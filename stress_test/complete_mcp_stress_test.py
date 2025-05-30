@@ -107,7 +107,7 @@ class CompleteMCPStressTest:
         self.output_dir = output_base_dir / f"results-{timestamp}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        print(f"📁 Test results will be saved to: {self.output_dir}")
+        print(f"Test results will be saved to: {self.output_dir}")
         
         self.results = {
             "metadata": {
@@ -126,7 +126,7 @@ class CompleteMCPStressTest:
         
     def generate_mock_server_data(self, num_servers: int = 50) -> List[Dict[str, Any]]:
         """Generate mock server definitions."""
-        print(f"🏗️  Generating {num_servers} mock server definitions...")
+        print(f"Generating {num_servers} mock server definitions...")
         
         server_types = ["database", "analytics", "ml", "security", "monitoring", "api", "workflow"]
         domains = ["finance", "healthcare", "retail", "logistics", "manufacturing", "education"]
@@ -168,7 +168,7 @@ class CompleteMCPStressTest:
             }
             servers.append(server)
             
-        print(f"✅ Generated {len(servers)} mock servers with {sum(s['num_tools'] for s in servers)} total tools")
+        print(f"Generated {len(servers)} mock servers with {sum(s['num_tools'] for s in servers)} total tools")
         return servers
     
     async def register_mock_servers(self, servers: List[Dict[str, Any]]) -> int:
@@ -202,13 +202,13 @@ class CompleteMCPStressTest:
                 
                 await asyncio.sleep(0.1)  # Small delay between batches
         
-        print(f"✅ Successfully registered {successful}/{len(servers)} servers")
+        print(f"Successfully registered {successful}/{len(servers)} servers")
         
         # Now enable all registered servers
         if successful > 0:
             print("🔄 Enabling all registered mock servers...")
             enabled_count = await self._enable_all_mock_servers()
-            print(f"✅ Enabled {enabled_count} mock servers")
+            print(f"Enabled {enabled_count} mock servers")
         
         self.results["mock_servers"] = {"total": len(servers), "successful": successful, "enabled": enabled_count if successful > 0 else 0}
         return successful
@@ -251,7 +251,7 @@ class CompleteMCPStressTest:
             
             async with session.post(f"{REGISTRY_URL}/login", data=data) as response:
                 if response.status not in [200, 201, 302, 303]:
-                    print("⚠️  Could not login to enable servers")
+                    print("Could not login to enable servers")
                     return 0
             
             # Process in batches
@@ -270,7 +270,7 @@ class CompleteMCPStressTest:
                         if server_path:
                             tasks.append(self._enable_single_server(session, server_path))
                     except Exception as e:
-                        print(f"⚠️  Could not read {mock_file}: {e}")
+                        print(f"Could not read {mock_file}: {e}")
                         continue
                 
                 if tasks:
@@ -301,15 +301,15 @@ class CompleteMCPStressTest:
                     response_text = await response.text()
                     return "enabled" in response_text.lower() or "success" in response_text.lower() or response.status in [302, 303]
                 else:
-                    print(f"⚠️  Toggle failed for {server_path}: HTTP {response.status}")
+                    print(f"Toggle failed for {server_path}: HTTP {response.status}")
                     return False
         except Exception as e:
-            print(f"⚠️  Error enabling {server_path}: {e}")
+            print(f"Error enabling {server_path}: {e}")
             return False
     
     async def test_faiss_performance(self, concurrent_limits: List[int] = [5, 10, 20]) -> List[Dict[str, Any]]:
         """Test FAISS performance with different concurrency levels."""
-        print(f"🔍 Testing FAISS performance with concurrency levels: {concurrent_limits}")
+        print(f"Testing FAISS performance with concurrency levels: {concurrent_limits}")
         
         all_results = []
         
@@ -744,7 +744,7 @@ class CompleteMCPStressTest:
                             # Re-find search input
                             search_input = driver.find_element(By.CSS_SELECTOR, search_selectors[0])
                         except:
-                            print(f"      ⚠️  Could not reset for next search query")
+                            print(f"      Could not reset for next search query")
                             break
                             
                 else:
@@ -837,12 +837,12 @@ class CompleteMCPStressTest:
     
     async def test_ui_search_concurrency(self, concurrent_limits: List[int] = [5, 10, 20]) -> List[Dict[str, Any]]:
         """Test UI search performance with different concurrency levels using HTTP requests."""
-        print(f"🔎 Testing UI Search concurrency with levels: {concurrent_limits}")
+        print(f"Testing UI Search concurrency with levels: {concurrent_limits}")
         
         all_results = []
         
         # First, check what search endpoints actually exist
-        print("  🔍 Discovering available search endpoints...")
+        print("  Discovering available search endpoints...")
         available_endpoints = []
         
         async with aiohttp.ClientSession() as session:
@@ -875,7 +875,7 @@ class CompleteMCPStressTest:
                     continue
         
         if not available_endpoints:
-            print("  ⚠️  No search endpoints found, using main page only")
+            print("  No search endpoints found, using main page only")
             available_endpoints = [REGISTRY_URL]
         
         # Create a persistent session with proper authentication
@@ -901,7 +901,7 @@ class CompleteMCPStressTest:
                         print(f"  ✗ Login failed for search testing: {response.status}")
                         # Continue anyway, some endpoints might not require auth
             except Exception as e:
-                print(f"  ⚠️  Login failed: {e}, continuing without authentication")
+                print(f"  Login failed: {e}, continuing without authentication")
             
             for concurrent_limit in concurrent_limits:
                 print(f"\n  Testing UI search with {concurrent_limit} concurrent requests...")
@@ -1093,7 +1093,7 @@ class CompleteMCPStressTest:
     
     def generate_performance_charts(self) -> Dict[str, str]:
         """Generate interactive performance analysis charts using Chart.js data."""
-        print("📊 Generating interactive performance charts...")
+        print("Generating interactive performance charts...")
         
         charts = {}
         
@@ -1282,7 +1282,7 @@ class CompleteMCPStressTest:
             charts["comparison_response_times"] = json.dumps([round(faiss_avg, 3), round(ui_avg, 3)])
             charts["comparison_success_rates"] = json.dumps([round(faiss_success_rate, 1), round(ui_success_rate, 1)])
         
-        print(f"✅ Generated interactive chart data for {len([k for k in charts.keys() if not k.endswith('_data') and not k.endswith('_labels')])} chart types")
+        print(f"Generated interactive chart data for {len([k for k in charts.keys() if not k.endswith('_data') and not k.endswith('_labels')])} chart types")
         return charts
     
     def generate_html_report(self, charts: Dict[str, str]) -> str:
@@ -1446,7 +1446,7 @@ class CompleteMCPStressTest:
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 MCP Gateway Stress Test Report</h1>
+            <h1>MCP Gateway Stress Test Report</h1>
             <p>Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         </div>
         
@@ -1496,7 +1496,7 @@ class CompleteMCPStressTest:
         if "faiss_boxplot_data" in charts:
             html_template += f"""
             <div class="chart-section">
-                <h2>📊 FAISS Performance Analysis</h2>
+                <h2>FAISS Performance Analysis</h2>
                 <div class="chart-description">
                     <p>This section analyzes FAISS search performance across different concurrency levels, showing response time distributions and success rates.</p>
                 </div>
@@ -1547,7 +1547,7 @@ class CompleteMCPStressTest:
         if "ui_search_boxplot_data" in charts:
             html_template += f"""
             <div class="chart-section">
-                <h2>🔍 UI Search Concurrency Analysis</h2>
+                <h2>UI Search Concurrency Analysis</h2>
                 <div class="chart-description">
                     <p>Analysis of UI search performance under concurrent load, showing how response times and success rates vary with concurrency levels.</p>
                 </div>
@@ -2350,7 +2350,7 @@ class CompleteMCPStressTest:
                               skip_faiss: bool = False,
                               headless_ui: bool = True):
         """Run the complete stress test suite."""
-        print("🚀 Starting Complete MCP Stress Test Suite")
+        print("Starting Complete MCP Stress Test Suite")
         print("=" * 60)
         
         start_time = time.time()
@@ -2387,8 +2387,8 @@ class CompleteMCPStressTest:
             # Final summary
             total_time = time.time() - start_time
             print("\n" + "=" * 60)
-            print("🎉 Complete Stress Test Finished!")
-            print(f"⏱️  Total time: {total_time:.1f} seconds")
+            print("Complete Stress Test Finished!")
+            print(f"Total time: {total_time:.1f} seconds")
             print(f"📋 HTML Report: {report_path}")
             print(f"💾 JSON Results: {results_path}")
             print("=" * 60)
@@ -2401,21 +2401,21 @@ class CompleteMCPStressTest:
             }
             
         except Exception as e:
-            print(f"❌ Test suite failed: {e}")
+            print(f"Test suite failed: {e}")
             return {"success": False, "error": str(e)}
 
     def add_tools_to_existing_mocks(self) -> int:
         """Add realistic tool lists to existing mock servers."""
-        print("🔧 Adding tool lists to existing mock servers...")
+        print("Adding tool lists to existing mock servers...")
         
         mock_server_dir = Path("/home/ubuntu/mcp-gateway-data/servers/")
         mock_files = list(mock_server_dir.glob("mock-server-*.json"))
         
         if not mock_files:
-            print("⚠️  No existing mock server files found")
+            print("No existing mock server files found")
             return 0
         
-        print(f"📁 Found {len(mock_files)} mock server files")
+        print(f"Found {len(mock_files)} mock server files")
         
         # Tool templates for different server types
         tool_templates = {
@@ -2531,10 +2531,10 @@ class CompleteMCPStressTest:
                     print(f"  📝 Updated {updated_count}/{len(mock_files)} servers...")
                 
             except Exception as e:
-                print(f"⚠️  Error updating {mock_file}: {e}")
+                print(f"Error updating {mock_file}: {e}")
                 continue
         
-        print(f"✅ Updated {updated_count} mock servers with {total_tools_added} total tools")
+        print(f"Updated {updated_count} mock servers with {total_tools_added} total tools")
         return updated_count
 
     def cleanup_mock_servers(self) -> int:
@@ -2545,7 +2545,7 @@ class CompleteMCPStressTest:
         mock_server_dir = Path("/home/ubuntu/mcp-gateway-data/servers/")
         mock_files = list(mock_server_dir.glob("mock-*.json"))
         
-        print(f"📁 Found {len(mock_files)} mock server files to remove")
+        print(f"Found {len(mock_files)} mock server files to remove")
         
         removed_count = 0
         for mock_file in mock_files:
@@ -2553,29 +2553,29 @@ class CompleteMCPStressTest:
                 mock_file.unlink()
                 removed_count += 1
             except Exception as e:
-                print(f"⚠️  Could not remove {mock_file}: {e}")
+                print(f"Could not remove {mock_file}: {e}")
         
         # Also cleanup FAISS index and server state
         try:
             faiss_index = mock_server_dir / "service_index.faiss"
             if faiss_index.exists():
                 faiss_index.unlink()
-                print("🗑️  Removed FAISS index")
+                print("Removed FAISS index")
             
             faiss_metadata = mock_server_dir / "service_index_metadata.json"
             if faiss_metadata.exists():
                 faiss_metadata.unlink()
-                print("🗑️  Removed FAISS metadata")
+                print("Removed FAISS metadata")
             
             server_state = mock_server_dir / "server_state.json"
             if server_state.exists():
                 server_state.unlink()
-                print("🗑️  Removed server state")
+                print("Removed server state")
                 
         except Exception as e:
-            print(f"⚠️  Error cleaning up index files: {e}")
+            print(f"Error cleaning up index files: {e}")
         
-        print(f"✅ Removed {removed_count} mock server files")
+        print(f"Removed {removed_count} mock server files")
         return removed_count
 
 async def main():
@@ -2604,10 +2604,10 @@ async def main():
             import subprocess
             try:
                 subprocess.run(["docker", "restart", "mcp-gateway-container"], check=True)
-                print("✅ Container restarted successfully")
-                print("💡 Wait a few seconds for services to start, then run the stress test again")
+                print("Container restarted successfully")
+                print("Wait a few seconds for services to start, then run the stress test again")
             except subprocess.CalledProcessError as e:
-                print(f"⚠️  Failed to restart container: {e}")
+                print(f"Failed to restart container: {e}")
         return
     
     # Parse concurrency limits
@@ -2615,12 +2615,12 @@ async def main():
     
     # Add tools to existing mocks if requested
     if args.add_tools:
-        print("🔧 Adding tools to existing mock servers...")
+        print("Adding tools to existing mock servers...")
         updated_count = test_suite.add_tools_to_existing_mocks()
         if updated_count > 0:
-            print(f"✅ Updated {updated_count} mock servers. Restarting container to reload FAISS...")
+            print(f"Updated {updated_count} mock servers. Restarting container to reload FAISS...")
             # Note: Container restart would need to be done manually or via docker command
-            print("💡 Run: docker restart mcp-gateway-container")
+            print("Run: docker restart mcp-gateway-container")
             print("   Then re-run the stress test to see the new tools in action!")
         return
     
@@ -2634,9 +2634,9 @@ async def main():
     )
     
     if result["success"]:
-        print(f"\n✅ Open the report: {result['report_path']}")
+        print(f"\nOpen the report: {result['report_path']}")
     else:
-        print(f"\n❌ Test failed: {result.get('error', 'Unknown error')}")
+        print(f"\nTest failed: {result.get('error', 'Unknown error')}")
         sys.exit(1)
 
 if __name__ == "__main__":

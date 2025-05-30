@@ -2,7 +2,7 @@
 
 A comprehensive stress testing tool for the MCP Gateway Registry that tests FAISS search performance, UI performance, and generates interactive performance reports.
 
-## 🚀 Features
+## Features
 
 - **FAISS Performance Testing**: Test intelligent tool search with various concurrency levels
 - **UI Performance Testing**: Automated browser testing of the registry web interface
@@ -11,14 +11,14 @@ A comprehensive stress testing tool for the MCP Gateway Registry that tests FAIS
 - **Mock Server Management**: Create and manage mock MCP servers for testing
 - **Comprehensive Reports**: Generate detailed HTML reports with performance analytics
 
-## 📋 Prerequisites
+## Prerequisites
 
 - Python 3.8+
 - `uv` package manager ([Install uv](https://docs.astral.sh/uv/getting-started/installation/))
 - Chrome/Chromium browser (for UI testing)
 - Access to MCP Gateway Registry instance
 
-## 🛠️ Installation
+## Installation
 
 The stress test uses `uv` for dependency management. All dependencies will be automatically installed when you run the script.
 
@@ -30,7 +30,7 @@ cd stress_test
 uv run complete_mcp_stress_test.py --help
 ```
 
-## 🎯 Usage
+## Usage
 
 ### Basic Usage
 
@@ -74,7 +74,7 @@ uv run complete_mcp_stress_test.py --add-tools
 uv run complete_mcp_stress_test.py --cleanup
 ```
 
-## 📊 Command Line Options
+## Command Line Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -87,7 +87,7 @@ uv run complete_mcp_stress_test.py --cleanup
 | `--show-ui` | Show browser during UI tests | False |
 | `--output-dir` | Custom output directory | Script directory |
 
-## 📈 Output Files
+## Output Files
 
 The stress test generates results in a timestamped directory:
 
@@ -101,13 +101,13 @@ stress_test/results-YYYYMMDD_HHMMSS/
 
 The HTML report includes:
 
-- **📊 Executive Summary**: Key performance metrics and success rates
-- **🔍 FAISS Performance**: Response time distributions and success rates by concurrency
-- **🖥️ UI Performance**: Login times, page loads, element detection
-- **🔎 UI Search Analysis**: Concurrent search performance testing
-- **💻 System Resources**: CPU and memory usage during tests
-- **📈 Response Time Distribution**: Statistical analysis with histograms
-- **⚖️ Performance Comparison**: Direct FAISS vs UI search comparison
+- **Executive Summary**: Key performance metrics and success rates
+- **FAISS Performance**: Response time distributions and success rates by concurrency
+- **UI Performance**: Login times, page loads, element detection
+- **UI Search Analysis**: Concurrent search performance testing
+- **System Resources**: CPU and memory usage during tests
+- **Response Time Distribution**: Statistical analysis with histograms
+- **Performance Comparison**: Direct FAISS vs UI search comparison
 
 ### Chart Types
 
@@ -119,7 +119,7 @@ The HTML report includes:
 - **Histograms**: Response time distributions (Plotly)
 - **Bar Charts**: Resource usage and comparisons
 
-## 🏃‍♂️ Quick Start Examples
+## Quick Start Examples
 
 ### 1. Test Existing Setup
 ```bash
@@ -145,7 +145,7 @@ uv run complete_mcp_stress_test.py --servers 75 --concurrency "10,20,40"
 uv run complete_mcp_stress_test.py --skip-faiss --skip-mock --show-ui
 ```
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -165,12 +165,12 @@ The stress test uses a predefined set of queries optimized for testing:
 - System administration queries
 - Mock data generation queries
 
-## 📋 Understanding Results
+## Understanding Results
 
 ### Success Rate Indicators
-- 🟢 **90%+**: Excellent performance
-- 🟡 **70-90%**: Good performance  
-- 🔴 **<70%**: Performance issues
+- **90%+**: Excellent performance
+- **70-90%**: Good performance  
+- **<70%**: Performance issues
 
 ### Key Metrics
 - **Response Time**: Average time for successful requests
@@ -178,7 +178,7 @@ The stress test uses a predefined set of queries optimized for testing:
 - **Resource Usage**: CPU and memory consumption during tests
 - **Error Rates**: Failed requests and their causes
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -216,7 +216,7 @@ uv run complete_mcp_stress_test.py --concurrency "2,3" --skip-mock
 uv run complete_mcp_stress_test.py --skip-faiss --skip-mock --show-ui
 ```
 
-## 🤝 Contributing
+## Contributing
 
 To add new test scenarios or improve the stress test:
 
@@ -226,6 +226,6 @@ To add new test scenarios or improve the stress test:
 4. Add new chart sections to `generate_html_report()`
 5. Test with `uv run` and submit a PR
 
-## 📄 License
+## License
 
 This stress test suite is part of the MCP Gateway Registry project. 
