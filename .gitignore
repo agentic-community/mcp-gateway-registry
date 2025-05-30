@@ -186,3 +186,11 @@ logs/
 
 # Agent testing
 agents/test_results/
+
+# Stress test results
+stress_test/results-*/
+stress_test_results/
+**/stress_test_report.html
+**/stress_test_results.json
+*.zip
+mcp_stress_test_results_*.zip
