@@ -235,13 +235,13 @@ Session cookie authentication enables agents to act on behalf of users, using th
 
 #### Implementation Components
 
-##### a. CLI Authentication Tool (`auth_server/cli_auth.py`)
+##### a. CLI Authentication Tool (`auth_server/cli_user_auth.py`)
 
 The CLI tool handles the OAuth flow with Cognito and saves the session cookie locally:
 
 ```bash
 # Run the CLI authentication tool
-python agents/cli_auth.py
+python agents/cli_user_auth.py
 
 # This will:
 # 1. Open your browser to Cognito hosted UI
