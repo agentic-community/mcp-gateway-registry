@@ -19,7 +19,7 @@ The MCP Gateway Registry implements a sophisticated dual-authentication system d
 ### Core Authentication Methods
 
 - **Traditional Authentication**: Username/password for local development
-- **OAuth2 Integration**: Enterprise IdP integration (AWS Cognito, SAML, etc.)
+- **OAuth2 Integration**: Enterprise IdP integration (Google OAuth, SAML, etc.)
 - **Session Management**: Secure HTTP cookies with digital signatures
 - **Role-Based Access Control**: Dynamic permissions based on user groups
 
@@ -27,7 +27,7 @@ The MCP Gateway Registry implements a sophisticated dual-authentication system d
 
 - 🔐 **Dual Authentication**: Support for both traditional and OAuth2 flows
 - 🎯 **RBAC System**: Fine-grained role-based access control
-- 🏢 **Enterprise Ready**: Integration with Cognito and SAML providers
+- 🏢 **Enterprise Ready**: Integration with Google OAuth and SAML providers
 - 🔒 **Secure Sessions**: Encrypted, signed session cookies
 - 🎛️ **Dynamic UI**: Permission-based interface rendering
 - 📊 **Audit Logging**: Comprehensive authentication event tracking
@@ -61,7 +61,7 @@ graph TB
     
     subgraph "External Auth Systems"
         AuthServer[Auth Server<br/>localhost:8888]
-        Cognito[AWS Cognito]
+        GoogleOAuth[Google OAuth]
         LocalAuth[Local Credentials]
     end
     
@@ -76,7 +76,7 @@ graph TB
     SessionSigner --> SessionStore
     
     AuthRoutes -.-> AuthServer
-    AuthServer -.-> Cognito
+    AuthServer -.-> GoogleOAuth
     AuthRoutes -.-> LocalAuth
     
     classDef browser fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
@@ -87,7 +87,7 @@ graph TB
     class UI,LoginForm,Dashboard browser
     class AuthRoutes,AuthDeps,ServerRoutes,Templates registry
     class Cookies,SessionSigner,SessionStore session
-    class AuthServer,Cognito,LocalAuth external
+    class AuthServer,GoogleOAuth,LocalAuth external
 ```
 
 ### Authentication Flow Architecture
@@ -126,7 +126,7 @@ sequenceDiagram
         AS->>IdP: OAuth2 authorization request
         IdP->>AS: Authorization code + user info
         AS->>AS: Exchange code for tokens
-        AS->>AS: Map Cognito groups to MCP scopes
+        AS->>AS: Map IdP groups to MCP scopes
         AS->>AS: Create compatible session cookie
         AS->>U: Set-Cookie mcp_gateway_session
         U->>R: GET /auth/callback
@@ -249,7 +249,7 @@ graph LR
         
         subgraph "OAuth2 Provider Buttons"
             ProviderButtons[Dynamic Provider Buttons]
-            CognitoBtn[AWS Cognito Button]
+            GoogleBtn[Google OAuth Button]
             SAMLBtn[SAML Provider Button]
             CustomBtn[Custom OAuth2 Button]
         end
@@ -262,7 +262,7 @@ graph LR
     TraditionalSection --> PasswordField
     TraditionalSection --> LoginButton
     OAuth2Section --> ProviderButtons
-    ProviderButtons --> CognitoBtn
+    ProviderButtons --> GoogleBtn
     ProviderButtons --> SAMLBtn
     ProviderButtons --> CustomBtn
     
@@ -274,7 +274,7 @@ graph LR
     class LoginHeader,ErrorDisplay header
     class TraditionalSection,OAuth2Section auth
     class UsernameField,PasswordField,LoginButton form
-    class ProviderButtons,CognitoBtn,SAMLBtn,CustomBtn oauth
+    class ProviderButtons,GoogleBtn,SAMLBtn,CustomBtn oauth
 ```
 
 #### Dynamic Provider Loading Implementation
@@ -907,8 +907,8 @@ def enhanced_auth(session: str = Cookie(alias="mcp_gateway_session")) -> Dict[st
     
     # Map groups to scopes based on authentication method
     if auth_method == 'oauth2':
-        # OAuth2 users get scopes based on Cognito group mappings
-        scopes = map_cognito_groups_to_scopes(groups)
+        # OAuth2 users get scopes based on IdP group mappings
+        scopes = map_idp_groups_to_scopes(groups)
         logger.info(f"OAuth2 user {username} mapped to scopes: {scopes}")
     else:
         # Traditional users get admin privileges by default
@@ -944,8 +944,8 @@ def enhanced_auth(session: str = Cookie(alias="mcp_gateway_session")) -> Dict[st
 
 ```python
 # registry/auth/dependencies.py
-def map_cognito_groups_to_scopes(groups: List[str]) -> List[str]:
-    """Map Cognito groups to MCP scopes using scopes.yml configuration"""
+def map_idp_groups_to_scopes(groups: List[str]) -> List[str]:
+    """Map IdP groups to MCP scopes using scopes.yml configuration"""
     scopes = []
     group_mappings = SCOPES_CONFIG.get('group_mappings', {})
     
@@ -1228,7 +1228,7 @@ def get_user_session_data(session: str = Cookie(alias="mcp_gateway_session")) ->
 sequenceDiagram
     participant Registry as Registry App
     participant AuthServer as Auth Server<br/>(:8888)
-    participant IdP as Identity Provider<br/>(Cognito/SAML)
+    participant IdP as Identity Provider<br/>(Google OAuth/SAML)
     
     Note over Registry,IdP: Provider Discovery
     Registry->>AuthServer: GET /oauth2/providers
@@ -1530,10 +1530,10 @@ CONTAINER_LOG_DIR=/app/logs
 #### OAuth2 Provider Configuration
 
 ```bash
-# AWS Cognito Integration (if using Cognito directly)
-COGNITO_DOMAIN=your-cognito-domain
-COGNITO_CLIENT_ID=your-cognito-client-id
-COGNITO_REGION=us-east-1
+# Google OAuth Integration
+COGNITO_DOMAIN=your-google-oauth-domain
+COGNITO_CLIENT_ID=your-google-client-id
+COGNITO_REGION=unused
 
 # Custom OAuth2 Providers (configured in auth server)
 # These are typically configured in the auth_server application
@@ -1790,7 +1790,7 @@ def enhanced_auth(session: str = None) -> Dict[str, Any]:
 
 **Common Solutions**:
 - **Group Mapping Issues**: Verify `auth_server/scopes.yml` configuration
-- **User Group Assignment**: Check user group assignments in identity provider (Cognito)
+ - **User Group Assignment**: Check user group assignments in your identity provider (e.g., Google OAuth)
 - **Server Name Mismatch**: Ensure server names in scopes.yml exactly match server definitions
 - **Scope Configuration**: Verify scope definitions reference correct server names
 

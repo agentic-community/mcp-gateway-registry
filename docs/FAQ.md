@@ -36,13 +36,13 @@ This FAQ addresses common questions from different user personas working with th
 
 - **User Identity Mode**: Your agent acts on behalf of a human user
   - Uses OAuth 2.0 PKCE flow with session cookies
-  - Agent inherits user's permissions based on Cognito groups
+  - Agent inherits user's permissions based on groups from your IdP (e.g., Google OAuth)
   - Use `--use-session-cookie` flag when running agents
   - Best for: Interactive applications, user-driven tasks
 
 - **Agent Identity Mode**: Your agent has its own identity
   - Uses Machine-to-Machine (M2M) JWT tokens
-  - Agent has its own scopes assigned in Cognito
+  - Agent has its own scopes assigned in the IdP
   - Default mode when running agents
   - Best for: Autonomous agents, scheduled tasks, background processing
 
@@ -188,22 +188,21 @@ except AuthenticationError as e:
 - **Load Balancer**: Application Load Balancer for high availability
 - **SSL Certificate**: Valid SSL certificate for HTTPS
 
-### Q9: How do I set up Amazon Cognito for authentication?
+### Q9: How do I set up Google OAuth for authentication?
 
-**A:** Follow the step-by-step [Cognito Setup Guide](cognito.md):
+**A:** Follow the step-by-step [Google OAuth Setup Guide](google-oauth.md):
 
-1. **Create User Pool** with email/username sign-in
-2. **Configure App Client** with proper callback URLs
-3. **Set up User Groups** (e.g., `mcp-registry-admin`, `mcp-registry-user`)
-4. **Create Resource Server** for M2M authentication with custom scopes
-5. **Configure Environment Variables** in your `.env` file
+1. **Create OAuth Credentials** in your Google Cloud project
+2. **Configure Authorized Redirect URIs** as shown in the guide
+3. **Set up Groups/Scopes** as needed for your organization
+4. **Configure Environment Variables** in your `.env` file
 
 Key environment variables needed:
 ```bash
 COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
 COGNITO_CLIENT_ID=your-client-id
 COGNITO_CLIENT_SECRET=your-client-secret
-AWS_REGION=us-east-1
+AWS_REGION=unused
 ```
 
 ### Q10: What ports need to be open in my security group?
@@ -279,7 +278,7 @@ The script handles Docker image building, service orchestration, and health chec
 **A:** You can add servers through the web interface:
 
 1. **Access the registry** at `http://your-gateway:7860`
-2. **Login** with your Cognito credentials or admin credentials
+2. **Login** with your IdP credentials or admin credentials
 3. **Click "Register Server"** button
 4. **Fill in server details**:
    - **Server Name**: Display name
@@ -321,8 +320,8 @@ The registry will automatically:
 
 **A:** Follow this troubleshooting checklist:
 
-1. **Verify Cognito Configuration**:
-   - Check User Pool ID format: `us-east-1_XXXXXXXXX`
+1. **Verify IdP Configuration**:
+    - Verify your project or tenant ID is correct
    - Verify Client ID and Secret are correct
    - Ensure callback URLs match exactly
 
@@ -348,7 +347,7 @@ The registry will automatically:
    ```
 
 5. **Common Issues**:
-   - **Callback URL mismatch**: Add all required URLs to Cognito app client
+   - **Callback URL mismatch**: Ensure all required URLs are added to your IdP configuration
    - **Secret key mismatch**: Ensure same `SECRET_KEY` in registry and agent configs
    - **Scope issues**: Verify group mappings in [`scopes.yml`](../auth_server/scopes.yml)
 
@@ -505,7 +504,7 @@ async def call_mcp_server(server_url: str):
 
 ### Q22: Can I use this with non-AWS identity providers?
 
-**A:** Currently, the system is designed for **Amazon Cognito**, but the architecture supports other OAuth2/OIDC providers.
+**A:** The system is provider agnostic. While the examples use Google OAuth, any OAuth2/OIDC provider can be integrated.
 
 **Supported Patterns**:
 - OAuth 2.0 Authorization Code flow (PKCE)

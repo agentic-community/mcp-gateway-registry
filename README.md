@@ -27,7 +27,7 @@ The MCP Gateway & Registry solves these challenges by providing a unified platfo
 | **Demo Video** | [Dynamic Tool Discovery and Invocation](https://github.com/user-attachments/assets/cee1847d-ecc1-406b-a83e-ebc80768430d) |
 | **Blog Post** | [How the MCP Gateway Centralizes Your AI Model's Tools](https://community.aws/content/2xmhMS0eVnA10kZA0eES46KlyMU/how-the-mcp-gateway-centralizes-your-ai-model-s-tools) |
 
-You can deploy the gateway and registry on Amazon EC2 or Amazon EKS for production environments. Jump to [installation on EC2](#installation-on-ec2) or [installation on EKS](#installation-on-eks) for deployment instructions.
+You can deploy the gateway and registry using Docker Compose on a Google Cloud VM or run it on Cloud Run. Jump to [installation on GCP VM](#installation-on-gcp-vm) or [installation on Cloud Run](#installation-on-cloud-run) for deployment instructions.
 
 ## Table of Contents
 
@@ -37,12 +37,12 @@ You can deploy the gateway and registry on Amazon EC2 or Amazon EKS for producti
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-  - [Installation on EC2](#installation-on-ec2)
+  - [Installation on GCP VM](#installation-on-gcp-vm)
     - [Docker Compose Architecture](#docker-compose-architecture)
     - [Quick Start Installation](#quick-start-installation)
     - [Post-Installation](#post-installation)
     - [Running the Gateway over HTTPS](#running-the-gateway-over-https)
-  - [Installation on EKS](#installation-on-eks)
+  - [Installation on Cloud Run](#installation-on-cloud-run)
 - [Using the Gateway and Registry with AI Agents](#using-the-gateway-and-registry-with-ai-agents)
   - [Run Agent with User Identity](#run-agent-with-user-identity)
   - [Run Agent with Its Own Agentic Identity](#run-agent-with-its-own-agentic-identity)
@@ -61,11 +61,11 @@ You can deploy the gateway and registry on Amazon EC2 or Amazon EKS for producti
 * 🚦 **Amazon Bedrock AgentCore Gateway Integration:** Seamless integration with Amazon Bedrock's AgentCore Gateway for enhanced AI agent capabilities and enterprise-grade AWS service connectivity. This integration enables direct access to AWS services through managed MCP endpoints with built-in security, monitoring, and scalability features. See [agents/agent.py](agents/agent.py) for implementation examples.
 * **JWT Token Vending Service:** Generate personal access tokens for programmatic access to MCP servers through a user-friendly web interface. Features include scope validation, rate limiting, and secure HMAC-SHA256 token generation. Perfect for automation, scripting, and agent access. [Learn more →](docs/jwt-token-vending.md)
 * **Modern React Frontend:** Complete UI overhaul with React 18 + TypeScript, featuring responsive design, dark/light themes, real-time updates, and integrated token management interface.
-* **IdP Integration with Amazon Cognito:** Complete identity provider integration supporting both user identity and agent identity modes. See [detailed Cognito setup guide](docs/cognito.md) for configuration instructions.
+* **IdP Integration via OAuth2:** Supports both user identity and agent identity modes. See the [Google OAuth setup guide](docs/google-oauth.md) for configuration instructions.
 * **Fine-Grained Access Control (FGAC) for MCP servers and tools:** Granular permissions system allowing precise control over which agents can access specific servers and tools. See [detailed FGAC documentation](docs/scopes.md) for scope configuration and access control setup.
 * **Integration with [Strands Agents](https://github.com/strands-agents/sdk-python):** Enhanced agent capabilities with the Strands SDK
 * **Dynamic tool discovery and invocation:** AI agents can autonomously discover and execute specialized tools beyond their initial capabilities using semantic search with FAISS indexing and sentence transformers. This breakthrough feature enables agents to handle tasks they weren't originally designed for by intelligently matching natural language queries to the most relevant MCP tools across all registered servers. [Learn more about Dynamic Tool Discovery →](docs/dynamic-tool-discovery.md)
-* **[Installation on EKS](#installation-on-eks):** New and improved microservices-based deployment on Kubernetes for production environments
+* **[Installation on Cloud Run](#installation-on-cloud-run):** Example deployment on Google Cloud Run using container images
 
 ## Architecture
 
@@ -88,7 +88,7 @@ flowchart TB
         AgentN["AI Agent N"]
     end
 
-    subgraph EC2_Gateway["<b>MCP Gateway & Registry</b> (Amazon EC2 Instance)"]
+    subgraph EC2_Gateway["<b>MCP Gateway & Registry</b> (GCP VM)"]
         subgraph NGINX["NGINX Reverse Proxy"]
             RP["Reverse Proxy Router"]
         end
@@ -106,9 +106,9 @@ flowchart TB
     end
     
     %% Identity Provider
-    IdP[Identity Provider<br/>Amazon Cognito]
+    IdP[Identity Provider<br/>Google OAuth]
     
-    subgraph EKS_Cluster["Amazon EKS/EC2 Cluster"]
+    subgraph EKS_Cluster["GKE/Compute Cluster"]
         MCP_EKS1["MCP Server 3"]
         MCP_EKS2["MCP Server 4"]
     end
@@ -198,7 +198,7 @@ Authentication and authorization are very key aspects of this solution. The MCP 
 - **On-behalf-of (User) Flows**: Where AI agents act on behalf of authenticated users using OAuth 2.0 PKCE flow
 - **AI Agents with Their Own Identity Flows**: Where agents use their own Machine-to-Machine credentials for autonomous operation
 
-These authentication patterns are discussed in detail in [`docs/auth.md`](docs/auth.md). An Amazon Cognito-based implementation with step-by-step setup details is provided in [`docs/cognito.md`](docs/cognito.md).
+These authentication patterns are discussed in detail in [`docs/auth.md`](docs/auth.md). A Google OAuth setup guide is provided in [`docs/google-oauth.md`](docs/google-oauth.md).
 
 ## Amazon Bedrock AgentCore Gateway Integration
 
@@ -209,7 +209,7 @@ Through the MCP Gateway & Registry, you can now connect to an Amazon Bedrock Age
 ## Features
 
 *   **MCP Tool Discovery:** Enables automatic tool discovery by AI Agents and Agent developers. Fetches and displays the list of tools (name, description, schema) based on natural language queries (e.g. _do I have tools to get stock information?_).
-*   **Integration with an IdP (Amazon Cognito, more coming soon):** Secure authentication and authorization through external identity providers for both user identity and agent identity modes.
+*   **Integration with an IdP (Google OAuth, more coming soon):** Secure authentication and authorization through external identity providers for both user identity and agent identity modes.
     *   **JWT Token Vending Service:** Alternative option to test the solution without an external IdP by generating self-signed JWT tokens through the web interface. See [detailed documentation →](docs/jwt-token-vending.md).
 *   **Modern React Frontend:** Built with React 18 + TypeScript, featuring:
     *   **Responsive Design:** Modern UI with Tailwind CSS and dark/light theme support
@@ -238,173 +238,39 @@ Through the MCP Gateway & Registry, you can now connect to an Amazon Bedrock Age
 *   **Node.js 16+**: Required for building the React frontend. Install from [nodejs.org](https://nodejs.org/)
 *   **npm**: Package manager for frontend dependencies (usually comes with Node.js)
 
-*   **Amazon EC2 Instance:** An Amazon EC2 machine (`ml.t3.2xlarge`) with a standard Ubuntu AMI for running this solution.
+*   **GCP Compute Engine VM:** A VM with Docker installed for running this solution via Docker Compose.
 
-*   **Amazon Cognito Configuration**: Set up an Amazon Cognito User Pool for authentication and authorization. This is required for both user identity and agent identity authentication modes. See [docs/cognito.md](docs/cognito.md) for complete step-by-step configuration instructions including user pools, app clients, groups, and callback URLs.
+*   **Google OAuth Configuration**: Set up OAuth credentials in Google Cloud for authentication. See [docs/google-oauth.md](docs/google-oauth.md) for configuration instructions.
 
 *   **SSL Certificate Options:**
     - **Production Deployments:** SSL certificate is preferred for secure communication to the Gateway
-    - **Testing/Development:** Can use localhost when running on EC2, or EC2 domain name for testing
+    - **Testing/Development:** Can use localhost when running on a VM, or the VM domain name for testing
     - **Default Configuration:** Gateway is available over HTTP for development
 
-*   **Security Group Configuration:** Configure your EC2 security group based on your deployment scenario:
+*   **Firewall Configuration:** Configure your VM or Cloud Run service based on your deployment scenario:
     - **HTTPS with SSL certificate:**  Port **8080**, **443** need to be opened
-    - **HTTP with EC2 domain name:** Port **8080**, **80** need to be opened
+    - **HTTP with domain name:** Port **8080**, **80** need to be opened
     - **HTTP with localhost (port forwarding):** Ports **80**, **7860**, and **8080** need to be opened
 
 *   **External API Keys (Optional):** The Financial Info MCP server requires Polygon API keys for stock ticker data. Configure client-specific API keys using the `.keys.yml` file in the `servers/fininfo` directory. See the [Financial Info Secrets Configuration](servers/fininfo/README_SECRETS.md) for detailed setup instructions.
 
-*   **Authentication Setup:** Setup authentication using Amazon Cognito as per instructions [here](docs/auth.md). For detailed Cognito configuration, see the [Cognito setup guide](docs/cognito.md). For Fine-Grained Access Control (FGAC) configuration, see the [scopes documentation](docs/scopes.md).
+*   **Authentication Setup:** Configure authentication using Google OAuth as described [here](docs/auth.md). For detailed setup, see the [Google OAuth guide](docs/google-oauth.md). For Fine-Grained Access Control (FGAC) configuration, see the [scopes documentation](docs/scopes.md).
 
 ## Installation
 
-### Installation on EC2
+### Installation on GCP VM
 
-The Gateway and Registry are deployed using Docker Compose with separate containers for each service, providing a scalable and maintainable architecture.
+Deploy the Gateway and Registry on a Compute Engine instance with Docker Compose:
 
-#### Docker Compose Architecture
-
-The deployment includes these containers:
-- **Nginx Reverse Proxy**: Routes requests to appropriate services and handles SSL termination
-- **Auth Server**: Handles authentication with Amazon Cognito and GitHub OAuth
-- **Registry MCP Server**: Provides service discovery, management, and the web UI
-- **Example MCP Servers**:
-  - Current Time server (port 8000)
-  - Financial Info server (port 8001)
-  - Real Server Fake Tools server (port 8002)
-  - MCP Gateway server (port 8003)
-
-#### Quick Start Installation
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/agentic-community/mcp-gateway-registry.git
-    cd mcp-gateway-registry
-    ```
-
-2. **Create local directories for saving MCP server logs and run-time data:**
-   ```bash
-   sudo mkdir -p /opt/mcp-gateway/servers
-   sudo cp -r registry/servers /opt/mcp-gateway/
-   sudo mkdir -p /opt/mcp-gateway/auth_server
-   sudo cp auth_server/scopes.yml /opt/mcp-gateway/auth_server/scopes.yml
-   sudo mkdir -p /opt/mcp-gateway/secrets/
-   sudo mkdir /var/log/mcp-gateway
-   ```
-
-3. **Configure environment variables:**
-   ```bash
-   # Copy the template and edit with your values
-   cp .env.template .env
-   nano .env  # or use your preferred editor
-   ```
-   
-   **Required configuration in `.env`:**
-   - `ADMIN_PASSWORD`: Set to a secure password (replace "your-secure-password-here")
-   - `COGNITO_USER_POOL_ID`: Your AWS Cognito User Pool ID
-   - `COGNITO_CLIENT_ID`: Your Cognito App Client ID
-   - `COGNITO_CLIENT_SECRET`: Your Cognito App Client Secret
-   - `AWS_REGION`: AWS region where your Cognito User Pool is located
-   
-   **Optional configuration:**
-   - `SECRET_KEY`: Auto-generated by build script if not provided
-   
-   **Financial Data Configuration:**
-   - For Polygon API keys, refer to the [Financial Info Secrets Configuration](servers/fininfo/README_SECRETS.md)
-   - Configure client-specific API keys in `servers/fininfo/.keys.yml`
-   - ```bash
-      sudo cp servers/fininfo/.keys.yml* /opt/mcp-gateway/secrets/
-     ```
-
-4. **Install prerequisites (uv and Docker):**
-   ```bash
-   # Install uv
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   source $HOME/.local/bin/env
-   uv venv --python 3.12 && source .venv/bin/activate && uv pip install --requirement pyproject.toml
-
-   # Install Docker and Docker Compose
-   sudo apt-get update
-   sudo apt-get install --reinstall docker.io -y
-   sudo apt-get install -y docker-compose
-   sudo usermod -a -G docker $USER
-   newgrp docker
-   ```
-
-5. **Deploy with the build and run script:**
-   ```bash
-   ./build_and_run.sh
-   ```
-   
-   The script will:
-   - Validate your `.env` configuration
-   - Generate `SECRET_KEY` if not provided
-   - Build all Docker images using Docker Compose
-   - Start all services in the correct order
-   - Verify service health and display status
-
-6. **Access the Registry:**
-   Navigate to `http://localhost:7860` and you will have two authentication options:
-   
-   **Option 1 - Amazon Cognito (Recommended for Production):**
-   - Click "Login with Cognito" to authenticate via your configured Cognito User Pool
-   - Access permissions will be based on the Cognito group you are a member of
-   - Provides fine-grained access control based on your organizational roles
-   - For detailed Cognito setup instructions, see [docs/cognito.md](docs/cognito.md)
-   - For Fine-Grained Access Control (FGAC) configuration and scope management, see [docs/scopes.md](docs/scopes.md)
-   
-   **Option 2 - Username/Password (Testing Only):**
-   - Use the traditional login with:
-     - **Username:** Value of `ADMIN_USER` (default: admin)
-     - **Password:** Value of `ADMIN_PASSWORD` from your `.env` file
-   - Provides admin access by default
-   - **Note:** This approach should only be used for testing and will soon require setting `ENABLE_DEV_MODE=true` in your `.env` file
-
-   ![MCP Registry](docs/img/br-agent-core-gw-1.png)
+1. **Clone the repository and prepare directories** (see the repository README for directory layout).
+2. **Create a `.env` file** from `.env.template` and fill in your Google OAuth credentials.
+3. **Install Docker and Docker Compose** on the VM.
+4. **Run `./build_and_run.sh`** to build images and start the stack.
+5. Access the registry at `http://YOUR_VM_IP:7860` and login via Google OAuth.
 
 #### Post-Installation
 
-1. **View logs from all services:**
-   ```bash
-   # View logs from all services
-   docker-compose logs -f
-   
-   # View logs from a specific service
-   docker-compose logs -f registry
-   docker-compose logs -f auth-server
-   ```
-
-2. **View MCP server metadata:**
-   Metadata about all MCP servers is available in `/opt/mcp-gateway/servers` directory. The metadata includes information gathered from `ListTools` as well as information provided during server registration.
-
-#### Running the Gateway over HTTPS
-
-For production deployments with SSL certificates:
-
-1. **Configure Security Group:** Enable access to TCP port 443 from the IP addresses of your MCP clients in the inbound rules of your EC2 instance's security group.
-
-2. **Prepare SSL Certificates:** You need an HTTPS certificate and private key for your domain. For example, if you use `your-mcp-gateway.com` as the domain, you'll need an SSL certificate for `your-mcp-gateway.com`. MCP servers behind the Gateway will be accessible as `https://your-mcp-gateway.com/mcp-server-name/sse`.
-
-3. **Place SSL Certificates:** Copy your SSL certificates to `/home/ubuntu/ssl_data/` on your EC2 instance:
-   ```bash
-   sudo mkdir -p /home/ubuntu/ssl_data/certs
-   sudo mkdir -p /home/ubuntu/ssl_data/private
-   # Copy your certificate and private key files to these directories
-   # Important: Name your files as follows:
-   # - Certificate file: fullchain.pem (goes in /home/ubuntu/ssl_data/certs/)
-   # - Private key file: privkey.pem (goes in /home/ubuntu/ssl_data/private/)
-   ```
-
-4. **Deploy with HTTPS:** Run the deployment script as normal:
-   ```bash
-   ./build_and_run.sh
-   ```
-   
-   The Docker Compose configuration automatically mounts the SSL certificates from `/home/ubuntu/ssl_data` to the appropriate container paths.
-
-5. **Access via HTTPS:** Your services will be available at:
-   - Main interface: `https://your-domain.com`
-   - MCP servers: `https://your-domain.com/server-name/sse`
+Logs can be viewed with `docker-compose logs -f`. SSL certificates can be mounted by placing them under `/home/ubuntu/ssl_data` and running the script with HTTPS enabled.
 
 ## Using the Gateway and Registry with AI Agents
 
@@ -415,12 +281,12 @@ For production deployments with SSL certificates:
    
    ```bash
    cp agents/.env.template agents/.env.user
-   # Edit agents/.env.user with your Cognito configuration
-   # See [`docs/cognito.md`](docs/cognito.md) for detailed Cognito setup instructions
+   # Edit agents/.env.user with your Google OAuth configuration
+   # See [`docs/google-oauth.md`](docs/google-oauth.md) for detailed setup instructions
    ```
 
 2. **Authenticate with user identity:**
-   Run the CLI user authentication script which will prompt you to open a browser window to authenticate with Cognito:
+   Run the CLI user authentication script which will prompt you to open a browser window to authenticate with Google OAuth:
    
    ```bash
    python agents/cli_user_auth.py
@@ -441,21 +307,21 @@ For production deployments with SSL certificates:
    
    ```bash
    cp agents/.env.template agents/.env.agent
-   # Edit agents/.env.agent with your Cognito configuration
-   # See docs/cognito.md for detailed Cognito setup instructions
+   # Edit agents/.env.agent with your Google OAuth configuration
+   # See docs/google-oauth.md for detailed setup instructions
    ```
 
 2. **Run the agent with agentic identity:**
-   The agent will communicate with Cognito to obtain a JWT token which will include information about the groups it is part of. This information is then used by the Auth server for authorization decisions.
+   The agent will communicate with Google OAuth to obtain a JWT token which will include information about the groups it is part of. This information is then used by the Auth server for authorization decisions.
    
    ```bash
    # your_registry_url would typically be http://localhost/mcpgw/sse or https://mymcpgateway.mycorp.com/mcpgw/sse
    python agents/agent.py --mcp-registry-url your_registry_url --message "what is the current time in clarksburg, md"
    ```
 
-### Installation on EKS
+### Installation on Cloud Run
 
-For production deployments you might want to run this solution on EKS, the [Distributed Training and Inference on EKS](https://github.com/aws-samples/amazon-eks-machine-learning-with-terraform-and-kubeflow) repo contains the helm chart for running the gateway and registry on an EKS cluster. Refer to [Serve MCP Gateway Registry](https://github.com/aws-samples/amazon-eks-machine-learning-with-terraform-and-kubeflow/tree/master/examples/agentic/mcp-gateway-microservices) README for step by step instructions.
+For a serverless option you can deploy the Docker images to Google Cloud Run. Build the images with `docker-compose build` and push them to Artifact Registry, then create Cloud Run services for the auth server, registry, and Nginx containers. Use the provided `docker-compose.yml` as a reference for environment variables and networking.
 
 ## Usage
 
@@ -538,7 +404,7 @@ For comprehensive information about using the MCP Gateway & Registry, see our de
 
 - **[Frequently Asked Questions (FAQ)](docs/FAQ.md)** - Common questions and answers for developers and platform engineers
 - **[Authentication Guide](docs/auth.md)** - Detailed authentication and authorization patterns
-- **[Cognito Setup Guide](docs/cognito.md)** - Step-by-step Amazon Cognito configuration
+- **[Google OAuth Setup Guide](docs/google-oauth.md)** - Step-by-step Google OAuth configuration
 - **[JWT Token Vending Service](docs/jwt-token-vending.md)** - Generate personal access tokens for programmatic access to MCP servers
 - **[Fine-Grained Access Control](docs/scopes.md)** - Scope configuration and access control setup
 - **[Dynamic Tool Discovery](docs/dynamic-tool-discovery.md)** - AI agent autonomous tool discovery capabilities
@@ -564,7 +430,7 @@ The following GitHub issues represent our current development roadmap and planne
   Extend the auth server to provide token vending capabilities for enhanced authentication workflows.
 
 - **[#5 - Add Support for KeyCloak as IdP Provider](https://github.com/agentic-community/mcp-gateway-registry/issues/5)**
-  Add KeyCloak integration as an alternative Identity Provider alongside Amazon Cognito.
+  Add KeyCloak integration as an alternative Identity Provider alongside Google OAuth.
 
 ### 📋 View All Issues
 

@@ -39,7 +39,7 @@ graph TB
     end
     
     %% Identity Provider
-    IdP[Identity Provider<br/>Amazon Cognito]
+    IdP[Identity Provider<br/>Google OAuth]
     
     %% MCP Server Farm
     subgraph MCPFarm["MCP Server Farm"]
@@ -111,15 +111,15 @@ The updated architecture diagram above shows the clear separation of components 
 
 #### MCP Gateway & Registry Infrastructure
 - **Nginx Reverse Proxy**: Single entry point that routes all requests and handles SSL termination
-- **Auth Server**: Validates JWT tokens and session cookies against Amazon Cognito, enforces fine-grained access control
+- **Auth Server**: Validates JWT tokens and session cookies against the configured IdP (for example, Google OAuth) and enforces fine-grained access control
 - **Registry Web UI**: Administrative interface for managing MCP servers and viewing system status
 - **Registry MCP Server**: Provides tool discovery capabilities to agents, returns filtered results based on permissions
 
 #### External Components
-- **Amazon Cognito**: Identity Provider (IdP) that handles user authentication and group management
+- **Identity Provider**: Handles user authentication and group management. Google OAuth is the recommended provider, but any OIDC-compliant IdP can be used
 - **MCP Server Farm**: Collection of individual MCP servers providing various tools and capabilities
 
-> **For detailed setup instructions**, see the comprehensive guide in [`docs/cognito.md`](cognito.md) which covers both user identity and agent identity authentication modes.
+> **For detailed setup instructions**, see the guide in [`docs/google-oauth.md`](google-oauth.md) which covers both user identity and agent identity authentication modes.
 
 At a high-level the flow works as follows:
 
@@ -212,9 +212,9 @@ sequenceDiagram
 The above implementation provides an OAuth compliant way to MCP security without the MCP servers being involved in enforcing this security greatly simplifying the MCP server implementation (as compared to every MCP server having to implement authentication and authorization).
 
 
-## Amazon Cognito based reference implementation
+## Identity Provider reference implementation
 
-For comprehensive setup instructions and detailed configuration of Amazon Cognito as the Identity Provider, see the detailed documentation in [`docs/cognito.md`](cognito.md) which covers both user identity and agent identity authentication modes with step-by-step configuration guides.
+For comprehensive setup instructions and detailed configuration using Google OAuth as the Identity Provider, see [`docs/google-oauth.md`](google-oauth.md).
 
 For information about Fine-Grained Access Control (FGAC) including scope configuration, group mappings, and permission management, see [`docs/scopes.md`](scopes.md).
 

@@ -1,6 +1,6 @@
 # Fine-Grained Access Control System Documentation
 
-> **Note**: While this document discusses Fine-Grained Access Control (FGAC) in the context of Amazon Cognito, the concepts and implementation apply to any Identity Provider (IdP). The same scope-based authorization model can be used with other OAuth2/OIDC providers by adapting the group mapping and token validation mechanisms.
+> **Note**: While this document previously referenced Amazon Cognito, the concepts apply to any Identity Provider (IdP). The same scope-based authorization model can be used with Google OAuth or other OAuth2/OIDC providers by adapting the group mapping and token validation mechanisms.
 
 This document provides comprehensive documentation for the fine-grained access control system in the MCP Gateway Registry, explaining how the scope-based authorization model works and how to configure it properly.
 
@@ -10,7 +10,7 @@ This document provides comprehensive documentation for the fine-grained access c
 2. [Scope System Architecture](#scope-system-architecture)
 3. [Scope Types and Structure](#scope-types-and-structure)
 4. [Methods vs Tools Access Control](#methods-vs-tools-access-control)
-5. [Cognito Integration](#cognito-integration)
+5. [IdP Integration](#idp-integration)
 6. [Scope Validation Logic](#scope-validation-logic)
 7. [Configuration Examples](#configuration-examples)
 8. [Security Considerations](#security-considerations)
@@ -20,7 +20,7 @@ This document provides comprehensive documentation for the fine-grained access c
 
 The MCP Gateway Registry implements a sophisticated fine-grained access control system that provides granular permissions for accessing MCP servers, methods, and tools. The system is built around a scope-based authorization model that:
 
-- Maps Amazon Cognito user groups to MCP server scopes
+- Maps IdP user groups to MCP server scopes
 - Controls access to specific MCP servers, methods, and individual tools
 - Supports both user identity mode (OAuth2 PKCE) and agent identity mode (Machine-to-Machine)
 - Uses hierarchical scope validation for precise permission control
@@ -35,21 +35,21 @@ The access control system is defined in [`auth_server/scopes.yml`](../auth_serve
 The access control system consists of three main components:
 
 1. **Scope Configuration** ([`auth_server/scopes.yml`](../auth_server/scopes.yml)): Defines all available scopes and their permissions
-2. **Group Mappings**: Maps Amazon Cognito groups to both UI and server scopes
+2. **Group Mappings**: Maps IdP groups to both UI and server scopes
 3. **Validation Engine** ([`auth_server/server.py`](../auth_server/server.py)): Enforces access control decisions
 
 ### Authentication Flow Integration
 
 The scope system integrates seamlessly with both authentication modes:
 
-- **User Identity Mode**: Users authenticate via OAuth2 PKCE, and their Cognito groups are mapped to scopes
+- **User Identity Mode**: Users authenticate via OAuth2 PKCE, and their IdP groups are mapped to scopes
 - **Agent Identity Mode**: Agents authenticate via M2M JWT tokens with custom scopes directly assigned
 
-### Relationship with Cognito
+### Relationship with the Identity Provider
 
-The system leverages Amazon Cognito's group membership feature to assign permissions:
+The system leverages your IdP's group membership feature to assign permissions:
 
-1. Users are assigned to Cognito groups (e.g., `mcp-registry-admin`, `mcp-registry-user`)
+1. Users are assigned to groups (e.g., `mcp-registry-admin`, `mcp-registry-user`)
 2. Groups are mapped to scopes via the `group_mappings` configuration
 3. Scopes define specific permissions for UI operations and MCP server access
 4. The validation engine checks these scopes against requested operations
@@ -97,7 +97,7 @@ Server scopes control access to MCP servers with read and execute permissions:
 
 ### Group Mappings
 
-Group mappings connect Cognito groups to both UI and server scopes:
+Group mappings connect IdP groups to both UI and server scopes:
 
 ```yaml
 group_mappings:
@@ -183,16 +183,16 @@ User has unrestricted execute permissions:
 - ✅ Can call any method
 - ✅ Can call any tool listed in the scope configuration
 
-## Cognito Integration
+## IdP Integration
 
-The access control system integrates deeply with Amazon Cognito for both user and agent authentication modes.
+The access control system integrates with your chosen Identity Provider (IdP). The examples here assume Google OAuth but other providers work similarly.
 
 ### User Identity Mode Integration
 
 For users authenticating through the web interface:
 
 1. **User Authentication**: Users log in via OAuth2 PKCE flow
-2. **Group Membership**: Cognito returns user's group memberships
+2. **Group Membership**: The IdP returns user's group memberships
 3. **Scope Mapping**: Groups are mapped to scopes using `group_mappings`
 4. **Session Management**: Scopes are stored in session cookies for subsequent requests
 
@@ -201,11 +201,11 @@ For users authenticating through the web interface:
 For agents using their own identity:
 
 1. **M2M Authentication**: Agents authenticate using client credentials flow
-2. **Custom Scopes**: Agents are assigned custom scopes directly in Cognito
+2. **Custom Scopes**: Agents are assigned custom scopes directly in the IdP
 3. **JWT Token**: Scopes are embedded in JWT tokens
 4. **Direct Validation**: Scopes are validated directly without group mapping
 
-### Cognito Configuration Requirements
+### IdP Configuration Requirements
 
 #### User Pool Setup
 - Create user groups matching the scope system (e.g., `mcp-registry-admin`)
@@ -217,7 +217,7 @@ For agents using their own identity:
 - Define custom scopes matching server scope names
 - Configure client credentials flow for agent applications
 
-For detailed Cognito setup instructions, see [`docs/cognito.md`](./cognito.md).
+For detailed Google OAuth setup instructions, see [`docs/google-oauth.md`](./google-oauth.md).
 
 ## Scope Validation Logic
 
@@ -297,7 +297,7 @@ mcp-servers-restricted/read:
       - current_time_by_timezone
 ```
 
-**Cognito Setup:**
+**IdP Setup:**
 1. Create group: `mcp-registry-basic-user`
 2. Assign users to this group
 3. Users can list and read time tools but cannot execute them
@@ -325,7 +325,7 @@ UI-Scopes:
 Configure an agent with access to specific financial tools:
 
 ```yaml
-# Agent scope (assigned directly in Cognito resource server)
+# Agent scope (assigned directly in the IdP resource server)
 mcp-servers-restricted/execute:
   - server: fininfo
     methods:
@@ -339,7 +339,7 @@ mcp-servers-restricted/execute:
       - print_stock_data
 ```
 
-**Cognito Setup:**
+**IdP Setup:**
 1. Create resource server: `mcp-gateway-api`
 2. Create custom scope: `mcp-servers-restricted/execute`
 3. Assign scope to agent client
@@ -393,7 +393,7 @@ The access control system is designed around the principle of least privilege:
 - Regularly audit scope configurations
 
 #### 4. Production Deployment
-- Use separate Cognito user pools for different environments
+- Use separate IdP tenants or projects for different environments
 - Implement proper secret management for client credentials
 - Enable MFA for administrative accounts
 
@@ -401,7 +401,7 @@ The access control system is designed around the principle of least privilege:
 
 The system enforces several security boundaries:
 
-- **Authentication Boundary**: Users must authenticate via Cognito
+- **Authentication Boundary**: Users must authenticate via your IdP
 - **Authorization Boundary**: Scopes control what authenticated users can access
 - **Server Boundary**: Each server's tools are independently controlled
 - **Method Boundary**: Protocol methods and tools have separate permissions
@@ -417,7 +417,7 @@ The system enforces several security boundaries:
 - Server appears unavailable to user
 
 **Diagnosis:**
-1. Check user's Cognito group membership
+1. Check user's group membership in the IdP
 2. Verify group mapping in `scopes.yml`
 3. Confirm server is listed in user's scopes
 
@@ -473,19 +473,19 @@ ls -la auth_server/scopes.yml
 #### Issue 4: Group Mapping Not Working
 
 **Symptoms:**
-- User has correct Cognito group but wrong scopes
+- User has correct IdP group but wrong scopes
 - Scope mapping appears incorrect
 
 **Diagnosis:**
-1. Verify group name matches exactly in Cognito and `scopes.yml`
+1. Verify group name matches exactly in the IdP and `scopes.yml`
 2. Check for typos in group names
 3. Confirm group mapping syntax
 
 **Solution:**
 ```yaml
-# Ensure exact match between Cognito group name and mapping key
+# Ensure exact match between IdP group name and mapping key
 group_mappings:
-  exact-cognito-group-name:  # Must match Cognito exactly
+  exact-idp-group-name:  # Must match the IdP exactly
     - scope-name
 ```
 
@@ -542,4 +542,4 @@ For production deployments, consider:
 
 ---
 
-This documentation provides a comprehensive guide to understanding and configuring the fine-grained access control system. For additional information about Cognito setup and integration, refer to [`docs/cognito.md`](./cognito.md) and [`docs/auth.md`](./auth.md).
+This documentation provides a comprehensive guide to understanding and configuring the fine-grained access control system. For more details on Google OAuth configuration, see [`docs/google-oauth.md`](./google-oauth.md) and [`docs/auth.md`](./auth.md).

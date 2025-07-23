@@ -17,7 +17,7 @@ This document provides comprehensive technical documentation for the MCP Gateway
 The MCP Gateway Registry implements a sophisticated dual-authentication system that supports:
 
 - **Traditional username/password authentication** for local development and basic setups
-- **OAuth2/SAML integration** with enterprise identity providers (Cognito, etc.)
+- **OAuth2/SAML integration** with enterprise identity providers (Google OAuth, etc.)
 - **Session-based authentication** using secure HTTP cookies
 - **Role-based access control** with groups and scopes
 - **Fine-grained permissions** for server management operations
@@ -26,7 +26,7 @@ The MCP Gateway Registry implements a sophisticated dual-authentication system t
 
 - 🔐 **Dual Authentication Methods**: Traditional + OAuth2
 - 🎯 **Role-Based Access Control**: Admin, User, and custom roles
-- 🏢 **Enterprise Integration**: Cognito, SAML, and other IdPs
+- 🏢 **Enterprise Integration**: Google OAuth, SAML, and other IdPs
 - 🔒 **Secure Session Management**: Encrypted cookies with expiration
 - 🎛️ **Permission-Based UI**: Dynamic UI based on user permissions
 - 📊 **Audit Trail**: Comprehensive logging of authentication events
@@ -57,7 +57,7 @@ graph TB
     
     subgraph "External Systems"
         AuthServer[Auth Server<br/>:8888]
-        Cognito[AWS Cognito]
+        IdProvider[Google OAuth]
         LocalAuth[Local User DB]
     end
     
@@ -71,7 +71,7 @@ graph TB
     SessionSigner --> Sessions
     
     AuthRoutes -.-> AuthServer
-    AuthServer -.-> Cognito
+    AuthServer -.-> IdProvider
     AuthRoutes -.-> LocalAuth
     
     classDef browser fill:#e3f2fd,stroke:#1976d2
@@ -82,7 +82,7 @@ graph TB
     class UI,LoginForm browser
     class AuthRoutes,AuthDeps,ServerRoutes,Templates registry
     class Cookies,SessionSigner,Sessions session
-    class AuthServer,Cognito,LocalAuth external
+    class AuthServer,IdProvider,LocalAuth external
 ```
 
 ### Authentication Flow Architecture
@@ -161,7 +161,7 @@ graph LR
         end
         
         subgraph "OAuth2 Providers"
-            CognitoBtn[AWS Cognito Button]
+            GoogleBtn[Google OAuth Button]
             SAMLBtn[SAML Provider Button]
             CustomBtn[Custom Provider Button]
         end
@@ -173,7 +173,7 @@ graph LR
     TraditionalForm --> UsernameField
     TraditionalForm --> PasswordField
     TraditionalForm --> LoginButton
-    OAuth2Section --> CognitoBtn
+    OAuth2Section --> GoogleBtn
     OAuth2Section --> SAMLBtn
     OAuth2Section --> CustomBtn
     
@@ -182,7 +182,7 @@ graph LR
     classDef input fill:#f3e5f5,stroke:#7b1fa2
     
     class TraditionalForm,UsernameField,PasswordField,LoginButton form
-    class OAuth2Section,CognitoBtn,SAMLBtn,CustomBtn oauth
+    class OAuth2Section,GoogleBtn,SAMLBtn,CustomBtn oauth
     class LoginHeader,ErrorDisplay input
 ```
 
@@ -624,7 +624,7 @@ graph LR
     end
     
     subgraph "Identity Providers"
-        Cognito[AWS Cognito]
+        Google[Google OAuth]
         SAML[SAML Provider]
         Custom[Custom OAuth2]
     end
@@ -632,10 +632,10 @@ graph LR
     AuthRoutes --> OAuth2Handler
     AuthDeps --> Config
     OAuth2Handler --> ProviderManager
-    ProviderManager --> Cognito
+    ProviderManager --> Google
     ProviderManager --> SAML
     ProviderManager --> Custom
-    TokenValidator --> Cognito
+    TokenValidator --> Google
     
     classDef registry fill:#e3f2fd,stroke:#1976d2
     classDef auth fill:#f3e5f5,stroke:#7b1fa2
@@ -643,7 +643,7 @@ graph LR
     
     class AuthRoutes,AuthDeps,Config registry
     class OAuth2Handler,ProviderManager,TokenValidator auth
-    class Cognito,SAML,Custom provider
+    class Google,SAML,Custom provider
 ```
 
 ### WebSocket Authentication
