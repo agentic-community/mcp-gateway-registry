@@ -15,6 +15,14 @@ A comprehensive solution for managing, securing, and accessing Model Context Pro
 | **🔐 OAuth Authentication** | [Watch OAuth Setup](https://github.com/agentic-community/mcp-gateway-registry/assets/your-user/demo-oauth.mp4) |
 | **🤖 AI Agent Integration** | [Watch AI Agents](https://github.com/agentic-community/mcp-gateway-registry/assets/your-user/demo-ai-agents.mp4) |
 
+### 🔧 MCP Tools in Action
+
+<div align="center">
+<img src="img/MCP_tools.gif" alt="MCP Tools Demo" width="800"/>
+</div>
+
+*Experience dynamic tool discovery and intelligent MCP server integration in real-time*
+
 ---
 
 ## Key Features
