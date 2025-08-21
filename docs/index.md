@@ -4,7 +4,7 @@
   <img src="img/mcp-gateway-header.svg" alt="MCP Gateway & Registry" width="600"/>
 </div>
 
-## Enterprise-Grade MCP Server Registry & Reverse Proxy
+## Enterprise-Grade MCP Server & Registry
 
 A comprehensive solution for managing, securing, and accessing Model Context Protocol (MCP) servers at scale. Built for enterprises, development teams, and autonomous AI agents.
 
