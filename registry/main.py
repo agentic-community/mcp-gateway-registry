@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import domain routers
 from registry.auth.routes import router as auth_router
 from registry.api.server_routes import router as servers_router
+from registry.api.wellknown_routes import router as wellknown_router
 from registry.health.routes import router as health_router
 
 # Import auth dependencies
@@ -37,12 +38,10 @@ from registry.core.config import settings
 # Configure logging with file and console handlers
 def setup_logging():
     """Configure logging to write to both file and console."""
-    # Ensure log directory exists
-    log_dir = settings.container_log_dir
+    # Ensure log directory exists (uses proper local dev detection)
+    log_file = settings.log_file_path
+    log_dir = log_file.parent
     log_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Define log file path
-    log_file = log_dir / "registry.log"
     
     # Create formatters
     file_formatter = logging.Formatter(
@@ -158,6 +157,9 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(servers_router, prefix="/api", tags=["Server Management"])
 app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring"])
+
+# Register well-known discovery router
+app.include_router(wellknown_router, prefix="/.well-known", tags=["Discovery"])
 
 # Add user info endpoint for React auth context
 @app.get("/api/auth/me")
