@@ -38,10 +38,12 @@ from registry.core.config import settings
 # Configure logging with file and console handlers
 def setup_logging():
     """Configure logging to write to both file and console."""
-    # Ensure log directory exists (uses proper local dev detection)
-    log_file = settings.log_file_path
-    log_dir = log_file.parent
+    # Ensure log directory exists
+    log_dir = settings.container_log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Define log file path
+    log_file = log_dir / "registry.log"
     
     # Create formatters
     file_formatter = logging.Formatter(
