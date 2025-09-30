@@ -181,7 +181,10 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
   // Generate MCP configuration for the server
   const generateMCPConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-    const baseUrl = window.location.origin;
+    
+    // Get base URL and strip port for nginx proxy compatibility
+    const currentUrl = new URL(window.location.origin);
+    const baseUrl = `${currentUrl.protocol}//${currentUrl.hostname}`;
     
     return {
       mcpServers: {
