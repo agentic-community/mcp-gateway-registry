@@ -374,7 +374,7 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
               <button
                 onClick={() => setShowConfig(true)}
                 className="p-2.5 text-gray-500 hover:text-green-600 dark:hover:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200"
-                title="Generate MCP configuration"
+                title="Copy mcp.json configuration"
               >
                 <CogIcon className="h-4 w-4" />
               </button>
