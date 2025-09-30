@@ -9,7 +9,9 @@ import {
   ClockIcon,
   CheckCircleIcon,
   XCircleIcon,
-  QuestionMarkCircleIcon
+  QuestionMarkCircleIcon,
+  CogIcon,
+  ClipboardDocumentIcon
 } from '@heroicons/react/24/outline';
 
 interface Server {
@@ -90,6 +92,7 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
   const [tools, setTools] = useState<Tool[]>([]);
   const [loadingTools, setLoadingTools] = useState(false);
   const [showTools, setShowTools] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
   const [loadingRefresh, setLoadingRefresh] = useState(false);
 
   const getStatusIcon = () => {
@@ -174,6 +177,45 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
       setLoadingRefresh(false);
     }
   }, [server.path, loadingRefresh, onRefreshSuccess, onShowToast, onServerUpdate]);
+
+  // Generate MCP configuration for the server
+  const generateMCPConfig = useCallback(() => {
+    const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const baseUrl = window.location.origin;
+    
+    return {
+      mcpServers: {
+        [serverName]: {
+          type: "streamable-http",
+          url: `${baseUrl}${server.path}/mcp`,
+          headers: {
+            "Authorization": "Bearer [YOUR_AUTH_TOKEN]",
+            "X-Client-Id": "[YOUR_CLIENT_ID]"
+          },
+          disabled: false,
+          alwaysAllow: []
+        }
+      }
+    };
+  }, [server.name, server.path]);
+
+  // Copy configuration to clipboard
+  const copyConfigToClipboard = useCallback(async () => {
+    try {
+      const config = generateMCPConfig();
+      const configText = JSON.stringify(config, null, 2);
+      await navigator.clipboard.writeText(configText);
+      
+      if (onShowToast) {
+        onShowToast('Configuration copied to clipboard!', 'success');
+      }
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      if (onShowToast) {
+        onShowToast('Failed to copy configuration', 'error');
+      }
+    }
+  }, [generateMCPConfig, onShowToast]);
 
   return (
     <>
@@ -328,6 +370,15 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
                 ) : null;
               })()}
 
+              {/* Configuration Generator Button */}
+              <button
+                onClick={() => setShowConfig(true)}
+                className="p-2.5 text-gray-500 hover:text-green-600 dark:hover:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200"
+                title="Generate MCP configuration"
+              >
+                <CogIcon className="h-4 w-4" />
+              </button>
+
               {/* Refresh Button */}
               <button
                 onClick={handleRefreshHealth}
@@ -404,6 +455,93 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
               ) : (
                 <p className="text-gray-500 dark:text-gray-300">No tools available for this server.</p>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Configuration Modal */}
+      {showConfig && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-3xl w-full mx-4 max-h-[80vh] overflow-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                MCP Configuration for {server.name}
+              </h3>
+              <button
+                onClick={() => setShowConfig(false)}
+                className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              {/* Instructions */}
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">
+                  How to use this configuration:
+                </h4>
+                <ol className="text-sm text-blue-800 dark:text-blue-200 space-y-1 list-decimal list-inside">
+                  <li>Copy the configuration below</li>
+                  <li>Paste it into your <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">mcp.json</code> file</li>
+                  <li>Replace <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">[YOUR_AUTH_TOKEN]</code> with your gateway authentication token</li>
+                  <li>Replace <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">[YOUR_CLIENT_ID]</code> with your client ID</li>
+                  <li>Restart your AI coding assistant to load the new configuration</li>
+                </ol>
+              </div>
+
+              {/* Authentication Note */}
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+                <h4 className="font-medium text-amber-900 dark:text-amber-100 mb-2">
+                  🔐 Authentication Required
+                </h4>
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  This configuration requires gateway authentication tokens. The tokens authenticate your AI assistant 
+                  with the MCP Gateway, not the individual server. Visit the authentication documentation for setup instructions.
+                </p>
+              </div>
+
+              {/* Configuration JSON */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium text-gray-900 dark:text-white">
+                    Configuration JSON:
+                  </h4>
+                  <button
+                    onClick={copyConfigToClipboard}
+                    className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors duration-200"
+                  >
+                    <ClipboardDocumentIcon className="h-4 w-4" />
+                    Copy to Clipboard
+                  </button>
+                </div>
+                
+                <pre className="p-4 bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg overflow-x-auto text-sm text-gray-900 dark:text-gray-100">
+                  {JSON.stringify(generateMCPConfig(), null, 2)}
+                </pre>
+              </div>
+
+              {/* Usage Examples */}
+              <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
+                <h4 className="font-medium text-gray-900 dark:text-white mb-2">
+                  Compatible with:
+                </h4>
+                <div className="flex flex-wrap gap-2">
+                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
+                    VS Code
+                  </span>
+                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
+                    Cursor
+                  </span>
+                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
+                    Claude Code
+                  </span>
+                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
+                    AI Agents
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
