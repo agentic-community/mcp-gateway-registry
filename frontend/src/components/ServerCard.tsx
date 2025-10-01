@@ -93,6 +93,7 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
   const [loadingTools, setLoadingTools] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
+  const [selectedIDE, setSelectedIDE] = useState<'vscode' | 'cursor' | 'cline' | 'windsurf' | 'agents'>('vscode');
   const [loadingRefresh, setLoadingRefresh] = useState(false);
 
   const getStatusIcon = () => {
@@ -186,21 +187,92 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
     const currentUrl = new URL(window.location.origin);
     const baseUrl = `${currentUrl.protocol}//${currentUrl.hostname}`;
     
-    return {
-      mcpServers: {
-        [serverName]: {
-          type: "streamable-http",
-          url: `${baseUrl}${server.path}/mcp`,
-          headers: {
-            "Authorization": "Bearer [YOUR_AUTH_TOKEN]",
-            "X-Client-Id": "[YOUR_CLIENT_ID]"
+    // Clean up server path - remove trailing slashes and ensure single leading slash
+    const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
+    const url = `${baseUrl}${cleanPath}/mcp`;
+    
+    // Generate different config formats for different IDEs
+    switch(selectedIDE) {
+      // https://code.visualstudio.com/docs/copilot/customization/mcp-servers
+      case 'vscode':
+        return {
+          "servers": {
+            [serverName]: {
+              "type": "http",
+              "url": url,
+              "headers": {
+                "Authorization": "Bearer [YOUR_AUTH_TOKEN]"
+              }
+            }
           },
-          disabled: false,
-          alwaysAllow: []
-        }
-      }
-    };
-  }, [server.name, server.path]);
+          "inputs": [
+            {
+              "type": "promptString",
+              "id": "auth-token",
+              "description": "Gateway Authentication Token"
+            }
+          ]
+        };
+      
+      // https://cursor.com/docs/context/mcp
+      case 'cursor':
+        return {
+          "mcpServers": {
+            [serverName]: {
+              "url": url,
+              "headers": {
+                "Authorization": "Bearer [YOUR_AUTH_TOKEN]"
+              }
+            }
+          }
+        };
+        
+      // https://docs.cline.bot/mcp/configuring-mcp-servers
+      case 'cline':
+        return {
+          "mcpServers": {
+            [serverName]: {
+              "command": "curl",
+              "args": ["-X", "POST", url, "-H", "Authorization: Bearer [YOUR_AUTH_TOKEN]"],
+              "env": {
+                "AUTH_TOKEN": "[YOUR_AUTH_TOKEN]"
+              },
+              "alwaysAllow": [],
+              "disabled": false
+            }
+          }
+        };
+      
+      // https://docs.windsurf.com/windsurf/cascade/mcp
+      case 'windsurf':
+        return {
+          "mcpServers": {
+            [serverName]: {
+              "serverUrl": url
+            }
+          }
+        };
+
+      case 'agents':
+      default:
+        return {
+          "mcpServers": {
+            [serverName]: {
+              "type": "streamable-http",
+              "url": url,
+              "headers": {
+                "X-Authorization": "Bearer [INGRESS_AUTH_TOKEN]",
+                "X-User-Pool-Id": "",
+                "X-Client-Id": "[YOUR_CLIENT_ID]",
+                "X-Region": "us-east-1"
+              },
+              "disabled": false,
+              "alwaysAllow": []
+            }
+          }
+        };
+    }
+  }, [server.name, server.path, selectedIDE]);
 
   // Copy configuration to clipboard
   const copyConfigToClipboard = useCallback(async () => {
@@ -505,6 +577,71 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
                 </p>
               </div>
 
+              {/* IDE Selection */}
+              <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
+                <h4 className="font-medium text-gray-900 dark:text-white mb-3">
+                  Select your IDE/Tool:
+                </h4>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setSelectedIDE('vscode')}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedIDE === 'vscode'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    VS Code
+                  </button>
+                  <button
+                    onClick={() => setSelectedIDE('cursor')}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedIDE === 'cursor'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    Cursor
+                  </button>
+                  <button
+                    onClick={() => setSelectedIDE('cline')}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedIDE === 'cline'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    Cline
+                  </button>
+                  <button
+                    onClick={() => setSelectedIDE('windsurf')}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedIDE === 'windsurf'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    Windsurf
+                  </button>
+                  <button
+                    onClick={() => setSelectedIDE('agents')}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedIDE === 'agents'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    AI Agents
+                  </button>
+                </div>
+                <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                  {selectedIDE === 'agents' 
+                    ? 'Uses "streamable-http" transport type for AI agent compatibility'
+                    : 'Uses "sse" (Server-Sent Events) transport type for IDE compatibility'
+                  }
+                </p>
+              </div>
+
               {/* Configuration JSON */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -528,20 +665,49 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
               {/* Usage Examples */}
               <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
                 <h4 className="font-medium text-gray-900 dark:text-white mb-2">
-                  Compatible with:
+                  Configuration for: {
+                    selectedIDE === 'vscode' ? 'VS Code' : 
+                    selectedIDE === 'cursor' ? 'Cursor' : 
+                    selectedIDE === 'cline' ? 'Cline' :
+                    selectedIDE === 'windsurf' ? 'Windsurf' :
+                    'AI Agents'
+                  }
                 </h4>
                 <div className="flex flex-wrap gap-2">
-                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
-                    VS Code
+                  <span className={`px-2 py-1 rounded text-sm ${
+                    selectedIDE === 'vscode' 
+                      ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                  }`}>
+                    VS Code {selectedIDE === 'vscode' ? '(Selected)' : ''}
                   </span>
-                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
-                    Cursor
+                  <span className={`px-2 py-1 rounded text-sm ${
+                    selectedIDE === 'cursor' 
+                      ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                  }`}>
+                    Cursor {selectedIDE === 'cursor' ? '(Selected)' : ''}
                   </span>
-                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
-                    Claude Code
+                  <span className={`px-2 py-1 rounded text-sm ${
+                    selectedIDE === 'cline' 
+                      ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                  }`}>
+                    Cline {selectedIDE === 'cline' ? '(Selected)' : ''}
                   </span>
-                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
-                    AI Agents
+                  <span className={`px-2 py-1 rounded text-sm ${
+                    selectedIDE === 'windsurf' 
+                      ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                  }`}>
+                    Windsurf {selectedIDE === 'windsurf' ? '(Selected)' : ''}
+                  </span>
+                  <span className={`px-2 py-1 rounded text-sm ${
+                    selectedIDE === 'agents' 
+                      ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                  }`}>
+                    AI Agents {selectedIDE === 'agents' ? '(Selected)' : ''}
                   </span>
                 </div>
               </div>
