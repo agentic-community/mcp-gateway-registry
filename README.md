@@ -80,6 +80,22 @@ The **MCP Gateway & Registry** is an enterprise-ready platform that centralizes 
 
 ---
 
+## What's New
+
+- **🔐 Keycloak Identity Provider Integration** - Enterprise-grade authentication with individual AI agent audit trails, group-based authorization, and production-ready service account management. [Learn more](docs/keycloak-integration.md)
+- **Real-Time Metrics & Observability** - Comprehensive monitoring via Grafana dashboards with metrics stored in SQLite and exposed through OpenTelemetry (OTEL). Track server health, tool usage, authentication events, and performance metrics in real-time for complete visibility into your MCP infrastructure. [Observability Guide](docs/OBSERVABILITY.md)
+- **Service Management Utility** - New comprehensive script for server lifecycle management with automated verification and testing. [Learn more](docs/service-management.md)
+- **Tag-Based Tool Filtering** - Enhanced intelligent_tool_finder now supports filtering tools by server tags for precise categorical discovery alongside semantic search
+- **Amazon Bedrock AgentCore Integration** - Direct access to AWS services through managed MCP endpoints
+- **Three-Legged OAuth (3LO) Support** - External service integration (Atlassian, Google, GitHub)
+- **JWT Token Vending Service** - Self-service token generation for automation
+- **Automated Token Refresh Service** - Background token refresh to maintain continuous authentication
+- **Modern React Frontend** - Complete UI overhaul with TypeScript and real-time updates
+- **Dynamic Tool Discovery** - AI agents autonomously find and execute specialized tools
+- **Fine-Grained Access Control** - Granular permissions for servers, methods, and individual tools
+
+---
+
 ## Core Use Cases
 
 ### AI Agent & Coding Assistant Governance
@@ -250,6 +266,8 @@ flowchart TB
 
 ## Quick Start
 
+> **📱 Running on macOS?** See our [macOS Setup Guide](docs/macos-setup-guide.md) for platform-specific instructions and optimizations.
+
 ### Option A: Pre-built Images (Instant Setup)
 
 Get running in under 2 minutes with pre-built containers:
@@ -302,7 +320,7 @@ Complete: **[Testing with mcp_client.py and agent.py](docs/complete-setup-guide.
 ### Testing & Integration Options
 
 **Python Scripts:**
-- `./mcp_client.py` - Core MCP operations (ping, list tools, call tools)
+- `./cli/mcp_client.py` - Core MCP operations (ping, list tools, call tools)
 - `./tests/mcp_cmds.sh` - Shell-based MCP testing operations
 
 **Python Agent:**
@@ -327,6 +345,17 @@ Transform how both autonomous AI agents and development teams access enterprise 
 <td width="50%">
 <img src="docs/img/roo_agent.png" alt="Roo Code Agent in Action" />
 <p><em>AI assistants executing approved enterprise tools with governance</em></p>
+</td>
+</tr>
+<tr>
+<td colspan="2">
+
+### Observability
+
+Comprehensive real-time metrics and monitoring through Grafana dashboards with dual-path storage: SQLite for detailed historical analysis and OpenTelemetry (OTEL) export for integration with Prometheus, CloudWatch, Datadog, and other monitoring platforms. Track authentication events, tool executions, discovery queries, and system performance metrics. [Learn more](docs/OBSERVABILITY.md)
+
+<img src="docs/img/dashboard.png" alt="Grafana Metrics Dashboard" />
+<p><em>Real-time metrics and observability dashboard tracking server health, tool usage, and authentication events</em></p>
 </td>
 </tr>
 </table>
@@ -364,20 +393,6 @@ Transform how both autonomous AI agents and development teams access enterprise 
 
 ---
 
-## What's New
-
-- **Tag-Based Tool Filtering** - Enhanced intelligent_tool_finder now supports filtering tools by server tags for precise categorical discovery alongside semantic search
-- **🔐 Keycloak Identity Provider Integration** - Enterprise-grade authentication with individual AI agent audit trails, group-based authorization, and production-ready service account management. [Learn more](docs/keycloak-integration.md)
-- **Amazon Bedrock AgentCore Integration** - Direct access to AWS services through managed MCP endpoints
-- **Three-Legged OAuth (3LO) Support** - External service integration (Atlassian, Google, GitHub)
-- **JWT Token Vending Service** - Self-service token generation for automation
-- **Automated Token Refresh Service** - Background token refresh to maintain continuous authentication
-- **Modern React Frontend** - Complete UI overhaul with TypeScript and real-time updates
-- **Dynamic Tool Discovery** - AI agents autonomously find and execute specialized tools
-- **Fine-Grained Access Control** - Granular permissions for servers, methods, and individual tools
-
----
-
 ## Documentation
 
 | Getting Started | Enterprise Setup | Developer & Operations |
@@ -385,8 +400,9 @@ Transform how both autonomous AI agents and development teams access enterprise 
 | [Complete Setup Guide](docs/complete-setup-guide.md)<br/>**NEW!** Step-by-step from scratch on AWS EC2 | [Authentication Guide](docs/auth.md)<br/>OAuth and identity provider integration | [AI Coding Assistants Setup](docs/ai-coding-assistants-setup.md)<br/>VS Code, Cursor, Claude Code integration |
 | [Installation Guide](docs/installation.md)<br/>Complete setup instructions for EC2 and EKS | [Keycloak Integration](docs/keycloak-integration.md)<br/>Enterprise identity with agent audit trails | [API Reference](docs/registry_api.md)<br/>Programmatic registry management |
 | [Quick Start Tutorial](docs/quick-start.md)<br/>Get running in 5 minutes | [Amazon Cognito Setup](docs/cognito.md)<br/>Step-by-step IdP configuration | [Token Refresh Service](docs/token-refresh-service.md)<br/>Automated token refresh and lifecycle management |
-| [Configuration Reference](docs/configuration.md)<br/>Environment variables and settings |  |  |
+| [Configuration Reference](docs/configuration.md)<br/>Environment variables and settings |  | [Observability Guide](docs/OBSERVABILITY.md)<br/>**NEW!** Metrics, monitoring, and OpenTelemetry setup |
 | | [Fine-Grained Access Control](docs/scopes.md)<br/>Permission management and security | [Dynamic Tool Discovery](docs/dynamic-tool-discovery.md)<br/>Autonomous agent capabilities |
+| | [Service Management](docs/service-management.md)<br/>Server lifecycle and operations | |
 | | | [Production Deployment](docs/installation.md)<br/>Complete setup for production environments |
 | | | [Troubleshooting Guide](docs/FAQ.md)<br/>Common issues and solutions |
 
@@ -408,40 +424,72 @@ Transform how both autonomous AI agents and development teams access enterprise 
 - [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines
 - [Security Policy](SECURITY.md) - Responsible disclosure process
 
+### Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=agentic-community/mcp-gateway-registry&type=Date)](https://star-history.com/#agentic-community/mcp-gateway-registry&Date)
+
 ### Roadmap
 
 The following GitHub issues represent our current development roadmap and planned features:
 
 **Major Features**
 
-- **[#120 - CLI Tool for MCP Server Registration and Health Validation](https://github.com/agentic-community/mcp-gateway-registry/issues/120)** 🚧 **IN PROGRESS**
-  Command-line interface for automated server registration, health checks, and registry management. Streamlines DevOps workflows and CI/CD integration.
+- **[#160 - Documentation: Add Amazon Bedrock AgentCore Gateway integration example](https://github.com/agentic-community/mcp-gateway-registry/issues/160)** 🚧 **IN PROGRESS**
+  Create comprehensive documentation and examples for integrating Amazon Bedrock AgentCore Gateway as an MCP server with egress authentication support.
 
-- **[#38 - Usage Metrics and Analytics System](https://github.com/agentic-community/mcp-gateway-registry/issues/38)** 🚧 **IN PROGRESS**
-  Implement comprehensive usage tracking across user and agent identities, with metrics emission from auth server, registry, and intelligent tool finder.
+- **[#159 - Add scope management: create/delete Keycloak groups with scope configuration](https://github.com/agentic-community/mcp-gateway-registry/issues/159)** 🚧 **IN PROGRESS**
+  Add dynamic scope management functionality to create/delete Keycloak groups with corresponding scope configurations through the service management CLI.
 
-- **[#129 - Virtual MCP Server Support - Dynamic Tool Aggregation and Intelligent Routing](https://github.com/agentic-community/mcp-gateway-registry/issues/129)**
+- **[#158 - Replace /opt/mcp-gateway with ${HOME}/mcp-gateway to eliminate sudo requirements](https://github.com/agentic-community/mcp-gateway-registry/issues/158)** 🚧 **IN PROGRESS**
+  Improve installation experience by using user home directory instead of /opt, removing the need for sudo privileges during setup.
+
+- **[#37 - Multi-Level Registry Support](https://github.com/agentic-community/mcp-gateway-registry/issues/37)** 🚧 **IN PROGRESS**
+  Add support for federated registries that can connect to other registries, enabling hierarchical MCP infrastructure with cross-IdP authentication.
+
+- **[#132 - Registry UI: Add MCP Configuration Generator](https://github.com/agentic-community/mcp-gateway-registry/issues/132)** 🚧 **IN PROGRESS**
+  Add copy-paste MCP configuration generator to Registry UI for seamless integration with AI coding assistants (VS Code, Cursor, Claude Code).
+
+- **[#129 - Virtual MCP Server Support - Dynamic Tool Aggregation and Intelligent Routing](https://github.com/agentic-community/mcp-gateway-registry/issues/129)** 🚧 **IN PROGRESS**
   Enable logical grouping of tools from multiple backend servers with intelligent routing using Lua/JavaScript scripting. Provides purpose-built virtual servers that abstract away backend complexity.
 
 - **[#121 - Migrate to OpenSearch for Server Storage and Vector Search](https://github.com/agentic-community/mcp-gateway-registry/issues/121)**
   Replace current storage with OpenSearch to provide advanced vector search capabilities and improved scalability for large server registries.
 
-- **[#119 - Implement Well-Known URL for MCP Server Discovery](https://github.com/agentic-community/mcp-gateway-registry/issues/119)**
-  Standardized discovery mechanism using /.well-known/mcp-servers endpoint for automatic server detection and federation across organizations.
-
 - **[#118 - Agent-as-Tool Integration: Dynamic MCP Server Generation](https://github.com/agentic-community/mcp-gateway-registry/issues/118)**
   Convert existing AI agents into MCP servers dynamically, enabling legacy agent ecosystems to participate in the MCP protocol without code rewrites.
 
-- **[#37 - Multi-Level Registry Support](https://github.com/agentic-community/mcp-gateway-registry/issues/37)**
-  Add support for federated registries that can connect to other registries, enabling hierarchical MCP infrastructure with cross-IdP authentication.
+- **[#98 - Complete GDPR and SOX Compliance Implementation](https://github.com/agentic-community/mcp-gateway-registry/issues/98)**
+  Full compliance implementation for GDPR and SOX requirements, including data retention policies, audit trails, and privacy controls.
 
 - **[#39 - Tool Popularity Scoring and Rating System](https://github.com/agentic-community/mcp-gateway-registry/issues/39)**
-  Enhance tool discovery with popularity scores and star ratings based on usage patterns and agent feedback. *Depends on #38.*
+  Enhance tool discovery with popularity scores and star ratings based on usage patterns and agent feedback.
 
 **Authentication & Identity**
 
 - **[#128 - Add Microsoft Entra ID (Azure AD) Authentication Provider](https://github.com/agentic-community/mcp-gateway-registry/issues/128)** 🚧 **IN PROGRESS**
   Extend authentication support beyond Keycloak to include Microsoft Entra ID integration. Enables enterprise SSO for organizations using Azure Active Directory.
+
+**DevOps & Operations**
+
+- **[#48 - Update EKS Helm Chart for Multi-Container Architecture](https://github.com/agentic-community/mcp-gateway-registry/issues/48)**
+  Update Helm charts to support the new multi-container Docker Compose architecture for Kubernetes deployments.
+
+- **[#70 - Docker Build & Runtime Performance Optimization](https://github.com/agentic-community/mcp-gateway-registry/issues/70)**
+  Optimize Docker build times and runtime performance for faster development and deployment cycles.
+
+**Completed**
+
+- **[#111 - Standalone Metrics Collection Service](https://github.com/agentic-community/mcp-gateway-registry/issues/111)** ✅ **COMPLETED**
+  Dedicated metrics collection service implemented for comprehensive monitoring and analytics across all MCP Gateway components. [Documentation](docs/OBSERVABILITY.md)
+
+- **[#38 - Usage Metrics and Analytics System](https://github.com/agentic-community/mcp-gateway-registry/issues/38)** ✅ **COMPLETED**
+  Comprehensive usage tracking implemented across user and agent identities, with metrics emission from auth server, registry, and intelligent tool finder. [Documentation](docs/OBSERVABILITY.md)
+
+- **[#120 - CLI Tool for MCP Server Registration and Health Validation](https://github.com/agentic-community/mcp-gateway-registry/issues/120)** ✅ **COMPLETED**
+  Command-line interface for automated server registration, health checks, and registry management. Streamlines DevOps workflows and CI/CD integration. [Documentation](docs/service-management.md)
+
+- **[#119 - Implement Well-Known URL for MCP Server Discovery](https://github.com/agentic-community/mcp-gateway-registry/issues/119)** ✅ **COMPLETED**
+  Standardized discovery mechanism using /.well-known/mcp-servers endpoint for automatic server detection and federation across organizations.
 
 - **[#18 - Add Token Vending Capability to Auth Server](https://github.com/agentic-community/mcp-gateway-registry/issues/18)** ✅ **COMPLETED**
   Auth server token vending capabilities implemented for enhanced authentication workflows with OAuth token management and service account provisioning.

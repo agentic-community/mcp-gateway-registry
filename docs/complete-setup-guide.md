@@ -81,9 +81,17 @@ cd ~/workspace
 ```bash
 # Install Docker
 sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+
+# Add Docker's official GPG key
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Add Docker repository (for Ubuntu 24.04 Noble and later)
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list
+
+# Update package list
 sudo apt-get update
+
+# Install Docker Engine and CLI
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io
 
 # Add user to docker group
@@ -92,25 +100,23 @@ sudo usermod -aG docker $USER
 # Apply the group change immediately for current shell
 newgrp docker
 
-# Verify Docker works without sudo:
+# Verify Docker works without sudo
 docker --version
-# Expected output: Docker version 24.x.x or higher
+# Expected output: Docker version 27.x.x or higher
 
 # Test Docker permissions (MUST work without sudo)
 docker run hello-world
 # Should show "Hello from Docker!" message
 
-# Install Docker Compose (standalone version)
-sudo apt-get install -y docker-compose
+# Install Docker Compose V2 Plugin (REQUIRED)
+sudo apt-get install -y docker-compose-plugin
 
-# Verify Docker Compose installation
-docker-compose --version
-# Expected output: docker-compose version 1.29.x or higher
+# Verify Docker Compose V2 installation
+docker compose version
+# Expected output: Docker Compose version v2.x.x or higher
 
-# Alternative: If the above doesn't work, install Docker Compose V2 plugin
-# sudo apt-get update
-# sudo apt-get install -y docker-compose-plugin
-# Then use 'docker compose' instead of 'docker-compose' in all commands
+# Note: The build_and_run.sh script requires Docker Compose V2 (docker compose)
+# Do NOT use the old standalone docker-compose v1
 ```
 
 ### Install Node.js and npm
@@ -504,7 +510,7 @@ source .oauth-tokens/agent-test-agent-m2m.env
 # export KEYCLOAK_REALM="mcp-gateway"
 
 # Test basic connectivity
-uv run python mcp_client.py ping
+uv run python cli/mcp_client.py ping
 
 # Expected output:
 # ✓ M2M authentication successful
@@ -516,16 +522,16 @@ uv run python mcp_client.py ping
 # }
 
 # List available tools
-uv run python mcp_client.py list
+uv run python cli/mcp_client.py list
 # Expected: List of available MCP tools
 
 # Test calling a simple tool to get current time
 # Note: current_time_by_timezone is on the 'currenttime' server, not 'mcpgw'
-uv run python mcp_client.py --url http://localhost/currenttime/mcp call --tool current_time_by_timezone --args '{"tz_name":"America/New_York"}'
+uv run python cli/mcp_client.py --url http://localhost/currenttime/mcp call --tool current_time_by_timezone --args '{"tz_name":"America/New_York"}'
 # Expected: Current time in JSON format
 
 # Alternative: Use intelligent_tool_finder on mcpgw to find and call tools dynamically
-uv run python mcp_client.py call --tool intelligent_tool_finder --args '{"natural_language_query":"get current time in New York"}'
+uv run python cli/mcp_client.py call --tool intelligent_tool_finder --args '{"natural_language_query":"get current time in New York"}'
 # This will automatically find and route to the correct server
 ```
 
@@ -533,7 +539,7 @@ uv run python mcp_client.py call --tool intelligent_tool_finder --args '{"natura
 
 ```bash
 # Use the intelligent tool finder to discover tools with natural language
-uv run python mcp_client.py call --tool intelligent_tool_finder --args '{"natural_language_query":"What is the current time?"}'
+uv run python cli/mcp_client.py call --tool intelligent_tool_finder --args '{"natural_language_query":"What is the current time?"}'
 # Expected: Tool discovery results with time-related tools
 
 # You can also run a full agent with the comprehensive agent script
