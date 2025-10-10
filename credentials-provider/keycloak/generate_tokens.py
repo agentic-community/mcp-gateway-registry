@@ -130,7 +130,9 @@ class TokenGenerator:
                         realm: str, oauth_tokens_dir: str) -> bool:
         """Save token to both .env and .json files"""
         access_token = token_data['access_token']
+        refresh_token = token_data.get('refresh_token')
         expires_in = token_data.get('expires_in')
+        refresh_expires_in = token_data.get('refresh_expires_in')
 
         # Create output directory
         os.makedirs(oauth_tokens_dir, exist_ok=True)
@@ -138,9 +140,13 @@ class TokenGenerator:
         # Generate timestamps
         generated_at = datetime.now(timezone.utc).isoformat()
         expires_at = None
+        refresh_expires_at = None
         if expires_in:
             expiry_timestamp = datetime.now(timezone.utc).timestamp() + expires_in
             expires_at = datetime.fromtimestamp(expiry_timestamp, timezone.utc).isoformat()
+        if refresh_expires_in:
+            refresh_expiry_timestamp = datetime.now(timezone.utc).timestamp() + refresh_expires_in
+            refresh_expires_at = datetime.fromtimestamp(refresh_expiry_timestamp, timezone.utc).isoformat()
 
         # Save .env file
         env_file = os.path.join(oauth_tokens_dir, f"{agent_name}.env")
@@ -149,6 +155,8 @@ class TokenGenerator:
                 f.write(f"# Generated access token for {agent_name}\n")
                 f.write(f"# Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f'export ACCESS_TOKEN="{access_token}"\n')
+                if refresh_token:
+                    f.write(f'export REFRESH_TOKEN="{refresh_token}"\n')
                 f.write(f'export CLIENT_ID="{client_id}"\n')
                 f.write(f'export CLIENT_SECRET="{client_secret}"\n')
                 f.write(f'export KEYCLOAK_URL="{keycloak_url}"\n')
@@ -179,6 +187,12 @@ class TokenGenerator:
                 "auth_method": "client_credentials"
             }
         }
+
+        # Add refresh token data if available
+        if refresh_token:
+            token_json["refresh_token"] = refresh_token
+            token_json["refresh_expires_in"] = refresh_expires_in
+            token_json["refresh_expires_at"] = refresh_expires_at
 
         try:
             with open(json_file, 'w') as f:
