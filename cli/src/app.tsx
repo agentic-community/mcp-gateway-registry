@@ -59,7 +59,8 @@ export default function App({options}: AppProps) {
   const [tokenSource, setTokenSource] = useState<string | undefined>();
 
   // Session token usage and cost tracking
-  const [sessionTotalTokens, setSessionTotalTokens] = useState<number>(0);
+  const [sessionInputTokens, setSessionInputTokens] = useState<number>(0);
+  const [sessionOutputTokens, setSessionOutputTokens] = useState<number>(0);
   const [sessionTotalCost, setSessionTotalCost] = useState<number>(0);
 
   const gatewayUrl = useMemo(() => options.url ?? "http://localhost/mcpgw/mcp", [options.url]);
@@ -419,7 +420,8 @@ export default function App({options}: AppProps) {
             const turnCost = calculateCost(currentModel, input_tokens, output_tokens);
 
             // Update session totals
-            setSessionTotalTokens((prev) => prev + total_tokens);
+            setSessionInputTokens((prev) => prev + input_tokens);
+            setSessionOutputTokens((prev) => prev + output_tokens);
             if (turnCost !== undefined) {
               setSessionTotalCost((prev) => prev + turnCost);
             }
@@ -549,7 +551,8 @@ export default function App({options}: AppProps) {
               lastRefresh={lastTokenRefresh}
               source={tokenSource}
               model={getDefaultModel(getDefaultProvider())}
-              totalTokens={sessionTotalTokens}
+              inputTokens={sessionInputTokens}
+              outputTokens={sessionOutputTokens}
               cost={sessionTotalCost}
             />
           </Box>

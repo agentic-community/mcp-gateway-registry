@@ -7,7 +7,8 @@ interface TokenStatusFooterProps {
   lastRefresh?: Date;
   source?: string;
   model?: string;
-  totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   cost?: number;
 }
 
@@ -18,7 +19,8 @@ export function TokenStatusFooter({
   lastRefresh,
   source,
   model,
-  totalTokens,
+  inputTokens,
+  outputTokens,
   cost
 }: TokenStatusFooterProps) {
   const formatTime = (seconds: number): string => {
@@ -80,10 +82,10 @@ export function TokenStatusFooter({
           <Text color="cyan">{model}</Text>
         </Text>
       )}
-      {totalTokens !== undefined && totalTokens > 0 && (
+      {(inputTokens !== undefined || outputTokens !== undefined) && (inputTokens! > 0 || outputTokens! > 0) && (
         <Text>
-          <Text color="gray"> | Tokens: </Text>
-          <Text color="cyan">{totalTokens.toLocaleString()}</Text>
+          <Text color="gray">Input tokens: {(inputTokens || 0).toLocaleString()}</Text>
+          <Text color="gray">Output tokens: {(outputTokens || 0).toLocaleString()}</Text>
         </Text>
       )}
       {cost !== undefined && cost > 0 && (
