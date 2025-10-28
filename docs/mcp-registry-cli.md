@@ -2,7 +2,7 @@
 
 Interactive terminal interface for chatting with AI models and using MCP (Model Context Protocol) tools.
 
-![MCP Registry CLI Screenshot](img/mcp-registry-cli.png.png)
+![MCP Registry CLI Screenshot](img/mcp-registry-cli.png)
 
 ## Table of Contents
 - [Quick Start](#quick-start)
