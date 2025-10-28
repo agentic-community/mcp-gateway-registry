@@ -84,7 +84,7 @@ export function TokenStatusFooter({
       )}
       {(inputTokens !== undefined || outputTokens !== undefined) && (inputTokens! > 0 || outputTokens! > 0) && (
         <Text>
-          <Text color="gray"> Tokens: </Text>
+          <Text color="gray"> | Tokens: </Text>
           <Text color="cyan">In: {(inputTokens || 0).toLocaleString()}</Text>
           <Text color="gray"> | </Text>
           <Text color="cyan">Out: {(outputTokens || 0).toLocaleString()}</Text>
