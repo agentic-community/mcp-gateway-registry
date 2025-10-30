@@ -1,7 +1,7 @@
 <div align="center">
-<img src="registry/static/mcp_gateway_horizontal_white_logo.png" alt="MCP Gateway Logo" width="100%">
+<img src="registry/static/mcp_gateway_horizontal_white_logo.png" alt="MCP Gateway & Registry Logo" width="100%">
 
-**Enterprise-Ready Gateway for AI Development Tools**
+**Enterprise-Ready Gateway & Registry for AI Development Tools**
 
 [![GitHub stars](https://img.shields.io/github/stars/agentic-community/mcp-gateway-registry?style=flat&logo=github)](https://github.com/agentic-community/mcp-gateway-registry/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/agentic-community/mcp-gateway-registry?style=flat&logo=github)](https://github.com/agentic-community/mcp-gateway-registry/network)
@@ -11,7 +11,7 @@
 
 [🚀 Get Running Now](#option-a-pre-built-images-instant-setup) | [Quick Start](#quick-start) | [Documentation](docs/) | [Enterprise Features](#enterprise-features) | [Community](#community)
 
-**Demo Videos:** [Full End-to-End Functionality](https://github.com/user-attachments/assets/5ffd8e81-8885-4412-a4d4-3339bbdba4fb) | [OAuth 3-Legged Authentication](https://github.com/user-attachments/assets/3c3a570b-29e6-4dd3-b213-4175884396cc) | [Dynamic Tool Discovery](https://github.com/user-attachments/assets/cee25b31-61e4-4089-918c-c3757f84518c)
+**Demo Videos:** ⭐ [MCP Registry CLI Demo](https://github.com/user-attachments/assets/98200866-e8bd-4ac3-bad6-c6d42b261dbe) | [Full End-to-End Functionality](https://github.com/user-attachments/assets/5ffd8e81-8885-4412-a4d4-3339bbdba4fb) | [OAuth 3-Legged Authentication](https://github.com/user-attachments/assets/3c3a570b-29e6-4dd3-b213-4175884396cc) | [Dynamic Tool Discovery](https://github.com/user-attachments/assets/cee25b31-61e4-4089-918c-c3757f84518c)
 
 </div>
 
@@ -80,8 +80,21 @@ The **MCP Gateway & Registry** is an enterprise-ready platform that centralizes 
 
 ---
 
+## MCP Registry CLI
+
+Interactive terminal interface for chatting with AI models and discovering MCP tools in natural language. Talk to the registry using a Claude Code-like conversational interface with real-time token status, cost tracking, and AI model selection.
+
+<div align="center">
+<img src="docs/img/mcp-registry-cli.png" alt="MCP Registry CLI Screenshot" width="800"/>
+</div>
+
+**Quick Start:** `registry --url https://mcpgateway.ddns.net` | [Full Guide](docs/mcp-registry-cli.md)
+
+---
+
 ## What's New
 
+- **🤖 Agentic CLI for MCP Registry** - Talk to the Registry in natural language using a Claude Code-like interface. Discover tools, ask questions, and execute MCP commands conversationally. [Learn more](docs/mcp-registry-cli.md)
 - **💬 Interactive MCP-Registry CLI** - Terminal-based chat interface with AI-powered MCP tool discovery. Supports Amazon Bedrock and Anthropic API. [MCP-Registry CLI](docs/mcp-registry-cli.md)
 - **🔒 MCP Server Security Scanning** - Integrated vulnerability scanning with [Cisco AI Defence MCP Scanner](https://github.com/cisco-ai-defense/mcp-scanner). Automatic security scans during server registration, periodic registry-wide scans with detailed markdown reports, and automatic disabling of servers with security issues.
 - **📥 Import Servers from Anthropic MCP Registry** - Import curated MCP servers from Anthropic's registry with a single command. [Import Guide](docs/anthropic-registry-import.md)
@@ -438,31 +451,26 @@ The following GitHub issues represent our current development roadmap and planne
 
 **Major Features**
 
+- **[#128 - Add Microsoft Entra ID (Azure AD) Authentication Provider](https://github.com/agentic-community/mcp-gateway-registry/issues/128)** 🚧 **IN PROGRESS**
+  Extend authentication support beyond Keycloak to include Microsoft Entra ID integration. Enables enterprise SSO for organizations using Azure Active Directory.
+
 - **[#170 - Architectural Proposal: Separate Gateway and Registry Containers](https://github.com/agentic-community/mcp-gateway-registry/issues/170)** 🚧 **IN PROGRESS**
   Architectural enhancement to separate gateway and registry functionality into independent containers for improved scalability, maintainability, and deployment flexibility.
-
-- **[#132 - Registry UI: Add MCP Configuration Generator](https://github.com/agentic-community/mcp-gateway-registry/issues/132)** 🚧 **IN PROGRESS**
-  Add copy-paste MCP configuration generator to Registry UI for seamless integration with AI coding assistants (VS Code, Cursor, Claude Code).
 
 - **[#129 - Virtual MCP Server Support - Dynamic Tool Aggregation and Intelligent Routing](https://github.com/agentic-community/mcp-gateway-registry/issues/129)** 🚧 **IN PROGRESS**
   Enable logical grouping of tools from multiple backend servers with intelligent routing using Lua/JavaScript scripting. Provides purpose-built virtual servers that abstract away backend complexity.
 
-- **[#121 - Migrate to OpenSearch for Server Storage and Vector Search](https://github.com/agentic-community/mcp-gateway-registry/issues/121)**
-  Replace current storage with OpenSearch to provide advanced vector search capabilities and improved scalability for large server registries.
-
 - **[#118 - Agent-as-Tool Integration: Dynamic MCP Server Generation](https://github.com/agentic-community/mcp-gateway-registry/issues/118)**
   Convert existing AI agents into MCP servers dynamically, enabling legacy agent ecosystems to participate in the MCP protocol without code rewrites.
+
+- **[#121 - Migrate to OpenSearch for Server Storage and Vector Search](https://github.com/agentic-community/mcp-gateway-registry/issues/121)**
+  Replace current storage with OpenSearch to provide advanced vector search capabilities and improved scalability for large server registries.
 
 - **[#98 - Complete GDPR and SOX Compliance Implementation](https://github.com/agentic-community/mcp-gateway-registry/issues/98)**
   Full compliance implementation for GDPR and SOX requirements, including data retention policies, audit trails, and privacy controls.
 
 - **[#39 - Tool Popularity Scoring and Rating System](https://github.com/agentic-community/mcp-gateway-registry/issues/39)**
   Enhance tool discovery with popularity scores and star ratings based on usage patterns and agent feedback.
-
-**Authentication & Identity**
-
-- **[#128 - Add Microsoft Entra ID (Azure AD) Authentication Provider](https://github.com/agentic-community/mcp-gateway-registry/issues/128)** 🚧 **IN PROGRESS**
-  Extend authentication support beyond Keycloak to include Microsoft Entra ID integration. Enables enterprise SSO for organizations using Azure Active Directory.
 
 **DevOps & Operations**
 
@@ -473,6 +481,9 @@ The following GitHub issues represent our current development roadmap and planne
   Optimize Docker build times and runtime performance for faster development and deployment cycles.
 
 **Completed**
+
+- **[#132 - Registry UI: Add MCP Configuration Generator](https://github.com/agentic-community/mcp-gateway-registry/issues/132)** ✅ **COMPLETED**
+  Copy-paste MCP configuration generator added to Registry UI for seamless integration with AI coding assistants (VS Code, Cursor, Claude Code).
 
 - **[#171 - Feature: Import Servers from Anthropic MCP Registry](https://github.com/agentic-community/mcp-gateway-registry/issues/171)** ✅ **COMPLETED**
   Anthropic MCP Registry import functionality implemented. Import curated servers with a single command and access through the gateway with full REST API compatibility. [Import Guide](docs/anthropic-registry-import.md) | [API Documentation](docs/anthropic_registry_api.md)
