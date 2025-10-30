@@ -15,7 +15,8 @@ from registry.auth.routes import (
     oauth2_login_redirect,
     oauth2_callback,
     login_submit,
-    logout
+    logout_get,
+    logout_post
 )
 
 
@@ -275,9 +276,25 @@ class TestAuthRoutes:
             assert "Invalid+username+or+password" in response.headers["location"]
 
     @pytest.mark.asyncio
-    async def test_logout(self, mock_settings):
-        """Test logout functionality."""
-        response = await logout()
+    async def test_logout_get(self, mock_request, mock_settings):
+        """Test logout functionality via GET."""
+        response = await logout_get(mock_request, session=None)
+        
+        assert isinstance(response, RedirectResponse)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/login"
+        
+        # Check that cookie deletion header is present
+        cookie_headers = [h for h in response.raw_headers if h[0] == b'set-cookie']
+        assert len(cookie_headers) > 0
+        cookie_value = cookie_headers[0][1].decode()
+        assert mock_settings.session_cookie_name in cookie_value
+        assert "expires=" in cookie_value.lower()  # Cookie deletion sets expires in past
+    
+    @pytest.mark.asyncio
+    async def test_logout_post(self, mock_request, mock_settings):
+        """Test logout functionality via POST."""
+        response = await logout_post(mock_request, session=None)
         
         assert isinstance(response, RedirectResponse)
         assert response.status_code == 303
