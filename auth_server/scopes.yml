@@ -31,6 +31,7 @@ UI-Scopes:
     toggle_service:
     - all
 group_mappings:
+  # Keycloak/Generic group mappings (by group name)
   mcp-registry-admin:
   - mcp-registry-admin
   - mcp-servers-unrestricted/read
@@ -52,6 +53,16 @@ group_mappings:
   mcp-servers-restricted:
   - mcp-servers-restricted/read
   - mcp-servers-restricted/execute
+  # Entra ID group mappings (by Azure AD Group Object IDs)
+  # Admin group: Mcp-test-admin
+  "16c7e67e-e8ae-498c-ba2e-0593c0159e43":
+  - mcp-registry-admin
+  - mcp-servers-unrestricted/read
+  - mcp-servers-unrestricted/execute
+  # Users group: mcp-test-users
+  "62c07ac1-03d0-4924-90c7-a0255f23bd1d":
+  - mcp-registry-user
+  - mcp-servers-restricted/read
 mcp-servers-unrestricted/read:
 - server: auth_server
   methods:
