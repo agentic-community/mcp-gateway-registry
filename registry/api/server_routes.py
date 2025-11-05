@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 import httpx
 
 from ..core.config import settings
-from ..auth.dependencies import web_auth, api_auth, enhanced_auth
+from ..auth.dependencies import web_auth, api_auth, enhanced_auth, nginx_proxied_auth
 from ..services.server_service import server_service
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ async def read_root(
 @router.get("/servers")
 async def get_servers_json(
     query: str | None = None,
-    user_context: Annotated[dict, Depends(enhanced_auth)] = None,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """Get servers data as JSON for React frontend (reuses root route logic)."""
     service_data = []

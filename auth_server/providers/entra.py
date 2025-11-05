@@ -142,11 +142,19 @@ class EntraIdProvider(AuthProvider):
             logger.debug(f"Token validation successful for user: {claims.get('preferred_username', 'unknown')}")
 
             # Extract user info from claims
+            # For M2M tokens, group memberships are in 'roles' claim instead of 'groups'
+            # For user tokens, they're in 'groups' claim
+            groups = claims.get('groups', [])
+            if not groups and 'roles' in claims:
+                # M2M token - use roles claim as groups
+                groups = claims.get('roles', [])
+                logger.debug(f"M2M token detected, using roles claim as groups: {groups}")
+
             return {
                 'valid': True,
                 'username': claims.get('preferred_username', claims.get('sub')),
                 'email': claims.get('email'),
-                'groups': claims.get('groups', []),
+                'groups': groups,
                 'scopes': claims.get('scope', '').split() if claims.get('scope') else [],
                 'client_id': claims.get('azp', self.client_id),
                 'method': 'entra',
