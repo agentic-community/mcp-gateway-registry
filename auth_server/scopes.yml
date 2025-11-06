@@ -61,8 +61,7 @@ group_mappings:
   - mcp-servers-unrestricted/execute
   # Users group: mcp-test-users
   "62c07ac1-03d0-4924-90c7-a0255f23bd1d":
-  - mcp-registry-user
-  - mcp-servers-restricted/read
+  - mcp-servers-currenttime-only/read
 mcp-servers-unrestricted/read:
 - server: auth_server
   methods:
@@ -544,3 +543,15 @@ mcp-servers-restricted/execute:
   - temporal_anomaly_detector
   - user_profile_analyzer
   - synthetic_data_generator
+mcp-servers-currenttime-only/read:
+- server: currenttime
+  methods:
+  - initialize
+  - notifications/initialized
+  - ping
+  - tools/list
+  - tools/call
+  - resources/list
+  - resources/templates/list
+  tools:
+  - current_time_by_timezone
