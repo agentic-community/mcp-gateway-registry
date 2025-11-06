@@ -82,22 +82,29 @@ addopts = [
     "--self-contained-html",
     "--json-report",
     "--json-report-file=tests/reports/report.json",
+    "-v",  # Verbose output
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
-    "unit: Unit tests",
-    "integration: Integration tests",
-    "e2e: End-to-end tests",
-    "auth: Authentication tests",
-    "servers: Server management tests", 
-    "search: Search and AI tests",
+    "unit: Unit tests (isolated components)",
+    "integration: Integration tests (component interaction)",
+    "e2e: End-to-end tests (complete workflows)",
+    "auth: Authentication and authorization tests",
+    "servers: Server management tests",
+    "search: Search and FAISS tests",
     "health: Health monitoring tests",
     "core: Core infrastructure tests",
-    "slow: Slow running tests",
+    "cli: CLI tools tests",
+    "scopes: Scopes manager tests",
+    "internal_api: Internal API tests",
+    "gateway: MCP Gateway server tests",
+    "slow: Slow running tests (>5s)",
+    "critical: Critical path tests (require 95% coverage)",
 ]
 
 # Coverage Configuration
