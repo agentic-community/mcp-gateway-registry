@@ -32,6 +32,7 @@ from registry.services.server_service import server_service
 from registry.search.service import faiss_service
 from registry.health.service import health_service
 from registry.core.nginx_service import nginx_service
+from registry.services.federation_service import get_federation_service
 
 # Import core configuration
 from registry.core.config import settings
@@ -112,14 +113,31 @@ async def lifespan(app: FastAPI):
         
         logger.info("🏥 Initializing health monitoring service...")
         await health_service.initialize()
-        
+
+        logger.info("🔗 Initializing federation service...")
+        federation_service = get_federation_service()
+        if federation_service.config.is_any_federation_enabled():
+            logger.info(f"Federation enabled for: {', '.join(federation_service.config.get_enabled_federations())}")
+
+            # Sync on startup if configured
+            if federation_service.config.anthropic.enabled and federation_service.config.anthropic.sync_on_startup:
+                logger.info("🔄 Syncing servers from federated registries on startup...")
+                try:
+                    sync_results = federation_service.sync_all()
+                    for source, servers in sync_results.items():
+                        logger.info(f"✅ Synced {len(servers)} servers from {source}")
+                except Exception as e:
+                    logger.error(f"⚠️ Federation sync failed (continuing with startup): {e}", exc_info=True)
+        else:
+            logger.info("Federation is disabled")
+
         logger.info("🌐 Generating initial Nginx configuration...")
         enabled_servers = {
-            path: server_service.get_server_info(path) 
+            path: server_service.get_server_info(path)
             for path in server_service.get_enabled_services()
         }
         await nginx_service.generate_config_async(enabled_servers)
-        
+
         logger.info("✅ All services initialized successfully!")
         
     except Exception as e:

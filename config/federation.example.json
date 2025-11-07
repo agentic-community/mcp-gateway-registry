@@ -1,0 +1,62 @@
+{
+  "_comment": "Federation configuration for MCP Gateway Registry",
+  "_description": "Configure federation with external registries like Anthropic MCP Registry and ASOR",
+
+  "anthropic": {
+    "enabled": false,
+    "endpoint": "https://registry.modelcontextprotocol.io",
+    "api_version": "v0.1",
+    "servers": [
+      {
+        "name": "ai.smithery/example-server",
+        "requires_auth": true,
+        "auth_type": "api-key",
+        "auth_env_var": "SMITHERY_API_KEY",
+        "enabled": true,
+        "metadata": {
+          "description": "Example server description",
+          "category": "example"
+        }
+      }
+    ],
+    "cache_ttl_seconds": 3600,
+    "sync_interval_seconds": 300,
+    "sync_on_startup": true,
+    "display_options": {
+      "mark_as_federated": true,
+      "attribution_label": "Anthropic MCP Registry",
+      "separate_section": true,
+      "read_only": true
+    },
+    "timeout_seconds": 30,
+    "retry_attempts": 3
+  },
+
+  "asor": {
+    "enabled": false,
+    "endpoint": "https://api.asor.workday.com/v1",
+    "agents": [
+      {
+        "id": "agent-123",
+        "endpoint": "https://asor-instance/agents/123",
+        "enabled": true,
+        "metadata": {
+          "description": "Example ASOR agent"
+        }
+      }
+    ],
+    "cache_ttl_seconds": 3600,
+    "sync_interval_seconds": 300,
+    "sync_on_startup": true,
+    "display_options": {
+      "mark_as_federated": true,
+      "attribution_label": "ASOR",
+      "separate_section": true,
+      "read_only": true
+    },
+    "auth_type": "oauth2",
+    "auth_env_var": "ASOR_API_KEY",
+    "timeout_seconds": 30,
+    "retry_attempts": 3
+  }
+}
