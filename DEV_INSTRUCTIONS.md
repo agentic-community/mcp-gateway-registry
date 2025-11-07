@@ -1,7 +1,7 @@
 # Getting Started
 
 ## Prerequisite Reading
-**READ THIS FIRST:** [CONTRIBUTING.md](../CONTRIBUTING.md)
+**READ THIS FIRST:** [CONTRIBUTING.md](CONTRIBUTING.md)
 
 Before you start contributing, please review the project's contribution guidelines.
 
@@ -34,7 +34,7 @@ Before making any code changes, ask your AI coding assistant to read:
 - [CLAUDE.md](CLAUDE.md) - Project-specific coding standards
 
 ### 2. Review the CLAUDE.md File
-This project uses [CLAUDE.md](../CLAUDE.md) for coding standards. The file is already included in the repository root - make sure to review it before contributing.
+This project uses [CLAUDE.md](CLAUDE.md) for coding standards. The file is already included in the repository root - make sure to review it before contributing.
 
 ## Fork and Contribute
 
@@ -81,7 +81,7 @@ Before submitting a pull request:
 - [ ] Pull request is created with clear description
 
 ## Questions?
-- Check the [CONTRIBUTING.md](../CONTRIBUTING.md) file for more details
+- Check the [CONTRIBUTING.md](CONTRIBUTING.md) file for more details
 - Review existing PRs to see contribution patterns
 - Ask your coding assistant to review the documentation with you
 
