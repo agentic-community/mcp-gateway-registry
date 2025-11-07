@@ -31,8 +31,7 @@ Before making any code changes, ask your AI coding assistant to read:
 - [docs/llms.txt](llms.txt)
 
 **Coding Standards and Guidelines:**
-- [CLAUDE.md](../CLAUDE.md) - Project-specific coding standards
-- Repo CLAUDE.md - General AI-assisted coding guidelines
+- [CLAUDE.md](CLAUDE.md) - Project-specific coding standards
 
 ### 2. Review the CLAUDE.md File
 This project uses [CLAUDE.md](../CLAUDE.md) for coding standards. The file is already included in the repository root - make sure to review it before contributing.
