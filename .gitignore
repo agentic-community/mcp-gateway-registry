@@ -286,5 +286,8 @@ coverage/
 anthropic_servers_*.json
 curated_import_list.txt
 
+# Federation cache
+.cache/federation/
+
 #Security scans
 security_scans/
