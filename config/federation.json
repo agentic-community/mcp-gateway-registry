@@ -80,8 +80,8 @@
     "retry_attempts": 3
   },
   "asor": {
-    "enabled": false,
-    "endpoint": "https://wcpdev.wd103.myworkday.com/awsasor_wcpdev1/api/asor/v1",
+    "enabled": true,
+    "endpoint": "https://wcpdev-services1.wd103.myworkday.com/ccx/api/asor/v1/awsasor_wcpdev1",
     "agents": [],
     "cache_ttl_seconds": 3600,
     "sync_interval_seconds": 300,
