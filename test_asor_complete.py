@@ -48,7 +48,7 @@ def get_token():
         if response.status_code == 200:
             tokens = response.json()
             access_token = tokens.get('access_token')
-            print(f"✅ Token obtained: {access_token[:20]}...")
+            print(f"✅ Token obtained: {access_token}")
             return access_token
         else:
             print(f"❌ Token exchange failed: {response.status_code} - {response.text}")
