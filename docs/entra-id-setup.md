@@ -245,27 +245,12 @@ The `auth_server/scopes.yml` file maps Azure AD groups to MCP Gateway scopes and
 
 ```yaml
 group_mappings:
-  # Keycloak/Generic group mappings (by group name)
-  mcp-registry-admin:
-  - mcp-registry-admin
-  - mcp-servers-unrestricted/read
-  - mcp-servers-unrestricted/execute
-
-  mcp-registry-user:
-  - mcp-registry-user
-  - mcp-servers-restricted/read
-
   # Entra ID group mappings (by Azure AD Group Object IDs)
-  # Admin group: Mcp-test-admin
-  "16c7e67e-e8ae-498c-ba2e-0593c0159e43":
+  # Admin group
+  "object_id":
   - mcp-registry-admin
-  - mcp-servers-unrestricted/read
-  - mcp-servers-unrestricted/execute
+  - registry-admins
 
-  # Users group: mcp-test-users
-  "62c07ac1-03d0-4924-90c7-a0255f23bd1d":
-  - mcp-registry-user
-  - mcp-servers-restricted/read
 ```
 
 3. Replace the group Object IDs with your actual group IDs from Azure Portal
@@ -498,6 +483,116 @@ You don't see the "Grant admin consent" button or get an error when clicking it
 - [Optional Claims Configuration](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims)
 - [Configure Group Claims](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims#configure-groups-optional-claims)
 - [Microsoft Graph Permissions Reference](https://learn.microsoft.com/en-us/graph/permissions-reference)
+
+---
+
+## Production Deployment
+
+### Update Redirect URIs
+
+For production, update redirect URIs:
+```
+https://your-domain.com/oauth2/callback/entra
+```
+
+### Environment Variables
+
+Update production `.env`:
+```bash
+ENTRA_REDIRECT_URI=https://your-domain.com/oauth2/callback/entra
+AUTH_SERVER_EXTERNAL_URL=https://your-domain.com:8888
+```
+
+### SSL/TLS Configuration
+
+Ensure your production deployment uses HTTPS for all OAuth flows.
+
+---
+
+## Advanced Configuration
+
+### Custom Claims
+
+To add custom claims to tokens:
+1. Go to **Token configuration**
+2. Click **Add optional claim**
+3. Select token type and claims
+4. Configure claim conditions
+
+### Group Filtering
+
+To limit which groups are included in tokens:
+1. Go to **Token configuration** 
+2. Click **Add groups claim**
+3. Configure **Groups assigned to the application**
+
+### Enterprise Applications
+
+For advanced management:
+1. Go to **Enterprise applications**
+2. Find your app registration
+3. Configure:
+   - User assignment required
+   - Visibility settings
+   - Provisioning (if needed)
+
+---
+
+## Adding New Users
+
+### Option 1: Add User to Existing Group (Recommended)
+
+**In Azure Portal:**
+1. Go to **Microsoft Entra ID** → **Groups**
+2. Click on **MCP Registry Admins** (or appropriate group)
+3. Click **Members** → **Add members**
+4. Search and select the new user
+5. Click **Select**
+
+**Access will be immediate** - user can login and see servers/agents.
+
+### Option 2: Create New Group for User
+
+**If you need different permissions:**
+
+1. **Create new group in Azure:**
+   - **Group name**: `MCP Registry LOB3 Users`
+   - **Members**: Add the new user
+
+2. **Get the group Object ID** from the group overview page
+
+3. **Add to scopes.yml:**
+```yaml
+group_mappings:
+  # Add new group mapping
+  "new-group-object-id-here":
+  - registry-users-lob1  # or whatever permission level needed
+```
+
+4. **Restart auth server:**
+```bash
+cp auth_server/scopes.yml ~/mcp-gateway/auth_server/scopes.yml
+docker-compose restart auth-server
+```
+
+---
+
+## API Reference
+
+### Token Endpoint
+```
+POST https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/token
+```
+
+### Authorization Endpoint
+```
+GET https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/authorize
+```
+
+### User Info Endpoint
+```
+GET https://graph.microsoft.com/v1.0/me
+```
 
 ---
 
