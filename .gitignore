@@ -206,6 +206,7 @@ keycloak/setup/retrieved-keycloak-secrets.txt
 # MCP Gateway specific
 registry/server_state.json
 registry/nginx_mcp_revproxy.conf
+registry/agents/
 logs/
 token_refresher.pid
 token_refresher.log
@@ -288,3 +289,10 @@ curated_import_list.txt
 
 #Security scans
 security_scans/
+
+#Temporary directories
+.tmp
+
+#AgentCore CLI generated files
+.bedrock_agentcore
+.bedrock_agentcore.yaml
