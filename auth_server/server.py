@@ -266,15 +266,19 @@ def _normalize_server_name(name: str) -> str:
 def _server_names_match(name1: str, name2: str) -> bool:
     """
     Compare two server names, normalizing for trailing slashes.
+    Supports wildcard matching with '*'.
 
     Args:
-        name1: First server name
+        name1: First server name (can be '*' for wildcard)
         name2: Second server name
 
     Returns:
-        True if names match (ignoring trailing slashes), False otherwise
+        True if names match (ignoring trailing slashes) or if name1 is '*', False otherwise
     """
-    return _normalize_server_name(name1) == _normalize_server_name(name2)
+    normalized_name1 = _normalize_server_name(name1)
+    if normalized_name1 == '*':
+        return True
+    return normalized_name1 == _normalize_server_name(name2)
 
 
 def validate_server_tool_access(server_name: str, method: str, tool_name: str, user_scopes: List[str]) -> bool:
@@ -329,11 +333,14 @@ def validate_server_tool_access(server_name: str, method: str, tool_name: str, u
                     allowed_methods = server_config.get('methods', [])
                     logger.info(f"  Allowed methods for server '{server_name}': {allowed_methods}")
                     logger.info(f"  Checking if method '{method}' is in allowed methods...")
-                    
+
+                    # Check if all methods are allowed (wildcard support)
+                    has_wildcard_methods = 'all' in allowed_methods or '*' in allowed_methods
+
                     # for all methods except tools/call we are good if the method is allowed
                     # for tools/call we need to do an extra validation to check if the tool
                     # itself is allowed or not
-                    if method in allowed_methods and method != 'tools/call':
+                    if (method in allowed_methods or has_wildcard_methods) and method != 'tools/call':
                         logger.info(f"  ✓ Method '{method}' found in allowed methods!")
                         logger.info(f"Access granted: scope '{scope}' allows access to {server_name}.{method}")
                         logger.info(f"=== VALIDATE_SERVER_TOOL_ACCESS END: GRANTED ===")
@@ -342,11 +349,14 @@ def validate_server_tool_access(server_name: str, method: str, tool_name: str, u
                     # Check tools if method not found in methods
                     allowed_tools = server_config.get('tools', [])
                     logger.info(f"  Allowed tools for server '{server_name}': {allowed_tools}")
-                    
+
+                    # Check if all tools are allowed (wildcard support)
+                    has_wildcard_tools = 'all' in allowed_tools or '*' in allowed_tools
+
                     # For tools/call, check if the specific tool is allowed
                     if method == 'tools/call' and tool_name:
                         logger.info(f"  Checking if tool '{tool_name}' is in allowed tools for tools/call...")
-                        if tool_name in allowed_tools:
+                        if tool_name in allowed_tools or has_wildcard_tools:
                             logger.info(f"  ✓ Tool '{tool_name}' found in allowed tools!")
                             logger.info(f"Access granted: scope '{scope}' allows access to {server_name}.{method} for tool {tool_name}")
                             logger.info(f"=== VALIDATE_SERVER_TOOL_ACCESS END: GRANTED ===")
@@ -356,7 +366,7 @@ def validate_server_tool_access(server_name: str, method: str, tool_name: str, u
                     else:
                         # For other methods, check if method is in tools list (backward compatibility)
                         logger.info(f"  Checking if method '{method}' is in allowed tools...")
-                        if method in allowed_tools:
+                        if method in allowed_tools or has_wildcard_tools:
                             logger.info(f"  ✓ Method '{method}' found in allowed tools!")
                             logger.info(f"Access granted: scope '{scope}' allows access to {server_name}.{method}")
                             logger.info(f"=== VALIDATE_SERVER_TOOL_ACCESS END: GRANTED ===")
@@ -1024,26 +1034,29 @@ async def validate_request(request: Request):
                     logger.error(f"Error processing request payload for tool extraction: {e}")
         
         # Validate scope-based access if we have server/tool information
-        # For Keycloak, map groups to scopes; otherwise use scopes directly
+        # For providers that use groups (Keycloak, Entra ID, Cognito), map groups to scopes
         user_groups = validation_result.get('groups', [])
-        if user_groups and validation_result.get('method') == 'keycloak':
-            # Map Keycloak groups to scopes using the group mappings
+        auth_method = validation_result.get('method', '')
+        if user_groups and auth_method in ['keycloak', 'entra', 'cognito']:
+            # Map IdP groups to scopes using the group mappings
             user_scopes = map_groups_to_scopes(user_groups)
-            logger.info(f"Mapped Keycloak groups {user_groups} to scopes: {user_scopes}")
+            logger.info(f"Mapped {auth_method} groups {user_groups} to scopes: {user_scopes}")
         else:
             user_scopes = validation_result.get('scopes', [])
-        if request_payload and server_name and tool_name:
-            # Extract method and actual tool name
-            method = tool_name  # The extracted tool_name is actually the method
+        if server_name:
+            # For ANY server access, enforce scope validation (fail closed principle)
+            # This includes MCP initialization methods that may not have a specific tool
+
+            method = tool_name if tool_name else "initialize"  # Default to initialize if no tool specified
             actual_tool_name = None
-            
+
             # For tools/call, extract the actual tool name from params
             if method == 'tools/call' and isinstance(request_payload, dict):
                 params = request_payload.get('params', {})
                 if isinstance(params, dict):
                     actual_tool_name = params.get('name')
                     logger.info(f"Extracted actual tool name for tools/call: '{actual_tool_name}'")
-            
+
             # Check if user has any scopes - if not, deny access (fail closed)
             if not user_scopes:
                 logger.warning(f"Access denied for user {hash_username(validation_result.get('username', ''))} to {server_name}.{method} (tool: {actual_tool_name}) - no scopes configured")
@@ -1052,7 +1065,7 @@ async def validate_request(request: Request):
                     detail=f"Access denied to {server_name}.{method} - user has no scopes configured",
                     headers={"Connection": "close"}
                 )
-            
+
             if not validate_server_tool_access(server_name, method, actual_tool_name, user_scopes):
                 logger.warning(f"Access denied for user {hash_username(validation_result.get('username', ''))} to {server_name}.{method} (tool: {actual_tool_name})")
                 raise HTTPException(
@@ -1061,10 +1074,8 @@ async def validate_request(request: Request):
                     headers={"Connection": "close"}
                 )
             logger.info(f"Scope validation passed for {server_name}.{method} (tool: {actual_tool_name})")
-        elif server_name or tool_name:
-            logger.debug(f"Partial server/tool info available (server='{server_name}', tool='{tool_name}'), skipping scope validation")
         else:
-            logger.debug("No server/tool information available, skipping scope validation")
+            logger.debug("No server information available, skipping scope validation")
         
         # Prepare JSON response data
         response_data = {
@@ -1714,6 +1725,39 @@ async def oauth2_callback(
                     
             except Exception as e:
                 logger.warning(f"JWT token validation failed: {e}, falling back to userInfo endpoint")
+                # Fallback to userInfo endpoint
+                user_info = await get_user_info(token_data["access_token"], provider_config)
+                logger.info(f"Raw user info from {provider}: {user_info}")
+                mapped_user = map_user_info(user_info, provider_config)
+                logger.info(f"Mapped user info from userInfo: {mapped_user}")
+        elif provider == "entra":
+            # For Entra ID, prioritize ID token claims over userinfo endpoint
+            try:
+                if "id_token" in token_data:
+                    import jwt
+                    # Decode without verification (we trust the token since we just got it from Microsoft)
+                    id_token_claims = jwt.decode(token_data["id_token"], options={"verify_signature": False})
+                    logger.info(f"Entra ID token claims: {id_token_claims}")
+
+                    # Extract user info from ID token claims
+                    # Entra ID can return groups as either 'groups' or 'roles' depending on configuration
+                    groups = id_token_claims.get("groups", [])
+                    if not groups:
+                        groups = id_token_claims.get("roles", [])
+
+                    mapped_user = {
+                        "username": id_token_claims.get("preferred_username") or id_token_claims.get("email") or id_token_claims.get("upn") or id_token_claims.get("sub"),
+                        "email": id_token_claims.get("email") or id_token_claims.get("preferred_username"),
+                        "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
+                        "groups": groups
+                    }
+                    logger.info(f"User extracted from Entra ID token: {mapped_user}")
+                else:
+                    logger.warning("No ID token found in Entra response, falling back to userInfo")
+                    raise ValueError("Missing ID token")
+
+            except Exception as e:
+                logger.warning(f"Entra ID token parsing failed: {e}, falling back to userInfo endpoint")
                 # Fallback to userInfo endpoint
                 user_info = await get_user_info(token_data["access_token"], provider_config)
                 logger.info(f"Raw user info from {provider}: {user_info}")
