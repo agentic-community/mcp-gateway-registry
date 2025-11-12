@@ -138,7 +138,12 @@ async def lifespan(app: FastAPI):
             logger.info(f"Federation enabled for: {', '.join(federation_service.config.get_enabled_federations())}")
 
             # Sync on startup if configured
-            if federation_service.config.anthropic.enabled and federation_service.config.anthropic.sync_on_startup:
+            sync_on_startup = (
+                (federation_service.config.anthropic.enabled and federation_service.config.anthropic.sync_on_startup) or
+                (federation_service.config.asor.enabled and federation_service.config.asor.sync_on_startup)
+            )
+            
+            if sync_on_startup:
                 logger.info("🔄 Syncing servers from federated registries on startup...")
                 try:
                     sync_results = federation_service.sync_all()

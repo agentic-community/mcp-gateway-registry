@@ -166,6 +166,27 @@ class FederationService:
             self.config.anthropic.servers
         )
 
+        # Save servers as files to external mount
+        from pathlib import Path
+        import json
+        from ..core.config import settings
+        
+        for server_data in servers:
+            try:
+                # Create filename from server name
+                server_name = server_data.get("server_name", "unknown-server")
+                filename = server_name.replace("/", "-").replace(".", "-") + ".json"
+                file_path = settings.servers_dir / filename
+                
+                # Save to file
+                with open(file_path, "w") as f:
+                    json.dump(server_data, f, indent=2)
+                
+                logger.info(f"Saved Anthropic server file: {server_name} -> {file_path}")
+                
+            except Exception as e:
+                logger.error(f"Failed to save Anthropic server {server_data.get('server_name', 'unknown')}: {e}")
+
         # Cache the results
         for server in servers:
             server_name = server.get("server_name")
@@ -195,9 +216,64 @@ class FederationService:
             self.config.asor.agents
         )
 
+        # Register agents with the agent service
+        from ..services.agent_service import agent_service
+        from ..schemas.agent_models import AgentCard
+        from datetime import datetime, timezone
+        
+        for agent_data in agents:
+            # Extract agent info from ASOR data structure
+            agent_name = agent_data.get("name", "Unknown ASOR Agent")
+            agent_path = f"/{agent_name.lower().replace('_', '-')}"
+            agent_url = agent_data.get("url", "")
+            agent_description = agent_data.get("description", "Agent synced from ASOR")
+            if agent_description == "None":
+                agent_description = f"ASOR agent: {agent_name}"
+            
+            # Extract skills
+            skills_data = agent_data.get("skills", [])
+            skills = []
+            for skill in skills_data:
+                skills.append({
+                    "name": skill.get("name", ""),
+                    "description": skill.get("description", ""),
+                    "id": skill.get("id", "")
+                })
+            
+            # Convert ASOR agent data to AgentCard format
+            agent_card = AgentCard(
+                protocol_version="1.0",  # Required A2A field
+                name=agent_name,
+                path=agent_path,
+                url=agent_url,
+                description=agent_description,
+                version=agent_data.get("version", "1.0.0"),
+                provider="ASOR",  # Add provider field
+                author="ASOR",
+                license="Unknown",
+                skills=skills,
+                tags=["asor", "federated", "workday"],
+                visibility="public",
+                registered_by="asor-federation",
+                registered_at=datetime.now(timezone.utc)
+            )
+            
+            try:
+                # Check if agent already exists
+                if agent_path in agent_service.registered_agents:
+                    logger.debug(f"ASOR agent {agent_path} already exists, skipping registration")
+                    continue
+                
+                # Register the agent using the proper method
+                agent_service.register_agent(agent_card)
+                logger.info(f"Registered ASOR agent: {agent_card.name} at {agent_card.path}")
+                
+            except Exception as e:
+                logger.error(f"Failed to register ASOR agent {agent_data.get('name', 'unknown')}: {e}")
+
         # Cache the results
         for agent in agents:
-            agent_id = agent.get("server_name")
+            agent_id = agent.get("name")  # Use 'name' instead of 'server_name'
             if agent_id:
                 cache_key = f"asor:{agent_id}"
                 self._cache[cache_key] = agent
