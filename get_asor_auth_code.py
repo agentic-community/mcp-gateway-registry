@@ -8,6 +8,8 @@ from the redirect URL for ASOR federation.
 
 import urllib.parse
 import webbrowser
+import os
+import re
 
 # ASOR OAuth configuration
 CLIENT_ID = "ZjgyZGVjMzAtMTY5Zi00Mzc1LThlNWUtYzc5OGU0NDdjMzJi"
@@ -32,6 +34,35 @@ def extract_code_from_url(redirect_url):
     parsed = urllib.parse.urlparse(redirect_url)
     params = urllib.parse.parse_qs(parsed.query)
     return params.get('code', [None])[0]
+
+def update_env_file(auth_code):
+    """Update .env file with ASOR_AUTH_CODE and remove old ASOR_ACCESS_TOKEN."""
+    env_file = ".env"
+    
+    # Read existing .env file
+    lines = []
+    if os.path.exists(env_file):
+        with open(env_file, 'r') as f:
+            lines = f.readlines()
+    
+    # Remove old ASOR tokens and add new auth code
+    new_lines = []
+    auth_code_added = False
+    
+    for line in lines:
+        # Skip old ASOR token lines
+        if line.startswith('ASOR_ACCESS_TOKEN=') or line.startswith('ASOR_AUTH_CODE='):
+            continue
+        new_lines.append(line)
+    
+    # Add new auth code
+    new_lines.append(f"ASOR_AUTH_CODE={auth_code}\n")
+    
+    # Write back to .env file
+    with open(env_file, 'w') as f:
+        f.writelines(new_lines)
+    
+    print(f"✅ Updated {env_file} with ASOR_AUTH_CODE")
 
 def main():
     print("🔑 ASOR Authorization Code Generator")
@@ -66,11 +97,13 @@ def main():
         print()
         print("✅ Authorization code extracted successfully!")
         print("=" * 50)
-        print("Set this environment variable:")
-        print()
+        
+        # Update .env file
+        update_env_file(auth_code)
+        print(f"Updated the env file, but run the following command to explicitly set the ASOR_AUTH_CODE")
         print(f"export ASOR_AUTH_CODE='{auth_code}'")
         print()
-        print("Then restart the registry:")
+        print("🔄 Restart the registry to use the new auth code:")
         print("docker-compose restart registry")
         print()
     else:
