@@ -10,10 +10,10 @@ import urllib.parse
 import os
 
 # Configuration from environment or defaults
-CLIENT_ID = os.getenv("ASOR_CLIENT_ID", "ZjgyZGVjMzAtMTY5Zi00Mzc1LThlNWUtYzc5OGU0NDdjMzJi")
-CLIENT_SECRET = os.getenv("ASOR_CLIENT_SECRET", "7gmvpojkja1h9ogu9drnzen9b8oyy23ojgz52utr37s8p68bkiyvrqpvlqq9cmkilgy6ju0zhcifzea5sw05cp161bbk6u2vc5j")
-TENANT_NAME = os.getenv("WORKDAY_TENANT_NAME", "awsasor_wcpdev1")
-HOSTNAME = os.getenv("WORKDAY_HOSTNAME", "wcpdev-services1.wd103.myworkday.com")
+CLIENT_ID = os.getenv("ASOR_CLIENT_ID")
+CLIENT_SECRET = os.getenv("ASOR_CLIENT_SECRET")
+TENANT_NAME = os.getenv("WORKDAY_TENANT_NAME")
+HOSTNAME = os.getenv("WORKDAY_HOSTNAME")
 
 def get_asor_token():
     """Get ASOR access token via 3-legged OAuth flow"""
