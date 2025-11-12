@@ -29,7 +29,7 @@ fi
 
 # Configuration
 ANTHROPIC_API_BASE="https://registry.modelcontextprotocol.io"
-TEMP_DIR="${HOME}/mcp-gateway/servers"
+TEMP_DIR="$PROJECT_ROOT/.tmp/anthropic-import"
 BASE_PORT=8100
 
 # Read API version from constants.py
@@ -261,4 +261,4 @@ done
 
 
 print_info "Import completed: $success_count/${#servers[@]} successful"
-print_info "Configuration files saved to: ${HOME}/mcp-gateway/servers"
+print_info "Configuration files saved to: $TEMP_DIR"
