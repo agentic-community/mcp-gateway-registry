@@ -552,7 +552,7 @@ The following GitHub issues represent our current development roadmap and planne
 - **[#195 - Add A2A (Agent-to-Agent) Protocol Support to Registry](https://github.com/agentic-community/mcp-gateway-registry/issues/195)** ✅ **COMPLETE**
   Agents can now register, discover, and communicate with other agents through the secure registry. Full implementation includes agent lifecycle management, Keycloak-based access control, fine-grained permissions, comprehensive testing, and documentation. [A2A Guide](docs/a2a.md)
 
-- **[#128 - Add Microsoft Entra ID (Azure AD) Authentication Provider](https://github.com/agentic-community/mcp-gateway-registry/issues/128)** 🚧 **IN PROGRESS**
+- **[#128 - Add Microsoft Entra ID (Azure AD) Authentication Provider](https://github.com/agentic-community/mcp-gateway-registry/issues/128)** ✅ **COMPLETE**
   Extend authentication support beyond Keycloak to include Microsoft Entra ID integration. Enables enterprise SSO for organizations using Azure Active Directory.
 
 - **[#170 - Architectural Proposal: Separate Gateway and Registry Containers](https://github.com/agentic-community/mcp-gateway-registry/issues/170)** 🚧 **IN PROGRESS**
