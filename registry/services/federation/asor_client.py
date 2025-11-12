@@ -176,8 +176,8 @@ class AsorFederationClient(BaseFederationClient):
         if agent_config and agent_config.endpoint:
             url = agent_config.endpoint
         else:
-            # Use Agent Gateway endpoint instead of direct ASOR API
-            url = f"https://agent.us.wcp.workday.com/agentDefinition"
+            # Use direct ASOR API endpoint
+            url = f"{self.endpoint}/agentDefinition/{agent_id}"
 
         # Get access token
         access_token = self._get_access_token()
@@ -216,7 +216,6 @@ class AsorFederationClient(BaseFederationClient):
         # ASOR API: GET /asor/v1/agentDefinition (singular, per OpenAPI spec)
         url = f"{self.endpoint}/agentDefinition"
 
-
         # Get access token
         access_token = self._get_access_token()
         if not access_token:
@@ -231,7 +230,7 @@ class AsorFederationClient(BaseFederationClient):
 
         # Make request
         logger.info("Listing all agents from ASOR")
-        response = self._make_request(url, headers=headers)
+        response = self._make_request(url, method="GET", headers=headers)
 
         if not response:
             logger.error("Failed to list agents")
