@@ -60,23 +60,7 @@ class AsorFederationClient(BaseFederationClient):
         Returns:
             Access token or None if authentication fails
         """
-        # Check for authorization code first (will exchange for access token)
-        auth_code_env = os.getenv("ASOR_AUTH_CODE")
-        if auth_code_env:
-            logger.info("Found ASOR authorization code, exchanging for access token")
-            access_token = self._exchange_auth_code_for_token(auth_code_env)
-            if access_token:
-                self._access_token = access_token
-                # Set a reasonable expiry (1 hour from now)
-                self._token_expiry = datetime.now(timezone.utc).replace(
-                    microsecond=0
-                ) + timedelta(hours=1)
-                return self._access_token
-            else:
-                logger.error("Failed to exchange authorization code for access token")
-                return None
-
-        # Always check for pre-obtained access token (for 3LO scenarios)
+        # Always check for pre-obtained access token first (for 3LO scenarios)
         access_token_env = os.getenv("ASOR_ACCESS_TOKEN")
         if access_token_env:
             logger.info("Using pre-obtained ASOR access token from environment")
@@ -172,63 +156,7 @@ class AsorFederationClient(BaseFederationClient):
             logger.info("2. Set the ASOR_ACCESS_TOKEN environment variable with the token")
             logger.info("3. Restart the registry to use the pre-obtained token")
             return None
-
-    def _exchange_auth_code_for_token(self, auth_code: str) -> Optional[str]:
-        """
-        Exchange authorization code for access token.
         
-        Args:
-            auth_code: Authorization code from OAuth redirect
-            
-        Returns:
-            Access token or None if exchange fails
-        """
-        try:
-            # Extract client credentials
-            client_id, client_secret, _ = self._parse_client_credentials()
-            
-            # Token exchange endpoint
-            token_url = f"{self.tenant_url}/oauth2/token"
-            
-            # Token exchange payload
-            payload = {
-                "grant_type": "authorization_code",
-                "code": auth_code,
-                "redirect_uri": "https://localhost:7860/callback",  # Must match registered redirect URI
-                "client_id": client_id,
-                "client_secret": client_secret
-            }
-            
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-            
-            logger.info(f"Exchanging authorization code for access token at {token_url}")
-            
-            response = httpx.post(
-                token_url,
-                data=payload,
-                headers=headers,
-                timeout=self.timeout_seconds
-            )
-            
-            if response.status_code == 200:
-                token_data = response.json()
-                access_token = token_data.get("access_token")
-                if access_token:
-                    logger.info("Successfully exchanged authorization code for access token")
-                    return access_token
-                else:
-                    logger.error("No access_token in response")
-                    return None
-            else:
-                logger.error(f"Token exchange failed: {response.status_code} - {response.text}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Failed to exchange authorization code: {e}")
-            return None
-
     def fetch_agent(
         self,
         agent_id: str,
