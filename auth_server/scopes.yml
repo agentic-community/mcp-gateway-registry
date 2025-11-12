@@ -116,7 +116,6 @@ UI-Scopes:
 # ==================== GROUP MAPPINGS ====================
 # Maps Keycloak groups to internal scope group names
 group_mappings:
-  # Keycloak/Generic group mappings (by group name)
   mcp-registry-admin:
   - mcp-registry-admin
   - mcp-servers-unrestricted/read
@@ -127,7 +126,6 @@ group_mappings:
   - registry-users-lob1
   registry-users-lob2:
   - registry-users-lob2
-  
 # ==================== MCP SERVER SCOPES ====================
 # Unrestricted read access: Wildcard access to all servers with all methods and tools
 mcp-servers-unrestricted/read:
