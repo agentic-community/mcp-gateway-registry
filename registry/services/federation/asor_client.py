@@ -172,12 +172,8 @@ class AsorFederationClient(BaseFederationClient):
         Returns:
             Agent data dictionary or None if fetch fails
         """
-        # Use custom endpoint if provided
-        if agent_config and agent_config.endpoint:
-            url = agent_config.endpoint
-        else:
-            # Use direct ASOR API endpoint
-            url = f"{self.endpoint}/agentDefinition/{agent_id}"
+        # Use direct ASOR API endpoint
+        url = f"{self.endpoint}/agentDefinition/{agent_id}"
 
         # Get access token
         access_token = self._get_access_token()
@@ -187,9 +183,8 @@ class AsorFederationClient(BaseFederationClient):
 
         logger.debug(f"Using access token for API call: {access_token[:50]}...")
 
-        # Build headers for Agent Gateway (like agentcore integration)
+        # Build headers - match working test script format
         headers = {
-            "wd-agent-tenant-alias": "awsasor_wcpdev1",
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}"
@@ -222,11 +217,18 @@ class AsorFederationClient(BaseFederationClient):
             logger.error("Failed to authenticate with Workday")
             return []
 
-        # Build headers
+        logger.info(f"ASOR DEBUG - URL: {url}")
+        logger.info(f"ASOR DEBUG - Token (first 50 chars): {access_token[:50]}...")
+        logger.info(f"ASOR DEBUG - Endpoint: {self.endpoint}")
+
+        # Build headers - match working test script format
         headers = {
             "Content-Type": "application/json",
+            "Accept": "application/json",
             "Authorization": f"Bearer {access_token}"
         }
+
+        logger.info(f"ASOR DEBUG - Headers: {headers}")
 
         # Make request
         logger.info("Listing all agents from ASOR")
@@ -271,9 +273,6 @@ class AsorFederationClient(BaseFederationClient):
             return self.list_all_agents()
 
         for config in agent_configs:
-            if not config.enabled:
-                logger.info(f"Skipping disabled agent: {config.id}")
-                continue
 
             agent_data = self.fetch_agent(config.id, config)
             if agent_data:
@@ -318,7 +317,7 @@ class AsorFederationClient(BaseFederationClient):
         """
         # Convert server names to agent configs
         agent_configs = [
-            AsorAgentConfig(id=name, endpoint=None, enabled=True)
+            AsorAgentConfig(id=name)
             for name in server_names
         ]
         return self.fetch_all_agents(agent_configs)
@@ -355,11 +354,6 @@ class AsorFederationClient(BaseFederationClient):
 
         # Generate tags
         tags = ["asor", "workday", "federated"]
-        if agent_config and agent_config.metadata:
-            category = agent_config.metadata.get("category")
-            if category:
-                tags.append(category)
-
         # Build transformed agent object
         transformed = {
             "source": "asor",
@@ -377,7 +371,7 @@ class AsorFederationClient(BaseFederationClient):
                 "agent_id": agent_id,
                 "capabilities": capabilities,
                 "tools": tools,
-                "config_metadata": agent_config.metadata if agent_config else {}
+                "config_metadata": {}
             },
             "cached_at": datetime.now(timezone.utc).isoformat(),
             "is_read_only": True,

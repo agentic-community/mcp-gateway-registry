@@ -68,35 +68,29 @@ class FederationService:
 
         # Initialize clients
         self.anthropic_client: Optional[AnthropicFederationClient] = None
-        if self.config.anthropic.enabled:
-            self.anthropic_client = AnthropicFederationClient(
-                endpoint=self.config.anthropic.endpoint,
-                api_version=self.config.anthropic.api_version,
-                timeout_seconds=self.config.anthropic.timeout_seconds,
-                retry_attempts=self.config.anthropic.retry_attempts
-            )
+        # Initialize Anthropic client
+        self.anthropic_client = AnthropicFederationClient(
+            endpoint=self.config.anthropic.endpoint
+        )
 
         self.asor_client: Optional[AsorFederationClient] = None
-        if self.config.asor.enabled:
-            # Extract tenant URL from endpoint or use default
-            tenant_url = self.config.asor.endpoint.split("/api")[0] if "/api" in self.config.asor.endpoint else self.config.asor.endpoint
+        # Initialize ASOR client
+        # Extract tenant URL from endpoint or use default
+        tenant_url = self.config.asor.endpoint.split("/api")[0] if "/api" in self.config.asor.endpoint else self.config.asor.endpoint
 
-            self.asor_client = AsorFederationClient(
-                endpoint=self.config.asor.endpoint,
-                auth_type=self.config.asor.auth_type or "oauth2",
-                auth_env_var=self.config.asor.auth_env_var,
-                tenant_url=tenant_url,
-                timeout_seconds=self.config.asor.timeout_seconds,
-                retry_attempts=self.config.asor.retry_attempts
-            )
+        self.asor_client = AsorFederationClient(
+            endpoint=self.config.asor.endpoint,
+            auth_env_var=self.config.asor.auth_env_var,
+            tenant_url=tenant_url
+        )
 
         # Cache
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
 
         logger.info(f"Federation service initialized with config: {config_path}")
-        if self.config.is_any_federation_enabled():
-            logger.info(f"Enabled federations: {', '.join(self.config.get_enabled_federations())}")
+        # Federation is always enabled with simplified schema
+        logger.info("Enabled federations: anthropic, asor")
 
     def _load_config(self) -> FederationConfig:
         """
@@ -142,11 +136,11 @@ class FederationService:
             results["anthropic"] = anthropic_servers
             logger.info(f"Synced {len(anthropic_servers)} servers from Anthropic")
 
-        if self.config.asor.enabled:
-            logger.info("Syncing agents from ASOR...")
-            asor_agents = self._sync_asor()
-            results["asor"] = asor_agents
-            logger.info(f"Synced {len(asor_agents)} agents from ASOR")
+        # Sync ASOR agents
+        logger.info("Syncing agents from ASOR...")
+        asor_agents = self._sync_asor()
+        results["asor"] = asor_agents
+        logger.info(f"Synced {len(asor_agents)} agents from ASOR")
 
         return results
 
@@ -322,8 +316,7 @@ class FederationService:
         Returns:
             List of Anthropic server data
         """
-        if not self.config.anthropic.enabled:
-            return []
+        # Anthropic federation is enabled by default
 
         # Check if cache needs refresh
         needs_refresh = force_refresh or self._is_cache_expired("anthropic")
@@ -375,8 +368,7 @@ class FederationService:
         Returns:
             List of ASOR agent data
         """
-        if not self.config.asor.enabled:
-            return []
+        # ASOR federation is enabled by default
 
         # Check if cache needs refresh
         needs_refresh = force_refresh or self._is_cache_expired("asor")

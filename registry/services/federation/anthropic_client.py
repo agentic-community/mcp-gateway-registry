@@ -60,27 +60,14 @@ class AnthropicFederationClient(BaseFederationClient):
         Returns:
             Server data dictionary or None if fetch fails
         """
-        # Use custom endpoint if provided, otherwise construct from server name
-        if server_config and server_config.endpoint:
-            url = server_config.endpoint
-        else:
-            # URL-encode server name (replace / with %2F)
-            encoded_name = quote(server_name, safe="")
-            url = f"{self.endpoint}/{self.api_version}/servers/{encoded_name}/versions/latest"
+        # URL-encode server name (replace / with %2F)
+        encoded_name = quote(server_name, safe="")
+        url = f"{self.endpoint}/{self.api_version}/servers/{encoded_name}/versions/latest"
 
         # Build headers
         headers = {"Content-Type": "application/json"}
 
-        # Add authentication if required
-        if server_config and server_config.requires_auth:
-            auth_value = self._get_auth_value(server_config)
-            if auth_value:
-                if server_config.auth_type == "bearer" or server_config.auth_type == "oauth":
-                    headers["Authorization"] = f"Bearer {auth_value}"
-                elif server_config.auth_type == "api-key":
-                    headers["X-API-Key"] = auth_value
-                else:
-                    logger.warning(f"Unknown auth type: {server_config.auth_type}")
+        # No authentication for public Anthropic registry
 
         # Make request
         logger.info(f"Fetching server {server_name} from Anthropic Registry")
@@ -109,9 +96,6 @@ class AnthropicFederationClient(BaseFederationClient):
         servers = []
 
         for config in server_configs:
-            if not config.enabled:
-                logger.info(f"Skipping disabled server: {config.name}")
-                continue
 
             server_data = self.fetch_server(config.name, config)
             if server_data:
@@ -121,32 +105,6 @@ class AnthropicFederationClient(BaseFederationClient):
 
         logger.info(f"Successfully fetched {len(servers)}/{len(server_configs)} servers")
         return servers
-
-    def _get_auth_value(
-        self,
-        server_config: AnthropicServerConfig
-    ) -> Optional[str]:
-        """
-        Get authentication value from environment variable.
-
-        Args:
-            server_config: Server configuration with auth details
-
-        Returns:
-            Authentication value or None
-        """
-        if not server_config.auth_env_var:
-            logger.warning(f"No auth_env_var specified for {server_config.name}")
-            return None
-
-        auth_value = os.getenv(server_config.auth_env_var)
-        if not auth_value:
-            logger.error(
-                f"Environment variable {server_config.auth_env_var} not found for {server_config.name}"
-            )
-            return None
-
-        return auth_value
 
     def _transform_server_response(
         self,
@@ -200,16 +158,6 @@ class AnthropicFederationClient(BaseFederationClient):
         tags.append("anthropic-registry")
         tags.append("federated")
 
-        # Build auth headers if needed
-        auth_headers = []
-        if server_config and server_config.requires_auth:
-            auth_value = self._get_auth_value(server_config)
-            if auth_value:
-                if server_config.auth_type == "bearer" or server_config.auth_type == "oauth":
-                    auth_headers.append({"Authorization": f"Bearer {auth_value}"})
-                elif server_config.auth_type == "api-key":
-                    auth_headers.append({"X-API-Key": auth_value})
-
         # Build transformed server object
         transformed = {
             "source": "anthropic",
@@ -219,12 +167,12 @@ class AnthropicFederationClient(BaseFederationClient):
             "title": title,
             "proxy_pass_url": proxy_url,
             "transport_type": transport_type,
-            "requires_auth": server_config.requires_auth if server_config else False,
-            "auth_headers": auth_headers,
+            "requires_auth": False,
+            "auth_headers": [],
             "tags": list(set(tags)),  # Remove duplicates
             "metadata": {
                 "original_response": response,
-                "config_metadata": server_config.metadata if server_config else {}
+                "config_metadata": {}
             },
             "cached_at": datetime.now(timezone.utc).isoformat(),
             "is_read_only": True,
