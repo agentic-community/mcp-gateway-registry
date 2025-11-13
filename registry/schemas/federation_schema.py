@@ -11,6 +11,7 @@ class AnthropicServerConfig(BaseModel):
 
 class AnthropicFederationConfig(BaseModel):
     """Anthropic federation configuration."""
+    enabled: bool = True
     endpoint: str = "https://registry.modelcontextprotocol.io"
     sync_on_startup: bool = False
     servers: List[AnthropicServerConfig] = Field(default_factory=list)
@@ -23,6 +24,7 @@ class AsorAgentConfig(BaseModel):
 
 class AsorFederationConfig(BaseModel):
     """ASOR federation configuration."""
+    enabled: bool = True
     endpoint: str
     auth_env_var: Optional[str] = None
     sync_on_startup: bool = False
@@ -33,6 +35,19 @@ class FederationConfig(BaseModel):
     """Root federation configuration."""
     anthropic: AnthropicFederationConfig = Field(default_factory=AnthropicFederationConfig)
     asor: AsorFederationConfig = Field(default_factory=AsorFederationConfig)
+    
+    def is_any_federation_enabled(self) -> bool:
+        """Check if any federation is enabled."""
+        return self.anthropic.enabled or self.asor.enabled
+    
+    def get_enabled_federations(self) -> List[str]:
+        """Get list of enabled federation names."""
+        enabled = []
+        if self.anthropic.enabled:
+            enabled.append("anthropic")
+        if self.asor.enabled:
+            enabled.append("asor")
+        return enabled
 
 
 # Add missing FederatedServer class for compatibility

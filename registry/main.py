@@ -134,23 +134,25 @@ async def lifespan(app: FastAPI):
 
         logger.info("🔗 Initializing federation service...")
         federation_service = get_federation_service()
-        # Federation is always enabled with simplified schema
-        logger.info("Federation enabled for: anthropic, asor")
+        if federation_service.config.is_any_federation_enabled():
+            logger.info(f"Federation enabled for: {', '.join(federation_service.config.get_enabled_federations())}")
 
-        # Sync on startup if configured
-        sync_on_startup = (
-            federation_service.config.anthropic.sync_on_startup or
-            federation_service.config.asor.sync_on_startup
-        )
-        
-        if sync_on_startup:
-            logger.info("🔄 Syncing servers from federated registries on startup...")
-            try:
-                sync_results = federation_service.sync_all()
-                for source, servers in sync_results.items():
-                    logger.info(f"✅ Synced {len(servers)} servers from {source}")
-            except Exception as e:
-                logger.error(f"⚠️ Federation sync failed (continuing with startup): {e}", exc_info=True)
+            # Sync on startup if configured
+            sync_on_startup = (
+                (federation_service.config.anthropic.enabled and federation_service.config.anthropic.sync_on_startup) or
+                (federation_service.config.asor.enabled and federation_service.config.asor.sync_on_startup)
+            )
+            
+            if sync_on_startup:
+                logger.info("🔄 Syncing servers from federated registries on startup...")
+                try:
+                    sync_results = federation_service.sync_all()
+                    for source, servers in sync_results.items():
+                        logger.info(f"✅ Synced {len(servers)} servers from {source}")
+                except Exception as e:
+                    logger.error(f"⚠️ Federation sync failed (continuing with startup): {e}", exc_info=True)
+        else:
+            logger.info("Federation is disabled")
 
         logger.info("🌐 Generating initial Nginx configuration...")
         enabled_servers = {
