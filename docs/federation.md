@@ -379,3 +379,110 @@ HTTPS_PROXY=http://proxy.company.com:8080
 ---
 
 *Last Updated: November 2024*
+
+## ASOR to Agent Card Field Mapping
+
+This section documents how ASOR agent data is mapped to the MCP Gateway Registry Agent Card format.
+
+### Field Mapping Table
+
+| ASOR Field | Agent Card Field | Mapping Logic | Status |
+|------------|------------------|---------------|---------|
+| **Required A2A Fields** |
+| N/A | `protocol_version` | Hardcoded to `"1.0"` | ✅ Mapped |
+| `name` | `name` | Direct mapping, fallback to `"Unknown ASOR Agent"` | ✅ Mapped |
+| `description` | `description` | Direct mapping, fallback to `f"ASOR agent: {agent_name}"` if `"None"` | ✅ Mapped |
+| `url` | `url` | Direct mapping, fallback to empty string | ✅ Mapped |
+| **Optional A2A Fields** |
+| `version` | `version` | Direct mapping, fallback to `"1.0.0"` | ✅ Mapped |
+| N/A | `provider` | Hardcoded to `"ASOR"` | ✅ Mapped |
+| N/A | `security_schemes` | Empty dict (default) | ❌ Missing |
+| N/A | `security` | None (default) | ❌ Missing |
+| `skills[]` | `skills` | Array mapping: `{name, description, id}` | ✅ Mapped |
+| `capabilities.streaming` | `streaming` | Direct mapping from capabilities object | ⚠️ Available but not mapped |
+| `capabilities`, `workdayConfig`, `supportsAuthenticatedExtendedCard` | `metadata` | Could map additional ASOR fields | ⚠️ Available but not mapped |
+| **Registry Extensions** |
+| N/A | `path` | Generated from name: `f"/{agent_name.lower().replace('_', '-')}"` | ✅ Mapped |
+| N/A | `tags` | Hardcoded to `["asor", "federated", "workday"]` | ✅ Mapped |
+| N/A | `is_enabled` | False (default) | ✅ Mapped |
+| N/A | `num_stars` | 0 (default) | ✅ Mapped |
+| N/A | `license` | Hardcoded to `"Unknown"` | ✅ Mapped |
+| N/A | `registered_at` | Current timestamp | ✅ Mapped |
+| N/A | `updated_at` | None (default) | ✅ Mapped |
+| N/A | `registered_by` | Hardcoded to `"asor-federation"` | ✅ Mapped |
+
+### ASOR Data Structure
+
+Based on the actual ASOR API response, the agent data structure is:
+
+```json
+{
+  "capabilities": {
+    "stateTransitionHistory": false,
+    "pushNotifications": false,
+    "streaming": true
+  },
+  "url": "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A218208277580%3Aruntime%2Faws_assistant-XYx9SWFOvW/invocations?qualifier=DEFAULT",
+  "description": "None",
+  "name": "aws_assistant",
+  "supportsAuthenticatedExtendedCard": false,
+  "workdayConfig": [
+    {
+      "skillId": "skill_extractContent"
+    },
+    {
+      "skillId": "skill_searchQuery"
+    }
+  ],
+  "skills": [
+    {
+      "id": "skill_extractContent",
+      "description": "Extract and parse content from up to 20 URLs simultaneously",
+      "name": "extractContent"
+    },
+    {
+      "id": "skill_searchQuery",
+      "description": "Performs a search query using Tavily Search and returns comprehensive results including answer, images, and search results",
+      "name": "searchQuery"
+    }
+  ],
+  "version": "1"
+}
+```
+
+### Available but Unmapped ASOR Fields
+
+The following ASOR fields are available but not currently mapped:
+
+1. **`capabilities`** - Object with streaming, notifications, state history flags
+2. **`workdayConfig`** - Array of skill configurations 
+3. **`supportsAuthenticatedExtendedCard`** - Boolean flag for extended card support
+
+### Missing Fields from ASOR
+
+The following Agent Card fields are not provided by ASOR:
+
+1. **Security Configuration**
+   - `security_schemes` - No authentication schemes provided
+   - `security` - No security requirements specified
+
+2. **Licensing**
+   - `license` - License information not available
+
+### Recommendations
+
+To improve ASOR integration:
+
+1. **Map available fields:**
+   ```python
+   streaming=agent_data.get("capabilities", {}).get("streaming", False)
+   metadata={
+       "capabilities": agent_data.get("capabilities", {}),
+       "workdayConfig": agent_data.get("workdayConfig", []),
+       "supportsAuthenticatedExtendedCard": agent_data.get("supportsAuthenticatedExtendedCard", False)
+   }
+   ```
+
+2. **Request additional fields from ASOR API:**
+   - License information
+   - Security/authentication schemes
