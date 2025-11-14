@@ -228,15 +228,6 @@ curl -H "Authorization: Bearer $ASOR_ACCESS_TOKEN" \
 - ASOR agents should only appear in **A2A Agents** tab
 - If appearing in both tabs, check federation service logs for duplicate registration
 
-**4. Cache Issues**
-```bash
-# Clear federation cache
-curl -X DELETE http://localhost:7860/api/federation/cache
-
-# Restart services
-docker-compose restart registry
-```
-
 ### Debug Mode
 
 Enable detailed federation logging:
@@ -339,11 +330,8 @@ HTTPS_PROXY=http://proxy.company.com:8080
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/federation/status` | Get federation configuration and status |
-| `GET` | `/api/federation/cache/stats` | Get cache statistics |
 | `POST` | `/api/federation/sync` | Sync all enabled federations |
 | `POST` | `/api/federation/sync/{source}` | Sync specific federation source |
-| `DELETE` | `/api/federation/cache` | Clear all federation caches |
-| `DELETE` | `/api/federation/cache/{source}` | Clear specific source cache |
 
 ### Response Examples
 
@@ -353,15 +341,11 @@ HTTPS_PROXY=http://proxy.company.com:8080
   "enabled_federations": ["anthropic", "asor"],
   "anthropic": {
     "enabled": true,
-    "last_sync": "2024-01-15T10:30:00Z",
-    "cached_servers": 25,
-    "cache_expires": "2024-01-15T11:30:00Z"
+    "last_sync": "2024-01-15T10:30:00Z"
   },
   "asor": {
     "enabled": true,
-    "last_sync": "2024-01-15T10:25:00Z",
-    "cached_agents": 3,
-    "cache_expires": "2024-01-15T14:25:00Z"
+    "last_sync": "2024-01-15T10:25:00Z"
   }
 }
 ```
