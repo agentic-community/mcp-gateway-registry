@@ -131,16 +131,27 @@ class AnthropicFederationClient(BaseFederationClient):
         version = server.get("version", "1.0.0")
         title = server.get("title", server_name)
 
-        # Extract transport info from packages
-        packages = server.get("packages", [])
+        # Extract transport info - handle both old (packages) and new (remotes) schema
         transport_type = "streamable-http"
         proxy_url = None
-
-        if packages:
-            package = packages[0]
-            transport = package.get("transport", {})
-            transport_type = transport.get("type", "streamable-http")
-            proxy_url = transport.get("url")
+        
+        # Try new schema format (remotes)
+        remotes = server.get("remotes", [])
+        if remotes:
+            remote = remotes[0]
+            transport_type = remote.get("type", "streamable-http")
+            proxy_url = remote.get("url")
+        else:
+            # Fallback to old schema format (packages)
+            packages = server.get("packages", [])
+            if packages:
+                package = packages[0]
+                transport = package.get("transport", {})
+                transport_type = transport.get("type", "streamable-http")
+                # Only set URL for HTTP-based transports
+                if transport_type in ["streamable-http", "http"]:
+                    proxy_url = transport.get("url")
+                # stdio and other transports don't have URLs
 
         # Extract tags from metadata if available
         tags = []
