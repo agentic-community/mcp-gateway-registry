@@ -270,6 +270,33 @@ class FederationService:
 
         return servers
 
+    def get_federated_items(
+        self,
+        source: Optional[str] = None,
+        force_refresh: bool = False
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get both federated servers and agents from specified source or all sources.
+        
+        Args:
+            source: Federation source name (e.g., "anthropic", "asor") or None for all
+            force_refresh: Ignored (always syncs fresh)
+            
+        Returns:
+            Dict with 'servers' and 'agents' keys containing respective federated items
+        """
+        result = {"servers": [], "agents": []}
+
+        if source is None or source == "anthropic":
+            result["servers"].extend(self._sync_anthropic())
+
+        if source is None or source == "asor":
+            # ASOR provides agents, not servers
+            asor_agents = self._sync_asor()
+            result["agents"].extend(asor_agents)
+
+        return result
+
 
 # Global instance
 _federation_service: Optional[FederationService] = None
