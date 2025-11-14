@@ -12,8 +12,8 @@ import os
 # Configuration from environment or defaults
 CLIENT_ID = os.getenv("ASOR_CLIENT_ID")
 CLIENT_SECRET = os.getenv("ASOR_CLIENT_SECRET")
-TENANT_NAME = os.getenv("WORKDAY_TENANT_NAME")
-HOSTNAME = os.getenv("WORKDAY_HOSTNAME")
+TENANT_NAME = os.getenv("ASOR_TENANT_NAME")
+HOSTNAME = os.getenv("ASOR_HOSTNAME")
 
 def get_asor_token():
     """Get ASOR access token via 3-legged OAuth flow"""
