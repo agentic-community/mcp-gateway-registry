@@ -165,6 +165,10 @@ class FederationService:
                 with open(file_path, "w") as f:
                     json.dump(server_data, f, indent=2)
                 
+                # Update server_state.json to enable the server
+                server_path = server_data.get("path", f"/{server_name.replace('/', '-')}")
+                self._update_server_state(server_path, True)
+                
                 logger.info(f"Saved Anthropic server file: {server_name} -> {file_path}")
                 
             except Exception as e:
@@ -296,6 +300,36 @@ class FederationService:
             result["agents"].extend(asor_agents)
 
         return result
+
+    def _update_server_state(self, server_path: str, enabled: bool) -> None:
+        """
+        Update server_state.json to enable/disable a server.
+        
+        Args:
+            server_path: Server path (e.g., "/ai.klavis-strata")
+            enabled: Whether to enable the server
+        """
+        try:
+            from ..core.config import settings
+            state_file = settings.servers_dir / "server_state.json"
+            
+            # Load existing state
+            state = {}
+            if state_file.exists():
+                with open(state_file, "r") as f:
+                    state = json.load(f)
+            
+            # Update state
+            state[server_path] = enabled
+            
+            # Save state
+            with open(state_file, "w") as f:
+                json.dump(state, f, indent=2)
+                
+            logger.info(f"Updated server state: {server_path} = {enabled}")
+            
+        except Exception as e:
+            logger.error(f"Failed to update server state for {server_path}: {e}")
 
 
 # Global instance
