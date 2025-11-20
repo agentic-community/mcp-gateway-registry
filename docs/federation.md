@@ -13,7 +13,9 @@ The MCP Gateway Registry supports federation with external registries, allowing 
 
 ## Federation in Action
 
-[Federation Demo](docs/img/federated-registry.png)
+<div align="center">
+<img src="docs/img/federated-registry.png" alt="Federation Demo" width="800"/>
+</div>
 
 ## Quick Setup
 
