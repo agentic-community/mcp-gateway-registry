@@ -1,5 +1,7 @@
 version: '3.8'
 
+name: mcp-gateway-registry
+
 services:
   # Registry service (includes nginx, SSL, FAISS, models)
   registry:

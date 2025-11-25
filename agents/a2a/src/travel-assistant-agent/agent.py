@@ -133,6 +133,31 @@ def api_create_trip_plan(
     return {"result": result}
 
 
+@app.post("/api/discover-agents")
+async def api_discover_agents(query: str):
+    logger.info(f"Agent discovery request: query='{query}'")
+
+    from dependencies import get_registry_client
+
+    registry_client = get_registry_client()
+    if not registry_client:
+        return {"error": "Discovery not configured"}
+
+    try:
+        agents = await registry_client.discover_by_semantic_search(
+            query=query,
+            max_results=5,
+        )
+        return {
+            "query": query,
+            "agents_found": len(agents),
+            "agents": [agent.model_dump() for agent in agents],
+        }
+    except Exception as e:
+        logger.error(f"Discovery failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
 app.mount("/", a2a_server.to_fastapi_app())
 
 

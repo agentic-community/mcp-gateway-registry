@@ -15,6 +15,12 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
       - AGENT_NAME=travel-assistant
       - AGENTCORE_RUNTIME_URL=http://travel-assistant-agent:9000/
+      # Keycloak M2M authentication for agent discovery
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://host.docker.internal:8080}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
+      - M2M_CLIENT_ID=${TRAVEL_AGENT_M2M_CLIENT_ID:-agent-test-agent-m2m}
+      - M2M_CLIENT_SECRET=${TRAVEL_AGENT_M2M_CLIENT_SECRET}
+      - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://host.docker.internal:7860}
     volumes:
       - travel_assistant_data:/app/data
     healthcheck:
@@ -40,6 +46,12 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
       - AGENT_NAME=flight-booking
       - AGENTCORE_RUNTIME_URL=http://flight-booking-agent:9000/
+      # Keycloak M2M authentication for agent discovery
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://host.docker.internal:8080}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
+      - M2M_CLIENT_ID=${FLIGHT_BOOKING_M2M_CLIENT_ID:-agent-test-agent-m2m}
+      - M2M_CLIENT_SECRET=${FLIGHT_BOOKING_M2M_CLIENT_SECRET}
+      - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://host.docker.internal:7860}
     volumes:
       - flight_booking_data:/app/data
     healthcheck:

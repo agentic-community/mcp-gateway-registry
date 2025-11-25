@@ -23,7 +23,7 @@ class EnvSettings:
         self.agent_name: str = os.getenv("AGENT_NAME", "travel-assistant")
         self.agent_version: str = os.getenv("AGENT_VERSION", "1.0.0")
 
-        # MCP Gateway Registry URL (TODO: replace later)
+        # MCP Gateway Registry URL
         self.mcp_registry_url: str = os.getenv("MCP_REGISTRY_URL", "http://localhost:7860")
 
         # Agent's public URL (AgentCore Runtime injects automatically)
@@ -32,6 +32,12 @@ class EnvSettings:
         # Server configuration (fixed for A2A protocol)
         self.host: str = "0.0.0.0"
         self.port: int = 9000
+
+        # Keycloak configuration for M2M authentication
+        self.keycloak_url: str = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
+        self.keycloak_realm: str = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
+        self.m2m_client_id: str = os.getenv("M2M_CLIENT_ID", "")
+        self.m2m_client_secret: str = os.getenv("M2M_CLIENT_SECRET", "")
 
         logger.info(f"EnvSettings initialized: agent_name={self.agent_name}, version={self.agent_version}")
         logger.debug(f"Database path: {self.db_path}")

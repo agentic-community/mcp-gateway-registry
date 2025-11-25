@@ -142,10 +142,161 @@ def create_trip_plan(
         return json.dumps({"error": f"Database error: {str(e)}"})
 
 
-# TODO: Create tool that's able to dynamically search agents from MCP Registry
-# example:
-# @tool
-# def delegate_to_agent(agent_capability: str, action: str, params: Dict) -> str:
+@tool
+async def invoke_discovered_agent(
+    agent_name: str,
+    skill_id: str,
+    parameters: Dict[str, Any],
+) -> str:
+    """Invoke a skill on a discovered agent.
+
+    First use discover_agents to find available agents, then use this tool
+    to invoke one of their skills. This enables multi-agent collaboration.
+
+    Args:
+        agent_name: Name of the agent (from discover_agents result)
+        skill_id: Skill ID to invoke (from agent's skills list)
+        parameters: Dictionary of parameters required by the skill
+
+    Returns:
+        JSON string with skill execution result
+
+    Example:
+        # First discover agents
+        agents = discover_agents("agent that can book flights")
+        # Then invoke a skill
+        result = invoke_discovered_agent(
+            agent_name="Flight Booking Agent",
+            skill_id="reserve_flight",
+            parameters={"flight_id": 123, "passenger_name": "John Doe"}
+        )
+    """
+    logger.info(f"Tool called: invoke_discovered_agent(agent_name={agent_name}, skill_id={skill_id})")
+
+    try:
+        from dependencies import get_registry_client
+        from a2a_tool_factory import invoke_agent_skill
+
+        registry_client = get_registry_client()
+        if not registry_client:
+            return json.dumps(
+                {
+                    "error": "Registry discovery not configured",
+                    "message": "Set M2M_CLIENT_ID and M2M_CLIENT_SECRET environment variables",
+                }
+            )
+
+        # First, discover the agent by name
+        logger.debug(f"Discovering agent: {agent_name}")
+        discovered = await registry_client.discover_by_semantic_search(
+            query=agent_name,
+            max_results=1,
+        )
+
+        if not discovered:
+            return json.dumps(
+                {
+                    "error": "Agent not found",
+                    "message": f"No agent found matching '{agent_name}'",
+                }
+            )
+
+        agent = discovered[0]
+        logger.info(f"Found agent: {agent.name} at {agent.url}")
+
+        # Get auth token for invocation
+        token = await registry_client._get_token()
+
+        # Invoke the skill
+        result = await invoke_agent_skill(
+            agent=agent,
+            skill_id=skill_id,
+            parameters=parameters,
+            auth_token=token,
+        )
+
+        logger.info(f"Agent skill invocation successful")
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.error(f"Agent invocation error: {e}", exc_info=True)
+        return json.dumps(
+            {
+                "error": "Invocation failed",
+                "message": str(e),
+            }
+        )
 
 
-TRAVEL_ASSISTANT_TOOLS = [search_flights, check_prices, get_recommendations, create_trip_plan]
+@tool
+async def discover_agents(query: str) -> str:
+    """Discover other agents in the registry by natural language query.
+
+    Use this tool to find agents that can help with tasks beyond your capabilities.
+    For example, if you need to book a flight, search for 'agent that can book flights'.
+
+    Args:
+        query: Natural language search query describing needed capabilities
+
+    Returns:
+        JSON string with discovered agents and their skills
+    """
+    logger.info(f"Tool called: discover_agents(query='{query}')")
+
+    try:
+        from dependencies import get_registry_client
+
+        registry_client = get_registry_client()
+        if not registry_client:
+            return json.dumps(
+                {
+                    "error": "Registry discovery not configured",
+                    "message": "Set M2M_CLIENT_ID and M2M_CLIENT_SECRET environment variables",
+                }
+            )
+
+        discovered = await registry_client.discover_by_semantic_search(
+            query=query,
+            max_results=5,
+        )
+
+        result = {
+            "query": query,
+            "agents_found": len(discovered),
+            "agents": [
+                {
+                    "name": agent.name,
+                    "description": agent.description,
+                    "path": agent.path,
+                    "url": agent.url,
+                    "skills": agent.skills,
+                    "tags": agent.tags,
+                    "relevance_score": agent.score,
+                    "trust_level": agent.trust_level,
+                }
+                for agent in discovered
+            ],
+        }
+
+        logger.info(f"Discovery successful: found {len(discovered)} agents")
+        logger.debug(f"Discovery result:\n{json.dumps(result, indent=2)}")
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.error(f"Discovery error in discover_agents: {e}", exc_info=True)
+        return json.dumps(
+            {
+                "error": "Discovery failed",
+                "message": str(e),
+            }
+        )
+
+
+TRAVEL_ASSISTANT_TOOLS = [
+    search_flights,
+    check_prices,
+    get_recommendations,
+    create_trip_plan,
+    discover_agents,
+    invoke_discovered_agent,
+]
