@@ -369,6 +369,83 @@ class AgentService:
         """
         return list(self.registered_agents.values())
 
+    def update_rating(
+        self,
+        path: str,
+        username: str,
+        rating: int,
+    ) -> float:
+        """
+        Log a user rating for an agent. If the user has already rated, update their rating.
+
+        Args:
+            path: Agent path
+            username: The user who submitted rating
+            rating: integer between 1-5
+        
+        Return:
+            Updated average rating
+
+        Raises:
+            ValueError: If agent not found
+        """
+        if path not in self.registered_agents:
+            logger.error(f"Cannot update agent at path '{path}': not found")
+            raise ValueError(f"Agent not found at path: {path}")
+
+        # Validate rating
+        if not isinstance(rating, int):
+            logger.error(f"Invalid rating type: {rating} (type={type(rating)})")
+            raise ValueError("Rating must be an integer")
+        if rating < 1 or rating > 5:
+            logger.error(f"Invalid rating value: {rating}. Must be between 1 and 5.")
+            raise ValueError("Rating must be between 1 and 5 (inclusive)")
+        
+        # Get existing agent
+        existing_agent = self.registered_agents[path]
+
+        # Ensure num_stars exists and ratings is a list
+        if "num_stars" not in existing_agent:
+            existing_agent["num_stars"] = 0.0
+        if "rating_details" not in existing_agent or not isinstance(existing_agent["rating_details"], list):
+            existing_agent["rating_details"] = []
+
+        # Check if this user has already rated; if so, update their rating
+        user_found = False
+        for entry in existing_agent["rating_details"]:
+            if entry.get("user") == username:
+                entry["rating"] = rating
+                user_found = True
+                break
+        
+        # If no existing rating from this user, append a new one
+        if not user_found:
+            existing_agent["rating_details"].append({
+                "user": username,
+                "rating": rating,
+            })
+
+        # Compute average rating
+        all_ratings = [entry["rating"] for entry in existing_agent["rating_details"]]
+        existing_agent["num_stars"] = float(sum(all_ratings) / len(all_ratings))
+
+        # Validate updated agent
+        try:
+            updated_agent = AgentCard(**existing_agent)
+        except Exception as e:
+            logger.error(f"Failed to validate updated agent: {e}")
+            raise ValueError(f"Invalid agent update: {e}")
+
+        # Save to disk
+        if not _save_agent_to_disk(updated_agent, settings.agents_dir):
+            raise ValueError(f"Failed to save updated agent to disk")
+
+        # Update in-memory registry
+        self.registered_agents[path] = updated_agent
+
+        logger.info(f"Agent '{updated_agent.name}' ({path}) updated")
+
+        return existing_agent["num_stars"]
 
     def update_agent(
         self,

@@ -29,6 +29,7 @@ from ..schemas.agent_models import (
     AgentProvider,
     AgentRegistrationRequest,
 )
+from pydantic import BaseModel
 from ..core.config import settings
 
 
@@ -42,6 +43,10 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+
+
+class RatingRequest(BaseModel):
+    rating: int
 
 
 def _normalize_path(
@@ -510,6 +515,70 @@ async def check_agent_health(
         "detail": detail,
         "response_time_ms": response_time_ms,
         "last_checked_iso": last_checked_iso,
+    }
+
+
+@router.post("/agents/{path:path}/rate")
+async def rate_agent(
+    path: str,
+    request: RatingRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Save integer ratings to agent card."""
+    path = _normalize_path(path)
+
+    agent_card = agent_service.get_agent_info(path)
+    if not agent_card:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent not found at path '{path}'",
+        )
+
+    accessible = _filter_agents_by_access([agent_card], user_context)
+    if not accessible:
+        logger.warning(
+            f"User {user_context['username']} attempted to rate agent {path} without permission"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this agent",
+        )
+
+    success = agent_service.update_rating(path, user_context["username"], request.rating)
+    if not success:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Failed to save rating"},
+        )
+
+    return {"message": "Rating added successfully"}
+
+
+@router.get("/agents/{path:path}/rating")
+async def get_agent_rating(
+    path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Get agent rating information."""
+    path = _normalize_path(path)
+
+    agent_card = agent_service.get_agent_info(path)
+    if not agent_card:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent not found at path '{path}'",
+        )
+
+    accessible = _filter_agents_by_access([agent_card], user_context)
+    if not accessible:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this agent",
+        )
+    
+    return {
+        "num_stars": agent_card.num_stars,
+        "rating_details": agent_card.rating_details,
     }
 
 
