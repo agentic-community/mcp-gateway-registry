@@ -48,6 +48,7 @@ class AgentSearchResult(BaseModel):
     path: str
     agent_name: str
     description: Optional[str] = None
+    url: Optional[str] = None  # Agent endpoint URL for invocation
     tags: List[str] = Field(default_factory=list)
     skills: List[str] = Field(default_factory=list)
     trust_level: Optional[str] = None
@@ -251,6 +252,7 @@ async def semantic_search(
                 description=agent_card_dict.get(
                     "description", agent.get("description")
                 ),
+                url=agent_card_dict.get("url"),
                 tags=tags or [],
                 skills=[s for s in skills if s],
                 trust_level=agent_card_dict.get("trust_level"),
