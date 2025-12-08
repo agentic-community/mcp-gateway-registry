@@ -109,10 +109,13 @@ class RegistryDiscoveryClient:
 
         token = await self._get_token()
         discovery_url = f"{self.registry_url}/api/search/semantic"
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            # "Host": "localhost"  # Not needed when using service name directly
+        }
         payload = {
             "query": query,
-            "entity_types": ["agent"],
+            "entity_types": ["a2a_agent"],
             "max_results": max_results
         }
 

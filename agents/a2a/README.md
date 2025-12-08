@@ -8,7 +8,7 @@ Two AI agents built with AWS Bedrock AgentCore and the Strands framework for fli
 - Searches for available flights between cities
 - Provides flight recommendations based on price and preferences
 - Returns detailed flight information (times, prices, airlines)
-- **Discovers other agents** through the MCP Gateway Registry
+- **Discovers other agents** through the MCP Gateway Registry and dynamically adds them as tools
 - [Full specification](https://github.com/agentic-community/mcp-gateway-registry/issues/196)
 
 **Flight Booking Agent** (`flight_booking_agent`)
@@ -30,12 +30,13 @@ Run agents locally with full FastAPI server including custom API endpoints.
 
 **Deploy:**
 ```bash
-# Configure AWS credentials (one of these methods)
-export AWS_PROFILE=your_profile_name
+# 1. Get AWS credentials (for Isengard users)
+isengard credentials --account YOUR_ACCOUNT --role YOUR_ROLE --export
 
-# Or use EC2 IAM role (no export needed)
+# This exports: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
+# Docker will automatically pick these up from your environment
 
-# Then deploy (auto-detects your system architecture)
+# 2. Deploy (auto-detects your system architecture)
 # From repo root:
 agents/a2a/deploy_local.sh
 
