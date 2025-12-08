@@ -2,21 +2,20 @@
 
 import logging
 from functools import lru_cache
-from typing import Optional
+from typing import Dict, Optional
 
 from database import FlightDatabaseManager
 from env_settings import EnvSettings
 from registry_discovery_client import RegistryDiscoveryClient
+from remote_agent_client import RemoteAgentCache
 
-# Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Set the log level to INFO
+    level=logging.INFO,  
     format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
 )
 logger = logging.getLogger(__name__)
 
 
-# Simple singleton providers
 @lru_cache()
 def get_env() -> EnvSettings:
     """Get environment settings singleton."""
@@ -57,3 +56,14 @@ def get_registry_client() -> Optional[RegistryDiscoveryClient]:
         client_secret=env.m2m_client_secret,
         realm=env.keycloak_realm,
     )
+
+
+@lru_cache()
+def get_remote_agent_cache() -> RemoteAgentCache:
+    """Get the remote agent cache singleton.
+    
+    Returns:
+        RemoteAgentCache instance
+    """
+    logger.debug("Getting remote agent cache")
+    return RemoteAgentCache()

@@ -20,9 +20,3 @@ class DiscoveredAgent(BaseModel):
     visibility: str = Field("public", description="Agent visibility")
     relevance_score: Optional[float] = Field(None, description="Relevance score from search")
     match_context: Optional[str] = Field(None, description="Context of the match")
-    
-    # Computed property for backward compatibility
-    @property
-    def name(self) -> str:
-        """Alias for agent_name for backward compatibility."""
-        return self.agent_name

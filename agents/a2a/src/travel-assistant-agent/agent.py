@@ -8,15 +8,11 @@ from typing import (
     List,
     Optional,
 )
-
 from strands import Agent, tool
+from dependencies import get_db_manager, get_registry_client, get_remote_agent_cache
 
-from dependencies import get_db_manager
-
-# Configure logging with basicConfig
 logging.basicConfig(
-    level=logging.INFO,  # Set the log level to INFO
-    # Define log message format
+    level=logging.INFO,
     format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -144,26 +140,13 @@ def create_trip_plan(
 
 @tool
 async def discover_remote_agents(query: str, max_results: int = 5) -> str:
-    """Discover remote agents from the registry and cache them for invocation.
-    
-    This tool searches the agent registry using natural language and caches
-    the discovered agents as callable A2A remote agents. After discovery,
-    use view_cached_remote_agents() to see what's available, and 
-    invoke_remote_agent() to call a specific agent.
-
-    Args:
-        query: Natural language search query describing needed capabilities
-        max_results: Maximum number of agents to discover (default: 5)
-
-    Returns:
-        JSON string with discovered agents, their IDs, descriptions, and skills
+    """
+    Discover remote agents from the mcp-registry with natural language query.
+    Cache them for visibility and invocation for later tool calls from LLM
     """
     logger.info(f"Tool called: discover_remote_agents(query='{query}', max_results={max_results})")
 
     try:
-        from dependencies import get_registry_client
-        from a2a_tool_factory import cache_discovered_agents, get_remote_agent_cache
-
         registry_client = get_registry_client()
         if not registry_client:
             return json.dumps(
@@ -188,10 +171,8 @@ async def discover_remote_agents(query: str, max_results: int = 5) -> str:
 
         # Get auth token and cache the agents
         auth_token = await registry_client._get_token()
-        newly_cached = cache_discovered_agents(discovered, auth_token)
-        
-        # Get total cache size
         cache = get_remote_agent_cache()
+        newly_cached = cache.cache_discovered_agents(discovered, auth_token)
 
         result = {
             "query": query,
@@ -201,7 +182,7 @@ async def discover_remote_agents(query: str, max_results: int = 5) -> str:
             "agents": [
                 {
                     "id": agent.path,
-                    "name": agent.name,
+                    "name": agent.agent_name,
                     "description": agent.description,
                     "url": agent.url,
                     "skills": agent.skills,
@@ -232,38 +213,29 @@ async def discover_remote_agents(query: str, max_results: int = 5) -> str:
 
 @tool
 async def view_cached_remote_agents() -> str:
-    """View all cached remote agents available for invocation.
-    
-    Shows the agents that have been discovered and cached, including their
-    IDs, names, URLs, and initialization status. Use this to see what agents
-    are available before invoking them.
-
-    Returns:
-        JSON string with all cached agents and their metadata
-    """
+    """View all cached remote agents available for invocation."""
     logger.info("Tool called: view_cached_remote_agents()")
 
     try:
-        from a2a_tool_factory import get_remote_agent_cache
-
         cache = get_remote_agent_cache()
 
-        if not cache:
+        if len(cache) == 0:
             return json.dumps({
                 "total": 0,
                 "message": "No agents cached. Use discover_remote_agents() to find and cache agents.",
             })
 
+        all_agents = cache.get_all()
         result = {
             "total": len(cache),
             "agents": [
                 {
                     "id": agent_id,
-                    "name": agent_tool.agent_name,
-                    "url": agent_tool.agent_url,
-                    "initialized": agent_tool._initialized,
+                    "name": agent_client.agent_name,
+                    "url": agent_client.agent_url,
+                    "skills": agent_client.skills,
                 }
-                for agent_id, agent_tool in cache.items()
+                for agent_id, agent_client in all_agents.items()
             ],
             "usage": "Use invoke_remote_agent(agent_id, message) to call any of these agents",
         }
@@ -283,41 +255,28 @@ async def view_cached_remote_agents() -> str:
 
 @tool
 async def invoke_remote_agent(agent_id: str, message: str) -> str:
-    """Invoke a cached remote agent by ID with a natural language message.
-    
-    Sends a message to a previously discovered and cached remote agent.
-    The remote agent will use its own LLM to understand your request and
-    execute the appropriate skills.
-
-    Args:
-        agent_id: The agent path/ID from discover_remote_agents (e.g., "/flight-booking-agent")
-        message: Natural language message to send to the agent
-
-    Returns:
-        Response from the remote agent
-    """
+    """Invoke a cached remote agent by ID with a natural language message."""
     logger.info(f"Tool called: invoke_remote_agent(agent_id='{agent_id}', message='{message[:100]}...')")
 
     try:
-        from a2a_tool_factory import get_remote_agent_cache
-
         cache = get_remote_agent_cache()
 
         if agent_id not in cache:
-            available_ids = list(cache.keys())
+            all_agents = cache.get_all()
+            available_ids = list(all_agents.keys())
             return json.dumps({
                 "error": f"Agent '{agent_id}' not found in cache",
                 "available_agents": available_ids,
                 "hint": "Use discover_remote_agents() to find and cache agents, or view_cached_remote_agents() to see what's available",
             })
 
-        # Get the cached agent tool and invoke it
-        agent_tool = cache[agent_id]
-        logger.info(f"Invoking agent: {agent_tool.agent_name}")
+        # Get the cached agent client and invoke it
+        agent_client = cache.get(agent_id)
+        logger.info(f"Invoking agent: {agent_client.agent_name}")
         
-        response = await agent_tool.send_message(message)
+        response = await agent_client.send_message(message)
         
-        logger.info(f"Successfully invoked {agent_tool.agent_name}")
+        logger.info(f"Successfully invoked {agent_client.agent_name}")
         return response
 
     except Exception as e:
@@ -331,9 +290,6 @@ async def invoke_remote_agent(agent_id: str, message: str) -> str:
         )
 
 
-
-
-
 TRAVEL_ASSISTANT_TOOLS = [
     search_flights,
     check_prices,
@@ -343,7 +299,6 @@ TRAVEL_ASSISTANT_TOOLS = [
     view_cached_remote_agents,
     invoke_remote_agent,
 ]
-
 
 strands_agent = Agent(
     name="Travel Assistant Agent",
@@ -355,5 +310,4 @@ strands_agent = Agent(
 
 
 def get_agent_instance():
-    """Get the global agent instance."""
     return strands_agent

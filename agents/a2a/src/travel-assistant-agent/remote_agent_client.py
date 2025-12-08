@@ -1,13 +1,12 @@
-"""Factory for creating A2A tools from discovered agents."""
+"""Client for communicating with remote A2A agents."""
 
 import logging
-from typing import Dict, List, Optional
+from typing import List, Optional
 from uuid import uuid4
 
 import httpx
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
 from a2a.types import Message, Part, Role, TextPart
-from strands import tool
 
 from models import DiscoveredAgent
 
@@ -18,15 +17,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Global cache: agent_id -> A2AAgentTool instance
-_remote_agent_cache: Dict[str, "A2AAgentTool"] = {}
-
-
-class A2AAgentTool:
-    """Wrapper for remote A2A agents - initialized once and reusable.
-    
+class RemoteAgentClient:
+    """
+    Client for communicating with a remote A2A agent.
     This class wraps an A2A agent discovered from the registry, providing
     lazy initialization and reusable client connections.
+
+    Reference: https://strandsagents.com/latest/documentation/docs/user-guide/concepts/multi-agent/agent-to-agent/
     """
 
     def __init__(
@@ -34,28 +31,21 @@ class A2AAgentTool:
         agent_url: str,
         agent_name: str,
         agent_id: str,
+        skills: Optional[List[str]] = None,
         auth_token: Optional[str] = None,
     ):
-        """Initialize A2A agent tool wrapper.
-
-        Args:
-            agent_url: Full URL to the A2A agent endpoint
-            agent_name: Human-readable name of the agent
-            agent_id: Unique identifier (typically the registry path)
-            auth_token: Optional JWT token for authentication
-        """
         self.agent_url = agent_url
         self.agent_name = agent_name
         self.agent_id = agent_id
+        self.skills = skills or []
         self.auth_token = auth_token
         self.agent_card = None
         self.client = None
         self.httpx_client = None
         self._initialized = False
-        logger.info(f"Created A2AAgentTool for: {agent_name} (ID: {agent_id})")
+        logger.info(f"Created RemoteAgentClient for: {agent_name} (ID: {agent_id}, Skills: {len(self.skills)})")
 
     async def _ensure_initialized(self):
-        """Lazy initialization of A2A client - only happens on first invoke."""
         if self._initialized:
             return
 
@@ -81,14 +71,7 @@ class A2AAgentTool:
         logger.info(f"A2A client initialized for {self.agent_name}")
 
     async def send_message(self, message: str) -> str:
-        """Send a natural language message to the remote agent.
-
-        Args:
-            message: Natural language message to send to the agent
-
-        Returns:
-            Response text from the agent
-        """
+        # Send a natural language message to the remote agent.
         await self._ensure_initialized()
 
         logger.info(f"Sending message to {self.agent_name}: {message[:100]}...")
@@ -119,74 +102,67 @@ class A2AAgentTool:
             return f"Error communicating with {self.agent_name}: {str(e)}"
 
     async def close(self):
-        """Close the httpx client and cleanup resources."""
+        # Close the httpx client and cleanup resources
         if self.httpx_client:
             await self.httpx_client.aclose()
             logger.info(f"Closed httpx client for {self.agent_name}")
 
 
-
-
-
-def get_remote_agent_cache() -> Dict[str, A2AAgentTool]:
-    """Get the global remote agent cache.
+class RemoteAgentCache:    
+    def __init__(self):
+        self._cache: dict[str, RemoteAgentClient] = {}
+        logger.info("RemoteAgentCache initialized")
     
-    Returns:
-        Dictionary mapping agent IDs to A2AAgentTool instances
-    """
-    return _remote_agent_cache
-
-
-async def clear_remote_agent_cache():
-    """Clear all cached remote agents and cleanup resources."""
-    global _remote_agent_cache
-    count = len(_remote_agent_cache)
+    def get(self, agent_id: str) -> Optional[RemoteAgentClient]:
+        return self._cache.get(agent_id)
     
-    # Close all httpx clients
-    for agent_tool in _remote_agent_cache.values():
-        await agent_tool.close()
+    def get_all(self) -> dict[str, RemoteAgentClient]:
+        return self._cache.copy()
     
-    _remote_agent_cache.clear()
-    logger.info(f"Cleared {count} agents from cache")
-
-
-def cache_discovered_agents(
-    agents: List[DiscoveredAgent],
-    auth_token: Optional[str] = None,
-) -> Dict[str, A2AAgentTool]:
-    """Cache discovered agents as A2AAgentTool instances.
+    def add(self, agent_id: str, agent_client: RemoteAgentClient):
+        self._cache[agent_id] = agent_client
+        logger.info(f"Added agent to cache: {agent_id}")
     
-    Args:
-        agents: List of discovered agents from registry
-        auth_token: Optional JWT token for authentication
+    def cache_discovered_agents(self, agents: List[DiscoveredAgent], auth_token: Optional[str] = None) -> dict[str, RemoteAgentClient]: 
+        newly_cached = {}
         
-    Returns:
-        Dictionary of newly cached agents (agent_id -> A2AAgentTool)
-    """
-    newly_cached = {}
+        for agent in agents:
+            agent_id = agent.path
+            
+            # Skip if already cached
+            if agent_id in self._cache:
+                logger.info(f"Agent {agent_id} already cached, skipping")
+                continue
+            
+            # Create and cache the remote agent client
+            agent_client = RemoteAgentClient(
+                agent_url=agent.url,
+                agent_name=agent.agent_name,
+                agent_id=agent_id,
+                skills=agent.skills,
+                auth_token=auth_token,
+            )
+            
+            self._cache[agent_id] = agent_client
+            newly_cached[agent_id] = agent_client
+            logger.info(f"Cached agent: {agent.agent_name} (ID: {agent_id})")
+        
+        logger.info(f"Cached {len(newly_cached)} new agents. Total in cache: {len(self._cache)}")
+        return newly_cached
     
-    for agent in agents:
-        agent_id = agent.path
+    async def clear(self):
+        count = len(self._cache)
+        for agent_client in self._cache.values():
+            await agent_client.close()
         
-        # Skip if already cached
-        if agent_id in _remote_agent_cache:
-            logger.info(f"Agent {agent_id} already cached, skipping")
-            continue
-        
-        # Create and cache the A2A agent tool
-        agent_tool = A2AAgentTool(
-            agent_url=agent.url,
-            agent_name=agent.name,
-            agent_id=agent_id,
-            auth_token=auth_token,
-        )
-        
-        _remote_agent_cache[agent_id] = agent_tool
-        newly_cached[agent_id] = agent_tool
-        logger.info(f"Cached agent: {agent.name} (ID: {agent_id})")
+        self._cache.clear()
+        logger.info(f"Cleared {count} agents from cache")
     
-    logger.info(f"Cached {len(newly_cached)} new agents. Total in cache: {len(_remote_agent_cache)}")
-    return newly_cached
+    def __len__(self) -> int:
+        return len(self._cache)
+    
+    def __contains__(self, agent_id: str) -> bool:
+        return agent_id in self._cache
 
 
 

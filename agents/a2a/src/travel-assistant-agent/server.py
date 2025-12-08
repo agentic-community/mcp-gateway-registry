@@ -50,8 +50,6 @@ async def lifespan(
     logger.info(f"Agent URL: {env_settings.agent_url}")
     logger.info(f"Listening on {env_settings.host}:{env_settings.port}")
 
-    # TODO: register agent with MCP Gateway Registry when path available
-
     yield
     # Triggered after server shutdown
     logger.info("Travel Assistant Agent shutting down")

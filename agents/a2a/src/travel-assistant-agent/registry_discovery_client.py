@@ -26,15 +26,7 @@ class RegistryDiscoveryClient:
         client_secret: str,
         realm: str = "mcp-gateway",
     ) -> None:
-        """Initialize registry discovery client.
 
-        Args:
-            registry_url: Base URL of the registry
-            keycloak_url: Base URL of Keycloak
-            client_id: M2M client ID
-            client_secret: M2M client secret
-            realm: Keycloak realm name
-        """
         self.registry_url = registry_url.rstrip("/")
         self.keycloak_url = keycloak_url.rstrip("/")
         self.client_id = client_id
@@ -108,14 +100,14 @@ class RegistryDiscoveryClient:
         logger.info(f"Semantic search: '{query}' (max_results={max_results})")
 
         token = await self._get_token()
-        discovery_url = f"{self.registry_url}/api/search/semantic"
+        discovery_url = f"{self.registry_url}/api/agents/discover/semantic"
         headers = {
             "Authorization": f"Bearer {token}",
-            # "Host": "localhost"  # Not needed when using service name directly
+            "Host": "localhost"
         }
-        payload = {
+        # This endpoint uses query parameters, not JSON body
+        params = {
             "query": query,
-            "entity_types": ["a2a_agent"],
             "max_results": max_results
         }
 
@@ -124,7 +116,7 @@ class RegistryDiscoveryClient:
                 async with session.post(
                     discovery_url,
                     headers=headers,
-                    json=payload,
+                    params=params,
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
@@ -138,6 +130,10 @@ class RegistryDiscoveryClient:
                     logger.info(f"Found {len(agents)} agents")
 
                     return agents
+
+            except aiohttp.ClientError as e:
+                logger.error(f"Network error during discovery: {e}")
+                raise Exception(f"Network error: {e}")
 
             except aiohttp.ClientError as e:
                 logger.error(f"Network error during discovery: {e}")
