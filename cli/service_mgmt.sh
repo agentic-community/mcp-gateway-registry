@@ -434,11 +434,31 @@ except Exception as e:
 add_service() {
     local config_file="${1}"
     local analyzers="${2:-yara}"
+    local skip_scan="false"
+
+    # Check for --skip-scan flag in any position
+    for arg in "$@"; do
+        if [ "$arg" = "--skip-scan" ] || [ "$arg" = "-s" ]; then
+            skip_scan="true"
+        fi
+    done
+
+    # Re-parse arguments excluding the flag
+    if [ "$skip_scan" = "true" ]; then
+        # If first arg is the flag, shift to get config file
+        if [ "$1" = "--skip-scan" ] || [ "$1" = "-s" ]; then
+            config_file="${2}"
+            analyzers="${3:-yara}"
+        elif [ "$2" = "--skip-scan" ] || [ "$2" = "-s" ]; then
+            analyzers="${3:-yara}"
+        fi
+    fi
 
     if [ -z "$config_file" ]; then
-        print_error "Usage: $0 add <config-file> [analyzers]"
+        print_error "Usage: $0 add <config-file> [analyzers] [--skip-scan]"
         print_error "Example: $0 add cli/examples/example-server-config.json"
         print_error "Example: $0 add cli/examples/example-server-config.json yara,llm"
+        print_error "Example: $0 add cli/examples/example-server-config.json --skip-scan  # Skip security scan"
         exit 1
     fi
 
@@ -500,65 +520,74 @@ else:
     print('')
 ")
 
-    # Check if LLM analyzer is requested and API key is available
-    if [[ "$analyzers" == *"llm"* ]]; then
-        if [ -z "$MCP_SCANNER_LLM_API_KEY" ] || [[ "$MCP_SCANNER_LLM_API_KEY" == *"your_"* ]] || [[ "$MCP_SCANNER_LLM_API_KEY" == *"placeholder"* ]]; then
-            echo ""
-            print_error "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY is not configured"
-            print_info "Current value: ${MCP_SCANNER_LLM_API_KEY:-<not set>}"
-            print_info ""
-            print_info "Options:"
-            print_info "  1. Add real API key to .env file: MCP_SCANNER_LLM_API_KEY=sk-..."
-            print_info "  2. Set environment variable: export MCP_SCANNER_LLM_API_KEY=sk-..."
-            print_info "  3. Use only YARA analyzer: $0 add $config_file yara"
-            exit 1
-        fi
-    fi
-
-    # Run security scan
-    echo ""
-    echo "=== Security Scan ==="
-    print_info "Scanning server for security vulnerabilities..."
-    print_info "Using analyzers: $analyzers"
-
-    local is_safe="true"
-    local scan_output=""
-
-    # Prepare scan URL - append /mcp if not already present
-    local scan_url="$proxy_pass_url"
-    if [[ ! "$scan_url" =~ /mcp/?$ ]] && [[ ! "$scan_url" =~ /sse/?$ ]]; then
-        # Remove trailing slash if present, then add /mcp
-        scan_url="${scan_url%/}/mcp"
-        print_info "Appending /mcp to scan URL: $scan_url"
-    fi
-
-    # Run scan using Python CLI and capture JSON output
-    # Note: Scanner exits with code 1 when unsafe, so we need to capture both success and "failure" cases
     local scan_exit_code=0
-    local scan_cmd="cd \"$PROJECT_ROOT\" && uv run cli/mcp_security_scanner.py --server-url \"$scan_url\" --analyzers \"$analyzers\" --json"
 
-    # Add headers if present in config
-    if [ -n "$headers_json" ]; then
-        print_info "Using custom headers from config for security scan"
-        scan_cmd="$scan_cmd --headers '$headers_json'"
-    fi
-
-    scan_output=$(eval "$scan_cmd" 2>&1) || scan_exit_code=$?
-    print_info "scan_exit_code - $scan_exit_code"
-
-    # Exit code 0 = safe, exit code 1 = unsafe, exit code 2 = error
-    if [ $scan_exit_code -eq 0 ]; then
-        print_success "Security scan passed - Server is SAFE"
-    elif [ $scan_exit_code -eq 1 ]; then
-        print_error "Security scan failed - Server has critical or high severity issues"
-        print_info "Server will be registered but marked as UNHEALTHY with security-pending status"
-
-        # Add security-pending tag to config_json BEFORE registration
+    # Skip security scan if --skip-scan flag is set
+    if [ "$skip_scan" = "true" ]; then
         echo ""
-        echo "====Adding security-pending tag to configuration===="
-        print_info "Adding 'security-pending' tag to server configuration before registration..."
+        echo "=== Security Scan ==="
+        print_info "Security scan SKIPPED (--skip-scan flag set)"
+        print_info "Server will be registered and auto-approved without security scanning"
+        echo ""
+    else
+        # Check if LLM analyzer is requested and API key is available
+        if [[ "$analyzers" == *"llm"* ]]; then
+            if [ -z "$MCP_SCANNER_LLM_API_KEY" ] || [[ "$MCP_SCANNER_LLM_API_KEY" == *"your_"* ]] || [[ "$MCP_SCANNER_LLM_API_KEY" == *"placeholder"* ]]; then
+                echo ""
+                print_error "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY is not configured"
+                print_info "Current value: ${MCP_SCANNER_LLM_API_KEY:-<not set>}"
+                print_info ""
+                print_info "Options:"
+                print_info "  1. Add real API key to .env file: MCP_SCANNER_LLM_API_KEY=sk-..."
+                print_info "  2. Set environment variable: export MCP_SCANNER_LLM_API_KEY=sk-..."
+                print_info "  3. Use only YARA analyzer: $0 add $config_file yara"
+                exit 1
+            fi
+        fi
 
-        config_json=$(python3 -c "
+        # Run security scan
+        echo ""
+        echo "=== Security Scan ==="
+        print_info "Scanning server for security vulnerabilities..."
+        print_info "Using analyzers: $analyzers"
+
+        local is_safe="true"
+        local scan_output=""
+
+        # Prepare scan URL - append /mcp if not already present
+        local scan_url="$proxy_pass_url"
+        if [[ ! "$scan_url" =~ /mcp/?$ ]] && [[ ! "$scan_url" =~ /sse/?$ ]]; then
+            # Remove trailing slash if present, then add /mcp
+            scan_url="${scan_url%/}/mcp"
+            print_info "Appending /mcp to scan URL: $scan_url"
+        fi
+
+        # Run scan using Python CLI and capture JSON output
+        # Note: Scanner exits with code 1 when unsafe, so we need to capture both success and "failure" cases
+        local scan_cmd="cd \"$PROJECT_ROOT\" && uv run cli/mcp_security_scanner.py --server-url \"$scan_url\" --analyzers \"$analyzers\" --json"
+
+        # Add headers if present in config
+        if [ -n "$headers_json" ]; then
+            print_info "Using custom headers from config for security scan"
+            scan_cmd="$scan_cmd --headers '$headers_json'"
+        fi
+
+        scan_output=$(eval "$scan_cmd" 2>&1) || scan_exit_code=$?
+        print_info "scan_exit_code - $scan_exit_code"
+
+        # Exit code 0 = safe, exit code 1 = unsafe, exit code 2 = error
+        if [ $scan_exit_code -eq 0 ]; then
+            print_success "Security scan passed - Server is SAFE"
+        elif [ $scan_exit_code -eq 1 ]; then
+            print_error "Security scan failed - Server has critical or high severity issues"
+            print_info "Server will be registered but marked as UNHEALTHY with security-pending status"
+
+            # Add security-pending tag to config_json BEFORE registration
+            echo ""
+            echo "====Adding security-pending tag to configuration===="
+            print_info "Adding 'security-pending' tag to server configuration before registration..."
+
+            config_json=$(python3 -c "
 import json
 import sys
 
@@ -578,18 +607,19 @@ except Exception as e:
     sys.exit(1)
 ")
 
-        if [ $? -eq 0 ]; then
-            print_success "Added 'security-pending' tag to configuration"
+            if [ $? -eq 0 ]; then
+                print_success "Added 'security-pending' tag to configuration"
+            else
+                print_error "Failed to add 'security-pending' tag to configuration"
+                exit 1
+            fi
         else
-            print_error "Failed to add 'security-pending' tag to configuration"
-            exit 1
+            print_error "Security scan encountered an error (exit code: $scan_exit_code)"
+            print_info "Server will be registered but marked as UNHEALTHY with security-pending status"
         fi
-    else
-        print_error "Security scan encountered an error (exit code: $scan_exit_code)"
-        print_info "Server will be registered but marked as UNHEALTHY with security-pending status"
-    fi
 
-    echo ""
+        echo ""
+    fi
 
     # Register the service
     if ! run_mcp_command "register_service" "$config_json" "Registering service"; then
@@ -612,7 +642,7 @@ except Exception as e:
         exit 1
     fi
 
-    if [ $scan_exit_code -eq 1 ]; then
+    if [ "$skip_scan" = "false" ] && [ $scan_exit_code -eq 1 ]; then
         #Disabling the server
         echo ""
         echo "====Disabling the server===="
@@ -909,8 +939,9 @@ show_usage() {
     echo "Usage: $0 {add|delete|monitor|test|scan|add-to-groups|remove-from-groups|create-group|delete-group|list-groups} [args...]"
     echo ""
     echo "Service Commands:"
-    echo "  add <config-file> [analyzers] - Add a service using JSON config and verify registration"
+    echo "  add <config-file> [analyzers] [--skip-scan] - Add a service using JSON config and verify registration"
     echo "                                  analyzers: yara (default), llm, or yara,llm"
+    echo "                                  --skip-scan: Skip security scan and auto-approve server"
     echo "  delete <service-path> <service-name> - Delete a service by path and name"
     echo "  monitor [config-file]        - Run health check (all services or specific service from config)"
     echo "  test <config-file>           - Test service searchability using intelligent_tool_finder"
@@ -944,6 +975,7 @@ show_usage() {
     echo "Examples:"
     echo "  # Service operations"
     echo "  $0 add cli/examples/example-server-config.json           # Add with default YARA analyzer"
+    echo "  $0 add cli/examples/example-server-config.json --skip-scan  # Add without security scan (auto-approve)"
     echo "  export MCP_SCANNER_LLM_API_KEY=sk-..."
     echo "  $0 add cli/examples/example-server-config.json yara,llm  # Add with both analyzers"
     echo "  $0 add cli/examples/example-server-config.json llm       # Add with only LLM analyzer"
