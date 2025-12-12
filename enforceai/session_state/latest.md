@@ -3,6 +3,15 @@
 ## Last Completed Work
 - Repo initialized
 - Base architecture files created
+- Persistence backend for phase 1 selected
+
+## Decisions
+- Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
+- Gateway token signing: RS256 for compatibility; local public-key verification with `kid`-based rotation.
+- Credential transport: use `Authorization: Bearer` as canonical; accept `X-Gateway-Token` as fallback; reject ambiguous multi-credential requests.
+- Service boundary: extend existing `auth_server` as the EnforceAI stateful enforcement point behind Nginx `auth_request`; keep `registry` optional for management/UI.
+- Generic OIDC scope: multi-issuer config map keyed by `iss` (map-of-one allowed), local JWKS validation with caching.
+- Agent binding: `agent_id` required for MCP access; from gateway token claim, API key record, or `X-Agent-Id` for OIDC.
 
 ## Current Task
 - Begin implementing the roadmap
@@ -15,5 +24,3 @@
 3. Gateway token signing system
 
 ## Outstanding Questions
-- DB backend choice
-- Token signing algorithm

@@ -16,6 +16,7 @@ Central point that determines which authentication method is used for the incomi
   - `X-Authorization`
   - `X-API-Key`
   - `X-Gateway-Token`
+  - `X-Agent-Id` (required for OIDC-authenticated MCP access)
 - Select the appropriate provider:
   - OIDC provider
   - API key provider
@@ -33,6 +34,17 @@ Central point that determines which authentication method is used for the incomi
   ```
 - Handle malformed/expired credentials.
 
+### Credential Precedence (Decision)
+- Canonical external client interface is `Authorization: Bearer <token>` for both OIDC JWTs and gateway-issued tokens.
+- `X-Gateway-Token` is accepted as a fallback for constrained clients.
+- Requests that present multiple credential headers (e.g., both `Authorization` and `X-Gateway-Token`, or `X-API-Key` plus a token) must be rejected to avoid ambiguity.
+
+### Agent Binding (Decision)
+- All MCP access is agent-scoped; `agent_id` is required on the request path.
+- `gateway-token` must embed `agent_id`.
+- `api-key` records are agent-bound and resolve to `{principal/user_id, agent_id}`.
+- For `oidc`, clients must send `X-Agent-Id`, which is validated against the gateway-managed agent registry for that user.
+
 ---
 
 ## 2. Generic OIDC Provider (MODIFIED / REPLACED COMPONENT)
@@ -41,16 +53,32 @@ Central point that determines which authentication method is used for the incomi
 Replace Cognito/Keycloak-specific validators with a generic OIDC JWT validator.
 
 ### Requirements
-- Support any OIDC issuer via config:
-  - `OIDC_ISSUER`
-  - `OIDC_JWKS_URI`
-  - `OIDC_AUDIENCE`
-  - `OIDC_SCOPE_CLAIM`
+- Support any OIDC issuer via config, including multi-issuer deployments:
+  - Phase 1 uses an issuer map (may contain a single issuer).
+  - Each configured issuer must specify:
+    - issuer (`iss`)
+    - `jwks_uri`
+    - `audience`
+    - claim mapping for scopes/roles (optional per issuer)
 - Validate:
   - `iss`, `aud`, `exp`, `iat`, signature via JWKS
 - Extract:
   - `sub` as `principal_id`
   - roles/scopes via configurable claims
+
+### OIDC Configuration Shape (Decision)
+Use an issuer map even for single-issuer deployments:
+
+```
+OIDC_ISSUERS='{
+  "https://example.okta.com/oauth2/default": {
+    "jwks_uri": "https://example.okta.com/oauth2/default/v1/keys",
+    "audience": ["mcp-gateway"],
+    "role_claims": ["groups", "roles"],
+    "scope_claims": ["scp", "scope", "permissions"]
+  }
+}'
+```
 
 ---
 
@@ -82,6 +110,7 @@ Issue long-lived tokens for non-OAuth clients (Claude, Cursor, VSCode).
   ```
 - Validate signature, expiration, revocation
 - Maintain a token revocation table
+- Prefer asymmetric signing for compatibility (`RS256`) and to avoid sharing signing capability with verifiers.
 
 ---
 
@@ -141,6 +170,7 @@ OIDC_JWKS_URI=https://...
 OIDC_AUDIENCE=mcp-gateway
 
 # Gateway token config
+GATEWAY_TOKEN_ALG=RS256
 GATEWAY_PRIVATE_KEY=...
 GATEWAY_PUBLIC_KEY=...
 

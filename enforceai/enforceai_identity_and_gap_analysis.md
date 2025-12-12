@@ -47,7 +47,7 @@ IdentityContext {
 ### 3.1 Supported Modes
 #### A. OIDC JWT Mode
 - Accept tokens from any IdP: Okta, Google, Auth0, Entra, Keycloak, Cognito.
-- Use generic OIDC config: issuer, JWKS, audience, claims.
+- Use generic OIDC config with multi-issuer support (issuer map): issuer, JWKS, audience, claims.
 
 #### B. Gateway Token Mode
 - Gateway issues tokens embedding: user_id, agent_id, agent scopes.
@@ -73,6 +73,12 @@ agents[user_id][agent_id] = {
 }
 ```
 
+### 4.3 Agent Identity Source (Decision)
+- `agent_id` is required for MCP access and must come from the gateway (not the IdP).
+- For `gateway-token`, `agent_id` is embedded in the token.
+- For `api-key`, API keys are agent-bound and resolve to `{user_id, agent_id}`.
+- For `oidc`, callers must provide `X-Agent-Id`, and the enforcement point validates it is owned by the authenticated `user_id`.
+
 ### 4.2 Required Metadata
 - Agent name  
 - Agent type  
@@ -97,6 +103,7 @@ Payload:
  "exp": <ts>
 }
 ```
+- Signature algorithm: `RS256` (selected for compatibility).
 
 ### 5.2 IdP JWT Handling
 - Validate issuer, audience, signature, expiration.
