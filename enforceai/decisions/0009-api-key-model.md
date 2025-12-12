@@ -27,3 +27,6 @@ EnforceAI supports an API-key-only authentication mode. API keys must remain com
 ## Future: Task-Scoped Permissions
 Later EnforceAI may add task-level authorization (e.g., `task_id`-scoped actions/tools). This does not change the API key format or hashed-at-rest approach.
 When introduced, task constraints should be modeled as an additional restriction dimension (e.g., credential/agent constraints metadata) and enforced alongside scope intersection.
+
+## Pepper Rotation (Phase 1)
+Phase 1 does not support pepper rotation/versioning. Rotating `API_KEY_PEPPER` is a breaking change for existing API keys unless a future pepper-versioning scheme is implemented.

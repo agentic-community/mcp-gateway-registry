@@ -40,3 +40,9 @@ IdentityContext {
 ## Tenancy (Decision)
 - Phase 1 tenancy boundary is `user_id` (no explicit `tenant_id/org_id` in the identity model or storage schemas).
 - A future `tenant_id` may be introduced later as an additive migration if required for delegated admin or org-level policy.
+
+## Identifier Canonicalization (Decision)
+- `user_id` is derived from OIDC as issuer-namespaced subject to avoid collisions across issuers:
+  - `user_id = "<iss>|<sub>"`
+- `agent_id` is a UUIDv4 string (canonical identifier used in tokens, headers, and storage).
+- Agents may also have an optional human-friendly alias/name, but authorization and binding always use `agent_id`.

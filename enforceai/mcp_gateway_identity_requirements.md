@@ -104,6 +104,10 @@ Support identity without any IdP (API-key-only mode).
 - Effective scopes must be non-elevating:
   - `effective_scopes = api_key.scopes ∩ agent.scopes` (or `agent.scopes` if key scopes are unset).
 
+### Pepper Rotation (Decision)
+- Phase 1 does not support pepper versioning/rotation.
+- Rotating `API_KEY_PEPPER` is a breaking change for existing API keys unless a future pepper-versioning scheme is implemented.
+
 ---
 
 ## 4. Gateway Token Provider (NEW COMPONENT)
@@ -173,6 +177,14 @@ Normalize scopes/roles across different identity providers.
 - Phase 1 uses `auth_server/scopes.yml` as the authoritative scope catalog (scope definitions and what they allow).
 - IdP group/role mappings are legacy/optional and must not override gateway-managed agent scopes.
 
+### OIDC Claim Defaults (Decision)
+- Default claim precedence for scopes (unless overridden per issuer):
+  - `scp`, then `scope`, then `permissions`
+  - If `scope` is a space-delimited string, split on spaces.
+- Default claim precedence for roles (unless overridden per issuer):
+  - `roles`, then `groups`, then `permissions`
+- IdP-derived roles/groups are for audit/metadata only and must not grant agent permissions.
+
 ---
 
 ## 7. Config System Extensions (MODIFIED COMPONENT)
@@ -223,6 +235,11 @@ Introduce identity-agnostic authentication pipeline.
 3. Produce IdentityContext  
 4. Apply FGAC  
 5. Route MCP request
+
+## Error Semantics (Decision)
+- `401 Unauthorized`: missing/invalid credentials (missing header, malformed token, invalid signature, expired token, API key mismatch).
+- `403 Forbidden`: authenticated but not authorized (FGAC deny, revoked agent/credential, invalid or missing agent binding such as missing `X-Agent-Id` for OIDC MCP access).
+- `503 Service Unavailable`: enforcement cannot safely decide due to internal dependency failure (unable to read registry/revocation state, key load failure); fail closed but signal retry.
 
 ---
 

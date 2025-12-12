@@ -25,6 +25,12 @@ Allowed:
 - Scopes decide authority
 - User roles do not override agents
 
+## 4.1 Error Semantics
+- Fail closed.
+- `401` for missing/invalid credentials.
+- `403` for authenticated-but-not-authorized (including missing agent binding like `X-Agent-Id`).
+- `503` for internal enforcement dependency failures (deny but signal retry).
+
 ## 5. No LLMs in Runtime Path
 - No dynamic auth decisions via LLM
 

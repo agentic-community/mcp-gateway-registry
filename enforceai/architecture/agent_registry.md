@@ -8,6 +8,7 @@ Agent {
     scopes: string[],
     allowed_tools?: string[],
     metadata?: Record<string, any>,
+    alias?: string,
     created_at: timestamp,
     tokens_valid_after?: timestamp,
     revoked: boolean
