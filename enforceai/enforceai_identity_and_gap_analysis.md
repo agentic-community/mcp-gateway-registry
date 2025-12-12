@@ -125,6 +125,10 @@ final_permissions =
   enterprise_policy ∩ user_baseline_scopes ∩ agent_scopes
 ```
 
+#### Overlay Semantics (Decision)
+- Phase 1 runtime enforcement is agent-scoped: effective permissions are computed from agent scopes (and optional allowed-tools) against the enterprise scope catalog.
+- Any user baseline constraints are applied at agent provisioning time (agent scopes cannot exceed the gateway-defined baseline), not on the request path.
+
 ---
 
 ## 7. Audit Requirements

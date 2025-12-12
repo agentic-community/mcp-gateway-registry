@@ -28,3 +28,9 @@
 - Streamline validation by keeping verification local to the enforcement point:
   - Verify using a locally loaded public key (no network call on the request path).
   - Cache parsed key material in memory and select keys by `kid` to support rotation.
+
+## Effective Scopes (Decision)
+- For `gateway-token` requests, effective scopes are:
+  - `effective_scopes = token.scopes ∩ agent.scopes`
+- Token scopes must never elevate permissions beyond the current agent registry scopes.
+- Scope mismatches (token contains scopes not currently on the agent) should be logged and treated as a reduction, not an error, to support immediate scope tightening without forced token rotation.

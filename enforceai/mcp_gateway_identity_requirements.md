@@ -96,6 +96,14 @@ Support identity without any IdP (API-key-only mode).
 - Return IdentityContext
 - Support key creation, revocation, rotation.
 
+### API Key Format and Storage (Decision)
+- Header format: `X-API-Key: eak_<key_id>.<secret>`
+- Store only a verifier hash (no plaintext keys), using a pepper:
+  - `secret_hash = HMAC-SHA256(API_KEY_PEPPER, secret)`
+- API keys are agent-bound and resolve to `{user_id/principal_id, agent_id}`.
+- Effective scopes must be non-elevating:
+  - `effective_scopes = api_key.scopes ∩ agent.scopes` (or `agent.scopes` if key scopes are unset).
+
 ---
 
 ## 4. Gateway Token Provider (NEW COMPONENT)
