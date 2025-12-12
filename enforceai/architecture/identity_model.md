@@ -36,3 +36,7 @@ IdentityContext {
   - `gateway-token`: from the token claim `agent_id`.
   - `api-key`: from the API key record (API keys are agent-bound).
   - `oidc`: from the `X-Agent-Id` request header, validated against the gateway-managed agent registry for the authenticated `user_id`.
+
+## Tenancy (Decision)
+- Phase 1 tenancy boundary is `user_id` (no explicit `tenant_id/org_id` in the identity model or storage schemas).
+- A future `tenant_id` may be introduced later as an additive migration if required for delegated admin or org-level policy.

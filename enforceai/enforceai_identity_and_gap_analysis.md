@@ -58,6 +58,10 @@ IdentityContext {
 #### D. Mixed Mode
 Gateway picks the right provider based on the request.
 
+### 3.2 Compatibility Scope (Decision)
+- EnforceAI does not require backward compatibility with upstream provider-specific modes or legacy token types.
+- Only the EnforceAI-defined authentication modes are supported: OIDC, gateway tokens, API keys (mixed mode via resolver).
+
 ---
 
 ## 4. Agent Identity Requirements

@@ -9,6 +9,7 @@ Agent {
     allowed_tools?: string[],
     metadata?: Record<string, any>,
     created_at: timestamp,
+    tokens_valid_after?: timestamp,
     revoked: boolean
 }
 ```
@@ -17,6 +18,8 @@ Agent {
 - Every agent belongs to exactly one user
 - Scopes must be assigned explicitly
 - Revoked agents cannot authenticate
+- Token revocation supports a bulk revoke mechanism using `tokens_valid_after` (deny if `token.iat < tokens_valid_after`).
+- If `allowed_tools` is set, it is an additional restriction layer for both tool execution and tool visibility (see `enforceai/architecture/fgac_model.md`).
 
 ## Persistence Strategy
 
@@ -44,3 +47,9 @@ Agent {
 - PATCH /agents/:agent_id
 - DELETE /agents/:agent_id
 - POST /agents/:agent_id/revoke
+
+## Management Surface (Decision)
+- Phase 1 is CLI-first for agent and credential lifecycle management.
+- Management is self-service per user:
+  - Users can create/manage/revoke their own agents and credentials.
+  - Cross-user operations (if needed) are reserved for an explicit admin path later.

@@ -119,6 +119,13 @@ Issue long-lived tokens for non-OAuth clients (Claude, Cursor, VSCode).
 - Validate signature, expiration, revocation
 - Maintain a token revocation table
 - Prefer asymmetric signing for compatibility (`RS256`) and to avoid sharing signing capability with verifiers.
+- Gateway tokens are long-lived (PAT-style) in Phase 1 and must include `exp` (no non-expiring tokens).
+
+### Revocation Semantics (Decision)
+- Layered revocation:
+  - Agent kill switch (`agent.revoked`) denies all access for that agent.
+  - Token-level revocation denies if `jti` is present in the revocation table.
+  - Bulk token revocation per agent via `agent.tokens_valid_after` (deny if `token.iat < tokens_valid_after`).
 
 ---
 
@@ -162,6 +169,10 @@ Normalize scopes/roles across different identity providers.
   - API key metadata
   - Gateway token payload
 
+### Enterprise Policy Catalog (Decision)
+- Phase 1 uses `auth_server/scopes.yml` as the authoritative scope catalog (scope definitions and what they allow).
+- IdP group/role mappings are legacy/optional and must not override gateway-managed agent scopes.
+
 ---
 
 ## 7. Config System Extensions (MODIFIED COMPONENT)
@@ -173,22 +184,31 @@ Add:
 AUTH_PROVIDER = oidc | api-key | gateway-token | mixed
 
 # OIDC config
-OIDC_ISSUER=https://...
-OIDC_JWKS_URI=https://...
-OIDC_AUDIENCE=mcp-gateway
+OIDC_ISSUERS='{"https://issuer": {"jwks_uri": "...", "audience": ["mcp-gateway"]}}'
 
 # Gateway token config
 GATEWAY_TOKEN_ALG=RS256
-GATEWAY_PRIVATE_KEY=...
-GATEWAY_PUBLIC_KEY=...
+GATEWAY_PRIVATE_KEY_PATH=/run/secrets/gateway_private_key.pem
+GATEWAY_PUBLIC_KEYS_DIR=/run/secrets/gateway_public_keys
+GATEWAY_ACTIVE_KID=...
 
 # API Key config
-API_KEY_STORE=/path/to/db
+API_KEY_PEPPER_PATH=/run/secrets/api_key_pepper
+ENFORCEAI_DB_PATH=/path/to/sqlite.db
 
 # Identity mapping
 ROLE_CLAIMS=roles,groups,custom_roles
 SCOPE_CLAIMS=scopes,permissions
 ```
+
+### Config Delivery (Decision)
+- Phase 1 is environment-variable driven.
+- Secrets are provided via mounted secret files and referenced via `*_PATH`/directory variables.
+
+### Audit Retention (Decision)
+- Audit retention thresholds are configurable (not hard-coded), for example:
+  - `ENFORCEAI_AUDIT_RETENTION_DAYS=400`
+  - `ENFORCEAI_AUDIT_MAX_DB_BYTES=10737418240`  # 10 GiB
 
 ---
 
@@ -209,8 +229,7 @@ Introduce identity-agnostic authentication pipeline.
 ## 9. Backward Compatibility Layer (OPTIONAL)
 
 ### Requirements
-- If `AUTH_PROVIDER=cognito` or `keycloak`, preserve existing behavior
-- Allow migration to new OIDC validator transparently
+- Not required for EnforceAI. Backward compatibility with legacy Cognito/Keycloak-specific modes is out of scope.
 
 ---
 
