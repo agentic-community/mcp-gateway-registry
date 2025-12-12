@@ -1,0 +1,7 @@
+{
+  "server_name": "Local MCP Server",
+  "description": "Local MCP server running on host machine",
+  "path": "/local-server",
+  "proxy_pass_url": "http://host.docker.internal:3031/",
+  "supported_transports": ["sse"]
+}
