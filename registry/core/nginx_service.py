@@ -319,14 +319,19 @@ class NginxConfigService:
         # The proxy_pass URL is used exactly as provided in the server configuration
         logger.info(f"Server {path}: Using proxy_pass URL as configured: {proxy_url}")
         
-        block = self._create_location_block(path, proxy_url, transport_type)
+        # Extract server-specific headers for injection
+        server_headers = server_info.get("headers", [])
+        block = self._create_location_block(path, proxy_url, transport_type, server_headers)
         blocks.append(block)
         
         return blocks
 
 
-    def _create_location_block(self, path: str, proxy_pass_url: str, transport_type: str) -> str:
+    def _create_location_block(self, path: str, proxy_pass_url: str, transport_type: str, server_headers: list = None) -> str:
         """Create a single nginx location block with transport-specific configuration."""
+        
+        if server_headers is None:
+            server_headers = []
         
         # Extract hostname from proxy_pass_url for external services
         parsed_url = urlparse(proxy_pass_url)
@@ -344,7 +349,38 @@ class NginxConfigService:
             host_header = '$host'
             logger.info(f"Using original host for Host header: $host")
         
+        # Build server-specific header directives
+        # If server has Authorization header configured, use it; otherwise pass client's Authorization
+        server_auth_header = None
+        extra_headers = []
+        for header_dict in server_headers:
+            if isinstance(header_dict, dict):
+                for header_name, header_value in header_dict.items():
+                    if header_name.lower() == 'authorization':
+                        server_auth_header = header_value
+                        logger.info(f"Using server-specific Authorization header for {path}")
+                    else:
+                        extra_headers.append((header_name, header_value))
+        
+        # Build the authorization header directive
+        if server_auth_header:
+            auth_header_directive = f'proxy_set_header Authorization "{server_auth_header}";'
+        else:
+            auth_header_directive = 'proxy_set_header Authorization $http_authorization;'
+        
+        # Build extra header directives
+        extra_header_directives = '\n'.join([
+            f'        proxy_set_header {name} "{value}";' for name, value in extra_headers
+        ])
+        
         # Common proxy settings
+        # Build extra headers section if any
+        extra_headers_section = ""
+        if extra_header_directives:
+            extra_headers_section = f"""
+        # Server-specific custom headers
+{extra_header_directives}"""
+        
         common_settings = f"""
         # Use IPv4 resolver (disable IPv6)
         resolver 8.8.8.8 8.8.4.4 valid=10s;
@@ -374,13 +410,13 @@ class NginxConfigService:
         # Add original URL for auth server scope validation
         proxy_set_header X-Original-URL $scheme://$host$request_uri;
         
-        # Pass through the original authentication headers
-        proxy_set_header Authorization $http_authorization;
+        # Backend authentication (server-specific or pass-through)
+        {auth_header_directive}
         proxy_set_header X-Authorization $http_x_authorization;
         proxy_set_header X-User-Pool-Id $http_x_user_pool_id;
         proxy_set_header X-Client-Id $http_x_client_id;
         proxy_set_header X-Region $http_x_region;
-
+{extra_headers_section}
         
         # Forward auth server response headers to backend
         proxy_set_header X-User $auth_user;
