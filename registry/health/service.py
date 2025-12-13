@@ -219,14 +219,21 @@ class HealthMonitoringService:
         # Close all WebSocket connections
         connections = list(self.websocket_manager.connections)
         close_tasks = []
+        remove_tasks = []
         for conn in connections:
             try:
                 close_tasks.append(conn.close())
             except Exception:
                 pass
+            try:
+                remove_tasks.append(self.websocket_manager.remove_connection(conn))
+            except Exception:
+                pass
                 
         if close_tasks:
             await asyncio.gather(*close_tasks, return_exceptions=True)
+        if remove_tasks:
+            await asyncio.gather(*remove_tasks, return_exceptions=True)
             
         logger.info("Health monitoring service shutdown complete")
         

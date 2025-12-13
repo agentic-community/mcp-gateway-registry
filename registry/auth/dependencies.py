@@ -60,6 +60,8 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid session"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Session validation error: {e}")
         raise HTTPException(
@@ -118,6 +120,8 @@ def get_user_session_data(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid session"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Session data extraction error: {e}")
         raise HTTPException(

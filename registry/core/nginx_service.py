@@ -279,6 +279,9 @@ class NginxConfigService:
             logger.warning("Nginx not found - skipping reload")
             return False
         except Exception as e:
+            logger.error(f"Unexpected error reloading Nginx: {e}", exc_info=True)
+            return False
+        except Exception as e:
             logger.error(f"Error reloading Nginx: {e}")
             return False
 

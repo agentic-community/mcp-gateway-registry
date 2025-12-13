@@ -251,6 +251,10 @@ async def logout_post(
     return await logout_handler(request, session)
 
 
+# Backwards-compatible alias used by unit tests.
+logout = logout_get
+
+
 @router.get("/providers")
 async def get_providers_api():
     """API endpoint to get available OAuth2 providers for React frontend"""
