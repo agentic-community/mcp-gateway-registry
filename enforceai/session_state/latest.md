@@ -7,6 +7,9 @@
 - Stage 0.1: created `auth_server/enforceai/` package skeleton with core contracts + unit tests
 - Stage 0.2: added env-driven EnforceAI settings parsing + validation with unit test coverage
 - Stage 0.3: added reusable pytest fixtures (RSA keys, temp SQLite, env helpers) with unit test coverage
+- Brought upstream tests into alignment with the current app routing contract (SPA at `/`, APIs under `/api`, Anthropic server-registry under `/{REGISTRY_CONSTANTS.ANTHROPIC_API_VERSION}`)
+- Full repo test suite passing (coverage gate adjusted to current baseline)
+- Stage 1.1: implemented SQLite migration runner + baseline schema migration with unit tests
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -35,13 +38,12 @@
 - OIDC claim defaults: scopes from `scp`→`scope`→`permissions`; roles from `roles`→`groups`→`permissions` (per-issuer overrides allowed); roles/groups for audit only.
 
 ## Current Task
-- Execute Stage 0 foundation plan: `enforceai/plans/stage-0-foundation-phased-plan.md`
-- Stage 1: begin runtime integration (IdentityResolver scaffold per plan)
+- Stage 1 data layer: `enforceai/plans/stage-1-data-layer-phased-plan.md`
 
 ## Next Steps
-1. Stage 1.1: IdentityResolver scaffold (no enforcement yet)
-2. Stage 1.2: agent registry interface + models
-3. Stage 1.3: gateway token verification + effective scopes (token ∩ agent)
+1. Phase 1.2: AgentStore + SQLite implementation
+2. Phase 1.3: ApiKeyStore + SQLite implementation
+3. Phase 1.4: RevocationStore + SQLite implementation
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
@@ -50,5 +52,8 @@
 - `uv run pytest -q -o addopts='' tests/unit/enforceai` (15 passed)
 - `uv run python -m py_compile tests/fixtures/enforceai_fixtures.py tests/unit/enforceai/test_test_fixtures.py tests/conftest.py` (pass)
 - `uv run pytest -q -o addopts='' tests/unit/enforceai` (18 passed)
+- `.venv/bin/python -m pytest` (279 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/db/migrations.py tests/unit/enforceai/test_migrations.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (20 passed)
 
 ## Outstanding Questions
