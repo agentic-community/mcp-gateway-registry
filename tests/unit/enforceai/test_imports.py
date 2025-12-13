@@ -12,6 +12,8 @@ class TestEnforceAIImports:
     def test_imports(self):
         import auth_server.enforceai  # noqa: F401
         import auth_server.enforceai.config  # noqa: F401
+        import auth_server.enforceai.db  # noqa: F401
+        import auth_server.enforceai.db.migrations  # noqa: F401
         import auth_server.enforceai.errors  # noqa: F401
         import auth_server.enforceai.identity  # noqa: F401
         import auth_server.enforceai.logging  # noqa: F401
