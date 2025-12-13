@@ -3,11 +3,13 @@ Unit tests for the Nginx configuration service.
 """
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, mock_open
+from unittest.mock import Mock, patch, mock_open, call, AsyncMock
 import tempfile
 import shutil
 
+from registry.constants import HealthStatus
 from registry.core.nginx_service import NginxConfigService
+from registry.health.service import health_service
 
 
 @pytest.mark.unit
@@ -20,13 +22,30 @@ class TestNginxConfigService:
         """Set up patches for all tests in this class."""
         # Create mock settings
         mock_settings = Mock()
-        mock_settings.container_registry_dir = temp_dir
         mock_settings.nginx_config_path = temp_dir / "nginx.conf"
+
+        template_path = temp_dir / "nginx_template.conf"
+        mock_constants = Mock()
+        mock_constants.SSL_CERT_PATH = str(temp_dir / "ssl_cert.pem")  # does not exist
+        mock_constants.SSL_KEY_PATH = str(temp_dir / "ssl_key.pem")  # does not exist
+        mock_constants.NGINX_TEMPLATE_HTTP_ONLY = str(template_path)
+        mock_constants.NGINX_TEMPLATE_HTTP_ONLY_LOCAL = str(template_path)
+        mock_constants.NGINX_TEMPLATE_HTTP_AND_HTTPS = str(temp_dir / "nginx_https.conf")
+        mock_constants.NGINX_TEMPLATE_HTTP_AND_HTTPS_LOCAL = str(temp_dir / "nginx_https.conf")
+        mock_constants.ANTHROPIC_API_VERSION = "v0.1"
         
         # Patch settings for the duration of each test
-        with patch('registry.core.nginx_service.settings', mock_settings):
+        with patch('registry.core.nginx_service.settings', mock_settings), \
+             patch('registry.core.nginx_service.REGISTRY_CONSTANTS', mock_constants), \
+            patch.object(NginxConfigService, "get_additional_server_names", new=AsyncMock(return_value="")):
             self.mock_settings = mock_settings
+            self.template_path = template_path
+            original_health_status = health_service.server_health_status
+            healthy_status = Mock()
+            healthy_status.get = Mock(return_value=HealthStatus.HEALTHY)
+            health_service.server_health_status = healthy_status
             yield
+            health_service.server_health_status = original_health_status
 
     @pytest.fixture
     def temp_dir(self):
@@ -38,11 +57,6 @@ class TestNginxConfigService:
     @pytest.fixture
     def nginx_service(self):
         """Create a Nginx service instance."""
-        return NginxConfigService()
-
-    @pytest.fixture
-    def sample_template(self, temp_dir):
-        """Create a sample nginx template file."""
         template_content = """
 events {
     worker_connections 1024;
@@ -55,16 +69,14 @@ http {
     }
 }
 """
-        template_path = temp_dir / "nginx_template.conf"
-        template_path.write_text(template_content)
-        return template_path
+        self.template_path.write_text(template_content)
+        return NginxConfigService()
 
     def test_init(self, nginx_service):
         """Test Nginx service initialization."""
-        expected_template_path = self.mock_settings.container_registry_dir / "nginx_template.conf"
-        assert nginx_service.nginx_template_path == expected_template_path
+        assert nginx_service.nginx_template_path == self.template_path
 
-    def test_generate_config_success(self, nginx_service, sample_template):
+    def test_generate_config_success(self, nginx_service):
         """Test successful config generation."""
         servers = {
             "/api/server1": {
@@ -89,13 +101,14 @@ http {
 
     def test_generate_config_no_template(self, nginx_service):
         """Test config generation when template doesn't exist."""
+        nginx_service.nginx_template_path = self.template_path.parent / "missing_template.conf"
         servers = {"/api/test": {"proxy_pass_url": "http://localhost:8001"}}
         
         result = nginx_service.generate_config(servers)
         
         assert result is False
 
-    def test_generate_config_empty_servers(self, nginx_service, sample_template):
+    def test_generate_config_empty_servers(self, nginx_service):
         """Test config generation with empty servers."""
         servers = {}
         
@@ -107,7 +120,7 @@ http {
         assert "events {" in config_content
         assert "http {" in config_content
 
-    def test_generate_config_servers_without_proxy_pass(self, nginx_service, sample_template):
+    def test_generate_config_servers_without_proxy_pass(self, nginx_service):
         """Test config generation with servers missing proxy_pass_url."""
         servers = {
             "/api/server1": {
@@ -125,7 +138,7 @@ http {
         assert "location /api/server1 {" in config_content
         assert "location /api/server2 {" not in config_content
 
-    def test_generate_config_template_read_error(self, nginx_service, sample_template):
+    def test_generate_config_template_read_error(self, nginx_service):
         """Test config generation with template read error."""
         with patch('builtins.open', side_effect=IOError("Permission denied")):
             servers = {"/api/test": {"proxy_pass_url": "http://localhost:8001"}}
@@ -134,7 +147,7 @@ http {
             
             assert result is False
 
-    def test_generate_config_write_error(self, nginx_service, sample_template):
+    def test_generate_config_write_error(self, nginx_service):
         """Test config generation with config file write error."""
         servers = {"/api/test": {"proxy_pass_url": "http://localhost:8001"}}
         
@@ -146,7 +159,7 @@ http {
             
             assert result is False
 
-    def test_generate_config_location_block_formatting(self, nginx_service, sample_template):
+    def test_generate_config_location_block_formatting(self, nginx_service):
         """Test that location blocks are properly formatted."""
         servers = {
             "/api/test": {
@@ -165,7 +178,7 @@ http {
         assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in config_content
         assert "proxy_set_header X-Forwarded-Proto $scheme;" in config_content
 
-    def test_generate_config_multiple_servers(self, nginx_service, sample_template):
+    def test_generate_config_multiple_servers(self, nginx_service):
         """Test config generation with multiple servers."""
         servers = {
             "/api/auth": {"proxy_pass_url": "http://localhost:3001"},
@@ -185,22 +198,26 @@ http {
     def test_reload_nginx_success(self, nginx_service):
         """Test successful nginx reload."""
         with patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 0
+            mock_run.side_effect = [
+                Mock(returncode=0),
+                Mock(returncode=0),
+            ]
             
             result = nginx_service.reload_nginx()
             
             assert result is True
-            mock_run.assert_called_once_with(
-                ["nginx", "-s", "reload"],
-                capture_output=True,
-                text=True
-            )
+            assert mock_run.call_args_list == [
+                call(["nginx", "-t"], capture_output=True, text=True),
+                call(["nginx", "-s", "reload"], capture_output=True, text=True),
+            ]
 
     def test_reload_nginx_failure(self, nginx_service):
         """Test nginx reload failure."""
         with patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 1
-            mock_run.return_value.stderr = "nginx: [error] invalid configuration"
+            mock_run.side_effect = [
+                Mock(returncode=0),
+                Mock(returncode=1, stderr="nginx: [error] invalid configuration"),
+            ]
             
             result = nginx_service.reload_nginx()
             
@@ -220,7 +237,7 @@ http {
             
             assert result is False
 
-    def test_logging_behavior(self, nginx_service, sample_template):
+    def test_logging_behavior(self, nginx_service):
         """Test that appropriate logging occurs."""
         with patch('registry.core.nginx_service.logger') as mock_logger:
             servers = {"/api/test": {"proxy_pass_url": "http://localhost:8001"}}
@@ -234,6 +251,7 @@ http {
 
     def test_logging_template_not_found(self, nginx_service):
         """Test logging when template is not found."""
+        nginx_service.nginx_template_path = self.template_path.parent / "missing_template.conf"
         with patch('registry.core.nginx_service.logger') as mock_logger:
             servers = {"/api/test": {"proxy_pass_url": "http://localhost:8001"}}
             
@@ -244,7 +262,7 @@ http {
             assert any("Nginx template not found" in str(call) 
                       for call in mock_logger.warning.call_args_list)
 
-    def test_logging_generation_error(self, nginx_service, sample_template):
+    def test_logging_generation_error(self, nginx_service):
         """Test logging when config generation fails."""
         with patch('registry.core.nginx_service.logger') as mock_logger, \
              patch('builtins.open', side_effect=Exception("Test error")):
@@ -261,7 +279,10 @@ http {
         with patch('registry.core.nginx_service.logger') as mock_logger, \
              patch('subprocess.run') as mock_run:
             
-            mock_run.return_value.returncode = 0
+            mock_run.side_effect = [
+                Mock(returncode=0),
+                Mock(returncode=0),
+            ]
             
             nginx_service.reload_nginx()
             
@@ -273,8 +294,10 @@ http {
         with patch('registry.core.nginx_service.logger') as mock_logger, \
              patch('subprocess.run') as mock_run:
             
-            mock_run.return_value.returncode = 1
-            mock_run.return_value.stderr = "Test error"
+            mock_run.side_effect = [
+                Mock(returncode=0),
+                Mock(returncode=1, stderr="Test error"),
+            ]
             
             nginx_service.reload_nginx()
             
@@ -311,7 +334,7 @@ http {
         assert "{{LOCATION_BLOCKS}}" not in config_content
         assert "location /api/test {" in config_content
 
-    def test_path_normalization(self, nginx_service, sample_template):
+    def test_path_normalization(self, nginx_service):
         """Test that server paths are handled correctly."""
         servers = {
             "/api/test/": {"proxy_pass_url": "http://localhost:8001"},  # trailing slash

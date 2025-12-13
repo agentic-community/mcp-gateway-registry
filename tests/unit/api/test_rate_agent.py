@@ -84,7 +84,7 @@ class TestRateAgent:
         ):
             client = TestClient(app)
             response = client.post(
-                "/agents/test-agent/rate",
+                "/api/agents/test-agent/rate",
                 json={"rating": 5},
             )
 
@@ -113,7 +113,7 @@ class TestRateAgent:
         ):
             client = TestClient(app)
             response = client.post(
-                "/agents/nonexistent/rate",
+                "/api/agents/nonexistent/rate",
                 json={"rating": 5},
             )
 
@@ -150,7 +150,7 @@ class TestRateAgent:
         ):
             client = TestClient(app)
             response = client.post(
-                "/agents/test-agent/rate",
+                "/api/agents/test-agent/rate",
                 json={"rating": 5},
             )
 
@@ -179,7 +179,7 @@ class TestRateAgent:
         ):
             client = TestClient(app)
             response = client.post(
-                "/agents/test-agent/rate",
+                "/api/agents/test-agent/rate",
                 json={"rating": "five"},  # String instead of int
             )
 
@@ -207,7 +207,7 @@ class TestRateAgent:
         ):
             client = TestClient(app)
             response = client.post(
-                "/agents/test-agent/rate",
+                "/api/agents/test-agent/rate",
                 json={},  # Missing rating field
             )
 
@@ -239,11 +239,11 @@ class TestRateAgent:
         ):
             client = TestClient(app)
             response = client.post(
-                "/agents/test-agent/rate",
+                "/api/agents/test-agent/rate",
                 json={"rating": 5},
             )
 
-            assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+            assert response.status_code == status.HTTP_400_BAD_REQUEST
             assert "Failed to save rating" in response.json()["detail"]
 
         app.dependency_overrides.clear()
@@ -273,7 +273,7 @@ class TestRateAgent:
             ):
                 client = TestClient(app)
                 response = client.post(
-                    "/agents/test-agent/rate",
+                    "/api/agents/test-agent/rate",
                     json={"rating": rating_value},
                 )
 
@@ -307,7 +307,7 @@ class TestRateAgent:
             client = TestClient(app)
             # Test with path without leading slash
             response = client.post(
-                "/agents/test-agent/rate",
+                "/api/agents/test-agent/rate",
                 json={"rating": 5},
             )
 
@@ -357,7 +357,7 @@ class TestRateAgent:
         ):
             client = TestClient(app)
             response = client.post(
-                "/agents/private-agent/rate",
+                "/api/agents/private-agent/rate",
                 json={"rating": 5},
             )
 
@@ -413,7 +413,7 @@ class TestRateAgent:
         ):
             client = TestClient(app)
             response = client.post(
-                "/agents/group-agent/rate",
+                "/api/agents/group-agent/rate",
                 json={"rating": 4},
             )
 

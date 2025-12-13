@@ -29,9 +29,13 @@ class TestFaissService:
             # Use actual Path objects for proper path operations
             mock_settings.servers_dir = Path("/tmp/test_servers")
             mock_settings.container_registry_dir = Path("/tmp/test_registry")
+            mock_settings.embeddings_provider = "sentence-transformers"
             mock_settings.embeddings_model_dir = Path("/tmp/test_model")
             mock_settings.embeddings_model_name = "all-MiniLM-L6-v2"
             mock_settings.embeddings_model_dimensions = 384
+            mock_settings.embeddings_api_key = None
+            mock_settings.embeddings_api_base = None
+            mock_settings.embeddings_aws_region = None
             mock_settings.faiss_index_path = Path("/tmp/test_index.faiss")
             mock_settings.faiss_metadata_path = Path("/tmp/test_metadata.json")
             
@@ -49,7 +53,12 @@ class TestFaissService:
         
         result = faiss_service_instance._get_text_for_embedding(server_info)
         
-        expected = "Name: Test Server\nDescription: A test server for demonstration\nTags: test, demo, example"
+        expected = (
+            "Name: Test Server\n"
+            "Description: A test server for demonstration\n"
+            "Tags: test, demo, example\n"
+            "Tools:"
+        )
         assert result == expected
 
     def test_get_text_for_embedding_empty_data(self, faiss_service_instance):
@@ -58,7 +67,7 @@ class TestFaissService:
         
         result = faiss_service_instance._get_text_for_embedding(server_info)
         
-        expected = "Name: \nDescription: \nTags: "
+        expected = "Name: \nDescription: \nTags: \nTools:"
         assert result == expected
 
     def test_initialize_new_index(self, faiss_service_instance, mock_settings):
@@ -85,51 +94,49 @@ class TestFaissService:
 
     @pytest.mark.asyncio
     async def test_load_embedding_model_local_exists(self, faiss_service_instance, mock_settings):
-        """Test loading embedding model from local path when it exists."""
-        with patch('registry.search.service.SentenceTransformer') as mock_transformer, \
-             patch('os.environ') as mock_env, \
-             patch.object(Path, 'exists') as mock_exists, \
-             patch.object(Path, 'iterdir') as mock_iterdir:
-            
-            # Mock local model exists
-            mock_exists.return_value = True
-            mock_iterdir.return_value = [Path("model.bin")]
-            
-            mock_transformer_instance = Mock()
-            mock_transformer.return_value = mock_transformer_instance
-            
+        """Test loading embedding model using embeddings client factory."""
+        mock_client = Mock()
+        mock_client.get_embedding_dimension.return_value = 384
+
+        with patch(
+            "registry.search.service.create_embeddings_client",
+            return_value=mock_client,
+        ) as mock_factory:
             await faiss_service_instance._load_embedding_model()
-            
-            mock_transformer.assert_called_once_with(str(mock_settings.embeddings_model_dir))
-            assert faiss_service_instance.embedding_model == mock_transformer_instance
+
+        assert faiss_service_instance.embedding_model == mock_client
+        mock_factory.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_load_embedding_model_download_from_hf(self, faiss_service_instance, mock_settings):
-        """Test downloading embedding model from Hugging Face."""
-        with patch('registry.search.service.SentenceTransformer') as mock_transformer, \
-             patch('os.environ') as mock_env, \
-             patch.object(Path, 'exists') as mock_exists:
-            
-            # Mock local model doesn't exist
-            mock_exists.return_value = False
-            
-            mock_transformer_instance = Mock()
-            mock_transformer.return_value = mock_transformer_instance
-            
+        """Test loading embedding model with a non-local provider."""
+        mock_settings.embeddings_provider = "litellm"
+        mock_settings.embeddings_api_key = "test-key"
+        mock_settings.embeddings_api_base = "http://localhost:9999"
+        mock_settings.embeddings_aws_region = "us-east-1"
+
+        mock_client = Mock()
+        mock_client.get_embedding_dimension.return_value = 384
+
+        with patch(
+            "registry.search.service.create_embeddings_client",
+            return_value=mock_client,
+        ) as mock_factory:
             await faiss_service_instance._load_embedding_model()
-            
-            mock_transformer.assert_called_once_with(str(mock_settings.embeddings_model_name))
-            assert faiss_service_instance.embedding_model == mock_transformer_instance
+
+        assert faiss_service_instance.embedding_model == mock_client
+        mock_factory.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_load_embedding_model_exception(self, faiss_service_instance, mock_settings):
         """Test handling exception during model loading."""
-        with patch('registry.search.service.SentenceTransformer') as mock_transformer:
-            mock_transformer.side_effect = Exception("Model load failed")
-            
+        with patch(
+            "registry.search.service.create_embeddings_client",
+            side_effect=Exception("Model load failed"),
+        ):
             await faiss_service_instance._load_embedding_model()
-            
-            assert faiss_service_instance.embedding_model is None
+
+        assert faiss_service_instance.embedding_model is None
 
     @pytest.mark.asyncio
     async def test_load_faiss_data_existing_files(self, faiss_service_instance, mock_settings):
@@ -256,45 +263,44 @@ class TestFaissService:
     @pytest.mark.asyncio
     async def test_add_or_update_service_new_service(self, faiss_service_instance):
         """Test adding a completely new service."""
-        with patch('asyncio.to_thread') as mock_to_thread:
-            # Setup mocks
+        with patch("asyncio.to_thread", new=AsyncMock(return_value=[[0.1, 0.2, 0.3]])):
+            faiss_service_instance.save_data = AsyncMock()
+
             mock_model = Mock()
-            mock_embedding = np.array([[0.1, 0.2, 0.3]])
-            mock_model.encode.return_value = mock_embedding
-            mock_to_thread.return_value = mock_embedding
-            
             mock_index = Mock()
             mock_index.add_with_ids = Mock()
-            
+
             faiss_service_instance.embedding_model = mock_model
             faiss_service_instance.faiss_index = mock_index
             faiss_service_instance.metadata_store = {}
             faiss_service_instance.next_id_counter = 0
-            
+
             server_info = {
                 "server_name": "New Server",
                 "description": "A new test server",
-                "tags": ["new", "test"]
+                "tags": ["new", "test"],
             }
-            
-            # Mock asyncio.to_thread to handle both encode and save_data calls
-            mock_to_thread.side_effect = lambda func, *args: mock_embedding if args else AsyncMock()
-            
-            await faiss_service_instance.add_or_update_service("new_service", server_info, True)
-            
-            # Verify service was added
-            assert "new_service" in faiss_service_instance.metadata_store
-            assert faiss_service_instance.metadata_store["new_service"]["id"] == 0
-            assert faiss_service_instance.next_id_counter == 1
-            mock_index.add_with_ids.assert_called_once()
-            # Verify asyncio.to_thread was called (for both encode and save_data)
-            assert mock_to_thread.call_count >= 2
+
+            await faiss_service_instance.add_or_update_service(
+                "new_service",
+                server_info,
+                True,
+            )
+
+        assert "new_service" in faiss_service_instance.metadata_store
+        assert faiss_service_instance.metadata_store["new_service"]["id"] == 0
+        assert faiss_service_instance.next_id_counter == 1
+        mock_index.add_with_ids.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_add_or_update_service_existing_no_change(self, faiss_service_instance):
         """Test updating existing service with no embedding change."""
-        # Setup existing service
-        existing_text = "Name: Test Server\nDescription: Test description\nTags: test"
+        server_info = {
+            "server_name": "Test Server",
+            "description": "Test description",
+            "tags": ["test"],
+        }
+        existing_text = faiss_service_instance._get_text_for_embedding(server_info)
         faiss_service_instance.metadata_store = {
             "existing_service": {
                 "id": 1,
@@ -308,17 +314,15 @@ class TestFaissService:
         faiss_service_instance.embedding_model = mock_model
         faiss_service_instance.faiss_index = mock_index
         
-        server_info = {
-            "server_name": "Test Server",
-            "description": "Test description",
-            "tags": ["test"]
-        }
-        
-        with patch.object(faiss_service_instance, 'save_data') as mock_save:
+        with patch.object(
+            faiss_service_instance,
+            "save_data",
+            new=AsyncMock(),
+        ) as mock_save:
             await faiss_service_instance.add_or_update_service("existing_service", server_info, True)
         
         # Should update metadata but not re-embed
-        mock_save.assert_called_once()
+        mock_save.assert_awaited_once()
         assert faiss_service_instance.metadata_store["existing_service"]["full_server_info"]["is_enabled"] is True
 
     @pytest.mark.asyncio

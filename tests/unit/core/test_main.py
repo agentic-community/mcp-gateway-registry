@@ -30,19 +30,33 @@ class TestMainApplication:
         with patch('registry.main.server_service') as mock_server_service, \
              patch('registry.main.faiss_service') as mock_faiss_service, \
              patch('registry.main.health_service') as mock_health_service, \
-             patch('registry.main.nginx_service') as mock_nginx_service:
+             patch('registry.main.nginx_service') as mock_nginx_service, \
+             patch('registry.main.agent_service') as mock_agent_service, \
+             patch('registry.main.get_federation_service') as mock_get_federation_service:
             
             # Configure mocks
             mock_server_service.load_servers_and_state = Mock()
+            mock_server_service.get_all_servers.return_value = {}
+            mock_server_service.is_service_enabled.return_value = False
             mock_server_service.get_enabled_services.return_value = ["service1", "service2"]
             mock_server_service.get_server_info.return_value = {"name": "test_server"}
             
             mock_faiss_service.initialize = AsyncMock()
+            mock_faiss_service.add_or_update_service = AsyncMock()
+            mock_faiss_service.add_or_update_agent = AsyncMock()
             
             mock_health_service.initialize = AsyncMock()
             mock_health_service.shutdown = AsyncMock()
             
-            mock_nginx_service.generate_config = Mock()
+            mock_nginx_service.generate_config_async = AsyncMock()
+
+            mock_agent_service.load_agents_and_state = Mock()
+            mock_agent_service.list_agents.return_value = []
+            mock_agent_service.is_agent_enabled.return_value = False
+
+            federation_service = Mock()
+            federation_service.config.is_any_federation_enabled.return_value = False
+            mock_get_federation_service.return_value = federation_service
             
             yield {
                 'server_service': mock_server_service,
@@ -61,10 +75,7 @@ class TestMainApplication:
             mock_services['server_service'].load_servers_and_state.assert_called_once()
             mock_services['faiss_service'].initialize.assert_called_once()
             mock_services['health_service'].initialize.assert_called_once()
-            mock_services['nginx_service'].generate_config.assert_called_once()
-            
-            # Verify log directory was created
-            mock_settings.container_log_dir.mkdir.assert_called_once_with(parents=True, exist_ok=True)
+            mock_services['nginx_service'].generate_config_async.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_lifespan_startup_server_service_failure(self, mock_settings, mock_services):
@@ -179,8 +190,8 @@ class TestMainApplication:
             pass
         
         # Verify nginx config was generated with correct servers
-        mock_services['nginx_service'].generate_config.assert_called_once()
-        call_args = mock_services['nginx_service'].generate_config.call_args[0][0]
+        mock_services['nginx_service'].generate_config_async.assert_awaited_once()
+        call_args = mock_services['nginx_service'].generate_config_async.call_args[0][0]
         
         # Check that enabled servers were passed to nginx config
         assert "service1" in call_args

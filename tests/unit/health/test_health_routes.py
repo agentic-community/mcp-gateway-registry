@@ -5,7 +5,12 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 from fastapi import WebSocket, WebSocketDisconnect
 
-from registry.health.routes import router, websocket_endpoint, health_status_http
+from registry.health.routes import (
+    router,
+    websocket_endpoint,
+    health_status_http,
+    settings,
+)
 
 
 @pytest.mark.unit
@@ -13,14 +18,27 @@ from registry.health.routes import router, websocket_endpoint, health_status_htt
 class TestHealthRoutes:
     """Test suite for health monitoring routes."""
 
+    @pytest.fixture(autouse=True)
+    def mock_websocket_auth(self):
+        """Mock WebSocket session validation."""
+        with patch(
+            "registry.health.routes.signer.loads",
+            return_value={"username": "testuser"},
+        ):
+            yield
+
     @pytest.fixture
     def mock_websocket(self):
         """Create a mock WebSocket."""
         websocket = Mock(spec=WebSocket)
         websocket.client = "127.0.0.1:12345"
+        websocket.cookies = {settings.session_cookie_name: "valid_session"}
+        websocket.headers = {}
+        websocket.query_params = {}
         websocket.accept = AsyncMock()
         websocket.receive_text = AsyncMock()
         websocket.send_json = AsyncMock()
+        websocket.ping = AsyncMock()
         websocket.close = AsyncMock()
         return websocket
 
@@ -28,7 +46,7 @@ class TestHealthRoutes:
     def mock_health_service(self):
         """Mock health service."""
         with patch('registry.health.routes.health_service') as mock_service:
-            mock_service.add_websocket_connection = AsyncMock()
+            mock_service.add_websocket_connection = AsyncMock(return_value=True)
             mock_service.remove_websocket_connection = AsyncMock()
             mock_service.get_all_health_status.return_value = {
                 "service1": {"status": "healthy", "last_check": "2023-01-01T00:00:00Z"},
@@ -86,8 +104,8 @@ class TestHealthRoutes:
         
         await websocket_endpoint(mock_websocket)
         
-        # Verify remove_websocket_connection is still called in finally block
-        mock_health_service.remove_websocket_connection.assert_called_once_with(mock_websocket)
+        # Connection is never added, so it should not be removed
+        mock_health_service.remove_websocket_connection.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_websocket_endpoint_remove_connection_failure(self, mock_websocket, mock_health_service):

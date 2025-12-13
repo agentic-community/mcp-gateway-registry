@@ -16,7 +16,7 @@ from registry.constants import REGISTRY_CONSTANTS
 
 @pytest.fixture
 def mock_enhanced_auth_admin():
-    """Mock enhanced_auth for admin user."""
+    """Mock nginx_proxied_auth for admin user."""
 
     def _mock_auth(session=None):
         return {
@@ -45,7 +45,7 @@ def mock_enhanced_auth_admin():
 
 @pytest.fixture
 def mock_enhanced_auth_user():
-    """Mock enhanced_auth for regular user with limited access."""
+    """Mock nginx_proxied_auth for regular user with limited access."""
 
     def _mock_auth(session=None):
         return {
@@ -115,9 +115,9 @@ class TestV0ListServers:
         self, mock_enhanced_auth_admin, sample_servers_data
     ):
         """Test that admin users see all servers."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             server_service, "get_all_servers", return_value=sample_servers_data
@@ -149,9 +149,9 @@ class TestV0ListServers:
         self, mock_enhanced_auth_user, sample_servers_data
     ):
         """Test that regular users see only authorized servers."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         # User should only see servers they have permission for
         filtered_servers = {"/mcpgw": sample_servers_data["/mcpgw"]}
@@ -184,9 +184,9 @@ class TestV0ListServers:
 
     def test_list_servers_pagination(self, mock_enhanced_auth_admin, sample_servers_data):
         """Test server list pagination with limit."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             server_service, "get_all_servers", return_value=sample_servers_data
@@ -217,9 +217,9 @@ class TestV0ListServers:
         self, mock_enhanced_auth_admin, sample_servers_data
     ):
         """Test that response follows Anthropic schema."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             server_service, "get_all_servers", return_value=sample_servers_data
@@ -276,9 +276,9 @@ class TestV0ListServerVersions:
 
     def test_list_versions_success(self, mock_enhanced_auth_admin, sample_servers_data):
         """Test listing versions for a server."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             server_service,
@@ -310,9 +310,9 @@ class TestV0ListServerVersions:
 
     def test_list_versions_server_not_found(self, mock_enhanced_auth_admin):
         """Test listing versions for non-existent server."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(server_service, "get_server_info", return_value=None):
             client = TestClient(app)
@@ -324,9 +324,9 @@ class TestV0ListServerVersions:
 
     def test_list_versions_invalid_name_format(self, mock_enhanced_auth_admin):
         """Test listing versions with invalid server name format."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         client = TestClient(app)
         response = client.get(f"/{REGISTRY_CONSTANTS.ANTHROPIC_API_VERSION}/servers/invalid-format/versions")
@@ -339,9 +339,9 @@ class TestV0ListServerVersions:
         self, mock_enhanced_auth_user, sample_servers_data
     ):
         """Test that users cannot access servers they don't have permission for."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         with patch.object(
             server_service,
@@ -363,9 +363,9 @@ class TestV0GetServerVersion:
 
     def test_get_version_latest(self, mock_enhanced_auth_admin, sample_servers_data):
         """Test getting server details with 'latest' version."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             server_service,
@@ -399,9 +399,9 @@ class TestV0GetServerVersion:
 
     def test_get_version_specific(self, mock_enhanced_auth_admin, sample_servers_data):
         """Test getting server details with specific version."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             server_service,
@@ -430,9 +430,9 @@ class TestV0GetServerVersion:
 
     def test_get_version_unsupported(self, mock_enhanced_auth_admin, sample_servers_data):
         """Test getting unsupported version returns 404."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             server_service,
@@ -448,9 +448,9 @@ class TestV0GetServerVersion:
 
     def test_get_version_server_not_found(self, mock_enhanced_auth_admin):
         """Test getting version for non-existent server."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(server_service, "get_server_info", return_value=None):
             client = TestClient(app)
@@ -466,9 +466,9 @@ class TestV0GetServerVersion:
         self, mock_enhanced_auth_admin, sample_servers_data
     ):
         """Test that response follows Anthropic ServerResponse schema."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             server_service,

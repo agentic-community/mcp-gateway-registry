@@ -90,7 +90,7 @@ class TestAuthDependencies:
                 get_current_user(None)
             
             assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-            assert "Not authenticated" in exc_info.value.detail
+            assert "Authentication required" in exc_info.value.detail
 
     def test_get_current_user_expired_session(self, mock_settings):
         """Test getting current user with expired session."""
@@ -103,7 +103,7 @@ class TestAuthDependencies:
                 get_current_user("expired_session")
             
             assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-            assert "Session expired" in exc_info.value.detail
+            assert "Session has expired" in exc_info.value.detail
 
     def test_get_current_user_invalid_signature(self, mock_settings):
         """Test getting current user with invalid signature."""
@@ -130,7 +130,7 @@ class TestAuthDependencies:
                 get_current_user(session_cookie)
             
             assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-            assert "Session validation failed" in exc_info.value.detail
+            assert "Invalid session data" in exc_info.value.detail
 
     def test_api_auth_success(self, mock_settings, valid_session_cookie):
         """Test API authentication success."""
@@ -145,7 +145,7 @@ class TestAuthDependencies:
                 api_auth(None)
             
             assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-            assert "API access requires authentication" in exc_info.value.detail
+            assert "Authentication required" in exc_info.value.detail
 
     def test_web_auth_success(self, mock_settings, valid_session_cookie):
         """Test web authentication success."""
@@ -154,11 +154,10 @@ class TestAuthDependencies:
             assert username == "testuser"
 
     def test_web_auth_no_session(self, mock_settings):
-        """Test web authentication with no session - should redirect."""
+        """Test web authentication with no session."""
         with patch('registry.auth.dependencies.settings', mock_settings):
             with pytest.raises(HTTPException) as exc_info:
                 web_auth(None)
             
-            assert exc_info.value.status_code == status.HTTP_307_TEMPORARY_REDIRECT
+            assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
             assert "Authentication required" in exc_info.value.detail
-            assert exc_info.value.headers["Location"] == "/login" 

@@ -14,7 +14,6 @@ from typing import Any, Dict
 from unittest.mock import patch
 from fastapi import status
 from fastapi.testclient import TestClient
-from pydantic import HttpUrl
 
 from registry.main import app
 from registry.schemas.agent_models import (
@@ -30,10 +29,11 @@ def public_agent() -> AgentCard:
         protocol_version="1.0",
         name="Public Code Reviewer",
         description="Reviews code publicly",
-        url=HttpUrl("https://code-reviewer.example.com/api"),
+        url="https://code-reviewer.example.com/api",
         path="/agents/public-reviewer",
         visibility="public",
         trust_level="verified",
+        version="1.0.0",
         skills=[
             Skill(
                 id="review",
@@ -52,11 +52,12 @@ def private_agent_alice() -> AgentCard:
         protocol_version="1.0",
         name="Alice's Private Agent",
         description="Private agent for alice only",
-        url=HttpUrl("https://alice-agent.example.com/api"),
+        url="https://alice-agent.example.com/api",
         path="/agents/alice-private",
         visibility="private",
         registered_by="alice",
         trust_level="trusted",
+        version="1.0.0",
         skills=[
             Skill(
                 id="private-task",
@@ -75,11 +76,12 @@ def private_agent_bob() -> AgentCard:
         protocol_version="1.0",
         name="Bob's Private Agent",
         description="Private agent for bob only",
-        url=HttpUrl("https://bob-agent.example.com/api"),
+        url="https://bob-agent.example.com/api",
         path="/agents/bob-private",
         visibility="private",
         registered_by="bob",
         trust_level="trusted",
+        version="1.0.0",
         skills=[
             Skill(
                 id="private-task",
@@ -98,11 +100,12 @@ def group_agent_engineers() -> AgentCard:
         protocol_version="1.0",
         name="Engineering Tools Agent",
         description="Restricted to engineers group",
-        url=HttpUrl("https://eng-tools.example.com/api"),
+        url="https://eng-tools.example.com/api",
         path="/agents/engineering-tools",
         visibility="group-restricted",
         allowed_groups=["engineers"],
         trust_level="verified",
+        version="1.0.0",
         skills=[
             Skill(
                 id="eng-task",
@@ -121,11 +124,12 @@ def group_agent_support() -> AgentCard:
         protocol_version="1.0",
         name="Support Tools Agent",
         description="Restricted to support group",
-        url=HttpUrl("https://support-tools.example.com/api"),
+        url="https://support-tools.example.com/api",
         path="/agents/support-tools",
         visibility="group-restricted",
         allowed_groups=["support"],
         trust_level="verified",
+        version="1.0.0",
         skills=[
             Skill(
                 id="support-task",
@@ -147,6 +151,7 @@ def admin_user_context() -> Dict[str, Any]:
         "auth_method": "traditional",
         "provider": "local",
         "ui_permissions": {"list_agents": ["all"]},
+        "accessible_agents": ["all"],
         "is_admin": True,
     }
 
@@ -161,6 +166,7 @@ def alice_engineer_context() -> Dict[str, Any]:
         "auth_method": "oauth2",
         "provider": "cognito",
         "ui_permissions": {"list_agents": ["all"]},
+        "accessible_agents": ["all"],
         "is_admin": False,
     }
 
@@ -175,6 +181,7 @@ def bob_support_context() -> Dict[str, Any]:
         "auth_method": "oauth2",
         "provider": "cognito",
         "ui_permissions": {"list_agents": ["all"]},
+        "accessible_agents": ["all"],
         "is_admin": False,
     }
 
@@ -189,6 +196,7 @@ def charlie_no_group_context() -> Dict[str, Any]:
         "auth_method": "oauth2",
         "provider": "cognito",
         "ui_permissions": {"list_agents": ["all"]},
+        "accessible_agents": ["all"],
         "is_admin": False,
     }
 
@@ -203,6 +211,7 @@ def alice_multiple_groups_context() -> Dict[str, Any]:
         "auth_method": "oauth2",
         "provider": "cognito",
         "ui_permissions": {"list_agents": ["all"]},
+        "accessible_agents": ["all"],
         "is_admin": False,
     }
 

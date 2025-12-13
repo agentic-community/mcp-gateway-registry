@@ -17,7 +17,7 @@ class TestSearchRoutes:
     def setup_method(self):
         """Override auth dependency for each test."""
         app.dependency_overrides[auth_dependencies.nginx_proxied_auth] = (
-            lambda *args, **kwargs: {
+            lambda: {
                 "username": "test-user",
                 "is_admin": True,
                 "accessible_servers": ["all"],

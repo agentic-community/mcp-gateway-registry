@@ -11,7 +11,6 @@ from typing import Any, Dict
 from unittest.mock import Mock, patch, AsyncMock
 from fastapi import status
 from fastapi.testclient import TestClient
-from pydantic import HttpUrl
 
 from registry.main import app
 from registry.schemas.agent_models import (
@@ -25,19 +24,22 @@ from registry.services.agent_service import agent_service
 
 @pytest.fixture
 def mock_enhanced_auth_admin():
-    """Mock enhanced_auth for admin user."""
+    """Mock nginx_proxied_auth for admin user."""
 
-    def _mock_auth(session=None):
+    def _mock_auth():
         return {
             "username": "admin_user",
             "groups": ["agents-admin"],
             "scopes": ["agent-admin"],
             "auth_method": "traditional",
             "provider": "local",
+            "accessible_agents": ["all"],
+            "accessible_services": ["all"],
             "ui_permissions": {
-                "register_service": ["all"],
+                "publish_agent": ["all"],
                 "modify_service": ["all"],
                 "toggle_service": ["all"],
+                "list_agents": ["all"],
             },
             "can_modify_servers": True,
             "is_admin": True,
@@ -48,17 +50,19 @@ def mock_enhanced_auth_admin():
 
 @pytest.fixture
 def mock_enhanced_auth_user():
-    """Mock enhanced_auth for regular user."""
+    """Mock nginx_proxied_auth for regular user."""
 
-    def _mock_auth(session=None):
+    def _mock_auth():
         return {
             "username": "test_user",
             "groups": ["agents-users"],
             "scopes": ["agent-read"],
             "auth_method": "oauth2",
             "provider": "cognito",
+            "accessible_agents": ["all"],
+            "accessible_services": ["all"],
             "ui_permissions": {
-                "register_service": ["all"],
+                "list_agents": ["all"],
                 "modify_service": ["all"],
                 "toggle_service": ["all"],
             },
@@ -71,15 +75,17 @@ def mock_enhanced_auth_user():
 
 @pytest.fixture
 def mock_enhanced_auth_viewer():
-    """Mock enhanced_auth for viewer-only user."""
+    """Mock nginx_proxied_auth for viewer-only user."""
 
-    def _mock_auth(session=None):
+    def _mock_auth():
         return {
             "username": "viewer_user",
             "groups": ["agents-viewers"],
             "scopes": ["agent-read"],
             "auth_method": "oauth2",
             "provider": "cognito",
+            "accessible_agents": ["all"],
+            "accessible_services": ["all"],
             "ui_permissions": {},
             "can_modify_servers": False,
             "is_admin": False,
@@ -95,10 +101,13 @@ def sample_agent_card() -> AgentCard:
         protocol_version="1.0",
         name="Code Reviewer Agent",
         description="Reviews code and provides feedback",
-        url=HttpUrl("https://code-reviewer.example.com/api"),
+        url="https://code-reviewer.example.com/api",
         path="/agents/code-reviewer",
         version="1.0.0",
-        provider="TechCorp",
+        provider={
+            "organization": "TechCorp",
+            "url": "https://techcorp.example.com",
+        },
         tags=["review", "code"],
         is_enabled=False,
         visibility="public",
@@ -127,8 +136,9 @@ def private_agent_card() -> AgentCard:
         protocol_version="1.0",
         name="Data Analyzer Agent",
         description="Analyzes data and generates reports",
-        url=HttpUrl("https://analyzer.example.com/api"),
+        url="https://analyzer.example.com/api",
         path="/agents/data-analyzer",
+        version="1.0.0",
         visibility="private",
         registered_by="test_user",
         trust_level="verified",
@@ -150,8 +160,9 @@ def group_agent_card() -> AgentCard:
         protocol_version="1.0",
         name="Task Runner Agent",
         description="Executes tasks within group context",
-        url=HttpUrl("https://taskrunner.example.com/api"),
+        url="https://taskrunner.example.com/api",
         path="/agents/task-runner",
+        version="1.0.0",
         visibility="group-restricted",
         allowed_groups=["agents-users"],
         trust_level="trusted",
@@ -176,22 +187,34 @@ class TestAgentRegistration:
         sample_agent_card,
     ):
         """Test successful registration with valid agent card."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             agent_service,
+            "get_agent_info",
+            return_value=None,
+        ), patch.object(
+            agent_service,
             "register_agent",
-            return_value=sample_agent_card,
+            return_value=True,
         ), patch.object(
             agent_service,
             "is_agent_enabled",
             return_value=False,
         ), patch(
-            "registry.search.service.faiss_service.add_or_update_agent",
+            "registry.search.service.faiss_service.add_or_update_entity",
             new_callable=AsyncMock,
-        ):
+        ), patch(
+            "registry.utils.agent_validator.agent_validator.validate_agent_card",
+            new_callable=AsyncMock,
+        ) as mock_validate:
+            mock_validate.return_value = Mock(
+                is_valid=True,
+                errors=[],
+                warnings=[],
+            )
 
             client = TestClient(app)
             response = client.post(
@@ -202,16 +225,24 @@ class TestAgentRegistration:
                     "url": str(sample_agent_card.url),
                     "path": sample_agent_card.path,
                     "protocol_version": sample_agent_card.protocol_version,
-                    "provider": sample_agent_card.provider,
+                    "version": sample_agent_card.version,
+                    "provider": (
+                        sample_agent_card.provider.model_dump()
+                        if sample_agent_card.provider
+                        else None
+                    ),
                     "tags": ",".join(sample_agent_card.tags),
                     "visibility": sample_agent_card.visibility,
+                    "skills": [skill.model_dump() for skill in sample_agent_card.skills],
                 },
             )
 
             assert response.status_code == status.HTTP_201_CREATED
             data = response.json()
+            assert data["message"] == "Agent registered successfully"
             assert data["agent"]["name"] == sample_agent_card.name
             assert data["agent"]["path"] == sample_agent_card.path
+            assert data["agent"]["is_enabled"] is False
 
         app.dependency_overrides.clear()
 
@@ -221,9 +252,9 @@ class TestAgentRegistration:
         sample_agent_card,
     ):
         """Test registering duplicate path returns 409 conflict."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             agent_service,
@@ -254,9 +285,9 @@ class TestAgentRegistration:
         mock_enhanced_auth_admin,
     ):
         """Test invalid protocol version format."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         client = TestClient(app)
         response = client.post(
@@ -278,10 +309,10 @@ class TestAgentRegistration:
         self,
         mock_enhanced_auth_admin,
     ):
-        """Test invalid URL without HTTPS."""
-        from registry.auth.dependencies import enhanced_auth
+        """Test invalid URL with unsupported scheme."""
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         client = TestClient(app)
         response = client.post(
@@ -289,7 +320,7 @@ class TestAgentRegistration:
             json={
                 "name": "Test Agent",
                 "description": "Test",
-                "url": "http://test.example.com/api",
+                "url": "ftp://test.example.com/api",
                 "path": "/agents/test",
                 "protocol_version": "1.0",
             },
@@ -304,9 +335,9 @@ class TestAgentRegistration:
         mock_enhanced_auth_admin,
     ):
         """Test registration with missing required fields."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         client = TestClient(app)
         response = client.post(
@@ -326,15 +357,30 @@ class TestAgentRegistration:
         sample_agent_card,
     ):
         """Test registration with tags."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             agent_service,
+            "get_agent_info",
+            return_value=None,
+        ), patch.object(
+            agent_service,
             "register_agent",
-            return_value=sample_agent_card,
-        ), patch("registry.search.service.faiss_service.add_or_update_agent", new_callable=AsyncMock):
+            return_value=True,
+        ), patch(
+            "registry.search.service.faiss_service.add_or_update_entity",
+            new_callable=AsyncMock,
+        ), patch(
+            "registry.utils.agent_validator.agent_validator.validate_agent_card",
+            new_callable=AsyncMock,
+        ) as mock_validate:
+            mock_validate.return_value = Mock(
+                is_valid=True,
+                errors=[],
+                warnings=[],
+            )
 
             client = TestClient(app)
             response = client.post(
@@ -345,6 +391,7 @@ class TestAgentRegistration:
                     "url": str(sample_agent_card.url),
                     "path": sample_agent_card.path,
                     "tags": "code,review,testing",
+                    "version": sample_agent_card.version,
                 },
             )
 
@@ -358,9 +405,9 @@ class TestAgentRegistration:
         sample_agent_card,
     ):
         """Test registration without permission."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_viewer
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_viewer
 
         client = TestClient(app)
         response = client.post(
@@ -389,9 +436,9 @@ class TestAgentList:
         private_agent_card,
     ):
         """Test listing all agents."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card, private_agent_card]
 
@@ -414,9 +461,9 @@ class TestAgentList:
         mock_enhanced_auth_admin,
     ):
         """Test listing agents when none exist."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(agent_service, "get_all_agents", return_value=[]):
 
@@ -437,9 +484,9 @@ class TestAgentList:
         private_agent_card,
     ):
         """Test filtering by enabled_only=true."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card, private_agent_card]
 
@@ -465,9 +512,9 @@ class TestAgentList:
         private_agent_card,
     ):
         """Test filtering by visibility."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card, private_agent_card]
 
@@ -489,9 +536,9 @@ class TestAgentList:
         sample_agent_card,
     ):
         """Test search by query parameter."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card]
 
@@ -518,9 +565,9 @@ class TestGetAgent:
         sample_agent_card,
     ):
         """Test getting existing public agent."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(agent_service, "get_agent_info", return_value=sample_agent_card):
 
@@ -539,9 +586,9 @@ class TestGetAgent:
         mock_enhanced_auth_admin,
     ):
         """Test getting non-existent agent returns 404."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(agent_service, "get_agent_info", return_value=None):
 
@@ -558,9 +605,9 @@ class TestGetAgent:
         sample_agent_card,
     ):
         """Test path normalization (with/without trailing slash)."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(agent_service, "get_agent_info", return_value=sample_agent_card):
 
@@ -577,9 +624,9 @@ class TestGetAgent:
         private_agent_card,
     ):
         """Test private agent only accessible to owner."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         with patch.object(agent_service, "get_agent_info", return_value=private_agent_card):
 
@@ -596,9 +643,9 @@ class TestGetAgent:
         private_agent_card,
     ):
         """Test private agent denied to non-owner non-admin."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_viewer
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_viewer
 
         with patch.object(agent_service, "get_agent_info", return_value=private_agent_card):
 
@@ -615,9 +662,9 @@ class TestGetAgent:
         group_agent_card,
     ):
         """Test group-restricted agent accessible to group members."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         with patch.object(agent_service, "get_agent_info", return_value=group_agent_card):
 
@@ -639,9 +686,9 @@ class TestUpdateAgent:
         private_agent_card,
     ):
         """Test successful agent update."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         updated_card = private_agent_card.model_copy()
         updated_card.description = "Updated description"
@@ -653,8 +700,19 @@ class TestUpdateAgent:
         ), patch.object(
             agent_service,
             "update_agent",
-            return_value=updated_card,
-        ), patch("registry.search.service.faiss_service.add_or_update_agent", new_callable=AsyncMock):
+            return_value=True,
+        ), patch(
+            "registry.search.service.faiss_service.add_or_update_entity",
+            new_callable=AsyncMock,
+        ), patch(
+            "registry.utils.agent_validator.agent_validator.validate_agent_card",
+            new_callable=AsyncMock,
+        ) as mock_validate:
+            mock_validate.return_value = Mock(
+                is_valid=True,
+                errors=[],
+                warnings=[],
+            )
 
             client = TestClient(app)
             response = client.put(
@@ -664,6 +722,15 @@ class TestUpdateAgent:
                     "description": updated_card.description,
                     "url": str(updated_card.url),
                     "path": updated_card.path,
+                    "protocol_version": updated_card.protocol_version,
+                    "version": updated_card.version,
+                    "provider": (
+                        updated_card.provider.model_dump()
+                        if updated_card.provider
+                        else None
+                    ),
+                    "tags": updated_card.tags,
+                    "visibility": updated_card.visibility,
                 },
             )
 
@@ -678,9 +745,9 @@ class TestUpdateAgent:
         mock_enhanced_auth_user,
     ):
         """Test updating non-existent agent returns 404."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         with patch.object(agent_service, "get_agent_info", return_value=None):
 
@@ -705,9 +772,9 @@ class TestUpdateAgent:
         private_agent_card,
     ):
         """Test path cannot be changed on update."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         with patch.object(
             agent_service,
@@ -716,8 +783,19 @@ class TestUpdateAgent:
         ), patch.object(
             agent_service,
             "update_agent",
-            return_value=private_agent_card,
-        ), patch("registry.search.service.faiss_service.add_or_update_agent", new_callable=AsyncMock):
+            return_value=True,
+        ), patch(
+            "registry.search.service.faiss_service.add_or_update_entity",
+            new_callable=AsyncMock,
+        ), patch(
+            "registry.utils.agent_validator.agent_validator.validate_agent_card",
+            new_callable=AsyncMock,
+        ) as mock_validate:
+            mock_validate.return_value = Mock(
+                is_valid=True,
+                errors=[],
+                warnings=[],
+            )
 
             client = TestClient(app)
             response = client.put(
@@ -727,6 +805,11 @@ class TestUpdateAgent:
                     "description": private_agent_card.description,
                     "url": str(private_agent_card.url),
                     "path": "/agents/different-path",
+                    "protocol_version": private_agent_card.protocol_version,
+                    "version": private_agent_card.version,
+                    "provider": None,
+                    "tags": private_agent_card.tags,
+                    "visibility": private_agent_card.visibility,
                 },
             )
 
@@ -745,9 +828,9 @@ class TestDeleteAgent:
         private_agent_card,
     ):
         """Test successful deletion returns 204."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         with patch.object(
             agent_service,
@@ -757,7 +840,7 @@ class TestDeleteAgent:
             agent_service,
             "remove_agent",
             return_value=True,
-        ), patch("registry.search.service.faiss_service.remove_agent", new_callable=AsyncMock):
+        ), patch("registry.search.service.faiss_service.remove_entity", new_callable=AsyncMock):
 
             client = TestClient(app)
             response = client.delete(f"/api/agents{private_agent_card.path}")
@@ -771,9 +854,9 @@ class TestDeleteAgent:
         mock_enhanced_auth_user,
     ):
         """Test deleting non-existent agent returns 404."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_user
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_user
 
         with patch.object(agent_service, "get_agent_info", return_value=None):
 
@@ -790,9 +873,9 @@ class TestDeleteAgent:
         sample_agent_card,
     ):
         """Test deletion respects ownership."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             agent_service,
@@ -802,7 +885,7 @@ class TestDeleteAgent:
             agent_service,
             "remove_agent",
             return_value=True,
-        ), patch("registry.search.service.faiss_service.remove_agent", new_callable=AsyncMock):
+        ), patch("registry.search.service.faiss_service.remove_entity", new_callable=AsyncMock):
 
             client = TestClient(app)
             response = client.delete(f"/api/agents{sample_agent_card.path}")
@@ -822,9 +905,9 @@ class TestToggleAgent:
         sample_agent_card,
     ):
         """Test enabling agent toggle."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             agent_service,
@@ -834,7 +917,7 @@ class TestToggleAgent:
             agent_service,
             "toggle_agent",
             return_value=True,
-        ), patch("registry.search.service.faiss_service.add_or_update_agent", new_callable=AsyncMock):
+        ), patch("registry.search.service.faiss_service.add_or_update_entity", new_callable=AsyncMock):
 
             client = TestClient(app)
             response = client.post(
@@ -853,9 +936,9 @@ class TestToggleAgent:
         sample_agent_card,
     ):
         """Test disabling agent toggle."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(
             agent_service,
@@ -865,7 +948,7 @@ class TestToggleAgent:
             agent_service,
             "toggle_agent",
             return_value=True,
-        ), patch("registry.search.service.faiss_service.add_or_update_agent", new_callable=AsyncMock):
+        ), patch("registry.search.service.faiss_service.add_or_update_entity", new_callable=AsyncMock):
 
             client = TestClient(app)
             response = client.post(
@@ -883,9 +966,9 @@ class TestToggleAgent:
         mock_enhanced_auth_admin,
     ):
         """Test toggle non-existent agent returns 404."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         with patch.object(agent_service, "get_agent_info", return_value=None):
 
@@ -909,9 +992,9 @@ class TestDiscoverAgentsBySkills:
         sample_agent_card,
     ):
         """Test discover by skill ID."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card]
 
@@ -944,9 +1027,9 @@ class TestDiscoverAgentsBySkills:
         sample_agent_card,
     ):
         """Test discover by multiple skills."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card]
 
@@ -978,9 +1061,9 @@ class TestDiscoverAgentsBySkills:
         sample_agent_card,
     ):
         """Test discover with tags filter."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card]
 
@@ -1015,9 +1098,9 @@ class TestDiscoverAgentsBySkills:
         sample_agent_card,
     ):
         """Test max_results parameter."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card]
 
@@ -1049,9 +1132,9 @@ class TestDiscoverAgentsBySkills:
         sample_agent_card,
     ):
         """Test discover returns only enabled agents."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         agents = [sample_agent_card]
 
@@ -1086,9 +1169,9 @@ class TestDiscoverAgentsBySkills:
         mock_enhanced_auth_admin,
     ):
         """Test empty skills parameter returns 400."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         client = TestClient(app)
         response = client.post(
@@ -1111,14 +1194,14 @@ class TestSemanticDiscovery:
         sample_agent_card,
     ):
         """Test semantic search by natural language query."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         search_results = [
             {
                 "path": sample_agent_card.path,
-                "score": 0.92,
+                "relevance_score": 0.92,
             }
         ]
 
@@ -1147,14 +1230,14 @@ class TestSemanticDiscovery:
         sample_agent_card,
     ):
         """Test max_results parameter in semantic search."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         search_results = [
             {
                 "path": sample_agent_card.path,
-                "score": 0.92,
+                "relevance_score": 0.92,
             }
         ]
 
@@ -1181,9 +1264,9 @@ class TestSemanticDiscovery:
         mock_enhanced_auth_admin,
     ):
         """Test empty query returns 400."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         client = TestClient(app)
         response = client.post(
@@ -1200,14 +1283,14 @@ class TestSemanticDiscovery:
         sample_agent_card,
     ):
         """Test semantic discovery returns only enabled agents."""
-        from registry.auth.dependencies import enhanced_auth
+        from registry.auth.dependencies import nginx_proxied_auth
 
-        app.dependency_overrides[enhanced_auth] = mock_enhanced_auth_admin
+        app.dependency_overrides[nginx_proxied_auth] = mock_enhanced_auth_admin
 
         search_results = [
             {
                 "path": sample_agent_card.path,
-                "score": 0.92,
+                "relevance_score": 0.92,
             }
         ]
 
