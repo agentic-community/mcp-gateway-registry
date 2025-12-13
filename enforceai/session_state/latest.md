@@ -10,6 +10,11 @@
 - Brought upstream tests into alignment with the current app routing contract (SPA at `/`, APIs under `/api`, Anthropic server-registry under `/{REGISTRY_CONSTANTS.ANTHROPIC_API_VERSION}`)
 - Full repo test suite passing (coverage gate adjusted to current baseline)
 - Stage 1.1: implemented SQLite migration runner + baseline schema migration with unit tests
+- Stage 1.2: implemented AgentStore interface + SQLite AgentStore with unit tests
+- Stage 1.3: implemented ApiKeyStore interface + SQLite ApiKeyStore with unit tests
+- Stage 1.4: implemented RevocationStore interface + SQLite RevocationStore with unit tests
+- Stage 1.5: implemented AuditStore interface + SQLite AuditStore with unit tests
+- Stage 1.6: added data layer initializer + shared SQLite connection pragmas + end-to-end smoke test
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -41,9 +46,9 @@
 - Stage 1 data layer: `enforceai/plans/stage-1-data-layer-phased-plan.md`
 
 ## Next Steps
-1. Phase 1.2: AgentStore + SQLite implementation
-2. Phase 1.3: ApiKeyStore + SQLite implementation
-3. Phase 1.4: RevocationStore + SQLite implementation
+1. Stage 1 end gate: `make test` (note: Makefile references `scripts/test.py` which is currently missing)
+2. Stage 2: crypto + gateway token primitives (RS256)
+3. Decide whether to restore `scripts/test.py` or adjust Makefile targets
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
@@ -55,5 +60,19 @@
 - `.venv/bin/python -m pytest` (279 passed; coverage gate met)
 - `.venv/bin/python -m py_compile auth_server/enforceai/db/migrations.py tests/unit/enforceai/test_migrations.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (20 passed)
+- `.venv/bin/python -m py_compile auth_server/enforceai/models/agent.py auth_server/enforceai/stores/sqlite/agent_store.py tests/unit/enforceai/test_agent_store_sqlite.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (26 passed)
+- `.venv/bin/python -m py_compile auth_server/enforceai/models/api_key.py auth_server/enforceai/stores/sqlite/api_key_store.py tests/unit/enforceai/test_api_key_store_sqlite.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (32 passed)
+- `.venv/bin/python -m pytest` (293 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/models/revocation.py auth_server/enforceai/stores/sqlite/revocation_store.py tests/unit/enforceai/test_revocation_store_sqlite.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (37 passed)
+- `.venv/bin/python -m pytest` (298 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/models/audit.py auth_server/enforceai/stores/sqlite/audit_store.py tests/unit/enforceai/test_audit_store_sqlite.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (40 passed)
+- `.venv/bin/python -m pytest` (301 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/db/connection.py auth_server/enforceai/db/data_layer.py tests/unit/enforceai/test_data_layer_smoke.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (42 passed)
+- `.venv/bin/python -m pytest` (303 passed; coverage gate met)
 
 ## Outstanding Questions
