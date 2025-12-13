@@ -236,10 +236,10 @@ async def register_agent(
             url=request.url,
             path=path,
             version=request.version,
+            capabilities={"streaming": request.streaming},
             provider=provider_obj,
             security_schemes=request.security_schemes or {},
             skills=request.skills or [],
-            streaming=request.streaming,
             tags=tag_list,
             license=request.license,
             visibility=request.visibility,
@@ -720,10 +720,10 @@ async def update_agent(
             url=request.url,
             path=path,
             version=request.version,
+            capabilities={"streaming": request.streaming},
             provider=request.provider,
             security_schemes=request.security_schemes or {},
             skills=request.skills or [],
-            streaming=request.streaming,
             tags=tag_list,
             license=request.license,
             visibility=request.visibility,
@@ -916,6 +916,9 @@ async def discover_agents_by_skills(
 
         relevance_score = 0.6 * skill_match_score + 0.2 * tag_match_score + 0.2 * trust_boost
 
+        streaming = agent.capabilities.get("streaming", False) if agent.capabilities else False
+        provider_name = agent.provider.organization if agent.provider else None
+
         agent_info = AgentInfo(
             name=agent.name,
             description=agent.description,
@@ -926,8 +929,8 @@ async def discover_agents_by_skills(
             num_skills=len(agent.skills),
             num_stars=agent.num_stars,
             is_enabled=True,
-            provider=agent.provider,
-            streaming=agent.streaming,
+            provider=provider_name,
+            streaming=streaming,
             trust_level=agent.trust_level,
         )
 
@@ -1009,6 +1012,17 @@ async def discover_agents_semantic(
             if not _filter_agents_by_access([agent_card], user_context):
                 continue
 
+            streaming = (
+                agent_card.capabilities.get("streaming", False)
+                if agent_card.capabilities
+                else False
+            )
+            provider_name = (
+                agent_card.provider.organization
+                if agent_card.provider
+                else None
+            )
+
             agent_info = AgentInfo(
                 name=agent_card.name,
                 description=agent_card.description,
@@ -1019,8 +1033,8 @@ async def discover_agents_semantic(
                 num_skills=len(agent_card.skills),
                 num_stars=agent_card.num_stars,
                 is_enabled=True,
-                provider=agent_card.provider,
-                streaming=agent_card.streaming,
+                provider=provider_name,
+                streaming=streaming,
                 trust_level=agent_card.trust_level,
             )
 
