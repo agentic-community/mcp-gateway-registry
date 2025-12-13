@@ -15,6 +15,13 @@
 - Stage 1.4: implemented RevocationStore interface + SQLite RevocationStore with unit tests
 - Stage 1.5: implemented AuditStore interface + SQLite AuditStore with unit tests
 - Stage 1.6: added data layer initializer + shared SQLite connection pragmas + end-to-end smoke test
+- Added a lightweight EnforceAI integration test covering settings -> data layer -> store roundtrip (still no request-path wiring)
+- Stage 2.1: added gateway token claims model + time/validation helpers with unit tests
+- Stage 2.2: added gateway keyring loader (PEM load, `kid` selection, caching) with unit tests
+- Stage 2.3: added gateway token minting (RS256 + `kid` header + required claims) with unit tests
+- Stage 2.4: added gateway token verification (RS256 signature + `kid` key selection + claims validation) with unit tests
+- Stage 2.5: added hardening tests (no secret/token leaks + clock-skew regression cases)
+- Added an integration-lite test for gateway token mint+verify roundtrip (no request-path wiring)
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -47,8 +54,8 @@
 
 ## Next Steps
 1. Stage 1 end gate: `make test` (note: Makefile references `scripts/test.py` which is currently missing)
-2. Stage 2: crypto + gateway token primitives (RS256)
-3. Decide whether to restore `scripts/test.py` or adjust Makefile targets
+2. Stage 2 completion: decide whether to treat Stage 2 as complete now (all planned phases implemented; full suite passing)
+3. Stage 3: generic OIDC multi-issuer validation (JWKS cache) per plan
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
@@ -74,5 +81,24 @@
 - `.venv/bin/python -m py_compile auth_server/enforceai/db/connection.py auth_server/enforceai/db/data_layer.py tests/unit/enforceai/test_data_layer_smoke.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (42 passed)
 - `.venv/bin/python -m pytest` (303 passed; coverage gate met)
+- `.venv/bin/python -m py_compile tests/integration/test_enforceai_data_layer.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_data_layer.py` (1 passed)
+- `.venv/bin/python -m py_compile auth_server/enforceai/tokens/claims.py tests/unit/enforceai/test_gateway_token_claims.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (53 passed)
+- `.venv/bin/python -m pytest` (315 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/crypto/keyring.py tests/unit/enforceai/test_gateway_keyring.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (57 passed)
+- `.venv/bin/python -m pytest` (319 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/tokens/mint.py tests/unit/enforceai/test_gateway_token_mint.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (60 passed)
+- `.venv/bin/python -m pytest` (322 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/tokens/verify.py tests/unit/enforceai/test_gateway_token_verify.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (67 passed)
+- `.venv/bin/python -m pytest` (329 passed; coverage gate met)
+- `.venv/bin/python -m py_compile tests/unit/enforceai/test_gateway_token_hardening.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (71 passed)
+- `.venv/bin/python -m pytest` (333 passed; coverage gate met)
+- `.venv/bin/python -m py_compile tests/integration/test_enforceai_gateway_token_roundtrip.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_gateway_token_roundtrip.py` (3 passed)
 
 ## Outstanding Questions
