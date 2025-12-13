@@ -22,6 +22,11 @@
 - Stage 2.4: added gateway token verification (RS256 signature + `kid` key selection + claims validation) with unit tests
 - Stage 2.5: added hardening tests (no secret/token leaks + clock-skew regression cases)
 - Added an integration-lite test for gateway token mint+verify roundtrip (no request-path wiring)
+- Stage 3.1: updated OIDC issuer config schema (jwks_uri, audiences, claim precedence, TTL/skew knobs) + updated fixtures/tests; maintained legacy `jwks_url`/`audience` parsing as aliases
+- Stage 3.2: implemented OIDC claim normalization helpers (aud/scopes/roles) with unit test coverage (no network)
+- Stage 3.3: implemented JWKS fetch + in-memory cache per issuer (TTL-based, refresh, fail-closed on fetch errors) with unit tests (no network; injected fetcher)
+- Stage 3.4: implemented generic OIDC JWT verification (multi-issuer selection, JWKS key selection with refresh-on-missing-kid, signature/aud/exp validation, iat skew check) with unit tests
+- Stage 3.5: added OIDC hardening tests (malformed/missing claims, no token/JWKS leakage) and an integration-lite OIDC roundtrip test that validates verifier + cache behavior without network
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -50,12 +55,12 @@
 - OIDC claim defaults: scopes from `scp`→`scope`→`permissions`; roles from `roles`→`groups`→`permissions` (per-issuer overrides allowed); roles/groups for audit only.
 
 ## Current Task
-- Stage 1 data layer: `enforceai/plans/stage-1-data-layer-phased-plan.md`
+- Stage 3 generic OIDC: `enforceai/plans/stage-3-oidc-phased-plan.md` (Phase 3.1 complete)
 
 ## Next Steps
-1. Stage 1 end gate: `make test` (note: Makefile references `scripts/test.py` which is currently missing)
-2. Stage 2 completion: decide whether to treat Stage 2 as complete now (all planned phases implemented; full suite passing)
-3. Stage 3: generic OIDC multi-issuer validation (JWKS cache) per plan
+1. Stage 4: wire IdentityResolver + agent binding (`X-Agent-Id`) rules
+2. Stage 5: FGAC enforcement + tool visibility filtering
+3. Stage 6: management APIs + CLI (self-service)
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
@@ -100,5 +105,16 @@
 - `.venv/bin/python -m pytest` (333 passed; coverage gate met)
 - `.venv/bin/python -m py_compile tests/integration/test_enforceai_gateway_token_roundtrip.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_gateway_token_roundtrip.py` (3 passed)
+- `.venv/bin/python -m py_compile auth_server/enforceai/config.py tests/unit/enforceai/test_config_parsing.py tests/unit/enforceai/test_config_validation.py tests/unit/enforceai/test_oidc_config_models.py tests/fixtures/enforceai_fixtures.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (77 passed)
+- `.venv/bin/python -m pytest` (342 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/oidc/claims.py tests/unit/enforceai/test_oidc_claims_normalization.py` (pass)
+- `.venv/bin/python -m pytest` (354 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/oidc/jwks.py tests/unit/enforceai/test_oidc_jwks_cache.py tests/unit/enforceai/test_imports.py` (pass)
+- `.venv/bin/python -m pytest` (360 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/oidc/models.py auth_server/enforceai/oidc/verify.py tests/unit/enforceai/test_oidc_verify_multi_issuer.py tests/unit/enforceai/test_oidc_jwks_rotation.py tests/unit/enforceai/test_oidc_verify_errors.py tests/unit/enforceai/test_imports.py` (pass)
+- `.venv/bin/python -m pytest` (370 passed; coverage gate met)
+- `.venv/bin/python -m py_compile tests/unit/enforceai/test_oidc_hardening.py tests/integration/test_enforceai_oidc_roundtrip.py` (pass)
+- `.venv/bin/python -m pytest` (376 passed; coverage gate met)
 
 ## Outstanding Questions

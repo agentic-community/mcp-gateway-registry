@@ -30,6 +30,11 @@ class TestEnforceAIImports:
         import auth_server.enforceai.tokens.claims  # noqa: F401
         import auth_server.enforceai.tokens.mint  # noqa: F401
         import auth_server.enforceai.tokens.verify  # noqa: F401
+        import auth_server.enforceai.oidc  # noqa: F401
+        import auth_server.enforceai.oidc.claims  # noqa: F401
+        import auth_server.enforceai.oidc.jwks  # noqa: F401
+        import auth_server.enforceai.oidc.models  # noqa: F401
+        import auth_server.enforceai.oidc.verify  # noqa: F401
         import auth_server.enforceai.stores  # noqa: F401
         import auth_server.enforceai.stores.interfaces  # noqa: F401
         import auth_server.enforceai.stores.sqlite  # noqa: F401
