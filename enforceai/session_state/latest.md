@@ -27,6 +27,7 @@
 - Stage 3.3: implemented JWKS fetch + in-memory cache per issuer (TTL-based, refresh, fail-closed on fetch errors) with unit tests (no network; injected fetcher)
 - Stage 3.4: implemented generic OIDC JWT verification (multi-issuer selection, JWKS key selection with refresh-on-missing-kid, signature/aud/exp validation, iat skew check) with unit tests
 - Stage 3.5: added OIDC hardening tests (malformed/missing claims, no token/JWKS leakage) and an integration-lite OIDC roundtrip test that validates verifier + cache behavior without network
+- Created Stage 4 phased plan: `enforceai/plans/stage-4-identity-resolver-phased-plan.md`
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -55,7 +56,7 @@
 - OIDC claim defaults: scopes from `scp`→`scope`→`permissions`; roles from `roles`→`groups`→`permissions` (per-issuer overrides allowed); roles/groups for audit only.
 
 ## Current Task
-- Stage 3 generic OIDC: `enforceai/plans/stage-3-oidc-phased-plan.md` (Phase 3.1 complete)
+- Stage 4 identity resolver: `enforceai/plans/stage-4-identity-resolver-phased-plan.md` (Phase 4.1 next)
 
 ## Next Steps
 1. Stage 4: wire IdentityResolver + agent binding (`X-Agent-Id`) rules
