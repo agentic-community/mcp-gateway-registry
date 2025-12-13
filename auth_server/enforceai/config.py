@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from json import JSONDecodeError
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Optional
 
 from pydantic import (
@@ -17,6 +18,19 @@ from pydantic_settings import (
     BaseSettings,
     SettingsConfigDict,
 )
+
+DEFAULT_OIDC_SCOPE_CLAIMS: list[str] = [
+    "scp",
+    "scope",
+    "permissions",
+]
+DEFAULT_OIDC_ROLE_CLAIMS: list[str] = [
+    "roles",
+    "groups",
+    "permissions",
+]
+DEFAULT_JWKS_CACHE_TTL_SECONDS: int = 300
+DEFAULT_OIDC_CLOCK_SKEW_SECONDS: int = 60
 
 
 def _parse_json_mapping(
@@ -42,20 +56,139 @@ class OIDCIssuerConfig(BaseModel):
         frozen=True,
     )
 
-    jwks_url: str = Field(
+    jwks_uri: str = Field(
         ...,
         min_length=1,
-        description="Issuer JWKS URL (e.g., https://issuer/.well-known/jwks.json)",
+        validation_alias=AliasChoices(
+            "jwks_uri",
+            "jwks_url",
+        ),
+        description="Issuer JWKS URI (e.g., https://issuer/.well-known/jwks.json)",
     )
-    audience: Optional[str] = Field(
-        default=None,
-        min_length=1,
-        description="Optional audience claim requirement for this issuer",
+    audiences: list[str] = Field(
+        ...,
+        validation_alias=AliasChoices(
+            "audiences",
+            "audience",
+        ),
+        description="Allowed JWT audiences for this issuer",
     )
     algorithms: list[str] = Field(
         default_factory=lambda: ["RS256"],
         description="Accepted JWT algorithms for this issuer",
     )
+    scope_claims: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_OIDC_SCOPE_CLAIMS),
+        description="Claim precedence for scopes for this issuer",
+    )
+    role_claims: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_OIDC_ROLE_CLAIMS),
+        description="Claim precedence for roles/groups (audit-only) for this issuer",
+    )
+    jwks_cache_ttl_seconds: int = Field(
+        default=DEFAULT_JWKS_CACHE_TTL_SECONDS,
+        ge=1,
+        description="JWKS cache TTL in seconds (in-memory cache)",
+    )
+    clock_skew_seconds: int = Field(
+        default=DEFAULT_OIDC_CLOCK_SKEW_SECONDS,
+        ge=0,
+        description="Clock skew tolerance in seconds for exp/iat validation",
+    )
+
+    @field_validator("jwks_uri")
+    @classmethod
+    def _validate_jwks_uri(
+        cls,
+        value: str,
+    ) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("jwks_uri must be a non-empty string")
+
+        parsed = urlparse(stripped)
+        if parsed.scheme not in {"https", "http"}:
+            raise ValueError("jwks_uri must be an https:// or http:// URL")
+
+        if not parsed.netloc:
+            raise ValueError("jwks_uri must include a hostname")
+
+        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1"}:
+            raise ValueError("jwks_uri http:// is only allowed for localhost development")
+
+        return stripped
+
+    @field_validator("audiences", mode="before")
+    @classmethod
+    def _normalize_audiences(
+        cls,
+        value: Any,
+    ) -> Any:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @field_validator("audiences")
+    @classmethod
+    def _validate_audiences(
+        cls,
+        value: list[str],
+    ) -> list[str]:
+        if not value:
+            raise ValueError("audiences must contain at least one audience")
+
+        normalized: list[str] = []
+        for audience in value:
+            stripped = audience.strip()
+            if stripped:
+                normalized.append(stripped)
+
+        if not normalized:
+            raise ValueError("audiences must contain at least one non-empty audience")
+
+        return sorted(set(normalized))
+
+    @field_validator("algorithms", mode="before")
+    @classmethod
+    def _normalize_algorithms(
+        cls,
+        value: Any,
+    ) -> Any:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @field_validator("algorithms")
+    @classmethod
+    def _validate_algorithms(
+        cls,
+        value: list[str],
+    ) -> list[str]:
+        normalized = [algorithm.strip() for algorithm in value if algorithm.strip()]
+        if not normalized:
+            raise ValueError("algorithms must contain at least one algorithm")
+        return sorted(set(normalized))
+
+    @field_validator("scope_claims", "role_claims", mode="before")
+    @classmethod
+    def _normalize_claim_lists(
+        cls,
+        value: Any,
+    ) -> Any:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("scope_claims", "role_claims")
+    @classmethod
+    def _validate_claim_lists(
+        cls,
+        value: list[str],
+    ) -> list[str]:
+        normalized = [item.strip() for item in value if item.strip()]
+        if not normalized:
+            raise ValueError("claim list must contain at least one entry")
+        return normalized
 
 
 class EnforceAISettings(BaseSettings):

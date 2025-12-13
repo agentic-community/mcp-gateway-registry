@@ -18,7 +18,8 @@ def _set_minimal_valid_env(
         json.dumps(
             {
                 "https://issuer.example": {
-                    "jwks_url": "https://issuer.example/.well-known/jwks.json",
+                    "jwks_uri": "https://issuer.example/.well-known/jwks.json",
+                    "audiences": ["mcp-registry"],
                 },
             }
         ),
@@ -39,7 +40,7 @@ class TestEnforceAIConfigParsing:
         settings = EnforceAISettings(_env_file=None)
 
         assert "https://issuer.example" in settings.oidc_issuers
-        assert settings.oidc_issuers["https://issuer.example"].jwks_url.endswith(
+        assert settings.oidc_issuers["https://issuer.example"].jwks_uri.endswith(
             "/.well-known/jwks.json"
         )
 
@@ -49,10 +50,11 @@ class TestEnforceAIConfigParsing:
             json.dumps(
                 {
                     "https://issuer-one.example": {
-                        "jwks_url": "https://issuer-one.example/jwks.json",
+                        "jwks_uri": "https://issuer-one.example/jwks.json",
+                        "audiences": ["mcp-registry"],
                     },
                     "https://issuer-two.example": {
-                        "jwks_url": "https://issuer-two.example/jwks.json",
+                        "jwks_uri": "https://issuer-two.example/jwks.json",
                         "audience": "mcp-registry",
                     },
                 }
@@ -69,7 +71,7 @@ class TestEnforceAIConfigParsing:
             "https://issuer-one.example",
             "https://issuer-two.example",
         }
-        assert settings.oidc_issuers["https://issuer-two.example"].audience == "mcp-registry"
+        assert settings.oidc_issuers["https://issuer-two.example"].audiences == ["mcp-registry"]
 
     def test_invalid_oidc_issuers_json_fails_with_clear_error(
         self,
@@ -100,4 +102,3 @@ class TestEnforceAIConfigParsing:
         message = str(exc.value)
         assert "OIDC_ISSUERS" in message
         assert "ENFORCEAI_DB_PATH" in message
-

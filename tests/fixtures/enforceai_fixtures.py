@@ -73,6 +73,7 @@ def enforceai_oidc_issuers_env_json() -> str:
         {
             "https://issuer.example": {
                 "jwks_url": "https://issuer.example/.well-known/jwks.json",
+                "audience": "mcp-registry",
             }
         }
     )
@@ -117,4 +118,3 @@ def enforceai_gateway_key_files(
         public_keys_dir=public_keys_dir,
         active_kid=active_kid,
     )
-

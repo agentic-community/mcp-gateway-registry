@@ -18,7 +18,8 @@ def _set_base_env(
         json.dumps(
             {
                 "https://issuer.example": {
-                    "jwks_url": "https://issuer.example/.well-known/jwks.json",
+                    "jwks_uri": "https://issuer.example/.well-known/jwks.json",
+                    "audiences": ["mcp-registry"],
                 },
             }
         ),
@@ -77,4 +78,3 @@ class TestEnforceAIConfigValidation:
 
         with pytest.raises(ValidationError):
             EnforceAISettings(_env_file=None)
-
