@@ -35,7 +35,7 @@
 - Treat `bandit` findings as advisory but fix anything touching secrets, auth, or filesystem access.
 
 
-# Claude Coding Rules
+# Agent Coding Rules
 
 ## Overview
 This document contains coding standards and best practices that must be followed for all code development. These rules prioritize maintainability, simplicity, and modern Python development practices.

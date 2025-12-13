@@ -32,6 +32,8 @@
 - OIDC claim defaults: scopes from `scp`→`scope`→`permissions`; roles from `roles`→`groups`→`permissions` (per-issuer overrides allowed); roles/groups for audit only.
 
 ## Current Task
+- Execute Stage 0 foundation plan: `enforceai/plans/stage-0-foundation-phased-plan.md`
+- Use `enforceai/instructions/ENFORCEAI_CONTEXT.md` as the primary navigation document for agent runs
 - Begin implementing the roadmap
 - Start OIDC validator design
 - Draft database schema for agents
