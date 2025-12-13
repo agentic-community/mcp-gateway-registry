@@ -32,6 +32,9 @@ Unify OIDC, gateway tokens, and API keys into a single, consistent `IdentityCont
   - `401` missing/invalid credentials
   - `403` authenticated-but-denied (binding failures, revoked agent/credential)
   - `503` internal dependency failures (cannot safely decide; deny but signal retry)
+- Auth mode selection (config):
+  - `AUTH_PROVIDER = oidc | api-key | gateway-token | mixed`
+  - In `mixed`, bearer tokens are routed by `iss` (gateway issuer vs configured OIDC issuers)
 
 ## Proposed Code Layout (within `auth_server/enforceai/`)
 - `auth/`
@@ -93,6 +96,7 @@ Unit tests must not require network access:
 - Extend settings to include API key pepper:
   - `ENFORCEAI_API_KEY_PEPPER_PATH` (or `API_KEY_PEPPER_PATH` alias)
   - enforce file exists/readable when API-key mode is enabled
+  - (optional) add `AUTH_PROVIDER` validation to ensure pepper is present when `api-key` or `mixed` is enabled
 - Implement API key parsing:
   - format: `eak_<key_id>.<secret>` (reject malformed -> `401`)
 - Implement hashing:
@@ -125,6 +129,9 @@ Unit tests must not require network access:
 **Goal**: validate gateway tokens and enforce registry + revocation checks.
 
 ### Scope (single run)
+- Extend settings to include a configured gateway issuer:
+  - `ENFORCEAI_GATEWAY_ISSUER` (or `GATEWAY_ISSUER` alias)
+  - used to (a) validate `iss` during token verification and (b) route bearer tokens in `mixed` mode
 - Provider behavior:
   - accept token from `Authorization: Bearer` (when issuer matches gateway issuer) OR `X-Gateway-Token`
   - verify RS256 token using Stage 2 primitives (keyring cached; misconfig -> `503`)
@@ -184,12 +191,18 @@ Unit tests must not require network access:
 - Add resolver that:
   - uses Phase 4.1 credential extraction
   - enforces “exactly one credential source” (`401`)
-  - selects provider in `mixed` mode:
+  - selects provider based on `AUTH_PROVIDER`:
+    - `oidc`: allow only OIDC bearer tokens
+    - `gateway-token`: allow only gateway tokens (bearer with gateway issuer or `X-Gateway-Token`)
+    - `api-key`: allow only `X-API-Key`
+    - `mixed`: allow all three
+  - in `mixed`, route bearer tokens by unverified `iss`:
+    - `iss == ENFORCEAI_GATEWAY_ISSUER` => gateway token provider
+    - `iss in OIDC_ISSUERS` => OIDC provider
+    - otherwise => `401`
     - `X-API-Key` => API key provider
     - `X-Gateway-Token` => gateway token provider
-    - `Authorization: Bearer` => route by unverified `iss`:
-      - matches configured gateway issuer => gateway token provider
-      - otherwise => OIDC provider (if configured issuer exists)
+    - `Authorization: Bearer` => bearer routing rules above
   - maps errors to `401/403/503` per `auth_server/enforceai/errors.py`
 - Add a single integration-lite test that exercises the resolver end-to-end (no FastAPI wiring):
   - OIDC success with mocked JWKS
@@ -206,4 +219,3 @@ Unit tests must not require network access:
 ### Exit criteria (Stage 4 completion gate)
 - Full suite passes: `.venv/bin/python -m pytest`
 - `enforceai/session_state/latest.md` updated with Stage 4 completion and pointer to Stage 5
-
