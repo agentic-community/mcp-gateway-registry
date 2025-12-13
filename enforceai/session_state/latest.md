@@ -4,6 +4,9 @@
 - Repo initialized
 - Base architecture files created
 - Persistence backend for phase 1 selected
+- Stage 0.1: created `auth_server/enforceai/` package skeleton with core contracts + unit tests
+- Stage 0.2: added env-driven EnforceAI settings parsing + validation with unit test coverage
+- Stage 0.3: added reusable pytest fixtures (RSA keys, temp SQLite, env helpers) with unit test coverage
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -33,14 +36,19 @@
 
 ## Current Task
 - Execute Stage 0 foundation plan: `enforceai/plans/stage-0-foundation-phased-plan.md`
-- Use `enforceai/instructions/ENFORCEAI_CONTEXT.md` as the primary navigation document for agent runs
-- Begin implementing the roadmap
-- Start OIDC validator design
-- Draft database schema for agents
+- Stage 1: begin runtime integration (IdentityResolver scaffold per plan)
 
 ## Next Steps
-1. IdentityResolver scaffold
-2. Agent registry models
-3. Gateway token signing system
+1. Stage 1.1: IdentityResolver scaffold (no enforcement yet)
+2. Stage 1.2: agent registry interface + models
+3. Stage 1.3: gateway token verification + effective scopes (token ∩ agent)
+
+## Tests Executed
+- `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
+- `uv run pytest -q -o addopts='' tests/unit/enforceai` (8 passed)
+- `uv run python -m py_compile auth_server/enforceai/config.py tests/unit/enforceai/test_config_*.py` (pass)
+- `uv run pytest -q -o addopts='' tests/unit/enforceai` (15 passed)
+- `uv run python -m py_compile tests/fixtures/enforceai_fixtures.py tests/unit/enforceai/test_test_fixtures.py tests/conftest.py` (pass)
+- `uv run pytest -q -o addopts='' tests/unit/enforceai` (18 passed)
 
 ## Outstanding Questions
