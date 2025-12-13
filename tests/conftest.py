@@ -1,6 +1,9 @@
 """
 Pytest configuration and shared fixtures.
 """
+
+pytest_plugins = ("tests.fixtures.enforceai_fixtures",)
+
 import asyncio
 import tempfile
 import shutil
