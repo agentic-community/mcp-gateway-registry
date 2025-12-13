@@ -168,15 +168,15 @@ async def list_server_versions(
     # Use the actual path from server_info (has correct trailing slash)
     path = server_info.get("path", lookup_path)
 
-    # Check user permissions - use accessible_servers (MCP scopes) not accessible_services (UI scopes)
+    # Check user permissions - `accessible_servers` contains technical names (e.g. "mcpgw")
     accessible_servers = user_context.get("accessible_servers", [])
-    server_name = server_info["server_name"]
+    technical_name = path.strip("/")
 
     if not user_context["is_admin"]:
         # Check if user can access this server
-        if server_name not in accessible_servers:
+        if technical_name not in accessible_servers:
             logger.warning(
-                f"User '{user_context['username']}' attempted to access unauthorized server: {server_name}"
+                f"User '{user_context['username']}' attempted to access unauthorized server: {technical_name}"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Server not found"
@@ -264,14 +264,14 @@ async def get_server_version(
     # Use the actual path from server_info (has correct trailing slash)
     path = server_info.get("path", lookup_path)
 
-    # Check user permissions - use accessible_servers (MCP scopes) not accessible_services (UI scopes)
+    # Check user permissions - `accessible_servers` contains technical names (e.g. "mcpgw")
     accessible_servers = user_context.get("accessible_servers", [])
-    server_name = server_info["server_name"]
+    technical_name = path.strip("/")
 
     if not user_context["is_admin"]:
-        if server_name not in accessible_servers:
+        if technical_name not in accessible_servers:
             logger.warning(
-                f"User '{user_context['username']}' attempted to access unauthorized server: {server_name}"
+                f"User '{user_context['username']}' attempted to access unauthorized server: {technical_name}"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Server not found"
