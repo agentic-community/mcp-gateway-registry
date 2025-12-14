@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -11,9 +10,14 @@ from pydantic import (
     field_validator,
 )
 
+from .._validation import (
+    _normalize_non_empty_str_list,
+    _validate_user_id,
+    _validate_uuid4,
+)
+
 DEFAULT_CLOCK_SKEW_SECONDS: int = 60
 DEFAULT_MAX_TOKEN_LIFETIME_SECONDS: int = 365 * 24 * 60 * 60
-USER_ID_SEPARATOR: str = "|"
 
 
 def _ensure_aware_utc(
@@ -42,32 +46,6 @@ def jwt_timestamp_to_datetime(
     ).replace(microsecond=0)
 
 
-def _validate_user_id(
-    user_id: str,
-) -> str:
-    parts = user_id.split(USER_ID_SEPARATOR)
-    if len(parts) != 2:
-        raise ValueError("sub must be a canonical user_id in '<iss>|<sub>' format")
-    issuer, subject = parts
-    if not issuer or not subject:
-        raise ValueError("sub must be a canonical user_id in '<iss>|<sub>' format")
-    return user_id
-
-
-def _validate_agent_id(
-    agent_id: str,
-) -> str:
-    try:
-        parsed = uuid.UUID(agent_id)
-    except ValueError as exc:
-        raise ValueError("agent_id must be a UUIDv4 string") from exc
-
-    if parsed.version != 4:
-        raise ValueError("agent_id must be a UUIDv4 string")
-
-    return agent_id
-
-
 class GatewayTokenClaims(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -93,7 +71,11 @@ class GatewayTokenClaims(BaseModel):
         cls,
         value: str,
     ) -> str:
-        return _validate_user_id(value)
+        return _validate_user_id(
+            value,
+            label="sub",
+            prefix="sub must be a canonical user_id",
+        )
 
     @field_validator("agent_id")
     @classmethod
@@ -101,7 +83,7 @@ class GatewayTokenClaims(BaseModel):
         cls,
         value: str,
     ) -> str:
-        return _validate_agent_id(value)
+        return _validate_uuid4(value, label="agent_id")
 
     @field_validator("scopes")
     @classmethod
@@ -109,13 +91,7 @@ class GatewayTokenClaims(BaseModel):
         cls,
         value: list[str],
     ) -> list[str]:
-        normalized: list[str] = []
-        for item in value:
-            stripped = item.strip()
-            if not stripped:
-                raise ValueError("scopes must not contain empty strings")
-            normalized.append(stripped)
-        return normalized
+        return _normalize_non_empty_str_list(value, label="scopes")
 
     @property
     def issued_at(self) -> datetime:
@@ -184,4 +160,3 @@ def validate_optional_gateway_token_claims(
         clock_skew_seconds=clock_skew_seconds,
         max_lifetime_seconds=max_lifetime_seconds,
     )
-

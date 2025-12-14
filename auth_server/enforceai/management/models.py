@@ -10,6 +10,9 @@ from pydantic import (
     field_validator,
 )
 
+from .._validation import (
+    _normalize_optional_non_empty_str_list,
+)
 
 class ApiKeySummary(BaseModel):
     model_config = ConfigDict(
@@ -34,14 +37,4 @@ class ApiKeySummary(BaseModel):
         cls,
         value: Optional[list[str]],
     ) -> Optional[list[str]]:
-        if value is None:
-            return None
-
-        normalized: list[str] = []
-        for item in value:
-            stripped = item.strip()
-            if not stripped:
-                raise ValueError("scopes must not contain empty strings")
-            normalized.append(stripped)
-        return normalized
-
+        return _normalize_optional_non_empty_str_list(value, label="scopes")
