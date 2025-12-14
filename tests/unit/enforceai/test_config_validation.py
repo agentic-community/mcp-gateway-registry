@@ -3,6 +3,7 @@ Unit tests for EnforceAI configuration validation rules.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -46,7 +47,7 @@ class TestEnforceAIConfigValidation:
             "kid-1",
         )
 
-        with pytest.raises(ValidationError, match="Gateway token key configuration incomplete"):
+        with pytest.raises(ValidationError, match="Gateway token configuration incomplete"):
             EnforceAISettings(_env_file=None)
 
     def test_missing_active_kid_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
@@ -61,7 +62,7 @@ class TestEnforceAIConfigValidation:
             "/tmp/public",
         )
 
-        with pytest.raises(ValidationError, match="GATEWAY_ACTIVE_KID"):
+        with pytest.raises(ValidationError, match="Gateway token configuration incomplete"):
             EnforceAISettings(_env_file=None)
 
     def test_negative_retention_values_are_rejected(self, monkeypatch: pytest.MonkeyPatch):
@@ -77,4 +78,54 @@ class TestEnforceAIConfigValidation:
         )
 
         with pytest.raises(ValidationError):
+            EnforceAISettings(_env_file=None)
+
+    def test_api_key_pepper_missing_file_is_rejected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _set_base_env(monkeypatch)
+
+        monkeypatch.setenv(
+            "ENFORCEAI_API_KEY_PEPPER_PATH",
+            "/tmp/pepper-does-not-exist",
+        )
+
+        with pytest.raises(ValidationError, match="API key pepper file does not exist"):
+            EnforceAISettings(_env_file=None)
+
+    def test_api_key_pepper_empty_file_is_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _set_base_env(monkeypatch)
+
+        pepper_path = tmp_path / "pepper"
+        pepper_path.write_text("")
+
+        monkeypatch.setenv(
+            "ENFORCEAI_API_KEY_PEPPER_PATH",
+            str(pepper_path),
+        )
+
+        with pytest.raises(ValidationError, match="API key pepper file is empty"):
+            EnforceAISettings(_env_file=None)
+
+    def test_api_key_mode_requires_pepper_path(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _set_base_env(monkeypatch)
+
+        monkeypatch.setenv(
+            "AUTH_PROVIDER",
+            "api-key",
+        )
+        monkeypatch.delenv(
+            "ENFORCEAI_API_KEY_PEPPER_PATH",
+            raising=False,
+        )
+
+        with pytest.raises(ValidationError, match="ENFORCEAI_API_KEY_PEPPER_PATH is required"):
             EnforceAISettings(_env_file=None)

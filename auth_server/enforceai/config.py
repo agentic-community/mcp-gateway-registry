@@ -4,7 +4,11 @@ import json
 from json import JSONDecodeError
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Optional
+from typing import (
+    Any,
+    Literal,
+    Optional,
+)
 
 from pydantic import (
     AliasChoices,
@@ -31,6 +35,13 @@ DEFAULT_OIDC_ROLE_CLAIMS: list[str] = [
 ]
 DEFAULT_JWKS_CACHE_TTL_SECONDS: int = 300
 DEFAULT_OIDC_CLOCK_SKEW_SECONDS: int = 60
+
+AuthProviderMode = Literal[
+    "oidc",
+    "api-key",
+    "gateway-token",
+    "mixed",
+]
 
 
 def _parse_json_mapping(
@@ -205,8 +216,15 @@ class EnforceAISettings(BaseSettings):
         enable_decoding=False,
     )
 
+    auth_provider: AuthProviderMode = Field(
+        default="oidc",
+        validation_alias=AliasChoices(
+            "ENFORCEAI_AUTH_PROVIDER",
+            "AUTH_PROVIDER",
+        ),
+    )
     oidc_issuers: dict[str, OIDCIssuerConfig] = Field(
-        ...,
+        default_factory=dict,
         validation_alias="OIDC_ISSUERS",
     )
     db_path: Path = Field(
@@ -236,6 +254,22 @@ class EnforceAISettings(BaseSettings):
         ),
     )
 
+    gateway_issuer: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "ENFORCEAI_GATEWAY_ISSUER",
+            "GATEWAY_ISSUER",
+        ),
+    )
+
+    api_key_pepper_path: Optional[Path] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "ENFORCEAI_API_KEY_PEPPER_PATH",
+            "API_KEY_PEPPER_PATH",
+        ),
+    )
+
     audit_retention_days: int = Field(
         default=30,
         ge=0,
@@ -247,12 +281,27 @@ class EnforceAISettings(BaseSettings):
         validation_alias="ENFORCEAI_AUDIT_MAX_DB_BYTES",
     )
 
+    @field_validator("auth_provider", mode="before")
+    @classmethod
+    def _normalize_auth_provider(
+        cls,
+        value: Any,
+    ) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"keycloak", "cognito"}:
+                return "oidc"
+            return normalized
+        return value
+
     @field_validator("oidc_issuers", mode="before")
     @classmethod
     def _parse_oidc_issuers(
         cls,
         value: Any,
     ) -> Any:
+        if value is None:
+            return {}
         if isinstance(value, str):
             return _parse_json_mapping(
                 "OIDC_ISSUERS",
@@ -260,10 +309,26 @@ class EnforceAISettings(BaseSettings):
             )
         return value
 
+    @field_validator("gateway_issuer")
+    @classmethod
+    def _normalize_gateway_issuer(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Gateway issuer must be a non-empty string")
+        return stripped
+
     @model_validator(mode="after")
     def _validate_settings(self) -> "EnforceAISettings":
-        if not self.oidc_issuers:
-            raise ValueError("OIDC_ISSUERS must contain at least one issuer")
+        if self.auth_provider in {"oidc", "mixed"} and not self.oidc_issuers:
+            raise ValueError(
+                "OIDC_ISSUERS must contain at least one issuer "
+                "when AUTH_PROVIDER is oidc or mixed"
+            )
 
         for issuer in self.oidc_issuers.keys():
             stripped = issuer.strip()
@@ -272,11 +337,12 @@ class EnforceAISettings(BaseSettings):
             if stripped != issuer:
                 raise ValueError("OIDC_ISSUERS keys must not contain surrounding whitespace")
 
-        if (
+        gateway_key_config_present = (
             self.gateway_private_key_path is not None
             or self.gateway_public_keys_dir is not None
             or self.gateway_active_kid is not None
-        ):
+        )
+        if self.auth_provider in {"gateway-token", "mixed"} or gateway_key_config_present:
             missing: list[str] = []
             if self.gateway_private_key_path is None:
                 missing.append("ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH")
@@ -284,12 +350,35 @@ class EnforceAISettings(BaseSettings):
                 missing.append("ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR")
             if self.gateway_active_kid is None:
                 missing.append("GATEWAY_ACTIVE_KID")
+            if self.gateway_issuer is None:
+                missing.append("ENFORCEAI_GATEWAY_ISSUER")
 
             if missing:
                 missing_display = ", ".join(missing)
                 raise ValueError(
-                    "Gateway token key configuration incomplete; "
+                    "Gateway token configuration incomplete; "
                     f"missing {missing_display}"
                 )
+
+        if self.gateway_issuer is not None:
+            if not self.gateway_issuer:
+                raise ValueError("Gateway issuer must be a non-empty string")
+
+        if self.auth_provider in {"api-key", "mixed"} and self.api_key_pepper_path is None:
+            raise ValueError(
+                "ENFORCEAI_API_KEY_PEPPER_PATH is required when AUTH_PROVIDER is api-key or mixed"
+            )
+
+        if self.api_key_pepper_path is not None:
+            if not self.api_key_pepper_path.exists():
+                raise ValueError("API key pepper file does not exist")
+            if not self.api_key_pepper_path.is_file():
+                raise ValueError("API key pepper path must be a file")
+            try:
+                pepper_bytes = self.api_key_pepper_path.read_bytes()
+            except OSError as exc:
+                raise ValueError("API key pepper file is not readable") from exc
+            if not pepper_bytes.strip():
+                raise ValueError("API key pepper file is empty")
 
         return self

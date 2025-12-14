@@ -100,5 +100,17 @@ class TestEnforceAIConfigParsing:
             EnforceAISettings(_env_file=None)
 
         message = str(exc.value)
-        assert "OIDC_ISSUERS" in message
         assert "ENFORCEAI_DB_PATH" in message
+
+    def test_missing_oidc_issuers_when_oidc_mode_is_rejected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("OIDC_ISSUERS", raising=False)
+        monkeypatch.setenv(
+            "ENFORCEAI_DB_PATH",
+            "/tmp/enforceai.db",
+        )
+
+        with pytest.raises(ValidationError, match="OIDC_ISSUERS"):
+            EnforceAISettings(_env_file=None)

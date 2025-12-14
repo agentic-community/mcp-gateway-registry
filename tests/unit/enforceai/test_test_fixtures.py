@@ -62,10 +62,10 @@ class TestEnforceAITestFixtures:
                 "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(key_files.private_key_path),
                 "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(key_files.public_keys_dir),
                 "GATEWAY_ACTIVE_KID": key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
             }
         )
 
         settings = EnforceAISettings(_env_file=None)
         assert settings.db_path == enforceai_sqlite_db_path
         assert settings.gateway_active_kid == key_files.active_kid
-
