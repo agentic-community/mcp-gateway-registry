@@ -7,10 +7,10 @@ from typing import Optional
 
 import sqlite3
 
-from auth_server.enforceai.db.connection import (
+from ...db.connection import (
     sqlite_connection,
 )
-from auth_server.enforceai.models.api_key import (
+from ...models.api_key import (
     ApiKeyRecord,
 )
 

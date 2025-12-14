@@ -5,17 +5,17 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from auth_server.enforceai.errors import (
+from ..errors import (
     DependencyUnavailableError,
     ForbiddenError,
 )
-from auth_server.enforceai.identity import (
+from ..identity import (
     IdentityContext,
 )
-from auth_server.enforceai.oidc.verify import (
+from ..oidc.verify import (
     OIDCVerifier,
 )
-from auth_server.enforceai.stores.interfaces import (
+from ..stores.interfaces import (
     AgentStore,
 )
 
@@ -75,17 +75,21 @@ class OidcProvider:
         if agent.revoked_at is not None:
             raise ForbiddenError("Agent revoked")
 
+        metadata = {
+            "issuer": validated.issuer,
+            "audiences": validated.audiences,
+            "oidc_scopes": validated.scopes,
+            "oidc_roles": validated.roles,
+            "claims": validated.claims,
+        }
+        if agent.allowed_tools is not None:
+            metadata["agent_allowed_tools"] = agent.allowed_tools
+
         return IdentityContext(
             user_id=validated.user_id,
             agent_id=agent.agent_id,
             provider="oidc",
             scopes=list(agent.scopes),
             user_roles=validated.roles,
-            metadata={
-                "issuer": validated.issuer,
-                "audiences": validated.audiences,
-                "oidc_scopes": validated.scopes,
-                "oidc_roles": validated.roles,
-                "claims": validated.claims,
-            },
+            metadata=metadata,
         )

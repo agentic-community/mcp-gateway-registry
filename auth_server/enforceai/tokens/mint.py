@@ -6,10 +6,10 @@ from typing import Optional
 
 import jwt
 
-from auth_server.enforceai.crypto.keyring import (
+from ..crypto.keyring import (
     GatewayKeyring,
 )
-from auth_server.enforceai.tokens.claims import (
+from .claims import (
     DEFAULT_MAX_TOKEN_LIFETIME_SECONDS,
     GatewayTokenClaims,
     datetime_to_jwt_timestamp,
@@ -106,4 +106,3 @@ def mint_gateway_token(
         raise TypeError("JWT encode returned non-string token")
 
     return token
-

@@ -4,26 +4,26 @@ from typing import Mapping, Optional
 
 import jwt
 
-from auth_server.enforceai.auth.credentials import (
+from .credentials import (
     CredentialInput,
     extract_credential_input,
 )
-from auth_server.enforceai.config import (
+from ..config import (
     AuthProviderMode,
 )
-from auth_server.enforceai.errors import (
+from ..errors import (
     UnauthorizedError,
 )
-from auth_server.enforceai.identity import (
+from ..identity import (
     IdentityContext,
 )
-from auth_server.enforceai.providers.api_key import (
+from ..providers.api_key import (
     ApiKeyProvider,
 )
-from auth_server.enforceai.providers.gateway_token import (
+from ..providers.gateway_token import (
     GatewayTokenProvider,
 )
-from auth_server.enforceai.providers.oidc import (
+from ..providers.oidc import (
     OidcProvider,
 )
 

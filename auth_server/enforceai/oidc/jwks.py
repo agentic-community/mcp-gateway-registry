@@ -7,10 +7,10 @@ from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
-from auth_server.enforceai.config import (
+from ..config import (
     OIDCIssuerConfig,
 )
-from auth_server.enforceai.errors import (
+from ..errors import (
     DependencyUnavailableError,
 )
 

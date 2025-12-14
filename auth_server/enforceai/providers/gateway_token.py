@@ -5,21 +5,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from auth_server.enforceai.crypto.keyring import (
+from ..crypto.keyring import (
     load_gateway_keyring_cached,
 )
-from auth_server.enforceai.errors import (
+from ..errors import (
     DependencyUnavailableError,
     ForbiddenError,
 )
-from auth_server.enforceai.identity import (
+from ..identity import (
     IdentityContext,
 )
-from auth_server.enforceai.stores.interfaces import (
+from ..stores.interfaces import (
     AgentStore,
     RevocationStore,
 )
-from auth_server.enforceai.tokens.verify import (
+from ..tokens.verify import (
     verify_gateway_token,
 )
 
@@ -129,14 +129,18 @@ class GatewayTokenProvider:
             token_scopes=claims.scopes,
         )
 
+        metadata = {
+            "jti": claims.jti,
+            "issuer": claims.iss,
+        }
+        if agent.allowed_tools is not None:
+            metadata["agent_allowed_tools"] = agent.allowed_tools
+
         return IdentityContext(
             user_id=claims.sub,
             agent_id=claims.agent_id,
             provider="gateway-token",
             scopes=scopes,
             user_roles=None,
-            metadata={
-                "jti": claims.jti,
-                "issuer": claims.iss,
-            },
+            metadata=metadata,
         )

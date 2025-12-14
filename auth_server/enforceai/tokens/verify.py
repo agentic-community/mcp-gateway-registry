@@ -5,14 +5,14 @@ from typing import Any, Optional
 
 import jwt
 
-from auth_server.enforceai.crypto.keyring import (
+from ..crypto.keyring import (
     GatewayKeyring,
 )
-from auth_server.enforceai.errors import (
+from ..errors import (
     DependencyUnavailableError,
     UnauthorizedError,
 )
-from auth_server.enforceai.tokens.claims import (
+from .claims import (
     DEFAULT_CLOCK_SKEW_SECONDS,
     DEFAULT_MAX_TOKEN_LIFETIME_SECONDS,
     GatewayTokenClaims,

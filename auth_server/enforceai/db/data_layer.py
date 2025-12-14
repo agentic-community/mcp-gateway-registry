@@ -3,23 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from auth_server.enforceai.db.connection import (
+from .connection import (
     sqlite_connection,
 )
-from auth_server.enforceai.db.migrations import (
+from .migrations import (
     DEFAULT_MIGRATIONS_SQL_DIR,
     upgrade_to_latest,
 )
-from auth_server.enforceai.stores.sqlite.agent_store import (
+from ..stores.sqlite.agent_store import (
     SqliteAgentStore,
 )
-from auth_server.enforceai.stores.sqlite.api_key_store import (
+from ..stores.sqlite.api_key_store import (
     SqliteApiKeyStore,
 )
-from auth_server.enforceai.stores.sqlite.audit_store import (
+from ..stores.sqlite.audit_store import (
     SqliteAuditStore,
 )
-from auth_server.enforceai.stores.sqlite.revocation_store import (
+from ..stores.sqlite.revocation_store import (
     SqliteRevocationStore,
 )
 
@@ -64,4 +64,3 @@ class EnforceAIDataLayer:
             revocation_store=SqliteRevocationStore(db_path=self._db_path),
             audit_store=SqliteAuditStore(db_path=self._db_path),
         )
-

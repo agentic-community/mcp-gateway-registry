@@ -14,23 +14,23 @@ from jwt import (
     MissingRequiredClaimError,
 )
 
-from auth_server.enforceai.config import (
+from ..config import (
     OIDCIssuerConfig,
 )
-from auth_server.enforceai.errors import (
+from ..errors import (
     DependencyUnavailableError,
     UnauthorizedError,
 )
-from auth_server.enforceai.oidc.claims import (
+from .claims import (
     extract_roles_for_audit,
     extract_scopes,
     is_audience_allowed,
     normalize_token_audiences,
 )
-from auth_server.enforceai.oidc.jwks import (
+from .jwks import (
     JWKSCache,
 )
-from auth_server.enforceai.oidc.models import (
+from .models import (
     OIDCValidatedToken,
 )
 

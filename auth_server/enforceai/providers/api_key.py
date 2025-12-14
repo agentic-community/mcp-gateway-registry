@@ -7,18 +7,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from auth_server.enforceai.errors import (
+from ..errors import (
     DependencyUnavailableError,
     ForbiddenError,
     UnauthorizedError,
 )
-from auth_server.enforceai.identity import (
+from ..identity import (
     IdentityContext,
 )
-from auth_server.enforceai.secrets.pepper import (
+from ..secrets.pepper import (
     load_api_key_pepper,
 )
-from auth_server.enforceai.stores.interfaces import (
+from ..stores.interfaces import (
     AgentStore,
     ApiKeyStore,
 )
@@ -154,13 +154,17 @@ class ApiKeyProvider:
             api_key_scopes=record.scopes,
         )
 
+        metadata = {
+            "api_key_id": record.key_id,
+        }
+        if agent.allowed_tools is not None:
+            metadata["agent_allowed_tools"] = agent.allowed_tools
+
         return IdentityContext(
             user_id=record.user_id,
             agent_id=record.agent_id,
             provider="api-key",
             scopes=scopes,
             user_roles=None,
-            metadata={
-                "api_key_id": record.key_id,
-            },
+            metadata=metadata,
         )

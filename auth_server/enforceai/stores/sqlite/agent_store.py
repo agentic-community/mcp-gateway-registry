@@ -7,10 +7,10 @@ from typing import Any, Optional
 
 import sqlite3
 
-from auth_server.enforceai.db.connection import (
+from ...db.connection import (
     sqlite_connection,
 )
-from auth_server.enforceai.models.agent import (
+from ...models.agent import (
     AgentRecord,
 )
 

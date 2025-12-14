@@ -8,7 +8,7 @@ from pydantic import (
     Field,
 )
 
-from auth_server.enforceai.errors import UnauthorizedError
+from ..errors import UnauthorizedError
 
 CredentialKind = Literal[
     "bearer",

@@ -3,16 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Protocol
 
-from auth_server.enforceai.models.agent import (
+from ..models.agent import (
     AgentRecord,
 )
-from auth_server.enforceai.models.api_key import (
+from ..models.api_key import (
     ApiKeyRecord,
 )
-from auth_server.enforceai.models.revocation import (
+from ..models.revocation import (
     TokenRevocationRecord,
 )
-from auth_server.enforceai.models.audit import (
+from ..models.audit import (
     AuditEventRecord,
 )
 

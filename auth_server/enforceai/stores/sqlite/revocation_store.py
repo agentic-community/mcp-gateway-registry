@@ -6,10 +6,10 @@ from typing import Optional
 
 import sqlite3
 
-from auth_server.enforceai.db.connection import (
+from ...db.connection import (
     sqlite_connection,
 )
-from auth_server.enforceai.models.revocation import (
+from ...models.revocation import (
     TokenRevocationRecord,
 )
 
