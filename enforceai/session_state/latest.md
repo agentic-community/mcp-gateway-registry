@@ -33,6 +33,12 @@
 - Stage 4.3: implemented gateway token provider (verify, revocation checks, agent binding, effective scopes) with unit tests
 - Stage 4.4: implemented OIDC provider (OIDC verify + X-Agent-Id binding + agent scopes) with unit tests
 - Stage 4.5: implemented IdentityResolver orchestration (mode selection + mixed routing) with unit tests
+- Stage 5.1: implemented FGAC scope catalog loader + caching (`auth_server/scopes.yml`) with unit tests
+- Stage 5.2: implemented FGAC evaluator (scopes + allowed_tools) with unit tests
+- Stage 5.3: implemented FastAPI dependency wiring (IdentityContext + ScopeCatalog once per request) with unit tests
+- Stage 5.4: added tool visibility filtering for MCP `tools/list` via nginx `body_filter_by_lua` using per-request `X-Allowed-Tools` allowlist from auth_server
+- Stage 5.5: enforced MCP `tools/call` authorization in auth_server `/validate` (deny on forbidden, 503 on dependency issues), added best-effort audit emission (stdout + SQLite AuditStore), and refactored EnforceAI imports to support both repo and Docker auth-server module layouts
+- Stage 5.6: added multi-auth integration coverage (OIDC, gateway-token, api-key, mixed bearer routing) for Stage 5 enforcement behavior and fixed auth_server `/validate` to honor `ENFORCEAI_SCOPES_CATALOG_PATH` / `SCOPES_CATALOG_PATH`
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -61,12 +67,12 @@
 - OIDC claim defaults: scopes from `scp`→`scope`→`permissions`; roles from `roles`→`groups`→`permissions` (per-issuer overrides allowed); roles/groups for audit only.
 
 ## Current Task
-- Stage 5 FGAC enforcement: `enforceai/plans/stage-5-fgac-phased-plan.md` (Phase 5.1 next)
+- Stage 6: management APIs + CLI (self-service)
 
 ## Next Steps
-1. Stage 4: wire IdentityResolver + agent binding (`X-Agent-Id`) rules
-2. Stage 5: FGAC enforcement + tool visibility filtering
-3. Stage 6: management APIs + CLI (self-service)
+1. Stage 6: management APIs + CLI (self-service)
+2. Stage 7: audit retention + cleanup jobs
+3. Stage 8+: advanced policy + UI
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
@@ -103,6 +109,9 @@
 - `.venv/bin/python -m py_compile auth_server/enforceai/tokens/mint.py tests/unit/enforceai/test_gateway_token_mint.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (60 passed)
 - `.venv/bin/python -m pytest` (322 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/server.py tests/integration/test_enforceai_stage5_roundtrip.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_stage5_roundtrip.py` (4 passed)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_tools_call_enforcement.py` (5 passed)
 - `.venv/bin/python -m py_compile auth_server/enforceai/tokens/verify.py tests/unit/enforceai/test_gateway_token_verify.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (67 passed)
 - `.venv/bin/python -m pytest` (329 passed; coverage gate met)
@@ -137,5 +146,13 @@
 - `.venv/bin/python -m py_compile auth_server/enforceai/config.py auth_server/enforceai/auth/resolver.py auth_server/enforceai/auth/__init__.py tests/unit/enforceai/test_config_parsing.py tests/unit/enforceai/test_config_validation.py tests/unit/enforceai/test_identity_resolver.py tests/unit/enforceai/test_imports.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_identity_resolver.py tests/unit/enforceai/test_config_parsing.py tests/unit/enforceai/test_config_validation.py tests/unit/enforceai/test_imports.py` (pass)
 - `.venv/bin/python -m pytest` (416 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/fgac/catalog.py auth_server/enforceai/fgac/evaluate.py auth_server/enforceai/auth/dependency.py tests/unit/enforceai/test_scope_catalog.py tests/unit/enforceai/test_fgac_evaluate.py tests/unit/enforceai/test_enforceai_dependency_wiring.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai -k \"scope_catalog\"` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai -k \"fgac_evaluate\"` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai -k \"dependency_wiring\"` (pass)
+- `.venv/bin/python -m pytest` (428 passed; coverage gate met)
+- `bash -n docker/registry-entrypoint.sh` (pass)
+- `.venv/bin/python -m py_compile auth_server/server.py registry/core/nginx_service.py auth_server/enforceai/fgac/evaluate.py` (pass)
+- `.venv/bin/python -m pytest` (429 passed; coverage gate met)
 
 ## Outstanding Questions

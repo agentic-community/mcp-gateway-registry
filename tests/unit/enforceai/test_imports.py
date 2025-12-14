@@ -13,6 +13,7 @@ class TestEnforceAIImports:
         import auth_server.enforceai  # noqa: F401
         import auth_server.enforceai.auth  # noqa: F401
         import auth_server.enforceai.auth.credentials  # noqa: F401
+        import auth_server.enforceai.auth.dependency  # noqa: F401
         import auth_server.enforceai.auth.resolver  # noqa: F401
         import auth_server.enforceai.config  # noqa: F401
         import auth_server.enforceai.crypto  # noqa: F401
@@ -44,6 +45,9 @@ class TestEnforceAIImports:
         import auth_server.enforceai.oidc.jwks  # noqa: F401
         import auth_server.enforceai.oidc.models  # noqa: F401
         import auth_server.enforceai.oidc.verify  # noqa: F401
+        import auth_server.enforceai.fgac  # noqa: F401
+        import auth_server.enforceai.fgac.catalog  # noqa: F401
+        import auth_server.enforceai.fgac.evaluate  # noqa: F401
         import auth_server.enforceai.stores  # noqa: F401
         import auth_server.enforceai.stores.interfaces  # noqa: F401
         import auth_server.enforceai.stores.sqlite  # noqa: F401

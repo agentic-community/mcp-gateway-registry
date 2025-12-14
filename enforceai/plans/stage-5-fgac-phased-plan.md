@@ -4,6 +4,27 @@
 ## Goal
 Wire the Stage 4 identity layer into the gateway request path and enforce agent-scoped FGAC using the enterprise scope catalog (`auth_server/scopes.yml`), including correct tool visibility filtering (`tools/list`) and execution enforcement (`tools/call`).
 
+## Status
+- Phase 5.1 complete (scope catalog loader + caching)
+- Phase 5.2 complete (FGAC evaluator + decision model)
+- Phase 5.3 complete (request context wiring + caching)
+- Phase 5.4 complete (gateway `tools/list` filtering via Nginx Lua using `X-Allowed-Tools`)
+- Phase 5.5 complete (gateway `tools/call` enforcement in auth_server `/validate` + best-effort audit hook)
+- Phase 5.6 complete (multi-auth integration scenarios + integration tests)
+
+## Implementation Notes (as-built)
+- Enforcement point: `auth_server/server.py` `/validate` (behind Nginx `auth_request`).
+- `tools/list` filtering: Nginx `body_filter_by_lua` filters JSON-RPC responses using `X-Allowed-Tools` returned by `/validate`.
+- `tools/call` enforcement: `/validate` denies `403` when the `(server, tool)` pair is not authorized under FGAC; maps internal dependency failures to `503`.
+- Best-effort auditing: `/validate` emits allow/deny events to stdout and attempts to persist via EnforceAI SQLite `AuditStore`; audit failures do not flip allow/deny outcomes.
+
+## References (code + tests)
+- FGAC catalog + evaluator: `auth_server/enforceai/fgac/catalog.py`, `auth_server/enforceai/fgac/evaluate.py`
+- Request context wiring: `auth_server/enforceai/auth/dependency.py`
+- Gateway filtering wiring: `registry/core/nginx_service.py`, `docker/registry-entrypoint.sh` (Lua scripts written at container start)
+- Tool-call enforcement + audit: `auth_server/server.py`
+- Unit tests: `tests/unit/enforceai/test_scope_catalog.py`, `tests/unit/enforceai/test_fgac_evaluate.py`, `tests/unit/enforceai/test_enforceai_dependency_wiring.py`, `tests/unit/enforceai/test_tools_call_enforcement.py`
+
 ## Non-Goals (Stage 5)
 - No new management APIs/CLI for agents/keys/tokens (Stage 6)
 - No retention/cleanup jobs (Stage 7)
