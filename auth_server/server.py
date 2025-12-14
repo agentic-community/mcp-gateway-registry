@@ -129,6 +129,25 @@ def resolve_callable_tools_for_server(
         allowed_tools=allowed_tools,
     )
 
+
+def _load_enforceai_management_router():
+    for base in ("auth_server.enforceai", "enforceai"):
+        try:
+            importlib.import_module(base)
+        except ModuleNotFoundError:
+            continue
+
+        try:
+            module = importlib.import_module(f"{base}.api.management_routes")
+        except ModuleNotFoundError:
+            continue
+
+        router = getattr(module, "router", None)
+        if router is not None:
+            return router
+
+    return None
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,  # Set the log level to INFO
@@ -613,6 +632,13 @@ app = FastAPI(
 
 # Add metrics collection middleware
 add_auth_metrics_middleware(app)
+
+try:
+    enforceai_management_router = _load_enforceai_management_router()
+    if enforceai_management_router is not None:
+        app.include_router(enforceai_management_router)
+except Exception:  # noqa: BLE001 - best-effort; server should still start
+    logger.exception("Failed to mount EnforceAI management routes")
 
 class TokenValidationResponse(BaseModel):
     """Response model for token validation"""
