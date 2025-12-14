@@ -129,3 +129,7 @@ Recommended bootstrap approach:
 
 This avoids introducing a separate “admin” identity surface in Phase 1 while keeping all management strictly ownership-scoped.
 
+## Audit Retention (Stage 7)
+Audit events are emitted to stdout and persisted best-effort to SQLite. Retention cleanup is out-of-band via `cli/enforceai_audit_cleanup.py`.
+
+See `enforceai/instructions/ENFORCEAI_AUDIT_RETENTION.md`.

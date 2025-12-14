@@ -171,4 +171,19 @@
 - `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_management_routes.py` (pass)
 - `.venv/bin/python -m pytest` (pass)
 
+## Stage 7 Progress
+- Stage 7.1: extended AuditStore retention primitives and SQLite implementation with unit tests
+- Stage 7.2: added audit retention engine (`compute_cutoff`, time retention, size retention) with unit tests
+- Stage 7.3: added out-of-band cleanup command `cli/enforceai_audit_cleanup.py` with unit + integration tests
+- Stage 7.4: added regression tests for audit failure policy + request-path caching; added audit retention operator docs
+- `.venv/bin/python -m py_compile auth_server/enforceai/stores/interfaces.py auth_server/enforceai/stores/sqlite/audit_store.py tests/unit/enforceai/test_audit_store_sqlite.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_audit_store_sqlite.py` (pass)
+- `.venv/bin/python -m py_compile auth_server/enforceai/audit/retention.py tests/unit/enforceai/test_audit_retention.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_audit_retention.py` (pass)
+- `.venv/bin/python -m py_compile cli/enforceai_audit_cleanup.py tests/unit/cli/test_enforceai_audit_cleanup_args.py tests/integration/test_enforceai_audit_cleanup.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/cli/test_enforceai_audit_cleanup_args.py tests/integration/test_enforceai_audit_cleanup.py` (pass)
+
+- `.venv/bin/python -m py_compile tests/integration/test_enforceai_stage7_hardening.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_stage7_hardening.py` (pass)
+
 ## Outstanding Questions
