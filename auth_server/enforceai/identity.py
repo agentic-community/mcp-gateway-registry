@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from typing import Any, Literal, Optional
 
 from pydantic import (
@@ -10,39 +9,18 @@ from pydantic import (
     field_validator,
 )
 
-USER_ID_SEPARATOR: str = "|"
+from ._validation import (
+    USER_ID_SEPARATOR,
+    _normalize_non_empty_str_list,
+    _validate_user_id,
+    _validate_uuid4,
+)
 
 Provider = Literal[
     "oidc",
     "gateway-token",
     "api-key",
 ]
-
-
-def _validate_user_id(
-    user_id: str,
-) -> str:
-    parts = user_id.split(USER_ID_SEPARATOR)
-    if len(parts) != 2:
-        raise ValueError("user_id must be in '<iss>|<sub>' format")
-    issuer, subject = parts
-    if not issuer or not subject:
-        raise ValueError("user_id must be in '<iss>|<sub>' format")
-    return user_id
-
-
-def _validate_agent_id(
-    agent_id: str,
-) -> str:
-    try:
-        parsed = uuid.UUID(agent_id)
-    except ValueError as exc:
-        raise ValueError("agent_id must be a UUIDv4 string") from exc
-
-    if parsed.version != 4:
-        raise ValueError("agent_id must be a UUIDv4 string")
-
-    return agent_id
 
 
 def build_user_id(
@@ -95,7 +73,7 @@ class IdentityContext(BaseModel):
         cls,
         value: str,
     ) -> str:
-        return _validate_agent_id(value)
+        return _validate_uuid4(value, label="agent_id")
 
     @field_validator("scopes")
     @classmethod
@@ -103,11 +81,4 @@ class IdentityContext(BaseModel):
         cls,
         value: list[str],
     ) -> list[str]:
-        normalized: list[str] = []
-        for item in value:
-            stripped = item.strip()
-            if not stripped:
-                raise ValueError("scopes must not contain empty strings")
-            normalized.append(stripped)
-        return normalized
-
+        return _normalize_non_empty_str_list(value, label="scopes")

@@ -1,0 +1,3 @@
+API_KEY_PREFIX: str = "eak_"
+DEFAULT_API_KEY_SECRET_BYTES: int = 32
+
