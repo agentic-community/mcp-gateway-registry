@@ -28,6 +28,11 @@
 - Stage 3.4: implemented generic OIDC JWT verification (multi-issuer selection, JWKS key selection with refresh-on-missing-kid, signature/aud/exp validation, iat skew check) with unit tests
 - Stage 3.5: added OIDC hardening tests (malformed/missing claims, no token/JWKS leakage) and an integration-lite OIDC roundtrip test that validates verifier + cache behavior without network
 - Created Stage 4 phased plan: `enforceai/plans/stage-4-identity-resolver-phased-plan.md`
+- Stage 4.1: implemented credential extraction + multi-credential ambiguity rejection with unit tests
+- Stage 4.2: implemented API key provider (pepper loading, key verify, effective scopes) with unit tests
+- Stage 4.3: implemented gateway token provider (verify, revocation checks, agent binding, effective scopes) with unit tests
+- Stage 4.4: implemented OIDC provider (OIDC verify + X-Agent-Id binding + agent scopes) with unit tests
+- Stage 4.5: implemented IdentityResolver orchestration (mode selection + mixed routing) with unit tests
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -56,7 +61,7 @@
 - OIDC claim defaults: scopes from `scp`→`scope`→`permissions`; roles from `roles`→`groups`→`permissions` (per-issuer overrides allowed); roles/groups for audit only.
 
 ## Current Task
-- Stage 4 identity resolver: `enforceai/plans/stage-4-identity-resolver-phased-plan.md` (Phase 4.1 next)
+- Stage 5 FGAC enforcement: `enforceai/plans/stage-5-fgac-phased-plan.md` (Phase 5.1 next)
 
 ## Next Steps
 1. Stage 4: wire IdentityResolver + agent binding (`X-Agent-Id`) rules
@@ -117,5 +122,20 @@
 - `.venv/bin/python -m pytest` (370 passed; coverage gate met)
 - `.venv/bin/python -m py_compile tests/unit/enforceai/test_oidc_hardening.py tests/integration/test_enforceai_oidc_roundtrip.py` (pass)
 - `.venv/bin/python -m pytest` (376 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/auth/__init__.py auth_server/enforceai/auth/credentials.py tests/unit/enforceai/test_identity_credentials.py tests/unit/enforceai/test_imports.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_identity_credentials.py` (9 passed)
+- `.venv/bin/python -m pytest` (385 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/config.py auth_server/enforceai/secrets/__init__.py auth_server/enforceai/secrets/pepper.py auth_server/enforceai/providers/__init__.py auth_server/enforceai/providers/api_key.py tests/unit/enforceai/test_api_key_provider.py tests/unit/enforceai/test_config_validation.py tests/unit/enforceai/test_imports.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_api_key_provider.py tests/unit/enforceai/test_config_validation.py tests/unit/enforceai/test_imports.py` (15 passed)
+- `.venv/bin/python -m pytest` (396 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/config.py auth_server/enforceai/providers/gateway_token.py auth_server/enforceai/providers/__init__.py tests/unit/enforceai/test_gateway_token_provider.py tests/unit/enforceai/test_imports.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_gateway_token_provider.py tests/unit/enforceai/test_imports.py` (7 passed)
+- `.venv/bin/python -m pytest` (402 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/providers/oidc.py auth_server/enforceai/providers/__init__.py tests/unit/enforceai/test_oidc_provider.py tests/unit/enforceai/test_imports.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_oidc_provider.py tests/unit/enforceai/test_imports.py` (8 passed)
+- `.venv/bin/python -m pytest` (409 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/config.py auth_server/enforceai/auth/resolver.py auth_server/enforceai/auth/__init__.py tests/unit/enforceai/test_config_parsing.py tests/unit/enforceai/test_config_validation.py tests/unit/enforceai/test_identity_resolver.py tests/unit/enforceai/test_imports.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_identity_resolver.py tests/unit/enforceai/test_config_parsing.py tests/unit/enforceai/test_config_validation.py tests/unit/enforceai/test_imports.py` (pass)
+- `.venv/bin/python -m pytest` (416 passed; coverage gate met)
 
 ## Outstanding Questions
