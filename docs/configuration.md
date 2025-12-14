@@ -30,6 +30,29 @@ The MCP Gateway Registry supports multiple authentication providers. Choose one 
 
 Based on your selection, configure the corresponding provider-specific variables below.
 
+### EnforceAI (Optional)
+
+EnforceAI is enabled when `ENFORCEAI_DB_PATH` is set. In EnforceAI mode, ingress authentication supports:
+- OIDC JWTs (generic multi-issuer) via `OIDC_ISSUERS`
+- Gateway-issued tokens (RS256) via `ENFORCEAI_GATEWAY_*`
+- API keys via `ENFORCEAI_API_KEY_PEPPER_PATH`
+
+Core EnforceAI configuration variables:
+
+| Variable | Description | Example | Required |
+|----------|-------------|---------|----------|
+| `ENFORCEAI_DB_PATH` | SQLite DB path for EnforceAI state | `/var/lib/enforceai/enforceai.db` | ✅ (to enable EnforceAI) |
+| `ENFORCEAI_AUTH_PROVIDER` | EnforceAI auth mode (`oidc`, `gateway-token`, `api-key`, `mixed`) | `mixed` | ✅ |
+| `OIDC_ISSUERS` | JSON map keyed by `iss` with OIDC issuer config | `{"https://issuer": {"jwks_uri": "https://issuer/jwks.json", "audiences": ["mcp-registry"]}}` | If using `oidc`/`mixed` |
+| `ENFORCEAI_SCOPES_CATALOG_PATH` | Path to `scopes.yml` used for scope validation/catalog | `/etc/mcp/scopes.yml` | ✅ |
+| `ENFORCEAI_API_KEY_PEPPER_PATH` | File path to pepper bytes for API key hashing | `/etc/mcp/api_key_pepper` | If using `api-key`/`mixed` |
+| `ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH` | PEM private key for minting gateway tokens | `/etc/mcp/gateway_private.pem` | If minting/using gateway tokens |
+| `ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR` | Directory containing `<kid>.pem` public keys | `/etc/mcp/gateway_public_keys` | If using gateway tokens |
+| `ENFORCEAI_GATEWAY_ACTIVE_KID` | Active key id (matches a `<kid>.pem` filename) | `kid-1` | If minting gateway tokens |
+| `ENFORCEAI_GATEWAY_ISSUER` | Expected/minted gateway token issuer (`iss`) | `enforceai-gateway` | If using gateway tokens |
+
+For EnforceAI operational docs (management API + CLI), see `enforceai/instructions/ENFORCEAI_CONTEXT.md` and `enforceai/instructions/ENFORCEAI_MANAGEMENT.md`.
+
 ### Core Variables
 
 | Variable | Description | Example | Required |

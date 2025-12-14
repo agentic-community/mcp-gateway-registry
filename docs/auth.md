@@ -2,6 +2,20 @@
 
 The MCP Gateway Registry provides enterprise-ready authentication and authorization using industry-standard OAuth 2.0 flows with fine-grained access control.
 
+## Ingress Authentication Modes
+
+This repository supports two ingress authentication/authorization stacks:
+
+1. **Legacy Keycloak/Cognito mode** (configured via `AUTH_PROVIDER`): ingress JWT validation and FGAC based on IdP groups and `auth_server/scopes.yml`.
+2. **EnforceAI mode** (enabled when `ENFORCEAI_DB_PATH` is set): generic OIDC JWT validation (configured via `OIDC_ISSUERS`), gateway tokens, and API keys, with FGAC driven by agent-scoped `scopes` plus optional `allowed_tools`.
+
+When EnforceAI is enabled:
+- The Auth Server validates ingress credentials via EnforceAI’s Stage 4 resolver (see `auth_server/enforceai/`).
+- Bearer credentials can be sent via `Authorization: Bearer <token>` or `X-Authorization: Bearer <token>`.
+- OIDC-authenticated MCP access requires `X-Agent-Id: <uuidv4>` (enforced as `403` when missing/invalid/not-owned).
+
+For EnforceAI operational docs (management API + CLI), see `enforceai/instructions/ENFORCEAI_CONTEXT.md` and `enforceai/instructions/ENFORCEAI_MANAGEMENT.md`.
+
 ## Quick Navigation
 
 **I want to...**

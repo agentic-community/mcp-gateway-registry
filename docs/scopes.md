@@ -1,6 +1,10 @@
 # Fine-Grained Access Control System Documentation
 
-> **Note**: While this document discusses Fine-Grained Access Control (FGAC) in the context of Amazon Cognito, the concepts and implementation apply to any Identity Provider (IdP). The same scope-based authorization model can be used with other OAuth2/OIDC providers by adapting the group mapping and token validation mechanisms.
+> **Note**: This repository supports two FGAC implementations:
+> - **EnforceAI mode** (recommended for Phase 1 EnforceAI deployments): authorization is driven by agent-scoped `scopes` and optional `allowed_tools` stored in the EnforceAI DB (`ENFORCEAI_DB_PATH`) and validated against a scope catalog (`scopes.yml`).
+> - **Legacy mode** (Keycloak/Cognito): authorization is driven by IdP groups mapped via `group_mappings` in `auth_server/scopes.yml`.
+>
+> This document includes legacy Cognito-oriented examples, but the same `scopes.yml` catalog can be used by EnforceAI (without Cognito group mappings) to validate and evaluate scopes.
 
 This document provides comprehensive documentation for the fine-grained access control system in the MCP Gateway Registry, explaining how the scope-based authorization model works and how to configure it properly.
 
@@ -20,13 +24,16 @@ This document provides comprehensive documentation for the fine-grained access c
 
 The MCP Gateway Registry implements a sophisticated fine-grained access control system that provides granular permissions for accessing MCP servers, methods, and tools. The system is built around a scope-based authorization model that:
 
-- Maps Amazon Cognito user groups to MCP server scopes
+- Can map Identity Provider groups to scopes (legacy mode)
+- Can evaluate agent-assigned scopes and allowed tool allowlists (EnforceAI mode)
 - Controls access to specific MCP servers, methods, and individual tools
 - Supports both user identity mode (OAuth2 PKCE) and agent identity mode (Machine-to-Machine)
 - Uses hierarchical scope validation for precise permission control
 - Follows the principle of least privilege by default
 
-The access control system is defined in [`auth_server/scopes.yml`](../auth_server/scopes.yml) and enforced by the validation logic in [`auth_server/server.py`](../auth_server/server.py).
+The access control system is defined in [`auth_server/scopes.yml`](../auth_server/scopes.yml) and enforced by:
+- Legacy validation logic in [`auth_server/server.py`](../auth_server/server.py) (IdP group mappings)
+- EnforceAI evaluation logic under [`auth_server/enforceai/fgac/`](../auth_server/enforceai/fgac/) (agent scopes + optional `allowed_tools`)
 
 ## Scope System Architecture
 
