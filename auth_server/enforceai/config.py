@@ -270,6 +270,15 @@ class EnforceAISettings(BaseSettings):
         ),
     )
 
+    scopes_catalog_path: Optional[Path] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "ENFORCEAI_SCOPES_CATALOG_PATH",
+            "SCOPES_CATALOG_PATH",
+        ),
+        description="Path to scopes.yml catalog used for FGAC enforcement",
+    )
+
     audit_retention_days: int = Field(
         default=30,
         ge=0,
@@ -380,5 +389,17 @@ class EnforceAISettings(BaseSettings):
                 raise ValueError("API key pepper file is not readable") from exc
             if not pepper_bytes.strip():
                 raise ValueError("API key pepper file is empty")
+
+        if self.scopes_catalog_path is not None:
+            if not self.scopes_catalog_path.exists():
+                raise ValueError("Scopes catalog file does not exist")
+            if not self.scopes_catalog_path.is_file():
+                raise ValueError("Scopes catalog path must be a file")
+            try:
+                catalog_bytes = self.scopes_catalog_path.read_bytes()
+            except OSError as exc:
+                raise ValueError("Scopes catalog file is not readable") from exc
+            if not catalog_bytes.strip():
+                raise ValueError("Scopes catalog file is empty")
 
         return self

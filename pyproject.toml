@@ -77,6 +77,7 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--cov=registry",
+    "--cov=auth_server/enforceai",
     "--cov-report=term-missing",
     "--cov-report=html:htmlcov",
     "--cov-report=xml:coverage.xml",
@@ -105,7 +106,7 @@ markers = [
 
 # Coverage Configuration
 [tool.coverage.run]
-source = ["registry"]
+source = ["registry", "auth_server/enforceai"]
 branch = true
 parallel = true
 omit = [
@@ -122,6 +123,7 @@ omit = [
 source = [
     "registry/",
     "*/site-packages/registry/",
+    "auth_server/enforceai/",
 ]
 
 [tool.coverage.report]

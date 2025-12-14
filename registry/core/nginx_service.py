@@ -364,6 +364,7 @@ class NginxConfigService:
         auth_request_set $auth_method $upstream_http_x_auth_method;
         auth_request_set $auth_server_name $upstream_http_x_server_name;
         auth_request_set $auth_tool_name $upstream_http_x_tool_name;
+        auth_request_set $auth_allowed_tools $upstream_http_x_allowed_tools;
         
         # Proxy to MCP server
         proxy_pass {proxy_pass_url};
@@ -406,6 +407,8 @@ class NginxConfigService:
             transport_settings = """
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        # Filter tools/list responses based on allowlist from auth server
+        body_filter_by_lua_file /etc/nginx/lua/filter_tools_list.lua;
 
         # For SSE connections and WebSocket upgrades
         proxy_buffering off;
@@ -420,6 +423,8 @@ class NginxConfigService:
             transport_settings = """
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        # Filter tools/list responses based on allowlist from auth server
+        body_filter_by_lua_file /etc/nginx/lua/filter_tools_list.lua;
 
         # HTTP transport configuration
         proxy_buffering off;
@@ -431,6 +436,8 @@ class NginxConfigService:
             transport_settings = """
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        # Filter tools/list responses based on allowlist from auth server
+        body_filter_by_lua_file /etc/nginx/lua/filter_tools_list.lua;
         
         # Generic transport configuration
         proxy_buffering off;

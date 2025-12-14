@@ -15,7 +15,9 @@ import time
 import uuid
 import hashlib
 from jwt.api_jwk import PyJWK
-from datetime import datetime
+from datetime import datetime, timezone
+from dataclasses import dataclass
+import importlib
 from typing import Dict, Optional, List, Any
 from functools import lru_cache
 from botocore.exceptions import ClientError
@@ -29,12 +31,103 @@ import secrets
 import urllib.parse
 import httpx
 from string import Template
+import os as _os
+import json as _json
 
-# Import metrics middleware
-from metrics_middleware import add_auth_metrics_middleware
+# Import metrics middleware (support repo + Docker module layouts)
+try:
+    from .metrics_middleware import add_auth_metrics_middleware
+except ImportError:  # pragma: no cover
+    from metrics_middleware import add_auth_metrics_middleware
 
-# Import provider factory
-from providers.factory import get_auth_provider
+# Import provider factory (support repo + Docker module layouts)
+try:
+    from .providers.factory import get_auth_provider
+except ImportError:  # pragma: no cover
+    from providers.factory import get_auth_provider
+
+@dataclass(frozen=True)
+class _EnforceAIRuntime:
+    DependencyUnavailableError: type[Exception]
+    EnforceAIError: type[Exception]
+    evaluate_tool_call: object
+    resolve_callable_tools_for_server: object
+    load_scope_catalog: object
+    get_enforceai_stores: object
+    get_identity_resolver: object
+
+
+@lru_cache(maxsize=1)
+def _load_enforceai_runtime() -> _EnforceAIRuntime:
+    for base in ("auth_server.enforceai", "enforceai"):
+        try:
+            importlib.import_module(base)
+        except ModuleNotFoundError:
+            continue
+
+        errors_module = importlib.import_module(f"{base}.errors")
+        evaluate_module = importlib.import_module(f"{base}.fgac.evaluate")
+        catalog_module = importlib.import_module(f"{base}.fgac.catalog")
+        dependency_module = importlib.import_module(f"{base}.auth.dependency")
+
+        return _EnforceAIRuntime(
+            DependencyUnavailableError=errors_module.DependencyUnavailableError,
+            EnforceAIError=errors_module.EnforceAIError,
+            evaluate_tool_call=evaluate_module.evaluate_tool_call,
+            resolve_callable_tools_for_server=evaluate_module.resolve_callable_tools_for_server,
+            load_scope_catalog=catalog_module.load_scope_catalog,
+            get_enforceai_stores=dependency_module.get_enforceai_stores,
+            get_identity_resolver=dependency_module.get_identity_resolver,
+        )
+
+    raise RuntimeError("EnforceAI runtime could not be imported")
+
+
+def get_identity_resolver():
+    return _load_enforceai_runtime().get_identity_resolver()
+
+
+def get_enforceai_stores():
+    return _load_enforceai_runtime().get_enforceai_stores()
+
+
+def load_scope_catalog(
+    *,
+    path: Optional[Path] = None,
+):
+    return _load_enforceai_runtime().load_scope_catalog(path=path)
+
+
+def evaluate_tool_call(
+    *,
+    identity,
+    catalog,
+    server: str,
+    tool: str,
+    allowed_tools,
+):
+    return _load_enforceai_runtime().evaluate_tool_call(
+        identity=identity,
+        catalog=catalog,
+        server=server,
+        tool=tool,
+        allowed_tools=allowed_tools,
+    )
+
+
+def resolve_callable_tools_for_server(
+    *,
+    identity,
+    catalog,
+    server: str,
+    allowed_tools,
+):
+    return _load_enforceai_runtime().resolve_callable_tools_for_server(
+        identity=identity,
+        catalog=catalog,
+        server=server,
+        allowed_tools=allowed_tools,
+    )
 
 # Configure logging
 logging.basicConfig(
@@ -134,6 +227,65 @@ def mask_headers(headers: dict) -> dict:
         else:
             masked[key] = value
     return masked
+
+
+def _resolve_enforceai_scopes_catalog_path() -> Optional[Path]:
+    raw = _os.environ.get("ENFORCEAI_SCOPES_CATALOG_PATH") or _os.environ.get(
+        "SCOPES_CATALOG_PATH"
+    )
+    if raw is None:
+        return None
+
+    stripped = raw.strip()
+    if not stripped:
+        return None
+
+    return Path(stripped)
+
+
+def _emit_enforceai_audit_event(
+    *,
+    action: str,
+    outcome: str,
+    user_id: str,
+    agent_id: str,
+    request_id: Optional[str],
+    details: dict[str, Any],
+) -> None:
+    try:
+        print(
+            _json.dumps(
+                {
+                    "event_type": "enforceai_audit",
+                    "action": action,
+                    "outcome": outcome,
+                    "user_id": user_id,
+                    "agent_id": agent_id,
+                    "request_id": request_id,
+                    "details": details,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+                default=str,
+            ),
+            flush=True,
+        )
+    except Exception:  # noqa: BLE001 - best-effort
+        logger.exception("Failed to emit EnforceAI audit event to stdout")
+
+    try:
+        stores = get_enforceai_stores()
+        stores.audit_store.append_event(
+            occurred_at=datetime.now(timezone.utc).replace(microsecond=0),
+            user_id=user_id,
+            agent_id=agent_id,
+            action=action,
+            outcome=outcome,
+            request_id=request_id,
+            details=details,
+        )
+    except Exception:  # noqa: BLE001 - best-effort
+        logger.exception("Failed to persist EnforceAI audit event")
 
 def map_groups_to_scopes(groups: List[str]) -> List[str]:
     """
@@ -862,6 +1014,7 @@ async def validate_request(request: Request):
     
     
     try:
+        enforceai_enabled = bool(_os.environ.get("ENFORCEAI_DB_PATH"))
         # Extract headers
         # Check for X-Authorization first (custom header used by this gateway)
         # Only if X-Authorization is not present, check standard Authorization header
@@ -904,6 +1057,171 @@ async def validate_request(request: Request):
             logger.warning(f"Could not parse JSON RPC payload: {e}")
         except Exception as e:
             logger.error(f"Error reading request payload: {type(e).__name__}: {e}")
+
+        server_name = server_name_from_url
+        tool_name = None
+        if request_payload and isinstance(request_payload, dict):
+            tool_name = request_payload.get("method") or request_payload.get("tool") or request_payload.get("name")
+            if not tool_name and "params" in request_payload and isinstance(
+                request_payload.get("params"),
+                dict,
+            ):
+                tool_name = (
+                    request_payload["params"].get("method")
+                    or request_payload["params"].get("tool")
+                    or request_payload["params"].get("name")
+                )
+
+        if enforceai_enabled:
+            runtime = _load_enforceai_runtime()
+            dependency_unavailable_error = runtime.DependencyUnavailableError
+            enforceai_error = runtime.EnforceAIError
+            try:
+                resolver = get_identity_resolver()
+                catalog_path = _resolve_enforceai_scopes_catalog_path()
+                if catalog_path is None:
+                    catalog = load_scope_catalog()
+                else:
+                    catalog = load_scope_catalog(path=catalog_path)
+                identity = await resolver.resolve_identity(headers=dict(request.headers))
+            except dependency_unavailable_error as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=exc.public_message,
+                    headers={"Connection": "close"},
+                ) from exc
+            except enforceai_error as exc:
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail=exc.public_message,
+                    headers={"Connection": "close"},
+                ) from exc
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Unexpected EnforceAI failure during identity resolution")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Enforcement dependency unavailable",
+                    headers={"Connection": "close"},
+                ) from exc
+
+            method = tool_name or "initialize"
+            actual_tool_name = None
+            if method == "tools/call" and isinstance(request_payload, dict):
+                params = request_payload.get("params")
+                if isinstance(params, dict):
+                    actual_tool_name = params.get("name")
+
+            request_id = request.headers.get("X-Request-Id")
+            if not request_id and isinstance(request_payload, dict) and "id" in request_payload:
+                request_id_value = request_payload.get("id")
+                if request_id_value is not None:
+                    request_id = str(request_id_value)
+
+            allowed_tools = None
+            if isinstance(identity.metadata, dict):
+                allowed_tools = identity.metadata.get("agent_allowed_tools")
+
+            allowed_tools_header_value = ""
+            if server_name and method == "tools/list":
+                tool_policy = resolve_callable_tools_for_server(
+                    identity=identity,
+                    catalog=catalog,
+                    server=server_name,
+                    allowed_tools=allowed_tools,
+                )
+                if tool_policy.all_tools:
+                    allowed_tools_header_value = "*"
+                else:
+                    allowed_tools_header_value = _json.dumps(sorted(tool_policy.tools))
+
+            if server_name and method in {"tools/list", "tools/call"}:
+                if method == "tools/list":
+                    _emit_enforceai_audit_event(
+                        action="tools/list",
+                        outcome="allow",
+                        user_id=identity.user_id,
+                        agent_id=identity.agent_id,
+                        request_id=request_id,
+                        details={
+                            "provider": identity.provider,
+                            "server": server_name,
+                            "allowed_tools": allowed_tools_header_value,
+                        },
+                    )
+
+                if method == "tools/call":
+                    if not actual_tool_name:
+                        _emit_enforceai_audit_event(
+                            action="tools/call",
+                            outcome="deny",
+                            user_id=identity.user_id,
+                            agent_id=identity.agent_id,
+                            request_id=request_id,
+                            details={
+                                "provider": identity.provider,
+                                "server": server_name,
+                                "reason": "missing_tool_name",
+                            },
+                        )
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden",
+                            headers={"Connection": "close"},
+                        )
+
+                    decision = evaluate_tool_call(
+                        identity=identity,
+                        catalog=catalog,
+                        server=server_name,
+                        tool=actual_tool_name,
+                        allowed_tools=allowed_tools,
+                    )
+                    _emit_enforceai_audit_event(
+                        action="tools/call",
+                        outcome="allow" if decision.allowed else "deny",
+                        user_id=identity.user_id,
+                        agent_id=identity.agent_id,
+                        request_id=request_id,
+                        details={
+                            "provider": identity.provider,
+                            "server": server_name,
+                            "tool": actual_tool_name,
+                            "reason": decision.reason,
+                            "matched_scope": decision.matched_scope,
+                        },
+                    )
+                    if not decision.allowed:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden",
+                            headers={"Connection": "close"},
+                        )
+
+            response_data = {
+                "valid": True,
+                "username": identity.user_id,
+                "client_id": "",
+                "scopes": identity.scopes,
+                "method": identity.provider,
+                "groups": [],
+                "server_name": server_name,
+                "tool_name": tool_name,
+            }
+
+            response = JSONResponse(
+                content=response_data,
+                status_code=200,
+            )
+            response.headers["X-User"] = identity.user_id
+            response.headers["X-Username"] = identity.user_id
+            response.headers["X-Client-Id"] = ""
+            response.headers["X-Scopes"] = " ".join(identity.scopes)
+            response.headers["X-Auth-Method"] = identity.provider
+            response.headers["X-Server-Name"] = server_name or ""
+            response.headers["X-Tool-Name"] = tool_name or ""
+            response.headers["X-Agent-Id"] = identity.agent_id
+            response.headers["X-Allowed-Tools"] = allowed_tools_header_value
+            return response
         
         # Log request for debugging with anonymized IP
         client_ip = request.client.host if request.client else 'unknown'
@@ -1119,15 +1437,15 @@ async def validate_request(request: Request):
             headers={"WWW-Authenticate": "Bearer", "Connection": "close"}
         )
     except HTTPException as e:
-        # If it's a 403 HTTPException, re-raise it as is
-        if e.status_code == 403:
+        # Preserve explicit auth/enforcement HTTP status codes
+        if e.status_code in {401, 403, 503}:
             raise
         # For other HTTPExceptions, let them fall through to general handler
         logger.error(f"HTTP error during validation: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Internal validation error: {str(e)}",
-            headers={"Connection": "close"}
+            headers={"Connection": "close"},
         )
     except Exception as e:
         logger.error(f"Unexpected error during validation: {e}")
