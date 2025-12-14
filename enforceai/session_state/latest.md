@@ -39,6 +39,10 @@
 - Stage 5.4: added tool visibility filtering for MCP `tools/list` via nginx `body_filter_by_lua` using per-request `X-Allowed-Tools` allowlist from auth_server
 - Stage 5.5: enforced MCP `tools/call` authorization in auth_server `/validate` (deny on forbidden, 503 on dependency issues), added best-effort audit emission (stdout + SQLite AuditStore), and refactored EnforceAI imports to support both repo and Docker auth-server module layouts
 - Stage 5.6: added multi-auth integration coverage (OIDC, gateway-token, api-key, mixed bearer routing) for Stage 5 enforcement behavior and fixed auth_server `/validate` to honor `ENFORCEAI_SCOPES_CATALOG_PATH` / `SCOPES_CATALOG_PATH`
+- Stage 6.1: added management service layer (`auth_server/enforceai/management/`) for agent CRUD, API key lifecycle, gateway token minting, and token revocation with strict ownership enforcement + unit tests
+- Stage 6.2: added management API routes (`/enforceai/*`) in `auth_server` with best-effort audit emission and integration coverage for OIDC, gateway-token, and api-key auth
+- Stage 6.3: added `cli/enforceai_cli.py` (argparse + httpx) for self-service management operations with unit arg/header tests and an ASGITransport roundtrip test (no network)
+- Stage 6.4: added management documentation and hardening regression tests (API key secret returned once; audit failure best-effort)
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -67,12 +71,11 @@
 - OIDC claim defaults: scopes from `scp`→`scope`→`permissions`; roles from `roles`→`groups`→`permissions` (per-issuer overrides allowed); roles/groups for audit only.
 
 ## Current Task
-- Stage 6: management APIs + CLI (self-service)
+- Stage 7: audit retention + cleanup jobs
 
 ## Next Steps
-1. Stage 6: management APIs + CLI (self-service)
-2. Stage 7: audit retention + cleanup jobs
-3. Stage 8+: advanced policy + UI
+1. Stage 7: audit retention + cleanup jobs
+2. Stage 8+: advanced policy + UI
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
@@ -154,5 +157,18 @@
 - `bash -n docker/registry-entrypoint.sh` (pass)
 - `.venv/bin/python -m py_compile auth_server/server.py registry/core/nginx_service.py auth_server/enforceai/fgac/evaluate.py` (pass)
 - `.venv/bin/python -m pytest` (429 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/management/__init__.py auth_server/enforceai/management/models.py auth_server/enforceai/management/service.py tests/unit/enforceai/test_management_service.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_management_service.py` (6 passed)
+- `.venv/bin/python -m pytest` (444 passed; coverage gate met)
+- `.venv/bin/python -m py_compile auth_server/enforceai/api/management_routes.py auth_server/server.py tests/integration/test_enforceai_management_routes.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_management_routes.py` (3 passed)
+- `.venv/bin/python -m pytest` (447 passed; coverage gate met)
+- `.venv/bin/python -m py_compile cli/enforceai_cli.py tests/unit/cli/test_enforceai_cli_args.py tests/integration/test_enforceai_cli_roundtrip.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/cli/test_enforceai_cli_args.py` (5 passed)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_cli_roundtrip.py` (1 passed)
+- `.venv/bin/python -m pytest` (453 passed; coverage gate met)
+- `.venv/bin/python -m py_compile tests/integration/test_enforceai_management_routes.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_management_routes.py` (pass)
+- `.venv/bin/python -m pytest` (pass)
 
 ## Outstanding Questions

@@ -13,7 +13,7 @@ All management operations must enforce strict ownership (`user_id`) and preserve
 - `503` internal dependency failures (deny but signal retry)
 
 ## Non-Goals (Stage 6)
-- No new UI (Stage 6 is CLI-first; UI is optional later)
+- No new UI (Stage 6 is CLI-first; UI is optional later)should add any more unit/e2e/integration tests at this point?
 - No background retention/cleanup jobs (Stage 7)
 - No external network calls in unit/integration tests (OIDC JWKS must be mocked)
 - No scope-catalog redesign (reuse `auth_server/scopes.yml`; only validate against it)
