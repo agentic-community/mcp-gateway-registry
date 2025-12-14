@@ -15,6 +15,12 @@ from ..errors import (
 from ..identity import (
     IdentityContext,
 )
+from ..constants import (
+    API_KEY_PREFIX,
+)
+from .._validation import (
+    _intersect_preserving_order,
+)
 from ..secrets.pepper import (
     load_api_key_pepper,
 )
@@ -24,8 +30,6 @@ from ..stores.interfaces import (
 )
 
 logger = logging.getLogger(__name__)
-
-API_KEY_PREFIX: str = "eak_"
 
 
 def _utc_now() -> datetime:
@@ -76,18 +80,6 @@ def _is_expired(
         normalized = normalized.replace(tzinfo=timezone.utc)
 
     return now > normalized
-
-
-def _effective_scopes(
-    *,
-    agent_scopes: list[str],
-    api_key_scopes: Optional[list[str]],
-) -> list[str]:
-    if api_key_scopes is None:
-        return list(agent_scopes)
-
-    allowed = set(api_key_scopes)
-    return [scope for scope in agent_scopes if scope in allowed]
 
 
 class ApiKeyProvider:
@@ -149,10 +141,13 @@ class ApiKeyProvider:
         if agent.revoked_at is not None:
             raise ForbiddenError("Agent revoked")
 
-        scopes = _effective_scopes(
-            agent_scopes=agent.scopes,
-            api_key_scopes=record.scopes,
-        )
+        if record.scopes is None:
+            scopes = list(agent.scopes)
+        else:
+            scopes = _intersect_preserving_order(
+                primary=agent.scopes,
+                allowed=record.scopes,
+            )
 
         metadata = {
             "api_key_id": record.key_id,

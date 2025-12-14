@@ -15,6 +15,9 @@ from ..errors import (
 from ..identity import (
     IdentityContext,
 )
+from .._validation import (
+    _intersect_preserving_order,
+)
 from ..stores.interfaces import (
     AgentStore,
     RevocationStore,
@@ -36,15 +39,6 @@ def _ensure_aware_utc(
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
-
-
-def _effective_scopes(
-    *,
-    agent_scopes: list[str],
-    token_scopes: list[str],
-) -> list[str]:
-    allowed = set(agent_scopes)
-    return [scope for scope in token_scopes if scope in allowed]
 
 
 class GatewayTokenProvider:
@@ -124,9 +118,9 @@ class GatewayTokenProvider:
             if claims.issued_at < tokens_valid_after:
                 raise ForbiddenError("Token revoked")
 
-        scopes = _effective_scopes(
-            agent_scopes=agent.scopes,
-            token_scopes=claims.scopes,
+        scopes = _intersect_preserving_order(
+            primary=claims.scopes,
+            allowed=agent.scopes,
         )
 
         metadata = {

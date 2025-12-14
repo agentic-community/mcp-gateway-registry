@@ -11,6 +11,10 @@ from typing import Optional
 from ..crypto.keyring import (
     GatewayKeyring,
 )
+from ..constants import (
+    API_KEY_PREFIX,
+    DEFAULT_API_KEY_SECRET_BYTES,
+)
 from ..errors import (
     DependencyUnavailableError,
     ForbiddenError,
@@ -40,9 +44,6 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
-
-API_KEY_PREFIX: str = "eak_"
-DEFAULT_API_KEY_SECRET_BYTES: int = 32
 
 
 def _utc_now() -> datetime:
