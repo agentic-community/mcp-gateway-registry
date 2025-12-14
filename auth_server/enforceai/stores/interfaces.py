@@ -177,3 +177,17 @@ class AuditStore(Protocol):
         limit: int = 100,
     ) -> list[AuditEventRecord]:
         ...
+
+    def delete_events_older_than(
+        self,
+        *,
+        cutoff: datetime,
+    ) -> int:
+        ...
+
+    def delete_oldest_events(
+        self,
+        *,
+        limit: int,
+    ) -> int:
+        ...

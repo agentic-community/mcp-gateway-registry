@@ -5,14 +5,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import sqlite3
-
 from ...db.connection import (
     sqlite_connection,
 )
 from ...models.audit import (
     AuditEventRecord,
 )
+
+
+def _validate_positive_limit(
+    *,
+    limit: int,
+) -> None:
+    if limit <= 0:
+        raise ValueError("limit must be positive")
 
 
 def _ensure_aware_utc(
@@ -139,8 +145,7 @@ class SqliteAuditStore:
     ) -> list[AuditEventRecord]:
         if user_id is None and agent_id is None:
             raise ValueError("At least one of user_id or agent_id must be provided")
-        if limit <= 0:
-            raise ValueError("limit must be positive")
+        _validate_positive_limit(limit=limit)
 
         filters: list[str] = []
         params: list[object] = []
@@ -197,6 +202,52 @@ class SqliteAuditStore:
             )
             for row in rows
         ]
+
+    def delete_events_older_than(
+        self,
+        *,
+        cutoff: datetime,
+    ) -> int:
+        normalized_cutoff = _ensure_aware_utc(cutoff).replace(microsecond=0)
+        cutoff_iso = _datetime_to_iso(normalized_cutoff)
+        if cutoff_iso is None:
+            raise RuntimeError("cutoff datetime conversion failed")
+
+        with sqlite_connection(self._db_path) as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM audit_events
+                WHERE occurred_at < ?
+                """.strip(),
+                (cutoff_iso,),
+            )
+            deleted = cursor.rowcount
+
+        return int(deleted) if deleted is not None else 0
+
+    def delete_oldest_events(
+        self,
+        *,
+        limit: int,
+    ) -> int:
+        _validate_positive_limit(limit=limit)
+
+        with sqlite_connection(self._db_path) as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM audit_events
+                WHERE id IN (
+                    SELECT id
+                    FROM audit_events
+                    ORDER BY occurred_at ASC, id ASC
+                    LIMIT ?
+                )
+                """.strip(),
+                (limit,),
+            )
+            deleted = cursor.rowcount
+
+        return int(deleted) if deleted is not None else 0
 
     def _get_event_by_id(
         self,

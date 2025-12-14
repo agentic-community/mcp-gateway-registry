@@ -123,3 +123,132 @@ class TestSqliteAuditStore:
                 limit=0,
             )
 
+    def test_delete_events_older_than_deletes_expected_subset(
+        self,
+        enforceai_sqlite_db_path: Path,
+    ) -> None:
+        _migrate_db(enforceai_sqlite_db_path)
+        store = SqliteAuditStore(db_path=enforceai_sqlite_db_path)
+
+        user_id = "https://issuer.example|sub-1"
+        agent_id = str(uuid.uuid4())
+        base_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+        for offset_seconds in range(5):
+            store.append_event(
+                occurred_at=base_time + timedelta(seconds=offset_seconds),
+                user_id=user_id,
+                agent_id=agent_id,
+                action="tools/list",
+                outcome="allow",
+                request_id=f"req-{offset_seconds}",
+            )
+
+        cutoff = base_time + timedelta(seconds=2)
+        deleted = store.delete_events_older_than(cutoff=cutoff)
+        assert deleted == 2
+
+        remaining = store.list_recent_events(
+            user_id=user_id,
+            limit=10,
+        )
+        assert [event.request_id for event in remaining] == [
+            "req-4",
+            "req-3",
+            "req-2",
+        ]
+
+    def test_delete_events_older_than_accepts_naive_cutoff_as_utc(
+        self,
+        enforceai_sqlite_db_path: Path,
+    ) -> None:
+        _migrate_db(enforceai_sqlite_db_path)
+        store = SqliteAuditStore(db_path=enforceai_sqlite_db_path)
+
+        user_id = "https://issuer.example|sub-1"
+        agent_id = str(uuid.uuid4())
+        base_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+        store.append_event(
+            occurred_at=base_time,
+            user_id=user_id,
+            agent_id=agent_id,
+            action="tools/list",
+            outcome="allow",
+            request_id="req-0",
+        )
+        store.append_event(
+            occurred_at=base_time + timedelta(seconds=1),
+            user_id=user_id,
+            agent_id=agent_id,
+            action="tools/list",
+            outcome="allow",
+            request_id="req-1",
+        )
+
+        deleted = store.delete_events_older_than(
+            cutoff=datetime(2025, 1, 1, 0, 0, 1),
+        )
+        assert deleted == 1
+
+        remaining = store.list_recent_events(
+            user_id=user_id,
+            limit=10,
+        )
+        assert [event.request_id for event in remaining] == ["req-1"]
+
+    def test_delete_oldest_events_deletes_oldest_rows(
+        self,
+        enforceai_sqlite_db_path: Path,
+    ) -> None:
+        _migrate_db(enforceai_sqlite_db_path)
+        store = SqliteAuditStore(db_path=enforceai_sqlite_db_path)
+
+        user_id = "https://issuer.example|sub-1"
+        agent_id = str(uuid.uuid4())
+        base_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+        for offset_seconds in range(5):
+            store.append_event(
+                occurred_at=base_time + timedelta(seconds=offset_seconds),
+                user_id=user_id,
+                agent_id=agent_id,
+                action="tools/list",
+                outcome="allow",
+                request_id=f"req-{offset_seconds}",
+            )
+
+        deleted = store.delete_oldest_events(limit=2)
+        assert deleted == 2
+
+        remaining = store.list_recent_events(
+            user_id=user_id,
+            limit=10,
+        )
+        assert [event.request_id for event in remaining] == [
+            "req-4",
+            "req-3",
+            "req-2",
+        ]
+
+    def test_delete_methods_return_zero_when_table_empty(
+        self,
+        enforceai_sqlite_db_path: Path,
+    ) -> None:
+        _migrate_db(enforceai_sqlite_db_path)
+        store = SqliteAuditStore(db_path=enforceai_sqlite_db_path)
+
+        assert store.delete_events_older_than(
+            cutoff=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        ) == 0
+        assert store.delete_oldest_events(limit=1) == 0
+
+    def test_delete_oldest_events_requires_positive_limit(
+        self,
+        enforceai_sqlite_db_path: Path,
+    ) -> None:
+        _migrate_db(enforceai_sqlite_db_path)
+        store = SqliteAuditStore(db_path=enforceai_sqlite_db_path)
+
+        with pytest.raises(ValueError, match="limit must be positive"):
+            store.delete_oldest_events(limit=0)
