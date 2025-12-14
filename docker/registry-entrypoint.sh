@@ -77,12 +77,111 @@ if body_data then
     -- Set the X-Body header with the raw body data
     ngx.req.set_header("X-Body", body_data)
     ngx.log(ngx.INFO, "Captured request body (" .. string.len(body_data) .. " bytes) for auth validation")
+
+    -- Best-effort parse for downstream response filtering (tools/list)
+    local ok, payload = pcall(cjson.decode, body_data)
+    if ok and type(payload) == "table" then
+        if type(payload.method) == "string" then
+            ngx.ctx.mcp_method = payload.method
+        end
+    end
 else
     ngx.log(ngx.INFO, "No request body found")
 end
 EOF
 
 echo "Lua script created."
+
+cat > "$LUA_SCRIPTS_DIR/filter_tools_list.lua" << 'EOF'
+-- filter_tools_list.lua: Filter tools/list JSON-RPC responses based on allowlist from auth_request.
+local cjson = require "cjson"
+
+local function _is_json_response()
+    local content_type = ngx.header["Content-Type"] or ""
+    return string.find(content_type, "application/json", 1, true) ~= nil
+end
+
+if ngx.ctx.mcp_method ~= "tools/list" then
+    return
+end
+
+if not _is_json_response() then
+    return
+end
+
+local allowed_raw = ngx.var.auth_allowed_tools
+if not allowed_raw or allowed_raw == "" then
+    -- No allowlist available (legacy mode); do not modify response.
+    return
+end
+
+local lowered = string.lower(allowed_raw)
+if allowed_raw == "*" or lowered == "all" then
+    return
+end
+
+local ok, allowed_list = pcall(cjson.decode, allowed_raw)
+if not ok or type(allowed_list) ~= "table" then
+    return
+end
+
+local allowed_set = {}
+for _, name in ipairs(allowed_list) do
+    if type(name) == "string" and name ~= "" then
+        allowed_set[name] = true
+    end
+end
+
+local chunk = ngx.arg[1]
+local eof = ngx.arg[2]
+ngx.ctx._tools_list_chunks = ngx.ctx._tools_list_chunks or {}
+if chunk and chunk ~= "" then
+    table.insert(ngx.ctx._tools_list_chunks, chunk)
+end
+
+if not eof then
+    ngx.arg[1] = nil
+    return
+end
+
+local body = table.concat(ngx.ctx._tools_list_chunks)
+ngx.ctx._tools_list_chunks = nil
+
+local decoded_ok, payload = pcall(cjson.decode, body)
+if not decoded_ok or type(payload) ~= "table" then
+    ngx.arg[1] = body
+    return
+end
+
+local tools = nil
+if type(payload.result) == "table" and type(payload.result.tools) == "table" then
+    tools = payload.result.tools
+elseif type(payload.tools) == "table" then
+    tools = payload.tools
+end
+
+if not tools then
+    ngx.arg[1] = body
+    return
+end
+
+local filtered = {}
+for _, tool in ipairs(tools) do
+    if type(tool) == "table" and type(tool.name) == "string" and allowed_set[tool.name] then
+        table.insert(filtered, tool)
+    end
+end
+
+if type(payload.result) == "table" and type(payload.result.tools) == "table" then
+    payload.result.tools = filtered
+elseif type(payload.tools) == "table" then
+    payload.tools = filtered
+end
+
+ngx.arg[1] = cjson.encode(payload)
+EOF
+
+echo "Lua tools/list filter script created."
 
 # --- Nginx Configuration ---
 echo "Preparing Nginx configuration..."
