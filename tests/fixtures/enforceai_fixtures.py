@@ -5,6 +5,7 @@ Shared pytest fixtures for EnforceAI stages (RSA keys, temp SQLite, env helpers)
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,39 @@ class EnforceAIGatewayKeyFiles:
     private_key_path: Path
     public_keys_dir: Path
     active_kid: str
+
+
+@pytest.fixture(autouse=True)
+def enforceai_env_isolation(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Prevent ambient ENFORCEAI_* env vars from breaking EnforceAI tests.
+
+    Developers often `source` docker-compose env files which set container paths
+    like `/app/enforceai_state/*`. Those values must not leak into unit/integration
+    tests that run on the host.
+    """
+
+    test_path = str(getattr(request, "fspath", ""))
+    if "enforceai" not in test_path.lower():
+        return
+
+    for key in list(os.environ.keys()):
+        if key.startswith("ENFORCEAI_"):
+            monkeypatch.delenv(key, raising=False)
+
+    for key in [
+        "AUTH_PROVIDER",
+        "OIDC_ISSUERS",
+        "SCOPES_CATALOG_PATH",
+        "API_KEY_PEPPER_PATH",
+        "GATEWAY_PRIVATE_KEY_PATH",
+        "GATEWAY_PUBLIC_KEYS_DIR",
+        "GATEWAY_ACTIVE_KID",
+        "GATEWAY_ISSUER",
+    ]:
+        monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture
