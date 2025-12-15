@@ -15,6 +15,12 @@ from ..models.revocation import (
 from ..models.audit import (
     AuditEventRecord,
 )
+from ..models.user import (
+    UserRecord,
+)
+from ..models.session import (
+    SessionRecord,
+)
 
 
 class AgentStore(Protocol):
@@ -190,4 +196,103 @@ class AuditStore(Protocol):
         *,
         limit: int,
     ) -> int:
+        ...
+
+
+class UserStore(Protocol):
+    def upsert_oidc_user(
+        self,
+        *,
+        user_id: str,
+        email: str,
+        role: str = "user",
+        now: Optional[datetime] = None,
+    ) -> UserRecord:
+        ...
+
+    def create_local_user(
+        self,
+        *,
+        username: str,
+        email: str,
+        password_hash: str,
+        role: str = "user",
+        now: Optional[datetime] = None,
+    ) -> UserRecord:
+        ...
+
+    def get_user_by_id(
+        self,
+        *,
+        user_id: str,
+    ) -> Optional[UserRecord]:
+        ...
+
+    def get_user_by_username(
+        self,
+        *,
+        username: str,
+    ) -> Optional[UserRecord]:
+        ...
+
+    def search_users(
+        self,
+        *,
+        query: str,
+        limit: int = 50,
+    ) -> list[UserRecord]:
+        ...
+
+    def disable_user(
+        self,
+        *,
+        user_id: str,
+        disabled_at: Optional[datetime] = None,
+    ) -> Optional[UserRecord]:
+        ...
+
+    def update_password_hash(
+        self,
+        *,
+        user_id: str,
+        password_hash: str,
+        updated_at: Optional[datetime] = None,
+    ) -> Optional[UserRecord]:
+        ...
+
+
+class SessionStore(Protocol):
+    def create_session(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        auth_method: str,
+        expires_at: datetime,
+        now: Optional[datetime] = None,
+    ) -> SessionRecord:
+        ...
+
+    def get_session_by_id(
+        self,
+        *,
+        session_id: str,
+    ) -> Optional[SessionRecord]:
+        ...
+
+    def touch_session(
+        self,
+        *,
+        session_id: str,
+        now: datetime,
+    ) -> Optional[SessionRecord]:
+        ...
+
+    def revoke_session(
+        self,
+        *,
+        session_id: str,
+        revoked_at: Optional[datetime] = None,
+        revoked_reason: Optional[str] = None,
+    ) -> Optional[SessionRecord]:
         ...

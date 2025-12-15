@@ -22,6 +22,12 @@ from ..stores.sqlite.audit_store import (
 from ..stores.sqlite.revocation_store import (
     SqliteRevocationStore,
 )
+from ..stores.sqlite.session_store import (
+    SqliteSessionStore,
+)
+from ..stores.sqlite.user_store import (
+    SqliteUserStore,
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,8 @@ class EnforceAIStores:
     api_key_store: SqliteApiKeyStore
     revocation_store: SqliteRevocationStore
     audit_store: SqliteAuditStore
+    user_store: SqliteUserStore
+    session_store: SqliteSessionStore
 
 
 class EnforceAIDataLayer:
@@ -63,4 +71,6 @@ class EnforceAIDataLayer:
             api_key_store=SqliteApiKeyStore(db_path=self._db_path),
             revocation_store=SqliteRevocationStore(db_path=self._db_path),
             audit_store=SqliteAuditStore(db_path=self._db_path),
+            user_store=SqliteUserStore(db_path=self._db_path),
+            session_store=SqliteSessionStore(db_path=self._db_path),
         )
