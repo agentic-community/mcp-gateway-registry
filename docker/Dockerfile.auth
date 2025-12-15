@@ -13,14 +13,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy only auth server files
-COPY auth_server/ /app/
+# Copy auth server as a package (so `uvicorn auth_server.server:app` works)
+COPY auth_server/ /app/auth_server/
+
+# Copy shared gateway session/CSRF modules used by auth-server
+COPY gateway_session.py /app/gateway_session.py
+COPY gateway_csrf.py /app/gateway_csrf.py
 
 # Install uv and setup Python environment
 RUN pip install uv && \
     uv venv .venv --python 3.12 && \
     . .venv/bin/activate && \
-    uv pip install --requirement pyproject.toml
+    uv pip install --requirement auth_server/pyproject.toml
 
 # Create logs directory
 RUN mkdir -p /app/logs
@@ -33,4 +37,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8888/health || exit 1
 
 # Start the auth server
-CMD ["/bin/bash", "-c", "source .venv/bin/activate && uvicorn server:app --host 0.0.0.0 --port 8888"] 
+CMD ["/bin/bash", "-c", "source .venv/bin/activate && uvicorn auth_server.server:app --host 0.0.0.0 --port 8888"]

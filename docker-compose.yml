@@ -8,6 +8,8 @@ services:
       dockerfile: docker/Dockerfile.registry
     environment:
       - SECRET_KEY=${SECRET_KEY}
+      # Shared EnforceAI DB for unified session validation/invalidation (Phase 1 UI)
+      - ENFORCEAI_DB_PATH=/app/enforceai_state/enforceai.db
       - ADMIN_USER=${ADMIN_USER:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - AUTH_SERVER_URL=${AUTH_SERVER_URL}
@@ -58,6 +60,8 @@ services:
       - ${HOME}/mcp-gateway/logs:/app/logs
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
+      # Important: do not mount over /app/enforceai (the python package); mount state separately.
+      - ${HOME}/mcp-gateway/enforceai:/app/enforceai_state
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
     depends_on:
       - auth-server
