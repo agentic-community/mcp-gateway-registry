@@ -59,6 +59,8 @@ if [[ $USE_COMPOSE_DIR -eq 1 ]]; then
   STATE_DIR="$COMPOSE_STATE_DIR_DEFAULT"
 fi
 
+export ENFORCEAI_STATE_DIR="$STATE_DIR"
+
 PYTHON_BIN="${ENFORCEAI_PYTHON:-}"
 if [[ -z "$PYTHON_BIN" && -x "$ROOT_DIR/.venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
@@ -323,7 +325,7 @@ from pathlib import Path
 token_path = Path(os.environ["ENFORCEAI_STATE_DIR"]) / "bootstrap_gateway_token.txt"
 raw = token_path.read_text().strip()
 
-if not re.fullmatch(r"[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", raw):
+if not re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", raw):
     raise SystemExit(f"[ERROR] bootstrap token is not a compact JWT: {token_path}")
 
 def decode(part: str) -> dict:
