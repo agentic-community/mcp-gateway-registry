@@ -12,10 +12,11 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, Cookie, HTTPException, Depends
+from fastapi import FastAPI, Cookie, HTTPException, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # Import domain routers
 from registry.auth.routes import router as auth_router
@@ -28,6 +29,9 @@ from registry.health.routes import router as health_router
 
 # Import auth dependencies
 from registry.auth.dependencies import enhanced_auth
+from registry.auth.csrf import (
+    enforce_csrf_for_request,
+)
 
 # Import services for initialization
 from registry.services.server_service import server_service
@@ -188,6 +192,21 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+@app.middleware("http")
+async def csrf_middleware(
+    request: Request,
+    call_next,
+):
+    try:
+        enforce_csrf_for_request(request)
+    except HTTPException as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+
+    return await call_next(request)
+
 # Add CORS middleware for React development and Docker deployment
 app.add_middleware(
     CORSMiddleware,
@@ -216,8 +235,12 @@ async def get_current_user(user_context: Dict[str, Any] = Depends(enhanced_auth)
     """Get current user information for React auth context"""
     # Return user info with scopes for token generation
     return {
+        "user_id": user_context.get("user_id"),
+        "session_id": user_context.get("session_id"),
+        "email": user_context.get("email"),
         "username": user_context["username"],
         "auth_method": user_context.get("auth_method", "basic"),
+        "legacy_auth_method": user_context.get("legacy_auth_method"),
         "provider": user_context.get("provider"),
         "scopes": user_context.get("scopes", []),
         "groups": user_context.get("groups", []),
