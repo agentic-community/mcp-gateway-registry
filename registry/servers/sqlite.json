@@ -1,0 +1,135 @@
+{
+  "server_name": "SQLite MCP Server",
+  "description": "Local SQLite MCP server for database operations",
+  "path": "/sqlite",
+  "proxy_pass_url": "http://host.docker.internal:3031/mcp",
+  "supported_transports": [
+    "streamable-http"
+  ],
+  "auth_type": "none",
+  "tags": [],
+  "num_tools": 6,
+  "num_stars": 0,
+  "is_python": false,
+  "license": "N/A",
+  "tool_list": [
+    {
+      "name": "read_query",
+      "parsed_description": {
+        "main": "No description available.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "SELECT SQL query to execute"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "write_query",
+      "parsed_description": {
+        "main": "No description available.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "SQL query to execute"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "create_table",
+      "parsed_description": {
+        "main": "No description available.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "CREATE TABLE SQL statement"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "list_tables",
+      "parsed_description": {
+        "main": "No description available.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "describe_table",
+      "parsed_description": {
+        "main": "No description available.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Name of the table to describe"
+          }
+        },
+        "required": [
+          "table_name"
+        ]
+      }
+    },
+    {
+      "name": "append_insight",
+      "parsed_description": {
+        "main": "No description available.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "insight": {
+            "type": "string",
+            "description": "Business insight discovered from data analysis"
+          }
+        },
+        "required": [
+          "insight"
+        ]
+      }
+    }
+  ]
+}
