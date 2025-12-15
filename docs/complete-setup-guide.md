@@ -1142,6 +1142,7 @@ curl -f https://mcpgateway.mycorp.com/realms/mcp-gateway
 ### Explore Advanced Features
 
 - **Fine-grained Access Control**: Configure `scopes.yml` for detailed permissions
+- **EnforceAI (Gateway Tokens + OIDC + FGAC)**: See [EnforceAI Setup Guide](enforceai-setup-guide.md)
 - **Custom MCP Servers**: Add your own MCP server implementations
 - **OAuth Integration**: Connect with external services (GitHub, Atlassian, etc.)
 - **Monitoring Dashboard**: Set up Grafana for metrics visualization

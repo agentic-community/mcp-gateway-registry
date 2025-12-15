@@ -442,6 +442,36 @@ docker-compose logs -f registry
 # Press Ctrl+C to exit log viewing
 ```
 
+### Optional: Enable EnforceAI (Gateway Tokens + FGAC)
+
+EnforceAI runs inside the `auth-server` container (used by nginx `auth_request`) and provides:
+- Gateway-signed tokens (dev bootstrap)
+- OIDC/JWT verification (optional)
+- Fine-grained tool access control (FGAC) + audit events
+
+Bootstrap local EnforceAI state and enable it in Docker Compose:
+
+```bash
+# Create EnforceAI state under your shared mcp-gateway directory
+ENFORCEAI_STATE_DIR="${HOME}/mcp-gateway/enforceai" ./scripts/enforceai_dev_bootstrap.sh
+
+# Load the container-friendly environment values and recreate auth-server
+set -a
+source "${HOME}/mcp-gateway/enforceai/enforceai.compose.env"
+set +a
+docker-compose up -d --force-recreate auth-server
+```
+
+Test an MCP JSON-RPC request through the gateway:
+
+```bash
+export ENFORCEAI_TOKEN="$(cat ${HOME}/mcp-gateway/enforceai/bootstrap_gateway_token.txt)"
+curl http://localhost/mcpgw/mcp -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ENFORCEAI_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq .
+```
+
 ---
 
 ## 8. Verification and Testing

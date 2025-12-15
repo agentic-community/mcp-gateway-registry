@@ -20,6 +20,7 @@ When EnforceAI is enabled (`ENFORCEAI_DB_PATH` is set), the Auth Server (`auth_s
 Use the same prerequisites as `docs/macos-setup-guide.md` or `docs/complete-setup-guide.md`:
 - Python `3.12+`
 - `uv`
+- `openssl`
 - `jq` (recommended for inspecting JSON output)
 
 Create the local virtualenv:
@@ -29,147 +30,96 @@ uv sync
 source .venv/bin/activate
 ```
 
-## 2. Choose a Scopes Catalog
+All commands below assume the virtualenv is active (so `python` points at `.venv/bin/python`).
 
-EnforceAI loads and validates a scope catalog (`scopes.yml`) using `auth_server/enforceai/fgac/catalog.py`. The simplest starting point is the repo’s default:
+## 2. One-Command Bootstrap
 
-- `auth_server/scopes.yml`
-
-For local development, set:
+Run:
 
 ```bash
-export ENFORCEAI_SCOPES_CATALOG_PATH="$(pwd)/auth_server/scopes.yml"
+./scripts/enforceai_dev_bootstrap.sh
 ```
 
-## 3. Create EnforceAI Local State (DB + Secrets)
+This generates EnforceAI dev state under a local state directory (default: `.enforceai/` in the repo).
 
-Pick a local directory for EnforceAI runtime state:
+For full gateway via Docker Compose (recommended), run:
 
 ```bash
-mkdir -p .enforceai/secrets/gateway_public_keys
+ENFORCEAI_STATE_DIR="$HOME/mcp-gateway/enforceai" ./scripts/enforceai_dev_bootstrap.sh
 ```
 
-### 3.1 EnforceAI DB
+The state includes:
+- SQLite DB (`enforceai.db`) with migrations applied
+- RSA keypair for gateway token mint/verify (`secrets/`)
+- API key pepper (`secrets/api_key_pepper`)
+- A bootstrap `user_id` and `agent_id`
+- A bootstrap gateway token (`bootstrap_gateway_token.txt`)
+- A sourceable env file for local host runs (`enforceai.env`)
+- A sourceable env file for Docker Compose (`enforceai.compose.env`)
 
-EnforceAI uses SQLite for persistence (agents, API keys, revocations, audit events).
+The repo-local `.enforceai/` is gitignored.
+
+If you need to overwrite generated secrets/ids (without deleting the DB), use:
 
 ```bash
-export ENFORCEAI_DB_PATH="$(pwd)/.enforceai/enforceai.db"
+./scripts/enforceai_dev_bootstrap.sh --force
 ```
 
-DB migrations are applied automatically when the Auth Server first loads EnforceAI stores.
-
-### 3.2 Gateway token keys (required for `gateway-token` / `mixed`)
-
-Generate an RSA keypair and a public key file named by `kid`:
+Load the environment in your current shell for local (host) usage:
 
 ```bash
-export ENFORCEAI_GATEWAY_ACTIVE_KID="kid-local-1"
-export ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH="$(pwd)/.enforceai/secrets/gateway_private.pem"
-export ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR="$(pwd)/.enforceai/secrets/gateway_public_keys"
-export ENFORCEAI_GATEWAY_ISSUER="enforceai-gateway"
-
-openssl genpkey -algorithm RSA -out "$ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH" -pkeyopt rsa_keygen_bits:2048
-openssl pkey -in "$ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH" -pubout -out "$ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR/$ENFORCEAI_GATEWAY_ACTIVE_KID.pem"
+source .enforceai/enforceai.env  # or $HOME/mcp-gateway/enforceai/enforceai.env
 ```
 
-### 3.3 API key pepper (required for `api-key` / `mixed`)
+## 3. Full Gateway (Docker Compose)
 
-The pepper is an opaque byte sequence used as part of the API key secret hashing scheme.
+For full gateway enforcement (nginx + registry + auth-server + MCP servers), use the standard stack:
 
 ```bash
-export ENFORCEAI_API_KEY_PEPPER_PATH="$(pwd)/.enforceai/secrets/api_key_pepper"
-python -c 'import secrets; print(secrets.token_hex(32))' > "$ENFORCEAI_API_KEY_PEPPER_PATH"
-chmod 600 "$ENFORCEAI_API_KEY_PEPPER_PATH"
+./build_and_run.sh --prebuilt
 ```
 
-## 4. Pick an EnforceAI Auth Mode
-
-Set `ENFORCEAI_AUTH_PROVIDER` to one of:
-- `gateway-token`: only gateway tokens (via `Authorization: Bearer <token>` or `X-Gateway-Token`)
-- `api-key`: only API keys (via `X-API-Key: eak_<key_id>.<secret>`)
-- `oidc`: only OIDC JWTs (via `Authorization: Bearer <jwt>` plus `X-Agent-Id`)
-- `mixed`: accept API keys, gateway tokens, and OIDC bearer tokens; bearer routing uses token `iss`
-
-For a fully local development setup without an external IdP, start with `gateway-token`:
+Then enable EnforceAI in the `auth-server` container:
 
 ```bash
-export ENFORCEAI_AUTH_PROVIDER="gateway-token"
+source $HOME/mcp-gateway/enforceai/enforceai.compose.env
+docker compose up -d --force-recreate auth-server
 ```
 
-## 5. Bootstrap: Create the First Agent (Out-of-Band)
-
-Management endpoints are ownership-scoped by `user_id`, and OIDC requests also require an existing agent binding. This means you must create the initial agent record out-of-band once per user.
-
-For a fully local setup (no IdP), choose a local user id in EnforceAI canonical format:
+Verify auth server health:
 
 ```bash
-export ENFORCEAI_BOOTSTRAP_USER_ID="local|admin"
-export ENFORCEAI_BOOTSTRAP_AGENT_ID="$(python -c 'import uuid; print(uuid.uuid4())')"
+curl -s http://127.0.0.1:8888/health | jq .
 ```
 
-Create the initial agent record using the EnforceAI data layer (runs migrations if needed):
+## 4. Use the Gateway with an EnforceAI Token
+
+Use the bootstrap gateway token as the client credential:
 
 ```bash
-uv run python - <<'PY'
-from pathlib import Path
-import os
-
-from auth_server.enforceai.db.data_layer import EnforceAIDataLayer
-
-db_path = Path(os.environ["ENFORCEAI_DB_PATH"])
-user_id = os.environ["ENFORCEAI_BOOTSTRAP_USER_ID"]
-agent_id = os.environ["ENFORCEAI_BOOTSTRAP_AGENT_ID"]
-
-data_layer = EnforceAIDataLayer(db_path=db_path)
-data_layer.initialize()
-stores = data_layer.build_stores()
-
-stores.agent_store.create_agent(
-    user_id=user_id,
-    agent_id=agent_id,
-    scopes=["registry-admins"],
-    allowed_tools=None,
-    alias="bootstrap",
-    metadata={"bootstrap": True},
-)
-
-print(f"Bootstrapped agent_id={agent_id} for user_id={user_id}")
-PY
+export ENFORCEAI_STATE_DIR="${ENFORCEAI_STATE_DIR:-$HOME/mcp-gateway/enforceai}"
+export ENFORCEAI_TOKEN="$(cat $ENFORCEAI_STATE_DIR/bootstrap_gateway_token.txt)"
 ```
 
-## 6. Bootstrap: Mint a Gateway Token (Out-of-Band)
-
-Mint a gateway token that you can use to call the management API:
+Example: call the gateway MCP endpoint (streamable HTTP):
 
 ```bash
-export ENFORCEAI_BOOTSTRAP_TOKEN="$(uv run python - <<'PY'
-from pathlib import Path
-import os
-
-from auth_server.enforceai.crypto.keyring import GatewayKeyring
-from auth_server.enforceai.tokens.mint import mint_gateway_token
-
-keyring = GatewayKeyring.load(
-    private_key_path=Path(os.environ["ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH"]),
-    public_keys_dir=Path(os.environ["ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR"]),
-    active_kid=os.environ["ENFORCEAI_GATEWAY_ACTIVE_KID"],
-)
-
-token = mint_gateway_token(
-    keyring=keyring,
-    issuer=os.environ["ENFORCEAI_GATEWAY_ISSUER"],
-    user_id=os.environ["ENFORCEAI_BOOTSTRAP_USER_ID"],
-    agent_id=os.environ["ENFORCEAI_BOOTSTRAP_AGENT_ID"],
-    scopes=["registry-admins"],
-    ttl_seconds=3600,
-)
-
-print(token)
-PY)"
+curl http://localhost/mcpgw/mcp -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ENFORCEAI_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq .
 ```
 
-## 7. Run the Auth Server (Local)
+Notes:
+- `/mcpgw/mcp` is a JSON-RPC endpoint; a browser `GET` is not a valid request (you should see `405`).
+- Required headers: `Content-Type: application/json` and `Authorization: Bearer <token>` (the gateway also accepts `X-Authorization` for legacy clients).
+- If you see `401`, the token/header is missing or malformed.
+- If you see `403`, you authenticated but were denied by FGAC (or the agent is revoked).
+- If you see `500` when hitting the gateway, the most common cause is nginx being unable to reach the Auth Server for `auth_request` (e.g., `auth-server` container not running/recreated). Check `docker compose ps` and `docker compose logs registry auth-server`.
+
+Tool visibility enforcement (Stage 5) should filter `tools/list` results based on the token’s scopes and any agent `allowed_tools` restrictions.
+
+## 5. Auth Server Only (Local Development)
 
 Run the Auth Server on localhost:
 
@@ -183,45 +133,45 @@ Health check:
 curl -s http://127.0.0.1:8888/health | jq .
 ```
 
-## 8. Use the Management API via the EnforceAI CLI
+## 6. Use the Management API via the EnforceAI CLI
 
 The EnforceAI CLI wraps the `/enforceai/*` management API:
 - `cli/enforceai_cli.py`
 - Base URL default: `http://localhost:8888`
 
-### 8.1 Configure CLI environment variables
+### 4.1 Configure CLI environment variables
 
 ```bash
-export ENFORCEAI_AUTH_SERVER_URL="http://127.0.0.1:8888"
-export ENFORCEAI_AUTHORIZATION="Bearer $ENFORCEAI_BOOTSTRAP_TOKEN"
+export ENFORCEAI_STATE_DIR="${ENFORCEAI_STATE_DIR:-.enforceai}"
+export ENFORCEAI_AUTHORIZATION="Bearer $(cat $ENFORCEAI_STATE_DIR/bootstrap_gateway_token.txt)"
 ```
 
-### 8.2 List agents
+### 4.2 List agents
 
 ```bash
-uv run python cli/enforceai_cli.py --pretty agents list
+python cli/enforceai_cli.py --pretty agents list
 ```
 
-### 8.3 Create a new agent (scopes + optional allowed_tools)
+### 4.3 Create a new agent (scopes + optional allowed_tools)
 
 ```bash
-uv run python cli/enforceai_cli.py --pretty agents create \
+python cli/enforceai_cli.py --pretty agents create \
   --scope registry-users-lob1 \
   --alias "my-agent" \
   --metadata '{"purpose":"demo"}'
 ```
 
-### 8.4 Mint a gateway token for an agent
+### 4.4 Mint a gateway token for an agent
 
 Use the `agent_id` returned by `agents create` (or any agent you own):
 
 ```bash
-uv run python cli/enforceai_cli.py --pretty tokens mint "<agent_id>" \
+python cli/enforceai_cli.py --pretty tokens mint "<agent_id>" \
   --scope registry-users-lob1 \
   --ttl-seconds 3600
 ```
 
-### 8.5 Create an API key for an agent (requires `ENFORCEAI_API_KEY_PEPPER_PATH`)
+### 4.5 Create an API key for an agent (requires `ENFORCEAI_API_KEY_PEPPER_PATH`)
 
 Switch to `mixed` mode if you want the Auth Server to accept API keys as credentials:
 
@@ -234,10 +184,10 @@ Restart the Auth Server process so it picks up the new `ENFORCEAI_AUTH_PROVIDER`
 Then create an API key:
 
 ```bash
-uv run python cli/enforceai_cli.py --pretty api-keys create "<agent_id>" --scope registry-users-lob1
+python cli/enforceai_cli.py --pretty api-keys create "<agent_id>" --scope registry-users-lob1
 ```
 
-## 9. Optional: OIDC Mode (External IdP)
+## 7. Optional: OIDC Mode (External IdP)
 
 If you want to use OIDC JWTs, set:
 - `ENFORCEAI_AUTH_PROVIDER=oidc` (or `mixed`)
@@ -259,7 +209,7 @@ For OIDC requests:
 - Send `Authorization: Bearer <oidc_jwt>`
 - Send `X-Agent-Id: <uuidv4>` (required; validated against the EnforceAI agent registry for that `user_id`)
 
-## 10. Audit Retention Cleanup (Operator)
+## 8. Audit Retention Cleanup (Operator)
 
 Audit events are emitted to stdout and persisted best-effort to the EnforceAI SQLite DB.
 
@@ -270,24 +220,15 @@ export ENFORCEAI_DB_PATH="$(pwd)/.enforceai/enforceai.db"
 export ENFORCEAI_AUDIT_RETENTION_DAYS=30
 export ENFORCEAI_AUDIT_MAX_DB_BYTES=500000000
 
-uv run python -m cli.enforceai_audit_cleanup
+python -m cli.enforceai_audit_cleanup
 ```
 
 Dry run:
 
 ```bash
-uv run python -m cli.enforceai_audit_cleanup --dry-run
+python -m cli.enforceai_audit_cleanup --dry-run
 ```
 
-## 11. Running in Docker Compose (Optional)
+## 9. Notes on Docker Compose
 
-The default `docker-compose.yml` does not set EnforceAI environment variables for the `auth-server` service. For local experimentation, create a `docker-compose.override.yml` (do not commit secrets) that:
-- Adds `ENFORCEAI_*` env vars to `auth-server`
-- Mounts the EnforceAI DB and secret files into the container
-- Sets `ENFORCEAI_SCOPES_CATALOG_PATH` to the mounted `scopes.yml` path
-
-Start the stack with:
-
-```bash
-docker compose up -d
-```
+`docker-compose.yml` now passes through `ENFORCEAI_*` and mounts `$HOME/mcp-gateway/enforceai` into the `auth-server` container at `/app/enforceai_state` (so it does not shadow the `enforceai` Python package).
