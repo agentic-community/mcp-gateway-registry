@@ -190,6 +190,7 @@ cookies.txt
 
 # Scratchpad for temporary notes and planning
 .scratchpad/
+.enforceai/
 
 # Roo IDE files
 .roo/
