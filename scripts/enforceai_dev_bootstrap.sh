@@ -10,16 +10,24 @@ STATE_DIR="${ENFORCEAI_STATE_DIR:-$STATE_DIR_DEFAULT}"
 MODE_DEFAULT="gateway-token"
 MODE="${ENFORCEAI_AUTH_PROVIDER:-$MODE_DEFAULT}"
 
+COMPOSE_STATE_DIR_DEFAULT="$HOME/mcp-gateway/enforceai"
+
 FORCE=0
 if [[ "${1:-}" == "--force" ]]; then
   FORCE=1
   shift
 fi
 
+USE_COMPOSE_DIR=0
+if [[ "${1:-}" == "--compose" ]]; then
+  USE_COMPOSE_DIR=1
+  shift
+fi
+
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<'EOF'
 Usage:
-  scripts/enforceai_dev_bootstrap.sh [--force]
+  scripts/enforceai_dev_bootstrap.sh [--force] [--compose]
 
 Creates a local EnforceAI dev environment:
   - EnforceAI SQLite DB
@@ -31,6 +39,7 @@ Creates a local EnforceAI dev environment:
 
 Options:
   --force  Overwrite existing generated files where safe (does not delete DB).
+  --compose  Write state to $HOME/mcp-gateway/enforceai for docker-compose mounts.
 
 Environment overrides:
   ENFORCEAI_STATE_DIR          Root directory for generated state (default: ./.enforceai)
@@ -44,6 +53,10 @@ Notes:
   - For full gateway via docker-compose, set ENFORCEAI_STATE_DIR=$HOME/mcp-gateway/enforceai.
 EOF
   exit 0
+fi
+
+if [[ $USE_COMPOSE_DIR -eq 1 ]]; then
+  STATE_DIR="$COMPOSE_STATE_DIR_DEFAULT"
 fi
 
 PYTHON_BIN="${ENFORCEAI_PYTHON:-}"
@@ -118,6 +131,14 @@ echo "Auth mode:      $MODE"
 echo "Scopes catalog: $SCOPES_CATALOG_PATH"
 echo "DB path:        $DB_PATH"
 echo ""
+
+if [[ -z "${ENFORCEAI_STATE_DIR:-}" && $USE_COMPOSE_DIR -eq 0 && -d "$COMPOSE_STATE_DIR_DEFAULT" ]]; then
+  echo "[WARN] docker-compose uses state mounted from: $COMPOSE_STATE_DIR_DEFAULT"
+  echo "       You are bootstrapping state into: $STATE_DIR"
+  echo "       If you intend to run the full gateway via docker-compose, re-run with:"
+  echo "         scripts/enforceai_dev_bootstrap.sh --compose"
+  echo ""
+fi
 
 mkdir -p "$STATE_DIR" "$SECRETS_DIR" "$GATEWAY_PUBLIC_KEYS_DIR"
 chmod 700 "$STATE_DIR" "$SECRETS_DIR" "$GATEWAY_PUBLIC_KEYS_DIR" || true
@@ -285,6 +306,43 @@ print(token)
 PY
 chmod 600 "$BOOTSTRAP_TOKEN_PATH" || true
 echo "[OK] wrote bootstrap token: $BOOTSTRAP_TOKEN_PATH"
+
+BOOTSTRAP_BEARER_TOKEN_PATH="$STATE_DIR/bootstrap_gateway_token.bearer.txt"
+echo "Bearer $(cat "$BOOTSTRAP_TOKEN_PATH")" >"$BOOTSTRAP_BEARER_TOKEN_PATH"
+chmod 600 "$BOOTSTRAP_BEARER_TOKEN_PATH" || true
+echo "[OK] wrote bootstrap bearer token: $BOOTSTRAP_BEARER_TOKEN_PATH"
+
+"$PYTHON_BIN" - <<'PY'
+import base64
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+token_path = Path(os.environ["ENFORCEAI_STATE_DIR"]) / "bootstrap_gateway_token.txt"
+raw = token_path.read_text().strip()
+
+if not re.fullmatch(r"[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", raw):
+    raise SystemExit(f"[ERROR] bootstrap token is not a compact JWT: {token_path}")
+
+def decode(part: str) -> dict:
+    part += "=" * (-len(part) % 4)
+    data = base64.urlsafe_b64decode(part.encode())
+    return json.loads(data.decode("utf-8"))
+
+header_b64, payload_b64, _sig_b64 = raw.split(".")
+header = decode(header_b64)
+payload = decode(payload_b64)
+
+now = int(time.time())
+exp = int(payload.get("exp", 0))
+if exp <= now:
+    raise SystemExit(f"[ERROR] bootstrap token is already expired (exp={exp}, now={now})")
+
+print("[OK] bootstrap gateway token looks valid (JWT format + not expired)")
+print(f"[OK] token iss={payload.get('iss')} sub={payload.get('sub')} agent_id={payload.get('agent_id')} kid={header.get('kid')} exp={exp}")
+PY
 
 echo ""
 echo "Next:"
