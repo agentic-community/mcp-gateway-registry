@@ -159,6 +159,33 @@ def extract_credential_input(
         raise UnauthorizedError("No credentials provided")
 
     if len(credential_candidates) != 1:
+        # Common gateway compatibility case: clients may send both Authorization and
+        # X-Authorization with the same bearer token. Treat them as one credential.
+        bearer_candidates = [
+            (header_name, raw_value)
+            for kind, header_name, raw_value in credential_candidates
+            if kind == "bearer"
+        ]
+        bearer_header_names = {header_name for header_name, _raw in bearer_candidates}
+        if (
+            len(credential_candidates) == 2
+            and len(bearer_candidates) == 2
+            and bearer_header_names == {"Authorization", "X-Authorization"}
+        ):
+            bearer_tokens: dict[str, str] = {}
+            for header_name, raw_value in bearer_candidates:
+                bearer_tokens[header_name] = _extract_bearer_token(
+                    raw_value,
+                    header_name=header_name,
+                )
+
+            if bearer_tokens["Authorization"] == bearer_tokens["X-Authorization"]:
+                return CredentialInput(
+                    kind="bearer",
+                    value=bearer_tokens["Authorization"],
+                    agent_id_header=x_agent_id,
+                )
+
         provided_headers = ", ".join(
             header_name
             for _kind, header_name, _value in credential_candidates
