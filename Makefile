@@ -1,5 +1,8 @@
 .PHONY: help test test-unit test-integration test-e2e test-fast test-coverage test-auth test-servers test-search test-health test-core install-dev lint format check-deps clean build-keycloak push-keycloak build-and-push-keycloak deploy-keycloak update-keycloak save-outputs view-logs view-logs-keycloak view-logs-registry view-logs-auth view-logs-follow list-images build push build-push generate-manifest validate-config publish-dockerhub publish-dockerhub-component publish-dockerhub-version publish-dockerhub-no-mirror publish-local compose-up-agents compose-down-agents compose-logs-agents build-agents push-agents
 
+# Prefer the repo virtualenv if present.
+PYTHON := $(shell if [ -x ./.venv/bin/python ]; then echo ./.venv/bin/python; elif [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python; fi)
+
 # Default target
 help:
 	@echo "🧪 MCP Registry Testing Commands"
@@ -75,53 +78,53 @@ install-dev:
 	pip install -e .[dev]
 
 check-deps:
-	@python scripts/test.py check
+	@$(PYTHON) scripts/test.py check
 
 # Full test suite
 test:
-	@python scripts/test.py full
+	@$(PYTHON) scripts/test.py full
 
 # Test types
 test-unit:
-	@python scripts/test.py unit
+	@$(PYTHON) scripts/test.py unit
 
 test-integration:
-	@python scripts/test.py integration
+	@$(PYTHON) scripts/test.py integration
 
 test-e2e:
-	@python scripts/test.py e2e
+	@$(PYTHON) scripts/test.py e2e
 
 test-fast:
-	@python scripts/test.py fast
+	@$(PYTHON) scripts/test.py fast
 
 test-coverage:
-	@python scripts/test.py coverage
+	@$(PYTHON) scripts/test.py coverage
 
 # Domain-specific tests
 test-auth:
-	@python scripts/test.py auth
+	@$(PYTHON) scripts/test.py auth
 
 test-servers:
-	@python scripts/test.py servers
+	@$(PYTHON) scripts/test.py servers
 
 test-search:
-	@python scripts/test.py search
+	@$(PYTHON) scripts/test.py search
 
 test-health:
-	@python scripts/test.py health
+	@$(PYTHON) scripts/test.py health
 
 test-core:
-	@python scripts/test.py core
+	@$(PYTHON) scripts/test.py core
 
 # Code quality
 lint:
 	@echo "🔍 Running linting checks..."
-	@python -m bandit -r registry/ -f json || true
+	@$(PYTHON) -m bandit -r registry/ -f json || true
 	@echo "✅ Linting complete"
 
 format:
 	@echo "🎨 Formatting code..."
-	@python -m black registry/ tests/ --diff --color
+	@$(PYTHON) -m black registry/ tests/ --diff --color
 	@echo "✅ Code formatting complete"
 
 # Cleanup

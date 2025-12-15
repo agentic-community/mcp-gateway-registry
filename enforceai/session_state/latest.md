@@ -4,6 +4,13 @@
 - Repo initialized
 - Base architecture files created
 - Persistence backend for phase 1 selected
+- Enforce GW UI backend Phase 1: added shared session cookie schema (`gateway_session.py`), updated registry `/api/auth/me` to include `user_id`/`session_id`/`email`, updated auth_server OAuth2 cookie issuance to include v1 fields, and added tests (full suite passing)
+- Enforce GW UI backend Phase 2: added CSRF token minting (`GET /api/auth/csrf`) + CSRF enforcement for cookie-authenticated state-changing requests in `registry` and `auth_server` (for `/enforceai/*`), wired Nginx forwarding for `/enforceai/*` and `X-CSRF-Token`, and added tests (full suite passing)
+- Enforce GW UI backend Phase 3: added EnforceAI users directory persistence (`0002_users` migration), `UserRecord` model, `UserStore` + `SqliteUserStore`, and scrypt-based password hashing utility, with updated tests (full suite passing)
+- Enforce GW UI backend Phase 4: added revocable sessions persistence (`0003_sessions` migration), `SessionRecord` + `SessionStore`, registry/auth_server session validation + logout revocation, and an integration test verifying revoked sessions are rejected (full suite passing)
+- Enforce GW UI backend Phase 5: enabled cookie-session auth for `/enforceai/*` management routes (no bearer/token required), added admin role check endpoint (`GET /enforceai/admin/ping`), and added integration coverage (full suite passing)
+- Enforce GW UI backend Phase 6: added EnforceAI admin APIs (users directory + cross-user operations) under `/enforceai/admin/*`, including user search/get, cross-user agent create/revoke, cross-user API key create/revoke, and gateway token revocation by `jti`, with integration coverage (full suite passing)
+- Enforce GW UI backend Phase 7: migrated registry `/api/internal/*` operator endpoints off HTTP Basic to unified admin auth (`nginx_proxied_auth`), updated `/api/servers/*` wrappers to pass user context, and added integration coverage (full suite passing)
 - Stage 0.1: created `auth_server/enforceai/` package skeleton with core contracts + unit tests
 - Stage 0.2: added env-driven EnforceAI settings parsing + validation with unit test coverage
 - Stage 0.3: added reusable pytest fixtures (RSA keys, temp SQLite, env helpers) with unit test coverage
@@ -195,6 +202,15 @@
 
 - `.venv/bin/python -m py_compile tests/integration/test_enforceai_stage7_hardening.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_stage7_hardening.py` (pass)
+
+- `.venv/bin/python -m py_compile tests/integration/test_registry_session_invalidation.py` (pass)
+- `make test` (pass)
+- `make test` (pass)
+- `make test` (pass)
+- `make test` (pass)
+
+## Next
+- Start UI build: new Enforce Gateway UI (frontend)
 
 ## Production Testing & Integration (2025-12-15)
 
