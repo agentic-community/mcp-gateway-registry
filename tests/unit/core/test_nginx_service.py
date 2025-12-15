@@ -177,6 +177,7 @@ http {
         assert "proxy_set_header X-Real-IP $remote_addr;" in config_content
         assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in config_content
         assert "proxy_set_header X-Forwarded-Proto $scheme;" in config_content
+        assert "header_filter_by_lua_file /etc/nginx/lua/filter_tools_list_headers.lua;" in config_content
         assert "body_filter_by_lua_file /etc/nginx/lua/filter_tools_list.lua;" in config_content
         assert "auth_request_set $auth_allowed_tools $upstream_http_x_allowed_tools;" in config_content
 

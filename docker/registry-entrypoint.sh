@@ -92,26 +92,30 @@ EOF
 
 echo "Lua script created."
 
-cat > "$LUA_SCRIPTS_DIR/filter_tools_list.lua" << 'EOF'
--- filter_tools_list.lua: Filter tools/list JSON-RPC responses based on allowlist from auth_request.
-local cjson = require "cjson"
+cat > "$LUA_SCRIPTS_DIR/filter_tools_list_headers.lua" << 'EOF'
+-- filter_tools_list_headers.lua: Fix response headers for tools/list filtering.
+--
+-- The body filter mutates the JSON body. If the upstream sends Content-Length,
+-- keeping the original value can cause clients to wait for bytes that will
+-- never arrive. This is especially problematic when chunked encoding is
+-- disabled for certain transports (SSE/direct).
+--
+-- For tools/list requests that will be filtered, remove Content-Length and
+-- force Connection: close so clients reliably see end-of-response promptly.
 
-local function _is_json_response()
-    local content_type = ngx.header["Content-Type"] or ""
-    return string.find(content_type, "application/json", 1, true) ~= nil
-end
-
+-- Only adjust headers for tools/list requests
 if ngx.ctx.mcp_method ~= "tools/list" then
     return
 end
 
-if not _is_json_response() then
+-- Only adjust JSON responses
+local content_type = ngx.header["Content-Type"] or ""
+if not string.find(content_type, "application/json", 1, true) then
     return
 end
 
 local allowed_raw = ngx.var.auth_allowed_tools
 if not allowed_raw or allowed_raw == "" then
-    -- No allowlist available (legacy mode); do not modify response.
     return
 end
 
@@ -120,11 +124,50 @@ if allowed_raw == "*" or lowered == "all" then
     return
 end
 
-local ok, allowed_list = pcall(cjson.decode, allowed_raw)
-if not ok or type(allowed_list) ~= "table" then
+ngx.header["Content-Length"] = nil
+ngx.header["Keep-Alive"] = nil
+ngx.header["Connection"] = "close"
+EOF
+
+echo "Lua tools/list header filter script created."
+
+cat > "$LUA_SCRIPTS_DIR/filter_tools_list.lua" << 'EOF'
+-- filter_tools_list.lua: Filter tools/list JSON-RPC responses based on allowlist from auth_request.
+-- Requires proxy_buffering on to work correctly.
+local cjson = require "cjson"
+
+-- Only filter tools/list requests
+if ngx.ctx.mcp_method ~= "tools/list" then
     return
 end
 
+-- Only filter JSON responses
+local content_type = ngx.header["Content-Type"] or ""
+if not string.find(content_type, "application/json", 1, true) then
+    return
+end
+
+-- Check for allowed tools header from auth_request
+local allowed_raw = ngx.var.auth_allowed_tools
+if not allowed_raw or allowed_raw == "" then
+    -- No allowlist available (legacy mode); do not modify response.
+    return
+end
+
+-- Check for wildcard (all tools allowed)
+local lowered = string.lower(allowed_raw)
+if allowed_raw == "*" or lowered == "all" then
+    return
+end
+
+-- Parse allowed tools JSON array
+local ok, allowed_list = pcall(cjson.decode, allowed_raw)
+if not ok or type(allowed_list) ~= "table" then
+    ngx.log(ngx.WARN, "Failed to parse allowed_tools: ", allowed_raw)
+    return
+end
+
+-- Build allowed set for O(1) lookup
 local allowed_set = {}
 for _, name in ipairs(allowed_list) do
     if type(name) == "string" and name ~= "" then
@@ -134,25 +177,37 @@ end
 
 local chunk = ngx.arg[1]
 local eof = ngx.arg[2]
-ngx.ctx._tools_list_chunks = ngx.ctx._tools_list_chunks or {}
+
+-- Initialize buffer
+ngx.ctx._filter_buffer = ngx.ctx._filter_buffer or {}
+
+-- Collect chunks
 if chunk and chunk ~= "" then
-    table.insert(ngx.ctx._tools_list_chunks, chunk)
+    table.insert(ngx.ctx._filter_buffer, chunk)
+    ngx.arg[1] = nil  -- Suppress output until EOF
 end
 
+-- Process at EOF when we have the complete response
 if not eof then
-    ngx.arg[1] = nil
     return
 end
 
-local body = table.concat(ngx.ctx._tools_list_chunks)
-ngx.ctx._tools_list_chunks = nil
+local body = table.concat(ngx.ctx._filter_buffer)
+ngx.ctx._filter_buffer = nil
 
-local decoded_ok, payload = pcall(cjson.decode, body)
-if not decoded_ok or type(payload) ~= "table" then
-    ngx.arg[1] = body
+if body == "" then
     return
 end
 
+-- Parse JSON response
+local decode_ok, payload = pcall(cjson.decode, body)
+if not decode_ok or type(payload) ~= "table" then
+    ngx.log(ngx.WARN, "Failed to decode tools/list response")
+    ngx.arg[1] = body  -- Pass through unchanged
+    return
+end
+
+-- Find tools array in response
 local tools = nil
 if type(payload.result) == "table" and type(payload.result.tools) == "table" then
     tools = payload.result.tools
@@ -161,10 +216,11 @@ elseif type(payload.tools) == "table" then
 end
 
 if not tools then
-    ngx.arg[1] = body
+    ngx.arg[1] = body  -- No tools to filter
     return
 end
 
+-- Filter tools based on allowlist
 local filtered = {}
 for _, tool in ipairs(tools) do
     if type(tool) == "table" and type(tool.name) == "string" and allowed_set[tool.name] then
@@ -172,6 +228,9 @@ for _, tool in ipairs(tools) do
     end
 end
 
+ngx.log(ngx.INFO, "Filtered tools/list: ", #tools, " -> ", #filtered, " tools")
+
+-- Update tools in response
 if type(payload.result) == "table" and type(payload.result.tools) == "table" then
     payload.result.tools = filtered
 elseif type(payload.tools) == "table" then

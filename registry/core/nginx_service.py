@@ -353,6 +353,12 @@ class NginxConfigService:
         resolver 8.8.8.8 8.8.4.4 valid=10s;
         resolver_timeout 5s;
 
+        # Preserve inbound auth headers for the auth_request subrequest (/validate).
+        # auth_request can run as an internal subrequest where $http_* vars may not reflect
+        # the original client headers, so we copy them into variables here.
+        set $enforceai_authorization $http_authorization;
+        set $enforceai_x_authorization $http_x_authorization;
+
         # Authenticate request - pass entire request to auth server
         auth_request /validate;
         
@@ -407,40 +413,60 @@ class NginxConfigService:
             transport_settings = """
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        # Ensure filtered tools/list responses don't keep stale Content-Length
+        header_filter_by_lua_file /etc/nginx/lua/filter_tools_list_headers.lua;
         # Filter tools/list responses based on allowlist from auth server
         body_filter_by_lua_file /etc/nginx/lua/filter_tools_list.lua;
 
-        # For SSE connections and WebSocket upgrades
-        proxy_buffering off;
+        # Enable buffering for Lua body filter to work correctly.
+        # For actual SSE streams, upstream can send X-Accel-Buffering: no to disable.
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 4 16k;
         proxy_cache off;
         proxy_set_header Connection $http_connection;
         proxy_set_header Upgrade $http_upgrade;
         # Explicitly preserve Accept header for MCP protocol requirements
         proxy_set_header Accept $http_accept;
         chunked_transfer_encoding off;"""
-        
+
         elif transport_type == "streamable-http":
             transport_settings = """
+        # MCP streamable-http endpoints are JSON-RPC over HTTP POST. Browsers often do a GET; fail fast with a helpful error.
+        if ($request_method !~ ^(POST|OPTIONS)$) {
+            add_header Content-Type application/json;
+            return 405 '{"error":"Method not allowed. Use HTTP POST with a JSON-RPC body."}';
+        }
+
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        # Ensure filtered tools/list responses don't keep stale Content-Length
+        header_filter_by_lua_file /etc/nginx/lua/filter_tools_list_headers.lua;
         # Filter tools/list responses based on allowlist from auth server
         body_filter_by_lua_file /etc/nginx/lua/filter_tools_list.lua;
 
-        # HTTP transport configuration
-        proxy_buffering off;
+        # Enable buffering for Lua body filter to work correctly.
+        # For actual SSE streams, upstream can send X-Accel-Buffering: no to disable.
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 4 16k;
         proxy_set_header Connection "";
-        # Explicitly preserve Accept header for MCP protocol requirements
-        proxy_set_header Accept $http_accept;"""
-        
+        # FastMCP streamable HTTP requires clients to accept both JSON and SSE frames.
+        proxy_set_header Accept "application/json, text/event-stream";"""
+
         else:  # direct
             transport_settings = """
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        # Ensure filtered tools/list responses don't keep stale Content-Length
+        header_filter_by_lua_file /etc/nginx/lua/filter_tools_list_headers.lua;
         # Filter tools/list responses based on allowlist from auth server
         body_filter_by_lua_file /etc/nginx/lua/filter_tools_list.lua;
-        
-        # Generic transport configuration
-        proxy_buffering off;
+
+        # Enable buffering for Lua body filter to work correctly.
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 4 16k;
         proxy_cache off;
         proxy_set_header Connection $http_connection;
         proxy_set_header Upgrade $http_upgrade;
