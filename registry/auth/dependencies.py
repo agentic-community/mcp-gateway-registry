@@ -1,4 +1,9 @@
 import secrets
+from datetime import (
+    datetime,
+    timezone,
+    timedelta,
+)
 from typing import Annotated, List, Dict, Any, Optional
 import logging
 import yaml
@@ -8,6 +13,16 @@ from fastapi import Depends, HTTPException, status, Cookie, Header, Request
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 
 from ..core.config import settings
+from gateway_session import (
+    build_session_cookie_payload,
+    normalize_session_data,
+)
+from auth_server.enforceai.stores.sqlite.session_store import (
+    SqliteSessionStore,
+)
+from auth_server.enforceai.db.data_layer import (
+    EnforceAIDataLayer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,20 +106,67 @@ def get_user_session_data(
     
     try:
         data = signer.loads(session, max_age=settings.session_max_age_seconds)
-        
-        if not data.get('username'):
+
+        normalized = normalize_session_data(
+            data,
+            default_provider="local",
+            max_age_seconds=settings.session_max_age_seconds,
+        )
+
+        if normalized.username is None or not normalized.username.strip():
             logger.warning("No username found in session data")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid session data"
             )
-        
-        # Set defaults for traditional auth users
-        if data.get('auth_method') != 'oauth2':
+
+        legacy_auth_method = normalized.legacy_auth_method or ""
+
+        # Set defaults for traditional auth users (legacy behavior)
+        if legacy_auth_method != "oauth2":
             # Traditional users get admin privileges
-            data.setdefault('groups', ['mcp-registry-admin'])
-            data.setdefault('scopes', ['mcp-servers-unrestricted/read', 'mcp-servers-unrestricted/execute'])
-        
+            data.setdefault("groups", ["mcp-registry-admin"])
+            data.setdefault(
+                "scopes",
+                [
+                    "mcp-servers-unrestricted/read",
+                    "mcp-servers-unrestricted/execute",
+                ],
+            )
+
+        data["v"] = normalized.v
+        data["session_id"] = normalized.session_id
+        data["user_id"] = normalized.user_id
+        data["auth_method"] = normalized.auth_method
+        data["legacy_auth_method"] = normalized.legacy_auth_method
+        data["provider"] = normalized.provider
+        data["username"] = normalized.username
+        data["email"] = normalized.email
+        data["name"] = normalized.name
+        data["groups"] = normalized.groups or data.get("groups", [])
+        data["issued_at"] = normalized.issued_at
+        data["expires_at"] = normalized.expires_at
+
+        enforceai_db_path = getattr(settings, "enforceai_db_path", None)
+        if enforceai_db_path is not None:
+            EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
+            store = SqliteSessionStore(db_path=enforceai_db_path)
+            record = store.get_session_by_id(session_id=normalized.session_id)
+            if record is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Session invalidated",
+                )
+            if record.revoked_at is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Session invalidated",
+                )
+            store.touch_session(
+                session_id=normalized.session_id,
+                now=datetime.now(timezone.utc).replace(microsecond=0),
+            )
+
         logger.debug(f"Session data extracted for user: {data.get('username')}")
         return data
         
@@ -451,14 +513,19 @@ def enhanced_auth(
     """
     session_data = get_user_session_data(session)
     
-    username = session_data['username']
-    groups = session_data.get('groups', [])
-    auth_method = session_data.get('auth_method', 'traditional')
+    username = session_data["username"]
+    groups = session_data.get("groups", [])
+    auth_method = session_data.get("auth_method", "password")
+    legacy_auth_method = session_data.get("legacy_auth_method") or ""
     
-    logger.info(f"Enhanced auth debug for {username}: groups={groups}, auth_method={auth_method}")
+    logger.info(
+        f"Enhanced auth debug for {username}: groups={groups}, auth_method={auth_method}, legacy_auth_method={legacy_auth_method}"
+    )
     
+    is_oauth2_user = legacy_auth_method == "oauth2" or auth_method == "oidc"
+
     # Map groups to scopes for OAuth2 users
-    if auth_method == 'oauth2':
+    if is_oauth2_user:
         scopes = map_cognito_groups_to_scopes(groups)
         logger.info(f"OAuth2 user {username} with groups {groups} mapped to scopes: {scopes}")
         # If OAuth2 user has no groups, they should get minimal permissions, not admin
@@ -491,17 +558,21 @@ def enhanced_auth(
     can_modify = user_can_modify_servers(groups, scopes)
 
     user_context = {
-        'username': username,
-        'groups': groups,
-        'scopes': scopes,
-        'auth_method': auth_method,
-        'provider': session_data.get('provider', 'local'),
-        'accessible_servers': accessible_servers,
-        'accessible_services': accessible_services,
-        'accessible_agents': accessible_agents,
-        'ui_permissions': ui_permissions,
-        'can_modify_servers': can_modify,
-        'is_admin': user_has_wildcard_access(scopes)
+        "user_id": session_data.get("user_id", f"local|{username}"),
+        "session_id": session_data.get("session_id"),
+        "email": session_data.get("email"),
+        "username": username,
+        "groups": groups,
+        "scopes": scopes,
+        "auth_method": auth_method,
+        "legacy_auth_method": legacy_auth_method,
+        "provider": session_data.get("provider", "local"),
+        "accessible_servers": accessible_servers,
+        "accessible_services": accessible_services,
+        "accessible_agents": accessible_agents,
+        "ui_permissions": ui_permissions,
+        "can_modify_servers": can_modify,
+        "is_admin": user_has_wildcard_access(scopes),
     }
 
     logger.debug(f"Enhanced auth context for {username}: {user_context}")
@@ -601,11 +672,32 @@ def nginx_proxied_auth(
 
 def create_session_cookie(username: str, auth_method: str = "traditional", provider: str = "local") -> str:
     """Create a session cookie for a user."""
-    session_data = {
-        "username": username,
-        "auth_method": auth_method,
-        "provider": provider
-    }
+    user_id = f"local|{username}"
+    session_id: Optional[str] = None
+    enforceai_db_path = getattr(settings, "enforceai_db_path", None)
+    if enforceai_db_path is not None:
+        EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
+        store = SqliteSessionStore(db_path=enforceai_db_path)
+        session_id = secrets.token_urlsafe(24)
+        store.create_session(
+            session_id=session_id,
+            user_id=user_id,
+            auth_method="password",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0)
+            + timedelta(seconds=settings.session_max_age_seconds),
+        )
+
+    session_data = build_session_cookie_payload(
+        username=username,
+        email=None,
+        name=None,
+        groups=None,
+        provider=provider,
+        legacy_auth_method=auth_method,
+        max_age_seconds=settings.session_max_age_seconds,
+        session_id=session_id,
+        user_id=user_id,
+    )
     return signer.dumps(session_data)
 
 

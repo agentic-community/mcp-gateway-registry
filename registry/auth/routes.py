@@ -8,7 +8,23 @@ from fastapi.templating import Jinja2Templates
 import httpx
 
 from ..core.config import settings
-from .dependencies import create_session_cookie, validate_login_credentials
+from .dependencies import (
+    create_session_cookie,
+    get_user_session_data,
+    validate_login_credentials,
+)
+from gateway_csrf import (
+    mint_csrf_token,
+)
+from gateway_session import (
+    normalize_session_data,
+)
+from auth_server.enforceai.stores.sqlite.session_store import (
+    SqliteSessionStore,
+)
+from auth_server.enforceai.db.data_layer import (
+    EnforceAIDataLayer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -192,13 +208,39 @@ async def logout_handler(
                 serializer = URLSafeTimedSerializer(settings.secret_key)
                 session_data = serializer.loads(session, max_age=settings.session_max_age_seconds)
                 
-                if session_data.get('auth_method') == 'oauth2':
+                legacy_auth_method = session_data.get("legacy_auth_method") or session_data.get(
+                    "auth_method"
+                )
+                if legacy_auth_method == "oauth2":
                     provider = session_data.get('provider')
                     logger.info(f"User was authenticated via OAuth2 provider: {provider}")
                     
             except (SignatureExpired, BadSignature, Exception) as e:
                 logger.debug(f"Could not decode session for logout: {e}")
         
+        session_id = None
+        if session:
+            try:
+                from .dependencies import signer
+                session_payload = signer.loads(session, max_age=settings.session_max_age_seconds)
+                normalized = normalize_session_data(
+                    session_payload,
+                    default_provider="local",
+                    max_age_seconds=settings.session_max_age_seconds,
+                )
+                session_id = normalized.session_id
+            except Exception:
+                session_id = None
+
+        enforceai_db_path = getattr(settings, "enforceai_db_path", None)
+        if session_id and enforceai_db_path is not None:
+            try:
+                EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
+                store = SqliteSessionStore(db_path=enforceai_db_path)
+                store.revoke_session(session_id=session_id, revoked_reason="logout")
+            except Exception:
+                logger.exception("Failed to revoke server-side session on logout")
+
         # Clear local session cookie
         response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
         response.delete_cookie(settings.session_cookie_name)
@@ -265,3 +307,28 @@ async def get_providers_api():
 async def get_auth_config():
     """API endpoint to get auth configuration for React frontend"""
     return {"auth_server_url": settings.auth_server_external_url}
+
+
+@router.get("/csrf")
+async def get_csrf_token(
+    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+):
+    """Return a CSRF token bound to the current session.
+
+    This endpoint requires an authenticated session cookie.
+    """
+    data = get_user_session_data(session)
+    session_id = data.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+    return {
+        "csrf_token": mint_csrf_token(
+            secret_key=settings.secret_key,
+            session_id=session_id,
+        ),
+        "expires_in_seconds": settings.csrf_token_max_age_seconds,
+    }

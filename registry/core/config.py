@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     session_cookie_domain: Optional[str] = None  # e.g., ".example.com" for cross-subdomain sharing
     auth_server_url: str = "http://localhost:8888"
     auth_server_external_url: str = "http://localhost:8888"  # External URL for OAuth redirects
+    csrf_token_max_age_seconds: int = 60 * 60  # 1 hour
+    enforceai_db_path: Optional[Path] = None  # Shared EnforceAI DB for session invalidation, etc.
     
     # Embeddings settings [Default]
     embeddings_provider: str = "sentence-transformers"  # 'sentence-transformers' or 'litellm'
