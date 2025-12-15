@@ -132,14 +132,45 @@ async def oauth2_callback(request: Request, error: str = None, details: str = No
 @router.post("/login")
 async def login_submit(
     request: Request,
-    username: Annotated[str, Form()], 
-    password: Annotated[str, Form()]
 ):
     """Handle login form submission - supports both traditional and API calls"""
+    content_type = (request.headers.get("content-type") or "").lower()
+
+    username: str | None = None
+    password: str | None = None
+
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+
+        if isinstance(payload, dict):
+            username = payload.get("username")
+            password = payload.get("password")
+    else:
+        form = await request.form()
+        username = form.get("username")
+        password = form.get("password")
+
+    if not isinstance(username, str) or not username.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="username is required",
+        )
+
+    if not isinstance(password, str) or not password.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="password is required",
+        )
+
+    username = username.strip()
+
     logger.info(f"Login attempt for username: {username}")
     
     # Check if this is an API call (React) or traditional form submission
-    accept_header = request.headers.get("accept", "")
+    accept_header = (request.headers.get("accept") or "").lower()
     is_api_call = "application/json" in accept_header
     
     if validate_login_credentials(username, password):

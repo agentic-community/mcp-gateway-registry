@@ -670,9 +670,15 @@ def nginx_proxied_auth(
     return enhanced_auth(session)
 
 
-def create_session_cookie(username: str, auth_method: str = "traditional", provider: str = "local") -> str:
+def create_session_cookie(
+    username: str,
+    auth_method: str = "traditional",
+    provider: str = "local",
+) -> str:
     """Create a session cookie for a user."""
-    user_id = f"local|{username}"
+    is_oidc_session = auth_method == "oauth2"
+    user_id = f"{provider}|{username}" if is_oidc_session else f"local|{username}"
+    groups = [] if is_oidc_session else ["enforceai-admin", "mcp-registry-admin"]
     session_id: Optional[str] = None
     enforceai_db_path = getattr(settings, "enforceai_db_path", None)
     if enforceai_db_path is not None:
@@ -682,7 +688,7 @@ def create_session_cookie(username: str, auth_method: str = "traditional", provi
         store.create_session(
             session_id=session_id,
             user_id=user_id,
-            auth_method="password",
+            auth_method="oidc" if is_oidc_session else "password",
             expires_at=datetime.now(timezone.utc).replace(microsecond=0)
             + timedelta(seconds=settings.session_max_age_seconds),
         )
@@ -691,7 +697,7 @@ def create_session_cookie(username: str, auth_method: str = "traditional", provi
         username=username,
         email=None,
         name=None,
-        groups=None,
+        groups=groups,
         provider=provider,
         legacy_auth_method=auth_method,
         max_age_seconds=settings.session_max_age_seconds,
