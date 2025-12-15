@@ -7,7 +7,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_DIR_DEFAULT="$ROOT_DIR/.enforceai"
 STATE_DIR="${ENFORCEAI_STATE_DIR:-$STATE_DIR_DEFAULT}"
 
-MODE_DEFAULT="gateway-token"
+MODE_DEFAULT="mixed"
 MODE="${ENFORCEAI_AUTH_PROVIDER:-$MODE_DEFAULT}"
 
 COMPOSE_STATE_DIR_DEFAULT="$HOME/mcp-gateway/enforceai"
@@ -43,13 +43,13 @@ Options:
 
 Environment overrides:
   ENFORCEAI_STATE_DIR          Root directory for generated state (default: ./.enforceai)
-  ENFORCEAI_AUTH_PROVIDER      gateway-token | api-key | oidc | mixed (default: gateway-token)
+  ENFORCEAI_AUTH_PROVIDER      gateway-token | api-key | oidc | mixed (default: mixed)
   ENFORCEAI_DB_PATH            Path to SQLite DB (default: $ENFORCEAI_STATE_DIR/enforceai.db)
   ENFORCEAI_SCOPES_CATALOG_PATH Path to scopes.yml (default: ./auth_server/scopes.yml)
 
 Notes:
   - This is a dev convenience script. Do not use it for production provisioning.
-  - mixed/oidc modes require OIDC_ISSUERS to be set separately.
+  - oidc mode requires OIDC_ISSUERS to be set separately.
   - For full gateway via docker-compose, set ENFORCEAI_STATE_DIR=$HOME/mcp-gateway/enforceai.
 EOF
   exit 0
@@ -236,7 +236,7 @@ echo "[OK] wrote env file: $ENV_FILE_PATH"
 "$PYTHON_BIN" - <<'PY' >"$COMPOSE_ENV_FILE_PATH"
 import os
 
-mode = os.environ.get("ENFORCEAI_AUTH_PROVIDER", "gateway-token")
+mode = os.environ.get("ENFORCEAI_AUTH_PROVIDER", "mixed")
 
 print('export ENFORCEAI_AUTH_PROVIDER="' + mode + '"')
 print('export ENFORCEAI_DB_PATH="/app/enforceai_state/enforceai.db"')

@@ -248,13 +248,19 @@ class TestAuthRoutes:
         username = "testuser"
         password = "testpass"
         
+        mock_request.form = AsyncMock(return_value={"username": username, "password": password})
+        mock_request.headers = {
+            "accept": "text/html",
+            "content-type": "application/x-www-form-urlencoded",
+        }
+
         with patch('registry.auth.routes.validate_login_credentials') as mock_validate, \
              patch('registry.auth.routes.create_session_cookie') as mock_create_session:
             
             mock_validate.return_value = True
             mock_create_session.return_value = "session_data"
             
-            response = await login_submit(mock_request, username, password)
+            response = await login_submit(mock_request)
             
             assert isinstance(response, RedirectResponse)
             assert response.status_code == 303
@@ -271,10 +277,16 @@ class TestAuthRoutes:
         username = "testuser"
         password = "wrongpass"
         
+        mock_request.form = AsyncMock(return_value={"username": username, "password": password})
+        mock_request.headers = {
+            "accept": "text/html",
+            "content-type": "application/x-www-form-urlencoded",
+        }
+
         with patch('registry.auth.routes.validate_login_credentials') as mock_validate:
             mock_validate.return_value = False
             
-            response = await login_submit(mock_request, username, password)
+            response = await login_submit(mock_request)
             
             assert isinstance(response, RedirectResponse)
             assert response.status_code == 303
