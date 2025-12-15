@@ -66,9 +66,13 @@ Must:
 - The UI must allow configuring base URLs for the services it calls:
   - Registry base URL (for `/api/*`)
   - Auth Server base URL (for `/enforceai/*` and auth flows)
+  - For same-origin deployments behind the gateway nginx, both base URLs may be the same (for example `http://localhost`), with EnforceAI reachable under `/enforceai/*`.
 
 Should:
 - Support per-environment config (dev/stage/prod) via build-time env vars, plus an in-app override for local testing.
+- Provide a way to view/download the OpenAPI schemas used by the UI:
+  - Registry: `GET <registry_base_url>/openapi.json`
+  - EnforceAI: `GET <registry_base_url>/enforceai/openapi.json` (preferred when behind nginx), or `GET <auth_server_base_url>/openapi.json` (when calling the auth server directly)
 
 ## Authentication and Session Requirements
 The UI must support authenticating to EnforceAI management APIs using exactly one credential source per request:
@@ -79,6 +83,8 @@ The UI must support authenticating to EnforceAI management APIs using exactly on
 The UI must also support the existing Registry UI authentication patterns:
 - OIDC login (OAuth provider selection)
 - Username/password login (non-IdP)
+  - The UI should call `POST /api/auth/login` and rely on a server-managed session cookie.
+  - The backend accepts either JSON (`{"username":"...","password":"..."}`) or form-encoded body; the new UI should use JSON.
 
 ### Enterprise Security Defaults (best practice)
 Given the UI is deployed on the same domain as the backends and must use a single session:
@@ -87,7 +93,7 @@ Given the UI is deployed on the same domain as the backends and must use a singl
   - short idle timeout + absolute timeout
   - session invalidation on logout and credential rotation
 - Enforce CSRF protection for all state-changing operations when using cookies:
-  - double-submit cookie or CSRF token endpoint + `X-CSRF-Token` header
+  - CSRF token endpoint (`GET /api/auth/csrf`) + `X-CSRF-Token` header on all state-changing requests made with the session cookie
 - Do not store long-lived tokens in browser storage (`localStorage`).
 - Use token-based auth (gateway token / API key) primarily for non-browser clients and break-glass scenarios.
 - For username/password auth:
@@ -104,8 +110,10 @@ Must:
 - If EnforceAI still requires an agent binding (`agent_id`) for OIDC-based calls, the UI must support selecting a “current agent context” once per session.
 
 ### Session Model
-- The UI must allow configuring a **Management API Base URL** (default `http://localhost:8888`).
 - The UI must allow configuring a **Registry API Base URL** (default `http://localhost`).
+- The UI must allow configuring an **EnforceAI API Base URL**:
+  - default `http://localhost` for same-origin deployments behind nginx (EnforceAI routes under `/enforceai/*`)
+  - allow `http://localhost:8888` for direct-to-auth-server local development
 - The UI must allow the user to choose **credential type** (OIDC bearer, gateway token, API key).
 - The UI must support storing session state in-browser (at minimum, in-memory; optionally `sessionStorage`) with a “Clear session” action.
 - The UI must never write credentials to logs.
