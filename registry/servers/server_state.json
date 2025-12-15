@@ -4,5 +4,6 @@
   "/mcpgw/": true,
   "/realserverfaketools/": true,
   "/sre-gateway/": true,
-  "/atlassian": true
+  "/atlassian": true,
+  "/sqlite": true
 }

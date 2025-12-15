@@ -43,6 +43,11 @@
 - Stage 6.2: added management API routes (`/enforceai/*`) in `auth_server` with best-effort audit emission and integration coverage for OIDC, gateway-token, and api-key auth
 - Stage 6.3: added `cli/enforceai_cli.py` (argparse + httpx) for self-service management operations with unit arg/header tests and an ASGITransport roundtrip test (no network)
 - Stage 6.4: added management documentation and hardening regression tests (API key secret returned once; audit failure best-effort)
+- Stage 7.1: extended AuditStore retention primitives and SQLite implementation with unit tests
+- Stage 7.2: added audit retention engine (compute_cutoff, time retention, size retention) with unit tests
+- Stage 7.3: added out-of-band cleanup command `cli/enforceai_audit_cleanup.py` with unit + integration tests
+- Stage 7.4: added regression tests for audit failure policy + request-path caching; added audit retention operator docs
+- Production testing (2025-12-15): verified end-to-end FGAC tool restrictions with SQLite MCP server integration, confirmed agent-level `allowed_tools` enforcement with Nginx Lua filtering
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -69,13 +74,18 @@
 - API key pepper rotation: no pepper rotation/versioning in Phase 1; rotation is a breaking change for existing keys unless versioning is added later.
 - Error semantics: 401 for missing/invalid credentials; 403 for authenticated-but-denied (including missing `X-Agent-Id`); 503 for internal enforcement dependency failures (deny but signal retry).
 - OIDC claim defaults: scopes from `scp`→`scope`→`permissions`; roles from `roles`→`groups`→`permissions` (per-issuer overrides allowed); roles/groups for audit only.
+- Bootstrap token TTL: extended to 30 days for local development convenience; production tokens should use shorter TTLs based on security requirements.
+- Docker Compose EnforceAI activation: EnforceAI environment variables must be loaded via `--env-file` flag (not inline env vars) for proper Docker Compose variable substitution.
+- Agent allowed_tools enforcement: tool restrictions are bidirectional (visibility + execution); `tools/list` shows only allowed tools, `tools/call` blocks unauthorized tools.
+- MCP server registration: use `host.docker.internal` for Docker-to-host connectivity when registering localhost MCP servers.
 
 ## Current Task
-- Stage 7: audit retention + cleanup jobs
+- Stage 7: audit retention + cleanup jobs (completed)
+- Production testing: FGAC tool restrictions + MCP gateway integration
 
 ## Next Steps
-1. Stage 7: audit retention + cleanup jobs
-2. Stage 8+: advanced policy + UI
+1. Stage 8+: advanced policy + UI
+2. Document operational procedures for token management and server registration
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
@@ -185,5 +195,94 @@
 
 - `.venv/bin/python -m py_compile tests/integration/test_enforceai_stage7_hardening.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_stage7_hardening.py` (pass)
+
+## Production Testing & Integration (2025-12-15)
+
+### Bootstrap Token Configuration
+- Extended bootstrap token TTL from 1 hour to 30 days (2592000 seconds) in `scripts/enforceai_dev_bootstrap.sh` for local development convenience
+- Regenerated bootstrap token with extended expiry: `exp: 2026-01-14`
+- Token stored in `~/mcp-gateway/enforceai/bootstrap_gateway_token.txt`
+
+### SQLite MCP Server Registration
+- Registered local SQLite MCP server (`localhost:3031/mcp`) to the MCP Gateway at path `/sqlite`
+- Server configuration:
+  - `display_name`: "SQLite MCP Server"
+  - `proxy_pass_url`: `http://host.docker.internal:3031/mcp`
+  - `supported_transports`: ["streamable-http"]
+- Server health verified with 6 tools exposed:
+  - `read_query` (SELECT queries)
+  - `write_query` (INSERT, UPDATE, DELETE)
+  - `create_table` (DDL operations)
+  - `list_tables` (schema introspection)
+  - `describe_table` (schema introspection)
+  - `append_insight` (business insight storage)
+
+### FGAC Tool Restrictions (Agent-Level)
+- Configured agent `9d2724e9-1753-4493-8993-0d6986754414` with `allowed_tools` restriction
+- Allowed tools: `["read_query", "list_tables"]` (read-only subset)
+- Updated agent using EnforceAI CLI:
+  ```bash
+  uv run python cli/enforceai_cli.py \
+    --x-gateway-token "$TOKEN" \
+    agents update 9d2724e9-1753-4493-8993-0d6986754414 \
+    --allowed-tool read_query \
+    --allowed-tool list_tables
+  ```
+- Verified FGAC enforcement:
+  - Auth-server returns `X-Allowed-Tools: ["list_tables", "read_query"]` header
+  - Nginx Lua filter (`filter_tools_list.lua`) filters `tools/list` responses to only show allowed tools
+  - Tools not in allowed list (`write_query`, `create_table`, `describe_table`, `append_insight`) are hidden from `tools/list` and blocked in `tools/call`
+- End-to-end validation confirmed: `tools/list` returns only 2 tools instead of 6
+
+### Docker Compose Environment Configuration
+- Fixed EnforceAI environment variable loading in Docker Compose:
+  - Used `--env-file` flag to properly load EnforceAI configuration
+  - Env file: `/Users/adizlotkin/mcp-gateway/enforceai/enforceai.compose.env`
+  - Key variables:
+    - `ENFORCEAI_AUTH_PROVIDER="gateway-token"`
+    - `ENFORCEAI_DB_PATH="/app/enforceai_state/enforceai.db"`
+    - `ENFORCEAI_SCOPES_CATALOG_PATH="/app/scopes.yml"`
+    - Gateway token signing keys, API key pepper, audit settings
+- Verified auth-server startup with EnforceAI active: "Loaded scopes configuration from /app/scopes.yml with 4 group mappings"
+
+### Audit Events Verified
+- Confirmed audit events emitted for `tools/list` requests:
+  ```json
+  {
+    "action": "tools/list",
+    "agent_id": "9d2724e9-1753-4493-8993-0d6986754414",
+    "details": {
+      "allowed_tools": "[\"list_tables\", \"read_query\"]",
+      "provider": "gateway-token",
+      "server": "sqlite"
+    },
+    "event_type": "enforceai_audit",
+    "outcome": "allow",
+    "user_id": "local|admin"
+  }
+  ```
+
+### Architecture Verification
+- Confirmed FGAC enforcement flow:
+  1. Client sends MCP request to `http://localhost/sqlite/mcp` with `Authorization: Bearer <token>`
+  2. Nginx calls `/validate` auth_request with `X-Original-URL` and `X-Body` headers
+  3. Auth-server (EnforceAI):
+     - Validates gateway token
+     - Looks up agent record from agent store
+     - Extracts `agent.allowed_tools` from agent record
+     - Adds to identity metadata: `identity.metadata["agent_allowed_tools"]`
+     - For `tools/list` requests: calls `resolve_callable_tools_for_server()` to compute intersection of scope permissions and agent allowed_tools
+     - Returns `X-Allowed-Tools` header with filtered tool list
+  4. Nginx captures `X-Allowed-Tools` as `$auth_allowed_tools` variable
+  5. Nginx proxies request to upstream MCP server
+  6. For `tools/list` responses: Lua `body_filter_by_lua_file` filters JSON response to only include tools in `$auth_allowed_tools`
+  7. Client receives filtered tools list
+
+### Operational Notes
+- Bootstrap token stored at: `~/mcp-gateway/enforceai/bootstrap_gateway_token.txt`
+- EnforceAI state directory: `~/mcp-gateway/enforceai/` (database, secrets, keys)
+- Docker Compose env file must be loaded using `--env-file` flag for proper EnforceAI activation
+- Agent configuration persisted in SQLite DB at `/app/enforceai_state/enforceai.db` (inside container)
+- Tool restrictions are enforced at both visibility (`tools/list`) and execution (`tools/call`) levels
 
 ## Outstanding Questions
