@@ -16,6 +16,58 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
+# Optional pytest plugins: accept their CLI args even when not installed.
+#
+# The repo config (`pyproject.toml`) includes addopts for pytest-html and
+# pytest-json-report. In environments where those plugins are not installed,
+# pytest will fail fast with "unrecognized arguments". This shim keeps the test
+# suite runnable everywhere while still letting the real plugins handle the
+# options when present.
+def pytest_addoption(parser: pytest.Parser) -> None:  # noqa: D401 - pytest hook
+    """Register optional plugin CLI args when plugins are missing."""
+
+    try:
+        import pytest_html  # noqa: F401
+        has_pytest_html = True
+    except Exception:
+        has_pytest_html = False
+
+    try:
+        import pytest_jsonreport  # noqa: F401
+        has_pytest_jsonreport = True
+    except Exception:
+        has_pytest_jsonreport = False
+
+    group = parser.getgroup("reporting")
+
+    if not has_pytest_html:
+        group.addoption(
+            "--html",
+            action="store",
+            default=None,
+            help="(noop) HTML report output path (pytest-html not installed).",
+        )
+        group.addoption(
+            "--self-contained-html",
+            action="store_true",
+            default=False,
+            help="(noop) Inline resources in HTML report (pytest-html not installed).",
+        )
+
+    if not has_pytest_jsonreport:
+        group.addoption(
+            "--json-report",
+            action="store_true",
+            default=False,
+            help="(noop) Enable JSON report output (pytest-json-report not installed).",
+        )
+        group.addoption(
+            "--json-report-file",
+            action="store",
+            default=None,
+            help="(noop) JSON report output path (pytest-json-report not installed).",
+        )
+
 # Import our application and services
 from registry.main import app
 from registry.core.config import Settings

@@ -68,8 +68,21 @@ class TestEnforceAIDataLayerIntegration:
             outcome="allow",
         )
 
+        stores.user_store.upsert_oidc_user(
+            user_id=user_id,
+            email="user@example.com",
+        )
+
+        stores.session_store.create_session(
+            session_id="sess-1",
+            user_id=user_id,
+            auth_method="oidc",
+            expires_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+
         assert stores.agent_store.get_agent_by_id(agent_id=agent_id) is not None
         assert stores.api_key_store.get_key_by_id(key_id="key-1") is not None
         assert stores.revocation_store.is_jti_revoked(jti="jti-1") is True
         assert stores.audit_store.list_recent_events(user_id=user_id, limit=10)
-
+        assert stores.user_store.get_user_by_id(user_id=user_id) is not None
+        assert stores.session_store.get_session_by_id(session_id="sess-1") is not None

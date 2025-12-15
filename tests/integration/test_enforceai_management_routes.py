@@ -13,6 +13,11 @@ import hmac
 import json
 import time
 import uuid
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +42,12 @@ from auth_server.enforceai.fgac.catalog import (
 from auth_server.enforceai.oidc.jwks import JWKSCache
 from auth_server.enforceai.tokens.mint import (
     mint_gateway_token,
+)
+from gateway_csrf import (
+    mint_csrf_token,
+)
+from gateway_session import (
+    build_session_cookie_payload,
 )
 
 
@@ -103,6 +114,227 @@ def _jwk_from_public_key(
 
 @pytest.mark.integration
 class TestEnforceAIManagementRoutes:
+    def test_cookie_session_can_manage_agents_and_enforces_admin(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(path=tmp_path / "scopes.yml")
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        session_id = str(uuid.uuid4())
+        user_id = "https://issuer.example|cookie-user-1"
+        stores.session_store.create_session(
+            session_id=session_id,
+            user_id=user_id,
+            auth_method="oidc",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+        )
+
+        cookie_payload = build_session_cookie_payload(
+            username="cookie-user-1",
+            email="cookie-user-1@example.com",
+            name=None,
+            groups=["enforceai-admin"],
+            provider="keycloak",
+            legacy_auth_method="oauth2",
+            max_age_seconds=28800,
+            session_id=session_id,
+            user_id=user_id,
+        )
+        cookie_value = auth_server_module.signer.dumps(cookie_payload)
+
+        client = TestClient(auth_server_module.app)
+        client.cookies.set("mcp_gateway_session", cookie_value)
+
+        list_response = client.get("/enforceai/agents")
+        assert list_response.status_code == 200
+        assert list_response.json() == []
+
+        csrf_token = mint_csrf_token(
+            secret_key=auth_server_module.SECRET_KEY,
+            session_id=session_id,
+        )
+        create_response = client.post(
+            "/enforceai/agents",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"scopes": ["scope-mgmt"]},
+        )
+        assert create_response.status_code == 200
+        assert create_response.json()["user_id"] == user_id
+
+        admin_ping = client.get("/enforceai/admin/ping")
+        assert admin_ping.status_code == 200
+        assert admin_ping.json() == {"ok": True}
+
+        non_admin_session_id = str(uuid.uuid4())
+        non_admin_user_id = "https://issuer.example|cookie-user-2"
+        stores.session_store.create_session(
+            session_id=non_admin_session_id,
+            user_id=non_admin_user_id,
+            auth_method="oidc",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+        )
+        non_admin_cookie_payload = build_session_cookie_payload(
+            username="cookie-user-2",
+            email="cookie-user-2@example.com",
+            name=None,
+            groups=[],
+            provider="keycloak",
+            legacy_auth_method="oauth2",
+            max_age_seconds=28800,
+            session_id=non_admin_session_id,
+            user_id=non_admin_user_id,
+        )
+        non_admin_cookie_value = auth_server_module.signer.dumps(non_admin_cookie_payload)
+        client.cookies.set("mcp_gateway_session", non_admin_cookie_value)
+
+        denied = client.get("/enforceai/admin/ping")
+        assert denied.status_code == 403
+        assert denied.json()["detail"] == "Admin required"
+
+    def test_admin_user_directory_and_cross_user_operations(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(path=tmp_path / "scopes.yml")
+        pepper_path = tmp_path / "pepper"
+        pepper_path.write_bytes(b"pepper-1")
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_API_KEY_PEPPER_PATH": str(pepper_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        target_user_id = "https://issuer.example|target-user-1"
+        stores.user_store.upsert_oidc_user(
+            user_id=target_user_id,
+            email="target-user-1@example.com",
+            role="user",
+        )
+
+        session_id = str(uuid.uuid4())
+        admin_user_id = "https://issuer.example|admin-user-1"
+        stores.session_store.create_session(
+            session_id=session_id,
+            user_id=admin_user_id,
+            auth_method="oidc",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+        )
+        cookie_payload = build_session_cookie_payload(
+            username="admin-user-1",
+            email="admin-user-1@example.com",
+            name=None,
+            groups=["enforceai-admin"],
+            provider="keycloak",
+            legacy_auth_method="oauth2",
+            max_age_seconds=28800,
+            session_id=session_id,
+            user_id=admin_user_id,
+        )
+        cookie_value = auth_server_module.signer.dumps(cookie_payload)
+
+        client = TestClient(auth_server_module.app)
+        client.cookies.set("mcp_gateway_session", cookie_value)
+        csrf_token = mint_csrf_token(
+            secret_key=auth_server_module.SECRET_KEY,
+            session_id=session_id,
+        )
+
+        search = client.get("/enforceai/admin/users", params={"query": "target-user-1"})
+        assert search.status_code == 200
+        results = search.json()
+        assert any(item["user_id"] == target_user_id for item in results)
+
+        detail = client.get(f"/enforceai/admin/users/{target_user_id}")
+        assert detail.status_code == 200
+        assert detail.json()["email"] == "target-user-1@example.com"
+
+        list_agents = client.get(f"/enforceai/admin/users/{target_user_id}/agents")
+        assert list_agents.status_code == 200
+        assert list_agents.json() == []
+
+        created = client.post(
+            f"/enforceai/admin/users/{target_user_id}/agents",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"scopes": ["scope-mgmt"], "alias": "target-agent"},
+        )
+        assert created.status_code == 200
+        created_agent_id = created.json()["agent_id"]
+        assert created.json()["user_id"] == target_user_id
+
+        key = client.post(
+            f"/enforceai/admin/users/{target_user_id}/agents/{created_agent_id}/api-keys",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"scopes": ["scope-mgmt"]},
+        )
+        assert key.status_code == 200
+        key_id = key.json()["key_id"]
+
+        revoke_key = client.post(
+            f"/enforceai/admin/users/{target_user_id}/api-keys/{key_id}/revoke",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert revoke_key.status_code == 200
+        assert revoke_key.json()["key_id"] == key_id
+
+        revoke_token = client.post(
+            f"/enforceai/admin/users/{target_user_id}/tokens/revoke",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"agent_id": created_agent_id, "jti": "jti-1", "reason": "test"},
+        )
+        assert revoke_token.status_code == 200
+        assert revoke_token.json()["jti"] == "jti-1"
+
+        revoke_agent = client.post(
+            f"/enforceai/admin/users/{target_user_id}/agents/{created_agent_id}/revoke",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert revoke_agent.status_code == 200
+        assert revoke_agent.json()["revoked_at"] is not None
+
     def test_oidc_management_happy_path_and_cross_user_denied(
         self,
         tmp_path: Path,
@@ -500,6 +732,8 @@ class TestEnforceAIManagementRoutes:
             api_key_store=stores.api_key_store,
             revocation_store=stores.revocation_store,
             audit_store=ExplodingAuditStore(),
+            user_store=stores.user_store,
+            session_store=stores.session_store,
         )
 
         auth_server_module.app.dependency_overrides[

@@ -177,6 +177,8 @@ class TestEnforceAIStage7Hardening:
             api_key_store=stores.api_key_store,
             revocation_store=stores.revocation_store,
             audit_store=_FailingAuditStore(),  # type: ignore[arg-type]
+            user_store=stores.user_store,
+            session_store=stores.session_store,
         )
         monkeypatch.setattr(
             auth_server_module,
@@ -256,6 +258,8 @@ class TestEnforceAIStage7Hardening:
             api_key_store=stores.api_key_store,
             revocation_store=stores.revocation_store,
             audit_store=_FailingAuditStore(),  # type: ignore[arg-type]
+            user_store=stores.user_store,
+            session_store=stores.session_store,
         )
         auth_server_module.app.dependency_overrides[
             enforceai_dependency.get_enforceai_stores

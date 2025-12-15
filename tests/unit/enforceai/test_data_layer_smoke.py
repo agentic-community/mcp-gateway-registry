@@ -67,6 +67,20 @@ class TestEnforceAIDataLayerSmoke:
         )
         assert event.event_id >= 1
 
+        created_user = stores.user_store.upsert_oidc_user(
+            user_id=user_id,
+            email="user@example.com",
+        )
+        assert created_user.user_id == user_id
+
+        created_session = stores.session_store.create_session(
+            session_id="sess-1",
+            user_id=user_id,
+            auth_method="oidc",
+            expires_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        assert created_session.session_id == "sess-1"
+
         reopened = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
         reopened.initialize()
         reopened_stores = reopened.build_stores()
@@ -87,6 +101,14 @@ class TestEnforceAIDataLayerSmoke:
         )
         assert recent[0].details == {"path": "/mcp"}
 
+        loaded_user = reopened_stores.user_store.get_user_by_id(user_id=user_id)
+        assert loaded_user is not None
+        assert loaded_user.email == "user@example.com"
+
+        loaded_session = reopened_stores.session_store.get_session_by_id(session_id="sess-1")
+        assert loaded_session is not None
+        assert loaded_session.user_id == user_id
+
     def test_sqlite_pragmas_are_applied(
         self,
         enforceai_sqlite_db_path: Path,
@@ -95,4 +117,3 @@ class TestEnforceAIDataLayerSmoke:
             row = connection.execute("PRAGMA foreign_keys").fetchone()
             assert row is not None
             assert row[0] == 1
-

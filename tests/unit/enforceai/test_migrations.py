@@ -43,12 +43,18 @@ class TestEnforceAIMigrations:
             rows = connection.execute(
                 "SELECT version FROM schema_migrations ORDER BY version ASC"
             ).fetchall()
-            assert [row[0] for row in rows] == ["0001_baseline"]
+            assert [row[0] for row in rows] == [
+                "0001_baseline",
+                "0002_users",
+                "0003_sessions",
+            ]
 
             assert _table_exists(connection, table_name="agents")
             assert _table_exists(connection, table_name="api_keys")
             assert _table_exists(connection, table_name="token_revocations")
             assert _table_exists(connection, table_name="audit_events")
+            assert _table_exists(connection, table_name="users")
+            assert _table_exists(connection, table_name="sessions")
         finally:
             connection.close()
 
@@ -62,12 +68,36 @@ class TestEnforceAIMigrations:
             upgrade_to_latest(connection)
 
             rolled_back = downgrade_one(connection)
+            assert rolled_back == "0003_sessions"
+
+            assert _table_exists(connection, table_name="agents")
+            assert _table_exists(connection, table_name="api_keys")
+            assert _table_exists(connection, table_name="token_revocations")
+            assert _table_exists(connection, table_name="audit_events")
+            assert _table_exists(connection, table_name="users")
+            assert not _table_exists(connection, table_name="sessions")
+            assert _table_exists(connection, table_name="schema_migrations")
+
+            rolled_back = downgrade_one(connection)
+            assert rolled_back == "0002_users"
+
+            assert _table_exists(connection, table_name="agents")
+            assert _table_exists(connection, table_name="api_keys")
+            assert _table_exists(connection, table_name="token_revocations")
+            assert _table_exists(connection, table_name="audit_events")
+            assert not _table_exists(connection, table_name="users")
+            assert not _table_exists(connection, table_name="sessions")
+            assert _table_exists(connection, table_name="schema_migrations")
+
+            rolled_back = downgrade_one(connection)
             assert rolled_back == "0001_baseline"
 
             assert not _table_exists(connection, table_name="agents")
             assert not _table_exists(connection, table_name="api_keys")
             assert not _table_exists(connection, table_name="token_revocations")
             assert not _table_exists(connection, table_name="audit_events")
+            assert not _table_exists(connection, table_name="users")
+            assert not _table_exists(connection, table_name="sessions")
             assert _table_exists(connection, table_name="schema_migrations")
 
             upgrade_to_latest(connection)
