@@ -35,6 +35,50 @@ def _set_base_env(
 class TestEnforceAIConfigValidation:
     """Test suite for EnforceAI settings validation."""
 
+    def test_mixed_mode_allows_empty_oidc_issuers(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(
+            "OIDC_ISSUERS",
+            json.dumps({}),
+        )
+        monkeypatch.setenv(
+            "ENFORCEAI_DB_PATH",
+            "/tmp/enforceai.db",
+        )
+        monkeypatch.setenv(
+            "AUTH_PROVIDER",
+            "mixed",
+        )
+        monkeypatch.setenv(
+            "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH",
+            "/tmp/private.pem",
+        )
+        monkeypatch.setenv(
+            "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR",
+            "/tmp/public",
+        )
+        monkeypatch.setenv(
+            "GATEWAY_ACTIVE_KID",
+            "kid-1",
+        )
+        monkeypatch.setenv(
+            "ENFORCEAI_GATEWAY_ISSUER",
+            "enforceai-gateway",
+        )
+
+        pepper_path = tmp_path / "pepper"
+        pepper_path.write_text("pepper")
+        monkeypatch.setenv(
+            "ENFORCEAI_API_KEY_PEPPER_PATH",
+            str(pepper_path),
+        )
+
+        settings = EnforceAISettings(_env_file=None)
+        assert settings.auth_provider == "mixed"
+
     def test_missing_public_keys_dir_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
         _set_base_env(monkeypatch)
 

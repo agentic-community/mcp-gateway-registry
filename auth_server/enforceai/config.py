@@ -333,10 +333,10 @@ class EnforceAISettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_settings(self) -> "EnforceAISettings":
-        if self.auth_provider in {"oidc", "mixed"} and not self.oidc_issuers:
+        if self.auth_provider == "oidc" and not self.oidc_issuers:
             raise ValueError(
                 "OIDC_ISSUERS must contain at least one issuer "
-                "when AUTH_PROVIDER is oidc or mixed"
+                "when AUTH_PROVIDER is oidc"
             )
 
         for issuer in self.oidc_issuers.keys():
