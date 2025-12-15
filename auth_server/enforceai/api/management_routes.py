@@ -19,8 +19,8 @@ from pydantic import (
 )
 
 from ..auth.dependency import (
-    EnforceAIRequestContext,
-    get_enforceai_request_context,
+    EnforceAIManagementContext,
+    get_enforceai_management_context,
     get_enforceai_settings,
     get_enforceai_stores,
 )
@@ -49,6 +49,9 @@ from ..management.models import (
 )
 from ..management.service import (
     ManagementService,
+)
+from ..models.user import (
+    UserRecord,
 )
 from ..models.agent import (
     AgentRecord,
@@ -138,8 +141,66 @@ class RevokeTokenRequest(BaseModel):
         return self
 
 
+class AdminUserSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    user_id: str
+    email: str
+    username: Optional[str] = None
+    auth_method: str
+    role: str
+    last_login_at: Optional[datetime] = None
+    disabled_at: Optional[datetime] = None
+    agent_count: int = 0
+
+
+class AdminCreateAgentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scopes: list[str]
+    allowed_tools: Optional[list[str]] = None
+    alias: Optional[str] = None
+    metadata: Optional[dict[str, object]] = None
+
+
+class AdminRevokeGatewayTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    jti: str
+    reason: Optional[str] = None
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def _require_admin(
+    context: EnforceAIManagementContext,
+) -> None:
+    if context.is_admin:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Admin required",
+    )
+
+
+def _user_summary(
+    *,
+    user: UserRecord,
+    agent_count: int,
+) -> AdminUserSummary:
+    return AdminUserSummary(
+        user_id=user.user_id,
+        email=user.email,
+        username=user.username,
+        auth_method=user.auth_method,
+        role=user.role,
+        last_login_at=user.last_login_at,
+        disabled_at=user.disabled_at,
+        agent_count=agent_count,
+    )
 
 
 def _emit_management_audit_event(
@@ -233,7 +294,7 @@ def _build_management_service(
     *,
     settings: EnforceAISettings,
     stores: EnforceAIStores,
-    context: EnforceAIRequestContext,
+    context: EnforceAIManagementContext,
 ) -> ManagementService:
     pepper: Optional[bytes] = None
     if settings.api_key_pepper_path is not None:
@@ -268,10 +329,427 @@ def _get_request_id(
     return stripped or None
 
 
+@router.get("/admin/ping")
+async def admin_ping(
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+) -> dict[str, bool]:
+    _require_admin(context)
+    return {"ok": True}
+
+
+@router.get("/admin/users", response_model=list[AdminUserSummary])
+async def admin_search_users(
+    query: str,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+    limit: int = 50,
+) -> list[AdminUserSummary]:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+
+    resolved_limit = max(1, min(limit, 200))
+    try:
+        users = stores.user_store.search_users(
+            query=query,
+            limit=resolved_limit,
+        )
+        summaries: list[AdminUserSummary] = []
+        for user in users:
+            agent_count = len(
+                stores.agent_store.list_agents_by_user_id(user_id=user.user_id)
+            )
+            summaries.append(_user_summary(user=user, agent_count=agent_count))
+
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/search",
+            outcome="allow",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"query": query, "count": len(summaries), "limit": resolved_limit},
+        )
+        return summaries
+    except Exception as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/search",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"error_type": type(exc).__name__},
+        )
+        raise _map_management_error(exc) from exc
+
+
+@router.get("/admin/users/{user_id:path}/agents", response_model=list[AgentRecord])
+async def admin_list_user_agents(
+    user_id: str,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> list[AgentRecord]:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+
+    try:
+        agents = stores.agent_store.list_agents_by_user_id(user_id=user_id)
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/agents/list",
+            outcome="allow",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "count": len(agents)},
+        )
+        return agents
+    except Exception as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/agents/list",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "error_type": type(exc).__name__},
+        )
+        raise _map_management_error(exc) from exc
+
+
+@router.post("/admin/users/{user_id:path}/agents", response_model=AgentRecord)
+async def admin_create_agent_for_user(
+    user_id: str,
+    body: AdminCreateAgentRequest,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> AgentRecord:
+    _require_admin(context)
+    service = _build_management_service(
+        settings=settings,
+        stores=stores,
+        context=context,
+    )
+    request_id = _get_request_id(request)
+
+    try:
+        created = service.create_agent(
+            user_id=user_id,
+            scopes=body.scopes,
+            allowed_tools=body.allowed_tools,
+            alias=body.alias,
+            metadata=body.metadata,
+        )
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/agents/create",
+            outcome="allow",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "created_agent_id": created.agent_id},
+        )
+        return created
+    except Exception as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/agents/create",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "error_type": type(exc).__name__},
+        )
+        raise _map_management_error(exc) from exc
+
+
+@router.post(
+    "/admin/users/{user_id:path}/agents/{agent_id}/revoke",
+    response_model=AgentRecord,
+)
+async def admin_revoke_agent_for_user(
+    user_id: str,
+    agent_id: str,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> AgentRecord:
+    _require_admin(context)
+    service = _build_management_service(
+        settings=settings,
+        stores=stores,
+        context=context,
+    )
+    request_id = _get_request_id(request)
+
+    try:
+        existing = stores.agent_store.get_agent_by_id(agent_id=agent_id)
+        if existing is None or existing.user_id != user_id:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        revoked = service.revoke_agent(
+            user_id=user_id,
+            agent_id=agent_id,
+        )
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/agents/revoke",
+            outcome="allow",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "target_agent_id": agent_id},
+        )
+        return revoked
+    except HTTPException as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/agents/revoke",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={
+                "target_user_id": user_id,
+                "target_agent_id": agent_id,
+                "error_type": "HTTPException",
+            },
+        )
+        raise exc
+    except Exception as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/agents/revoke",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={
+                "target_user_id": user_id,
+                "target_agent_id": agent_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise _map_management_error(exc) from exc
+
+
+@router.post(
+    "/admin/users/{user_id:path}/api-keys/{key_id}/revoke",
+    response_model=ApiKeySummary,
+)
+async def admin_revoke_api_key_for_user(
+    user_id: str,
+    key_id: str,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> ApiKeySummary:
+    _require_admin(context)
+    service = _build_management_service(
+        settings=settings,
+        stores=stores,
+        context=context,
+    )
+    request_id = _get_request_id(request)
+
+    try:
+        revoked = service.revoke_api_key(
+            user_id=user_id,
+            key_id=key_id,
+        )
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/api-keys/revoke",
+            outcome="allow",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "key_id": key_id},
+        )
+        return revoked
+    except Exception as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/api-keys/revoke",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "key_id": key_id, "error_type": type(exc).__name__},
+        )
+        raise _map_management_error(exc) from exc
+
+
+@router.post(
+    "/admin/users/{user_id:path}/agents/{agent_id}/api-keys",
+    response_model=CreateApiKeyResponse,
+)
+async def admin_create_api_key_for_user(
+    user_id: str,
+    agent_id: str,
+    body: CreateApiKeyRequest,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> CreateApiKeyResponse:
+    _require_admin(context)
+    service = _build_management_service(
+        settings=settings,
+        stores=stores,
+        context=context,
+    )
+    request_id = _get_request_id(request)
+
+    try:
+        key_id, secret, api_key_value = service.create_api_key(
+            user_id=user_id,
+            agent_id=agent_id,
+            scopes=body.scopes,
+            expires_at=body.expires_at,
+        )
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/api-keys/create",
+            outcome="allow",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "target_agent_id": agent_id, "key_id": key_id},
+        )
+        return CreateApiKeyResponse(
+            key_id=key_id,
+            secret=secret,
+            api_key_value=api_key_value,
+        )
+    except Exception as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/api-keys/create",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "target_agent_id": agent_id, "error_type": type(exc).__name__},
+        )
+        raise _map_management_error(exc) from exc
+
+
+@router.post(
+    "/admin/users/{user_id:path}/tokens/revoke",
+    response_model=TokenRevocationRecord,
+)
+async def admin_revoke_gateway_token_for_user(
+    user_id: str,
+    body: AdminRevokeGatewayTokenRequest,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> TokenRevocationRecord:
+    _require_admin(context)
+    service = _build_management_service(
+        settings=settings,
+        stores=stores,
+        context=context,
+    )
+    request_id = _get_request_id(request)
+
+    try:
+        record = service.revoke_token_jti(
+            user_id=user_id,
+            agent_id=body.agent_id,
+            jti=body.jti,
+            reason=body.reason,
+        )
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/tokens/revoke",
+            outcome="allow",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={
+                "target_user_id": user_id,
+                "target_agent_id": body.agent_id,
+                "jti": body.jti,
+            },
+        )
+        return record
+    except Exception as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/tokens/revoke",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "error_type": type(exc).__name__},
+        )
+        raise _map_management_error(exc) from exc
+
+
+@router.get("/admin/users/{user_id:path}", response_model=AdminUserSummary)
+async def admin_get_user(
+    user_id: str,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> AdminUserSummary:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+
+    try:
+        user = stores.user_store.get_user_by_id(user_id=user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        agent_count = len(stores.agent_store.list_agents_by_user_id(user_id=user.user_id))
+        summary = _user_summary(user=user, agent_count=agent_count)
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/get",
+            outcome="allow",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id},
+        )
+        return summary
+    except HTTPException as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/get",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "error_type": "HTTPException"},
+        )
+        raise exc
+    except Exception as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/users/get",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"target_user_id": user_id, "error_type": type(exc).__name__},
+        )
+        raise _map_management_error(exc) from exc
+
+
 @router.get("/agents", response_model=list[AgentRecord])
 async def list_agents(
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> list[AgentRecord]:
@@ -283,13 +761,13 @@ async def list_agents(
 
     request_id = _get_request_id(request)
     try:
-        agents = service.list_agents(user_id=context.identity.user_id)
+        agents = service.list_agents(user_id=context.user_id)
         _emit_management_audit_event(
             stores=stores,
             action="management/agents/list",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"count": len(agents)},
         )
@@ -299,8 +777,8 @@ async def list_agents(
             stores=stores,
             action="management/agents/list",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"error_type": type(exc).__name__},
         )
@@ -311,7 +789,7 @@ async def list_agents(
 async def create_agent(
     body: CreateAgentRequest,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> AgentRecord:
@@ -324,7 +802,7 @@ async def create_agent(
 
     try:
         agent = service.create_agent(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             scopes=body.scopes,
             allowed_tools=body.allowed_tools,
             alias=body.alias,
@@ -334,8 +812,8 @@ async def create_agent(
             stores=stores,
             action="management/agents/create",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"created_agent_id": agent.agent_id},
         )
@@ -345,8 +823,8 @@ async def create_agent(
             stores=stores,
             action="management/agents/create",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"error_type": type(exc).__name__},
         )
@@ -357,7 +835,7 @@ async def create_agent(
 async def get_agent(
     agent_id: str,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> AgentRecord:
@@ -370,15 +848,15 @@ async def get_agent(
 
     try:
         agent = service.get_agent(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             agent_id=agent_id,
         )
         _emit_management_audit_event(
             stores=stores,
             action="management/agents/get",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id},
         )
@@ -388,8 +866,8 @@ async def get_agent(
             stores=stores,
             action="management/agents/get",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id, "error_type": type(exc).__name__},
         )
@@ -401,7 +879,7 @@ async def update_agent(
     agent_id: str,
     body: UpdateAgentRequest,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> AgentRecord:
@@ -414,7 +892,7 @@ async def update_agent(
 
     try:
         updated = service.update_agent(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             agent_id=agent_id,
             scopes=body.scopes,
             allowed_tools=body.allowed_tools,
@@ -425,8 +903,8 @@ async def update_agent(
             stores=stores,
             action="management/agents/update",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id},
         )
@@ -436,8 +914,8 @@ async def update_agent(
             stores=stores,
             action="management/agents/update",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id, "error_type": type(exc).__name__},
         )
@@ -448,7 +926,7 @@ async def update_agent(
 async def revoke_agent(
     agent_id: str,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> AgentRecord:
@@ -461,15 +939,15 @@ async def revoke_agent(
 
     try:
         revoked = service.revoke_agent(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             agent_id=agent_id,
         )
         _emit_management_audit_event(
             stores=stores,
             action="management/agents/revoke",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id},
         )
@@ -479,8 +957,8 @@ async def revoke_agent(
             stores=stores,
             action="management/agents/revoke",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id, "error_type": type(exc).__name__},
         )
@@ -491,7 +969,7 @@ async def revoke_agent(
 async def revoke_all_tokens(
     agent_id: str,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> AgentRecord:
@@ -504,15 +982,15 @@ async def revoke_all_tokens(
 
     try:
         updated = service.revoke_all_tokens(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             agent_id=agent_id,
         )
         _emit_management_audit_event(
             stores=stores,
             action="management/tokens/revoke-all",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id},
         )
@@ -522,8 +1000,8 @@ async def revoke_all_tokens(
             stores=stores,
             action="management/tokens/revoke-all",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id, "error_type": type(exc).__name__},
         )
@@ -535,7 +1013,7 @@ async def create_api_key(
     agent_id: str,
     body: CreateApiKeyRequest,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> CreateApiKeyResponse:
@@ -548,7 +1026,7 @@ async def create_api_key(
 
     try:
         key_id, secret, api_key_value = service.create_api_key(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             agent_id=agent_id,
             scopes=body.scopes,
             expires_at=body.expires_at,
@@ -557,8 +1035,8 @@ async def create_api_key(
             stores=stores,
             action="management/api-keys/create",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={
                 "target_agent_id": agent_id,
@@ -577,8 +1055,8 @@ async def create_api_key(
             stores=stores,
             action="management/api-keys/create",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id, "error_type": type(exc).__name__},
         )
@@ -589,7 +1067,7 @@ async def create_api_key(
 async def list_api_keys(
     agent_id: str,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> list[ApiKeySummary]:
@@ -602,15 +1080,15 @@ async def list_api_keys(
 
     try:
         keys = service.list_api_keys(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             agent_id=agent_id,
         )
         _emit_management_audit_event(
             stores=stores,
             action="management/api-keys/list",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id, "count": len(keys)},
         )
@@ -620,8 +1098,8 @@ async def list_api_keys(
             stores=stores,
             action="management/api-keys/list",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id, "error_type": type(exc).__name__},
         )
@@ -632,7 +1110,7 @@ async def list_api_keys(
 async def revoke_api_key(
     key_id: str,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> ApiKeySummary:
@@ -645,15 +1123,15 @@ async def revoke_api_key(
 
     try:
         revoked = service.revoke_api_key(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             key_id=key_id,
         )
         _emit_management_audit_event(
             stores=stores,
             action="management/api-keys/revoke",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"key_id": key_id},
         )
@@ -663,8 +1141,8 @@ async def revoke_api_key(
             stores=stores,
             action="management/api-keys/revoke",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"key_id": key_id, "error_type": type(exc).__name__},
         )
@@ -676,7 +1154,7 @@ async def mint_token(
     agent_id: str,
     body: MintTokenRequest,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> MintTokenResponse:
@@ -689,7 +1167,7 @@ async def mint_token(
 
     try:
         token = service.mint_gateway_token(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             agent_id=agent_id,
             scopes=body.scopes,
             ttl_seconds=body.ttl_seconds,
@@ -699,8 +1177,8 @@ async def mint_token(
             stores=stores,
             action="management/tokens/mint",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={
                 "target_agent_id": agent_id,
@@ -715,8 +1193,8 @@ async def mint_token(
             stores=stores,
             action="management/tokens/mint",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": agent_id, "error_type": type(exc).__name__},
         )
@@ -727,7 +1205,7 @@ async def mint_token(
 async def revoke_token(
     body: RevokeTokenRequest,
     request: Request,
-    context: EnforceAIRequestContext = Depends(get_enforceai_request_context),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
     settings: EnforceAISettings = Depends(get_enforceai_settings),
     stores: EnforceAIStores = Depends(get_enforceai_stores),
 ) -> TokenRevocationRecord:
@@ -757,11 +1235,11 @@ async def revoke_token(
                 keyring=keyring,
                 expected_issuer=settings.gateway_issuer,
             )
-            if claims.sub != context.identity.user_id:
+            if claims.sub != context.user_id:
                 raise HTTPException(status_code=403, detail="Forbidden")
 
             record = service.revoke_token_jti(
-                user_id=context.identity.user_id,
+                user_id=context.user_id,
                 agent_id=claims.agent_id,
                 jti=claims.jti,
                 expires_at=claims.expires_at,
@@ -771,15 +1249,15 @@ async def revoke_token(
                 stores=stores,
                 action="management/tokens/revoke",
                 outcome="allow",
-                user_id=context.identity.user_id,
-                agent_id=context.identity.agent_id,
+                user_id=context.user_id,
+                agent_id=context.actor_agent_id,
                 request_id=request_id,
                 details={"target_agent_id": claims.agent_id},
             )
             return record
 
         record = service.revoke_token_jti(
-            user_id=context.identity.user_id,
+            user_id=context.user_id,
             agent_id=body.agent_id or "",
             jti=body.jti or "",
             reason=body.reason,
@@ -788,8 +1266,8 @@ async def revoke_token(
             stores=stores,
             action="management/tokens/revoke",
             outcome="allow",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"target_agent_id": body.agent_id},
         )
@@ -799,8 +1277,8 @@ async def revoke_token(
             stores=stores,
             action="management/tokens/revoke",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"error_type": "HTTPException"},
         )
@@ -810,8 +1288,8 @@ async def revoke_token(
             stores=stores,
             action="management/tokens/revoke",
             outcome="deny",
-            user_id=context.identity.user_id,
-            agent_id=context.identity.agent_id,
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
             request_id=request_id,
             details={"error_type": type(exc).__name__},
         )

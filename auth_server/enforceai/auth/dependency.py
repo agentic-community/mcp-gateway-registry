@@ -5,13 +5,25 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
+from datetime import (
+    datetime,
+    timezone,
+)
 from fastapi import (
     Depends,
     HTTPException,
     Request,
 )
 from pydantic import ValidationError
+from itsdangerous import (
+    BadSignature,
+    SignatureExpired,
+    URLSafeTimedSerializer,
+)
 
+from .credentials import (
+    extract_credential_input,
+)
 from .resolver import (
     IdentityResolver,
 )
@@ -25,6 +37,7 @@ from ..db.data_layer import (
 from ..errors import (
     DependencyUnavailableError,
     EnforceAIError,
+    UnauthorizedError,
 )
 from ..fgac.catalog import (
     load_scope_catalog,
@@ -50,16 +63,32 @@ from ..providers.gateway_token import (
 from ..providers.oidc import (
     OidcProvider,
 )
+from gateway_session import (
+    normalize_session_data,
+)
 
 logger = logging.getLogger(__name__)
 
 IDENTITY_STATE_KEY: str = "enforceai_identity"
 CATALOG_STATE_KEY: str = "enforceai_scope_catalog"
+SESSION_COOKIE_NAME: str = "mcp_gateway_session"
+SESSION_MAX_AGE_SECONDS: int = 60 * 60 * 8
+ENFORCEAI_ADMIN_GROUP: str = "enforceai-admin"
 
 
 @dataclass(frozen=True)
 class EnforceAIRequestContext:
     identity: IdentityContext
+    catalog: ScopeCatalog
+
+
+@dataclass(frozen=True)
+class EnforceAIManagementContext:
+    user_id: str
+    actor_agent_id: str
+    provider: str
+    groups: list[str]
+    is_admin: bool
     catalog: ScopeCatalog
 
 
@@ -167,6 +196,133 @@ def get_scope_catalog(
         raise DependencyUnavailableError(
             "Invalid scope catalog",
             public_message="Scope catalog unavailable",
+        ) from exc
+
+
+def _has_header_credentials(
+    request: Request,
+) -> bool:
+    try:
+        extract_credential_input(request.headers)
+        return True
+    except EnforceAIError as exc:
+        if str(exc) == "No credentials provided":
+            return False
+        raise
+
+
+def _get_cookie_signer(
+    request: Request,
+) -> URLSafeTimedSerializer:
+    signer = getattr(request.app.state, "session_signer", None)
+    if isinstance(signer, URLSafeTimedSerializer):
+        return signer
+
+    secret_key = getattr(request.app.state, "session_secret_key", None)
+    if isinstance(secret_key, str) and secret_key.strip():
+        return URLSafeTimedSerializer(secret_key.strip())
+
+    raise DependencyUnavailableError(
+        "Session signer unavailable",
+        public_message="Enforcement misconfigured",
+    )
+
+
+def _resolve_management_context_from_cookie(
+    *,
+    request: Request,
+    stores: EnforceAIStores,
+    catalog: ScopeCatalog,
+) -> EnforceAIManagementContext:
+    cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie_value is None or not cookie_value.strip():
+        raise UnauthorizedError("No credentials provided")
+
+    signer = _get_cookie_signer(request)
+    try:
+        payload = signer.loads(
+            cookie_value,
+            max_age=SESSION_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise UnauthorizedError("Session expired") from exc
+    except BadSignature as exc:
+        raise UnauthorizedError("Invalid session") from exc
+    except Exception as exc:  # noqa: BLE001 - treat as invalid session
+        raise UnauthorizedError("Invalid session") from exc
+
+    if not isinstance(payload, dict):
+        raise UnauthorizedError("Invalid session")
+
+    normalized = normalize_session_data(
+        payload,
+        default_provider="local",
+        max_age_seconds=SESSION_MAX_AGE_SECONDS,
+    )
+
+    record = stores.session_store.get_session_by_id(session_id=normalized.session_id)
+    if record is None or record.revoked_at is not None:
+        raise UnauthorizedError("Session invalidated")
+
+    stores.session_store.touch_session(
+        session_id=normalized.session_id,
+        now=datetime.now(timezone.utc).replace(microsecond=0),
+    )
+
+    groups: list[str] = normalized.groups or []
+    is_admin = ENFORCEAI_ADMIN_GROUP in groups
+
+    if normalized.auth_method == "oidc" and normalized.email:
+        stores.user_store.upsert_oidc_user(
+            user_id=normalized.user_id,
+            email=normalized.email,
+            role="admin" if is_admin else "user",
+        )
+
+    return EnforceAIManagementContext(
+        user_id=normalized.user_id,
+        actor_agent_id=normalized.session_id,
+        provider="session-cookie",
+        groups=groups,
+        is_admin=is_admin,
+        catalog=catalog,
+    )
+
+
+async def get_enforceai_management_context(
+    request: Request,
+    resolver: IdentityResolver = Depends(get_identity_resolver),
+    catalog: ScopeCatalog = Depends(get_scope_catalog),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> EnforceAIManagementContext:
+    """FastAPI dependency: allow management auth via cookie-session or existing credentials."""
+
+    try:
+        if _has_header_credentials(request):
+            identity = await resolver.resolve_identity(headers=request.headers)
+            groups = identity.user_roles or []
+            is_admin = ENFORCEAI_ADMIN_GROUP in groups
+            return EnforceAIManagementContext(
+                user_id=identity.user_id,
+                actor_agent_id=identity.agent_id,
+                provider=identity.provider,
+                groups=list(groups),
+                is_admin=is_admin,
+                catalog=catalog,
+            )
+
+        return _resolve_management_context_from_cookie(
+            request=request,
+            stores=stores,
+            catalog=catalog,
+        )
+    except EnforceAIError as exc:
+        raise _map_to_http_exception(exc) from exc
+    except Exception as exc:  # noqa: BLE001 - fail closed, signal retry
+        logger.exception("Unexpected enforcement dependency failure")
+        raise HTTPException(
+            status_code=503,
+            detail="Enforcement dependency unavailable",
         ) from exc
 
 

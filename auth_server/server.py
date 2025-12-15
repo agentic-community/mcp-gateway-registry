@@ -15,7 +15,7 @@ import time
 import uuid
 import hashlib
 from jwt.api_jwk import PyJWK
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 import importlib
 from typing import Dict, Optional, List, Any
@@ -33,6 +33,25 @@ import httpx
 from string import Template
 import os as _os
 import json as _json
+
+from gateway_session import (
+    build_session_cookie_payload,
+)
+from gateway_csrf import (
+    validate_csrf_token,
+)
+from gateway_session import (
+    normalize_session_data,
+)
+from auth_server.enforceai.db.data_layer import (
+    EnforceAIDataLayer,
+)
+from auth_server.enforceai.stores.sqlite.session_store import (
+    SqliteSessionStore,
+)
+from auth_server.enforceai.stores.sqlite.user_store import (
+    SqliteUserStore,
+)
 
 # Import metrics middleware (support repo + Docker module layouts)
 try:
@@ -367,10 +386,35 @@ def validate_session_cookie(cookie_value: str) -> Dict[str, any]:
     try:
         # Decrypt cookie (max_age=28800 for 8 hours)
         data = signer.loads(cookie_value, max_age=28800)
-        
+
+        normalized = normalize_session_data(
+            data,
+            default_provider="local",
+            max_age_seconds=28800,
+        )
+
+        db_path_raw = _os.environ.get("ENFORCEAI_DB_PATH")
+        if db_path_raw:
+            try:
+                db_path = Path(db_path_raw.strip())
+                EnforceAIDataLayer(db_path=db_path).initialize()
+                store = SqliteSessionStore(db_path=db_path)
+                record = store.get_session_by_id(session_id=normalized.session_id)
+                if record is None or record.revoked_at is not None:
+                    raise ValueError("Session invalidated")
+                store.touch_session(
+                    session_id=normalized.session_id,
+                    now=datetime.now(timezone.utc).replace(microsecond=0),
+                )
+            except ValueError:
+                raise
+            except Exception as exc:
+                logger.error(f"Session store validation failed: {exc}")
+                raise ValueError("Session invalidated") from exc
+
         # Extract user info
-        username = data.get('username')
-        groups = data.get('groups', [])
+        username = normalized.user_id
+        groups = normalized.groups or []
         
         # Map groups to scopes
         scopes = map_groups_to_scopes(groups)
@@ -1821,6 +1865,74 @@ if not SECRET_KEY:
                    "Set a permanent SECRET_KEY environment variable for production.")
 
 signer = URLSafeTimedSerializer(SECRET_KEY)
+app.state.session_secret_key = SECRET_KEY
+app.state.session_signer = signer
+
+CSRF_TOKEN_MAX_AGE_SECONDS = int(os.environ.get("CSRF_TOKEN_MAX_AGE_SECONDS", "3600"))
+SESSION_COOKIE_NAME = "mcp_gateway_session"
+SAFE_CSRF_METHODS: set[str] = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
+
+def _has_non_cookie_credentials_for_csrf(
+    request: Request,
+) -> bool:
+    authorization = request.headers.get("authorization") or ""
+    if authorization.strip():
+        return True
+
+    for header_name in ("x-api-key", "x-gateway-token", "x-authorization"):
+        value = request.headers.get(header_name)
+        if value and value.strip():
+            return True
+
+    return False
+
+
+@app.middleware("http")
+async def enforce_csrf_middleware(
+    request: Request,
+    call_next,
+):
+    if request.method in SAFE_CSRF_METHODS:
+        return await call_next(request)
+
+    if not request.url.path.startswith("/enforceai"):
+        return await call_next(request)
+
+    if _has_non_cookie_credentials_for_csrf(request):
+        return await call_next(request)
+
+    cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie_value is None or not cookie_value.strip():
+        return await call_next(request)
+
+    try:
+        session_payload = signer.loads(cookie_value, max_age=28800)
+    except (SignatureExpired, BadSignature):
+        return await call_next(request)
+    except Exception:
+        return await call_next(request)
+
+    normalized = normalize_session_data(
+        session_payload,
+        default_provider="local",
+        max_age_seconds=28800,
+    )
+
+    csrf_header = request.headers.get("x-csrf-token") or ""
+    error = validate_csrf_token(
+        secret_key=SECRET_KEY,
+        token=csrf_header,
+        session_id=normalized.session_id,
+        max_age_seconds=CSRF_TOKEN_MAX_AGE_SECONDS,
+    )
+    if error is not None:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": error},
+        )
+
+    return await call_next(request)
 
 def get_enabled_providers():
     """Get list of enabled OAuth2 providers, filtered by AUTH_PROVIDER env var if set"""
@@ -2121,15 +2233,86 @@ async def oauth2_callback(
             mapped_user = map_user_info(user_info, provider_config)
             logger.info(f"Mapped user info: {mapped_user}")
         
-        # Create session cookie compatible with registry
-        session_data = {
-            "username": mapped_user["username"],
-            "email": mapped_user.get("email"),
-            "name": mapped_user.get("name"),
-            "groups": mapped_user.get("groups", []),
-            "provider": provider,
-            "auth_method": "oauth2"
-        }
+        issuer = mapped_user.get("iss") or mapped_user.get("issuer")
+        subject = mapped_user.get("sub") or mapped_user.get("subject")
+        if issuer is None or subject is None:
+            try:
+                if "id_token" in token_data:
+                    id_claims = jwt.decode(
+                        token_data["id_token"],
+                        options={"verify_signature": False},
+                    )
+                    issuer = issuer or id_claims.get("iss")
+                    subject = subject or id_claims.get("sub")
+            except Exception:
+                issuer = issuer
+                subject = subject
+
+        if issuer is None or subject is None:
+            try:
+                access_claims = jwt.decode(
+                    token_data["access_token"],
+                    options={"verify_signature": False},
+                )
+                issuer = issuer or access_claims.get("iss")
+                subject = subject or access_claims.get("sub")
+            except Exception:
+                issuer = issuer
+                subject = subject
+
+        session_id = str(uuid.uuid4())
+        user_id_value = None
+        if isinstance(issuer, str) and issuer.strip() and isinstance(subject, str) and subject.strip():
+            user_id_value = f"{issuer.strip()}|{subject.strip()}"
+
+        db_path_raw = _os.environ.get("ENFORCEAI_DB_PATH")
+        if user_id_value and db_path_raw:
+            try:
+                db_path = Path(db_path_raw.strip())
+                EnforceAIDataLayer(db_path=db_path).initialize()
+                store = SqliteSessionStore(db_path=db_path)
+                store.create_session(
+                    session_id=session_id,
+                    user_id=user_id_value,
+                    auth_method="oidc",
+                    expires_at=datetime.now(timezone.utc).replace(microsecond=0)
+                    + timedelta(
+                        seconds=OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
+                    ),
+                )
+                email_value = mapped_user.get("email")
+                if isinstance(email_value, str) and email_value.strip():
+                    groups_value = mapped_user.get("groups", [])
+                    role_value = (
+                        "admin"
+                        if isinstance(groups_value, list) and "enforceai-admin" in groups_value
+                        else "user"
+                    )
+                    SqliteUserStore(db_path=db_path).upsert_oidc_user(
+                        user_id=user_id_value,
+                        email=email_value.strip(),
+                        role=role_value,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to persist OAuth2 session (continuing without server-side invalidation)"
+                )
+
+        session_data = build_session_cookie_payload(
+            username=mapped_user["username"],
+            email=mapped_user.get("email"),
+            name=mapped_user.get("name"),
+            groups=mapped_user.get("groups", []),
+            provider=provider,
+            legacy_auth_method="oauth2",
+            max_age_seconds=OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800),
+            session_id=session_id,
+            user_id=user_id_value,
+        )
+        if user_id_value and isinstance(issuer, str) and issuer.strip() and isinstance(subject, str) and subject.strip():
+            session_data["iss"] = issuer.strip()
+            session_data["sub"] = subject.strip()
+            session_data["user_id"] = user_id_value
         
         registry_session = signer.dumps(session_data)
         
@@ -2276,7 +2459,9 @@ async def oauth2_logout(provider: str, request: Request, redirect_uri: str = Non
         if not logout_url:
             # If provider doesn't support logout URL, just redirect
             redirect_url = redirect_uri or OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/login")
-            return RedirectResponse(url=redirect_url, status_code=302)
+            response = RedirectResponse(url=redirect_url, status_code=302)
+            response.delete_cookie(SESSION_COOKIE_NAME)
+            return response
         
         # For Cognito, we need to construct the full redirect URI
         full_redirect_uri = redirect_uri or "/logout"
@@ -2304,7 +2489,30 @@ async def oauth2_logout(provider: str, request: Request, redirect_uri: str = Non
         logout_redirect_url = f"{logout_url}?{urllib.parse.urlencode(logout_params)}"
         
         logger.info(f"Redirecting to {provider} logout: {logout_redirect_url}")
-        return RedirectResponse(url=logout_redirect_url, status_code=302)
+        response = RedirectResponse(url=logout_redirect_url, status_code=302)
+
+        cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
+        if cookie_value:
+            try:
+                session_payload = signer.loads(cookie_value, max_age=28800)
+                normalized = normalize_session_data(
+                    session_payload,
+                    default_provider="local",
+                    max_age_seconds=28800,
+                )
+                db_path_raw = _os.environ.get("ENFORCEAI_DB_PATH")
+                if db_path_raw:
+                    db_path = Path(db_path_raw.strip())
+                    EnforceAIDataLayer(db_path=db_path).initialize()
+                    SqliteSessionStore(db_path=db_path).revoke_session(
+                        session_id=normalized.session_id,
+                        revoked_reason="logout",
+                    )
+            except Exception:
+                logger.exception("Failed to revoke server-side session on oauth2 logout")
+
+        response.delete_cookie(SESSION_COOKIE_NAME)
+        return response
         
     except HTTPException:
         raise
