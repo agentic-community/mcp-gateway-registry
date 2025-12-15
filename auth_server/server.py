@@ -684,6 +684,49 @@ try:
 except Exception:  # noqa: BLE001 - best-effort; server should still start
     logger.exception("Failed to mount EnforceAI management routes")
 
+
+@app.on_event("startup")
+def _seed_enforceai_password_admin_user() -> None:
+    db_path_raw = _os.environ.get("ENFORCEAI_DB_PATH")
+    if not db_path_raw:
+        return
+
+    admin_username = _os.environ.get("ADMIN_USER", "admin").strip() or "admin"
+    admin_password = _os.environ.get("ADMIN_PASSWORD")
+    if not admin_password or not admin_password.strip():
+        logger.warning("ADMIN_PASSWORD missing; skipping EnforceAI admin user seeding")
+        return
+
+    admin_email = _os.environ.get("ADMIN_EMAIL")
+    if not admin_email or not admin_email.strip():
+        admin_email = f"{admin_username}@local"
+
+    try:
+        db_path = Path(db_path_raw.strip())
+        EnforceAIDataLayer(db_path=db_path).initialize()
+        user_store = SqliteUserStore(db_path=db_path)
+
+        existing = user_store.get_user_by_id(user_id=f"local|{admin_username}")
+        if existing is not None:
+            return
+
+        from auth_server.enforceai.users.passwords import (
+            hash_password,
+        )
+
+        password_hash = hash_password(admin_password).encoded
+        user_store.create_local_user(
+            username=admin_username,
+            email=admin_email,
+            password_hash=password_hash,
+            role="admin",
+        )
+        logger.info(
+            "Seeded EnforceAI admin user record for password login",
+        )
+    except Exception:
+        logger.exception("Failed to seed EnforceAI password admin user")
+
 class TokenValidationResponse(BaseModel):
     """Response model for token validation"""
     valid: bool
@@ -1096,6 +1139,14 @@ async def validate_request(request: Request):
         client_id = request.headers.get("X-Client-Id")
         region = request.headers.get("X-Region", "us-east-1")
         original_url = request.headers.get("X-Original-URL")
+        original_path = ""
+        if original_url:
+            try:
+                from urllib.parse import urlparse
+
+                original_path = urlparse(original_url).path or ""
+            except Exception:
+                original_path = ""
         body = request.headers.get("X-Body")
         
         # Extract server_name from original_url early for logging
@@ -1146,6 +1197,73 @@ async def validate_request(request: Request):
             runtime = _load_enforceai_runtime()
             dependency_unavailable_error = runtime.DependencyUnavailableError
             enforceai_error = runtime.EnforceAIError
+
+            has_non_cookie_credentials = any(
+                value and value.strip()
+                for value in (
+                    request.headers.get("authorization"),
+                    request.headers.get("x-authorization"),
+                    request.headers.get("x-gateway-token"),
+                    request.headers.get("x-api-key"),
+                )
+            )
+
+            allow_cookie_auth = original_path.startswith("/api/")
+            cookie_header = request.headers.get("Cookie", "")
+
+            if allow_cookie_auth and not has_non_cookie_credentials:
+                if "mcp_gateway_session=" not in cookie_header:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Authentication required",
+                        headers={"Connection": "close"},
+                    )
+
+                cookie_value = None
+                for cookie in cookie_header.split(";"):
+                    if cookie.strip().startswith("mcp_gateway_session="):
+                        cookie_value = cookie.strip().split("=", 1)[1]
+                        break
+
+                if not cookie_value:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Authentication required",
+                        headers={"Connection": "close"},
+                    )
+
+                try:
+                    validation_result = validate_session_cookie(cookie_value)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=401,
+                        detail=str(exc),
+                        headers={"Connection": "close"},
+                    ) from exc
+
+                response_data = {
+                    "valid": True,
+                    "username": validation_result.get("username") or "",
+                    "client_id": validation_result.get("client_id") or "",
+                    "scopes": validation_result.get("scopes", []),
+                    "method": validation_result.get("method") or "",
+                    "groups": validation_result.get("groups", []),
+                    "server_name": server_name_from_url,
+                    "tool_name": tool_name,
+                }
+                response = JSONResponse(
+                    content=response_data,
+                    status_code=200,
+                )
+                response.headers["X-User"] = validation_result.get("username") or ""
+                response.headers["X-Username"] = validation_result.get("username") or ""
+                response.headers["X-Client-Id"] = validation_result.get("client_id") or ""
+                response.headers["X-Scopes"] = " ".join(validation_result.get("scopes", []))
+                response.headers["X-Auth-Method"] = validation_result.get("method") or ""
+                response.headers["X-Server-Name"] = server_name_from_url or ""
+                response.headers["X-Tool-Name"] = tool_name or ""
+                return response
+
             try:
                 resolver = get_identity_resolver()
                 catalog_path = _resolve_enforceai_scopes_catalog_path()
