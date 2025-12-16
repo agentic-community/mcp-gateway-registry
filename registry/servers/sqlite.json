@@ -1,8 +1,8 @@
 {
   "server_name": "SQLite MCP Server",
   "description": "Local SQLite MCP server for database operations",
-  "path": "/sqlite",
-  "proxy_pass_url": "http://host.docker.internal:3031/mcp",
+  "path": "/sqlite/",
+  "proxy_pass_url": "http://host.docker.internal:3031/",
   "supported_transports": [
     "streamable-http"
   ],
