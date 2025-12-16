@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import type { Server, A2AAgent, EnforceAIAgent, ServerDetails, Tool } from '@/api/types';
+import type { Server, A2AAgent, EnforceAIAgent, ServerDetails, Tool, ApiKeySummary } from '@/api/types';
 
 // Mock tools data
 export const mockTools: Tool[] = [
@@ -125,6 +125,29 @@ export const mockEnforceAIAgents: EnforceAIAgent[] = [
     tokens_valid_after: null,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-10T00:00:00Z',
+  },
+];
+
+export const mockApiKeys: ApiKeySummary[] = [
+  {
+    key_id: 'eak_abc123',
+    user_id: 'test|user123',
+    agent_id: '9d2724e9-1753-4493-8993-0d6986754414',
+    scopes: ['sqlite.manage'],
+    expires_at: '2026-01-01T00:00:00Z',
+    revoked_at: null,
+    created_at: '2024-01-05T00:00:00Z',
+    last_used_at: '2024-01-15T00:00:00Z',
+  },
+  {
+    key_id: 'eak_def456',
+    user_id: 'test|user123',
+    agent_id: '9d2724e9-1753-4493-8993-0d6986754414',
+    scopes: null,
+    expires_at: null,
+    revoked_at: '2024-01-12T00:00:00Z',
+    created_at: '2024-01-02T00:00:00Z',
+    last_used_at: null,
   },
 ];
 
@@ -409,31 +432,90 @@ export const handlers = [
   }),
 
   // EnforceAI: API Keys endpoints
-  http.get('/enforceai/agents/:agentId/api-keys', () => {
-    return HttpResponse.json([]);
+  http.get('/enforceai/agents/:agentId/api-keys', ({ params }) => {
+    const keys = mockApiKeys.filter((k) => k.agent_id === params.agentId);
+    return HttpResponse.json(keys);
   }),
 
-  http.post('/enforceai/agents/:agentId/api-keys', () => {
+  http.post('/enforceai/agents/:agentId/api-keys', async ({ params, request }) => {
+    const body = (await request.json()) as {
+      scopes?: string[] | null;
+      expires_at?: string | null;
+    };
+    const keyId = 'eak_' + Date.now();
     return HttpResponse.json({
-      key_id: 'key-' + Date.now(),
-      secret: 'test-secret-value',
-      api_key_value: 'eak_key123.secretvalue',
+      key_id: keyId,
+      secret: 'test-secret-value-' + Date.now(),
+      api_key_value: `${keyId}.testsecretvalue`,
     });
   }),
 
+  http.post('/enforceai/api-keys/:keyId/revoke', ({ params }) => {
+    const key = mockApiKeys.find((k) => k.key_id === params.keyId);
+    if (!key) {
+      return HttpResponse.json({ detail: 'API key not found' }, { status: 404 });
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   // EnforceAI: Tokens endpoints
-  http.post('/enforceai/agents/:agentId/tokens/mint', () => {
+  http.post('/enforceai/agents/:agentId/tokens/mint', async ({ params, request }) => {
+    const body = (await request.json()) as {
+      scopes: string[];
+      ttl_seconds?: number | null;
+      expires_at?: string | null;
+    };
+    // Generate a mock JWT token with realistic structure
+    const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: 'kid-local-1' }));
+    const now = Math.floor(Date.now() / 1000);
+    const exp = body.ttl_seconds
+      ? now + body.ttl_seconds
+      : body.expires_at
+        ? Math.floor(new Date(body.expires_at).getTime() / 1000)
+        : now + 86400;
+    const payload = btoa(JSON.stringify({
+      iss: 'enforceai-gateway',
+      sub: params.agentId,
+      aud: ['mcp-gateway'],
+      exp,
+      iat: now,
+      jti: 'jti-' + Date.now(),
+      type: 'agent',
+      name: 'test-agent',
+      scopes: body.scopes,
+    }));
+    const signature = 'mocksignature' + Date.now();
     return HttpResponse.json({
-      token: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test.signature',
+      token: `${header}.${payload}.${signature}`,
     });
   }),
 
   http.post('/enforceai/tokens/revoke', async ({ request }) => {
-    const body = (await request.json()) as { jti?: string; reason?: string };
+    const body = (await request.json()) as {
+      gateway_token?: string;
+      agent_id?: string;
+      jti?: string;
+      reason?: string;
+    };
+    // Extract JTI from token if provided
+    let jti = body.jti;
+    let agentId = body.agent_id;
+    if (body.gateway_token && !jti) {
+      try {
+        const parts = body.gateway_token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(atob(parts[1]));
+          jti = payload.jti;
+          agentId = payload.sub;
+        }
+      } catch {
+        // Ignore decode errors
+      }
+    }
     return HttpResponse.json({
-      jti: body.jti ?? 'revoked-jti',
+      jti: jti ?? 'revoked-jti-' + Date.now(),
       user_id: 'test|user123',
-      agent_id: '9d2724e9-1753-4493-8993-0d6986754414',
+      agent_id: agentId ?? '9d2724e9-1753-4493-8993-0d6986754414',
       revoked_at: new Date().toISOString(),
       expires_at: null,
       reason: body.reason ?? null,
