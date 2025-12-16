@@ -149,7 +149,7 @@ const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen }) => {
                   ) : (
                     <span className="text-gray-600 dark:text-gray-300">👁️ Read-only Access</span>
                   )}
-                  {user.auth_method === 'oauth2' && user.provider && (
+                  {user.auth_method === 'oidc' && user.provider && (
                     <span className="ml-1">({user.provider})</span>
                   )}
                 </div>
@@ -223,7 +223,7 @@ const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen }) => {
                     ) : (
                       <span className="text-gray-600 dark:text-gray-300">👁️ Read-only Access</span>
                     )}
-                    {user.auth_method === 'oauth2' && user.provider && (
+                    {user.auth_method === 'oidc' && user.provider && (
                       <span className="ml-1">({user.provider})</span>
                     )}
                   </div>

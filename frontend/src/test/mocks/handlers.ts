@@ -36,6 +36,19 @@ export const handlers = [
     return HttpResponse.json({ success: true });
   }),
 
+  http.get('/api/auth/providers', () => {
+    return HttpResponse.json({
+      providers: [
+        { name: 'google', display_name: 'Google' },
+        { name: 'github', display_name: 'GitHub' },
+      ],
+    });
+  }),
+
+  http.post('/api/auth/refresh', () => {
+    return HttpResponse.json({ success: true });
+  }),
+
   // Registry endpoints
   http.get('/api/servers', () => {
     return HttpResponse.json({
