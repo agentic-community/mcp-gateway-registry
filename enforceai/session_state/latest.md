@@ -55,6 +55,8 @@
 - Stage 7.3: added out-of-band cleanup command `cli/enforceai_audit_cleanup.py` with unit + integration tests
 - Stage 7.4: added regression tests for audit failure policy + request-path caching; added audit retention operator docs
 - Production testing (2025-12-15): verified end-to-end FGAC tool restrictions with SQLite MCP server integration, confirmed agent-level `allowed_tools` enforcement with Nginx Lua filtering
+- UI Frontend Planning (2025-12-15): created `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` with 16 phases covering complete UI rewrite using Vite, React 18, TypeScript, Tailwind CSS, TanStack Query, Vitest, React Testing Library, and Playwright E2E
+- UI Frontend Phase 1 (2025-12-16): migrated from CRA to Vite 6.x, added Vitest + RTL + MSW testing infrastructure, created API client with CSRF handling and X-Request-Id generation, added core utilities (cn, format, errors) with 80 unit tests passing, build succeeds
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -87,12 +89,11 @@
 - MCP server registration: use `host.docker.internal` for Docker-to-host connectivity when registering localhost MCP servers.
 
 ## Current Task
-- Stage 7: audit retention + cleanup jobs (completed)
-- Production testing: FGAC tool restrictions + MCP gateway integration
+- UI Frontend Phase 1: Project Foundation + Build System Migration (completed)
 
 ## Next Steps
-1. Stage 8+: advanced policy + UI
-2. Document operational procedures for token management and server registration
+1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 2: UI Primitives + Theme System
+2. Continue through remaining 15 phases to complete the new Enforce Gateway UI
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
