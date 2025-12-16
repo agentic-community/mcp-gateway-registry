@@ -1,6 +1,9 @@
+import forms from '@tailwindcss/forms';
+
 /** @type {import('tailwindcss').Config} */
-module.exports = {
+export default {
   content: [
+    "./index.html",
     "./src/**/*.{js,jsx,ts,tsx}",
   ],
   darkMode: 'class',
@@ -38,6 +41,7 @@ module.exports = {
       animation: {
         'fade-in': 'fadeIn 0.2s ease-in-out',
         'slide-up': 'slideUp 0.2s ease-out',
+        'spin-slow': 'spin 2s linear infinite',
       },
       keyframes: {
         fadeIn: {
@@ -51,7 +55,5 @@ module.exports = {
       },
     },
   },
-  plugins: [
-    require('@tailwindcss/forms'),
-  ],
-} 
+  plugins: [forms],
+}
