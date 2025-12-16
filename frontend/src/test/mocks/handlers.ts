@@ -1,4 +1,132 @@
 import { http, HttpResponse } from 'msw';
+import type { Server, A2AAgent, EnforceAIAgent, ServerDetails, Tool } from '@/api/types';
+
+// Mock tools data
+export const mockTools: Tool[] = [
+  {
+    name: 'read_query',
+    description: 'Execute a SELECT query on the database',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The SQL SELECT query' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'list_tables',
+    description: 'List all tables in the database',
+    input_schema: {},
+  },
+  {
+    name: 'describe_table',
+    description: 'Get the schema of a table',
+    input_schema: {
+      type: 'object',
+      properties: {
+        table_name: { type: 'string', description: 'Name of the table' },
+      },
+      required: ['table_name'],
+    },
+  },
+];
+
+// Mock data for testing
+export const mockServers: Server[] = [
+  {
+    display_name: 'SQLite Server',
+    path: 'sqlite',
+    proxy_pass_url: 'http://localhost:3031/mcp',
+    description: 'SQLite MCP Server',
+    tags: ['database', 'sql'],
+    is_enabled: true,
+    health_status: 'healthy',
+    num_tools: 6,
+  },
+  {
+    display_name: 'Filesystem Server',
+    path: 'filesystem',
+    proxy_pass_url: 'http://localhost:3032/mcp',
+    description: 'Filesystem MCP Server',
+    tags: ['files', 'io'],
+    is_enabled: true,
+    health_status: 'healthy',
+    num_tools: 4,
+  },
+  {
+    display_name: 'Disabled Server',
+    path: 'disabled',
+    proxy_pass_url: 'http://localhost:3033/mcp',
+    description: 'A disabled server',
+    is_enabled: false,
+    health_status: 'unknown',
+    num_tools: 0,
+  },
+];
+
+// Mock server details (with tools)
+export const mockServerDetails: ServerDetails[] = mockServers.map((server) => ({
+  ...server,
+  tools: server.path === 'sqlite' ? mockTools : [],
+  supported_transports: ['http', 'sse'],
+}));
+
+export const mockA2AAgents: A2AAgent[] = [
+  {
+    name: 'Code Assistant',
+    path: 'code-assistant',
+    url: 'http://localhost:5001',
+    description: 'AI-powered code assistant',
+    skills: ['code-review', 'refactoring'],
+    tags: ['ai', 'code'],
+    num_skills: 2,
+    num_stars: 5,
+    visibility: 'public',
+    is_enabled: true,
+    health_status: 'healthy',
+  },
+  {
+    name: 'Data Analyst',
+    path: 'data-analyst',
+    url: 'http://localhost:5002',
+    description: 'Data analysis agent',
+    skills: ['data-analysis', 'visualization'],
+    tags: ['ai', 'data'],
+    num_skills: 2,
+    num_stars: 3,
+    visibility: 'private',
+    is_enabled: false,
+    health_status: 'unknown',
+  },
+];
+
+export const mockEnforceAIAgents: EnforceAIAgent[] = [
+  {
+    user_id: 'test|user123',
+    agent_id: '9d2724e9-1753-4493-8993-0d6986754414',
+    scopes: ['sqlite.manage', 'filesystem.read'],
+    allowed_tools: ['read_query', 'list_tables'],
+    alias: 'sqlite-agent',
+    metadata: null,
+    revoked_at: null,
+    tokens_valid_after: null,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-15T00:00:00Z',
+  },
+  {
+    user_id: 'test|user123',
+    agent_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    scopes: ['filesystem.read'],
+    allowed_tools: null,
+    alias: 'fs-reader',
+    metadata: null,
+    revoked_at: '2024-01-10T00:00:00Z', // Revoked agent
+    tokens_valid_after: null,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-10T00:00:00Z',
+  },
+];
 
 // Default mock handlers for API endpoints
 export const handlers = [
@@ -22,14 +150,14 @@ export const handlers = [
   }),
 
   http.post('/api/auth/login', async ({ request }) => {
-    const body = await request.json() as { username?: string; password?: string };
+    const body = (await request.json()) as {
+      username?: string;
+      password?: string;
+    };
     if (body.username === 'testuser' && body.password === 'testpass') {
       return HttpResponse.json({ success: true });
     }
-    return HttpResponse.json(
-      { detail: 'Invalid credentials' },
-      { status: 401 }
-    );
+    return HttpResponse.json({ detail: 'Invalid credentials' }, { status: 401 });
   }),
 
   http.post('/api/auth/logout', () => {
@@ -49,21 +177,216 @@ export const handlers = [
     return HttpResponse.json({ success: true });
   }),
 
-  // Registry endpoints
+  // Registry: Servers endpoints
   http.get('/api/servers', () => {
-    return HttpResponse.json({
-      servers: [],
-    });
+    return HttpResponse.json({ servers: mockServers });
   }),
 
+  http.get('/api/servers/:path', ({ params }) => {
+    const server = mockServerDetails.find((s) => s.path === params.path);
+    if (server) {
+      return HttpResponse.json(server);
+    }
+    return HttpResponse.json({ detail: 'Server not found' }, { status: 404 });
+  }),
+
+  http.post('/api/servers', async ({ request }) => {
+    const body = (await request.json()) as {
+      name: string;
+      path: string;
+      proxy_pass_url: string;
+      description?: string;
+      tags?: string[];
+    };
+    const newServer: Server = {
+      display_name: body.name,
+      path: body.path,
+      proxy_pass_url: body.proxy_pass_url,
+      description: body.description,
+      tags: body.tags,
+      is_enabled: true,
+      health_status: 'unknown',
+      num_tools: 0,
+    };
+    return HttpResponse.json(newServer, { status: 201 });
+  }),
+
+  http.put('/api/servers/:path', async ({ params, request }) => {
+    const server = mockServers.find((s) => s.path === params.path);
+    if (!server) {
+      return HttpResponse.json({ detail: 'Server not found' }, { status: 404 });
+    }
+    const body = (await request.json()) as {
+      name?: string;
+      proxy_pass_url?: string;
+      description?: string;
+      tags?: string[];
+      enabled?: boolean;
+    };
+    const updatedServer: Server = {
+      ...server,
+      display_name: body.name ?? server.display_name,
+      proxy_pass_url: body.proxy_pass_url ?? server.proxy_pass_url,
+      description: body.description ?? server.description,
+      tags: body.tags ?? server.tags,
+      is_enabled: body.enabled !== undefined ? body.enabled : server.is_enabled,
+    };
+    return HttpResponse.json(updatedServer);
+  }),
+
+  http.delete('/api/servers/:path', ({ params }) => {
+    const server = mockServers.find((s) => s.path === params.path);
+    if (!server) {
+      return HttpResponse.json({ detail: 'Server not found' }, { status: 404 });
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.post('/api/servers/:path/refresh', ({ params }) => {
+    const server = mockServers.find((s) => s.path === params.path);
+    if (server) {
+      return HttpResponse.json({ ...server, health_status: 'healthy' });
+    }
+    return HttpResponse.json({ detail: 'Server not found' }, { status: 404 });
+  }),
+
+  // Registry: A2A Agents endpoints
   http.get('/api/agents', () => {
     return HttpResponse.json({
-      agents: [],
+      agents: mockA2AAgents,
+      total_count: mockA2AAgents.length,
     });
   }),
 
-  // EnforceAI endpoints
+  http.get('/api/agents/:path', ({ params }) => {
+    const agent = mockA2AAgents.find((a) => a.path === params.path);
+    if (agent) {
+      return HttpResponse.json(agent);
+    }
+    return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+  }),
+
+  http.post('/api/agents', async ({ request }) => {
+    const body = (await request.json()) as {
+      name: string;
+      path: string;
+      description?: string;
+      skills?: string[];
+      tags?: string[];
+      visibility?: 'public' | 'private';
+    };
+    const newAgent: A2AAgent = {
+      name: body.name,
+      path: body.path,
+      url: `http://localhost:${5000 + Math.floor(Math.random() * 1000)}`,
+      description: body.description,
+      skills: body.skills ?? [],
+      tags: body.tags ?? [],
+      num_skills: body.skills?.length ?? 0,
+      num_stars: 0,
+      visibility: body.visibility ?? 'public',
+      is_enabled: true,
+      health_status: 'unknown',
+    };
+    return HttpResponse.json(newAgent, { status: 201 });
+  }),
+
+  http.put('/api/agents/:path', async ({ params, request }) => {
+    const agent = mockA2AAgents.find((a) => a.path === params.path);
+    if (!agent) {
+      return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+    }
+    const body = (await request.json()) as {
+      name?: string;
+      description?: string;
+      skills?: string[];
+      tags?: string[];
+      visibility?: 'public' | 'private';
+      enabled?: boolean;
+    };
+    const updatedAgent: A2AAgent = {
+      ...agent,
+      name: body.name ?? agent.name,
+      description: body.description ?? agent.description,
+      skills: body.skills ?? agent.skills,
+      tags: body.tags ?? agent.tags,
+      visibility: body.visibility ?? agent.visibility,
+      is_enabled: body.enabled !== undefined ? body.enabled : agent.is_enabled,
+      num_skills: body.skills?.length ?? agent.num_skills,
+    };
+    return HttpResponse.json(updatedAgent);
+  }),
+
+  http.delete('/api/agents/:path', ({ params }) => {
+    const agent = mockA2AAgents.find((a) => a.path === params.path);
+    if (!agent) {
+      return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // EnforceAI: Agents endpoints
   http.get('/enforceai/agents', () => {
+    return HttpResponse.json(mockEnforceAIAgents);
+  }),
+
+  http.get('/enforceai/agents/:agentId', ({ params }) => {
+    const agent = mockEnforceAIAgents.find((a) => a.agent_id === params.agentId);
+    if (agent) {
+      return HttpResponse.json(agent);
+    }
+    return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+  }),
+
+  http.post('/enforceai/agents', async ({ request }) => {
+    const body = (await request.json()) as {
+      scopes: string[];
+      alias?: string;
+    };
+    const newAgent: EnforceAIAgent = {
+      user_id: 'test|user123',
+      agent_id: 'new-agent-' + Date.now(),
+      scopes: body.scopes,
+      allowed_tools: null,
+      alias: body.alias ?? null,
+      metadata: null,
+      revoked_at: null,
+      tokens_valid_after: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(newAgent, { status: 201 });
+  }),
+
+  // EnforceAI: API Keys endpoints
+  http.get('/enforceai/agents/:agentId/api-keys', () => {
     return HttpResponse.json([]);
+  }),
+
+  http.post('/enforceai/agents/:agentId/api-keys', () => {
+    return HttpResponse.json({
+      key_id: 'key-' + Date.now(),
+      secret: 'test-secret-value',
+      api_key_value: 'eak_key123.secretvalue',
+    });
+  }),
+
+  // EnforceAI: Tokens endpoints
+  http.post('/enforceai/agents/:agentId/tokens/mint', () => {
+    return HttpResponse.json({
+      token: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test.signature',
+    });
+  }),
+
+  http.post('/enforceai/tokens/revoke', async ({ request }) => {
+    const body = (await request.json()) as { jti?: string; reason?: string };
+    return HttpResponse.json({
+      jti: body.jti ?? 'revoked-jti',
+      user_id: 'test|user123',
+      agent_id: '9d2724e9-1753-4493-8993-0d6986754414',
+      revoked_at: new Date().toISOString(),
+      expires_at: null,
+      reason: body.reason ?? null,
+    });
   }),
 ];
