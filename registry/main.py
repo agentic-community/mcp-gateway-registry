@@ -258,8 +258,19 @@ async def health_check():
 FRONTEND_BUILD_PATH = Path(__file__).parent.parent / "frontend" / "build"
 
 if FRONTEND_BUILD_PATH.exists():
-    # Serve static assets
-    app.mount("/static", StaticFiles(directory=FRONTEND_BUILD_PATH / "static"), name="static")
+    # Serve built frontend assets.
+    #
+    # Older builds (CRA) used /static/*, while the current Vite build uses /assets/*.
+    assets_dir = FRONTEND_BUILD_PATH / "assets"
+    static_dir = FRONTEND_BUILD_PATH / "static"
+
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    else:
+        # Keep legacy template routes working even when the SPA build is present.
+        app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
     
     # Serve React app for all other routes (SPA)
     @app.get("/{full_path:path}")

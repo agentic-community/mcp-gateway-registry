@@ -50,18 +50,22 @@ COPY . /app/
 COPY docker/nginx_rev_proxy_http_only.conf /app/docker/nginx_rev_proxy_http_only.conf
 COPY docker/nginx_rev_proxy_http_and_https.conf /app/docker/nginx_rev_proxy_http_and_https.conf
 
-# Build React frontend
+# Build frontend assets (optional).
+#
+# The new Enforce Gateway UI is often run separately in development (e.g. Vite on :3000),
+# so container builds should not fail if frontend toolchains are unavailable.
+ARG BUILD_FRONTEND=0
 WORKDIR /app/frontend
 COPY frontend/package.json ./
-RUN npm install --legacy-peer-deps
 COPY frontend/ ./
-RUN npm run build
+RUN if [ "$BUILD_FRONTEND" = "1" ]; then \
+      npm install --legacy-peer-deps && npm run build; \
+    else \
+      echo "Skipping frontend build (BUILD_FRONTEND=$BUILD_FRONTEND)"; \
+    fi
 
 # Return to app directory
 WORKDIR /app
-
-# Install uv and setup Python environment
-RUN . .venv/bin/activate && uv pip install -e .
 
 # Create logs directory
 RUN mkdir -p /app/logs

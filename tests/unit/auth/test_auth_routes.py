@@ -140,7 +140,8 @@ class TestAuthRoutes:
         
         assert isinstance(response, RedirectResponse)
         assert response.status_code == 302
-        expected_url = f"{mock_settings.auth_server_external_url}/oauth2/login/{provider}?redirect_uri=http://localhost:8000/"
+        expected_redirect = urllib.parse.quote("http://localhost:8000/", safe="/")
+        expected_url = f"{mock_settings.auth_server_external_url}/oauth2/login/{provider}?redirect_uri={expected_redirect}"
         assert response.headers["location"] == expected_url
 
     @pytest.mark.asyncio

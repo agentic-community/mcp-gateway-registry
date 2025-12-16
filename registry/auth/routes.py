@@ -34,6 +34,38 @@ router = APIRouter()
 templates = Jinja2Templates(directory=settings.templates_dir)
 
 
+def _normalize_redirect_uri(
+    request: Request,
+    redirect_uri: str | None,
+) -> str:
+    if redirect_uri is None:
+        return str(request.base_url).rstrip("/") + "/"
+
+    candidate = redirect_uri.strip()
+    if not candidate:
+        return str(request.base_url).rstrip("/") + "/"
+
+    if candidate.startswith("/"):
+        base = str(request.base_url).rstrip("/")
+        return base + candidate
+
+    parsed = urllib.parse.urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid redirect_uri",
+        )
+
+    request_host = request.url.hostname
+    if request_host and parsed.hostname != request_host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="redirect_uri host mismatch",
+        )
+
+    return candidate
+
+
 async def get_oauth2_providers():
     """Fetch available OAuth2 providers from auth server"""
     try:
@@ -68,20 +100,46 @@ async def login_form(request: Request, error: str | None = None):
 
 
 @router.get("/auth/{provider}")
-async def oauth2_login_redirect(provider: str, request: Request):
+async def oauth2_login_redirect(
+    provider: str,
+    request: Request,
+    redirect_uri: str | None = None,
+):
     """Redirect to auth server for OAuth2 login"""
     try:
-        # Build redirect URL to auth server - use external URL for browser redirects
-        registry_url = str(request.base_url).rstrip('/')
+        registry_url = _normalize_redirect_uri(
+            request,
+            redirect_uri,
+        )
+
         auth_external_url = settings.auth_server_external_url
-        auth_url = f"{auth_external_url}/oauth2/login/{provider}?redirect_uri={registry_url}/"
+        if not auth_external_url or "your-domain.com" in auth_external_url:
+            auth_external_url = str(request.base_url).rstrip("/")
+        auth_url = (
+            f"{auth_external_url}/oauth2/login/{provider}"
+            f"?redirect_uri={urllib.parse.quote(registry_url)}"
+        )
         logger.info(f"request.base_url: {request.base_url}, registry_url: {registry_url}, auth_external_url: {auth_external_url}, auth_url: {auth_url}")
         logger.info(f"Redirecting to OAuth2 login for provider {provider}: {auth_url}")
         return RedirectResponse(url=auth_url, status_code=302)
-        
+
     except Exception as e:
         logger.error(f"Error redirecting to OAuth2 login for {provider}: {e}")
         return RedirectResponse(url="/login?error=oauth2_redirect_failed", status_code=302)
+
+
+@router.get("/login/{provider}")
+async def oauth2_login_redirect_compat(
+    provider: str,
+    request: Request,
+    redirect_uri: str | None = None,
+):
+    """Compatibility route for SPAs: /api/auth/login/{provider}."""
+    return await oauth2_login_redirect(
+        provider=provider,
+        request=request,
+        redirect_uri=redirect_uri,
+    )
 
 
 @router.get("/auth/callback")
