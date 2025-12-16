@@ -1,38 +1,39 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import { AuthProvider } from './contexts/AuthContext';
+import { useEffect } from 'react';
+import { RouterProvider } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
-import Layout from './components/Layout';
-import Dashboard from './pages/Dashboard';
-import TokenGeneration from './pages/TokenGeneration';
-import Login from './pages/Login';
-import OAuthCallback from './pages/OAuthCallback';
-import ProtectedRoute from './components/ProtectedRoute';
+import { ToastProvider } from './components/ui/Toast';
+import { router, setAuthContext } from './router';
+
+// Component that syncs auth context to router
+function AuthSync() {
+  const auth = useAuth();
+
+  useEffect(() => {
+    setAuthContext(auth);
+  }, [auth]);
+
+  return null;
+}
+
+// Inner app with auth sync
+function AppWithAuth() {
+  return (
+    <>
+      <AuthSync />
+      <RouterProvider router={router} />
+    </>
+  );
+}
 
 function App() {
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <Router>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/auth/callback" element={<OAuthCallback />} />
-            <Route path="/" element={
-              <ProtectedRoute>
-                <Layout>
-                  <Dashboard />
-                </Layout>
-              </ProtectedRoute>
-            } />
-            <Route path="/generate-token" element={
-              <ProtectedRoute>
-                <Layout>
-                  <TokenGeneration />
-                </Layout>
-              </ProtectedRoute>
-            } />
-          </Routes>
-        </Router>
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <AppWithAuth />
+        </AuthProvider>
+      </ToastProvider>
     </ThemeProvider>
   );
 }
