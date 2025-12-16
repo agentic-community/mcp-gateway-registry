@@ -342,20 +342,70 @@ export const handlers = [
     const body = (await request.json()) as {
       scopes: string[];
       alias?: string;
+      allowed_tools?: string[] | null;
+      metadata?: Record<string, unknown> | null;
     };
     const newAgent: EnforceAIAgent = {
       user_id: 'test|user123',
       agent_id: 'new-agent-' + Date.now(),
       scopes: body.scopes,
-      allowed_tools: null,
+      allowed_tools: body.allowed_tools ?? null,
       alias: body.alias ?? null,
-      metadata: null,
+      metadata: body.metadata ?? null,
       revoked_at: null,
       tokens_valid_after: null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     return HttpResponse.json(newAgent, { status: 201 });
+  }),
+
+  http.put('/enforceai/agents/:agentId', async ({ params, request }) => {
+    const agent = mockEnforceAIAgents.find((a) => a.agent_id === params.agentId);
+    if (!agent) {
+      return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+    }
+    const body = (await request.json()) as {
+      scopes?: string[] | null;
+      alias?: string | null;
+      allowed_tools?: string[] | null;
+      metadata?: Record<string, unknown> | null;
+    };
+    const updatedAgent: EnforceAIAgent = {
+      ...agent,
+      scopes: body.scopes ?? agent.scopes,
+      alias: body.alias !== undefined ? body.alias : agent.alias,
+      allowed_tools: body.allowed_tools !== undefined ? body.allowed_tools : agent.allowed_tools,
+      metadata: body.metadata !== undefined ? body.metadata : agent.metadata,
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(updatedAgent);
+  }),
+
+  http.post('/enforceai/agents/:agentId/revoke', ({ params }) => {
+    const agent = mockEnforceAIAgents.find((a) => a.agent_id === params.agentId);
+    if (!agent) {
+      return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+    }
+    const revokedAgent: EnforceAIAgent = {
+      ...agent,
+      revoked_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(revokedAgent);
+  }),
+
+  http.post('/enforceai/agents/:agentId/revoke-all-tokens', ({ params }) => {
+    const agent = mockEnforceAIAgents.find((a) => a.agent_id === params.agentId);
+    if (!agent) {
+      return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+    }
+    const updatedAgent: EnforceAIAgent = {
+      ...agent,
+      tokens_valid_after: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(updatedAgent);
   }),
 
   // EnforceAI: API Keys endpoints

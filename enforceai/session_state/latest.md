@@ -63,6 +63,8 @@
 - UI Frontend Phase 5 (2025-12-16): implemented Overview dashboard page with connection status cards, summary counts, and quick actions; added QueryClientProvider to App.tsx; created API hooks (useServers, useA2AAgents, useEnforceAIAgents, useConnectionTest); updated API types to match backend response format (servers/agents use is_enabled field); added comprehensive MSW mock handlers; 297 tests passing
 - UI Frontend Phase 6 (2025-12-16): implemented MCP Servers feature with full CRUD operations; ServersPage with list/search/filters; ServerDetailsPage with tools list; ServerRegisterModal and ServerEditModal with Zod validation; hooks for all server operations with optimistic updates; 350 tests passing
 - UI Frontend Phase 7 (2025-12-16): implemented A2A Agents feature with full CRUD operations; A2AAgentsPage with list/search/filters (including visibility filter); A2AAgentDetailsPage with skills list; AgentRegisterModal and AgentEditModal with Zod validation; hooks for all agent operations with optimistic updates; 403 tests passing
+- Backend Auth Improvements (2025-12-16): improved OAuth redirect URI handling with _normalize_redirect_uri helper for secure redirect validation; fixed OAuth login URL in AuthContext to use correct backend route; fixed session management useEffect dependency array
+- UI Frontend Phase 8 (2025-12-16): implemented EnforceAI Agents feature with full CRUD operations; EnforceAIAgentsPage with list/search/status filters; EnforceAIAgentDetailsPage with scopes, allowed_tools, metadata display; CreateAgentModal and EditAgentModal with Zod validation; RevokeAgentModal with confirmation requiring typing agent ID; RevokeAllTokensModal for bulk token revocation; hooks for all operations (useEnforceAIAgents, useEnforceAIAgent, useCreateEnforceAIAgent, useUpdateEnforceAIAgent, useRevokeEnforceAIAgent, useRevokeAllTokens) with optimistic updates; 457 tests passing
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -95,11 +97,11 @@
 - MCP server registration: use `host.docker.internal` for Docker-to-host connectivity when registering localhost MCP servers.
 
 ## Current Task
-- UI Frontend Phase 7: Registry - A2A Agents (completed)
+- UI Frontend Phase 8: EnforceAI - Agents (completed)
 
 ## Next Steps
-1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 8: EnforceAI - Agents
-2. Continue through remaining 8 phases to complete the new Enforce Gateway UI
+1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 9: EnforceAI - API Keys
+2. Continue through remaining 7 phases to complete the new Enforce Gateway UI
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
