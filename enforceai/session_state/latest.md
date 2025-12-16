@@ -108,7 +108,6 @@
 ## Next Steps
 1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 11: EnforceAI - Gateway Tokens
 2. Continue through remaining 5 phases to complete the new Enforce Gateway UI
-3. Consider adding GET /sse endpoint support to gateway for streamable-http transport session management
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
