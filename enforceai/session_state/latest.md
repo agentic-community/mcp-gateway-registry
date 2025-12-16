@@ -57,6 +57,12 @@
 - Production testing (2025-12-15): verified end-to-end FGAC tool restrictions with SQLite MCP server integration, confirmed agent-level `allowed_tools` enforcement with Nginx Lua filtering
 - UI Frontend Planning (2025-12-15): created `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` with 16 phases covering complete UI rewrite using Vite, React 18, TypeScript, Tailwind CSS, TanStack Query, Vitest, React Testing Library, and Playwright E2E
 - UI Frontend Phase 1 (2025-12-16): migrated from CRA to Vite 6.x, added Vitest + RTL + MSW testing infrastructure, created API client with CSRF handling and X-Request-Id generation, added core utilities (cn, format, errors) with 80 unit tests passing, build succeeds
+- UI Frontend Phase 2 (2025-12-16): implemented complete UI component library (Button, Input, Card, Modal, Toast, Badge, Spinner, etc.) with dark mode support, added ThemeContext for light/dark/system theme management, created 14 reusable UI components with 187 unit tests passing
+- UI Frontend Phase 3 (2025-12-16): built main application shell with AppShell, Header, Sidebar, and MobileNav components; implemented router with lazy loading and protected routes (ProtectedRoute, AdminRoute); created 19 placeholder pages for all features; added navigation with 11 sections (Registry, EnforceAI, Policy, Monitoring, Administration); 250 tests passing
+- UI Frontend Phase 4 (2025-12-16): enhanced AuthContext with OAuth provider support and session management (expiry detection, periodic checks, refresh capability); enhanced LoginPage with OAuth provider buttons (Google, GitHub, Microsoft, Okta); added SessionExpiryWarning component; created useSession hooks for session state management; added comprehensive auth tests; 267 tests passing
+- UI Frontend Phase 5 (2025-12-16): implemented Overview dashboard page with connection status cards, summary counts, and quick actions; added QueryClientProvider to App.tsx; created API hooks (useServers, useA2AAgents, useEnforceAIAgents, useConnectionTest); updated API types to match backend response format (servers/agents use is_enabled field); added comprehensive MSW mock handlers; 297 tests passing
+- UI Frontend Phase 6 (2025-12-16): implemented MCP Servers feature with full CRUD operations; ServersPage with list/search/filters; ServerDetailsPage with tools list; ServerRegisterModal and ServerEditModal with Zod validation; hooks for all server operations with optimistic updates; 350 tests passing
+- UI Frontend Phase 7 (2025-12-16): implemented A2A Agents feature with full CRUD operations; A2AAgentsPage with list/search/filters (including visibility filter); A2AAgentDetailsPage with skills list; AgentRegisterModal and AgentEditModal with Zod validation; hooks for all agent operations with optimistic updates; 403 tests passing
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -89,11 +95,11 @@
 - MCP server registration: use `host.docker.internal` for Docker-to-host connectivity when registering localhost MCP servers.
 
 ## Current Task
-- UI Frontend Phase 1: Project Foundation + Build System Migration (completed)
+- UI Frontend Phase 7: Registry - A2A Agents (completed)
 
 ## Next Steps
-1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 2: UI Primitives + Theme System
-2. Continue through remaining 15 phases to complete the new Enforce Gateway UI
+1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 8: EnforceAI - Agents
+2. Continue through remaining 8 phases to complete the new Enforce Gateway UI
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
