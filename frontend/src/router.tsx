@@ -7,6 +7,8 @@ import {
 } from 'react-router-dom';
 import { Spinner } from './components/ui';
 import { AppShell } from './components/layout/index';
+import { useAuth } from './contexts/AuthContext';
+import ProtectedRouteComponent from './components/ProtectedRoute';
 
 // Lazy load all pages for code splitting
 const OverviewPage = lazy(() => import('./features/overview/OverviewPage'));
@@ -44,60 +46,25 @@ function SuspenseWrapper({ children }: { children: ReactNode }) {
   return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
 }
 
-// Auth context interface (to be provided by AuthProvider)
-interface AuthContextValue {
-  user: {
-    username?: string;
-    email?: string;
-    is_admin?: boolean;
-  } | null;
-  loading: boolean;
-  logout: () => Promise<void>;
-}
-
-// These will be set by the RouterProvider wrapper
-let authContext: AuthContextValue | null = null;
-
-export function setAuthContext(ctx: AuthContextValue) {
-  authContext = ctx;
-}
-
-// Protected route wrapper
+// Protected route wrapper using the hook-based component
 function ProtectedRoute({ children }: { children: ReactNode }) {
-  const location = useLocation();
-
-  if (!authContext) {
-    return <PageLoader />;
-  }
-
-  if (authContext.loading) {
-    return <PageLoader />;
-  }
-
-  if (!authContext.user) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
-  }
-
-  return <>{children}</>;
+  return <ProtectedRouteComponent>{children}</ProtectedRouteComponent>;
 }
 
 // Admin route wrapper
 function AdminRoute({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
   const location = useLocation();
 
-  if (!authContext) {
+  if (loading) {
     return <PageLoader />;
   }
 
-  if (authContext.loading) {
-    return <PageLoader />;
-  }
-
-  if (!authContext.user) {
+  if (!user) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (!authContext.user.is_admin) {
+  if (!user.is_admin) {
     return <Navigate to="/" replace />;
   }
 
@@ -106,14 +73,10 @@ function AdminRoute({ children }: { children: ReactNode }) {
 
 // App shell layout wrapper
 function AppLayout() {
-  const handleLogout = async () => {
-    if (authContext) {
-      await authContext.logout();
-    }
-  };
+  const { user, logout } = useAuth();
 
   return (
-    <AppShell user={authContext?.user ?? null} onLogout={handleLogout}>
+    <AppShell user={user} onLogout={logout}>
       <Outlet />
     </AppShell>
   );
