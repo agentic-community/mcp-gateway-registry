@@ -65,6 +65,10 @@
 - UI Frontend Phase 7 (2025-12-16): implemented A2A Agents feature with full CRUD operations; A2AAgentsPage with list/search/filters (including visibility filter); A2AAgentDetailsPage with skills list; AgentRegisterModal and AgentEditModal with Zod validation; hooks for all agent operations with optimistic updates; 403 tests passing
 - Backend Auth Improvements (2025-12-16): improved OAuth redirect URI handling with _normalize_redirect_uri helper for secure redirect validation; fixed OAuth login URL in AuthContext to use correct backend route; fixed session management useEffect dependency array
 - UI Frontend Phase 8 (2025-12-16): implemented EnforceAI Agents feature with full CRUD operations; EnforceAIAgentsPage with list/search/status filters; EnforceAIAgentDetailsPage with scopes, allowed_tools, metadata display; CreateAgentModal and EditAgentModal with Zod validation; RevokeAgentModal with confirmation requiring typing agent ID; RevokeAllTokensModal for bulk token revocation; hooks for all operations (useEnforceAIAgents, useEnforceAIAgent, useCreateEnforceAIAgent, useUpdateEnforceAIAgent, useRevokeEnforceAIAgent, useRevokeAllTokens) with optimistic updates; 457 tests passing
+- UI Frontend Phase 9 (2025-12-16): implemented EnforceAI API Keys feature with full CRUD operations; ApiKeysPage with list/search/status filters; ApiKeyDetailsPage with associated agent, scopes, metadata display; CreateApiKeyModal with Zod validation and one-time secret display; RevokeApiKeyModal with confirmation; hooks for all operations (useApiKeys, useApiKey, useCreateApiKey, useRevokeApiKey) with optimistic updates; tests passing
+- Documentation Update (2025-12-16): updated CLAUDE.md with comprehensive repository guidelines including project structure, build/test commands, coding style, testing guidelines, commit/PR best practices, and security tips
+- UI Frontend Phase 10 (2025-12-16): implemented Scopes Catalog Viewer with comprehensive scope management interface; ScopesPage with search, server filtering, expand/collapse functionality; ScopeExplainerCard for detailed permission breakdown; ScopePicker component for reusable scope selection; added ScopeCatalog, ScopeDefinition, ScopeInfo API types; extended Badge component for interactive use; displays stats (total scopes, servers, group mappings), group mappings with clickable navigation; mock scope catalog data matching scopes.yml schema; tests passing
+- MCP Gateway Troubleshooting (2025-12-16): fixed SQLite MCP server gateway connection issues; resolved auth-server using Keycloak instead of EnforceAI by restarting with EnforceAI environment variables; fixed nginx path routing by changing SQLite server path from '/sqlite' to '/sqlite/' for proper proxy_pass URI rewriting; verified proper request flow from gateway to SQLite server (now returns "Missing session ID" instead of "Not Found"); identified streamable-http transport session management limitation (requires GET /sse for session establishment but gateway blocks GET requests)
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -95,13 +99,16 @@
 - Docker Compose EnforceAI activation: EnforceAI environment variables must be loaded via `--env-file` flag (not inline env vars) for proper Docker Compose variable substitution.
 - Agent allowed_tools enforcement: tool restrictions are bidirectional (visibility + execution); `tools/list` shows only allowed tools, `tools/call` blocks unauthorized tools.
 - MCP server registration: use `host.docker.internal` for Docker-to-host connectivity when registering localhost MCP servers.
+- Nginx location path handling: MCP server paths in registry JSON must include trailing slash (e.g., `/sqlite/`) for proper nginx `proxy_pass` URI rewriting; without trailing slash, nginx sends full request path to upstream instead of stripping location prefix; this is required when using `rewrite_by_lua_file` in nginx config.
 
 ## Current Task
-- UI Frontend Phase 8: EnforceAI - Agents (completed)
+- UI Frontend Phase 10: Scopes Catalog Viewer (completed)
+- MCP Gateway Troubleshooting (completed)
 
 ## Next Steps
-1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 9: EnforceAI - API Keys
-2. Continue through remaining 7 phases to complete the new Enforce Gateway UI
+1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 11: EnforceAI - Gateway Tokens
+2. Continue through remaining 5 phases to complete the new Enforce Gateway UI
+3. Consider adding GET /sse endpoint support to gateway for streamable-http transport session management
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
