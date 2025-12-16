@@ -38,15 +38,18 @@ export interface LoginRequest {
 // ============================================================================
 
 export interface Server {
-  name: string;
+  display_name: string;
   path: string;
   proxy_pass_url: string;
   description?: string;
   tags?: string[];
-  enabled: boolean;
+  is_enabled: boolean;
   health_status?: 'healthy' | 'unhealthy' | 'unknown';
-  last_health_check?: string;
-  tools_count?: number;
+  last_checked_iso?: string;
+  num_tools?: number;
+  num_stars?: number;
+  is_python?: boolean;
+  license?: string;
 }
 
 export interface ServerDetails extends Server {
@@ -83,11 +86,17 @@ export interface EditServerRequest {
 export interface A2AAgent {
   name: string;
   path: string;
+  url?: string;
   description?: string;
   skills?: string[];
   tags?: string[];
+  num_skills?: number;
+  num_stars?: number;
+  is_enabled: boolean;
+  provider?: string;
+  streaming?: boolean;
+  trust_level?: string;
   visibility?: 'public' | 'private';
-  enabled: boolean;
   health_status?: 'healthy' | 'unhealthy' | 'unknown';
 }
 

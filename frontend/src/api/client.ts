@@ -69,10 +69,12 @@ function createApiClient(): AxiosInstance {
       // Add request ID for correlation
       config.headers['X-Request-Id'] = uuidv4();
 
-      // Skip CSRF for GET requests or if explicitly skipped
+      // Skip CSRF for GET requests, login endpoint, or if explicitly skipped
+      const isLoginRequest = config.url === '/api/auth/login';
       const skipCsrf =
         config.method?.toUpperCase() === 'GET' ||
-        config.headers['X-Skip-CSRF'] === 'true';
+        config.headers['X-Skip-CSRF'] === 'true' ||
+        isLoginRequest;
 
       if (config.headers['X-Skip-CSRF']) {
         delete config.headers['X-Skip-CSRF'];
