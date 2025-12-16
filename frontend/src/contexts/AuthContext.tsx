@@ -109,11 +109,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       if (userData.session_expires_at) {
         setupSessionExpiryWarning(userData.session_expires_at);
       }
-    } catch {
+    } catch (error) {
       // User not authenticated
+      console.log('[AuthContext] Auth check failed (expected for non-authenticated users)');
       setUser(null);
       clearSessionTimers();
     } finally {
+      console.log('[AuthContext] Setting loading to false');
       setLoading(false);
     }
   }, []);
@@ -178,15 +180,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     // Set up periodic session check
     sessionCheckInterval.current = setInterval(() => {
-      if (user) {
-        checkAuth();
-      }
+      checkAuth();
     }, SESSION_CHECK_INTERVAL);
 
     return () => {
       clearSessionTimers();
     };
-  }, [checkAuth, fetchOAuthProviders, clearSessionTimers, user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount
 
   // Password login
   const login = async (username: string, password: string): Promise<void> => {
@@ -209,7 +210,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const loginWithOAuth = (providerName: string): void => {
     // Get current URL for redirect after auth
     const returnUrl = window.location.origin + '/auth/callback';
-    const authUrl = `/api/auth/login/${providerName}?redirect_uri=${encodeURIComponent(returnUrl)}`;
+    // Backend route is /api/auth/auth/{provider}
+    const authUrl = `/api/auth/auth/${providerName}?redirect_uri=${encodeURIComponent(returnUrl)}`;
     window.location.href = authUrl;
   };
 

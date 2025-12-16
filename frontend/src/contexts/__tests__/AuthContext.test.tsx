@@ -116,7 +116,7 @@ describe('AuthContext', () => {
     });
 
     expect(mockHref).toHaveBeenCalledWith(
-      '/api/auth/login/google?redirect_uri=' +
+      '/api/auth/auth/google?redirect_uri=' +
         encodeURIComponent('http://localhost:3000/auth/callback')
     );
 
