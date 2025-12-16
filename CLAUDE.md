@@ -1,4 +1,41 @@
-# Claude Coding Rules
+# Repository Guidelines
+
+## Project Structure & Module Organization
+- `registry/`: FastAPI backend; `api/` routers (servers, agents, search, well-known), `auth/` for OAuth/JWT, `services/` for registry/search/federation, plus `templates/` and `static/`.
+- `frontend/`: React UI (Node 16+); built assets are served by the backend and Docker images.
+- `cli/`: Management scripts and conversational CLI (`agent_mgmt.sh`, `mcp_client.py`) for imports and scans.
+- `agents/a2a/`: Sample agent cards and docker-compose stack for local A2A demos.
+- Infra lives in `docker-compose*.yml`, `terraform/`, `charts/`; docs in `docs/`; tests mirror modules in `tests/`.
+
+## Build, Test, and Development Commands
+- Install backend deps: `make install-dev` (Python 3.12). Quick API run: `uvicorn registry.main:app --reload`.
+- Full compose stack (frontend + services): `./build_and_run.sh` or `./build_and_run.sh --prebuilt`.
+- Tests: `make test` (full suite), `make test-unit`, `make test-integration`, `make test-e2e`, `make test-fast`.
+- Quality: `make lint` (Bandit) and `make format` (Black); `make clean` clears artifacts.
+- Containers: `make build IMAGE=registry`, `make push IMAGE=registry`, `make compose-up-agents` for local A2A agents.
+
+## Coding Style & Naming Conventions
+- Python: 4-space indent, Black formatting, type hints preferred; modules and functions use `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE`.
+- Frontend: keep existing React/Tailwind patterns; prefer functional components and descriptive prop names.
+- Config stays in `.env`/`config/` or sample files—never commit secrets.
+
+## Testing Guidelines
+- Pytest lives in `tests/`; files follow `test_*.py` or `*_test.py`, marks in `pyproject.toml` (`unit`, `integration`, `e2e`, `auth`, etc.).
+- Coverage threshold is 80% (`--cov-fail-under=80`); `make test-coverage` builds reports.
+- For feature work, add focused unit tests plus one integration/API test that hits the new route/service path.
+
+## Commit & Pull Request Guidelines
+- Commit style mirrors history: concise, imperative summary with optional PR tag (e.g., `Add cookie security enhancements (#276)`).
+- PRs should include what changed, why, how to validate (`make test-fast` or a pytest command), and any config/env changes. Add screenshots or CLI output for UI/CLI-facing work.
+- Link related issues and keep diffs scoped; avoid unrelated reformatting unless necessary.
+
+## Security & Configuration Tips
+- Review `SECURITY.md` before auth or network changes; keep OAuth/Keycloak settings in `auth_server/` synced with `.env`.
+- Rotate FAISS/cache artifacts via `./build_and_run.sh` when switching branches or catalogs.
+- Treat `bandit` findings as advisory but fix anything touching secrets, auth, or filesystem access.
+
+
+# Agent Coding Rules
 
 ## Overview
 This document contains coding standards and best practices that must be followed for all code development. These rules prioritize maintainability, simplicity, and modern Python development practices.
