@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import type { Server, A2AAgent, EnforceAIAgent, ServerDetails, Tool, ApiKeySummary } from '@/api/types';
+import type { Server, A2AAgent, EnforceAIAgent, ServerDetails, Tool, ApiKeySummary, ScopeCatalog } from '@/api/types';
 
 // Mock tools data
 export const mockTools: Tool[] = [
@@ -150,6 +150,113 @@ export const mockApiKeys: ApiKeySummary[] = [
     last_used_at: null,
   },
 ];
+
+export const mockScopeCatalog: ScopeCatalog = {
+  ui_scopes: {
+    'registry-admins': {
+      list_agents: { action: 'list_agents', resources: ['all'] },
+      get_agent: { action: 'get_agent', resources: ['all'] },
+      publish_agent: { action: 'publish_agent', resources: ['all'] },
+      modify_agent: { action: 'modify_agent', resources: ['all'] },
+      delete_agent: { action: 'delete_agent', resources: ['all'] },
+    },
+    'registry-users-lob1': {
+      list_agents: { action: 'list_agents', resources: ['/code-reviewer', '/test-automation'] },
+      get_agent: { action: 'get_agent', resources: ['/code-reviewer', '/test-automation'] },
+    },
+  },
+  group_mappings: {
+    'registry-admins': ['registry-admins', 'mcp-servers-unrestricted/read'],
+    'registry-users-lob1': ['registry-users-lob1'],
+  },
+  scopes: {
+    'mcp-servers-unrestricted/read': {
+      name: 'mcp-servers-unrestricted/read',
+      server_permissions: [
+        {
+          server: '*',
+          methods: {
+            all_methods: false,
+            methods: ['initialize', 'tools/list', 'tools/call', 'GET'],
+          },
+          tools: {
+            all_tools: true,
+            tools: [],
+          },
+        },
+      ],
+      agent_permissions: [],
+    },
+    'registry-admins': {
+      name: 'registry-admins',
+      server_permissions: [
+        {
+          server: '*',
+          methods: {
+            all_methods: true,
+            methods: [],
+          },
+          tools: {
+            all_tools: true,
+            tools: [],
+          },
+        },
+      ],
+      agent_permissions: [
+        { action: 'list_agents', resources: ['all'] },
+        { action: 'get_agent', resources: ['all'] },
+        { action: 'publish_agent', resources: ['all'] },
+        { action: 'modify_agent', resources: ['all'] },
+        { action: 'delete_agent', resources: ['all'] },
+      ],
+    },
+    'registry-users-lob1': {
+      name: 'registry-users-lob1',
+      server_permissions: [
+        {
+          server: 'api',
+          methods: {
+            all_methods: false,
+            methods: ['initialize', 'GET'],
+          },
+          tools: null,
+        },
+        {
+          server: 'sqlite',
+          methods: {
+            all_methods: false,
+            methods: ['initialize', 'tools/list', 'tools/call'],
+          },
+          tools: {
+            all_tools: false,
+            tools: ['read_query', 'list_tables'],
+          },
+        },
+      ],
+      agent_permissions: [
+        { action: 'list_agents', resources: ['/code-reviewer', '/test-automation'] },
+        { action: 'get_agent', resources: ['/code-reviewer', '/test-automation'] },
+      ],
+    },
+    'sqlite.manage': {
+      name: 'sqlite.manage',
+      server_permissions: [
+        {
+          server: 'sqlite',
+          methods: {
+            all_methods: false,
+            methods: ['initialize', 'tools/list', 'tools/call'],
+          },
+          tools: {
+            all_tools: true,
+            tools: [],
+          },
+        },
+      ],
+      agent_permissions: [],
+    },
+  },
+};
 
 // Default mock handlers for API endpoints
 export const handlers = [
@@ -520,5 +627,10 @@ export const handlers = [
       expires_at: null,
       reason: body.reason ?? null,
     });
+  }),
+
+  // Scopes endpoints
+  http.get('/api/scopes/catalog', () => {
+    return HttpResponse.json(mockScopeCatalog);
   }),
 ];

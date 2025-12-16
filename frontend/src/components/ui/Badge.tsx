@@ -1,13 +1,13 @@
+import { type HTMLAttributes, type ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 
 export type BadgeVariant = 'success' | 'warning' | 'error' | 'neutral' | 'info';
 export type BadgeSize = 'sm' | 'md';
 
-export interface BadgeProps {
+export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   variant?: BadgeVariant;
   size?: BadgeSize;
-  children: React.ReactNode;
-  className?: string;
+  children: ReactNode;
 }
 
 const variantStyles: Record<BadgeVariant, string> = {
@@ -43,9 +43,11 @@ export function Badge({
   size = 'sm',
   children,
   className,
+  ...props
 }: BadgeProps) {
   return (
     <span
+      {...props}
       className={cn(
         'inline-flex items-center font-medium rounded-full',
         variantStyles[variant],

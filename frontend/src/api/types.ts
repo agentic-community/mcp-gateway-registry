@@ -214,15 +214,61 @@ export interface AdminUser {
 // Scopes Types
 // ============================================================================
 
-export interface ScopeDefinition {
-  name: string;
-  servers?: Record<string, ScopeServerConfig>;
-  description?: string;
+/** Method access policy for a server */
+export interface MethodPolicy {
+  all_methods: boolean;
+  methods: string[];
 }
 
-export interface ScopeServerConfig {
-  methods?: string[];
-  tools?: string[] | '*';
+/** Tool access policy for a server */
+export interface ToolPolicy {
+  all_tools: boolean;
+  tools: string[];
+}
+
+/** Permission to access a specific server */
+export interface ServerPermission {
+  server: string;
+  methods: MethodPolicy;
+  tools?: ToolPolicy | null;
+}
+
+/** Permission for agent actions */
+export interface AgentActionPermission {
+  action: string;
+  resources: string[];
+}
+
+/** UI action permission (for scopes that control UI visibility) */
+export interface UIActionPermission {
+  action: string;
+  resources: string[];
+}
+
+/** Complete definition of a scope */
+export interface ScopeDefinition {
+  name: string;
+  server_permissions: ServerPermission[];
+  agent_permissions: AgentActionPermission[];
+}
+
+/** Full scope catalog containing all scopes and mappings */
+export interface ScopeCatalog {
+  ui_scopes: Record<string, Record<string, UIActionPermission>>;
+  group_mappings: Record<string, string[]>;
+  scopes: Record<string, ScopeDefinition>;
+}
+
+/** Simplified scope info for display */
+export interface ScopeInfo {
+  name: string;
+  servers: string[];
+  methods: string[];
+  tools: string[];
+  all_servers: boolean;
+  all_methods: boolean;
+  all_tools: boolean;
+  agent_actions: string[];
 }
 
 // ============================================================================
