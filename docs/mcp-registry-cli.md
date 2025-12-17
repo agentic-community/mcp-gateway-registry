@@ -54,7 +54,7 @@ Shows real-time status at the bottom:
 Token: Valid for 5m 23s | Source: ingress-json | Last refresh: 14:32:15 | Model: us.anthropic.claude-haiku-4-5-20251001-v1:0 | Tokens: In: 1,234 | Out: 567 | Cost: $0.01
 ```
 
-- **Token:** Time remaining (green > 60s, yellow < 60s, red when expired) - auto-refreshes at < 10s
+- **Token:** Time remaining (green > 60s, yellow < 60s, red when expired). Use `/refresh` to fetch a new token when needed.
 - **Source:** Token origin (`ingress-json`, `env`, `token-file`)
 - **Model:** Current AI model
 - **Tokens:** Input/output usage for session

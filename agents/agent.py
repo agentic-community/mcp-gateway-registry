@@ -183,10 +183,23 @@ def get_server_headers(server_name: str, config: Dict[str, Any]) -> Dict[str, st
         logger.debug(f"No custom headers configured for server '{server_name}'")
         return {}
     
+    disallowed_headers = {
+        "authorization",
+        "cookie",
+        "x-atlassian-cloud-id",
+    }
+
     # Resolve environment variables in header values
     resolved_headers = {}
     try:
         for header_name, header_value in raw_headers.items():
+            header_name_lower = header_name.lower()
+            if header_name_lower in disallowed_headers or header_name_lower.startswith("x-mcp-"):
+                logger.warning(
+                    f"Ignoring disallowed client-supplied header for server '{server_name}': {header_name}"
+                )
+                continue
+
             resolved_value = resolve_env_vars(header_value, server_name)
             if resolved_value != header_value:
                 logger.debug(f"Resolved header {header_name} for server {server_name}")
@@ -433,7 +446,7 @@ def calculator(expression: str) -> str:
 
 @tool
 async def invoke_mcp_tool(mcp_registry_url: str, server_name: str, tool_name: str, arguments: Dict[str, Any],
-                         supported_transports: List[str] = None, auth_provider: str = None) -> str:
+                         supported_transports: List[str] = None) -> str:
     """
     Invoke a tool on an MCP server using the MCP Registry URL and server name with authentication.
     
@@ -446,7 +459,6 @@ async def invoke_mcp_tool(mcp_registry_url: str, server_name: str, tool_name: st
         tool_name (str): The name of the tool to invoke
         arguments (Dict[str, Any]): Dictionary containing the arguments for the tool
         supported_transports (List[str]): Transport protocols supported by the server (["streamable_http"] or ["sse"])
-        auth_provider (str): The authentication provider for the server (e.g., "atlassian", "bedrock-agentcore")
     
     Returns:
         str: The result of the tool invocation as a string
@@ -525,55 +537,18 @@ async def invoke_mcp_tool(mcp_registry_url: str, server_name: str, tool_name: st
     for header_name, header_value in server_headers.items():
         headers[header_name] = header_value
         
-    # Check for egress authentication if auth_provider is specified
-    if auth_provider:
-        # Try to load egress token from {auth_provider}-{server_name}-egress.json
-        oauth_tokens_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.oauth-tokens')
-        # Convert server_name to lowercase and remove leading slash if present
-        server_name_clean = server_name.strip('/').lower()
-        egress_file = os.path.join(oauth_tokens_dir, f"{auth_provider.lower()}-{server_name_clean}-egress.json")
-        
-        # Also try without server name if the first file doesn't exist
-        egress_file_alt = os.path.join(oauth_tokens_dir, f"{auth_provider.lower()}-egress.json")
-        
-        egress_data = None
-        if os.path.exists(egress_file):
-            logger.info(f"Found egress token file: {egress_file}")
-            with open(egress_file, 'r') as f:
-                egress_data = json.load(f)
-        elif os.path.exists(egress_file_alt):
-            logger.info(f"Found alternative egress token file: {egress_file_alt}")
-            with open(egress_file_alt, 'r') as f:
-                egress_data = json.load(f)
-        
-        if egress_data:
-            # Add egress authorization header
-            egress_token = egress_data.get('access_token')
-            if egress_token:
-                headers['Authorization'] = f'Bearer {egress_token}'
-                logger.info(f"Added egress Authorization header for {auth_provider}")
-            
-            # Add provider-specific headers
-            if auth_provider.lower() == 'atlassian':
-                cloud_id = egress_data.get('cloud_id')
-                if cloud_id:
-                    headers['X-Atlassian-Cloud-Id'] = cloud_id
-                    logger.info(f"Added X-Atlassian-Cloud-Id header: {cloud_id}")
-        else:
-            logger.warning(f"No egress token file found for auth_provider: {auth_provider}")
-    
     if auth_method == "session_cookie" and session_cookie:
         headers['Cookie'] = f'mcp_gateway_session={session_cookie}'
     else:
         headers['X-Authorization'] = f'Bearer {auth_token}'
-        # If no auth header from config and no egress token, use the general auth_token
+        # Provide Authorization as an alternative gateway credential header (same token)
         if 'Authorization' not in headers:
             headers['Authorization'] = f'Bearer {auth_token}'
     
     # Create redacted headers for logging (redact all sensitive values)
     redacted_headers = {}
     for header_name, header_value in headers.items():
-        if header_name in ['Authorization', 'X-Authorization', 'Cookie', 'X-User-Pool-Id', 'X-Client-Id', 'X-Atlassian-Cloud-Id']:
+        if header_name in ['Authorization', 'X-Authorization', 'Cookie', 'X-User-Pool-Id', 'X-Client-Id']:
             # Redact sensitive headers
             if header_name == 'Cookie':
                 redacted_headers[header_name] = f'mcp_gateway_session={redact_sensitive_value(session_cookie if session_cookie else "")}'
@@ -585,7 +560,7 @@ async def invoke_mcp_tool(mcp_registry_url: str, server_name: str, tool_name: st
         else:
             # Keep non-sensitive headers as-is
             redacted_headers[header_name] = header_value
-    logger.info(f"headers after redaction: {headers}")
+    logger.info(f"headers after redaction: {redacted_headers}")
     try:
         # Determine transport based on supported_transports
         # Default to streamable_http, only use SSE if explicitly supported and no streamable_http

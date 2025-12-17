@@ -990,7 +990,7 @@ The M2M service account `mcp-gateway-m2m` has:
 - a2a-agent-admin
 ```
 
-The token is generated every 5 minutes and stored in `.oauth-tokens/ingress.json`.
+The token is short-lived (often 5 minutes by default) and stored in `.oauth-tokens/ingress.json`.
 
 ---
 

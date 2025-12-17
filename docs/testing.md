@@ -13,7 +13,7 @@ This guide provides comprehensive testing instructions for the MCP Gateway using
 
 ## Regenerate Credentials
 
-**⚠️ Important:** Unless changed, Keycloak has an access token lifetime of only 5 minutes. You will most likely need to regenerate credentials before testing.
+**Important:** Unless changed, Keycloak has an access token lifetime of only 5 minutes. You will most likely need to regenerate credentials before testing.
 
 ### Generate Fresh Credentials
 
@@ -30,7 +30,7 @@ This script will:
 - Update all credential files in `.oauth-tokens/` directory
 - Ensure tokens are valid for the current testing session
 
-**Note:** The script should be run whenever you encounter authentication errors or when tokens have expired (every 5 minutes by default).
+**Note:** Run this script whenever you encounter authentication errors or when tokens have expired (Keycloak is often configured with a 5-minute access token TTL).
 
 ## Quick Start Testing
 
