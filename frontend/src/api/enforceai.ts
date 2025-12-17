@@ -14,6 +14,7 @@ import type {
   MintTokenResponse,
   RevokeTokenRequest,
   TokenRevocationRecord,
+  AdminUser,
 } from './types';
 
 // ============================================================================
@@ -131,6 +132,134 @@ export async function revokeGatewayToken(
   data: RevokeTokenRequest
 ): Promise<TokenRevocationRecord> {
   return apiPost<TokenRevocationRecord>('/enforceai/tokens/revoke', data);
+}
+
+// ============================================================================
+// Admin API
+// ============================================================================
+
+/**
+ * Search for users (admin only)
+ * @param query - Search query to match against email/username
+ */
+export async function searchAdminUsers(query: string): Promise<AdminUser[]> {
+  return apiGet<AdminUser[]>(`/enforceai/admin/users?query=${encodeURIComponent(query)}`);
+}
+
+/**
+ * Get a single user by ID (admin only)
+ * @param userId - The canonical user_id
+ */
+export async function getAdminUser(userId: string): Promise<AdminUser> {
+  return apiGet<AdminUser>(`/enforceai/admin/users/${encodeURIComponent(userId)}`);
+}
+
+/**
+ * Get agents for a specific user (admin only)
+ * @param userId - The canonical user_id
+ */
+export async function getAdminUserAgents(userId: string): Promise<EnforceAIAgent[]> {
+  return apiGet<EnforceAIAgent[]>(
+    `/enforceai/admin/users/${encodeURIComponent(userId)}/agents`
+  );
+}
+
+// ============================================================================
+// Admin Cross-User Operations API
+// ============================================================================
+
+/**
+ * Create an agent for another user (admin only)
+ */
+export async function adminCreateAgentForUser(
+  userId: string,
+  data: CreateAgentRequest
+): Promise<EnforceAIAgent> {
+  return apiPost<EnforceAIAgent>(
+    `/enforceai/admin/users/${encodeURIComponent(userId)}/agents`,
+    data
+  );
+}
+
+/**
+ * Revoke an agent for another user (admin only)
+ */
+export async function adminRevokeAgentForUser(
+  userId: string,
+  agentId: string
+): Promise<EnforceAIAgent> {
+  return apiPost<EnforceAIAgent>(
+    `/enforceai/admin/users/${encodeURIComponent(userId)}/agents/${encodeURIComponent(agentId)}/revoke`
+  );
+}
+
+/**
+ * Revoke all tokens for a user's agent (admin only)
+ */
+export async function adminRevokeAllTokensForUser(
+  userId: string,
+  agentId: string
+): Promise<EnforceAIAgent> {
+  return apiPost<EnforceAIAgent>(
+    `/enforceai/admin/users/${encodeURIComponent(userId)}/agents/${encodeURIComponent(agentId)}/tokens/revoke-all`
+  );
+}
+
+/**
+ * Get API keys for a user's agent (admin only)
+ */
+export async function adminGetApiKeysForUser(
+  userId: string,
+  agentId: string
+): Promise<ApiKeySummary[]> {
+  return apiGet<ApiKeySummary[]>(
+    `/enforceai/admin/users/${encodeURIComponent(userId)}/agents/${encodeURIComponent(agentId)}/api-keys`
+  );
+}
+
+/**
+ * Create an API key for another user's agent (admin only)
+ */
+export async function adminCreateApiKeyForUser(
+  userId: string,
+  agentId: string,
+  data: CreateApiKeyRequest
+): Promise<CreateApiKeyResponse> {
+  return apiPost<CreateApiKeyResponse>(
+    `/enforceai/admin/users/${encodeURIComponent(userId)}/agents/${encodeURIComponent(agentId)}/api-keys`,
+    data
+  );
+}
+
+/**
+ * Revoke an API key for another user (admin only)
+ */
+export async function adminRevokeApiKeyForUser(
+  userId: string,
+  keyId: string
+): Promise<ApiKeySummary> {
+  return apiPost<ApiKeySummary>(
+    `/enforceai/admin/users/${encodeURIComponent(userId)}/api-keys/${encodeURIComponent(keyId)}/revoke`
+  );
+}
+
+export interface AdminRevokeTokenRequest {
+  agent_id: string;
+  jti: string;
+  reason?: string;
+}
+
+/**
+ * Revoke a gateway token for another user (admin only)
+ */
+export async function adminRevokeTokenForUser(
+  userId: string,
+  data: AdminRevokeTokenRequest
+): Promise<TokenRevocationRecord> {
+  return apiPost<TokenRevocationRecord>(
+    `/enforceai/admin/users/${encodeURIComponent(userId)}/tokens/revoke`,
+    data
+  );
 }
 
 // ============================================================================

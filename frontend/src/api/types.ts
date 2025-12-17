@@ -254,7 +254,8 @@ export interface ScopeDefinition {
 
 /** Full scope catalog containing all scopes and mappings */
 export interface ScopeCatalog {
-  ui_scopes: Record<string, Record<string, UIActionPermission>>;
+  version: string;
+  generated_at: string;
   group_mappings: Record<string, string[]>;
   scopes: Record<string, ScopeDefinition>;
 }
