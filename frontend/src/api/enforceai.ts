@@ -2,7 +2,7 @@
  * EnforceAI API functions
  */
 
-import { apiGet, apiPost, apiPut, apiDelete } from './client';
+import { apiGet, apiPost, apiPut, apiDelete, type ApiError } from './client';
 import type {
   EnforceAIAgent,
   CreateAgentRequest,
@@ -15,6 +15,9 @@ import type {
   RevokeTokenRequest,
   TokenRevocationRecord,
   AdminUser,
+  CreateScopeRequest,
+  ReplaceScopeRequest,
+  ScopeMutationResponse,
 } from './types';
 
 // ============================================================================
@@ -269,6 +272,10 @@ export async function adminRevokeTokenForUser(
 /**
  * Test EnforceAI connectivity
  * Returns timing and status information
+ *
+ * A service is considered "reachable" if it responds with any HTTP status code,
+ * including 401/403 (which indicate the service is up but auth is required).
+ * Only network errors or 5xx status codes indicate the service is unreachable.
  */
 export async function testEnforceAIConnection(): Promise<{
   reachable: boolean;
@@ -281,10 +288,70 @@ export async function testEnforceAIConnection(): Promise<{
       reachable: true,
       elapsed_ms: Date.now() - start,
     };
-  } catch {
+  } catch (error) {
+    const elapsed_ms = Date.now() - start;
+
+    // The error is normalized to ApiError by the client interceptor
+    const apiError = error as ApiError;
+
+    // If it's a network error or timeout, the service is unreachable
+    if (apiError.isNetworkError || apiError.isTimeout) {
+      return {
+        reachable: false,
+        elapsed_ms,
+      };
+    }
+
+    // If we got an HTTP status code, check if it's a server error (5xx)
+    // Any 1xx-4xx response means the service IS reachable (just auth/permission issues)
+    if (apiError.status > 0 && apiError.status < 500) {
+      return {
+        reachable: true,
+        elapsed_ms,
+      };
+    }
+
+    // 5xx or unknown errors mean unreachable
     return {
       reachable: false,
-      elapsed_ms: Date.now() - start,
+      elapsed_ms,
     };
   }
+}
+
+// ============================================================================
+// Scopes Management (Admin)
+// ============================================================================
+
+export async function adminCreateScope(
+  data: CreateScopeRequest,
+  ifMatch?: string
+): Promise<ScopeMutationResponse> {
+  return apiPost<ScopeMutationResponse>(
+    '/enforceai/admin/scopes',
+    data,
+    ifMatch ? { headers: { 'If-Match': ifMatch } } : undefined
+  );
+}
+
+export async function adminReplaceScope(
+  scopeName: string,
+  data: ReplaceScopeRequest,
+  ifMatch: string
+): Promise<ScopeMutationResponse> {
+  return apiPut<ScopeMutationResponse>(
+    `/enforceai/admin/scopes/${encodeURIComponent(scopeName)}`,
+    data,
+    { headers: { 'If-Match': ifMatch } }
+  );
+}
+
+export async function adminDeleteScope(
+  scopeName: string,
+  ifMatch: string
+): Promise<ScopeMutationResponse> {
+  return apiDelete<ScopeMutationResponse>(
+    `/enforceai/admin/scopes/${encodeURIComponent(scopeName)}`,
+    { headers: { 'If-Match': ifMatch } }
+  );
 }

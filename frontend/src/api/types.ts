@@ -256,8 +256,54 @@ export interface ScopeDefinition {
 export interface ScopeCatalog {
   version: string;
   generated_at: string;
+  etag?: string;
+  last_modified?: string;
   group_mappings: Record<string, string[]>;
   scopes: Record<string, ScopeDefinition>;
+}
+
+// ============================================================================
+// Scopes Management (Admin) Types
+// ============================================================================
+
+export interface ScopeMutationResponse {
+  ok: boolean;
+  scope_name: string;
+  etag: string;
+  last_modified?: string;
+}
+
+export interface MethodPolicyUpsert {
+  all_methods: boolean;
+  methods: string[];
+}
+
+export interface ToolPolicyUpsert {
+  all_tools: boolean;
+  tools: string[];
+}
+
+export interface ServerPermissionUpsert {
+  server: string;
+  methods: MethodPolicyUpsert;
+  tools?: ToolPolicyUpsert | null;
+}
+
+export interface AgentPermissionUpsert {
+  action: string;
+  resources: string[];
+}
+
+export interface CreateScopeRequest {
+  name: string;
+  server_permissions: ServerPermissionUpsert[];
+  agent_permissions: AgentPermissionUpsert[];
+}
+
+export interface ReplaceScopeRequest {
+  name?: string | null;
+  server_permissions: ServerPermissionUpsert[];
+  agent_permissions: AgentPermissionUpsert[];
 }
 
 /** Simplified scope info for display */
