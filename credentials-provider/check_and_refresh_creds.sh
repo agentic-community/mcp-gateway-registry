@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Script to check JWT token validity and refresh credentials only if needed
-# Usage: ./scripts/check_and_refresh_creds.sh
+# Script to check gateway token validity and refresh credentials only if needed
+# Usage: ./credentials-provider/check_and_refresh_creds.sh
 
 set -e
 
