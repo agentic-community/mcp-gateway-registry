@@ -54,15 +54,17 @@ from gateway_session import (
 def _write_scope_catalog(
     *,
     path: Path,
+    scope_name: str = "scope-mgmt",
+    tool_name: str = "good_tool",
 ) -> Path:
     content = "\n".join(
         [
             "UI-Scopes: {}",
             "group_mappings: {}",
-            "scope-mgmt:",
+            f"{scope_name}:",
             "  - server: mcpgw",
             "    methods: [tools/list, tools/call]",
-            "    tools: [good_tool]",
+            f"    tools: [{tool_name}]",
             "",
         ]
     )
@@ -87,6 +89,40 @@ def _reset_enforcement_caches() -> None:
     clear_scope_catalog_cache()
     load_gateway_keyring_cached.cache_clear()
     auth_server_module._load_enforceai_runtime.cache_clear()
+
+
+def _make_cookie_client(
+    *,
+    stores: EnforceAIStores,
+    session_id: str,
+    user_id: str,
+    groups: list[str],
+    username: str,
+    email: str,
+) -> TestClient:
+    stores.session_store.create_session(
+        session_id=session_id,
+        user_id=user_id,
+        auth_method="oidc",
+        expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+    )
+
+    cookie_payload = build_session_cookie_payload(
+        username=username,
+        email=email,
+        name=None,
+        groups=groups,
+        provider="keycloak",
+        legacy_auth_method="oauth2",
+        max_age_seconds=28800,
+        session_id=session_id,
+        user_id=user_id,
+    )
+    cookie_value = auth_server_module.signer.dumps(cookie_payload)
+
+    client = TestClient(auth_server_module.app)
+    client.cookies.set("mcp_gateway_session", cookie_value)
+    return client
 
 
 def _b64url_uint(
@@ -114,6 +150,334 @@ def _jwk_from_public_key(
 
 @pytest.mark.integration
 class TestEnforceAIManagementRoutes:
+    def test_scopes_catalog_endpoint_uses_configured_path_and_etag_updates(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(
+            path=tmp_path / "scopes.yml",
+            scope_name="scope-initial",
+            tool_name="tool_initial",
+        )
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        client = TestClient(auth_server_module.app)
+
+        first = client.get("/enforceai/scopes/catalog")
+        assert first.status_code == 200
+        first_payload = first.json()
+        assert set(first_payload["scopes"].keys()) == {"scope-initial"}
+        assert isinstance(first_payload["etag"], str)
+        assert first_payload["etag"]
+
+        _write_scope_catalog(
+            path=catalog_path,
+            scope_name="scope-updated",
+            tool_name="tool_updated",
+        )
+
+        second = client.get("/enforceai/scopes/catalog")
+        assert second.status_code == 200
+        second_payload = second.json()
+        assert set(second_payload["scopes"].keys()) == {"scope-updated"}
+        assert second_payload["etag"] != first_payload["etag"]
+
+    def test_admin_can_create_replace_and_delete_scopes_with_etag_and_csrf(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(
+            path=tmp_path / "scopes.yml",
+            scope_name="scope-initial",
+            tool_name="tool_initial",
+        )
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        session_id = str(uuid.uuid4())
+        user_id = "https://issuer.example|cookie-admin-1"
+        client = _make_cookie_client(
+            stores=stores,
+            session_id=session_id,
+            user_id=user_id,
+            groups=["enforceai-admin"],
+            username="cookie-admin-1",
+            email="cookie-admin-1@example.com",
+        )
+
+        first_catalog = client.get("/enforceai/scopes/catalog")
+        assert first_catalog.status_code == 200
+        etag = first_catalog.json()["etag"]
+
+        create_no_csrf = client.post(
+            "/enforceai/admin/scopes",
+            headers={"If-Match": etag},
+            json={
+                "name": "scope-created",
+                "server_permissions": [
+                    {
+                        "server": "mcpgw",
+                        "methods": {"all_methods": False, "methods": ["tools/list", "tools/call"]},
+                        "tools": {"all_tools": False, "tools": ["tool-a"]},
+                    }
+                ],
+                "agent_permissions": [],
+            },
+        )
+        assert create_no_csrf.status_code == 403
+
+        csrf_token = mint_csrf_token(
+            secret_key=auth_server_module.SECRET_KEY,
+            session_id=session_id,
+        )
+
+        create_response = client.post(
+            "/enforceai/admin/scopes",
+            headers={"If-Match": etag, "X-CSRF-Token": csrf_token},
+            json={
+                "name": "scope-created",
+                "server_permissions": [
+                    {
+                        "server": "mcpgw",
+                        "methods": {"all_methods": False, "methods": ["tools/list", "tools/call"]},
+                        "tools": {"all_tools": False, "tools": ["tool-a"]},
+                    }
+                ],
+                "agent_permissions": [],
+            },
+        )
+        assert create_response.status_code == 200
+        assert create_response.json()["scope_name"] == "scope-created"
+
+        updated_catalog = client.get("/enforceai/scopes/catalog")
+        assert updated_catalog.status_code == 200
+        updated_payload = updated_catalog.json()
+        assert "scope-created" in updated_payload["scopes"]
+        updated_etag = updated_payload["etag"]
+
+        replace_missing_if_match = client.put(
+            "/enforceai/admin/scopes/scope-created",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "server_permissions": [],
+                "agent_permissions": [],
+            },
+        )
+        assert replace_missing_if_match.status_code == 428
+
+        replace_response = client.put(
+            "/enforceai/admin/scopes/scope-created",
+            headers={"If-Match": updated_etag, "X-CSRF-Token": csrf_token},
+            json={
+                "server_permissions": [
+                    {
+                        "server": "mcpgw",
+                        "methods": {"all_methods": True, "methods": []},
+                        "tools": {"all_tools": True, "tools": []},
+                    }
+                ],
+                "agent_permissions": [],
+            },
+        )
+        assert replace_response.status_code == 200
+
+        mismatch = client.put(
+            "/enforceai/admin/scopes/scope-created",
+            headers={"If-Match": updated_etag, "X-CSRF-Token": csrf_token},
+            json={
+                "server_permissions": [],
+                "agent_permissions": [],
+            },
+        )
+        assert mismatch.status_code == 412
+
+        latest_catalog = client.get("/enforceai/scopes/catalog")
+        latest_etag = latest_catalog.json()["etag"]
+
+        delete_response = client.delete(
+            "/enforceai/admin/scopes/scope-created",
+            headers={"If-Match": latest_etag, "X-CSRF-Token": csrf_token},
+        )
+        assert delete_response.status_code == 200
+
+        final_catalog = client.get("/enforceai/scopes/catalog")
+        assert final_catalog.status_code == 200
+        assert "scope-created" not in final_catalog.json()["scopes"]
+
+    def test_admin_delete_scope_returns_conflict_when_referenced_by_group_mappings(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = tmp_path / "scopes.yml"
+        catalog_path.write_text(
+            "\n".join(
+                [
+                    "UI-Scopes: {}",
+                    "group_mappings:",
+                    "  some-group: [scope-referenced]",
+                    "scope-referenced:",
+                    "  - server: mcpgw",
+                    "    methods: [tools/list, tools/call]",
+                    "    tools: [tool-a]",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        session_id = str(uuid.uuid4())
+        user_id = "https://issuer.example|cookie-admin-2"
+        client = _make_cookie_client(
+            stores=stores,
+            session_id=session_id,
+            user_id=user_id,
+            groups=["enforceai-admin"],
+            username="cookie-admin-2",
+            email="cookie-admin-2@example.com",
+        )
+
+        catalog = client.get("/enforceai/scopes/catalog")
+        assert catalog.status_code == 200
+        etag = catalog.json()["etag"]
+        csrf_token = mint_csrf_token(
+            secret_key=auth_server_module.SECRET_KEY,
+            session_id=session_id,
+        )
+
+        denied = client.delete(
+            "/enforceai/admin/scopes/scope-referenced",
+            headers={"If-Match": etag, "X-CSRF-Token": csrf_token},
+        )
+        assert denied.status_code == 409
+
+    def test_non_admin_cannot_manage_scopes(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(
+            path=tmp_path / "scopes.yml",
+            scope_name="scope-initial",
+            tool_name="tool_initial",
+        )
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        session_id = str(uuid.uuid4())
+        user_id = "https://issuer.example|cookie-user-noadmin"
+        client = _make_cookie_client(
+            stores=stores,
+            session_id=session_id,
+            user_id=user_id,
+            groups=[],
+            username="cookie-user-noadmin",
+            email="cookie-user-noadmin@example.com",
+        )
+
+        catalog = client.get("/enforceai/scopes/catalog")
+        etag = catalog.json()["etag"]
+        csrf_token = mint_csrf_token(
+            secret_key=auth_server_module.SECRET_KEY,
+            session_id=session_id,
+        )
+
+        denied = client.post(
+            "/enforceai/admin/scopes",
+            headers={"If-Match": etag, "X-CSRF-Token": csrf_token},
+            json={
+                "name": "scope-created",
+                "server_permissions": [],
+                "agent_permissions": [],
+            },
+        )
+        assert denied.status_code == 403
+
     def test_cookie_session_can_manage_agents_and_enforces_admin(
         self,
         tmp_path: Path,

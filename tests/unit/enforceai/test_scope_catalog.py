@@ -2,6 +2,7 @@
 Unit tests for the FGAC scope catalog loader and validator.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -79,3 +80,67 @@ class TestScopeCatalog:
         assert first is second
         assert read_calls == 1
 
+    def test_cache_invalidates_when_file_changes(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        clear_scope_catalog_cache()
+
+        read_calls: int = 0
+        original_read_text = catalog_module._read_text
+
+        def _counting_read_text(path: Path) -> str:
+            nonlocal read_calls
+            read_calls += 1
+            return original_read_text(path)
+
+        monkeypatch.setattr(
+            catalog_module,
+            "_read_text",
+            _counting_read_text,
+        )
+
+        path = tmp_path / "scopes.yml"
+        path.write_text(
+            "\n".join(
+                [
+                    "UI-Scopes: {}",
+                    "group_mappings: {}",
+                    "scope-a:",
+                    "  - server: mcpgw",
+                    "    methods: [tools/list, tools/call]",
+                    "    tools: [tool-a]",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        first = load_scope_catalog(path=path)
+        first_calls = read_calls
+        second = load_scope_catalog(path=path)
+        assert first is second
+        assert read_calls == first_calls
+
+        path.write_text(
+            "\n".join(
+                [
+                    "UI-Scopes: {}",
+                    "group_mappings: {}",
+                    "scope-b:",
+                    "  - server: mcpgw",
+                    "    methods: [tools/list, tools/call]",
+                    "    tools: [tool-b]",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        stat = path.stat()
+        os.utime(path, (stat.st_atime + 2, stat.st_mtime + 2))
+
+        third = load_scope_catalog(path=path)
+        assert third is not second
+        assert "scope-b" in third.scopes
+        assert read_calls > first_calls

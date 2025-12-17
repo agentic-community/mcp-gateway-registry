@@ -23,6 +23,18 @@ RESERVED_TOP_LEVEL_KEYS: frozenset[str] = frozenset({"UI-Scopes", "group_mapping
 WILDCARD_VALUES: frozenset[str] = frozenset({"*", "all"})
 
 
+def _get_mtime_ns(
+    path: Path,
+) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError as exc:
+        raise DependencyUnavailableError(
+            f"Failed to stat scope catalog at {path}",
+            public_message="Scope catalog unavailable",
+        ) from exc
+
+
 def _read_text(
     path: Path,
 ) -> str:
@@ -334,7 +346,9 @@ def _canonicalize_path(
 @lru_cache(maxsize=8)
 def _load_scope_catalog_cached(
     path_str: str,
+    mtime_ns: int,
 ) -> ScopeCatalog:
+    del mtime_ns
     path = _canonicalize_path(Path(path_str))
     payload = _load_yaml_object(path=path)
     root = _ensure_mapping(payload, label="scope catalog root")
@@ -389,4 +403,7 @@ def load_scope_catalog(
         ValueError: Catalog YAML/schema is invalid.
     """
     resolved = _canonicalize_path(path or default_scopes_catalog_path())
-    return _load_scope_catalog_cached(str(resolved))
+    return _load_scope_catalog_cached(
+        str(resolved),
+        _get_mtime_ns(resolved),
+    )
