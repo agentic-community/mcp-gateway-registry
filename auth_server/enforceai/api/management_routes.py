@@ -171,6 +171,57 @@ class AdminRevokeGatewayTokenRequest(BaseModel):
     reason: Optional[str] = None
 
 
+# ============================================================================
+# Scopes Catalog Response Models
+# ============================================================================
+
+
+class MethodPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    all_methods: bool
+    methods: list[str]
+
+
+class ToolPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    all_tools: bool
+    tools: list[str]
+
+
+class ServerPermissionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    server: str
+    methods: MethodPolicyResponse
+    tools: Optional[ToolPolicyResponse] = None
+
+
+class AgentPermissionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    action: str
+    resources: list[str]
+
+
+class ScopeDefinitionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    server_permissions: list[ServerPermissionResponse]
+    agent_permissions: list[AgentPermissionResponse]
+
+
+class ScopeCatalogResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: str
+    generated_at: str
+    scopes: dict[str, ScopeDefinitionResponse]
+    group_mappings: dict[str, list[str]]
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -335,6 +386,77 @@ async def admin_ping(
 ) -> dict[str, bool]:
     _require_admin(context)
     return {"ok": True}
+
+
+@router.get("/scopes/catalog", response_model=ScopeCatalogResponse)
+async def get_scopes_catalog() -> ScopeCatalogResponse:
+    """
+    Get the scopes catalog for UI display.
+
+    Returns the full scope definitions and group mappings.
+    This endpoint is publicly accessible (no authentication required)
+    since the scope catalog is configuration data meant for display.
+    """
+    from ..fgac.catalog import load_scope_catalog, default_scopes_catalog_path
+
+    try:
+        catalog = load_scope_catalog(path=default_scopes_catalog_path())
+    except Exception as exc:
+        logger.warning(f"Failed to load scope catalog: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Scope catalog unavailable",
+        )
+
+    # Transform internal models to response models
+    scopes_response: dict[str, ScopeDefinitionResponse] = {}
+    for scope_name, scope_def in catalog.scopes.items():
+        server_perms: list[ServerPermissionResponse] = []
+        for sp in scope_def.server_permissions:
+            tools_resp = None
+            if sp.tools is not None:
+                tools_resp = ToolPolicyResponse(
+                    all_tools=sp.tools.all_tools,
+                    tools=list(sp.tools.tools),
+                )
+            server_perms.append(
+                ServerPermissionResponse(
+                    server=sp.server,
+                    methods=MethodPolicyResponse(
+                        all_methods=sp.methods.all_methods,
+                        methods=list(sp.methods.methods),
+                    ),
+                    tools=tools_resp,
+                )
+            )
+
+        agent_perms: list[AgentPermissionResponse] = []
+        for ap in scope_def.agent_permissions:
+            agent_perms.append(
+                AgentPermissionResponse(
+                    action=ap.action,
+                    resources=list(ap.resources),
+                )
+            )
+
+        scopes_response[scope_name] = ScopeDefinitionResponse(
+            name=scope_def.name,
+            server_permissions=server_perms,
+            agent_permissions=agent_perms,
+        )
+
+    # Convert group_mappings tuples to lists
+    group_mappings_response: dict[str, list[str]] = {
+        group: list(scopes)
+        for group, scopes in catalog.group_mappings.items()
+    }
+
+    return ScopeCatalogResponse(
+        version="1.0",
+        generated_at=_utc_now().isoformat(),
+        scopes=scopes_response,
+        group_mappings=group_mappings_response,
+    )
 
 
 @router.get("/admin/users", response_model=list[AdminUserSummary])
