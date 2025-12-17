@@ -23,3 +23,4 @@ export {
   type ToastType,
 } from './Toast';
 export { Tooltip, type TooltipProps, type TooltipPosition } from './Tooltip';
+export { TypeToConfirmDialog, type TypeToConfirmDialogProps } from './TypeToConfirmDialog';
