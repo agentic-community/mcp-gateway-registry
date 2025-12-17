@@ -108,11 +108,17 @@
 
 ## Current Task
 - UI Frontend Phase 14: Admin Cross-User Operations (completed)
+- UI Scope Catalog Management Phase 0: catalog path + `etag` (completed)
+- UI Scope Catalog Management Phase 1: admin scope CRUD API (completed)
+- UI Scope Catalog Management Phase 2: UI create scope flow (completed)
+- UI Scope Catalog Management Phase 3: UI edit scope flow (completed)
+- UI Scope Catalog Management Phase 4: UI delete scope flow (completed)
+- UI Scope Catalog Management Phase 5 (optional): structured scope editor (completed)
+- UI Scope Catalog Management: allow scope management UI for `enforceai-admin` group (completed)
 
 ## Next Steps
 1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 15: Settings + Help + Final Polish (SettingsPage, HelpPage, 404 page, error boundary)
 2. Execute Phase 16: E2E Testing + Documentation (Playwright setup, E2E scenarios, README update)
-3. Add admin scope catalog management (create/edit/delete) in UI + auth_server (see `enforceai/plans/plan-ui-scope-catalog-management-phased.md`)
 
 ## Tests Executed
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
@@ -128,6 +134,24 @@
 - `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (26 passed)
 - `.venv/bin/python -m py_compile auth_server/enforceai/models/api_key.py auth_server/enforceai/stores/sqlite/api_key_store.py tests/unit/enforceai/test_api_key_store_sqlite.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (32 passed)
+- `.venv/bin/python -m py_compile auth_server/enforceai/fgac/catalog.py auth_server/enforceai/api/management_routes.py tests/unit/enforceai/test_scope_catalog.py tests/integration/test_enforceai_management_routes.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_scope_catalog.py::TestScopeCatalog::test_cache_invalidates_when_file_changes` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_management_routes.py::TestEnforceAIManagementRoutes::test_scopes_catalog_endpoint_uses_configured_path_and_etag_updates` (pass)
+- `.venv/bin/python -m py_compile auth_server/enforceai/fgac/policy_writer.py auth_server/enforceai/api/management_routes.py tests/unit/enforceai/test_policy_writer.py tests/integration/test_enforceai_management_routes.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_policy_writer.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_management_routes.py::TestEnforceAIManagementRoutes::test_admin_can_create_replace_and_delete_scopes_with_etag_and_csrf tests/integration/test_enforceai_management_routes.py::TestEnforceAIManagementRoutes::test_admin_delete_scope_returns_conflict_when_referenced_by_group_mappings tests/integration/test_enforceai_management_routes.py::TestEnforceAIManagementRoutes::test_non_admin_cannot_manage_scopes` (pass)
+- `npm -C frontend run typecheck` (pass)
+- `npm -C frontend test` (pass)
+- `npm -C frontend run build` (pass)
+- `npm -C frontend run typecheck` (pass)
+- `npm -C frontend test` (pass)
+- `npm -C frontend run build` (pass)
+- `npm -C frontend run typecheck` (pass)
+- `npm -C frontend test` (pass)
+- `npm -C frontend run build` (pass)
+- `.venv/bin/python -m py_compile auth_server/enforceai/api/management_routes.py auth_server/enforceai/fgac/catalog.py auth_server/enforceai/fgac/policy_writer.py tests/unit/enforceai/test_scope_catalog.py tests/unit/enforceai/test_policy_writer.py tests/integration/test_enforceai_management_routes.py` (pass)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai/test_scope_catalog.py tests/unit/enforceai/test_policy_writer.py` (11 passed)
+- `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_management_routes.py` (10 passed)
 - `.venv/bin/python -m pytest` (293 passed; coverage gate met)
 - `.venv/bin/python -m py_compile auth_server/enforceai/models/revocation.py auth_server/enforceai/stores/sqlite/revocation_store.py tests/unit/enforceai/test_revocation_store_sqlite.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/unit/enforceai` (37 passed)
