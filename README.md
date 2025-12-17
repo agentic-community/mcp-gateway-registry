@@ -566,7 +566,7 @@ echo 'ASOR_ACCESS_TOKEN=your_token' >> .env
 |------------------|-------------------|------------------------|
 | [Complete Setup Guide](docs/complete-setup-guide.md)<br/>**NEW!** Step-by-step from scratch on AWS EC2 | [Authentication Guide](docs/auth.md)<br/>OAuth and identity provider integration | [AI Coding Assistants Setup](docs/ai-coding-assistants-setup.md)<br/>VS Code, Cursor, Claude Code integration |
 | [Installation Guide](docs/installation.md)<br/>Complete setup instructions for EC2 and EKS | [AWS ECS Deployment](terraform/aws-ecs/README.md)<br/>Production-ready deployment on AWS ECS Fargate | [API Reference](docs/registry_api.md)<br/>Programmatic registry management |
-| [Quick Start Tutorial](docs/quick-start.md)<br/>Get running in 5 minutes | [Keycloak Integration](docs/keycloak-integration.md)<br/>Enterprise identity with agent audit trails | [Token Refresh Service](docs/token-refresh-service.md)<br/>Automated token refresh and lifecycle management |
+| [Quick Start Tutorial](docs/quick-start.md)<br/>Get running in 5 minutes | [Keycloak Integration](docs/keycloak-integration.md)<br/>Enterprise identity with agent audit trails | [Service Management](docs/service-management.md)<br/>Server lifecycle and operations |
 | [Configuration Reference](docs/configuration.md)<br/>Environment variables and settings | [Amazon Cognito Setup](docs/cognito.md)<br/>Step-by-step IdP configuration | [Observability Guide](docs/OBSERVABILITY.md)<br/>**NEW!** Metrics, monitoring, and OpenTelemetry setup |
 | | [Anthropic Registry Import](docs/anthropic-registry-import.md)<br/>**NEW!** Import servers from Anthropic MCP Registry | [Federation Guide](docs/federation.md)<br/>**NEW!** External registry integration (Anthropic, ASOR) |
 | | [Service Management](docs/service-management.md)<br/>Server lifecycle and operations | [Anthropic Registry API](docs/anthropic_registry_api.md)<br/>**NEW!** REST API compatibility |
@@ -650,7 +650,7 @@ The following GitHub issues represent our current development roadmap and planne
   Dynamic scope management functionality implemented with create-group, delete-group, list-groups, and server-to-group assignment commands through service management CLI. Includes comprehensive user management with group-based access control. [Service Management Guide](docs/service-management.md)
 
 - **[#160 - Documentation: Add Amazon Bedrock AgentCore Gateway integration example](https://github.com/agentic-community/mcp-gateway-registry/issues/160)** ✅ **COMPLETED**
-  Comprehensive documentation and examples for integrating Amazon Bedrock AgentCore Gateway with dual authentication (Keycloak ingress + Cognito egress), passthrough token mode, and complete MCP protocol flow. [Integration Guide](docs/agentcore.md)
+  Documentation and examples for integrating Amazon Bedrock AgentCore Gateway with gateway-terminated upstream authentication. [Integration Guide](docs/agentcore.md)
 
 - **[#158 - Replace /opt/mcp-gateway with ${HOME}/mcp-gateway to eliminate sudo requirements](https://github.com/agentic-community/mcp-gateway-registry/issues/158)** ✅ **COMPLETED**
   Installation experience improved by using user home directory instead of /opt, removing the need for sudo privileges during setup.

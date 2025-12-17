@@ -287,7 +287,7 @@ main() {
     echo ""
     echo -e "${YELLOW}Next steps:${NC}"
     echo "1. Generate a new M2M token to get the group membership:"
-    echo "   python credentials-provider/token_refresher.py"
+    echo "   ./credentials-provider/generate_creds.sh --ingress-only"
     echo ""
     echo "2. Test the authentication:"
     echo "   ./test-keycloak-mcp.sh"

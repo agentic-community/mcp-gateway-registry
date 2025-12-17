@@ -82,7 +82,7 @@ Unit tests must not require network access:
   - bearer parsing accepts valid value, rejects non-bearer auth scheme
   - multi-credential combinations rejected (`Authorization` + `X-Gateway-Token`, `X-API-Key` + token)
   - missing credentials produces `UnauthorizedError`
-  - `X-Agent-Id` passthrough captured but not validated yet
+  - `X-Agent-Id` captured but not validated yet
 
 ### Exit criteria
 - Full suite passes: `.venv/bin/python -m pytest`

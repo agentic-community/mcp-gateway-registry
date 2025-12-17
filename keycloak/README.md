@@ -137,7 +137,7 @@ export KEYCLOAK_DB_PASSWORD="secure-db-password"
 
 # 2. Generate token (using Python script)
 cd credentials-provider
-python token_refresher.py --agent-id new-agent
+uv run python credentials-provider/keycloak/generate_tokens.py --agent-id new-agent
 
 # 3. Test the setup
 ./test-keycloak-mcp.sh --agent-id new-agent
@@ -148,7 +148,7 @@ python token_refresher.py --agent-id new-agent
 2. Navigate to Users → `agent-<id>-m2m`
 3. Go to Groups tab
 4. Leave current group and join new group
-5. Regenerate token: `python token_refresher.py --agent-id <id>`
+5. Regenerate token: `uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <id>`
 
 ### Viewing All Agents
 1. Login to Keycloak Admin Console
