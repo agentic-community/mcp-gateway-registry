@@ -264,7 +264,7 @@ function ApiKeyRow({ apiKey, onRevoke }: ApiKeyRowProps) {
  */
 export default function AdminUserDetailsPage() {
   const { userId } = useParams<{ userId: string }>();
-  const { showToast } = useToast();
+  const toast = useToast();
   const { user, isLoading: userLoading, isError: userError } = useAdminUser(userId || '');
   const {
     agents,
@@ -294,34 +294,34 @@ export default function AdminUserDetailsPage() {
   // Handlers
   const handleCreateAgent = async (data: Parameters<typeof createAgent>[0]) => {
     await createAgent(data);
-    showToast({ type: 'success', message: 'Agent created successfully' });
+    toast.success('Agent created successfully');
     refetchAgents();
   };
 
   const handleRevokeAgent = async (reason?: string) => {
     if (!selectedAgent) return;
     await revokeAgent(selectedAgent.agent_id);
-    showToast({ type: 'success', message: 'Agent revoked successfully' });
+    toast.success('Agent revoked successfully');
     refetchAgents();
   };
 
   const handleRevokeAllTokens = async () => {
     if (!selectedAgent) return;
     await revokeAllTokens(selectedAgent.agent_id);
-    showToast({ type: 'success', message: 'All tokens revoked successfully' });
+    toast.success('All tokens revoked successfully');
     refetchAgents();
   };
 
   const handleRevokeApiKey = async () => {
     if (!selectedKeyId) return;
     await revokeApiKey(selectedKeyId);
-    showToast({ type: 'success', message: 'API key revoked successfully' });
+    toast.success('API key revoked successfully');
     refetchAgents();
   };
 
   const handleRevokeToken = async (agentId: string, jti: string, reason?: string) => {
     await revokeToken({ agent_id: agentId, jti, reason });
-    showToast({ type: 'success', message: 'Token revoked successfully' });
+    toast.success('Token revoked successfully');
   };
 
   const openRevokeAgentModal = (agent: EnforceAIAgent) => {

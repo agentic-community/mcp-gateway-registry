@@ -3,6 +3,11 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactNode } from 'react';
 import { server } from '@/test/mocks/server';
+import type {
+  EnforceAIAgent,
+  ApiKeySummary,
+  TokenRevocationRecord,
+} from '@/api/types';
 import {
   useAdminUsers,
   useAdminUser,
@@ -141,7 +146,7 @@ describe('Admin Mutation Hooks', () => {
         wrapper: createWrapper(),
       });
 
-      let createdAgent;
+      let createdAgent: EnforceAIAgent | undefined;
       await waitFor(async () => {
         createdAgent = await result.current.createAgent({
           scopes: ['sqlite.manage'],
@@ -160,7 +165,7 @@ describe('Admin Mutation Hooks', () => {
         wrapper: createWrapper(),
       });
 
-      let revokedAgent;
+      let revokedAgent: EnforceAIAgent | undefined;
       await waitFor(async () => {
         revokedAgent = await result.current.revokeAgent(
           '9d2724e9-1753-4493-8993-0d6986754414'
@@ -178,7 +183,7 @@ describe('Admin Mutation Hooks', () => {
         wrapper: createWrapper(),
       });
 
-      let updatedAgent;
+      let updatedAgent: EnforceAIAgent | undefined;
       await waitFor(async () => {
         updatedAgent = await result.current.revokeAllTokens(
           '9d2724e9-1753-4493-8993-0d6986754414'
@@ -196,7 +201,7 @@ describe('Admin Mutation Hooks', () => {
         wrapper: createWrapper(),
       });
 
-      let revokedKey;
+      let revokedKey: ApiKeySummary | undefined;
       await waitFor(async () => {
         revokedKey = await result.current.revokeApiKey('eak_abc123');
       });
@@ -212,7 +217,7 @@ describe('Admin Mutation Hooks', () => {
         wrapper: createWrapper(),
       });
 
-      let revocation;
+      let revocation: TokenRevocationRecord | undefined;
       await waitFor(async () => {
         revocation = await result.current.revokeToken({
           agent_id: '9d2724e9-1753-4493-8993-0d6986754414',
