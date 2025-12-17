@@ -31,17 +31,17 @@ This guide uses the [Customer Support Assistant](https://github.com/awslabs/amaz
                                    │               │  └────────────────────┘  │
                           ┌────────▼────────┐      │            │             │
                           │                 │      │            │             │
-                          │  Authentication │      │    ┌───────▼──────────┐  │
-                          │  - Cognito Token│◀─────────│    Cognito User  │  │
-                          │  - Passthrough  │      │    │  Pool (OAuth)    │  │
-                          │                 │      │    └──────────────────┘  │
+                          │  Upstream Auth  │      │    ┌───────▼──────────┐  │
+                          │  - Cognito OAuth│◀─────────│    Cognito User  │  │
+                          │  - Managed by   │      │    │  Pool (OAuth)    │  │
+                          │    Gateway      │      │    └──────────────────┘  │
                           └─────────────────┘      │                          │
                                                    └──────────────────────────┘
 
 Flow:
 1. AI Agent sends request to MCP Gateway Registry
 2. Gateway routes to registered AgentCore Gateway MCP server
-3. AgentCore Gateway authenticates via Cognito (token passthrough)
+3. Gateway authenticates to AgentCore using gateway-managed Cognito OAuth
 4. Tools execute (warranty lookup, customer profile, knowledge base query)
 5. Response flows back through Gateway to AI Agent
 ```
@@ -115,22 +115,14 @@ This will create:
 - Lambda functions for warranty status and customer profile lookup
 - Knowledge base integration
 
-**Important:** During deployment, save the following configuration values that will be printed in the output:
+**Important:** During deployment, record the AgentCore gateway’s OAuth details so you can configure gateway-managed upstream auth:
 
-```bash
-cd ${HOME}/workspace/
+- Cognito token URL (OAuth `/token` endpoint)
+- OAuth client ID
+- OAuth client secret
+- Required scope (if any)
 
-# Create a file to store AgentCore authentication parameters
-cat > .agentcore-params << 'EOF'
-# AgentCore Gateway Authentication Parameters
-COGNITO_TOKEN_URL="<YOUR_COGNITO_TOKEN_URL>"  # Example: https://us-east-1XXXXXXXX.auth.us-east-1.amazoncognito.com/oauth2/token
-CLIENT_ID="<YOUR_CLIENT_ID>"                   # Example: 7kqi2l0n47mnfmhfapsf29ch4h
-CLIENT_SECRET="<YOUR_CLIENT_SECRET>"           # Get from AWS Cognito Console
-SCOPE="<YOUR_SCOPE>"                           # Example: default-m2m-resource-server-XXXXXXXX/read
-EOF
-```
-
-**To find your Client Secret:**
+**To find your Client Secret (for gateway upstream auth configuration):**
 1. Go to AWS Cognito Console
 2. Find the User Pool with prefix `customersupport-`
 3. Navigate to App Integration → App clients
@@ -160,8 +152,18 @@ Create a file named `gateway-config.json` in your AgentCore project directory wi
   "description": "Amazon Bedrock AgentCore Gateway for customer support operations with warranty lookup and knowledge base",
   "path": "/customer-support-assistant",
   "proxy_pass_url": "https://<YOUR-GATEWAY-ID>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp/",
-  "auth_provider": "bedrock-agentcore",
   "auth_type": "oauth",
+  "upstream_auth": {
+    "mode": "gateway-managed",
+    "type": "oauth2",
+    "provider": "cognito",
+    "credential_binding": "service",
+    "injection": {
+      "kind": "header",
+      "name": "Authorization",
+      "value_format": "Bearer {access_token}"
+    }
+  },
   "supported_transports": [
     "streamable-http"
   ],
@@ -171,11 +173,6 @@ Create a file named `gateway-config.json` in your AgentCore project directory wi
     "customer-support",
     "warranty",
     "knowledge-base"
-  ],
-  "headers": [
-    {
-      "Authorization": "Bearer $CUSTOMER_SUPPORT_AUTH_TOKEN"
-    }
   ],
   "num_tools": 2,
   "num_stars": 0,
@@ -246,17 +243,15 @@ Create a file named `gateway-config.json` in your AgentCore project directory wi
 |-----------|-------|-------------|
 | `path` | `/customer-support-assistant` | The URL path where this service will be accessible through the registry. The registry will automatically format this to `/customer-support-assistant/` (with trailing slash) for bedrock-agentcore services. |
 | `proxy_pass_url` | `https://<YOUR-GATEWAY-ID>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp/` | The backend AgentCore Gateway URL. The registry will automatically remove the `/mcp/` suffix and ensure it ends with just `/` for bedrock-agentcore services. Replace `<YOUR-GATEWAY-ID>` with your actual Gateway ID from the deployment output. |
-| `auth_provider` | `bedrock-agentcore` | **Critical:** This tells the registry to use passthrough authentication - the Cognito token will be passed directly to the AgentCore Gateway without validation by the registry's auth server. |
 | `auth_type` | `oauth` | Specifies OAuth authentication flow |
+| `upstream_auth` | `{"type":"oauth2","provider":"cognito",...}` | Declares the upstream authentication requirement; credentials are stored and injected by the gateway. |
 | `server_name` | `customer-support-assistant` | Display name for the service in the registry UI |
 | `tags` | `["bedrock", "agentcore", "customer-support", ...]` | Searchable tags used by the `intelligent_tool_finder` for hybrid search (combines semantic search with tag-based filtering). AI agents can discover tools by category using these tags. |
 | `tool_list` | Array of tool definitions | Defines the available tools/functions with their schemas, descriptions, and parameters. Each tool includes a name, parsed description, and JSON schema for arguments. This metadata enables the registry to catalog and expose tools for dynamic discovery by AI agents. |
 
 **Important Notes:**
-- The `auth_provider: "bedrock-agentcore"` field enables passthrough authentication, which means:
-  - The registry does not validate the Cognito access token
-  - The token is passed directly to the AgentCore Gateway
-  - The AgentCore Gateway validates the token with its own Cognito User Pool
+- Agents authenticate only to the gateway; the gateway handles all upstream authentication to AgentCore.
+- Do not distribute Cognito tokens to agents or include upstream `Authorization` headers in client configuration.
 - Replace `<YOUR-GATEWAY-ID>` with your actual AgentCore Gateway ID (shown in deployment output)
 
 ### 3.2 Register the Gateway
@@ -312,194 +307,54 @@ Generate fresh ingress credentials for the registry. **Note:** Keycloak access t
 ./credentials-provider/generate_creds.sh
 ```
 
-### 4.2 Generate Cognito Access Token for AgentCore Gateway
-
-Before calling the AgentCore gateway, you need to obtain an access token from Cognito. Load the parameters you saved earlier and generate the token:
-
-```bash
-cd ${HOME}/workspace/.agentcore-params
-
-# Load AgentCore authentication parameters
-source .agentcore-params
-
-# Request access token from Cognito
-response=$(curl -s -X POST "$COGNITO_TOKEN_URL" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials" \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" \
-  -d "scope=$SCOPE")
-
-# Extract and save the access token
-echo "$response" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])" > .cognito_access_token
-
-echo "Access token saved to .cognito_access_token"
-```
-
-**Note:** Cognito access tokens have a default validity of **1 hour**. You'll need to regenerate the token if it expires.
-
-### 4.3 Call the AgentCore Gateway Through the Registry
+### 4.2 Call the AgentCore Gateway Through the Registry
 
 Now you can call the AgentCore gateway tools through the MCP Gateway Registry:
 
 ```bash
 uv run cli/mcp_client.py \
   --url http://localhost/customer-support-assistant/mcp \
-  --token-file ${HOME}/workspace/amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant/.cognito_access_token \
   call --tool LambdaUsingSDK___check_warranty_status \
   --args '{"serial_number":"MNO33333333"}'
 ```
 
-**Expected Output:**
-
-```json
-✓ Token file authentication successful (${HOME}/workspace/amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant/.cognito_access_token)
-{
-  "isError": false,
-  "content": [
-    {
-      "type": "text",
-      "text": "{\"statusCode\":200,\"body\":\"🛡️ Warranty Status Information\\n===============================\\n📱 Product: Gaming Console Pro\\n🔢 Serial Number: MNO33333333\\n👤 Customer: Unknown\\n📅 Purchase Date: 2023-11-25\\n⏰ Warranty End Date: 2024-11-25\\n📋 Warranty Type: Gaming Warranty\\n🔍 Status: ❌ Expired\\n\\n📆 Expired 317 days ago\\n\\n🔧 Coverage Details:\\n   Controller issues, overheating protection, and hard drive replacement covered\\n\\n❌ Your warranty has expired.\\n   Extended warranty options may be available.\\n   Contact support for repair service pricing.\"}"
-    }
-  ]
-}
-```
-
-### 4.4 Test Customer Profile Lookup
+### 4.3 Test Customer Profile Lookup
 
 ```bash
 uv run cli/mcp_client.py \
-  --url http://localhost/customer-support-assistant/ \
-  --token-file ${HOME}/workspace/amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant/.cognito_access_token \
+  --url http://localhost/customer-support-assistant/mcp \
   call --tool LambdaUsingSDK___get_customer_profile \
   --args '{"customer_id":"CUST001"}'
 ```
 
-**Expected Output:**
-
-```json
-✓ Token file authentication successful (.cognito_access_token)
-{
-  "isError": false,
-  "content": [
-    {
-      "type": "text",
-      "text": "{\"statusCode\":200,\"body\":\"👤 Customer Profile Information: 👤 Customer Profile Information\\n===============================\\n🆔 Customer ID: CUST001\\n👤 Name: John Smith\\n💎 Tier: Premium\\n\\n📞 Contact Information:\\n   📧 Email: john.smith@email.com\\n   📱 Phone: +1-555-0101\\n   🏠 Address: 123 Main Street, New York, NY, 10001, USA\\n\\n📊 Account Details:\\n   📅 Registration Date: 2022-11-20\\n   🎂 Date of Birth: 1985-03-15\\n   ⏱️ Customer Since: 2 years, 10 months\\n\\n💼 Purchase History:\\n   🛒 Total Purchases: 3\\n   💰 Lifetime Value: $2,850.00\\n   🎯 Average Order: $950.00\\n\\n🎧 Support Information:\\n   📞 Support Cases: 2\\n   💬 Communication Preferences: Email, SMS\\n\\n📝 Account Notes:\\n   VIP customer, prefers email communication\\n\\n🌟 Premium Benefits:\\n   • Priority customer support\\n   • Extended warranty coverage\\n   • Free expedited shipping\\n   • Exclusive product access\\n\\n💡 Support Recommendations:\\n   💎 High-value customer - prioritize satisfaction\\n   🎉 Loyal customer - consider loyalty rewards\\n\\n⚡ Quick Actions Available:\\n   • Check warranty status for customer products\\n   • View purchase history and invoices\\n   • Update contact information or preferences\\n   • Create new support case\\n   • Send promotional offers (if opted in)\"}"
-    }
-  ]
-}
-```
+Expected: a successful MCP tool response from the upstream AgentCore gateway.
 
 ## How It Works
 
-### Dual Authentication Flow
+### Gateway-Terminated Upstream Authentication
 
-The integration uses **two separate authentication layers**:
+This integration follows the gateway-terminated model:
 
-#### Ingress Authentication (Gateway Access Control)
-- **Purpose**: Verifies the AI agent has permission to access the MCP Gateway Registry itself
-- **Identity Provider**: Keycloak (MCP Gateway's IdP)
-- **Token**: Keycloak JWT access token (5-minute TTL by default)
-- **Validation**: Performed by the MCP Gateway's Auth Server
-- **Scope**: Controls which services and tools the agent can access through the gateway
-
-#### Egress Authentication (AgentCore Access Control)
-- **Purpose**: Verifies the request has permission to call the AgentCore Gateway
-- **Identity Provider**: Amazon Cognito (AgentCore's IdP)
-- **Token**: Cognito JWT access token (1-hour TTL by default)
-- **Validation**: Performed by the AgentCore Gateway itself
-- **Scope**: Controls access to AgentCore tools and resources
-
-### Authentication Sequence
+- Agents authenticate only to the gateway.
+- The gateway resolves and injects upstream `Authorization` (Cognito OAuth) when proxying to AgentCore.
+- If upstream credentials are required but not configured, expect `424 Failed Dependency` with `error_code=UPSTREAM_CREDENTIALS_REQUIRED`.
 
 ```mermaid
 sequenceDiagram
     participant Agent as AI Agent
-    participant Keycloak as Keycloak<br/>(Ingress IdP)
-    participant Gateway as MCP Gateway<br/>& Auth Server
-    participant AgentCore as AgentCore Gateway<br/>(Customer Support)
-    participant Cognito as Amazon Cognito<br/>(Egress IdP)
+    participant Gateway as MCP Gateway (Nginx)
+    participant Auth as Auth Server (/validate)
+    participant AgentCore as AgentCore Gateway
+    participant Cognito as Cognito (Upstream IdP)
 
-    Note over Agent,Cognito: Setup Phase
-
-    rect rgb(240, 248, 255)
-        Note over Agent,Keycloak: 1. Ingress Authentication
-        Agent->>Keycloak: 1a. Request access token<br/>(client credentials)
-        Keycloak->>Agent: 1b. Keycloak JWT token<br/>(5-min TTL)
-    end
-
-    rect rgb(255, 248, 220)
-        Note over Agent,Cognito: 2. Egress Authentication
-        Agent->>Cognito: 2a. Request access token<br/>(client credentials)
-        Cognito->>Agent: 2b. Cognito JWT token<br/>(1-hour TTL)
-        Agent->>Agent: 2c. Save to .cognito_access_token
-    end
-
-    Note over Agent,Cognito: Runtime Phase - MCP Protocol Flow
-
-    rect rgb(255, 240, 245)
-        Note over Agent,Gateway: 3. Initialize MCP Session
-        Agent->>Gateway: 3a. POST /initialize<br/>X-Authorization: Bearer [Keycloak JWT]<br/>Authorization: Bearer [Cognito JWT]
-
-        Gateway->>Keycloak: 3b. Validate ingress token
-        Keycloak->>Gateway: 3c. Token valid ✓
-
-        Gateway->>Gateway: 3d. Check auth_provider=bedrock-agentcore<br/>→ Use passthrough mode
-
-        Note right of Gateway: Gateway does NOT<br/>validate Cognito token
-
-        Gateway->>AgentCore: 3e. Forward initialize request<br/>Authorization: Bearer [Cognito JWT]
-
-        AgentCore->>Cognito: 3f. Validate egress token
-        Cognito->>AgentCore: 3g. Token valid ✓
-
-        AgentCore->>Gateway: 3h. Return capabilities
-        Gateway->>Agent: 3i. Session initialized ✓
-    end
-
-    rect rgb(240, 255, 240)
-        Note over Agent,AgentCore: 4. Discover Tools
-        Agent->>Gateway: 4a. POST /tools/list<br/>X-Authorization: Bearer [Keycloak JWT]<br/>Authorization: Bearer [Cognito JWT]
-
-        Gateway->>AgentCore: 4b. Forward tools/list<br/>Authorization: Bearer [Cognito JWT]
-
-        AgentCore->>Gateway: 4c. Return tool list<br/>[LambdaUsingSDK___check_warranty_status,<br/>LambdaUsingSDK___get_customer_profile]
-
-        Gateway->>Agent: 4d. Available tools returned
-    end
-
-    rect rgb(255, 250, 240)
-        Note over Agent,AgentCore: 5. Call Tool
-        Agent->>Gateway: 5a. POST /tools/call<br/>Tool: LambdaUsingSDK___get_customer_profile<br/>Args: {customer_id: "CUST001"}<br/>X-Authorization: Bearer [Keycloak JWT]<br/>Authorization: Bearer [Cognito JWT]
-
-        Gateway->>AgentCore: 5b. Forward tool call<br/>Authorization: Bearer [Cognito JWT]
-
-        AgentCore->>AgentCore: 5c. Execute Lambda function<br/>get_customer_profile("CUST001")
-
-        AgentCore->>Gateway: 5d. Return customer profile<br/>{name: "John Smith", tier: "Premium", ...}
-
-        Gateway->>Agent: 5e. Tool response returned
-    end
+    Agent->>Gateway: MCP request + gateway auth
+    Gateway->>Auth: auth_request (/validate)
+    Auth-->>Gateway: allow/deny + upstream injection metadata
+    Gateway->>AgentCore: MCP request + injected Authorization
+    AgentCore->>Cognito: validate upstream token (as required)
+    AgentCore-->>Gateway: MCP response
+    Gateway-->>Agent: MCP response
 ```
-
-### Key Points
-
-**Ingress Authentication (Keycloak)**
-- Validates AI agent's access to the MCP Gateway Registry
-- Checked by the MCP Gateway's Auth Server
-- Required for all gateway requests
-- Token refresh: `./credentials-provider/generate_creds.sh`
-
-**Egress Authentication (Cognito)**
-- Validates access to the AgentCore Gateway
-- **Passthrough mode**: Gateway does NOT validate this token
-- Validated by the AgentCore Gateway itself
-- Token refresh: Re-run the curl command in Section 4.2
-
-**Why Two Tokens?**
-- **Security in depth**: Both layers must authenticate successfully
-- **Separation of concerns**: Gateway controls access to its services; AgentCore controls access to its tools
-- **Flexibility**: Each layer can use its own IdP and policies
 
 
 ## Next Steps
@@ -541,9 +396,9 @@ If you get a 404 error, verify:
 ### 401 Authentication Error
 
 If you get a 401 error:
-1. Refresh your Cognito access token
-2. Verify token file path is correct
-3. Check token hasn't expired
+1. Refresh your gateway access token: `./credentials-provider/generate_creds.sh`
+2. Verify your client is sending the gateway auth headers expected by your deployment
+3. If the gateway reports missing upstream credentials, configure upstream auth for this server in the Registry UI
 
 ### Service Not Showing as Healthy
 

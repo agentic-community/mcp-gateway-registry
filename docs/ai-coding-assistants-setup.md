@@ -32,10 +32,10 @@ cat .oauth-tokens/vscode-mcp.json >> ~/.vscode/settings.json
 {
   "mcp": {
     "servers": {
-      "atlassian": {
-        "url": "https://your-gateway.com/atlassian/sse",
+      "mcpgw": {
+        "url": "https://your-gateway.com/mcpgw/sse",
         "headers": {
-          "Authorization": "Bearer eyJ...",
+          "Authorization": "Bearer <gateway-access-token>",
           "X-User-Pool-Id": "us-east-1_vm1115QSU",
           "X-Client-Id": "5v2rav1v93...",
           "X-Region": "us-east-1"
@@ -105,7 +105,7 @@ ln -sf "$(pwd)/.oauth-tokens/mcp.json" ~/.vscode/mcp_settings.json
 **Secure Authentication**  
 - All tool access routes through enterprise identity systems (Amazon Cognito)
 - No individual API key management required
-- Automatic token refresh and rotation via [Token Refresh Service](token-refresh-service.md)
+- Rotate gateway access tokens by re-issuing before expiry (JWT token vending or re-running credential generation)
 
 **Usage Analytics & Compliance**
 - Track which developers use which tools and when
@@ -198,26 +198,10 @@ async with sse_client('https://gateway.com/mcpgw/sse', headers=headers) as (read
 
 ## Configuration Management
 
-### Automatic Token Refresh
+### Token Rotation
 
-The MCP Gateway includes an [Automated Token Refresh Service](token-refresh-service.md) that provides continuous token management:
-
-```bash
-# Start the token refresh service (runs in background)
-./start_token_refresher.sh
-
-# Service automatically:
-# - Monitors token expiration (1-hour buffer by default)
-# - Refreshes tokens before they expire
-# - Updates all MCP client configurations
-# - Generates fresh configs for all AI assistants
-```
-
-**Key Benefits:**
-- **Zero Downtime**: Tokens refresh automatically before expiration
-- **Continuous Operation**: AI assistants never lose access due to expired tokens
-- **Multiple Client Support**: Updates configurations for VS Code, Roo Code, Claude Code, etc.
-- **Background Operation**: Runs as a service with comprehensive logging
+- Re-issue gateway access tokens before they expire.
+- Upstream authentication is gateway-managed; AI assistants should not store upstream API keys or provider tokens.
 
 ### Manual Configuration Updates
 
@@ -255,19 +239,6 @@ cp .oauth-tokens/prod-* ~/.vscode/
 
 **Token Expired:**
 
-*If using Token Refresh Service (recommended):*
-```bash
-# Check if token refresh service is running
-ps aux | grep token_refresher
-
-# Restart token refresh service if needed
-./start_token_refresher.sh
-
-# Check service logs
-tail -f token_refresher.log
-```
-
-*Manual token refresh:*
 ```bash
 # Regenerate credentials
 ./credentials-provider/generate_creds.sh

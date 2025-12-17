@@ -11,7 +11,7 @@ The repository provides:
 5. **Comprehensive Observability**: Dual-path metrics collection with SQLite and OpenTelemetry for detailed analytics
 6. **Production-Ready Deployment**: Docker-based deployment with support for EC2, EKS, and container orchestration
 
-Key features include: centralized server management, OAuth 2.0/3.0 authentication flows, token vending service, automated token refresh, dynamic tool discovery and invocation, real-time health monitoring, Grafana dashboards, security scanning integration, and Anthropic MCP Registry compatibility.
+Key features include: centralized server management, OAuth authentication flows, token vending service, dynamic tool discovery and invocation, real-time health monitoring, Grafana dashboards, security scanning integration, and Anthropic MCP Registry compatibility.
 
 ---
 
@@ -23,7 +23,7 @@ Key features include: centralized server management, OAuth 2.0/3.0 authenticatio
 - **Purpose:** Enterprise-ready platform for managing, securing, and accessing Model Context Protocol (MCP) servers at scale
 - **Core Goal:** Transform scattered MCP server connections into a centralized, governed platform with unified authentication and intelligent tool discovery
 - **Communication:** Uses MCP protocol over SSE (Server-Sent Events) and Streamable HTTP
-- **Key Components:** Gateway (Nginx reverse proxy), Registry (Web UI & API), Auth Server (OAuth/JWT), MCP Servers, Metrics Service, Token Refresh Service
+- **Key Components:** Gateway (Nginx reverse proxy), Registry (Web UI & API), Auth Server (OAuth/JWT), MCP Servers, Metrics Service
 
 ## 2. Core Problem Solved
 
@@ -147,7 +147,7 @@ AI Agent/Coding Assistant
 
 ## 4. Authentication & Authorization
 
-### 4.1. Three-Layer Authentication System
+### 4.1. Gateway-Terminated Authentication Model
 
 **Layer 1: Ingress Authentication (2LO/M2M)**
 - Purpose: Controls who can access the MCP Gateway
@@ -161,53 +161,43 @@ AI Agent/Coding Assistant
 - Validation: Applied at gateway level after ingress auth
 - Granularity: Server-level, method-level, individual tool-level
 
-**Layer 3: Egress Authentication (3LO)**
-- Purpose: Allows MCP servers to act on user's behalf with external services
-- Providers: Atlassian, Google, GitHub, Microsoft, custom OAuth providers
-- Headers: `Authorization`, provider-specific headers (e.g., `X-Atlassian-Cloud-Id`)
-- Validation: MCP server validates with its IdP
+**Layer 3: Upstream Authentication (Gateway-Terminated)**
+- Purpose: Allows the gateway to authenticate to upstream MCP servers on behalf of the requesting principal
+- Credential sources: gateway-managed API keys, OAuth tokens, JWTs, etc. (never supplied by the agent/client)
+- Injection: computed at request time by the auth server (`/validate`) and applied by the Nginx proxy layer
+- Validation: upstream MCP server validates the injected credential with its own IdP as required
 
-### 4.2. Dual Token System
+### 4.2. Single Token System (Client → Gateway Only)
 
-AI agents carry BOTH ingress and egress tokens:
+Agents carry only gateway credentials:
 
 ```json
 {
   "headers": {
-    // Ingress Authentication (for Gateway) - Keycloak
+    // Ingress Authentication (to the Gateway)
     "X-Authorization": "Bearer {keycloak_jwt_token}",
     "X-Client-Id": "{agent_client_id}",
     "X-Keycloak-Realm": "mcp-gateway",
-    "X-Keycloak-URL": "http://localhost:8080",
-
-    // OR Cognito
-    "X-Authorization": "Bearer {cognito_jwt_token}",
-    "X-User-Pool-Id": "{cognito_user_pool_id}",
-    "X-Client-Id": "{cognito_client_id}",
-    "X-Region": "{aws_region}",
-
-    // Egress Authentication (for MCP Server) - Example: Atlassian
-    "Authorization": "Bearer {atlassian_oauth_token}",
-    "X-Atlassian-Cloud-Id": "{atlassian_cloud_id}"
+    "X-Keycloak-URL": "http://localhost:8080"
   }
 }
 ```
 
-### 4.3. Complete Authentication Flow
+### 4.3. Complete Authentication Flow (Gateway-Terminated)
 
 ```
 1. One-Time Setup:
    User → Keycloak/Cognito (2LO) → Ingress Token
-   User → External IdP (3LO, consent) → Egress Token
-   User → Agent Configuration (both tokens)
+   Admin/User → Gateway UI/API → Configure upstream credentials per server (stored by gateway)
+   User → Agent Configuration (gateway token only)
 
 2. Runtime (Every Request):
-   Agent → Gateway (dual tokens)
-   Gateway → Keycloak/Cognito (validate ingress)
+   Agent → Gateway (ingress auth only)
+   Gateway → IdP (validate ingress)
    Gateway → Apply FGAC (check permissions)
-   Gateway → MCP Server (forward egress token)
-   MCP Server → External IdP (validate egress)
-   MCP Server → Response (via Gateway)
+   Gateway → Auth Server (/validate) computes upstream injection
+   Gateway → Upstream MCP Server (inject upstream auth)
+   Upstream MCP Server → Response (via Gateway)
 ```
 
 ### 4.4. Fine-Grained Access Control (FGAC)
@@ -773,15 +763,7 @@ INGRESS_OAUTH_CLIENT_ID=5v2rav1v93...
 INGRESS_OAUTH_CLIENT_SECRET=1i888fnolv6k5sa1b8s5k839pdm...
 ```
 
-**Egress Authentication (Multiple Providers):**
-```bash
-# Pattern: EGRESS_OAUTH_CLIENT_ID_N, EGRESS_OAUTH_CLIENT_SECRET_N
-EGRESS_OAUTH_CLIENT_ID_1=your_atlassian_client_id
-EGRESS_OAUTH_CLIENT_SECRET_1=your_atlassian_client_secret
-EGRESS_OAUTH_REDIRECT_URI_1=http://localhost:8080/callback
-EGRESS_PROVIDER_NAME_1=atlassian
-EGRESS_MCP_SERVER_NAME_1=atlassian
-```
+Upstream authentication credentials are configured in the gateway (not via client `.env` variables) and are not distributed to agents.
 
 ### 7.3. OAuth Providers Configuration
 
@@ -856,12 +838,8 @@ cp credentials-provider/oauth/.env.example credentials-provider/oauth/.env
 ./credentials-provider/generate_creds.sh
 
 # Available options:
-# --all              # Run all authentication flows (default)
-# --ingress-only     # Only MCP Gateway authentication
-# --egress-only      # Only external provider authentication
-# --agentcore-only   # Only AgentCore token generation
-# --keycloak-only    # Only Keycloak token generation
-# --provider google  # Specify provider for egress auth
+# --ingress-only     # Only gateway ingress authentication
+# --keycloak-only    # Only Keycloak agent token generation
 # --verbose          # Enable debug logging
 ```
 
@@ -869,7 +847,6 @@ cp credentials-provider/oauth/.env.example credentials-provider/oauth/.env
 - `.oauth-tokens/vscode_mcp.json` - VS Code MCP configuration
 - `.oauth-tokens/mcp.json` - Roocode/Claude Code configuration
 - `.oauth-tokens/ingress.json` - Ingress tokens
-- `.oauth-tokens/egress.json` - Egress tokens
 - `.oauth-tokens/agent-{name}-m2m-token.json` - Agent-specific tokens
 
 ### 7.6. Keycloak Setup
@@ -899,10 +876,7 @@ cd keycloak/setup
 **Token Generation:**
 ```bash
 # Generate M2M token for ingress
-uv run python credentials-provider/token_refresher.py
-
-# Generate agent-specific token
-uv run python credentials-provider/token_refresher.py --agent-id sre-agent
+uv run python credentials-provider/keycloak/generate_tokens.py --all-agents
 ```
 
 ## 8. Observability & Monitoring
@@ -1320,9 +1294,7 @@ cd credentials-provider
 ./generate_creds.sh --verbose
 
 # Test specific authentication flows
-./generate_creds.sh --ingress-only --verbose    # MCP Gateway auth
-./generate_creds.sh --egress-only --verbose     # External provider auth
-./generate_creds.sh --agentcore-only --verbose  # AgentCore auth
+./generate_creds.sh --ingress-only --verbose    # Gateway ingress auth
 ```
 
 ## 11. Security Features
@@ -1354,33 +1326,13 @@ cd credentials-provider
 - Scope-based authorization at server, method, and tool levels
 
 **Token Lifecycle:**
-- Ingress tokens: 1-hour expiry, auto-refresh via client credentials
-- Egress tokens: Provider-specific, refresh tokens where available
-- Automated refresh service for continuous monitoring
+- Gateway access tokens: short-lived by default; rotate by re-issuing (or use client credentials where supported)
+- Upstream credentials: stored and refreshed by the gateway on demand (agents do not hold upstream tokens)
 
 **Audit & Compliance:**
 - Complete audit trails (Nginx access logs + auth server logs + IdP logs)
 - Comprehensive metrics for compliance reporting
 - Security event tracking and monitoring
-
-### 11.3. Token Refresh Service
-
-**Automated Token Refresh Service** provides:
-- Continuous monitoring of all OAuth tokens for expiration
-- Proactive refresh before tokens expire (configurable 1-hour buffer)
-- Automatic MCP config generation for coding assistants
-- Service discovery for both OAuth and no-auth services
-- Background operation with comprehensive logging
-
-**Start the service:**
-```bash
-./start_token_refresher.sh
-```
-
-**Generated configurations:**
-- `.oauth-tokens/vscode_mcp.json` - VS Code extensions
-- `.oauth-tokens/mcp.json` - Claude Code/Roocode
-- Standard configuration format for custom MCP clients
 
 ## 12. Enterprise Features
 
@@ -1427,7 +1379,7 @@ cp .oauth-tokens/mcp.json ~/.vscode/mcp-settings.json
 **Usage:**
 ```bash
 # Generate token for agent
-uv run python credentials-provider/token_refresher.py --agent-id sre-agent
+uv run python credentials-provider/keycloak/generate_tokens.py --agent-id sre-agent
 
 # Check generated token
 cat .oauth-tokens/agent-sre-agent-m2m-token.json
@@ -1526,7 +1478,6 @@ curl http://localhost:7860/health
 - [API Reference](docs/registry_api.md) - Programmatic registry management
 - [Anthropic Registry API](docs/anthropic_registry_api.md) - REST API compatibility
 - [Service Management](docs/service-management.md) - Server lifecycle and operations
-- [Token Refresh Service](docs/token-refresh-service.md) - Automated token refresh and lifecycle management
 - [Observability Guide](docs/OBSERVABILITY.md) - Metrics, monitoring, and OpenTelemetry setup
 - [Troubleshooting Guide](docs/FAQ.md) - Common issues and solutions
 - [Architectural Decision](docs/design/architectural-decision-reverse-proxy-vs-application-layer-gateway.md) - Reverse proxy vs application layer gateway

@@ -336,12 +336,6 @@ ls -la .oauth-tokens/agent-*-m2m-token.json
 ```bash
 # Generate all authentication tokens and MCP configurations
 ./credentials-provider/generate_creds.sh
-
-# Start automatic token refresh service
-./start_token_refresher.sh
-
-# Verify token refresh is working
-tail -f token_refresher.log
 ```
 
 #### 6. Validation & Testing
@@ -425,22 +419,11 @@ cat .oauth-tokens/agent-<agent-id>-m2m-token.json | jq -r '.access_token' | cut 
 
 # Test token authentication
 ./test-keycloak-mcp.sh --agent-id <agent-id>
-
-# Check automatic token refresh status
-tail -20 token_refresher.log
 ```
 
 #### Token Rotation Strategy
 ```bash
-# Automatic token refresh service (recommended)
-./start_token_refresher.sh
-
-# The service will automatically:
-# - Refresh tokens every 5 minutes
-# - Regenerate MCP configuration files
-# - Handle both ingress and egress tokens
-
-# Manual token refresh if needed
+# Rotate tokens by re-issuing them before expiry
 uv run python credentials-provider/keycloak/generate_tokens.py --all-agents
 
 # Hourly health check
@@ -478,7 +461,7 @@ open https://mcpgateway.ddns.net/admin
 # - mcp-servers-restricted (limited access)
 
 # Generate new token to reflect changes
-uv run uv run python credentials-provider/token_refresher.py --agent-id <agent-id>
+uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <agent-id>
 ```
 
 #### Updating Scopes Configuration
@@ -508,7 +491,7 @@ docker-compose logs auth-server | grep -i scope
   --group <mcp-servers-restricted|mcp-servers-unrestricted>
 
 # Step 2: Generate initial token
-uv run uv run python credentials-provider/token_refresher.py --agent-id <agent-id>
+uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <agent-id>
 
 # Step 3: Validate setup
 ./test-keycloak-mcp.sh --agent-id <agent-id>
@@ -525,7 +508,7 @@ echo "<agent-id>,<group>,<created-date>,<purpose>" >> docs/agent-inventory.csv
 # 3. Join new group
 # 4. Generate new token
 
-uv run uv run python credentials-provider/token_refresher.py --agent-id <agent-id>
+uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <agent-id>
 ```
 
 #### Agent Decommissioning
@@ -642,7 +625,7 @@ docker-compose logs -f auth-server | grep -E "Token validation|Groups.*mapped|Ac
 # - "Token has expired" in logs
 
 # Solution:
-uv run uv run python credentials-provider/token_refresher.py --agent-id <agent-id>
+uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <agent-id>
 ```
 
 #### Issue: Service Account Missing
@@ -941,7 +924,7 @@ echo "Agent cleanup completed for: $AGENT_ID"
 ./keycloak/setup/setup-agent-service-account.sh --agent-id <id> --group <group>
 
 # Operations
-uv run python credentials-provider/token_refresher.py --agent-id <id>
+uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <id>
 ./test-keycloak-mcp.sh --agent-id <id>
 docker-compose logs -f auth-server
 

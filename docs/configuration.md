@@ -8,10 +8,8 @@ This document provides a comprehensive reference for all configuration files in 
 |------|---------|------|----------|--------------|-------------------|
 | [`.env`](#main-environment-configuration) | Main project environment variables | Environment | Project root | `.env.example` | **Yes** - Required |
 | [`.env` (OAuth)](#oauth-environment-configuration) | OAuth provider credentials | Environment | `credentials-provider/oauth/` | `.env.example` | **Yes** - Required |
-| [`.env` (AgentCore)](#agentcore-environment-configuration) | AgentCore authentication config | Environment | `credentials-provider/agentcore-auth/` | `.env.example` | **Optional** - Only if using AgentCore |
 | [`oauth2_providers.yml`](#oauth2-providers-configuration) | OAuth2 provider definitions | YAML | `auth_server/` | - | **No** - Pre-configured |
 | [`scopes.yml`](#scopes-configuration) | Fine-grained access control scopes | YAML | `auth_server/` | - | **Rarely** - Only for custom permissions |
-| [`oauth_providers.yaml`](#oauth-providers-mapping) | Provider-specific OAuth configurations | YAML | `credentials-provider/oauth/` | - | **No** - Pre-configured |
 | [`docker-compose.yml`](#docker-compose-configuration) | Container orchestration | YAML | Project root | - | **Rarely** - Only for custom deployments |
 
 ---
@@ -276,11 +274,14 @@ For individual AI agent audit trails, create service accounts:
 Generate tokens for Keycloak authentication:
 
 ```bash
-# Generate M2M token for ingress
-uv run python credentials-provider/token_refresher.py
+# Generate tokens for a single agent service account
+uv run python credentials-provider/keycloak/generate_tokens.py --agent-id sre-agent
 
-# Generate agent-specific token
-uv run python credentials-provider/token_refresher.py --agent-id sre-agent
+# Generate tokens for all agents
+uv run python credentials-provider/keycloak/generate_tokens.py --all-agents
+
+# Generate a full local credential/config set (tokens + editor configs)
+./credentials-provider/generate_creds.sh
 ```
 
 For detailed Keycloak integration documentation, see [Keycloak Integration Guide](keycloak-integration.md).
@@ -290,7 +291,7 @@ For detailed Keycloak integration documentation, see [Keycloak Integration Guide
 ## OAuth Environment Configuration
 
 **File:** `credentials-provider/oauth/.env`
-**Purpose:** OAuth provider credentials for ingress and egress authentication flows.
+**Purpose:** OAuth credentials for gateway ingress authentication (Keycloak/Cognito).
 
 ### Ingress Authentication
 
@@ -311,66 +312,14 @@ For detailed Keycloak integration documentation, see [Keycloak Integration Guide
 | `INGRESS_OAUTH_CLIENT_ID` | Cognito client ID for ingress | `5v2rav1v93...` | ✅ |
 | `INGRESS_OAUTH_CLIENT_SECRET` | Cognito client secret for ingress | `1i888fnolv6k5sa1b8s5k839pdm...` | ✅ |
 
-### Egress Authentication (Optional)
+### Upstream Authentication (Gateway-Managed)
 
-Support for multiple OAuth provider configurations using numbered suffixes (`_1`, `_2`, `_3`, etc.):
+Upstream authentication (API keys, OAuth provider tokens, JWTs) is terminated at the gateway:
 
-| Variable Pattern | Description | Example | Required |
-|------------------|-------------|---------|----------|
-| `EGRESS_OAUTH_CLIENT_ID_N` | OAuth client ID for provider N | `cNYWTFwyZB...` | For each provider |
-| `EGRESS_OAUTH_CLIENT_SECRET_N` | OAuth client secret for provider N | `ATOAubT-N-lAzpT05RDFq9dxcVr...` | For each provider |
-| `EGRESS_OAUTH_REDIRECT_URI_N` | OAuth redirect URI for provider N | `http://localhost:8080/callback` | For each provider |
-| `EGRESS_OAUTH_SCOPE_N` | OAuth scopes for provider N | Uses provider defaults if not set | Optional |
-| `EGRESS_PROVIDER_NAME_N` | Provider name (atlassian, google, etc.) | `atlassian` | For each provider |
-| `EGRESS_MCP_SERVER_NAME_N` | MCP server name for provider N | `atlassian` | For each provider |
+- Agent/client configuration contains only gateway ingress credentials.
+- Upstream credentials are configured and stored by the gateway per server (and per binding rules, e.g., per-user or per-service).
 
-### Supported Providers
-
-- **Atlassian**: Confluence, Jira integration
-- **Google**: Gmail, Drive, Calendar services  
-- **GitHub**: Repository and issue management
-- **Microsoft**: Office 365, Teams integration
-- **Bedrock AgentCore**: AWS AgentCore services
-
----
-
-## AgentCore Environment Configuration
-
-**File:** `credentials-provider/agentcore-auth/.env`
-**Purpose:** Amazon Bedrock AgentCore authentication configuration with support for multiple gateways.
-
-### Shared Configuration
-
-| Variable | Description | Example | Required |
-|----------|-------------|---------|----------|
-| `COGNITO_DOMAIN` | AgentCore Cognito domain URL | `https://your-cognito-domain.auth.region.amazoncognito.com` | ✅ |
-| `COGNITO_USER_POOL_ID` | Cognito User Pool ID | `region_your_pool_id` | ✅ |
-
-### Gateway-Specific Configurations
-
-Support for multiple gateways using numbered suffixes (`_1`, `_2`, `_3`, etc., up to `_100`). Each configuration set requires all four parameters:
-
-| Variable Pattern | Description | Example | Required |
-|------------------|-------------|---------|----------|
-| `AGENTCORE_CLIENT_ID_N` | AgentCore Cognito client ID for gateway N | `your_client_id_here` | ✅ |
-| `AGENTCORE_CLIENT_SECRET_N` | AgentCore Cognito client secret for gateway N | `your_client_secret_here` | ✅ |
-| `AGENTCORE_GATEWAY_ARN_N` | Amazon Bedrock AgentCore Gateway ARN for gateway N | `arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/my-gateway-1` | ✅ |
-| `AGENTCORE_SERVER_NAME_N` | MCP server name for AgentCore gateway N | `my-gateway-1` | ✅ |
-
-**Example Configuration:**
-```bash
-# Configuration Set 1
-AGENTCORE_CLIENT_ID_1=your_client_id_here
-AGENTCORE_CLIENT_SECRET_1=your_client_secret_here
-AGENTCORE_GATEWAY_ARN_1=arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/my-gateway-1
-AGENTCORE_SERVER_NAME_1=my-gateway-1
-
-# Configuration Set 2
-AGENTCORE_CLIENT_ID_2=your_client_id_here
-AGENTCORE_CLIENT_SECRET_2=your_client_secret_here
-AGENTCORE_GATEWAY_ARN_2=arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/my-gateway-2
-AGENTCORE_SERVER_NAME_2=my-gateway-2
-```
+Do not configure upstream provider secrets in `credentials-provider/oauth/.env` and do not distribute upstream tokens to agents.
 
 ---
 
@@ -435,22 +384,6 @@ When using Keycloak as the authentication provider, the following configuration 
 - **MCP Servers**: Individual server access (`mcp-servers-{name}/read`, `mcp-servers-{name}/execute`)
 - **Unrestricted**: Global access (`mcp-servers-unrestricted/read`, `mcp-servers-unrestricted/execute`)
 - **Admin**: Administrative functions (`admin/registry`, `admin/users`)
-
----
-
-## OAuth Providers Mapping
-
-**File:** `credentials-provider/oauth/oauth_providers.yaml`
-**Purpose:** Provider-specific OAuth endpoint configurations and metadata.
-
-### Provider Fields
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `auth_url` | OAuth authorization URL | `https://api.atlassian.com/ex/oauth/authorize` |
-| `token_url` | OAuth token exchange URL | `https://api.atlassian.com/ex/oauth/token` |
-| `scopes` | Default OAuth scopes | `["read:confluence-content.all", "write:confluence-content"]` |
-| `client_credentials_supported` | Whether provider supports client credentials flow | `false` |
 
 ---
 

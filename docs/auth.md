@@ -22,7 +22,7 @@ For EnforceAI operational docs (management API + CLI), see `enforceai/instructio
 - [Manage A2A agents via CLI](#a2a-agent-management) → Agent Management
 - [Build an AI agent with authentication](#quick-start-for-ai-agents) → Quick Start
 - [Understand the authentication architecture](#authentication-architecture) → Architecture
-- [Set up external service integration](#external-service-integration) → Egress Auth
+- [Configure upstream authentication](#upstream-authentication-gateway-terminated) → Upstream Auth
 - [Configure fine-grained permissions](#fine-grained-access-control-fgac) → FGAC
 - [See all configuration options](#configuration-reference) → Reference
 
@@ -51,7 +51,7 @@ Get your AI agent authenticated and running in 5 minutes.
 
 ### Prerequisites
 - Keycloak service account credentials (provided by your administrator)
-- Access to external services you want to integrate (optional)
+- No upstream credentials are required in MCP client configs (upstream auth is gateway-terminated).
 
 ### Step 1: Configure Environment
 
@@ -72,13 +72,6 @@ KEYCLOAK_M2M_CLIENT_SECRET=your_keycloak_m2m_client_secret
 # INGRESS_OAUTH_USER_POOL_ID=us-east-1_XXXXXXXXX
 # INGRESS_OAUTH_CLIENT_ID=your_cognito_client_id
 # INGRESS_OAUTH_CLIENT_SECRET=your_cognito_client_secret
-
-# Egress Authentication (Optional - for external services)
-EGRESS_OAUTH_CLIENT_ID_1=your_external_provider_client_id
-EGRESS_OAUTH_CLIENT_SECRET_1=your_external_provider_client_secret
-EGRESS_OAUTH_REDIRECT_URI_1=http://localhost:9999/callback
-EGRESS_PROVIDER_NAME_1=atlassian
-EGRESS_MCP_SERVER_NAME_1=atlassian
 ```
 
 **Pro Tip:** Use the example files as templates:
@@ -99,18 +92,14 @@ cd credentials-provider
 # Available options:
 # ./generate_creds.sh --all              # Run all authentication flows (default)
 # ./generate_creds.sh --ingress-only     # Only MCP Gateway authentication
-# ./generate_creds.sh --egress-only      # Only external provider authentication
-# ./generate_creds.sh --agentcore-only   # Only AgentCore token generation
-# ./generate_creds.sh --provider google  # Specify provider for egress auth
 # ./generate_creds.sh --verbose          # Enable debug logging
 
 # This will:
 # 1. Authenticate with Keycloak (M2M) or Cognito (M2M/2LO)
-# 2. Optionally authenticate with external services (3LO)
-# 3. Generate AgentCore tokens if configured
-# 4. Generate Keycloak agent tokens if configured
-# 5. Generate MCP client configurations
-# 6. Add no-auth services to configurations
+# 2. Generate MCP client configurations for gateway access
+# 3. Add no-auth services to configurations
+#
+# Upstream authentication is configured and stored in the gateway (not in MCP client configs).
 ```
 
 ### Step 3: Use Generated Configuration
@@ -134,8 +123,6 @@ The script generates ready-to-use MCP client configurations:
       "atlassian": {
         "url": "https://mcpgateway.ddns.net/atlassian/mcp",
         "headers": {
-          "Authorization": "Bearer {atlassian_oauth_token}",
-          "X-Atlassian-Cloud-Id": "{cloud_id}",
           "X-Authorization": "Bearer {your_keycloak_jwt_token}",
           "X-Client-Id": "{agent_client_id}",
           "X-Keycloak-Realm": "mcp-gateway",
@@ -168,8 +155,6 @@ The script generates ready-to-use MCP client configurations:
       "type": "streamable-http",
       "url": "https://mcpgateway.ddns.net/atlassian/mcp",
       "headers": {
-        "Authorization": "Bearer eyJraWQiOiJhdXRoLmF0bGFzc2lhbi5jb20tQUNDRVNTLTk0ZTczYTkwLTUxYWQtNGFjMS1hOWFjLWU4NGUwNDVjNDU3ZCIsImFsZyI6IlJTMjU2In0...",
-        "X-Atlassian-Cloud-Id": "923a213e-e930-4359-be44-f4b164d3f269",
         "X-Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
         "X-Client-Id": "agent-ai-coding-assistant-m2m",
         "X-Keycloak-Realm": "mcp-gateway",
@@ -326,132 +311,48 @@ For a complete working example, see [`agents/agent.py`](../agents/agent.py) whic
 
 ### Overview
 
-The MCP Gateway Registry uses a comprehensive three-layer authentication system:
+This project uses **gateway-terminated authentication**:
 
-1. **Ingress Authentication (2LO)**: Gateway access using Keycloak or Amazon Cognito
-2. **Egress Authentication (3LO)**: External service integration via OAuth providers
-3. **Fine-Grained Access Control (FGAC)**: Permission management at method and tool level
+- Agents/clients authenticate **only** to the MCP Gateway.
+- Upstream MCP servers do not require the agent to present upstream credentials.
+- The gateway resolves and injects upstream credentials on behalf of the authenticated principal.
 
-### Key Concepts
+The runtime model is:
 
-- **Dual Token System**: AI agents carry BOTH ingress and egress tokens
-- **Token Storage**: After authentication, tokens are stored locally and used by AI agents
-- **Header Passing**: Both token sets are passed as headers from AI agent to gateway
-- **Validation Points**:
-  - Ingress tokens validated by gateway with Keycloak or Cognito
-  - FGAC enforced at gateway level using group-based permissions
-  - Egress tokens passed through to MCP servers for their validation
+1. **Ingress Authentication** (client → gateway): session cookies or bearer credentials (Keycloak/Cognito/EnforceAI).
+2. **FGAC Authorization** (in gateway): scopes + optional allowlists determine which servers/tools are allowed.
+3. **Upstream Authentication** (gateway → upstream): the gateway injects the required upstream auth (API key, OAuth2 access token, JWT, header-trust identity) based on server configuration and stored credentials.
 
-### High-Level Authentication Flow
+### High-Level Flow
 
 ```mermaid
 sequenceDiagram
     participant User as User/Developer
     participant Agent as AI Agent
-    participant Auth as Keycloak/Cognito<br/>(Ingress IdP)
-    participant ExtIdP as External IdP<br/>(e.g., Atlassian)
     participant Gateway as MCP Gateway
-    participant MCPServer as MCP Server
-    
-    Note over User,MCPServer: One-Time Setup
-    
-    User->>Cognito: 1. Authenticate (2LO)
-    Cognito->>User: Ingress Token
-    
-    User->>ExtIdP: 2. Authenticate & Approve (3LO)
-    Note right of User: "Allow AI agent to<br/>act on my behalf"
-    ExtIdP->>User: Egress Token
-    
-    User->>Agent: 3. Configure with both tokens
-    
-    Note over Agent,MCPServer: Runtime (Every Request)
-    
-    Agent->>Gateway: 4. Request with dual tokens<br/>(Ingress + Egress headers)
-    Gateway->>Cognito: 5. Validate ingress auth
-    Gateway->>Gateway: 6. Apply FGAC
-    Gateway->>MCPServer: 7. Forward with egress token
-    MCPServer->>ExtIdP: 8. Validate egress auth
-    MCPServer->>Agent: 9. Response (via Gateway)
+    participant AuthServer as Auth Server
+    participant Upstream as Upstream MCP Server
+    participant Provider as OAuth Provider (optional)
+
+    Note over User,Provider: One-time or periodic setup (via Gateway UI)
+    User->>Gateway: Configure upstream credentials (Connect/Set)
+    Gateway->>Provider: OAuth flow (if required)
+    Provider->>Gateway: Tokens (stored by gateway)
+
+    Note over Agent,Upstream: Runtime (every request)
+    Agent->>Gateway: MCP request with gateway credential only
+    Gateway->>AuthServer: /validate (ingress auth + FGAC)
+    AuthServer-->>Gateway: allow/deny + upstream injection instructions
+    Gateway->>Upstream: Forward MCP request with injected upstream auth + identity headers
+    Upstream-->>Agent: Response (via gateway)
 ```
 
-### Complete End-to-End Flow (Detailed)
+## Upstream Authentication (Gateway-Terminated)
 
-```mermaid
-sequenceDiagram
-    participant User as User/Developer
-    participant Agent as AI Agent
-    participant Browser as Browser
-    participant Cognito as Amazon Cognito<br/>(Ingress IdP)
-    participant ExtIdP as External IdP<br/>(e.g., Atlassian)
-    participant Gateway as MCP Gateway
-    participant AuthServer as Auth Server<br/>(in Gateway)
-    participant MCPServer as MCP Server
-    
-    Note over User,MCPServer: PHASE 1: One-Time Setup & Authentication
-    
-    rect rgb(240, 248, 255)
-        Note over User,Cognito: Step 1: Ingress Authentication (2LO/M2M)
-        User->>Cognito: 1. Client Credentials Grant<br/>(client_id + client_secret)
-        Cognito->>User: 2. JWT Token with scopes
-        User->>User: 3. Store ingress token locally
-    end
-    
-    rect rgb(255, 248, 220)
-        Note over User,ExtIdP: Step 2: Egress Authentication (3LO)
-        User->>Browser: 4. Initiate OAuth flow
-        Browser->>ExtIdP: 5. Redirect to provider login
-        User->>ExtIdP: 6. User authenticates
-        User->>ExtIdP: 7. Reviews & approves permissions<br/>"Allow AI agent to act on my behalf"
-        ExtIdP->>Browser: 8. Auth code redirect
-        Browser->>User: 9. Capture auth code
-        User->>ExtIdP: 10. Exchange code for tokens
-        ExtIdP->>User: 11. Access & refresh tokens
-        User->>User: 12. Store egress tokens locally
-    end
-    
-    rect rgb(240, 255, 240)
-        Note over User: Step 3: Configure AI Agent
-        User->>User: 13. Create configuration with:<br/>- Server URLs<br/>- Ingress headers (X-Authorization, etc.)<br/>- Egress headers (Authorization, etc.)
-    end
-    
-    Note over Agent,MCPServer: PHASE 2: Runtime - AI Agent Uses Tokens
-    
-    rect rgb(255, 240, 245)
-        Note over Agent,MCPServer: Every MCP Request
-        Agent->>Gateway: 14. MCP Request with headers:<br/>X-Authorization: Bearer {ingress_jwt}<br/>Authorization: Bearer {egress_jwt}<br/>X-User-Pool-Id, X-Client-Id, X-Region
-        
-        Gateway->>AuthServer: 15. Extract & validate ingress token
-        AuthServer->>Cognito: 16. Verify JWT signature & claims
-        Cognito->>AuthServer: 17. Token valid + user scopes
-        
-        AuthServer->>AuthServer: 18. Apply FGAC rules<br/>(Check tool/method permissions)
-        
-        Gateway->>MCPServer: 19. Forward request with egress headers:<br/>Authorization: Bearer {egress_jwt}
-        
-        MCPServer->>ExtIdP: 20. Validate egress token
-        ExtIdP->>MCPServer: 21. Token valid + permissions
-        
-        MCPServer->>MCPServer: 22. Execute requested action<br/>(within approved scope)
-        
-        MCPServer->>Gateway: 23. Response
-        Gateway->>Agent: 24. Response
-        Agent->>User: 25. Display result
-    end
-```
+Upstream auth is configured per server (e.g., `api-key`, `oauth2`, `oidc`, `provider-oauth`, `jwt`, `header-trust`). Credentials are stored in the gateway and injected at proxy-time.
 
-### Authentication Types Explained
-
-#### Two-Legged OAuth (2LO) - Ingress
-- **Purpose**: Authenticate agents/users TO the MCP Gateway
-- **Provider**: Amazon Cognito
-- **Use Case**: M2M authentication for AI agents
-- **Token Type**: JWT with embedded scopes
-
-#### Three-Legged OAuth (3LO) - Egress  
-- **Purpose**: Authenticate FROM the Gateway to external services
-- **Providers**: Atlassian, Google, GitHub, others
-- **Use Case**: Access external APIs on behalf of users
-- **Token Type**: Provider-specific OAuth tokens
+For EnforceAI upstream auth requirements and contracts, see:
+- `enforceai/mcp_upstream_auth_requirements.md`
 
 ---
 
@@ -472,22 +373,23 @@ sequenceDiagram
     "X-User-Pool-Id": "{cognito_user_pool_id}",
     "X-Client-Id": "{cognito_client_id}",
     "X-Region": "{aws_region}",
-
-    // Egress Authentication (for MCP Server) - Example: Atlassian
-    "Authorization": "Bearer {atlassian_oauth_token}",
-    "X-Atlassian-Cloud-Id": "{atlassian_cloud_id}"
   }
 }
 ```
 
-### Headers forwarded from Gateway to MCP Server:
+### Headers forwarded from Gateway to Upstream MCP Server:
 ```json
 {
   "headers": {
-    // Only egress headers are forwarded (provider-specific)
-    "Authorization": "Bearer {external_provider_token}",
-    "X-Atlassian-Cloud-Id": "{atlassian_cloud_id}"  // For Atlassian
-    // OR other provider-specific headers as needed
+    // Canonical identity context (gateway-injected, never accepted from clients)
+    "X-MCP-Principal": "user:{user_id}",
+    "X-MCP-Auth-Type": "gateway-token|oidc|api-key",
+    "X-MCP-Scopes": "mcp-servers-restricted/read mcp-servers-restricted/execute",
+    "X-MCP-Claims": "{\"user_id\":\"...\",\"agent_id\":\"...\",\"provider\":\"...\"}",
+
+    // Upstream authentication (gateway-injected; examples)
+    "Authorization": "Bearer {upstream_access_token_or_jwt}",
+    "X-API-Key": "{upstream_api_key}"
   }
 }
 ```
@@ -505,42 +407,10 @@ sequenceDiagram
 - **Validation**: Applied at Gateway level after ingress auth
 - **Based on**: User/agent scopes and permissions
 
-### Layer 3: Egress Authentication (3LO)
-- **Purpose**: Allows MCP servers to act on user's behalf with external services
-- **Validation**: MCP server validates with its IdP (e.g., Atlassian)
-- **Headers**: Authorization, provider-specific headers
-
-## External Service Integration
-
-### Supported Providers
-
-- **Atlassian Cloud**: Jira, Confluence integration
-- **Google**: Workspace, Gmail, Drive access
-- **GitHub**: Repository and organization access
-- **Others**: See [`agents/oauth/oauth_providers.yaml`](../agents/oauth/oauth_providers.yaml) for complete list
-
-### Setting Up External Provider (Atlassian Example)
-
-1. **Create Developer App**
-   - Visit [developer.atlassian.com](https://developer.atlassian.com)
-   - Create OAuth 2.0 (3LO) app
-   - Set redirect URI: `http://localhost:8080/callback`
-
-2. **Configure Credentials**
-   ```bash
-   # In credentials-provider/oauth/.env
-   EGRESS_OAUTH_CLIENT_ID_1=your_atlassian_client_id
-   EGRESS_OAUTH_CLIENT_SECRET_1=your_atlassian_client_secret
-   EGRESS_OAUTH_REDIRECT_URI_1=http://localhost:8080/callback
-   EGRESS_PROVIDER_NAME_1=atlassian
-   EGRESS_MCP_SERVER_NAME_1=atlassian
-   ```
-
-3. **Run Authentication**
-   ```bash
-   cd credentials-provider
-   ./generate_creds.sh  # This will handle both ingress and egress auth
-   ```
+### Layer 3: Upstream Authentication (Gateway-Terminated)
+- **Purpose**: Allow upstream MCP servers to require API keys or OAuth/JWT without pushing credential handling to agents.
+- **Validation/Injection**: Gateway resolves stored upstream credentials and injects them at proxy-time.
+- **Client Requirement**: None. Agents never send upstream credentials.
 
 ---
 
@@ -595,54 +465,20 @@ For complete FGAC documentation, see [Fine-Grained Access Control](scopes.md).
 
 ---
 
-## Implementation Guide
+## Upstream Credential Management
 
-### Running OAuth Authentication
+Upstream authentication is gateway-terminated:
 
-#### Complete Setup (Ingress + Egress)
-```bash
-cd agents/oauth
-./oauth_creds.sh                    # Interactive mode
-./oauth_creds.sh --provider atlassian --force  # Specific provider
-```
+- Agents authenticate only to the gateway.
+- Upstream credentials (API keys, OAuth tokens, JWTs) are configured and stored in the gateway and injected at proxy-time.
 
-#### Ingress Only (Gateway Access)
-```bash
-./oauth_creds.sh --ingress-only
-# Or directly:
-python ingress_oauth.py --verbose
-```
-
-#### Egress Only (External Services)
-```bash
-./oauth_creds.sh --egress-only --provider atlassian
-# Or directly:
-python egress_oauth.py --provider atlassian
-```
-
-### Authentication Headers Reference
-
-Headers are automatically managed by the OAuth scripts, but here's what gets sent:
-
-#### For MCP Gateway (Ingress)
-| Header | Purpose | Example |
-|--------|---------|---------|
-| `X-Authorization` | JWT token for gateway | `Bearer eyJhbG...` |
-| `X-User-Pool-Id` | Cognito pool identifier | `us-east-1_XXXXXXXXX` |
-| `X-Client-Id` | Cognito client ID | `your_client_id` |
-| `X-Region` | AWS region | `us-east-1` |
-
-#### For External Services (Egress)
-| Header | Purpose | Example |
-|--------|---------|---------|
-| `Authorization` | External service token | `Bearer ya29.a0...` |
-| `X-Atlassian-Cloud-Id` | Atlassian instance | `1234-5678-9abc` |
-
----
+References:
+- `docs/enforceai-setup-guide.md`
+- `enforceai/mcp_upstream_auth_requirements.md`
 
 ## Configuration Reference
 
-📋 **For complete configuration documentation, see [Configuration Reference](configuration.md)**
+For complete configuration documentation, see [Configuration Reference](configuration.md).
 
 The Configuration Reference provides comprehensive documentation for all configuration files including:
 
@@ -657,27 +493,14 @@ The Configuration Reference provides comprehensive documentation for all configu
 | Configuration | Location | Purpose |
 |---------------|----------|---------|
 | **Main Environment** | `.env` | Core project settings and registry URLs |
-| **OAuth Credentials** | `credentials-provider/oauth/.env` | Ingress/egress OAuth provider credentials |
-| **AgentCore Config** | `credentials-provider/agentcore-auth/` | Amazon Bedrock AgentCore authentication |
-| **OAuth Providers** | `auth_server/oauth2_providers.yml` | Web-based OAuth provider definitions |
+| **OAuth Credentials** | `credentials-provider/oauth/.env` | Ingress token generation for gateway access (Keycloak/Cognito) |
+| **OAuth Providers** | `auth_server/oauth2_providers.yml` | Registry UI login providers (not upstream providers) |
 
 ### Key Configuration Files
 
-#### OAuth Provider Configuration
+#### Upstream OAuth Providers
 
-Providers are configured in [`credentials-provider/oauth/oauth_providers.yaml`](../credentials-provider/oauth/oauth_providers.yaml):
-
-```yaml
-providers:
-  atlassian:
-    display_name: "Atlassian Cloud"
-    auth_url: "https://auth.atlassian.com/authorize"
-    token_url: "https://auth.atlassian.com/oauth/token"
-    scopes:
-      - "read:jira-work"
-      - "write:jira-work"
-    requires_cloud_id: true
-```
+Upstream authentication is gateway-terminated. Upstream OAuth providers (and their client secrets) are configured in the gateway and are not part of MCP client configuration.
 
 ### Scope Configuration
 
@@ -700,13 +523,13 @@ mcp-servers-restricted/read:
 
 ### Generated Output Files
 
-The OAuth scripts generate:
+The credential tooling generates:
 
 - **VS Code Config**: `~/.vscode/mcp.json` - Primary configuration for VS Code integration
 - **Local VS Code Config**: `.oauth-tokens/vscode_mcp.json` - Local copy of VS Code config
 - **Roocode Config**: `~/.roocode/mcp_servers.json` - Configuration for Roocode
 - **Local Roocode Config**: `.oauth-tokens/mcp.json` - Local copy of Roocode config
-- **Token Storage**: `.oauth-tokens/ingress.json`, `.oauth-tokens/egress.json` - Raw token data
+- **Token Storage**: `.oauth-tokens/ingress.json` - Raw token data for gateway access
 
 #### Using Configuration Files in Your Code
 
@@ -739,30 +562,9 @@ with open(config_path) as f:
 
 ### Token Lifecycle
 
-- **Ingress tokens**: 1-hour expiry, auto-refresh via client credentials
-- **Egress tokens**: Provider-specific, refresh tokens where available
-- **Session management**: Handled automatically by OAuth scripts
-- **Automated refresh service**: Background service monitors and refreshes all tokens
-
-#### Token Refresh Service
-
-The MCP Gateway includes an [Automated Token Refresh Service](token-refresh-service.md) that provides:
-
-- **Continuous monitoring** of all OAuth tokens for expiration
-- **Proactive refresh** before tokens expire (configurable 1-hour buffer)
-- **Automatic MCP config generation** for coding assistants
-- **Service discovery** for both OAuth and no-auth services
-- **Background operation** with comprehensive logging
-
-Start the token refresh service:
-```bash
-./start_token_refresher.sh
-```
-
-The service automatically generates MCP configurations for:
-- **VS Code extensions** (`.oauth-tokens/vscode_mcp.json`)
-- **Claude Code/Roocode** (`.oauth-tokens/mcp.json`)
-- **Custom MCP clients** (standard configuration format)
+- **Gateway access tokens**: short-lived by default; use your IdP’s native session/refresh behavior (UI) or client credentials (headless clients).
+- **Coding assistants**: use the gateway’s token vending flow (short-lived but longer TTL, rotated by re-issuing) rather than storing/refreshing provider tokens locally.
+- **Upstream credentials**: managed and refreshed by the gateway on demand; agents do not store upstream tokens/keys/certs in client config.
 
 ---
 
@@ -776,9 +578,10 @@ The service automatically generates MCP configurations for:
 - Ensure client has proper Cognito configuration
 
 **External provider authentication fails**
-- Verify redirect URI matches provider configuration
-- Check client ID/secret are correct
-- Ensure required scopes are configured
+This indicates a gateway-to-upstream authentication issue (not an agent/client auth issue):
+- Verify the upstream auth requirement and credential status in the server details UI.
+- If the gateway reports missing upstream credentials, configure them in the gateway (agents must not supply them).
+- Expect `424 Failed Dependency` with `error_code=UPSTREAM_CREDENTIALS_REQUIRED` when credentials are required but not configured.
 
 **Permission denied for specific tools**
 - Check your Cognito group memberships
@@ -827,8 +630,6 @@ cd credentials-provider
 
 # Test specific authentication flows
 ./generate_creds.sh --ingress-only --verbose    # Test MCP Gateway auth
-./generate_creds.sh --egress-only --verbose     # Test external provider auth
-./generate_creds.sh --agentcore-only --verbose  # Test AgentCore auth
 ```
 
 ### Authentication Flow Testing
@@ -836,16 +637,6 @@ cd credentials-provider
 1. **Ingress Authentication** (MCP Gateway access):
    ```bash
    python credentials-provider/oauth/ingress_oauth.py --verbose
-   ```
-
-2. **Egress Authentication** (External services):
-   ```bash
-   python credentials-provider/oauth/egress_oauth.py --provider atlassian --verbose
-   ```
-
-3. **AgentCore Token Generation**:
-   ```bash
-   python credentials-provider/agentcore-auth/generate_access_token.py --debug
    ```
 
 ---
@@ -1013,11 +804,10 @@ Is this agent for...
 3. **Test token generation with groups** ✓
    ```bash
    # Generate a token for an agent
-   cd credentials-provider
-   python token_refresher.py --agent-id <agent-name>
+   uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <agent-name>
 
    # Check the token contains groups
-   cat .oauth-tokens/agent-<agent-name>.json | jq '.access_token' | \
+   cat .oauth-tokens/agent-<agent-name>-m2m-token.json | jq '.access_token' | \
      cut -d. -f2 | base64 -d | jq '.groups'
 
    # Should show: ["mcp-servers-unrestricted"] or ["mcp-servers-restricted"]
@@ -1056,7 +846,7 @@ Is this agent for...
 
 3. **Regenerate token** after group changes:
    ```bash
-   python credentials-provider/token_refresher.py --agent-id <agent-name> --force
+   uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <agent-name>
    ```
 
 #### Issue: Groups not appearing in JWT token
@@ -1116,6 +906,5 @@ Is this agent for...
 - [Complete Configuration Reference](configuration.md)
 - [Amazon Cognito Setup Guide](cognito.md)
 - [Complete Fine-Grained Access Control Documentation](scopes.md)
-- [OAuth Provider Configurations](../credentials-provider/oauth/oauth_providers.yaml)
 - [MCP Testing Tools](../tests/mcp_cmds.sh)
 - [Source: Auth Server Implementation](../auth_server/server.py)

@@ -663,8 +663,6 @@ cd ~/workspace/mcp-gateway-registry
 ./credentials-provider/generate_creds.sh
 ```
 
-**Note**: You may see errors related to "egress token" during credential generation. These errors can be safely ignored as they refer to external identity providers (IdPs) that are not yet configured. The local Keycloak credentials will be generated successfully.
-
 ### Test Intelligent Agent Demo
 
 ```bash
@@ -689,13 +687,12 @@ Before generating tokens, you need to configure your OAuth credentials. Follow t
 ```bash
 cd ~/workspace/mcp-gateway-registry
 
-# Configure OAuth credentials for external services (if needed)
+# Configure OAuth credentials for gateway ingress authentication
 cp credentials-provider/oauth/.env.example credentials-provider/oauth/.env
-# Edit credentials-provider/oauth/.env with your provider credentials
+# Edit `credentials-provider/oauth/.env` with your IdP configuration (Keycloak/Cognito)
 
-# Configure AgentCore credentials (if using Amazon Bedrock AgentCore)
-cp credentials-provider/agentcore-auth/.env.example credentials-provider/agentcore-auth/.env
-# Edit credentials-provider/agentcore-auth/.env with your AgentCore credentials
+# Upstream credentials are managed by the gateway (not in agent/client configs).
+# Configure upstream auth per server in the Registry UI (Server Details → Upstream Auth).
 ```
 
 ### Generate Authentication Tokens and MCP Configurations
@@ -706,33 +703,8 @@ cp credentials-provider/agentcore-auth/.env.example credentials-provider/agentco
 
 # This script will:
 # 1. Generate Keycloak agent tokens for ingress authentication
-# 2. Generate external provider tokens for egress authentication (if configured)
-# 3. Generate AgentCore tokens (if configured)
-# 4. Create MCP configuration files for AI coding assistants
-# 5. Add no-auth services to the configurations
-```
-
-### Start Automatic Token Refresh Service
-
-For production use, start the token refresh service to automatically maintain valid tokens. See the [Authentication Guide](auth.md) for detailed information about token lifecycle management.
-
-```bash
-# Start the background token refresh service
-./start_token_refresher.sh
-
-# Monitor the token refresh process
-tail -f token_refresher.log
-```
-
-**Example Token Refresh Output:**
-```
-2025-09-17 03:09:43,391,p455210,{token_refresher.py:370},INFO,Successfully refreshed OAuth token: agent-test-agent-m2m-token.json
-2025-09-17 03:09:43,391,p455210,{token_refresher.py:898},INFO,Token successfully updated at: /home/ubuntu/repos/mcp-gateway-registry/.oauth-tokens/agent-test-agent-m2m-token.json
-2025-09-17 03:09:43,631,p455210,{token_refresher.py:341},INFO,Refreshing OAuth token for provider: keycloak
-2025-09-17 03:09:43,778,p455210,{token_refresher.py:341},INFO,Refreshing OAuth token for provider: atlassian
-2025-09-17 03:09:43,778,p455210,{token_refresher.py:903},INFO,Refresh cycle complete: 8/8 tokens refreshed successfully
-2025-09-17 03:09:43,778,p455210,{token_refresher.py:907},INFO,Regenerating MCP configuration files after token refresh...
-2025-09-17 03:09:43,781,p455210,{token_refresher.py:490},INFO,MCP configuration files regenerated successfully
+# 2. Create MCP configuration files for AI coding assistants
+# 3. Add no-auth services to the configurations
 ```
 
 ### Generated Token Files and Configurations
@@ -746,7 +718,6 @@ ls -la .oauth-tokens/
 
 **Key Files Generated:**
 - **Agent Tokens**: `agent-*-m2m-token.json` and `agent-*-m2m.env` files for each Keycloak agent
-- **External Service Tokens**: `*-egress.json` files for external providers (Atlassian, etc.)
 - **AI Coding Assistant Configurations**:
   - `mcp.json` - Configuration for Claude Code/Roocode format
   - `vscode_mcp.json` - Configuration for VS Code format
@@ -760,20 +731,6 @@ ls -la .oauth-tokens/
       "type": "streamable-http",
       "url": "https://mcpgateway.ddns.net/mcpgw/mcp",
       "headers": {
-        "X-Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "X-Client-Id": "agent-ai-coding-assistant-m2m",
-        "X-Keycloak-Realm": "mcp-gateway",
-        "X-Keycloak-URL": "http://localhost:8080"
-      },
-      "disabled": false,
-      "alwaysAllow": []
-    },
-    "atlassian": {
-      "type": "streamable-http",
-      "url": "https://mcpgateway.ddns.net/atlassian/mcp",
-      "headers": {
-        "Authorization": "Bearer eyJraWQiOiJhdXRoLmF0bGFzc2lhbi5jb20tQUNDRVNTLTk0ZTczYTkw...",
-        "X-Atlassian-Cloud-Id": "923a213e-e930-4359-be44-f4b164d3f269",
         "X-Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
         "X-Client-Id": "agent-ai-coding-assistant-m2m",
         "X-Keycloak-Realm": "mcp-gateway",

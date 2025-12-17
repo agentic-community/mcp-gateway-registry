@@ -270,7 +270,7 @@ uv run cli/mcp_client.py --url http://localhost/currenttime/mcp call \
 
 3. **Token Expired**
    - Refresh your authentication token
-   - For ingress tokens: Run the token refresh script
+   - For ingress tokens: re-run `./credentials-provider/generate_creds.sh` to mint a fresh gateway token
    - For M2M: Re-authenticate with credentials
 
 4. **Connection Refused**
