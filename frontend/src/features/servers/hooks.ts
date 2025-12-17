@@ -2,7 +2,7 @@
  * React Query hooks for MCP Server management
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getServers,
   getServer,
@@ -333,4 +333,61 @@ export function filterServers(servers: Server[], filter: ServerFilter): Server[]
 
     return true;
   });
+}
+
+// ============================================================================
+// All Server Tools Hook
+// ============================================================================
+
+export interface ServerWithTools {
+  server: Server;
+  tools: ServerDetails['tools'];
+  isLoading: boolean;
+  error: Error | null;
+}
+
+export interface UseAllServerToolsResult {
+  serversWithTools: ServerWithTools[];
+  isLoading: boolean;
+  isError: boolean;
+  error: Error | null;
+  refetch: () => void;
+}
+
+/**
+ * Fetch all servers and their tools
+ * Aggregates tools from all registered MCP servers
+ */
+export function useAllServerTools(): UseAllServerToolsResult {
+  const { servers, isLoading: serversLoading, isError, error } = useServers();
+
+  // Fetch details for each server (including tools) using useQueries
+  const serverQueries = useQueries({
+    queries: servers.map((server) => ({
+      queryKey: serverQueryKeys.detail(server.path),
+      queryFn: () => getServer(server.path),
+      enabled: Boolean(server.path),
+      staleTime: 1000 * 60, // 1 minute
+    })),
+  });
+
+  const serversWithTools: ServerWithTools[] = servers.map((server, index) => ({
+    server,
+    tools: serverQueries[index].data?.tools || [],
+    isLoading: serverQueries[index].isLoading,
+    error: serverQueries[index].error,
+  }));
+
+  const anyQueryLoading = serverQueries.some((q) => q.isLoading);
+  const overallLoading = serversLoading || anyQueryLoading;
+
+  return {
+    serversWithTools,
+    isLoading: overallLoading,
+    isError,
+    error,
+    refetch: () => {
+      serverQueries.forEach((q) => q.refetch());
+    },
+  };
 }

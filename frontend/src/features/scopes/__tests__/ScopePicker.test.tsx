@@ -277,7 +277,7 @@ describe('ScopePicker', () => {
   describe('Catalog Unavailable', () => {
     it('shows unavailable message when API fails', async () => {
       server.use(
-        http.get('/api/scopes/catalog', () => {
+        http.get('/enforceai/scopes/catalog', () => {
           return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
         })
       );

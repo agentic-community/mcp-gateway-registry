@@ -152,19 +152,8 @@ export const mockApiKeys: ApiKeySummary[] = [
 ];
 
 export const mockScopeCatalog: ScopeCatalog = {
-  ui_scopes: {
-    'registry-admins': {
-      list_agents: { action: 'list_agents', resources: ['all'] },
-      get_agent: { action: 'get_agent', resources: ['all'] },
-      publish_agent: { action: 'publish_agent', resources: ['all'] },
-      modify_agent: { action: 'modify_agent', resources: ['all'] },
-      delete_agent: { action: 'delete_agent', resources: ['all'] },
-    },
-    'registry-users-lob1': {
-      list_agents: { action: 'list_agents', resources: ['/code-reviewer', '/test-automation'] },
-      get_agent: { action: 'get_agent', resources: ['/code-reviewer', '/test-automation'] },
-    },
-  },
+  version: '1.0',
+  generated_at: new Date().toISOString(),
   group_mappings: {
     'registry-admins': ['registry-admins', 'mcp-servers-unrestricted/read'],
     'registry-users-lob1': ['registry-users-lob1'],
@@ -630,7 +619,152 @@ export const handlers = [
   }),
 
   // Scopes endpoints
-  http.get('/api/scopes/catalog', () => {
+  http.get('/enforceai/scopes/catalog', () => {
     return HttpResponse.json(mockScopeCatalog);
+  }),
+
+  // Admin endpoints
+  http.get('/enforceai/admin/users', ({ request }) => {
+    const url = new URL(request.url);
+    const query = url.searchParams.get('query') || '';
+    const mockUsers = [
+      {
+        user_id: 'test|user123',
+        email: 'test@example.com',
+        username: 'testuser',
+        auth_method: 'password',
+        role: 'admin',
+        last_seen_at: '2024-01-15T00:00:00Z',
+        created_at: '2024-01-01T00:00:00Z',
+      },
+      {
+        user_id: 'local|admin',
+        email: 'admin@example.com',
+        username: 'admin',
+        auth_method: 'password',
+        role: 'admin',
+        last_seen_at: '2024-01-16T00:00:00Z',
+        created_at: '2024-01-01T00:00:00Z',
+      },
+    ];
+    if (query) {
+      return HttpResponse.json(
+        mockUsers.filter(
+          (u) =>
+            u.email?.toLowerCase().includes(query.toLowerCase()) ||
+            u.username?.toLowerCase().includes(query.toLowerCase())
+        )
+      );
+    }
+    return HttpResponse.json(mockUsers);
+  }),
+
+  http.get('/enforceai/admin/users/:userId', ({ params }) => {
+    const mockUser = {
+      user_id: params.userId,
+      email: 'test@example.com',
+      username: 'testuser',
+      auth_method: 'password',
+      role: 'admin',
+      last_seen_at: '2024-01-15T00:00:00Z',
+      created_at: '2024-01-01T00:00:00Z',
+    };
+    return HttpResponse.json(mockUser);
+  }),
+
+  http.get('/enforceai/admin/users/:userId/agents', () => {
+    return HttpResponse.json(mockEnforceAIAgents);
+  }),
+
+  http.post('/enforceai/admin/users/:userId/agents', async ({ params, request }) => {
+    const body = (await request.json()) as {
+      scopes: string[];
+      alias?: string;
+      allowed_tools?: string[] | null;
+      metadata?: Record<string, unknown> | null;
+    };
+    const newAgent: EnforceAIAgent = {
+      user_id: String(params.userId),
+      agent_id: 'admin-created-agent-' + Date.now(),
+      scopes: body.scopes,
+      allowed_tools: body.allowed_tools ?? null,
+      alias: body.alias ?? null,
+      metadata: body.metadata ?? null,
+      revoked_at: null,
+      tokens_valid_after: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(newAgent, { status: 201 });
+  }),
+
+  http.post('/enforceai/admin/users/:userId/agents/:agentId/revoke', ({ params }) => {
+    const agent = mockEnforceAIAgents.find((a) => a.agent_id === params.agentId);
+    if (!agent) {
+      return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+    }
+    const revokedAgent: EnforceAIAgent = {
+      ...agent,
+      user_id: String(params.userId),
+      revoked_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(revokedAgent);
+  }),
+
+  http.post('/enforceai/admin/users/:userId/agents/:agentId/tokens/revoke-all', ({ params }) => {
+    const agent = mockEnforceAIAgents.find((a) => a.agent_id === params.agentId);
+    if (!agent) {
+      return HttpResponse.json({ detail: 'Agent not found' }, { status: 404 });
+    }
+    const updatedAgent: EnforceAIAgent = {
+      ...agent,
+      user_id: String(params.userId),
+      tokens_valid_after: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(updatedAgent);
+  }),
+
+  http.get('/enforceai/admin/users/:userId/agents/:agentId/api-keys', ({ params }) => {
+    const keys = mockApiKeys.filter((k) => k.agent_id === params.agentId);
+    return HttpResponse.json(keys);
+  }),
+
+  http.post('/enforceai/admin/users/:userId/agents/:agentId/api-keys', async () => {
+    const keyId = 'eak_admin_' + Date.now();
+    return HttpResponse.json({
+      key_id: keyId,
+      secret: 'admin-test-secret-value-' + Date.now(),
+      api_key_value: `${keyId}.admintestsecret`,
+    });
+  }),
+
+  http.post('/enforceai/admin/users/:userId/api-keys/:keyId/revoke', ({ params }) => {
+    const key = mockApiKeys.find((k) => k.key_id === params.keyId);
+    if (!key) {
+      return HttpResponse.json({ detail: 'API key not found' }, { status: 404 });
+    }
+    const revokedKey = {
+      ...key,
+      revoked_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(revokedKey);
+  }),
+
+  http.post('/enforceai/admin/users/:userId/tokens/revoke', async ({ request, params }) => {
+    const body = (await request.json()) as {
+      agent_id: string;
+      jti: string;
+      reason?: string;
+    };
+    return HttpResponse.json({
+      jti: body.jti,
+      user_id: String(params.userId),
+      agent_id: body.agent_id,
+      revoked_at: new Date().toISOString(),
+      expires_at: null,
+      reason: body.reason ?? null,
+    });
   }),
 ];

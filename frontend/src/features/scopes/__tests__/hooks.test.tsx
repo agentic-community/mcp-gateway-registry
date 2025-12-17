@@ -75,7 +75,7 @@ describe('Scopes Hooks', () => {
 
     it('handles API error gracefully', async () => {
       server.use(
-        http.get('/api/scopes/catalog', () => {
+        http.get('/enforceai/scopes/catalog', () => {
           return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
         })
       );

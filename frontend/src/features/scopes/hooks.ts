@@ -21,7 +21,7 @@ export const scopesKeys = {
 // ============================================================================
 
 async function fetchScopeCatalog(): Promise<ScopeCatalog> {
-  const response = await apiClient.get<ScopeCatalog>('/api/scopes/catalog');
+  const response = await apiClient.get<ScopeCatalog>('/enforceai/scopes/catalog');
   return response.data;
 }
 

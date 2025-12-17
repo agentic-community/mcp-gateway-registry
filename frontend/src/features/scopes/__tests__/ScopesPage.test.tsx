@@ -31,10 +31,11 @@ describe('ScopesPage', () => {
 
     it('shows loading spinner initially', async () => {
       server.use(
-        http.get('/api/scopes/catalog', async () => {
+        http.get('/enforceai/scopes/catalog', async () => {
           await new Promise((resolve) => setTimeout(resolve, 100));
           return HttpResponse.json({
-            ui_scopes: {},
+            version: '1.0',
+            generated_at: new Date().toISOString(),
             group_mappings: {},
             scopes: {},
           });
@@ -154,7 +155,7 @@ describe('ScopesPage', () => {
   describe('Catalog Unavailable', () => {
     it('shows unavailable message when API fails', async () => {
       server.use(
-        http.get('/api/scopes/catalog', () => {
+        http.get('/enforceai/scopes/catalog', () => {
           return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
         })
       );
@@ -174,7 +175,7 @@ describe('ScopesPage', () => {
 
     it('shows about scopes info when catalog unavailable', async () => {
       server.use(
-        http.get('/api/scopes/catalog', () => {
+        http.get('/enforceai/scopes/catalog', () => {
           return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
         })
       );
