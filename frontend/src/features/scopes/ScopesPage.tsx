@@ -20,6 +20,13 @@ import {
   getToolsDisplay,
 } from './hooks';
 import { ScopeExplainerCard } from './ScopeExplainerCard';
+import { CreateScopeModal } from './CreateScopeModal';
+import { EditScopeModal } from './EditScopeModal';
+import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/components/ui/Toast';
+import { useDeleteScope } from './hooks';
+import { TypeToConfirmDialog } from '@/components/ui/TypeToConfirmDialog';
+import { normalizeError } from '@/lib/errors';
 import type { ScopeInfo, ScopeDefinition } from '@/api/types';
 
 // ============================================================================
@@ -31,6 +38,10 @@ interface ScopeCardProps {
   scopeDefinition?: ScopeDefinition;
   isExpanded: boolean;
   onToggle: () => void;
+  canEdit?: boolean;
+  onEdit?: () => void;
+  canDelete?: boolean;
+  onDelete?: () => void;
 }
 
 function ScopeCard({
@@ -38,6 +49,10 @@ function ScopeCard({
   scopeDefinition,
   isExpanded,
   onToggle,
+  canEdit,
+  onEdit,
+  canDelete,
+  onDelete,
 }: ScopeCardProps) {
   const isWildcard =
     scopeInfo.all_servers && scopeInfo.all_methods && scopeInfo.all_tools;
@@ -45,42 +60,59 @@ function ScopeCard({
   return (
     <Card className="overflow-hidden">
       {/* Header - Clickable */}
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-      >
-        <div className="flex items-center space-x-3 min-w-0">
-          <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
-            <ShieldCheckIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+      <div className="flex items-stretch">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex-1 text-left px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+        >
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
+              <ShieldCheckIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                {scopeInfo.name}
+              </h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                {getServersDisplay(scopeInfo)}
+              </p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
-              {scopeInfo.name}
-            </h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-              {getServersDisplay(scopeInfo)}
-            </p>
+          <div className="flex items-center space-x-3">
+            {isWildcard && (
+              <Badge variant="warning" size="sm">
+                Unrestricted
+              </Badge>
+            )}
+            {scopeInfo.agent_actions.length > 0 && (
+              <Badge variant="info" size="sm">
+                {scopeInfo.agent_actions.length} actions
+              </Badge>
+            )}
+            {isExpanded ? (
+              <ChevronDownIcon className="w-5 h-5 text-gray-400" />
+            ) : (
+              <ChevronRightIcon className="w-5 h-5 text-gray-400" />
+            )}
           </div>
-        </div>
-        <div className="flex items-center space-x-3">
-          {isWildcard && (
-            <Badge variant="warning" size="sm">
-              Unrestricted
-            </Badge>
-          )}
-          {scopeInfo.agent_actions.length > 0 && (
-            <Badge variant="info" size="sm">
-              {scopeInfo.agent_actions.length} actions
-            </Badge>
-          )}
-          {isExpanded ? (
-            <ChevronDownIcon className="w-5 h-5 text-gray-400" />
-          ) : (
-            <ChevronRightIcon className="w-5 h-5 text-gray-400" />
-          )}
-        </div>
-      </button>
+        </button>
+
+        {(canEdit || canDelete) && (
+          <div className="flex items-center pr-4 gap-2">
+            {canEdit && onEdit && (
+              <Button variant="secondary" size="sm" onClick={onEdit}>
+                Edit
+              </Button>
+            )}
+            {canDelete && onDelete && (
+              <Button variant="danger" size="sm" onClick={onDelete}>
+                Delete
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Expanded Content */}
       {isExpanded && (
@@ -185,9 +217,17 @@ function ScopeCard({
 export default function ScopesPage() {
   const { catalog, scopes, isLoading, isError, isAvailable, groupMappings } =
     useScopeCatalog();
+  const { user } = useAuth();
+  const toast = useToast();
+  const { deleteScope, isDeleting } = useDeleteScope();
+  const canManageScopes =
+    !!user?.is_admin || !!user?.groups?.includes('enforceai-admin');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedScopes, setExpandedScopes] = useState<Set<string>>(new Set());
   const [filterServer, setFilterServer] = useState('');
+  const [showCreateScope, setShowCreateScope] = useState(false);
+  const [editingScopeName, setEditingScopeName] = useState<string | null>(null);
+  const [deletingScopeName, setDeletingScopeName] = useState<string | null>(null);
 
   // Get unique servers for filter dropdown
   const allServers = useMemo(() => {
@@ -284,6 +324,17 @@ export default function ScopesPage() {
         title="Scopes and Policy"
         description="View the scope catalog and policy definitions"
         breadcrumbs={[{ name: 'Scopes' }]}
+        actions={
+          canManageScopes ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setShowCreateScope(true)}
+            >
+              Create Scope
+            </Button>
+          ) : null
+        }
       />
 
       {/* Stats Cards */}
@@ -401,6 +452,10 @@ export default function ScopesPage() {
               scopeDefinition={catalog?.scopes[scopeInfo.name]}
               isExpanded={expandedScopes.has(scopeInfo.name)}
               onToggle={() => toggleScope(scopeInfo.name)}
+              canEdit={canManageScopes}
+              onEdit={() => setEditingScopeName(scopeInfo.name)}
+              canDelete={canManageScopes}
+              onDelete={() => setDeletingScopeName(scopeInfo.name)}
             />
           ))}
         </div>
@@ -445,6 +500,67 @@ export default function ScopesPage() {
             </div>
           </Card>
         </div>
+      )}
+
+      <CreateScopeModal
+        open={showCreateScope}
+        onClose={() => setShowCreateScope(false)}
+        catalogEtag={catalog?.etag}
+        onSuccess={(scopeName) => {
+          setShowCreateScope(false);
+          setSearchQuery(scopeName);
+          setExpandedScopes(new Set([scopeName]));
+        }}
+      />
+
+      {editingScopeName && catalog?.scopes[editingScopeName] && (
+        <EditScopeModal
+          open={!!editingScopeName}
+          onClose={() => setEditingScopeName(null)}
+          scopeName={editingScopeName}
+          scope={catalog.scopes[editingScopeName]}
+          catalogEtag={catalog.etag}
+          onSuccess={(scopeName) => {
+            setEditingScopeName(null);
+            setSearchQuery(scopeName);
+            setExpandedScopes(new Set([scopeName]));
+          }}
+        />
+      )}
+
+      {deletingScopeName && (
+        <TypeToConfirmDialog
+          open={!!deletingScopeName}
+          onClose={() => setDeletingScopeName(null)}
+          title="Delete Scope"
+          message="This permanently removes the scope from the policy catalog. Deletion will be blocked if the scope is referenced by group mappings."
+          confirmValue={deletingScopeName}
+          confirmLabel="Delete Scope"
+          loading={isDeleting}
+          onConfirm={async () => {
+            if (!catalog?.etag) {
+              toast.error('Delete failed', 'Catalog ETag missing. Refresh and try again.');
+              return;
+            }
+
+            try {
+              await deleteScope(deletingScopeName, catalog.etag);
+              toast.success('Scope deleted', `Deleted ${deletingScopeName}`);
+
+              setDeletingScopeName(null);
+              if (searchQuery === deletingScopeName) {
+                setSearchQuery('');
+              }
+            } catch (err) {
+              const normalized = normalizeError(err);
+              if (normalized.status === 412) {
+                toast.error('Delete failed', 'Catalog changed; refresh and retry.');
+              } else {
+                toast.error('Delete failed', normalized.message);
+              }
+            }
+          }}
+        />
       )}
     </PageContent>
   );

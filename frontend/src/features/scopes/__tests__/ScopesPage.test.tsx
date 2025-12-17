@@ -23,7 +23,7 @@ describe('ScopesPage', () => {
 
   describe('Page Structure', () => {
     it('renders page title and description', async () => {
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       expect(screen.getByRole('heading', { level: 1, name: 'Scopes and Policy' })).toBeInTheDocument();
       expect(screen.getByText('View the scope catalog and policy definitions')).toBeInTheDocument();
@@ -42,7 +42,7 @@ describe('ScopesPage', () => {
         })
       );
 
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       const spinner = document.querySelector('[class*="animate-spin"]');
       expect(spinner || screen.queryByText('Scopes and Policy')).toBeTruthy();
@@ -51,7 +51,7 @@ describe('ScopesPage', () => {
 
   describe('Catalog Available', () => {
     it('shows scope list when catalog loads', async () => {
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         expect(screen.getByText('Total Scopes')).toBeInTheDocument();
@@ -63,7 +63,7 @@ describe('ScopesPage', () => {
     });
 
     it('shows stats cards', async () => {
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         expect(screen.getByText('Total Scopes')).toBeInTheDocument();
@@ -75,7 +75,7 @@ describe('ScopesPage', () => {
     });
 
     it('displays group mappings section', async () => {
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         // Group Mappings appears as both a stat card label and section header
@@ -89,7 +89,7 @@ describe('ScopesPage', () => {
 
   describe('Search and Filter', () => {
     it('shows search input', async () => {
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         expect(screen.getByPlaceholderText('Search scopes, servers, or tools...')).toBeInTheDocument();
@@ -97,7 +97,7 @@ describe('ScopesPage', () => {
     });
 
     it('filters scopes by search query', async () => {
-      const { user } = render(<ScopesPage />);
+      const { user } = render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         expect(screen.getByPlaceholderText('Search scopes, servers, or tools...')).toBeInTheDocument();
@@ -112,7 +112,7 @@ describe('ScopesPage', () => {
     });
 
     it('shows server filter dropdown', async () => {
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         expect(screen.getByRole('combobox')).toBeInTheDocument();
@@ -125,7 +125,7 @@ describe('ScopesPage', () => {
 
   describe('Expand/Collapse', () => {
     it('shows expand all and collapse all buttons', async () => {
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: 'Expand All' })).toBeInTheDocument();
@@ -134,7 +134,7 @@ describe('ScopesPage', () => {
     });
 
     it('expands scope on click', async () => {
-      const { user } = render(<ScopesPage />);
+      const { user } = render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         expect(screen.getByText('sqlite.manage')).toBeInTheDocument();
@@ -160,7 +160,7 @@ describe('ScopesPage', () => {
         })
       );
 
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       // Allow extra time for retry to complete
       await waitFor(
@@ -180,7 +180,7 @@ describe('ScopesPage', () => {
         })
       );
 
-      render(<ScopesPage />);
+      render(<ScopesPage />, { withAuth: true });
 
       // Allow extra time for retry to complete
       await waitFor(
@@ -194,7 +194,7 @@ describe('ScopesPage', () => {
 
   describe('Empty States', () => {
     it('shows empty state when no scopes match filter', async () => {
-      const { user } = render(<ScopesPage />);
+      const { user } = render(<ScopesPage />, { withAuth: true });
 
       await waitFor(() => {
         expect(screen.getByPlaceholderText('Search scopes, servers, or tools...')).toBeInTheDocument();
@@ -206,6 +206,52 @@ describe('ScopesPage', () => {
       await waitFor(() => {
         expect(screen.getByText('No matching scopes')).toBeInTheDocument();
       });
+    });
+  });
+
+  describe('Admin Actions', () => {
+    it('hides create scope button for non-admin users', async () => {
+      render(<ScopesPage />, { withAuth: true });
+
+      await waitFor(() => {
+        expect(screen.getByText('Total Scopes')).toBeInTheDocument();
+      });
+
+      expect(
+        screen.queryByRole('button', { name: 'Create Scope' })
+      ).not.toBeInTheDocument();
+
+      expect(
+        screen.queryByRole('button', { name: 'Edit' })
+      ).not.toBeInTheDocument();
+
+      expect(
+        screen.queryByRole('button', { name: 'Delete' })
+      ).not.toBeInTheDocument();
+    });
+
+    it('shows create scope button for enforceai-admin group', async () => {
+      server.use(
+        http.get('/api/auth/me', () => {
+          return HttpResponse.json({
+            user_id: 'test|admin123',
+            email: 'admin@example.com',
+            username: 'admin',
+            auth_method: 'password',
+            is_admin: false,
+            roles: [],
+            groups: ['enforceai-admin'],
+          });
+        })
+      );
+
+      render(<ScopesPage />, { withAuth: true });
+
+      await waitFor(() => {
+        expect(screen.getByText('Total Scopes')).toBeInTheDocument();
+      });
+
+      expect(screen.getByRole('button', { name: 'Create Scope' })).toBeInTheDocument();
     });
   });
 });

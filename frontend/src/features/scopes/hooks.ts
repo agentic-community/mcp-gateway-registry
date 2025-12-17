@@ -1,10 +1,14 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
+import { adminCreateScope, adminDeleteScope, adminReplaceScope } from '@/api/enforceai';
 import type {
   ScopeCatalog,
   ScopeDefinition,
   ScopeInfo,
   ServerPermission,
+  CreateScopeRequest,
+  ReplaceScopeRequest,
+  ScopeMutationResponse,
 } from '@/api/types';
 
 // ============================================================================
@@ -199,6 +203,99 @@ export function useScopeCatalog() {
     error,
     refetch,
     isAvailable: !!catalog,
+  };
+}
+
+// ============================================================================
+// Hooks: Mutations
+// ============================================================================
+
+interface UseCreateScopeResult {
+  createScope: (
+    data: CreateScopeRequest,
+    ifMatch?: string
+  ) => Promise<ScopeMutationResponse>;
+  isCreating: boolean;
+  error: Error | null;
+}
+
+export function useCreateScope(): UseCreateScopeResult {
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: ({ data, ifMatch }: { data: CreateScopeRequest; ifMatch?: string }) =>
+      adminCreateScope(data, ifMatch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: scopesKeys.catalog() });
+    },
+  });
+
+  return {
+    createScope: async (data: CreateScopeRequest, ifMatch?: string) =>
+      mutation.mutateAsync({ data, ifMatch }),
+    isCreating: mutation.isPending,
+    error: mutation.error as Error | null,
+  };
+}
+
+interface UseReplaceScopeResult {
+  replaceScope: (
+    scopeName: string,
+    data: ReplaceScopeRequest,
+    ifMatch: string
+  ) => Promise<ScopeMutationResponse>;
+  isUpdating: boolean;
+  error: Error | null;
+}
+
+export function useReplaceScope(): UseReplaceScopeResult {
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: ({
+      scopeName,
+      data,
+      ifMatch,
+    }: {
+      scopeName: string;
+      data: ReplaceScopeRequest;
+      ifMatch: string;
+    }) => adminReplaceScope(scopeName, data, ifMatch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: scopesKeys.catalog() });
+    },
+  });
+
+  return {
+    replaceScope: async (scopeName: string, data: ReplaceScopeRequest, ifMatch: string) =>
+      mutation.mutateAsync({ scopeName, data, ifMatch }),
+    isUpdating: mutation.isPending,
+    error: mutation.error as Error | null,
+  };
+}
+
+interface UseDeleteScopeResult {
+  deleteScope: (scopeName: string, ifMatch: string) => Promise<ScopeMutationResponse>;
+  isDeleting: boolean;
+  error: Error | null;
+}
+
+export function useDeleteScope(): UseDeleteScopeResult {
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: ({ scopeName, ifMatch }: { scopeName: string; ifMatch: string }) =>
+      adminDeleteScope(scopeName, ifMatch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: scopesKeys.catalog() });
+    },
+  });
+
+  return {
+    deleteScope: async (scopeName: string, ifMatch: string) =>
+      mutation.mutateAsync({ scopeName, ifMatch }),
+    isDeleting: mutation.isPending,
+    error: mutation.error as Error | null,
   };
 }
 
