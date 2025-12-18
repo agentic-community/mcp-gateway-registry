@@ -1,5 +1,6 @@
 import os
 import secrets
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -9,9 +10,9 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
-    
+
     model_config = ConfigDict(
-        env_file=".env",
+        env_file=None if "pytest" in sys.modules else ".env",
         case_sensitive=False,
         extra="ignore"  # Ignore extra environment variables
     )

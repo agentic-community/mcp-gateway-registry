@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from json import JSONDecodeError
 from pathlib import Path
 from urllib.parse import urlparse
@@ -210,7 +211,7 @@ class EnforceAISettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=None if "pytest" in sys.modules else ".env",
         case_sensitive=False,
         extra="ignore",
         enable_decoding=False,
