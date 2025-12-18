@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os as _os
 import sys
 from json import JSONDecodeError
 from pathlib import Path
@@ -24,6 +25,10 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from .secrets.upstream_kek import (
+    load_upstream_kek,
+)
+
 DEFAULT_OIDC_SCOPE_CLAIMS: list[str] = [
     "scp",
     "scope",
@@ -36,6 +41,8 @@ DEFAULT_OIDC_ROLE_CLAIMS: list[str] = [
 ]
 DEFAULT_JWKS_CACHE_TTL_SECONDS: int = 300
 DEFAULT_OIDC_CLOCK_SKEW_SECONDS: int = 60
+DEFAULT_UPSTREAM_OAUTH_STATE_TTL_SECONDS: int = 10 * 60
+DEFAULT_UPSTREAM_OAUTH_REFRESH_SKEW_SECONDS: int = 60
 
 AuthProviderMode = Literal[
     "oidc",
@@ -203,6 +210,107 @@ class OIDCIssuerConfig(BaseModel):
         return normalized
 
 
+class UpstreamOAuthClientSecretRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["env", "file"]
+    env_var: Optional[str] = None
+    path: Optional[Path] = None
+
+    @field_validator("env_var")
+    @classmethod
+    def _normalize_env_var(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def _validate_ref(self) -> "UpstreamOAuthClientSecretRef":
+        if self.kind == "env":
+            if self.env_var is None:
+                raise ValueError("env client_secret_ref requires env_var")
+            if self.path is not None:
+                raise ValueError("env client_secret_ref must not include path")
+            return self
+
+        if self.kind == "file":
+            if self.path is None:
+                raise ValueError("file client_secret_ref requires path")
+            if self.env_var is not None:
+                raise ValueError("file client_secret_ref must not include env_var")
+            return self
+
+        raise ValueError("Unsupported client_secret_ref.kind")
+
+
+class UpstreamOAuthProviderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    authorization_endpoint: str
+    token_endpoint: str
+    client_id: str
+    client_secret_ref: UpstreamOAuthClientSecretRef
+    default_scopes: list[str] = Field(default_factory=list)
+    extra_authorize_params: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("authorization_endpoint", "token_endpoint")
+    @classmethod
+    def _validate_endpoint_url(
+        cls,
+        value: str,
+    ) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("endpoint must be a non-empty string")
+        parsed = urlparse(stripped)
+        if parsed.scheme not in {"https", "http"}:
+            raise ValueError("endpoint must be an https:// or http:// URL")
+        if not parsed.netloc:
+            raise ValueError("endpoint must include a hostname")
+        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1"}:
+            raise ValueError("http:// endpoints are only allowed for localhost development")
+        return stripped
+
+    @field_validator("client_id")
+    @classmethod
+    def _normalize_client_id(
+        cls,
+        value: str,
+    ) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("client_id must be a non-empty string")
+        return stripped
+
+    @field_validator("default_scopes")
+    @classmethod
+    def _normalize_scopes(
+        cls,
+        value: list[str],
+    ) -> list[str]:
+        normalized = [item.strip() for item in value if item.strip()]
+        return sorted(set(normalized))
+
+    @field_validator("extra_authorize_params")
+    @classmethod
+    def _normalize_authorize_params(
+        cls,
+        value: dict[str, str],
+    ) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            key = raw_key.strip()
+            val = raw_value.strip()
+            if not key or not val:
+                continue
+            normalized[key] = val
+        return normalized
+
+
 class EnforceAISettings(BaseSettings):
     """Validated EnforceAI configuration sourced from environment variables.
 
@@ -231,6 +339,25 @@ class EnforceAISettings(BaseSettings):
     db_path: Path = Field(
         ...,
         validation_alias="ENFORCEAI_DB_PATH",
+    )
+
+    upstream_oauth_providers: dict[str, "UpstreamOAuthProviderConfig"] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices(
+            "ENFORCEAI_UPSTREAM_OAUTH_PROVIDERS",
+            "UPSTREAM_OAUTH_PROVIDERS",
+        ),
+        description="Upstream OAuth provider config for gateway-terminated upstream auth.",
+    )
+    upstream_oauth_state_ttl_seconds: int = Field(
+        default=DEFAULT_UPSTREAM_OAUTH_STATE_TTL_SECONDS,
+        ge=30,
+        validation_alias="ENFORCEAI_UPSTREAM_OAUTH_STATE_TTL_SECONDS",
+    )
+    upstream_oauth_refresh_skew_seconds: int = Field(
+        default=DEFAULT_UPSTREAM_OAUTH_REFRESH_SKEW_SECONDS,
+        ge=0,
+        validation_alias="ENFORCEAI_UPSTREAM_OAUTH_REFRESH_SKEW_SECONDS",
     )
 
     gateway_private_key_path: Optional[Path] = Field(
@@ -269,6 +396,15 @@ class EnforceAISettings(BaseSettings):
             "ENFORCEAI_API_KEY_PEPPER_PATH",
             "API_KEY_PEPPER_PATH",
         ),
+    )
+
+    upstream_kek_path: Optional[Path] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "ENFORCEAI_UPSTREAM_KEK_PATH",
+            "UPSTREAM_KEK_PATH",
+        ),
+        description="Path to a hex-encoded 32-byte KEK used for upstream secret encryption-at-rest.",
     )
 
     scopes_catalog_path: Optional[Path] = Field(
@@ -315,6 +451,21 @@ class EnforceAISettings(BaseSettings):
         if isinstance(value, str):
             return _parse_json_mapping(
                 "OIDC_ISSUERS",
+                value,
+            )
+        return value
+
+    @field_validator("upstream_oauth_providers", mode="before")
+    @classmethod
+    def _parse_upstream_oauth_providers(
+        cls,
+        value: Any,
+    ) -> Any:
+        if value is None:
+            return {}
+        if isinstance(value, str):
+            return _parse_json_mapping(
+                "UPSTREAM_OAUTH_PROVIDERS",
                 value,
             )
         return value
@@ -402,5 +553,58 @@ class EnforceAISettings(BaseSettings):
                 raise ValueError("Scopes catalog file is not readable") from exc
             if not catalog_bytes.strip():
                 raise ValueError("Scopes catalog file is empty")
+
+        if self.upstream_kek_path is not None:
+            if not self.upstream_kek_path.exists():
+                raise ValueError("Upstream KEK file does not exist")
+            if not self.upstream_kek_path.is_file():
+                raise ValueError("Upstream KEK path must be a file")
+            try:
+                load_upstream_kek(self.upstream_kek_path)
+            except ValueError as exc:
+                raise ValueError("Invalid upstream KEK file") from exc
+
+        for provider_id, provider in self.upstream_oauth_providers.items():
+            normalized = provider_id.strip()
+            if not normalized:
+                raise ValueError("UPSTREAM_OAUTH_PROVIDERS keys must be non-empty strings")
+            if normalized != provider_id:
+                raise ValueError("UPSTREAM_OAUTH_PROVIDERS keys must not include whitespace")
+
+            if provider.client_secret_ref.kind == "env":
+                env_name = provider.client_secret_ref.env_var
+                if env_name is None:
+                    raise ValueError(
+                        f"UPSTREAM_OAUTH_PROVIDERS.{provider_id}.client_secret_ref.env_var is required"
+                    )
+                secret_value = _os.environ.get(env_name)
+                if secret_value is None or not secret_value.strip():
+                    raise ValueError(
+                        f"Missing upstream OAuth client secret env var for provider '{provider_id}': {env_name}"
+                    )
+            elif provider.client_secret_ref.kind == "file":
+                secret_path = provider.client_secret_ref.path
+                if secret_path is None:
+                    raise ValueError(
+                        f"UPSTREAM_OAUTH_PROVIDERS.{provider_id}.client_secret_ref.path is required"
+                    )
+                if not secret_path.exists() or not secret_path.is_file():
+                    raise ValueError(
+                        f"Upstream OAuth client secret file missing for provider '{provider_id}': {secret_path}"
+                    )
+                try:
+                    secret_bytes = secret_path.read_bytes()
+                except OSError as exc:
+                    raise ValueError(
+                        f"Upstream OAuth client secret file is not readable for provider '{provider_id}'"
+                    ) from exc
+                if not secret_bytes.strip():
+                    raise ValueError(
+                        f"Upstream OAuth client secret file is empty for provider '{provider_id}'"
+                    )
+            else:
+                raise ValueError(
+                    f"Unsupported upstream OAuth client_secret_ref.kind for provider '{provider_id}'"
+                )
 
         return self

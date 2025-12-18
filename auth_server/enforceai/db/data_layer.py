@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from .connection import (
     sqlite_connection,
@@ -28,6 +29,15 @@ from ..stores.sqlite.session_store import (
 from ..stores.sqlite.user_store import (
     SqliteUserStore,
 )
+from ..stores.sqlite.egress_allowlist_store import (
+    SqliteEgressAllowlistStore,
+)
+from ..stores.sqlite.upstream_credential_store import (
+    SqliteUpstreamCredentialStore,
+)
+from ..stores.sqlite.upstream_oauth_state_store import (
+    SqliteUpstreamOAuthStateStore,
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +48,9 @@ class EnforceAIStores:
     audit_store: SqliteAuditStore
     user_store: SqliteUserStore
     session_store: SqliteSessionStore
+    egress_allowlist_store: SqliteEgressAllowlistStore
+    upstream_credential_store: Optional[SqliteUpstreamCredentialStore]
+    upstream_oauth_state_store: Optional[SqliteUpstreamOAuthStateStore]
 
 
 class EnforceAIDataLayer:
@@ -65,7 +78,23 @@ class EnforceAIDataLayer:
                 migrations_sql_dir=self._migrations_sql_dir,
             )
 
-    def build_stores(self) -> EnforceAIStores:
+    def build_stores(
+        self,
+        *,
+        upstream_kek: Optional[bytes] = None,
+    ) -> EnforceAIStores:
+        upstream_credential_store: Optional[SqliteUpstreamCredentialStore] = None
+        upstream_oauth_state_store: Optional[SqliteUpstreamOAuthStateStore] = None
+        if upstream_kek is not None:
+            upstream_credential_store = SqliteUpstreamCredentialStore(
+                db_path=self._db_path,
+                kek=upstream_kek,
+            )
+            upstream_oauth_state_store = SqliteUpstreamOAuthStateStore(
+                db_path=self._db_path,
+                kek=upstream_kek,
+            )
+
         return EnforceAIStores(
             agent_store=SqliteAgentStore(db_path=self._db_path),
             api_key_store=SqliteApiKeyStore(db_path=self._db_path),
@@ -73,4 +102,7 @@ class EnforceAIDataLayer:
             audit_store=SqliteAuditStore(db_path=self._db_path),
             user_store=SqliteUserStore(db_path=self._db_path),
             session_store=SqliteSessionStore(db_path=self._db_path),
+            egress_allowlist_store=SqliteEgressAllowlistStore(db_path=self._db_path),
+            upstream_credential_store=upstream_credential_store,
+            upstream_oauth_state_store=upstream_oauth_state_store,
         )

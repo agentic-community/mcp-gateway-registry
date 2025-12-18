@@ -72,8 +72,10 @@ class _EnforceAIRuntime:
     evaluate_tool_call: object
     resolve_callable_tools_for_server: object
     load_scope_catalog: object
+    get_enforceai_settings: object
     get_enforceai_stores: object
     get_identity_resolver: object
+    get_upstream_oauth_token_client: object
 
 
 @lru_cache(maxsize=1)
@@ -95,8 +97,10 @@ def _load_enforceai_runtime() -> _EnforceAIRuntime:
             evaluate_tool_call=evaluate_module.evaluate_tool_call,
             resolve_callable_tools_for_server=evaluate_module.resolve_callable_tools_for_server,
             load_scope_catalog=catalog_module.load_scope_catalog,
+            get_enforceai_settings=dependency_module.get_enforceai_settings,
             get_enforceai_stores=dependency_module.get_enforceai_stores,
             get_identity_resolver=dependency_module.get_identity_resolver,
+            get_upstream_oauth_token_client=dependency_module.get_upstream_oauth_token_client,
         )
 
     raise RuntimeError("EnforceAI runtime could not be imported")
@@ -106,8 +110,16 @@ def get_identity_resolver():
     return _load_enforceai_runtime().get_identity_resolver()
 
 
+def get_enforceai_settings():
+    return _load_enforceai_runtime().get_enforceai_settings()
+
+
 def get_enforceai_stores():
     return _load_enforceai_runtime().get_enforceai_stores()
+
+
+def get_upstream_oauth_token_client():
+    return _load_enforceai_runtime().get_upstream_oauth_token_client()
 
 
 def load_scope_catalog(
@@ -1385,6 +1397,93 @@ async def validate_request(request: Request):
                             headers={"Connection": "close"},
                         )
 
+            from auth_server.enforceai.models.upstream_auth import (
+                UpstreamAuthConfig,
+                UpstreamAuthInjection,
+            )
+            from auth_server.enforceai.upstream.headers import (
+                ENFORCEAI_ERROR_CODE_HEADER,
+                ENFORCEAI_UPSTREAM_API_KEY_HEADER,
+                ENFORCEAI_UPSTREAM_API_KEY_HEADER_NAME_HEADER,
+                ENFORCEAI_UPSTREAM_AUTHORIZATION_HEADER,
+                ENFORCEAI_UPSTREAM_MODE_HEADER,
+                MCP_AUTH_TYPE_HEADER,
+                MCP_CLAIMS_HEADER,
+                MCP_PRINCIPAL_HEADER,
+                MCP_PROVIDER_HEADER,
+                MCP_SCOPES_HEADER,
+            )
+            from auth_server.enforceai.upstream.resolver import (
+                UpstreamInjectionError,
+                resolve_upstream_injection,
+            )
+
+            server_path = request.headers.get("X-EnforceAI-Server-Path")
+            if not server_path and server_name:
+                server_path = f"/{server_name}"
+
+            upstream_type = (
+                request.headers.get("X-EnforceAI-Upstream-Auth-Type") or "none"
+            ).strip()
+            upstream_binding = (
+                request.headers.get("X-EnforceAI-Upstream-Credential-Binding") or "service"
+            ).strip()
+            upstream_provider = request.headers.get("X-EnforceAI-Upstream-Provider")
+            upstream_header_name = request.headers.get("X-EnforceAI-Upstream-Header-Name")
+            upstream_scheme = request.headers.get("X-EnforceAI-Upstream-Scheme")
+
+            injection = None
+            if upstream_type in {"api-key", "jwt", "oauth2", "oidc", "provider-oauth"}:
+                header_name = upstream_header_name
+                scheme = upstream_scheme
+                if not header_name:
+                    if upstream_type == "api-key":
+                        header_name = "X-API-Key"
+                        scheme = None
+                    else:
+                        header_name = "Authorization"
+                        scheme = scheme or "Bearer"
+                injection = UpstreamAuthInjection(
+                    header_name=header_name,
+                    scheme=scheme,
+                )
+
+            upstream_auth = UpstreamAuthConfig(
+                type=upstream_type,
+                provider=upstream_provider,
+                credential_binding=upstream_binding,
+                injection=injection,
+            )
+
+            try:
+                oauth_providers = None
+                oauth_token_client = None
+                oauth_refresh_skew_seconds = 0
+                if upstream_auth.type in {"oauth2", "oidc", "provider-oauth"}:
+                    settings = get_enforceai_settings()
+                    oauth_providers = settings.upstream_oauth_providers
+                    oauth_token_client = get_upstream_oauth_token_client()
+                    oauth_refresh_skew_seconds = settings.upstream_oauth_refresh_skew_seconds
+
+                injection_result = await resolve_upstream_injection(
+                    server_path=server_path,
+                    upstream_auth=upstream_auth,
+                    identity=identity,
+                    stores=get_enforceai_stores(),
+                    oauth_providers=oauth_providers,
+                    oauth_token_client=oauth_token_client,
+                    oauth_refresh_skew_seconds=oauth_refresh_skew_seconds,
+                )
+            except UpstreamInjectionError as exc:
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail=exc.public_message,
+                    headers={
+                        "Connection": "close",
+                        ENFORCEAI_ERROR_CODE_HEADER: exc.error_code,
+                    },
+                ) from exc
+
             response_data = {
                 "valid": True,
                 "username": identity.user_id,
@@ -1409,6 +1508,19 @@ async def validate_request(request: Request):
             response.headers["X-Tool-Name"] = tool_name or ""
             response.headers["X-Agent-Id"] = identity.agent_id
             response.headers["X-Allowed-Tools"] = allowed_tools_header_value
+            response.headers[MCP_PRINCIPAL_HEADER] = injection_result.mcp_principal
+            response.headers[MCP_AUTH_TYPE_HEADER] = injection_result.mcp_auth_type
+            response.headers[MCP_SCOPES_HEADER] = injection_result.mcp_scopes
+            response.headers[MCP_PROVIDER_HEADER] = injection_result.mcp_provider
+            response.headers[MCP_CLAIMS_HEADER] = injection_result.mcp_claims
+            response.headers[ENFORCEAI_UPSTREAM_MODE_HEADER] = injection_result.mode
+            response.headers[ENFORCEAI_UPSTREAM_AUTHORIZATION_HEADER] = (
+                injection_result.upstream_authorization
+            )
+            response.headers[ENFORCEAI_UPSTREAM_API_KEY_HEADER] = injection_result.upstream_api_key
+            response.headers[ENFORCEAI_UPSTREAM_API_KEY_HEADER_NAME_HEADER] = (
+                injection_result.upstream_api_key_header
+            )
             return response
         
         # Log request for debugging with anonymized IP
@@ -1622,11 +1734,11 @@ async def validate_request(request: Request):
         raise HTTPException(
             status_code=401,
             detail=str(e),
-            headers={"WWW-Authenticate": "Bearer", "Connection": "close"}
+            headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
         )
     except HTTPException as e:
         # Preserve explicit auth/enforcement HTTP status codes
-        if e.status_code in {401, 403, 503}:
+        if e.status_code in {401, 403, 409, 424, 503}:
             raise
         # For other HTTPExceptions, let them fall through to general handler
         logger.error(f"HTTP error during validation: {e}")

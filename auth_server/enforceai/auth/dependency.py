@@ -63,6 +63,12 @@ from ..providers.gateway_token import (
 from ..providers.oidc import (
     OidcProvider,
 )
+from ..secrets.upstream_kek import (
+    load_upstream_kek,
+)
+from ..upstream.oauth_client import (
+    OAuthTokenClient,
+)
 from gateway_session import (
     normalize_session_data,
 )
@@ -115,7 +121,17 @@ def get_enforceai_stores() -> EnforceAIStores:
 
     data_layer = EnforceAIDataLayer(db_path=settings.db_path)
     data_layer.initialize()
-    return data_layer.build_stores()
+    upstream_kek: Optional[bytes] = None
+    if settings.upstream_kek_path is not None:
+        try:
+            upstream_kek = load_upstream_kek(settings.upstream_kek_path)
+        except ValueError as exc:
+            raise DependencyUnavailableError(
+                "Invalid upstream KEK",
+                public_message="Enforcement misconfigured",
+            ) from exc
+
+    return data_layer.build_stores(upstream_kek=upstream_kek)
 
 
 @lru_cache(maxsize=1)
@@ -183,6 +199,11 @@ def get_identity_resolver() -> IdentityResolver:
         gateway_issuer=settings.gateway_issuer,
         oidc_issuers=set(settings.oidc_issuers.keys()),
     )
+
+
+@lru_cache(maxsize=1)
+def get_upstream_oauth_token_client() -> OAuthTokenClient:
+    return OAuthTokenClient()
 
 
 def get_scope_catalog(
@@ -366,3 +387,4 @@ def clear_enforceai_dependency_caches() -> None:
     get_enforceai_stores.cache_clear()
     get_jwks_cache.cache_clear()
     get_identity_resolver.cache_clear()
+    get_upstream_oauth_token_client.cache_clear()

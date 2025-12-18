@@ -26,6 +26,7 @@ from ..auth.dependency import (
     get_enforceai_management_context,
     get_enforceai_settings,
     get_enforceai_stores,
+    get_upstream_oauth_token_client,
 )
 from ..config import (
     EnforceAISettings,
@@ -53,6 +54,26 @@ from ..management.models import (
 from ..management.service import (
     ManagementService,
 )
+from ..models.egress_allowlist import (
+    EgressAllowlistEntryRecord,
+    EgressAllowlistEntryKind,
+)
+from ..models.upstream_credentials import (
+    UpstreamCredentialRecord,
+)
+from ..models.upstream_management import (
+    UpstreamCredentialCreateRequest,
+    UpstreamCredentialCreateResponse,
+    UpstreamCredentialRevokeRequest,
+    UpstreamServerSummary,
+)
+from ..models.upstream_oauth import (
+    UpstreamOAuthCallbackResponse,
+    UpstreamOAuthDisconnectRequest,
+    UpstreamOAuthDisconnectResponse,
+    UpstreamOAuthStartRequest,
+    UpstreamOAuthStartResponse,
+)
 from ..models.user import (
     UserRecord,
 )
@@ -61,6 +82,21 @@ from ..models.agent import (
 )
 from ..models.revocation import (
     TokenRevocationRecord,
+)
+from ..egress.allowlist import (
+    check_proxy_pass_url,
+    normalize_allowlist_entry_value,
+)
+from ..secrets.upstream_oauth_client import (
+    load_upstream_oauth_client_secret,
+)
+from ..upstream.oauth_client import (
+    OAuthTokenClient,
+    OAuthTokenClientError,
+)
+from ..upstream.oauth_flow import (
+    consume_oauth_state,
+    start_oauth_flow,
 )
 
 logger = logging.getLogger(__name__)
@@ -211,6 +247,38 @@ class AdminRevokeGatewayTokenRequest(BaseModel):
     agent_id: str
     jti: str
     reason: Optional[str] = None
+
+
+class EgressAllowlistCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: EgressAllowlistEntryKind
+    value: str
+    comment: Optional[str] = None
+    expires_at: Optional[datetime] = None
+
+
+class EgressAllowlistUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Optional[EgressAllowlistEntryKind] = None
+    value: Optional[str] = None
+    comment: Optional[str] = None
+    expires_at: Optional[datetime] = None
+
+
+class EgressAllowlistCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proxy_pass_url: str
+
+
+class EgressAllowlistCheckResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    allowed: bool
+    reason: str
+    matched_entry: Optional[EgressAllowlistEntryRecord] = None
 
 
 # ============================================================================
@@ -526,12 +594,742 @@ def _get_request_id(
     return stripped or None
 
 
+def _require_upstream_credential_store(
+    stores: EnforceAIStores,
+) -> object:
+    store = getattr(stores, "upstream_credential_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Upstream credential store unavailable (missing ENFORCEAI_UPSTREAM_KEK_PATH)",
+        )
+    return store
+
+
+def _require_upstream_oauth_state_store(
+    stores: EnforceAIStores,
+) -> object:
+    store = getattr(stores, "upstream_oauth_state_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Upstream OAuth state store unavailable (missing ENFORCEAI_UPSTREAM_KEK_PATH)",
+        )
+    return store
+
+
+def _normalize_server_path(
+    raw: str,
+) -> str:
+    stripped = raw.strip()
+    if not stripped:
+        raise HTTPException(status_code=400, detail="server_path is required")
+    if not stripped.startswith("/"):
+        stripped = "/" + stripped
+    return stripped
+
+
+def _owned_agent_ids_for_user(
+    *,
+    stores: EnforceAIStores,
+    user_id: str,
+) -> set[str]:
+    return {
+        record.agent_id for record in stores.agent_store.list_agents_by_user_id(user_id=user_id)
+    }
+
+
+def _is_upstream_credential_visible(
+    *,
+    record: UpstreamCredentialRecord,
+    context: EnforceAIManagementContext,
+    owned_agent_ids: set[str],
+    include_service: bool,
+) -> bool:
+    if record.credential_binding == "service":
+        return include_service and context.is_admin
+    if record.credential_binding == "user":
+        return record.user_id == context.user_id
+    if record.credential_binding == "agent":
+        return record.agent_id in owned_agent_ids
+    if record.credential_binding == "user+agent":
+        return record.user_id == context.user_id and record.agent_id in owned_agent_ids
+    return False
+
+
+def _credential_key(
+    record: UpstreamCredentialRecord,
+) -> tuple[object, ...]:
+    return (
+        record.server_path,
+        record.credential_type,
+        record.credential_binding,
+        record.user_id,
+        record.agent_id,
+        record.provider,
+    )
+
+
 @router.get("/admin/ping")
 async def admin_ping(
     context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
 ) -> dict[str, bool]:
     _require_admin(context)
     return {"ok": True}
+
+
+@router.get(
+    "/admin/egress-allowlist",
+    response_model=list[EgressAllowlistEntryRecord],
+)
+async def admin_list_egress_allowlist(
+    include_expired: bool = False,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> list[EgressAllowlistEntryRecord]:
+    _require_admin(context)
+    return stores.egress_allowlist_store.list_entries(include_expired=include_expired)
+
+
+@router.post(
+    "/admin/egress-allowlist",
+    response_model=EgressAllowlistEntryRecord,
+)
+async def admin_create_egress_allowlist_entry(
+    request: Request,
+    payload: EgressAllowlistCreateRequest,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> EgressAllowlistEntryRecord:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+
+    try:
+        normalized_value = normalize_allowlist_entry_value(
+            kind=payload.kind,
+            value=payload.value,
+        )
+        record = stores.egress_allowlist_store.create_entry(
+            kind=payload.kind,
+            value=normalized_value,
+            comment=payload.comment,
+            expires_at=payload.expires_at,
+        )
+    except ValueError as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/egress-allowlist/create",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"error": str(exc)},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="admin/egress-allowlist/create",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={"entry_id": record.entry_id, "kind": record.kind, "value": record.value},
+    )
+    return record
+
+
+@router.put(
+    "/admin/egress-allowlist/{entry_id}",
+    response_model=EgressAllowlistEntryRecord,
+)
+async def admin_update_egress_allowlist_entry(
+    entry_id: int,
+    request: Request,
+    payload: EgressAllowlistUpdateRequest,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> EgressAllowlistEntryRecord:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+
+    existing = stores.egress_allowlist_store.get_entry_by_id(entry_id=entry_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Allowlist entry not found")
+
+    if payload.kind is not None and payload.value is None:
+        raise HTTPException(
+            status_code=400,
+            detail="value is required when updating kind",
+        )
+
+    kind = payload.kind
+    effective_kind = payload.kind or existing.kind
+    value = payload.value
+    if value is not None:
+        value = normalize_allowlist_entry_value(
+            kind=effective_kind,
+            value=value,
+        )
+
+    updated = stores.egress_allowlist_store.update_entry(
+        entry_id=entry_id,
+        kind=kind,
+        value=value,
+        comment=payload.comment,
+        expires_at=payload.expires_at,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Allowlist entry not found")
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="admin/egress-allowlist/update",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={"entry_id": entry_id},
+    )
+    return updated
+
+
+@router.delete(
+    "/admin/egress-allowlist/{entry_id}",
+    response_model=dict[str, bool],
+)
+async def admin_delete_egress_allowlist_entry(
+    entry_id: int,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> dict[str, bool]:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+
+    deleted = stores.egress_allowlist_store.delete_entry(entry_id=entry_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Allowlist entry not found")
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="admin/egress-allowlist/delete",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={"entry_id": entry_id},
+    )
+
+    return {"ok": True}
+
+
+@router.post(
+    "/admin/egress-allowlist/check",
+    response_model=EgressAllowlistCheckResponse,
+)
+async def admin_check_proxy_pass_url_allowlist(
+    payload: EgressAllowlistCheckRequest,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> EgressAllowlistCheckResponse:
+    _require_admin(context)
+    entries = stores.egress_allowlist_store.list_entries(include_expired=False)
+    decision = check_proxy_pass_url(
+        proxy_pass_url=payload.proxy_pass_url,
+        entries=entries,
+    )
+    return EgressAllowlistCheckResponse(
+        allowed=decision.allowed,
+        reason=decision.reason,
+        matched_entry=decision.matched_entry,
+    )
+
+
+@router.get(
+    "/upstream/servers",
+    response_model=list[UpstreamServerSummary],
+)
+async def list_upstream_servers(
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+    include_service: bool = False,
+) -> list[UpstreamServerSummary]:
+    upstream_store = _require_upstream_credential_store(stores)
+
+    owned_agent_ids = _owned_agent_ids_for_user(
+        stores=stores,
+        user_id=context.user_id,
+    )
+
+    records = upstream_store.list_credentials(include_revoked=False)
+    visible = [
+        record
+        for record in records
+        if _is_upstream_credential_visible(
+            record=record,
+            context=context,
+            owned_agent_ids=owned_agent_ids,
+            include_service=include_service,
+        )
+    ]
+
+    by_server: dict[str, int] = {}
+    for record in visible:
+        by_server[record.server_path] = by_server.get(record.server_path, 0) + 1
+
+    return [
+        UpstreamServerSummary(
+            server_path=server_path,
+            active_credential_count=count,
+        )
+        for server_path, count in sorted(by_server.items(), key=lambda item: item[0])
+    ]
+
+
+@router.get(
+    "/upstream/servers/{server_path:path}/credentials",
+    response_model=list[UpstreamCredentialRecord],
+)
+async def list_upstream_credentials_for_server(
+    server_path: str,
+    include_revoked: bool = False,
+    include_service: bool = False,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> list[UpstreamCredentialRecord]:
+    upstream_store = _require_upstream_credential_store(stores)
+    normalized_server_path = _normalize_server_path(server_path)
+
+    owned_agent_ids = _owned_agent_ids_for_user(
+        stores=stores,
+        user_id=context.user_id,
+    )
+
+    records = upstream_store.list_credentials(
+        server_path=normalized_server_path,
+        include_revoked=include_revoked,
+    )
+    return [
+        record
+        for record in records
+        if _is_upstream_credential_visible(
+            record=record,
+            context=context,
+            owned_agent_ids=owned_agent_ids,
+            include_service=include_service,
+        )
+    ]
+
+
+@router.post(
+    "/upstream/servers/{server_path:path}/credentials",
+    response_model=UpstreamCredentialCreateResponse,
+)
+async def create_upstream_credential(
+    server_path: str,
+    payload: UpstreamCredentialCreateRequest,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamCredentialCreateResponse:
+    upstream_store = _require_upstream_credential_store(stores)
+    request_id = _get_request_id(request)
+
+    normalized_server_path = _normalize_server_path(server_path)
+
+    if payload.credential_binding == "service" and not context.is_admin:
+        raise HTTPException(status_code=403, detail="Admin required for service-bound credentials")
+
+    provider = payload.provider.strip() if payload.provider is not None else None
+    provider = provider or None
+
+    user_id: Optional[str] = None
+    agent_id: Optional[str] = None
+
+    if payload.credential_binding == "service":
+        user_id = None
+        agent_id = None
+    elif payload.credential_binding == "user":
+        user_id = context.user_id
+        agent_id = None
+    elif payload.credential_binding == "agent":
+        agent_id = payload.agent_id
+        if agent_id is None:
+            raise HTTPException(status_code=400, detail="agent_id is required")
+        agent = stores.agent_store.get_agent_by_id(agent_id=agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if not context.is_admin and agent.user_id != context.user_id:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        user_id = None
+    elif payload.credential_binding == "user+agent":
+        agent_id = payload.agent_id
+        if agent_id is None:
+            raise HTTPException(status_code=400, detail="agent_id is required")
+        agent = stores.agent_store.get_agent_by_id(agent_id=agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if agent.user_id != context.user_id:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        user_id = context.user_id
+    else:
+        raise HTTPException(status_code=400, detail="Invalid credential_binding")
+
+    try:
+        existing = upstream_store.list_credentials(
+            server_path=normalized_server_path,
+            include_revoked=False,
+        )
+        desired_key = (
+            normalized_server_path,
+            payload.credential_type,
+            payload.credential_binding,
+            user_id,
+            agent_id,
+            provider,
+        )
+        for record in existing:
+            if _credential_key(record) == desired_key:
+                upstream_store.revoke_credential(credential_id=record.credential_id)
+
+        created = upstream_store.create_credential(
+            server_path=normalized_server_path,
+            credential_type=payload.credential_type,
+            credential_binding=payload.credential_binding,
+            user_id=user_id,
+            agent_id=agent_id,
+            provider=provider,
+            scopes=payload.scopes,
+            token_type=payload.token_type,
+            expires_at=payload.expires_at,
+            secret_payload=payload.secret_payload,
+        )
+    except ValueError as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="upstream/credentials/create",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"error": str(exc)},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="upstream/credentials/create",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "credential_id": created.credential_id,
+            "server_path": created.server_path,
+            "credential_type": created.credential_type,
+            "credential_binding": created.credential_binding,
+        },
+    )
+    return UpstreamCredentialCreateResponse(
+        credential=created,
+        secret_payload=payload.secret_payload,
+    )
+
+
+@router.post(
+    "/upstream/credentials/{credential_id}/revoke",
+    response_model=UpstreamCredentialRecord,
+)
+async def revoke_upstream_credential(
+    credential_id: str,
+    payload: UpstreamCredentialRevokeRequest,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamCredentialRecord:
+    upstream_store = _require_upstream_credential_store(stores)
+    request_id = _get_request_id(request)
+
+    record = upstream_store.get_credential_by_id(credential_id=credential_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    owned_agent_ids = _owned_agent_ids_for_user(
+        stores=stores,
+        user_id=context.user_id,
+    )
+    if not _is_upstream_credential_visible(
+        record=record,
+        context=context,
+        owned_agent_ids=owned_agent_ids,
+        include_service=True,
+    ):
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    revoked = upstream_store.revoke_credential(
+        credential_id=credential_id,
+    )
+    if revoked is None:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="upstream/credentials/revoke",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "credential_id": credential_id,
+            "reason": payload.reason,
+        },
+    )
+
+    return revoked
+
+
+@router.post(
+    "/upstream/oauth/start",
+    response_model=UpstreamOAuthStartResponse,
+)
+async def start_upstream_oauth_flow(
+    payload: UpstreamOAuthStartRequest,
+    request: Request,
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamOAuthStartResponse:
+    request_id = _get_request_id(request)
+    state_store = _require_upstream_oauth_state_store(stores)
+
+    provider = settings.upstream_oauth_providers.get(payload.provider)
+    if provider is None:
+        raise HTTPException(status_code=400, detail="Unknown upstream OAuth provider")
+
+    agent_id: Optional[str] = None
+    if payload.credential_binding == "user+agent":
+        agent_id = payload.agent_id
+        if agent_id is None:
+            raise HTTPException(status_code=400, detail="agent_id is required")
+        record = stores.agent_store.get_agent_by_id(agent_id=agent_id)
+        if record is None or record.user_id != context.user_id:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    redirect_uri = str(request.url_for("upstream_oauth_callback"))
+
+    try:
+        started = start_oauth_flow(
+            state_store=state_store,
+            provider=provider,
+            provider_id=payload.provider,
+            server_path=payload.server_path,
+            credential_type=payload.credential_type,
+            credential_binding=payload.credential_binding,
+            user_id=context.user_id,
+            agent_id=agent_id,
+            redirect_uri=redirect_uri,
+            scopes=payload.scopes,
+            ttl_seconds=settings.upstream_oauth_state_ttl_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="upstream/oauth/start",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "server_path": payload.server_path,
+            "credential_type": payload.credential_type,
+            "credential_binding": payload.credential_binding,
+            "provider": payload.provider,
+        },
+    )
+
+    return UpstreamOAuthStartResponse(
+        authorization_url=started.authorization_url,
+        state_id=started.state_id,
+        expires_at=started.expires_at,
+    )
+
+
+@router.get(
+    "/upstream/oauth/callback",
+    response_model=UpstreamOAuthCallbackResponse,
+    name="upstream_oauth_callback",
+)
+async def upstream_oauth_callback(
+    request: Request,
+    state: str,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+    token_client: OAuthTokenClient = Depends(get_upstream_oauth_token_client),
+) -> UpstreamOAuthCallbackResponse:
+    request_id = _get_request_id(request)
+    if error is not None and error.strip():
+        raise HTTPException(status_code=400, detail="Upstream OAuth authorization failed")
+    if code is None or not code.strip():
+        raise HTTPException(status_code=400, detail="Missing authorization code")
+
+    state_store = _require_upstream_oauth_state_store(stores)
+    upstream_store = _require_upstream_credential_store(stores)
+
+    try:
+        consumed = consume_oauth_state(
+            state_store=state_store,
+            state_id=state,
+            actor_user_id=context.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    provider = settings.upstream_oauth_providers.get(consumed.provider)
+    if provider is None:
+        raise HTTPException(status_code=400, detail="Unknown upstream OAuth provider")
+
+    client_secret = load_upstream_oauth_client_secret(provider=provider)
+
+    try:
+        tokens = await token_client.exchange_authorization_code(
+            token_endpoint=provider.token_endpoint,
+            client_id=provider.client_id,
+            client_secret=client_secret,
+            code=code.strip(),
+            redirect_uri=consumed.redirect_uri,
+            code_verifier=consumed.code_verifier,
+        )
+    except OAuthTokenClientError as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="upstream/oauth/callback",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"error": exc.message},
+        )
+        raise HTTPException(status_code=502, detail="Upstream OAuth token exchange failed") from exc
+
+    existing = upstream_store.list_credentials(
+        server_path=consumed.server_path,
+        user_id=context.user_id,
+        agent_id=consumed.agent_id,
+        include_revoked=False,
+    )
+    for record in existing:
+        if (
+            record.credential_type == consumed.credential_type
+            and record.credential_binding == consumed.credential_binding
+            and record.provider == consumed.provider
+        ):
+            upstream_store.revoke_credential(credential_id=record.credential_id)
+
+    secret_payload: dict[str, object] = {
+        "access_token": tokens.access_token,
+    }
+    if tokens.refresh_token is not None:
+        secret_payload["refresh_token"] = tokens.refresh_token
+    if tokens.id_token is not None:
+        secret_payload["id_token"] = tokens.id_token
+
+    created = upstream_store.create_credential(
+        server_path=consumed.server_path,
+        credential_type=consumed.credential_type,
+        credential_binding=consumed.credential_binding,
+        user_id=context.user_id,
+        agent_id=consumed.agent_id,
+        provider=consumed.provider,
+        scopes=tokens.scopes,
+        token_type=tokens.token_type,
+        expires_at=tokens.expires_at,
+        secret_payload=secret_payload,
+    )
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="upstream/oauth/callback",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "credential_id": created.credential_id,
+            "server_path": created.server_path,
+            "credential_type": created.credential_type,
+            "credential_binding": created.credential_binding,
+            "provider": created.provider,
+        },
+    )
+
+    return UpstreamOAuthCallbackResponse(
+        credential_id=created.credential_id,
+        server_path=created.server_path,
+        provider=created.provider or "",
+    )
+
+
+@router.post(
+    "/upstream/oauth/disconnect",
+    response_model=UpstreamOAuthDisconnectResponse,
+)
+async def disconnect_upstream_oauth(
+    payload: UpstreamOAuthDisconnectRequest,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamOAuthDisconnectResponse:
+    request_id = _get_request_id(request)
+    upstream_store = _require_upstream_credential_store(stores)
+
+    agent_id: Optional[str] = None
+    if payload.credential_binding == "user+agent":
+        agent_id = payload.agent_id
+        if agent_id is None:
+            raise HTTPException(status_code=400, detail="agent_id is required")
+        record = stores.agent_store.get_agent_by_id(agent_id=agent_id)
+        if record is None or record.user_id != context.user_id:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    records = upstream_store.list_credentials(
+        server_path=payload.server_path,
+        user_id=context.user_id,
+        agent_id=agent_id,
+        include_revoked=False,
+    )
+    revoked = 0
+    for record in records:
+        if (
+            record.credential_type == payload.credential_type
+            and record.credential_binding == payload.credential_binding
+            and record.provider == payload.provider
+        ):
+            upstream_store.revoke_credential(credential_id=record.credential_id)
+            revoked += 1
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="upstream/oauth/disconnect",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "server_path": payload.server_path,
+            "credential_type": payload.credential_type,
+            "credential_binding": payload.credential_binding,
+            "provider": payload.provider,
+            "revoked_count": revoked,
+        },
+    )
+
+    return UpstreamOAuthDisconnectResponse(revoked_count=revoked)
 
 
 @router.get("/scopes/catalog", response_model=ScopeCatalogResponse)
