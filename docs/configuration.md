@@ -370,7 +370,13 @@ When using Keycloak as the authentication provider, the following configuration 
 - **Keycloak**: Enterprise-grade open-source identity and access management
 - **Amazon Cognito**: Amazon managed authentication service
 - **GitHub**: Repository and development services (planned)
-- **Google**: Google Workspace and consumer services (planned)
+- **Google**: Google Workspace and consumer accounts
+
+To enable Google login:
+
+- Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
+- Set `GOOGLE_ENABLED=true`
+- Configure the Google OAuth client redirect URI as `${AUTH_SERVER_EXTERNAL_URL}/oauth2/callback/google`
 
 ---
 

@@ -1914,6 +1914,64 @@ def main():
 if __name__ == "__main__":
     main()
 
+# Environment parsing helpers for oauth2_providers.yml.
+_ENV_TRUE_VALUES: set[str] = {"1", "true", "yes", "on"}
+
+
+def _parse_env_bool(
+    value: str,
+) -> bool | None:
+    candidate = value.strip().lower()
+    if not candidate:
+        return None
+
+    if candidate in _ENV_TRUE_VALUES:
+        return True
+
+    if candidate in {"0", "false", "no", "off"}:
+        return False
+
+    return None
+
+
+def _apply_provider_enabled_env(
+    config: dict,
+) -> dict:
+    """Enable OAuth2 providers via `<PROVIDER>_ENABLED=true` env vars.
+
+    Notes:
+    - This is intentionally enable-only (truthy values). Many deploy configs set
+      `*_ENABLED=false` by default, and we do not want those defaults to disable
+      providers that are enabled in YAML.
+    """
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
+        return config
+
+    for provider_name, provider_config in providers.items():
+        if not isinstance(provider_config, dict):
+            continue
+
+        env_key = f"{provider_name.upper()}_ENABLED"
+        env_value = os.environ.get(env_key)
+        if env_value is None:
+            continue
+
+        parsed = _parse_env_bool(env_value)
+        if parsed is None:
+            logger.warning(
+                f"Ignoring {env_key}={env_value!r}: expected one of "
+                f"{sorted(_ENV_TRUE_VALUES)} (enable-only)."
+            )
+            continue
+
+        if parsed is True:
+            provider_config["enabled"] = True
+            logger.info(f"Enabled OAuth2 provider '{provider_name}' via {env_key}=true")
+
+    return config
+
+
 # Load OAuth2 providers configuration
 def load_oauth2_config():
     """Load the OAuth2 providers configuration from oauth2_providers.yml"""
@@ -1924,6 +1982,7 @@ def load_oauth2_config():
             
         # Substitute environment variables in configuration
         processed_config = substitute_env_vars(config)
+        processed_config = _apply_provider_enabled_env(processed_config)
         return processed_config
     except Exception as e:
         logger.error(f"Failed to load OAuth2 configuration: {e}")
@@ -2251,6 +2310,8 @@ async def oauth2_callback(
             
         token_data = await exchange_code_for_token(provider, code, provider_config, auth_server_url)
         logger.info(f"Token data keys: {list(token_data.keys())}")
+
+        user_info: dict[str, Any] | None = None
         
         # For Cognito and Keycloak, try to extract user info from JWT tokens
         if provider in ["cognito", "keycloak"]:
@@ -2353,6 +2414,16 @@ async def oauth2_callback(
         
         issuer = mapped_user.get("iss") or mapped_user.get("issuer")
         subject = mapped_user.get("sub") or mapped_user.get("subject")
+
+        # Google userInfo (v2) returns `id` instead of OIDC `sub`; set sensible defaults
+        # so sessions can still be persisted/invalidation can work even without an ID token.
+        if provider == "google":
+            issuer = issuer or "https://accounts.google.com"
+            if subject is None and isinstance(user_info, dict):
+                raw_subject = user_info.get("sub") or user_info.get("id")
+                if isinstance(raw_subject, str) and raw_subject.strip():
+                    subject = raw_subject.strip()
+
         if issuer is None or subject is None:
             try:
                 if "id_token" in token_data:
@@ -2384,6 +2455,15 @@ async def oauth2_callback(
             user_id_value = f"{issuer.strip()}|{subject.strip()}"
 
         db_path_raw = _os.environ.get("ENFORCEAI_DB_PATH")
+        if user_id_value is None:
+            email_value = mapped_user.get("email")
+            if isinstance(email_value, str) and email_value.strip():
+                user_id_value = f"{provider}|{email_value.strip().lower()}"
+            else:
+                username_value = mapped_user.get("username")
+                if isinstance(username_value, str) and username_value.strip():
+                    user_id_value = f"{provider}|{username_value.strip()}"
+
         if user_id_value and db_path_raw:
             try:
                 db_path = Path(db_path_raw.strip())
