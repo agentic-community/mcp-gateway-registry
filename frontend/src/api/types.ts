@@ -37,6 +37,34 @@ export interface LoginRequest {
 // Registry: Server Types
 // ============================================================================
 
+/** Upstream authentication mode */
+export type UpstreamAuthMode = 'gateway-managed' | 'none';
+
+/** Upstream authentication type */
+export type UpstreamAuthType =
+  | 'none'
+  | 'api-key'
+  | 'oauth2'
+  | 'oidc'
+  | 'provider-oauth'
+  | 'jwt'
+  | 'mtls'
+  | 'header-trust';
+
+/** Credential binding strategy */
+export type CredentialBinding = 'service' | 'user' | 'agent' | 'user+agent';
+
+/** Upstream credential status for the current principal */
+export type UpstreamCredentialStatus = 'configured' | 'missing' | 'expired' | 'revoked';
+
+/** Upstream authentication configuration */
+export interface UpstreamAuthConfig {
+  mode: UpstreamAuthMode;
+  type: UpstreamAuthType;
+  provider?: string;
+  credential_binding: CredentialBinding;
+}
+
 export interface Server {
   display_name: string;
   path: string;
@@ -50,6 +78,8 @@ export interface Server {
   num_stars?: number;
   is_python?: boolean;
   license?: string;
+  upstream_auth?: UpstreamAuthConfig;
+  upstream_credential_status?: UpstreamCredentialStatus;
 }
 
 export interface ServerDetails extends Server {
@@ -316,6 +346,115 @@ export interface ScopeInfo {
   all_methods: boolean;
   all_tools: boolean;
   agent_actions: string[];
+}
+
+// ============================================================================
+// Upstream Credential Types
+// ============================================================================
+
+/** Upstream credential metadata (never includes secret) */
+export interface UpstreamCredential {
+  credential_id: string;
+  server_path: string;
+  credential_type: UpstreamAuthType;
+  binding: CredentialBinding;
+  user_id?: string;
+  agent_id?: string;
+  status: UpstreamCredentialStatus;
+  expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_used_at?: string | null;
+}
+
+/** Request to create an upstream credential (API key or static JWT) */
+export interface CreateUpstreamCredentialRequest {
+  credential_type: 'api-key' | 'jwt';
+  /** The secret value (API key or JWT token) */
+  secret: string;
+  /** Optional expiration date */
+  expires_at?: string | null;
+}
+
+/** Response after creating an upstream credential - includes secret once */
+export interface CreateUpstreamCredentialResponse {
+  credential_id: string;
+  server_path: string;
+  credential_type: UpstreamAuthType;
+  /** The secret value - only returned once at creation time */
+  secret: string;
+  created_at: string;
+}
+
+/** Request to revoke an upstream credential */
+export interface RevokeUpstreamCredentialRequest {
+  reason?: string;
+}
+
+// ============================================================================
+// Upstream OAuth Credential Types
+// ============================================================================
+
+/** OAuth credential metadata (for oauth2, oidc, provider-oauth) */
+export interface UpstreamOAuthCredential {
+  credential_id: string;
+  server_path: string;
+  credential_type: 'oauth2' | 'oidc' | 'provider-oauth';
+  binding: CredentialBinding;
+  user_id?: string;
+  agent_id?: string;
+  status: UpstreamCredentialStatus;
+  /** OAuth provider name (e.g., 'github', 'google', 'slack') */
+  provider?: string;
+  /** OAuth scopes granted */
+  oauth_scopes?: string[];
+  /** Token expiration time */
+  token_expires_at?: string | null;
+  /** Whether a refresh token is available */
+  has_refresh_token?: boolean;
+  expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_used_at?: string | null;
+}
+
+/** Response from starting an OAuth flow */
+export interface StartOAuthFlowResponse {
+  /** The authorization URL to redirect the user to */
+  authorization_url: string;
+  /** State parameter for CSRF protection */
+  state: string;
+}
+
+/** Request to disconnect an OAuth credential */
+export interface DisconnectOAuthRequest {
+  /** Optional reason for disconnecting */
+  reason?: string;
+}
+
+// ============================================================================
+// Egress Allowlist Types (Admin)
+// ============================================================================
+
+export interface EgressAllowlistEntry {
+  entry_id: string;
+  pattern: string;
+  description?: string;
+  expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateEgressAllowlistEntryRequest {
+  pattern: string;
+  description?: string;
+  expires_at?: string | null;
+}
+
+export interface UpdateEgressAllowlistEntryRequest {
+  pattern?: string;
+  description?: string;
+  expires_at?: string | null;
 }
 
 // ============================================================================

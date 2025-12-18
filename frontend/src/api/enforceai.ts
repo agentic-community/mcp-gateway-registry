@@ -18,6 +18,11 @@ import type {
   CreateScopeRequest,
   ReplaceScopeRequest,
   ScopeMutationResponse,
+  UpstreamCredential,
+  CreateUpstreamCredentialRequest,
+  CreateUpstreamCredentialResponse,
+  UpstreamOAuthCredential,
+  StartOAuthFlowResponse,
 } from './types';
 
 // ============================================================================
@@ -353,5 +358,109 @@ export async function adminDeleteScope(
   return apiDelete<ScopeMutationResponse>(
     `/enforceai/admin/scopes/${encodeURIComponent(scopeName)}`,
     { headers: { 'If-Match': ifMatch } }
+  );
+}
+
+// ============================================================================
+// Upstream Credentials API
+// ============================================================================
+
+/**
+ * Get upstream credential for a server
+ * Returns metadata only (never includes secret)
+ */
+export async function getUpstreamCredential(
+  serverPath: string
+): Promise<UpstreamCredential | null> {
+  try {
+    return await apiGet<UpstreamCredential>(
+      `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/credentials`
+    );
+  } catch (error) {
+    const apiError = error as ApiError;
+    // 404 means no credential configured - return null
+    if (apiError.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create or replace an upstream credential for a server
+ * Returns the credential with secret (only returned once at creation)
+ */
+export async function createUpstreamCredential(
+  serverPath: string,
+  data: CreateUpstreamCredentialRequest
+): Promise<CreateUpstreamCredentialResponse> {
+  return apiPost<CreateUpstreamCredentialResponse>(
+    `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/credentials`,
+    data
+  );
+}
+
+/**
+ * Revoke an upstream credential
+ */
+export async function revokeUpstreamCredential(
+  credentialId: string,
+  reason?: string
+): Promise<void> {
+  return apiPost<void>(
+    `/enforceai/upstream/credentials/${encodeURIComponent(credentialId)}/revoke`,
+    reason ? { reason } : {}
+  );
+}
+
+// ============================================================================
+// Upstream OAuth Credentials API
+// ============================================================================
+
+/**
+ * Get upstream OAuth credential for a server
+ * Returns OAuth-specific metadata (provider, scopes, expiry)
+ */
+export async function getUpstreamOAuthCredential(
+  serverPath: string
+): Promise<UpstreamOAuthCredential | null> {
+  try {
+    return await apiGet<UpstreamOAuthCredential>(
+      `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/credentials`
+    );
+  } catch (error) {
+    const apiError = error as ApiError;
+    // 404 means no credential configured - return null
+    if (apiError.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Start an OAuth flow for upstream authentication
+ * Returns the authorization URL to redirect the user to
+ */
+export async function startUpstreamOAuth(
+  serverPath: string,
+  returnUrl?: string
+): Promise<StartOAuthFlowResponse> {
+  return apiPost<StartOAuthFlowResponse>(
+    `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/oauth/start`,
+    { return_url: returnUrl }
+  );
+}
+
+/**
+ * Disconnect an OAuth credential (revoke and remove stored tokens)
+ */
+export async function disconnectUpstreamOAuth(
+  serverPath: string,
+  reason?: string
+): Promise<void> {
+  return apiPost<void>(
+    `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/oauth/disconnect`,
+    reason ? { reason } : {}
   );
 }
