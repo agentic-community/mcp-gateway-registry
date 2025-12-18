@@ -345,4 +345,65 @@
 - Agent configuration persisted in SQLite DB at `/app/enforceai_state/enforceai.db` (inside container)
 - Tool restrictions are enforced at both visibility (`tools/list`) and execution (`tools/call`) levels
 
+### Upstream Auth Backend Phase 1 (Data Model + Storage Foundations)
+- Added canonical `upstream_auth` models + legacy normalization (`auth_type`/`auth_provider`/`headers`) in `auth_server/enforceai/models/upstream_auth.py`.
+- Added encrypted upstream credential storage:
+  - Migration `0004_upstream_credentials`
+  - SQLite store `auth_server/enforceai/stores/sqlite/upstream_credential_store.py`
+  - AES-GCM envelope helpers in `auth_server/enforceai/crypto/upstream_secrets.py`
+- Extended EnforceAI settings with `ENFORCEAI_UPSTREAM_KEK_PATH` and updated `scripts/enforceai_dev_bootstrap.sh` to generate `.enforceai/secrets/upstream_kek` (mode `0600`).
+- Updated registry server registration/loading to populate `upstream_auth` for server entries.
+- Tests: `make test-unit` (pass).
+
+### Upstream Auth Backend Phase 2 (SSRF/Egress Allowlist)
+- Added DB-managed egress allowlist:
+  - Migration `0005_egress_allowlist` (table `egress_allowlist_entries`)
+  - SQLite store `auth_server/enforceai/stores/sqlite/egress_allowlist_store.py`
+  - URL/host/CIDR matcher `auth_server/enforceai/egress/allowlist.py`
+- Added admin management endpoints in auth server:
+  - `GET/POST /enforceai/admin/egress-allowlist`
+  - `PUT/DELETE /enforceai/admin/egress-allowlist/{entry_id}`
+  - `POST /enforceai/admin/egress-allowlist/check`
+- Enforced allowlist on registry server registration/update routes when `ENFORCEAI_DB_PATH` is set in the registry process.
+- Defense-in-depth: `registry/core/nginx_service.py` filters/skips non-allowlisted `proxy_pass_url` entries at config generation time when `ENFORCEAI_DB_PATH` is set.
+- Tests: `make test-unit` and `make test-integration` (pass).
+
+### Upstream Auth Backend Phase 3 (Upstream Credential Management)
+- Added upstream credential management routes in auth server:
+  - `GET /enforceai/upstream/servers`
+  - `GET /enforceai/upstream/servers/{server_path}/credentials`
+  - `POST /enforceai/upstream/servers/{server_path}/credentials`
+  - `POST /enforceai/upstream/credentials/{credential_id}/revoke`
+- Added API schemas: `auth_server/enforceai/models/upstream_management.py`.
+- Added Compose wiring for `ENFORCEAI_UPSTREAM_KEK_PATH` in `docker-compose.yml` and `docker-compose.prebuilt.yml`.
+- Tests: `make test-unit` and `make test-integration` (pass).
+
+### Upstream Auth Backend Phase 4 (Request-Time Resolution + Injection)
+- Added request-time upstream credential resolver: `auth_server/enforceai/upstream/resolver.py`.
+- Wired `/validate` to emit internal-only headers for Nginx upstream injection:
+  - Identity forwarding: `X-MCP-Principal`, `X-MCP-Auth-Type`, `X-MCP-Scopes`, `X-MCP-Provider`, `X-MCP-Claims`
+  - Upstream injection: `X-EnforceAI-Upstream-Authorization`, `X-EnforceAI-Upstream-Api-Key`, `X-EnforceAI-Upstream-Api-Key-Header`, `X-EnforceAI-Upstream-Mode`
+- Supported types: `none`, `header-trust`, `api-key`, `jwt`.
+- Tests: `make test-unit` and `make test-integration` (pass).
+
+### Upstream Auth Backend Phase 5 (OAuth2 / OIDC / Provider OAuth + Refresh)
+- Added upstream OAuth provider config in EnforceAI settings:
+  - `ENFORCEAI_UPSTREAM_OAUTH_PROVIDERS` (JSON map keyed by provider id)
+  - `ENFORCEAI_UPSTREAM_OAUTH_STATE_TTL_SECONDS`
+  - `ENFORCEAI_UPSTREAM_OAUTH_REFRESH_SKEW_SECONDS`
+  - Client secrets are sourced via `client_secret_ref` (`env` or `file`) and never logged.
+- Added encrypted OAuth state storage:
+  - Migration `0006_upstream_oauth_states`
+  - Store `auth_server/enforceai/stores/sqlite/upstream_oauth_state_store.py`
+- Added OAuth flow endpoints (gateway-terminated):
+  - `POST /enforceai/upstream/oauth/start`
+  - `GET /enforceai/upstream/oauth/callback`
+  - `POST /enforceai/upstream/oauth/disconnect`
+- Added token exchange + refresh client: `auth_server/enforceai/upstream/oauth_client.py` (httpx; test transport injectable).
+- Extended request-time resolver to support `oauth2`, `oidc`, `provider-oauth` with on-demand refresh.
+- Added tests:
+  - Unit: `tests/unit/enforceai/test_upstream_oauth_state_store_sqlite.py`, `tests/unit/enforceai/test_upstream_oauth_refresh.py`
+  - Integration: `tests/integration/test_enforceai_upstream_oauth_flow.py` (in-process stub provider; no network)
+- Tests: `make test-unit` and `make test-integration` (pass).
+
 ## Outstanding Questions
