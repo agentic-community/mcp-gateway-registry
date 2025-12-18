@@ -19,6 +19,7 @@ import pytest
 
 
 _JWT_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+_HEX_32_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
 def _run_bootstrap(
@@ -91,6 +92,10 @@ class TestEnforceAIDevBootstrapScript:
         assert bearer_path.exists()
         assert _read_text(bearer_path) == f"Bearer {token}"
 
+        upstream_kek_path = state_dir / "secrets" / "upstream_kek"
+        assert upstream_kek_path.exists()
+        assert _HEX_32_RE.match(_read_text(upstream_kek_path))
+
     def test_compose_flag_writes_to_home_mcp_gateway_enforceai(
         self,
         tmp_path: Path,
@@ -117,3 +122,7 @@ class TestEnforceAIDevBootstrapScript:
 
         token = _read_text(token_path)
         assert _JWT_RE.match(token)
+
+        upstream_kek_path = state_dir / "secrets" / "upstream_kek"
+        assert upstream_kek_path.exists()
+        assert _HEX_32_RE.match(_read_text(upstream_kek_path))

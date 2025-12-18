@@ -579,6 +579,318 @@ class TestEnforceAIManagementRoutes:
         assert denied.status_code == 403
         assert denied.json()["detail"] == "Admin required"
 
+    def test_admin_can_manage_egress_allowlist_and_check_urls(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(path=tmp_path / "scopes.yml")
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        session_id = str(uuid.uuid4())
+        user_id = "https://issuer.example|cookie-admin-egress-1"
+        stores.session_store.create_session(
+            session_id=session_id,
+            user_id=user_id,
+            auth_method="oidc",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+        )
+
+        cookie_payload = build_session_cookie_payload(
+            username="cookie-admin-egress-1",
+            email="cookie-admin-egress-1@example.com",
+            name=None,
+            groups=["enforceai-admin"],
+            provider="keycloak",
+            legacy_auth_method="oauth2",
+            max_age_seconds=28800,
+            session_id=session_id,
+            user_id=user_id,
+        )
+        cookie_value = auth_server_module.signer.dumps(cookie_payload)
+
+        client = TestClient(auth_server_module.app)
+        client.cookies.set("mcp_gateway_session", cookie_value)
+
+        csrf_token = mint_csrf_token(
+            secret_key=auth_server_module.SECRET_KEY,
+            session_id=session_id,
+        )
+
+        created = client.post(
+            "/enforceai/admin/egress-allowlist",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"kind": "hostname", "value": "example.com", "comment": "test"},
+        )
+        assert created.status_code == 200
+        entry_id = created.json()["entry_id"]
+
+        listed = client.get("/enforceai/admin/egress-allowlist")
+        assert listed.status_code == 200
+        assert [item["entry_id"] for item in listed.json()] == [entry_id]
+
+        check = client.post(
+            "/enforceai/admin/egress-allowlist/check",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"proxy_pass_url": "https://example.com/mcp"},
+        )
+        assert check.status_code == 200
+        assert check.json()["allowed"] is True
+
+        updated = client.put(
+            f"/enforceai/admin/egress-allowlist/{entry_id}",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"comment": "updated"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["comment"] == "updated"
+
+        deleted = client.delete(
+            f"/enforceai/admin/egress-allowlist/{entry_id}",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert deleted.status_code == 200
+        assert deleted.json() == {"ok": True}
+
+        non_admin_session_id = str(uuid.uuid4())
+        non_admin_user_id = "https://issuer.example|cookie-admin-egress-2"
+        stores.session_store.create_session(
+            session_id=non_admin_session_id,
+            user_id=non_admin_user_id,
+            auth_method="oidc",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+        )
+
+        non_admin_cookie_payload = build_session_cookie_payload(
+            username="cookie-admin-egress-2",
+            email="cookie-admin-egress-2@example.com",
+            name=None,
+            groups=[],
+            provider="keycloak",
+            legacy_auth_method="oauth2",
+            max_age_seconds=28800,
+            session_id=non_admin_session_id,
+            user_id=non_admin_user_id,
+        )
+        non_admin_cookie_value = auth_server_module.signer.dumps(non_admin_cookie_payload)
+        client.cookies.set("mcp_gateway_session", non_admin_cookie_value)
+
+        denied = client.get("/enforceai/admin/egress-allowlist")
+        assert denied.status_code == 403
+        assert denied.json()["detail"] == "Admin required"
+
+    def test_upstream_credentials_create_list_revoke_no_secret_on_list(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(path=tmp_path / "scopes.yml")
+        upstream_kek_path = tmp_path / "upstream_kek"
+        upstream_kek_path.write_text("11" * 32)
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_UPSTREAM_KEK_PATH": str(upstream_kek_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        session_id = str(uuid.uuid4())
+        user_id = "https://issuer.example|cookie-upstream-1"
+        stores.session_store.create_session(
+            session_id=session_id,
+            user_id=user_id,
+            auth_method="oidc",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+        )
+
+        cookie_payload = build_session_cookie_payload(
+            username="cookie-upstream-1",
+            email="cookie-upstream-1@example.com",
+            name=None,
+            groups=[],
+            provider="keycloak",
+            legacy_auth_method="oauth2",
+            max_age_seconds=28800,
+            session_id=session_id,
+            user_id=user_id,
+        )
+        cookie_value = auth_server_module.signer.dumps(cookie_payload)
+
+        client = TestClient(auth_server_module.app)
+        client.cookies.set("mcp_gateway_session", cookie_value)
+
+        csrf_token = mint_csrf_token(
+            secret_key=auth_server_module.SECRET_KEY,
+            session_id=session_id,
+        )
+
+        created = client.post(
+            "/enforceai/upstream/servers/fininfo/credentials",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "credential_type": "api-key",
+                "credential_binding": "user",
+                "secret_payload": {"api_key": "super-secret"},
+            },
+        )
+        assert created.status_code == 200
+        created_payload = created.json()
+        assert created_payload["secret_payload"] == {"api_key": "super-secret"}
+        credential_id = created_payload["credential"]["credential_id"]
+
+        listed = client.get("/enforceai/upstream/servers/fininfo/credentials")
+        assert listed.status_code == 200
+        listed_payload = listed.json()
+        assert len(listed_payload) == 1
+        assert listed_payload[0]["credential_id"] == credential_id
+        assert "secret_payload" not in listed_payload[0]
+
+        revoked = client.post(
+            f"/enforceai/upstream/credentials/{credential_id}/revoke",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"reason": "test"},
+        )
+        assert revoked.status_code == 200
+        assert revoked.json()["revoked_at"] is not None
+
+    def test_upstream_credentials_revoke_denied_for_non_owner(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(path=tmp_path / "scopes.yml")
+        upstream_kek_path = tmp_path / "upstream_kek"
+        upstream_kek_path.write_text("22" * 32)
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_UPSTREAM_KEK_PATH": str(upstream_kek_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        session_a = str(uuid.uuid4())
+        user_a = "https://issuer.example|cookie-upstream-a"
+        stores.session_store.create_session(
+            session_id=session_a,
+            user_id=user_a,
+            auth_method="oidc",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+        )
+
+        cookie_payload_a = build_session_cookie_payload(
+            username="cookie-upstream-a",
+            email="cookie-upstream-a@example.com",
+            name=None,
+            groups=[],
+            provider="keycloak",
+            legacy_auth_method="oauth2",
+            max_age_seconds=28800,
+            session_id=session_a,
+            user_id=user_a,
+        )
+        client = TestClient(auth_server_module.app)
+        client.cookies.set("mcp_gateway_session", auth_server_module.signer.dumps(cookie_payload_a))
+        csrf_a = mint_csrf_token(secret_key=auth_server_module.SECRET_KEY, session_id=session_a)
+
+        created = client.post(
+            "/enforceai/upstream/servers/fininfo/credentials",
+            headers={"X-CSRF-Token": csrf_a},
+            json={
+                "credential_type": "api-key",
+                "credential_binding": "user",
+                "secret_payload": {"api_key": "a-secret"},
+            },
+        )
+        assert created.status_code == 200
+        credential_id = created.json()["credential"]["credential_id"]
+
+        session_b = str(uuid.uuid4())
+        user_b = "https://issuer.example|cookie-upstream-b"
+        stores.session_store.create_session(
+            session_id=session_b,
+            user_id=user_b,
+            auth_method="oidc",
+            expires_at=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1),
+        )
+        cookie_payload_b = build_session_cookie_payload(
+            username="cookie-upstream-b",
+            email="cookie-upstream-b@example.com",
+            name=None,
+            groups=[],
+            provider="keycloak",
+            legacy_auth_method="oauth2",
+            max_age_seconds=28800,
+            session_id=session_b,
+            user_id=user_b,
+        )
+        client.cookies.set("mcp_gateway_session", auth_server_module.signer.dumps(cookie_payload_b))
+        csrf_b = mint_csrf_token(secret_key=auth_server_module.SECRET_KEY, session_id=session_b)
+
+        denied = client.post(
+            f"/enforceai/upstream/credentials/{credential_id}/revoke",
+            headers={"X-CSRF-Token": csrf_b},
+            json={"reason": "should-not-work"},
+        )
+        assert denied.status_code == 404
+
     def test_admin_user_directory_and_cross_user_operations(
         self,
         tmp_path: Path,
@@ -1098,6 +1410,9 @@ class TestEnforceAIManagementRoutes:
             audit_store=ExplodingAuditStore(),
             user_store=stores.user_store,
             session_store=stores.session_store,
+            egress_allowlist_store=stores.egress_allowlist_store,
+            upstream_credential_store=stores.upstream_credential_store,
+            upstream_oauth_state_store=stores.upstream_oauth_state_store,
         )
 
         auth_server_module.app.dependency_overrides[

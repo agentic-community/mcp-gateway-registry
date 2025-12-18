@@ -181,6 +181,41 @@ http {
         assert "body_filter_by_lua_file /etc/nginx/lua/filter_tools_list.lua;" in config_content
         assert "auth_request_set $auth_allowed_tools $upstream_http_x_allowed_tools;" in config_content
 
+    def test_generate_config_includes_upstream_injection_directives(self, nginx_service):
+        """Test that upstream injection headers are wired in generated config."""
+        servers = {
+            "/fininfo": {
+                "proxy_pass_url": "http://localhost:8002",
+                "upstream_auth": {
+                    "type": "api-key",
+                    "provider": None,
+                    "credential_binding": "user",
+                    "injection": {
+                        "kind": "header",
+                        "header_name": "X-API-Key",
+                        "scheme": None,
+                    },
+                },
+            }
+        }
+
+        result = nginx_service.generate_config(servers)
+
+        assert result is True
+        config_content = self.mock_settings.nginx_config_path.read_text()
+
+        assert 'set $enforceai_server_path "/fininfo";' in config_content
+        assert 'set $enforceai_upstream_auth_type "api-key";' in config_content
+        assert 'set $enforceai_upstream_credential_binding "user";' in config_content
+        assert "auth_request_set $mcp_principal $upstream_http_x_mcp_principal;" in config_content
+        assert (
+            "auth_request_set $enforceai_upstream_api_key $upstream_http_x_enforceai_upstream_api_key;"
+            in config_content
+        )
+        assert "proxy_set_header X-MCP-Principal $mcp_principal;" in config_content
+        assert "proxy_set_header X-API-Key $enforceai_upstream_api_key;" in config_content
+        assert "error_page 424 = @upstream_credentials_required;" in config_content
+
     def test_generate_config_multiple_servers(self, nginx_service):
         """Test config generation with multiple servers."""
         servers = {

@@ -66,10 +66,6 @@ def enforceai_env_isolation(
     tests that run on the host.
     """
 
-    test_path = str(getattr(request, "fspath", ""))
-    if "enforceai" not in test_path.lower():
-        return
-
     for key in list(os.environ.keys()):
         if key.startswith("ENFORCEAI_"):
             monkeypatch.delenv(key, raising=False)
@@ -79,6 +75,8 @@ def enforceai_env_isolation(
         "OIDC_ISSUERS",
         "SCOPES_CATALOG_PATH",
         "API_KEY_PEPPER_PATH",
+        "UPSTREAM_KEK_PATH",
+        "UPSTREAM_OAUTH_PROVIDERS",
         "GATEWAY_PRIVATE_KEY_PATH",
         "GATEWAY_PUBLIC_KEYS_DIR",
         "GATEWAY_ACTIVE_KID",

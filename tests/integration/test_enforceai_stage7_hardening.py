@@ -179,6 +179,9 @@ class TestEnforceAIStage7Hardening:
             audit_store=_FailingAuditStore(),  # type: ignore[arg-type]
             user_store=stores.user_store,
             session_store=stores.session_store,
+            egress_allowlist_store=stores.egress_allowlist_store,
+            upstream_credential_store=None,
+            upstream_oauth_state_store=None,
         )
         monkeypatch.setattr(
             auth_server_module,
@@ -260,6 +263,9 @@ class TestEnforceAIStage7Hardening:
             audit_store=_FailingAuditStore(),  # type: ignore[arg-type]
             user_store=stores.user_store,
             session_store=stores.session_store,
+            egress_allowlist_store=stores.egress_allowlist_store,
+            upstream_credential_store=None,
+            upstream_oauth_state_store=None,
         )
         auth_server_module.app.dependency_overrides[
             enforceai_dependency.get_enforceai_stores

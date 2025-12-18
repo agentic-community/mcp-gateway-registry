@@ -47,6 +47,9 @@ class TestEnforceAIMigrations:
                 "0001_baseline",
                 "0002_users",
                 "0003_sessions",
+                "0004_upstream_credentials",
+                "0005_egress_allowlist",
+                "0006_upstream_oauth_states",
             ]
 
             assert _table_exists(connection, table_name="agents")
@@ -55,6 +58,9 @@ class TestEnforceAIMigrations:
             assert _table_exists(connection, table_name="audit_events")
             assert _table_exists(connection, table_name="users")
             assert _table_exists(connection, table_name="sessions")
+            assert _table_exists(connection, table_name="upstream_credentials")
+            assert _table_exists(connection, table_name="egress_allowlist_entries")
+            assert _table_exists(connection, table_name="upstream_oauth_states")
         finally:
             connection.close()
 
@@ -68,6 +74,48 @@ class TestEnforceAIMigrations:
             upgrade_to_latest(connection)
 
             rolled_back = downgrade_one(connection)
+            assert rolled_back == "0006_upstream_oauth_states"
+
+            assert _table_exists(connection, table_name="agents")
+            assert _table_exists(connection, table_name="api_keys")
+            assert _table_exists(connection, table_name="token_revocations")
+            assert _table_exists(connection, table_name="audit_events")
+            assert _table_exists(connection, table_name="users")
+            assert _table_exists(connection, table_name="sessions")
+            assert _table_exists(connection, table_name="upstream_credentials")
+            assert _table_exists(connection, table_name="egress_allowlist_entries")
+            assert not _table_exists(connection, table_name="upstream_oauth_states")
+            assert _table_exists(connection, table_name="schema_migrations")
+
+            rolled_back = downgrade_one(connection)
+            assert rolled_back == "0005_egress_allowlist"
+
+            assert _table_exists(connection, table_name="agents")
+            assert _table_exists(connection, table_name="api_keys")
+            assert _table_exists(connection, table_name="token_revocations")
+            assert _table_exists(connection, table_name="audit_events")
+            assert _table_exists(connection, table_name="users")
+            assert _table_exists(connection, table_name="sessions")
+            assert _table_exists(connection, table_name="upstream_credentials")
+            assert not _table_exists(connection, table_name="egress_allowlist_entries")
+            assert not _table_exists(connection, table_name="upstream_oauth_states")
+            assert _table_exists(connection, table_name="schema_migrations")
+
+            rolled_back = downgrade_one(connection)
+            assert rolled_back == "0004_upstream_credentials"
+
+            assert _table_exists(connection, table_name="agents")
+            assert _table_exists(connection, table_name="api_keys")
+            assert _table_exists(connection, table_name="token_revocations")
+            assert _table_exists(connection, table_name="audit_events")
+            assert _table_exists(connection, table_name="users")
+            assert _table_exists(connection, table_name="sessions")
+            assert not _table_exists(connection, table_name="upstream_credentials")
+            assert not _table_exists(connection, table_name="egress_allowlist_entries")
+            assert not _table_exists(connection, table_name="upstream_oauth_states")
+            assert _table_exists(connection, table_name="schema_migrations")
+
+            rolled_back = downgrade_one(connection)
             assert rolled_back == "0003_sessions"
 
             assert _table_exists(connection, table_name="agents")
@@ -76,6 +124,8 @@ class TestEnforceAIMigrations:
             assert _table_exists(connection, table_name="audit_events")
             assert _table_exists(connection, table_name="users")
             assert not _table_exists(connection, table_name="sessions")
+            assert not _table_exists(connection, table_name="upstream_credentials")
+            assert not _table_exists(connection, table_name="egress_allowlist_entries")
             assert _table_exists(connection, table_name="schema_migrations")
 
             rolled_back = downgrade_one(connection)
@@ -87,6 +137,8 @@ class TestEnforceAIMigrations:
             assert _table_exists(connection, table_name="audit_events")
             assert not _table_exists(connection, table_name="users")
             assert not _table_exists(connection, table_name="sessions")
+            assert not _table_exists(connection, table_name="upstream_credentials")
+            assert not _table_exists(connection, table_name="egress_allowlist_entries")
             assert _table_exists(connection, table_name="schema_migrations")
 
             rolled_back = downgrade_one(connection)
@@ -98,6 +150,8 @@ class TestEnforceAIMigrations:
             assert not _table_exists(connection, table_name="audit_events")
             assert not _table_exists(connection, table_name="users")
             assert not _table_exists(connection, table_name="sessions")
+            assert not _table_exists(connection, table_name="upstream_credentials")
+            assert not _table_exists(connection, table_name="egress_allowlist_entries")
             assert _table_exists(connection, table_name="schema_migrations")
 
             upgrade_to_latest(connection)
