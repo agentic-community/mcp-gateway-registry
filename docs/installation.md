@@ -25,7 +25,7 @@ cp .env.example .env
 
 # 4. Install prerequisites
 curl -LsSf https://astral.sh/uv/install.sh | sh
-sudo apt-get update && sudo apt-get install -y docker.io docker-compose
+sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin
 
 # 5. Deploy
 ./build_and_run.sh
@@ -90,7 +90,7 @@ open http://localhost:7860
    # Install Docker
    sudo apt-get update
    sudo apt-get install --reinstall docker.io -y
-   sudo apt-get install -y docker-compose
+   sudo apt-get install -y docker-compose-plugin
    sudo usermod -a -G docker $USER
    newgrp docker
    ```
@@ -242,8 +242,8 @@ graph TB
 
 1. **Check Service Status**
    ```bash
-   docker-compose ps
-   docker-compose logs -f
+   docker compose ps
+   docker compose logs -f
    ```
 
 2. **Test Web Interface**
@@ -290,7 +290,7 @@ sudo systemctl status docker
 cat .env | grep -v SECRET
 
 # View detailed logs
-docker-compose logs --tail=50
+docker compose logs --tail=50
 ```
 
 **Authentication failures:**
@@ -311,11 +311,11 @@ sudo netstat -tlnp | grep -E ':(80|443|7860|8080)'
 curl -v http://localhost:7860/health
 ```
 
-For more troubleshooting help, see [Troubleshooting Guide](troubleshooting.md).
+For more troubleshooting help, see [FAQ](FAQ.md) and [Complete Setup Guide](complete-setup-guide.md#9-troubleshooting).
 
 ## Next Steps
 
 - [Authentication Setup](auth.md) - Configure identity providers
 - [AI Assistant Integration](ai-coding-assistants-setup.md) - Setup development tools
-- [Production Deployment](production-deployment.md) - High availability configuration
+- [Production Deployment](../terraform/aws-ecs/README.md) - High availability configuration
 - [API Reference](registry_api.md) - Programmatic management

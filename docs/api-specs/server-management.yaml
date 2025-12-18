@@ -18,11 +18,11 @@ tags:
   - name: UI Server Management
     description: Dashboard and UI endpoints (Session Cookie auth)
   - name: Admin Operations
-    description: Administrative endpoints (HTTP Basic auth)
+    description: Administrative endpoints (Session Cookie admin auth or JWT Bearer via gateway)
   - name: Token Management
     description: JWT token generation and management
   - name: Group Management
-    description: User group and permission management
+    description: User group and permission management (admin-only)
 
 paths:
   /api/:
@@ -344,7 +344,8 @@ paths:
       description: Register service for mcpgw-server (auto-enables service)
       operationId: internalRegisterService
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -369,7 +370,8 @@ paths:
       description: Remove a service from registry
       operationId: internalRemoveService
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -399,7 +401,8 @@ paths:
       description: Enable or disable service
       operationId: internalToggleService
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -427,7 +430,8 @@ paths:
       description: Get health status for all servers
       operationId: internalHealthcheck
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       responses:
         '200':
           description: Health status
@@ -444,7 +448,8 @@ paths:
       description: Get list of all services with health status
       operationId: internalListServices
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       responses:
         '200':
           description: List of services
@@ -461,7 +466,8 @@ paths:
       description: Add a server to user groups
       operationId: addServerToGroups
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -496,7 +502,8 @@ paths:
       description: Remove a server from user groups
       operationId: removeServerFromGroups
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -524,7 +531,8 @@ paths:
       description: Create a new user group
       operationId: createGroup
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -552,7 +560,8 @@ paths:
       description: Delete a user group (prevents deletion of system groups)
       operationId: deleteGroup
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -580,7 +589,8 @@ paths:
       description: List all user groups with optional Keycloak and scopes information
       operationId: listGroups
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: include_keycloak
           in: query
@@ -608,7 +618,8 @@ paths:
       description: Admin-only endpoint to retrieve M2M tokens
       operationId: adminGetTokens
       security:
-        - BasicAuth: []
+        - SessionCookie: []
+        - BearerAuth: []
       responses:
         '200':
           description: Access token
@@ -629,10 +640,11 @@ components:
       type: apiKey
       in: cookie
       name: mcp_gateway_session
-    BasicAuth:
+    BearerAuth:
       type: http
-      scheme: basic
-      description: Admin credentials (ADMIN_USER:ADMIN_PASSWORD)
+      scheme: bearer
+      bearerFormat: JWT
+      description: Use when calling via the gateway reverse proxy; nginx validates the token and injects identity headers.
 
   schemas:
     ServerListResponse:

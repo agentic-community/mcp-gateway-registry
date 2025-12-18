@@ -73,7 +73,7 @@ source $HOME/.local/bin/env
 
 # Install Docker (Ubuntu/Debian)
 sudo apt-get update
-sudo apt-get install -y docker.io docker-compose
+sudo apt-get install -y docker.io docker-compose-plugin
 sudo usermod -a -G docker $USER
 newgrp docker
 
@@ -87,7 +87,7 @@ newgrp docker
 
 ```bash
 # Check all services are running
-docker-compose ps
+docker compose ps
 
 # You should see services like:
 # - registry (port 7860)  
@@ -165,8 +165,8 @@ You now have a fully functional MCP Gateway & Registry! Here are your next steps
 
 ### Enterprise Features
 - 👥 **[Fine-Grained Access Control](scopes.md)** - Team-based permissions
-- 📊 **[Monitoring & Analytics](monitoring.md)** - Usage tracking and health monitoring
-- 🏢 **[Production Deployment](production-deployment.md)** - High availability and scaling
+- 📊 **[Monitoring & Analytics](OBSERVABILITY.md)** - Usage tracking and health monitoring
+- 🏢 **[Production Deployment](../terraform/aws-ecs/README.md)** - High availability and scaling
 
 ## Amazon Cognito Minimal Setup
 
@@ -244,7 +244,7 @@ aws cognito-idp describe-user-pool --user-pool-id YOUR_POOL_ID
 curl http://localhost:7860/health
 
 # Check logs
-docker-compose logs registry
+docker compose logs registry
 ```
 
 ### AI Assistant Not Connecting
@@ -262,7 +262,7 @@ curl -H "Authorization: Bearer $(cat .oauth-tokens/ingress.json | jq -r .access_
 - 📖 **[Full Documentation](/)** - Comprehensive guides and references
 - 🐛 **[GitHub Issues](https://github.com/agentic-community/mcp-gateway-registry/issues)** - Bug reports and feature requests
 - 💬 **[GitHub Discussions](https://github.com/agentic-community/mcp-gateway-registry/discussions)** - Community support and questions
-- 📧 **[Troubleshooting Guide](troubleshooting.md)** - Common issues and detailed solutions
+- 📧 **[Troubleshooting Guide](FAQ.md)** - Common issues and detailed solutions
 
 ---
 

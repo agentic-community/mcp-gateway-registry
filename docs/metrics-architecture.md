@@ -276,12 +276,12 @@ Pre-built dashboard: **MCP Analytics Comprehensive**
 
 1. **Start the metrics service:**
 ```bash
-docker-compose up -d metrics-service metrics-db grafana
+docker compose up -d metrics-service metrics-db grafana
 ```
 
 2. **Generate API keys for your services:**
 ```bash
-docker-compose exec metrics-service python create_api_key.py
+docker compose exec metrics-service python create_api_key.py
 ```
 
 3. **Configure your services with API keys:**

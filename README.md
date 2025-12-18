@@ -9,13 +9,43 @@
 [![License](https://img.shields.io/github/license/agentic-community/mcp-gateway-registry?style=flat)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/agentic-community/mcp-gateway-registry?style=flat&logo=github)](https://github.com/agentic-community/mcp-gateway-registry/releases)
 
-[🚀 Get Running Now](#option-a-pre-built-images-instant-setup) | [Production Deployment](terraform/aws-ecs/README.md) | [Quick Start](#quick-start) | [Documentation](docs/) | [Enterprise Features](#enterprise-features) | [Community](#community)
+[🚀 Get Running Now](#option-a-pre-built-images-instant-setup) | [EnforceAI Setup](docs/enforceai-setup-guide.md) | [Production Deployment](terraform/aws-ecs/README.md) | [Quick Start](#quick-start) | [Documentation](docs/) | [Enterprise Features](#enterprise-features) | [Community](#community)
 
 **Demo Videos:** ⭐ [MCP Registry CLI Demo](https://github.com/user-attachments/assets/98200866-e8bd-4ac3-bad6-c6d42b261dbe) | [Full End-to-End Functionality](https://github.com/user-attachments/assets/5ffd8e81-8885-4412-a4d4-3339bbdba4fb) | [OAuth 3-Legged Authentication](https://github.com/user-attachments/assets/3c3a570b-29e6-4dd3-b213-4175884396cc) | [Dynamic Tool Discovery](https://github.com/user-attachments/assets/cee25b31-61e4-4089-918c-c3757f84518c)
 
 </div>
 
 ---
+
+## EnforceAI Security Gateway
+
+This repository contains the upstream **MCP Gateway & Registry** plus an **EnforceAI Security Gateway** layer that adds agent-scoped identity, fine-grained tool authorization, management APIs, and audit retention.
+
+**Start here (EnforceAI):**
+- `docs/enforceai-setup-guide.md` (how to bootstrap and run EnforceAI locally)
+- `enforceai/instructions/ENFORCEAI_CONTEXT.md` (repo map, safe workflow, and navigation)
+- `enforceai/session_state/latest.md` (current multi-session status and next steps)
+- `enforceai/instructions/ENFORCEAI_MANAGEMENT.md` (management API + CLI contract)
+
+**What EnforceAI adds (enabled when `ENFORCEAI_DB_PATH` is set):**
+- Identity resolution via `ENFORCEAI_AUTH_PROVIDER`: OIDC JWT (multi-issuer), gateway tokens (RS256), API keys, or `mixed`
+- Agent-scoped FGAC using the scope catalog in `auth_server/scopes.yml` plus per-agent `allowed_tools`
+- Gateway enforcement for MCP requests: tool visibility filtering on `tools/list` and authorization on `tools/call`
+- Management APIs under `/enforceai/*` (and admin APIs under `/enforceai/admin/*`) served by `auth_server`
+- Operational tooling: `cli/enforceai_cli.py` (self-service management) and `cli/enforceai_audit_cleanup.py` (audit retention cleanup)
+- Upstream auth hardening: encrypted upstream credential storage/injection and SSRF egress allowlisting (see `enforceai/mcp_upstream_auth_requirements.md`)
+
+**Quick EnforceAI dev bootstrap (local + Docker Compose):**
+```bash
+ENFORCEAI_STATE_DIR="${HOME}/mcp-gateway/enforceai" ./scripts/enforceai_dev_bootstrap.sh
+./build_and_run.sh --prebuilt
+source "${HOME}/mcp-gateway/enforceai/enforceai.compose.env"
+docker compose up -d --force-recreate auth-server
+```
+
+Notes:
+- When registering MCP servers, prefer paths with a trailing slash (for example, `/sqlite/`) so nginx `proxy_pass` URI rewriting behaves correctly.
+- The scopes catalog is also exposed for UI display at `GET /enforceai/scopes/catalog` (intentionally unauthenticated display data).
 
 ## What is MCP Gateway & Registry?
 

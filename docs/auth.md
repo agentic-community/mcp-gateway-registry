@@ -648,7 +648,7 @@ This section provides step-by-step instructions for entry-level platform enginee
 ### Prerequisites Checklist
 
 Before starting group setup:
-- ✅ Keycloak is running (check: `docker-compose ps keycloak`)
+- ✅ Keycloak is running (check: `docker compose ps keycloak`)
 - ✅ You have admin credentials (default: admin / your-configured-password)
 - ✅ You can access the admin console at `https://your-domain/admin` or `http://localhost:8080/admin`
 - ✅ The `mcp-gateway` realm exists (created by init-keycloak.sh)
@@ -819,7 +819,7 @@ Is this agent for...
    ./test-keycloak-mcp.sh --agent-id <agent-name>
 
    # Check auth server logs for group mapping
-   docker-compose logs auth-server | grep -i "groups.*mapped"
+   docker compose logs auth-server | grep -i "groups.*mapped"
    # Should see: "Mapped Keycloak groups ['mcp-servers-unrestricted'] to scopes..."
    ```
 

@@ -56,8 +56,8 @@ For EnforceAI operational docs (management API + CLI), see `enforceai/instructio
 | Variable | Description | Example | Required |
 |----------|-------------|---------|----------|
 | `REGISTRY_URL` | Public URL of the MCP Gateway Registry | `https://mcpgateway.ddns.net` | ✅ |
-| `ADMIN_USER` | Registry admin username | `admin` | ✅ |
-| `ADMIN_PASSWORD` | Registry admin password | `your-secure-password` | ✅ |
+| `ADMIN_USER` | Local username/password login username (also used by some internal maintenance endpoints) | `admin` | ✅ |
+| `ADMIN_PASSWORD` | Local username/password login password (also used by some internal maintenance endpoints) | `your-secure-password` | ✅ |
 | `AUTH_PROVIDER` | Authentication provider (`cognito` or `keycloak`) | `keycloak` | ✅ |
 | `AWS_REGION` | AWS region for services | `us-east-1` | ✅ |
 

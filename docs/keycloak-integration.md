@@ -219,7 +219,7 @@ AUTH_LOG_FORMAT=%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s
 1. **Docker & Docker Compose**
    ```bash
    docker --version
-   docker-compose --version
+   docker compose version
    ```
 
 2. **Required Ports Available**
@@ -239,13 +239,13 @@ AUTH_LOG_FORMAT=%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s
 cd /path/to/mcp-gateway-registry
 
 # Start prerequisite services
-docker-compose up -d postgres
+docker compose up -d postgres
 
 # Wait for PostgreSQL to be ready
 sleep 10
 
 # Start Keycloak
-docker-compose up -d keycloak
+docker compose up -d keycloak
 
 # Wait for Keycloak to initialize (may take 2-3 minutes)
 sleep 120
@@ -306,10 +306,10 @@ export KEYCLOAK_ADMIN_PASSWORD="your-secure-password"
 #### 4. Start Complete Stack
 ```bash
 # Start all services
-docker-compose up -d
+docker compose up -d
 
 # Verify all services are running
-docker-compose ps
+docker compose ps
 
 # Check service health
 curl -f http://localhost:8080/health/ready
@@ -361,23 +361,23 @@ ls -la .oauth-tokens/agent-*-m2m-token.json
 #### Complete Stack Startup
 ```bash
 # 1. Start database first
-docker-compose up -d postgres
+docker compose up -d postgres
 
 # 2. Wait for database ready
 sleep 10
 
 # 3. Start Keycloak
-docker-compose up -d keycloak
+docker compose up -d keycloak
 
 # 4. Wait for Keycloak initialization
 sleep 120
 
 # 5. Start remaining services
-docker-compose up -d
+docker compose up -d
 
 # 6. Verify all services
-docker-compose ps
-docker-compose logs --tail=20
+docker compose ps
+docker compose logs --tail=20
 ```
 
 #### Service Health Checks
@@ -389,10 +389,10 @@ curl -f http://localhost:8080/health/ready
 curl -f http://localhost:8000/health
 
 # PostgreSQL connection
-docker-compose exec postgres pg_isready -U keycloak
+docker compose exec postgres pg_isready -U keycloak
 
 # Complete service status
-docker-compose ps --format table
+docker compose ps --format table
 ```
 
 ### Token Management
@@ -470,10 +470,10 @@ uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <agent
 nano auth_server/scopes.yml
 
 # 2. Restart auth server to pick up changes
-docker-compose restart auth-server
+docker compose restart auth-server
 
 # 3. Verify changes took effect
-docker-compose logs auth-server | grep -i scope
+docker compose logs auth-server | grep -i scope
 
 # 4. Test authorization with updated scopes
 ./test-keycloak-mcp.sh --agent-id <agent-id>
@@ -579,16 +579,16 @@ done
 #### Service Logs
 ```bash
 # Keycloak logs
-docker-compose logs -f keycloak
+docker compose logs -f keycloak
 
 # Auth server logs
-docker-compose logs -f auth-server
+docker compose logs -f auth-server
 
 # PostgreSQL logs
-docker-compose logs -f postgres
+docker compose logs -f postgres
 
 # All services
-docker-compose logs -f
+docker compose logs -f
 ```
 
 #### Authentication Debugging
@@ -599,16 +599,16 @@ docker-compose logs -f
 #   - LOG_LEVEL=DEBUG
 
 # Restart auth server
-docker-compose restart auth-server
+docker compose restart auth-server
 
 # Monitor authentication attempts
-docker-compose logs -f auth-server | grep -i "keycloak\|token\|auth"
+docker compose logs -f auth-server | grep -Ei "keycloak|token|auth"
 ```
 
 #### Token Validation Logs
 ```bash
 # Watch token validation in real-time
-docker-compose logs -f auth-server | grep -E "Token validation|Groups.*mapped|Access.*denied"
+docker compose logs -f auth-server | grep -E "Token validation|Groups.*mapped|Access.*denied"
 
 # Sample output:
 # ✓ Token validation successful using KeycloakProvider
@@ -658,13 +658,13 @@ uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <agent
 # - Database connection errors
 
 # Check PostgreSQL:
-docker-compose ps postgres
-docker-compose logs postgres
+docker compose ps postgres
+docker compose logs postgres
 
 # Restart database:
-docker-compose restart postgres
+docker compose restart postgres
 sleep 10
-docker-compose restart keycloak
+docker compose restart keycloak
 ```
 
 ### Performance Monitoring
@@ -688,7 +688,8 @@ echo "Timestamp: $(date)"
 echo ""
 
 echo "--- Service Status ---"
-docker-compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Ports}}"
+docker compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Ports}}"
+docker compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Ports}}"
 echo ""
 
 echo "--- Token Status ---"
@@ -794,34 +795,34 @@ chown app:app .oauth-tokens/*.json
 ### Graceful Shutdown
 ```bash
 # 1. Stop accepting new requests
-docker-compose stop nginx
+docker compose stop nginx
 
 # 2. Allow current requests to complete
 sleep 30
 
 # 3. Stop application services
-docker-compose stop auth-server
+docker compose stop auth-server
 
 # 4. Stop Keycloak
-docker-compose stop keycloak
+docker compose stop keycloak
 
 # 5. Stop database last
-docker-compose stop postgres
+docker compose stop postgres
 
 # 6. Verify all stopped
-docker-compose ps
+docker compose ps
 ```
 
 ### Complete Removal
 ```bash
 # Stop and remove containers
-docker-compose down
+docker compose down
 
 # Remove volumes (WARNING: This deletes all data)
-docker-compose down -v
+docker compose down -v
 
 # Remove images
-docker-compose down --rmi all
+docker compose down --rmi all
 
 # Remove networks
 docker network prune -f
@@ -844,7 +845,7 @@ BACKUP_DIR="backups/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
 # Backup database
-docker-compose exec postgres pg_dump -U keycloak keycloak > "$BACKUP_DIR/keycloak.sql"
+docker compose exec postgres pg_dump -U keycloak keycloak > "$BACKUP_DIR/keycloak.sql"
 
 # Backup configuration
 cp -r keycloak/setup "$BACKUP_DIR/"
@@ -870,12 +871,12 @@ if [ -z "$BACKUP_DIR" ]; then
 fi
 
 # Stop services
-docker-compose down
+docker compose down
 
 # Restore database
-docker-compose up -d postgres
+docker compose up -d postgres
 sleep 10
-docker-compose exec -T postgres psql -U keycloak -d keycloak < "$BACKUP_DIR/keycloak.sql"
+docker compose exec -T postgres psql -U keycloak -d keycloak < "$BACKUP_DIR/keycloak.sql"
 
 # Restore configuration
 cp -r "$BACKUP_DIR/setup" keycloak/
@@ -883,7 +884,7 @@ cp "$BACKUP_DIR/scopes.yml" auth_server/
 cp "$BACKUP_DIR/docker-compose.yml" .
 
 # Start services
-docker-compose up -d
+docker compose up -d
 
 echo "Restore completed from: $BACKUP_DIR"
 ```
@@ -926,15 +927,15 @@ echo "Agent cleanup completed for: $AGENT_ID"
 # Operations
 uv run python credentials-provider/keycloak/generate_tokens.py --agent-id <id>
 ./test-keycloak-mcp.sh --agent-id <id>
-docker-compose logs -f auth-server
+docker compose logs -f auth-server
 
 # Health Checks
 curl -f http://localhost:8080/health/ready
 curl -f http://localhost:8000/health
 
 # Troubleshooting
-docker-compose ps
-docker-compose logs <service>
+docker compose ps
+docker compose logs <service>
 cat .oauth-tokens/agent-<id>.json | jq '.expires_at_human'
 ```
 

@@ -281,12 +281,12 @@ group_mappings:
 
 1. Build and start the Docker containers:
    ```bash
-   docker-compose up -d --build
+   docker compose up -d --build
    ```
 
 2. Check that services are running:
    ```bash
-   docker-compose ps
+   docker compose ps
    ```
 
 ### Step 2: Test User Authentication
@@ -310,7 +310,7 @@ group_mappings:
 
 1. Check the auth server logs to verify user information is being received:
    ```bash
-   docker-compose logs auth-server | grep "Raw user info"
+   docker compose logs auth-server | grep "Raw user info"
    ```
 
 2. You should see output similar to:
@@ -326,7 +326,7 @@ group_mappings:
 
 3. Verify the mapped scopes:
    ```bash
-   docker-compose logs auth-server | grep "Mapped user info"
+   docker compose logs auth-server | grep "Mapped user info"
    ```
 
 4. You should see:
@@ -421,7 +421,7 @@ User can log in but sees "Access Denied" or "Insufficient Permissions"
 3. Verify the group mappings include the necessary scopes
 4. Check auth server logs to see what groups are being received:
    ```bash
-   docker-compose logs auth-server | grep "groups"
+   docker compose logs auth-server | grep "groups"
    ```
 
 ### Issue: Redirect URI mismatch error
@@ -461,7 +461,7 @@ AADSTS7000215: Invalid client secret provided
 3. Update `ENTRA_CLIENT_SECRET` in `.env`
 4. Restart the services:
    ```bash
-   docker-compose restart auth-server
+   docker compose restart auth-server
    ```
 
 ### Issue: Cannot grant admin consent
@@ -572,7 +572,7 @@ group_mappings:
 4. **Restart auth server:**
 ```bash
 cp auth_server/scopes.yml ~/mcp-gateway/auth_server/scopes.yml
-docker-compose restart auth-server
+docker compose restart auth-server
 ```
 
 ---

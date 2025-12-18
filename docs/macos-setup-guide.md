@@ -117,7 +117,7 @@ ls -la ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2/
 # You should see model files like model.safetensors, config.json, etc.
 ```
 
-**Note**: This command automatically creates the necessary directory structure and downloads all required model files (~90MB). If you don't have `hf` command installed, install it first with `pip install huggingface_hub[cli]`.
+**Note**: This command automatically creates the necessary directory structure and downloads all required model files (~90MB). If you don't have the `hf` command installed, install it with `uv tool install "huggingface-hub[cli]"`.
 
 ---
 
@@ -145,13 +145,13 @@ echo "DB Password: $KEYCLOAK_DB_PASSWORD"
 ### Start Database and Keycloak
 ```bash
 # Start only the database and Keycloak services first
-docker-compose up -d keycloak-db keycloak
+docker compose up -d keycloak-db keycloak
 
 # Check if services are starting
-docker-compose ps
+docker compose ps
 
 # Monitor Keycloak logs until ready
-docker-compose logs -f keycloak
+docker compose logs -f keycloak
 # Wait for: "Keycloak 25.x.x started in xxxms"
 # Press Ctrl+C when you see this message
 ```
@@ -165,7 +165,7 @@ curl -s http://localhost:8080/realms/master | jq '.realm'
 # Should return: "master"
 
 # Check health status
-docker-compose ps keycloak
+docker compose ps keycloak
 # Should show "Up" status (may show "unhealthy" - this is normal for dev mode)
 ```
 
@@ -416,7 +416,7 @@ chmod +x build_and_run.sh
 ### Verify All Services are Running
 ```bash
 # Check all services status
-docker-compose ps
+docker compose ps
 
 # Expected services (all should show "Up"):
 # - keycloak-db
@@ -433,11 +433,11 @@ docker-compose ps
 ### Monitor Service Logs
 ```bash
 # View all logs
-docker-compose logs -f
+docker compose logs -f
 
 # View specific service logs
-docker-compose logs -f auth-server
-docker-compose logs -f registry
+docker compose logs -f auth-server
+docker compose logs -f registry
 
 # Press Ctrl+C to exit log viewing
 ```
@@ -459,7 +459,7 @@ ENFORCEAI_STATE_DIR="${HOME}/mcp-gateway/enforceai" ./scripts/enforceai_dev_boot
 set -a
 source "${HOME}/mcp-gateway/enforceai/enforceai.compose.env"
 set +a
-docker-compose up -d --force-recreate auth-server
+docker compose up -d --force-recreate auth-server
 ```
 
 Test an MCP JSON-RPC request through the gateway:
@@ -596,8 +596,8 @@ docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh update re
 df -h
 
 # Restart all services
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 ```
 
 #### Authentication Failures
@@ -609,13 +609,13 @@ cat .env | grep KEYCLOAK_CLIENT_SECRET
 # They should match! If not, update .env file
 
 # Restart auth-server after updating secrets
-docker-compose restart auth-server
+docker compose restart auth-server
 ```
 
 #### "oauth2_callback_failed" Error
 ```bash
 # Check auth-server logs
-docker-compose logs auth-server | tail -20
+docker compose logs auth-server | tail -20
 
 # Usually caused by wrong client secret
 # Regenerate credentials:
@@ -625,14 +625,14 @@ docker-compose logs auth-server | tail -20
 nano .env
 
 # Restart auth-server
-docker-compose restart auth-server
+docker compose restart auth-server
 ```
 
 ### Reset Everything
 If you need to start over completely:
 ```bash
 # Stop and remove all containers and data
-docker-compose down -v
+docker compose down -v
 
 # Remove Docker images (optional)
 docker system prune -a
@@ -648,10 +648,10 @@ cp .env.example .env
 ### View Service Status
 ```bash
 # Check all service status
-docker-compose ps
+docker compose ps
 
 # Check specific service health
-docker-compose logs [service-name] --tail 50
+docker compose logs [service-name] --tail 50
 
 # Check resource usage
 docker stats
@@ -700,4 +700,4 @@ You now have a fully functional MCP Gateway & Registry running on macOS! The sys
 ### Getting Help
 - **GitHub Issues**: https://github.com/agentic-community/mcp-gateway-registry/issues
 - **Documentation**: Check `/docs` folder for additional guides
-- **Logs**: Always check `docker-compose logs` for troubleshooting
+- **Logs**: Always check `docker compose logs` for troubleshooting

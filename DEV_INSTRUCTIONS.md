@@ -13,13 +13,13 @@ We recommend the fastest option to get started:
 #### Option A: macOS Setup (Fastest ⚡)
 Complete this setup guide first:
 
-- [macOS Setup Guide](macos-setup-guide.md)
+- [macOS Setup Guide](docs/macos-setup-guide.md)
 - Time to first run: ~30 minutes
 
 #### Option B: EC2 Complete Configuration (Preferred for Server Setup)
 If working on EC2 or a Linux server, complete this guide first:
 
-- [Complete Configuration Guide](complete-configuration-guide.md)
+- [Complete Setup Guide](docs/complete-setup-guide.md)
 - Time to first run: ~60 minutes
 
 ## Before You Start Coding

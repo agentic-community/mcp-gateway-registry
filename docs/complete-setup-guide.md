@@ -552,10 +552,10 @@ chmod +x build_and_run.sh
 # - Build the React frontend in the frontend/ directory
 # - Create necessary local directories
 # - Build Docker images
-# - Start all services with docker-compose
+# - Start all services with docker compose
 
 # After the script completes, check all services are running
-docker-compose ps
+docker compose ps
 
 # Expected output should show all services as "Up":
 # - keycloak-db
@@ -570,12 +570,12 @@ docker-compose ps
 
 ```bash
 # View all logs
-docker-compose logs -f
+docker compose logs -f
 
 # Or view specific service logs
-docker-compose logs -f auth-server
-docker-compose logs -f registry
-docker-compose logs -f nginx
+docker compose logs -f auth-server
+docker compose logs -f registry
+docker compose logs -f nginx
 
 # Press Ctrl+C to exit log viewing
 ```
@@ -805,10 +805,10 @@ sudo systemctl stop apache2  # If Apache is running
 #### Keycloak Initialization Fails
 ```bash
 # Check Keycloak logs
-docker-compose logs keycloak | tail -50
+docker compose logs keycloak | tail -50
 
 # Restart Keycloak
-docker-compose restart keycloak
+docker compose restart keycloak
 
 # Wait 2-3 minutes and retry initialization
 ./keycloak/setup/init-keycloak.sh
@@ -825,7 +825,7 @@ docker-compose restart keycloak
    ```
 3. Restart Keycloak and try initialization again:
    ```bash
-   docker-compose restart keycloak
+   docker compose restart keycloak
    # Wait 2-3 minutes, then:
    ./keycloak/setup/init-keycloak.sh
    ```
@@ -879,7 +879,7 @@ docker-compose restart keycloak
 curl http://localhost:8080/realms/mcp-gateway
 
 # Check auth server logs
-docker-compose logs auth-server | tail -50
+docker compose logs auth-server | tail -50
 
 # Regenerate agent credentials
 ./keycloak/setup/setup-agent-service-account.sh \
@@ -892,17 +892,17 @@ This usually indicates a session cookie issue between auth-server and registry:
 
 ```bash
 # Check for SECRET_KEY mismatch
-docker-compose logs auth-server | grep "SECRET_KEY"
-docker-compose logs registry | grep -E "(session|cookie|Invalid)"
+docker compose logs auth-server | grep "SECRET_KEY"
+docker compose logs registry | grep -E "(session|cookie|Invalid)"
 
 # If you see "No SECRET_KEY environment variable found", regenerate and restart:
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
 sed -i "s/SECRET_KEY=.*/SECRET_KEY=$SECRET_KEY/" .env
 
 # Recreate containers to pick up new SECRET_KEY
-docker-compose stop auth-server registry
-docker-compose rm -f auth-server registry
-docker-compose up -d auth-server registry
+docker compose stop auth-server registry
+docker compose rm -f auth-server registry
+docker compose up -d auth-server registry
 
 # Test login again - should work now
 ```
@@ -946,66 +946,66 @@ If you see "oauth2_callback_failed" error:
 
 ```bash
 # Check Keycloak external URL configuration
-docker-compose exec -T auth-server env | grep KEYCLOAK_EXTERNAL_URL
+docker compose exec -T auth-server env | grep KEYCLOAK_EXTERNAL_URL
 # Should show: KEYCLOAK_EXTERNAL_URL=http://localhost:8080
 
 # If missing, add to .env file:
 echo "KEYCLOAK_EXTERNAL_URL=http://localhost:8080" >> .env
-docker-compose restart auth-server
+docker compose restart auth-server
 
 # Check auth-server can reach Keycloak internally
-docker-compose exec auth-server curl -f http://keycloak:8080/health/ready
+docker compose exec auth-server curl -f http://keycloak:8080/health/ready
 ```
 
 #### Registry Not Loading
 ```bash
 # Check registry logs
-docker-compose logs registry | tail -50
+docker compose logs registry | tail -50
 
 # Rebuild registry frontend
 cd ~/workspace/mcp-gateway-registry/registry
 npm install
 npm run build
 cd ..
-docker-compose restart registry
+docker compose restart registry
 ```
 
 ### View Real-time Logs
 ```bash
 # All services
-docker-compose logs -f
+docker compose logs -f
 
 # Specific service
-docker-compose logs -f <service-name>
+docker compose logs -f <service-name>
 
 # Last 100 lines
-docker-compose logs --tail=100 <service-name>
+docker compose logs --tail=100 <service-name>
 ```
 
 ### Stopping Services
 
 ```bash
 # Graceful shutdown (keeps data)
-docker-compose down
+docker compose down
 
 # Complete cleanup (removes all data)
-docker-compose down -v
+docker compose down -v
 
 # Just stop services (to restart later)
-docker-compose stop
+docker compose stop
 ```
 
 ### Reset Everything
 If you need to start over completely:
 ```bash
 # Stop all services and remove volumes
-docker-compose down -v
+docker compose down -v
 
 # Remove all Docker images (optional)
 docker system prune -a
 
 # Start fresh
-docker-compose up -d keycloak-db keycloak
+docker compose up -d keycloak-db keycloak
 # Then follow setup steps again from Step 5
 ```
 
@@ -1055,7 +1055,7 @@ After updating your `.env` file with custom domain values:
 
 ```bash
 # Restart services to pick up new configuration
-docker-compose restart auth-server registry
+docker compose restart auth-server registry
 
 # Test the custom domain
 curl -f https://mcpgateway.mycorp.com/health
@@ -1086,7 +1086,7 @@ curl -f https://mcpgateway.mycorp.com/realms/mcp-gateway
 
 3. Restart services:
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 ### Configure Production Settings
@@ -1110,7 +1110,7 @@ curl -f https://mcpgateway.mycorp.com/realms/mcp-gateway
 - [Keycloak Advanced Configuration](keycloak-integration.md) - Enterprise features
 - [API Reference](registry_api.md) - Programmatic registry management
 - [Dynamic Tool Discovery](dynamic-tool-discovery.md) - AI agent capabilities
-- [Production Deployment](production-deployment.md) - Best practices for production
+- [Production Deployment](../terraform/aws-ecs/README.md) - Best practices for production
 
 ### Getting Help
 

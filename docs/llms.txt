@@ -1085,7 +1085,7 @@ cp .env.example .env
 
 # 4. Install prerequisites
 curl -LsSf https://astral.sh/uv/install.sh | sh
-sudo apt-get update && sudo apt-get install -y docker.io docker-compose
+sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin
 
 # 5. Deploy
 ./build_and_run.sh
@@ -1124,7 +1124,7 @@ open http://localhost:7860
 # Complete: Create Your First AI Agent Account guide
 
 # Step 8: Restart auth server
-docker-compose down auth-server && docker-compose rm -f auth-server && docker-compose up -d auth-server
+docker compose down auth-server && docker compose rm -f auth-server && docker compose up -d auth-server
 
 # Step 9: Test the setup
 # Complete: Testing with mcp_client.py and agent.py guide
@@ -1159,7 +1159,7 @@ uv venv --python 3.12 && source .venv/bin/activate
 
 sudo apt-get update
 sudo apt-get install --reinstall docker.io -y
-sudo apt-get install -y docker-compose
+sudo apt-get install -y docker-compose-plugin
 sudo usermod -a -G docker $USER
 newgrp docker
 
@@ -1210,8 +1210,8 @@ For production Kubernetes deployments, see [EKS deployment guide](https://github
 
 ```bash
 # Check service status
-docker-compose ps
-docker-compose logs -f
+docker compose ps
+docker compose logs -f
 
 # Test web interface
 open http://localhost:7860
@@ -1398,7 +1398,7 @@ sudo systemctl status docker
 cat .env | grep -v SECRET
 
 # View detailed logs
-docker-compose logs --tail=50
+docker compose logs --tail=50
 ```
 
 **Authentication failures:**

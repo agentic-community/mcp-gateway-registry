@@ -648,7 +648,7 @@ See [docs/design/anthropic-api-test-commands.md](anthropic-api-test-commands.md)
 2. ✅ **Permission Filtering** - Uses MCP scopes
 3. ✅ **Health Data** - Includes status and last checked
 4. ✅ **Pagination** - Cursor-based with configurable limits
-5. 🔄 **Read-Only API Access** - Optional: Create dedicated M2M client with minimal scopes (see `.scratchpad/registry-api-readonly-access.md`)
+5. 🔄 **Read-Only API Access** - Optional: Create dedicated M2M client with minimal scopes
 6. 🔄 **Rate Limiting** - Future: Add per-client rate limits
 7. 🔄 **Caching** - Future: Cache server list responses
 
@@ -660,4 +660,3 @@ See [docs/design/anthropic-api-test-commands.md](anthropic-api-test-commands.md)
 - **OpenAPI Spec**: https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/api/openapi.yaml
 - **API Guide**: https://github.com/modelcontextprotocol/registry/blob/main/docs/guides/consuming/use-rest-api.md
 - **Test Commands**: [anthropic-api-test-commands.md](anthropic-api-test-commands.md)
-- **Progress Notes**: [.scratchpad/anthropic-api-v0-jwt-auth-progress.md](../../.scratchpad/anthropic-api-v0-jwt-auth-progress.md)

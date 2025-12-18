@@ -7,11 +7,8 @@ This directory contains the MkDocs-based documentation for the MCP Gateway & Reg
 ### Prerequisites
 
 ```bash
-# Using uv (recommended)
-uv pip install -e ".[docs]"
-
-# Or using pip
-pip install -e ".[docs]"
+# Install documentation dependencies
+uv sync --extra docs
 ```
 
 ### Development Server

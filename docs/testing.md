@@ -37,7 +37,7 @@ This script will:
 ### Prerequisites
 1. Ensure all containers are running:
    ```bash
-   docker-compose ps
+   docker compose ps
    ```
 
 2. Set up authentication (choose one method):
@@ -140,8 +140,7 @@ The Python agent (`agents/agent.py`) provides advanced AI capabilities with Lang
 ### Prerequisites
 ```bash
 # Install dependencies
-cd agents
-pip install -r requirements.txt
+uv pip install -r agents/requirements.txt
 ```
 
 ### Basic Usage
@@ -284,7 +283,7 @@ Use the `service_mgmt.sh` script for comprehensive server lifecycle management:
 #### Connection Refused
 ```bash
 # Check if services are running
-docker-compose ps
+docker compose ps
 
 # Test direct registry access
 curl http://localhost:7860/health
@@ -361,7 +360,7 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Start services
-        run: docker-compose up -d
+        run: docker compose up -d
 
       - name: Wait for services
         run: sleep 10
@@ -381,10 +380,11 @@ jobs:
 
 ### Docker Container Testing
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.12-slim
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN python -m pip install --no-cache-dir uv
+RUN uv sync --frozen
 COPY cli/ cli/
 COPY agents/ agents/
 CMD ["python", "cli/mcp_client.py", "ping"]

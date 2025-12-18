@@ -532,7 +532,7 @@ curl -o /tmp/anthropic-openapi.yaml \
   https://raw.githubusercontent.com/modelcontextprotocol/registry/refs/heads/main/docs/reference/api/openapi.yaml
 
 # Use a tool like openapi-spec-validator or similar
-# (Requires installation: pip install openapi-spec-validator)
+# (Requires installation: uv pip install openapi-spec-validator)
 ```
 
 ## Common Issues

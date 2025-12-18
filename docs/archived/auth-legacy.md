@@ -119,7 +119,7 @@ The updated architecture diagram above shows the clear separation of components 
 - **Amazon Cognito**: Identity Provider (IdP) that handles user authentication and group management
 - **MCP Server Farm**: Collection of individual MCP servers providing various tools and capabilities
 
-> **For detailed setup instructions**, see the comprehensive guide in [`docs/cognito.md`](cognito.md) which covers both user identity and agent identity authentication modes.
+> **For detailed setup instructions**, see the comprehensive guide in [`docs/cognito.md`](../cognito.md) which covers both user identity and agent identity authentication modes.
 
 At a high-level the flow works as follows:
 
@@ -214,8 +214,8 @@ The above implementation provides an OAuth compliant way to MCP security without
 
 ## Amazon Cognito based reference implementation
 
-For comprehensive setup instructions and detailed configuration of Amazon Cognito as the Identity Provider, see the detailed documentation in [`docs/cognito.md`](cognito.md) which covers both user identity and agent identity authentication modes with step-by-step configuration guides.
+For comprehensive setup instructions and detailed configuration of Amazon Cognito as the Identity Provider, see the detailed documentation in [`docs/cognito.md`](../cognito.md) which covers both user identity and agent identity authentication modes with step-by-step configuration guides.
 
-For information about Fine-Grained Access Control (FGAC) including scope configuration, group mappings, and permission management, see [`docs/scopes.md`](scopes.md).
+For information about Fine-Grained Access Control (FGAC) including scope configuration, group mappings, and permission management, see [`docs/scopes.md`](../scopes.md).
 
 By implementing these enhancements, we can significantly improve the security, scalability, and flexibility of our MCP authentication and authorization system.

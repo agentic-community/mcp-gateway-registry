@@ -112,7 +112,7 @@ This setup is for agents that have their own identity and authenticate using cli
    - **App type**: Select "Machine to Machine"
    - **App client name**: Enter `Agent` (or `My AI Assistant` or any name that reflects what the agent will do)
    - **Client secret**: Select "Generate a client secret"
-   - **Copy and save** the **Client ID** and **Client Secret** - you'll need these for the [`agents/.env.agent`](../agents/.env.agent) file
+   - **Copy and save** the **Client ID** and **Client Secret** - you will use these in `credentials-provider/oauth/.env` (used by `./credentials-provider/generate_creds.sh`)
 
 #### Step 2: Create Resource Server and Custom Scopes
 
@@ -484,7 +484,7 @@ python agent.py --message "test" --mcp-registry-url http://localhost/mcpgw/sse
 
 ```bash
 # View auth server logs for validation details
-docker-compose logs -f auth-server
+docker compose logs -f auth-server
 
 # Look for:
 # - Token validation attempts
@@ -516,10 +516,9 @@ print(f'Groups {groups} mapped to scopes: {scopes}')
 
 - [Main Authentication Guide](auth.md) - Overview of the authentication architecture
 - [Scopes Configuration](../auth_server/scopes.yml) - Detailed scope and permission definitions
-- [Environment Template](../.env.template) - Complete environment configuration template
+- [Environment Template](../.env.example) - Example environment configuration
 - [Agent Implementation](../agents/agent.py) - Reference agent implementation
 - [CLI Authentication Tool](../agents/cli_user_auth.py) - User authentication utility
-
 ## Support and Troubleshooting
 
 For additional support:
@@ -529,81 +528,8 @@ For additional support:
 3. **Test Components**: Use the testing procedures above to isolate issues
 4. **Review Scopes**: Verify scope mappings match your intended access control
 
-This guide provides comprehensive coverage of Amazon Cognito setup for both authentication modes. Follow the step-by-step instructions and use the troubleshooting section to resolve common issues.
+This guide provides Cognito setup for the gateway. For the credential generation workflow used by the repo, see:
+- `credentials-provider/oauth/.env.example`
+- `./credentials-provider/generate_creds.sh`
 
-## Saving Client Credentials to Agent Environment Files
-
-After completing the Cognito setup and obtaining your client ID and secret, you need to configure the agent environment files to use these credentials.
-
-### Step 1: Copy Template to Environment File
-
-Navigate to the `agents/` directory and copy the template file:
-
-```bash
-cd agents/
-cp .env.template .env.user
-```
-
-### Step 2: Configure Client Credentials
-
-Edit the [`agents/.env.user`](../agents/.env.user) file with your Cognito credentials obtained from the [User Group Setup](#user-group-setup-for-users-and-agents-using-user-identity) section:
-
-```bash
-# Cognito Authentication Configuration
-# Copy this file to .env and fill in your actual values
-
-# Cognito App Client ID (from Step 2 of User Group Setup)
-COGNITO_CLIENT_ID=your_actual_cognito_client_id_here
-
-# Cognito App Client Secret (from Step 2 of User Group Setup)
-COGNITO_CLIENT_SECRET=your_actual_cognito_client_secret_here
-
-# Cognito User Pool ID (from Step 1 of User Group Setup)
-COGNITO_USER_POOL_ID=your_actual_cognito_user_pool_id_here
-
-# AWS Region for Cognito
-AWS_REGION=us-east-1
-
-# Cognito Domain (without https:// prefix, just the domain name)
-# Example: mcp-gateway or your-custom-domain
-# COGNITO_DOMAIN=
-
-# Secret key for session cookie signing (must match registry SECRET_KEY), string of hex characters
-# To generate: python -c 'import secrets; print(secrets.token_hex(32))'
-SECRET_KEY=your-secret-key-here
-
-# Either http://localhost:8000 or the HTTPS URL of your deployed MCP Gateway
-REGISTRY_URL=your_registry_url_here
-```
-
-### Step 3: Replace Placeholder Values
-
-Replace the following placeholder values with your actual Cognito configuration:
-
-1. **COGNITO_CLIENT_ID**: The Client ID copied from Step 2 of the [User Group Setup](#step-2-configure-app-client-for-users)
-2. **COGNITO_CLIENT_SECRET**: The Client Secret copied from Step 2 of the [User Group Setup](#step-2-configure-app-client-for-users)
-3. **COGNITO_USER_POOL_ID**: Your User Pool ID from Step 1 of the [User Group Setup](#step-1-create-user-pool)
-4. **AWS_REGION**: The AWS region where your Cognito User Pool is located (e.g., `us-east-1`)
-5. **SECRET_KEY**: Generate a secure secret key using: `python -c 'import secrets; print(secrets.token_hex(32))'`
-6. **REGISTRY_URL**: Your MCP Gateway URL (e.g., `http://localhost:7860` for local development)
-
-### Step 4: Verify Configuration
-
-After saving the file, verify your configuration by testing the authentication flow:
-
-```bash
-# Test user authentication
-python cli_user_auth.py
-
-# Test agent with session cookie
-python agent.py --use-session-cookie --message "test authentication"
-```
-
-### Important Notes
-
-- **Security**: Keep your `.env.user` file secure and never commit it to version control
-- **Secret Key Matching**: Ensure the `SECRET_KEY` in `agents/.env.user` matches the `SECRET_KEY` in your main registry `.env` file
-- **Multiple Agents**: If you have multiple agent instances, each can use the same `.env.user` file or have separate configuration files
-- **Environment Separation**: Use different `.env.user` files for different environments (development, staging, production)
-
-This completes the client credential configuration for your MCP Gateway agents using Amazon Cognito authentication.
+For broader troubleshooting, see `docs/FAQ.md`.

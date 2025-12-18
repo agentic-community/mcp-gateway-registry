@@ -25,7 +25,7 @@ This document provides a comprehensive overview of all 49 API endpoints availabl
 | A2A Agent Management | 8 | JWT Bearer Token | Agent registration, discovery, and management |
 | Anthropic Registry API v0 (Servers) | 3 | JWT Bearer Token | Standard MCP server discovery via Anthropic API spec |
 | Internal Server Management (UI) | 10 | Session Cookie | Dashboard and service management |
-| Internal Server Management (Admin) | 12 | HTTP Basic Auth | Administrative operations and group management |
+| Internal Server Management (Admin) | 12 | Session Cookie (Admin) / JWT Bearer Token (Nginx-Proxied) | Administrative operations and group management |
 | Authentication & Login | 7 | OAuth2 + Session | User authentication and provider management |
 | Health Monitoring | 3 | Session Cookie / None | Real-time health updates and statistics |
 | Discovery | 1 | None (Public) | Public MCP server discovery |
@@ -76,20 +76,18 @@ curl -b "mcp_gateway_session=<session_value>" \
 
 ---
 
-### 3. HTTP Basic Auth
+### 3. Admin (Unified Admin Auth)
 
-**Used by:** Internal Admin Endpoints
+**Used by:** Registry `/api/internal/*` admin endpoints
 
 **How it works:**
-- Credentials: `ADMIN_USER:ADMIN_PASSWORD` from environment
-- Sent in `Authorization: Basic <base64>` header
-- Used for internal mcpgw-server operations
+- Registry admin endpoints use the same `nginx_proxied_auth` model as other registry APIs.
+- Through the gateway (recommended for programmatic access): send `Authorization: Bearer <jwt>`; nginx validates it via the auth server and forwards identity headers.
+- For browser/UI calls: the registry falls back to session cookie authentication and requires an admin user.
 
-**Example:**
-```bash
-curl -u admin:password http://localhost/api/internal/register \
-  -d "service_path=/example"
-```
+**Notes:**
+- HTTP Basic is not used for registry admin endpoints.
+- The auth server still exposes some internal endpoints that use HTTP Basic (for example `POST /internal/reload-scopes`); those are separate from the registry API surface documented here.
 
 ---
 
@@ -633,7 +631,7 @@ This section implements the official [Anthropic MCP Registry API specification](
 
 ### Internal Admin Endpoints
 
-**Authentication:** HTTP Basic Auth (admin credentials)
+**Authentication:** Session Cookie (Admin) or JWT Bearer Token (nginx-proxied)
 
 #### 11. Internal Register Service
 
@@ -1132,7 +1130,7 @@ curl -s http://localhost:7860/openapi.json | \
 | Anthropic v0 (Servers) | 3 | JWT Bearer | Standard server discovery |
 | Anthropic v0 (Agents) | 3 | JWT Bearer | Standard agent discovery |
 | UI Management | 10 | Session Cookie | Dashboard operations |
-| Admin Operations | 12 | HTTP Basic Auth | Administrative tasks |
+| Admin Operations | 12 | Session Cookie (Admin) / JWT Bearer | Administrative tasks |
 | Authentication | 7 | OAuth2/Session | User login/logout |
 | Health Monitoring | 3 | Session/None | Real-time status |
 | Discovery | 1 | None | Public server discovery |
@@ -1176,4 +1174,3 @@ curl -s http://localhost:7860/openapi.json | \
 | Date | Version | Changes |
 |------|---------|---------|
 | 2025-11-01 | 1.0 | Initial API reference documentation, 49 endpoints cataloged |
-

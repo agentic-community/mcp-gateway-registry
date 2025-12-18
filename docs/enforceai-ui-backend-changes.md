@@ -1,5 +1,6 @@
 # Enforce Gateway UI — Backend Changes Required
-*Created: 2025-12-15*
+*Created: 2025-12-15*  
+*Status: Implemented (kept as a historical checklist/contract)*
 
 ## Purpose
 Capture the backend changes required to support the new Enforce Gateway UI requirements (`docs/enforceai-ui-requirements.md`). This document is an implementation checklist/contract for backend work (not UI work).
@@ -139,7 +140,7 @@ These actions must:
 - Use “admin acting on target” semantics (no impersonation/act-as in Phase 1).
 
 ## 5) Registry Admin Auth Migration (Remove HTTP Basic)
-Registry currently has internal/operator endpoints protected by HTTP Basic.
+Registry previously had internal/operator endpoints protected by HTTP Basic.
 
 Backend must:
 - Migrate those endpoints to unified admin auth (same session/admin identity).

@@ -1,5 +1,6 @@
 # Enforce Gateway UI Requirements (Phase 1)
 *Created: 2025-12-15*
+*Status: Implemented (retained as original requirements/spec)*
 
 ## Purpose
 Define a complete, UI-focused requirements specification for a new Enforce Gateway (EnforceAI) web UI. This document is requirements-only (no implementation).
@@ -474,7 +475,7 @@ Should:
 8. Admin authorization supports both OIDC-admin and a dedicated admin break-glass credential.
 9. For EnforceAI agents, revoke (soft-delete) is sufficient for Phase 1.
 10. Admin “user directory” primary display identifier is `email` (OIDC claim).
-11. Registry internal/operator actions must be migrated to unified admin auth (no HTTP Basic in the new UI).
+11. Registry internal/operator actions are migrated to unified admin auth (no HTTP Basic in the UI).
 12. Admin role is granted by OIDC group/role `enforceai-admin`.
 13. Username/password auth supports multiple users with admin and non-admin roles.
 14. Username/password users are admin-provisioned only (no self-service signup).
@@ -492,12 +493,12 @@ These are not UI design questions, but requirements-impacting backend work that 
 1. **Single unified session across services**: `auth_server` EnforceAI endpoints currently authenticate via bearer/API-key style credentials; to meet “single session”, `auth_server` must accept the same browser session identity used by the Registry (or both must trust a shared session issuer).
 2. **Cross-user admin APIs**: current EnforceAI management endpoints are ownership-scoped by `user_id`; cross-user create/revoke/delete requires new admin-only endpoints and an admin permission model.
 3. **User directory source of truth**: add a minimal user directory store (likely in the EnforceAI DB) populated on first-seen from OIDC (`email`) and from username/password logins (`username`), so Admin → Users is searchable and comprehensible.
-4. **Registry operator endpoints**: Registry internal/operator actions currently protected by HTTP Basic must be migrated to unified admin auth and audited.
+4. **Registry operator endpoints**: Registry internal/operator actions are migrated to unified admin auth and audited.
 5. **Auth parity for UI flows**: some Registry APIs are JWT-bearer oriented today; for a cookie-session UI, either (a) add cookie-auth equivalents, or (b) vend short-lived UI-scoped tokens server-side without exposing long-lived secrets to the browser.
 6. **Local user management**: add a persistent user store for username/password identities (multiple users, admin vs non-admin role), with secure password hashing, resets, and audit logging.
 
 ## Appendix B: Registry Internal Admin (HTTP Basic) vs Unified Admin Auth
-The Registry currently exposes some “internal/operator” endpoints protected by HTTP Basic Auth (admin username/password in a header).
+The Registry previously exposed some “internal/operator” endpoints protected by HTTP Basic Auth (admin username/password in a header). UI-facing actions are now migrated to unified admin auth.
 
 ### Meaning
 - **Keep HTTP Basic (as-is):**

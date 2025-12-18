@@ -1513,7 +1513,7 @@ SECRET_KEY=your-secure-random-secret-key-here
 SESSION_COOKIE_NAME=mcp_gateway_session
 SESSION_MAX_AGE_SECONDS=28800  # 8 hours default
 
-# Traditional Authentication (for local development)
+# Local username/password login (for development/bootstrap)
 ADMIN_USER=admin
 ADMIN_PASSWORD=secure-password-here
 

@@ -75,7 +75,7 @@ cp .env.example .env
 ./credentials-provider/generate_creds.sh
 
 # 4. Deploy with Docker Compose
-docker-compose up -d
+docker compose up -d
 
 # 5. Access the registry
 open http://localhost:7860
@@ -273,7 +273,7 @@ Accelerate development workflows with integrated tooling:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
 
 ---
 

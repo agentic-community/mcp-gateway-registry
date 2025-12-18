@@ -677,7 +677,7 @@ SECRET_KEY=your-secure-secret-key-here
 SESSION_COOKIE_NAME=mcp_gateway_session
 SESSION_MAX_AGE_SECONDS=28800  # 8 hours
 
-# Traditional authentication
+# Local username/password login (for development/bootstrap)
 ADMIN_USER=admin
 ADMIN_PASSWORD=secure-password
 

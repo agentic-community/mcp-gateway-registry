@@ -374,7 +374,7 @@ A: Yes, set `"visibility": "private"` in agent JSON. Only registered users can a
 
 1. Check [Troubleshooting](#troubleshooting) section above
 2. Review JWT token contents and verify groups are present
-3. Check service is running: `docker-compose ps`
+3. Check service is running: `docker compose ps`
 4. View logs: `docker logs mcp-gateway-registry-auth-server-1`
 5. Verify Keycloak groups in admin UI: http://localhost:8080/admin
 

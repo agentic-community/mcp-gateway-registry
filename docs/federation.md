@@ -206,7 +206,7 @@ Federated servers and agents are visually tagged in the UI:
 **1. Anthropic Servers Not Importing**
 ```bash
 # Check logs
-docker-compose logs registry | grep -i anthropic
+docker compose logs registry | grep -i anthropic
 
 # Verify connectivity
 curl https://registry.modelcontextprotocol.io/servers
@@ -218,7 +218,7 @@ cat ~/mcp-gateway/federation.json
 **2. ASOR Authentication Errors**
 ```bash
 # Check token in logs
-docker-compose logs registry | grep -i asor
+docker compose logs registry | grep -i asor
 
 # Verify token
 echo $ASOR_ACCESS_TOKEN
@@ -242,23 +242,23 @@ FEDERATION_DEBUG=true
 LOG_LEVEL=DEBUG
 
 # Restart services
-docker-compose restart registry
+docker compose restart registry
 ```
 
 ### Log Analysis
 
 ```bash
 # Federation startup
-docker-compose logs registry | grep -i "federation.*enabled"
+docker compose logs registry | grep -i "federation.*enabled"
 
 # Sync operations
-docker-compose logs registry | grep -i "sync.*servers\|sync.*agents"
+docker compose logs registry | grep -Ei "sync.*servers|sync.*agents"
 
 # Authentication
-docker-compose logs registry | grep -i "token\|auth"
+docker compose logs registry | grep -Ei "token|auth"
 
 # Errors
-docker-compose logs registry | grep -i "error\|failed"
+docker compose logs registry | grep -Ei "error|failed"
 ```
 
 ---
