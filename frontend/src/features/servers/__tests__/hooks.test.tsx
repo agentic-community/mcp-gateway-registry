@@ -53,7 +53,7 @@ describe('Server Hooks', () => {
         expect(result.current.isLoading).toBe(false);
       });
 
-      expect(result.current.servers).toHaveLength(3);
+      expect(result.current.servers).toHaveLength(5);
       expect(result.current.servers[0].display_name).toBe('SQLite Server');
       expect(result.current.isError).toBe(false);
     });
@@ -224,7 +224,7 @@ describe('Server Hooks', () => {
       const filter: ServerFilter = { search: '', status: 'enabled', healthStatus: 'all' };
       const result = filterServers(servers, filter);
 
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(4);
       expect(result.every(s => s.is_enabled)).toBe(true);
     });
 
@@ -240,7 +240,7 @@ describe('Server Hooks', () => {
       const filter: ServerFilter = { search: '', status: 'all', healthStatus: 'healthy' };
       const result = filterServers(servers, filter);
 
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(4);
       expect(result.every(s => s.health_status === 'healthy')).toBe(true);
     });
 
@@ -248,14 +248,14 @@ describe('Server Hooks', () => {
       const filter: ServerFilter = { search: 'server', status: 'enabled', healthStatus: 'healthy' };
       const result = filterServers(servers, filter);
 
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(4);
     });
 
     it('returns all servers with no filters', () => {
       const filter: ServerFilter = { search: '', status: 'all', healthStatus: 'all' };
       const result = filterServers(servers, filter);
 
-      expect(result).toHaveLength(3);
+      expect(result).toHaveLength(5);
     });
   });
 });

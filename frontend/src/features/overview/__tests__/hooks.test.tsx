@@ -55,7 +55,7 @@ describe('Overview Hooks', () => {
         expect(result.current.isLoading).toBe(false);
       });
 
-      expect(result.current.servers).toHaveLength(3);
+      expect(result.current.servers).toHaveLength(5);
       expect(result.current.servers[0].display_name).toBe('SQLite Server');
       expect(result.current.isError).toBe(false);
     });
@@ -93,9 +93,9 @@ describe('Overview Hooks', () => {
         expect(result.current.isLoading).toBe(false);
       });
 
-      // Mock data has 3 servers: 2 enabled, 1 disabled
-      expect(result.current.total).toBe(3);
-      expect(result.current.enabled).toBe(2);
+      // Mock data has 5 servers: 4 enabled, 1 disabled
+      expect(result.current.total).toBe(5);
+      expect(result.current.enabled).toBe(4);
       expect(result.current.disabled).toBe(1);
     });
   });

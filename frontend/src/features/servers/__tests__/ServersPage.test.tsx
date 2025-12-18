@@ -271,7 +271,7 @@ describe('ServersPage', () => {
         expect(screen.getByText('SQLite Server')).toBeInTheDocument();
       });
 
-      expect(screen.getByText(/showing 3 of 3 servers/i)).toBeInTheDocument();
+      expect(screen.getByText(/showing 5 of 5 servers/i)).toBeInTheDocument();
     });
 
     it('updates count when filtering', async () => {
@@ -285,7 +285,7 @@ describe('ServersPage', () => {
       await user.selectOptions(statusSelect, 'enabled');
 
       await waitFor(() => {
-        expect(screen.getByText(/showing 2 of 3 servers/i)).toBeInTheDocument();
+        expect(screen.getByText(/showing 4 of 5 servers/i)).toBeInTheDocument();
       });
     });
   });
