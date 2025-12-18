@@ -21,6 +21,13 @@ from ..models.user import (
 from ..models.session import (
     SessionRecord,
 )
+from ..models.upstream_credentials import (
+    UpstreamCredentialRecord,
+    UpstreamCredentialSecret,
+)
+from ..models.egress_allowlist import (
+    EgressAllowlistEntryRecord,
+)
 
 
 class AgentStore(Protocol):
@@ -120,6 +127,109 @@ class ApiKeyStore(Protocol):
         key_id: str,
         last_used_at: datetime,
     ) -> Optional[ApiKeyRecord]:
+        ...
+
+
+class UpstreamCredentialStore(Protocol):
+    def create_credential(
+        self,
+        *,
+        server_path: str,
+        credential_type: str,
+        credential_binding: str,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        scopes: Optional[list[str]] = None,
+        token_type: Optional[str] = None,
+        expires_at: Optional[datetime] = None,
+        secret_payload: Optional[dict[str, object]] = None,
+    ) -> UpstreamCredentialRecord:
+        ...
+
+    def get_credential_by_id(
+        self,
+        *,
+        credential_id: str,
+    ) -> Optional[UpstreamCredentialRecord]:
+        ...
+
+    def get_credential_secret(
+        self,
+        *,
+        credential_id: str,
+    ) -> Optional[UpstreamCredentialSecret]:
+        ...
+
+    def list_credentials(
+        self,
+        *,
+        server_path: Optional[str] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        include_revoked: bool = False,
+    ) -> list[UpstreamCredentialRecord]:
+        ...
+
+    def revoke_credential(
+        self,
+        *,
+        credential_id: str,
+        revoked_at: Optional[datetime] = None,
+    ) -> Optional[UpstreamCredentialRecord]:
+        ...
+
+    def update_last_used_at(
+        self,
+        *,
+        credential_id: str,
+        last_used_at: datetime,
+    ) -> Optional[UpstreamCredentialRecord]:
+        ...
+
+
+class EgressAllowlistStore(Protocol):
+    def create_entry(
+        self,
+        *,
+        kind: str,
+        value: str,
+        comment: Optional[str] = None,
+        expires_at: Optional[datetime] = None,
+    ) -> EgressAllowlistEntryRecord:
+        ...
+
+    def get_entry_by_id(
+        self,
+        *,
+        entry_id: int,
+    ) -> Optional[EgressAllowlistEntryRecord]:
+        ...
+
+    def list_entries(
+        self,
+        *,
+        include_expired: bool = False,
+        now: Optional[datetime] = None,
+    ) -> list[EgressAllowlistEntryRecord]:
+        ...
+
+    def update_entry(
+        self,
+        *,
+        entry_id: int,
+        kind: Optional[str] = None,
+        value: Optional[str] = None,
+        comment: Optional[str] = None,
+        expires_at: Optional[datetime] = None,
+    ) -> Optional[EgressAllowlistEntryRecord]:
+        ...
+
+    def delete_entry(
+        self,
+        *,
+        entry_id: int,
+    ) -> bool:
         ...
 
 
