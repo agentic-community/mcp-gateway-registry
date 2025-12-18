@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import type { Server, A2AAgent, EnforceAIAgent, ServerDetails, Tool, ApiKeySummary, ScopeCatalog } from '@/api/types';
+import type { Server, A2AAgent, EnforceAIAgent, ServerDetails, Tool, ApiKeySummary, ScopeCatalog, EgressAllowlistEntry, UpstreamOAuthCredential } from '@/api/types';
 
 // Mock tools data
 export const mockTools: Tool[] = [
@@ -43,6 +43,12 @@ export const mockServers: Server[] = [
     is_enabled: true,
     health_status: 'healthy',
     num_tools: 6,
+    upstream_auth: {
+      mode: 'gateway-managed',
+      type: 'api-key',
+      credential_binding: 'user',
+    },
+    upstream_credential_status: 'configured',
   },
   {
     display_name: 'Filesystem Server',
@@ -53,6 +59,13 @@ export const mockServers: Server[] = [
     is_enabled: true,
     health_status: 'healthy',
     num_tools: 4,
+    upstream_auth: {
+      mode: 'gateway-managed',
+      type: 'oauth2',
+      provider: 'github',
+      credential_binding: 'user',
+    },
+    upstream_credential_status: 'missing',
   },
   {
     display_name: 'Disabled Server',
@@ -62,6 +75,46 @@ export const mockServers: Server[] = [
     is_enabled: false,
     health_status: 'unknown',
     num_tools: 0,
+    upstream_auth: {
+      mode: 'gateway-managed',
+      type: 'jwt',
+      credential_binding: 'service',
+    },
+    upstream_credential_status: 'expired',
+  },
+  {
+    display_name: 'GitHub MCP',
+    path: 'github-mcp',
+    proxy_pass_url: 'http://localhost:3034/mcp',
+    description: 'GitHub API MCP Server',
+    tags: ['github', 'vcs'],
+    is_enabled: true,
+    health_status: 'healthy',
+    num_tools: 10,
+    upstream_auth: {
+      mode: 'gateway-managed',
+      type: 'provider-oauth',
+      provider: 'github',
+      credential_binding: 'user',
+    },
+    upstream_credential_status: 'configured',
+  },
+  {
+    display_name: 'Slack MCP',
+    path: 'slack-mcp',
+    proxy_pass_url: 'http://localhost:3035/mcp',
+    description: 'Slack API MCP Server',
+    tags: ['slack', 'messaging'],
+    is_enabled: true,
+    health_status: 'healthy',
+    num_tools: 8,
+    upstream_auth: {
+      mode: 'gateway-managed',
+      type: 'oauth2',
+      provider: 'slack',
+      credential_binding: 'user',
+    },
+    upstream_credential_status: 'missing',
   },
 ];
 
@@ -148,6 +201,33 @@ export const mockApiKeys: ApiKeySummary[] = [
     revoked_at: '2024-01-12T00:00:00Z',
     created_at: '2024-01-02T00:00:00Z',
     last_used_at: null,
+  },
+];
+
+export const mockEgressAllowlistEntries: EgressAllowlistEntry[] = [
+  {
+    entry_id: 'entry-1',
+    pattern: 'localhost:*',
+    description: 'Allow all localhost connections for development',
+    expires_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    entry_id: 'entry-2',
+    pattern: '*.example.com',
+    description: 'Allow all example.com subdomains',
+    expires_at: '2025-12-31T23:59:59Z',
+    created_at: '2024-01-05T00:00:00Z',
+    updated_at: '2024-01-05T00:00:00Z',
+  },
+  {
+    entry_id: 'entry-3',
+    pattern: 'api.trusted-service.io',
+    description: 'Production API endpoint',
+    expires_at: null,
+    created_at: '2024-01-10T00:00:00Z',
+    updated_at: '2024-01-15T00:00:00Z',
   },
 ];
 
@@ -766,5 +846,172 @@ export const handlers = [
       expires_at: null,
       reason: body.reason ?? null,
     });
+  }),
+
+  // Egress Allowlist endpoints
+  http.get('/enforceai/admin/egress-allowlist', () => {
+    return HttpResponse.json(mockEgressAllowlistEntries);
+  }),
+
+  http.post('/enforceai/admin/egress-allowlist', async ({ request }) => {
+    const body = (await request.json()) as {
+      pattern: string;
+      description?: string;
+      expires_at?: string | null;
+    };
+    const newEntry: EgressAllowlistEntry = {
+      entry_id: 'entry-' + Date.now(),
+      pattern: body.pattern,
+      description: body.description,
+      expires_at: body.expires_at ?? null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(newEntry, { status: 201 });
+  }),
+
+  http.put('/enforceai/admin/egress-allowlist/:entryId', async ({ params, request }) => {
+    const entry = mockEgressAllowlistEntries.find((e) => e.entry_id === params.entryId);
+    if (!entry) {
+      return HttpResponse.json({ detail: 'Entry not found' }, { status: 404 });
+    }
+    const body = (await request.json()) as {
+      pattern?: string;
+      description?: string;
+      expires_at?: string | null;
+    };
+    const updatedEntry: EgressAllowlistEntry = {
+      ...entry,
+      pattern: body.pattern ?? entry.pattern,
+      description: body.description !== undefined ? body.description : entry.description,
+      expires_at: body.expires_at !== undefined ? body.expires_at : entry.expires_at,
+      updated_at: new Date().toISOString(),
+    };
+    return HttpResponse.json(updatedEntry);
+  }),
+
+  http.delete('/enforceai/admin/egress-allowlist/:entryId', ({ params }) => {
+    const entry = mockEgressAllowlistEntries.find((e) => e.entry_id === params.entryId);
+    if (!entry) {
+      return HttpResponse.json({ detail: 'Entry not found' }, { status: 404 });
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.post('/enforceai/admin/egress-allowlist/check', async ({ request }) => {
+    const body = (await request.json()) as { pattern: string };
+    // Simple mock check - always return allowed for now
+    return HttpResponse.json({
+      allowed: true,
+      reason: 'Pattern matches allowlist',
+    });
+  }),
+
+  // ============================================================================
+  // Upstream Credentials API
+  // ============================================================================
+
+  // Mock upstream credentials storage (keyed by server path)
+  // In real tests, this would be managed by the test setup
+
+  http.get('/enforceai/upstream/servers/:serverPath/credentials', ({ params }) => {
+    const serverPath = params.serverPath as string;
+
+    // Mock OAuth credentials for OAuth-type servers
+    if (serverPath === 'github-mcp') {
+      const oauthCredential: UpstreamOAuthCredential = {
+        credential_id: `cred-${serverPath}`,
+        server_path: serverPath,
+        credential_type: 'provider-oauth',
+        binding: 'user',
+        user_id: 'local|testuser',
+        status: 'configured',
+        provider: 'github',
+        oauth_scopes: ['repo', 'read:user', 'read:org'],
+        token_expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
+        has_refresh_token: true,
+        expires_at: null,
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+        last_used_at: '2024-01-15T10:30:00Z',
+      };
+      return HttpResponse.json(oauthCredential);
+    }
+
+    // Mock API key credentials for api-key type servers
+    if (serverPath === 'sqlite') {
+      return HttpResponse.json({
+        credential_id: `cred-${serverPath}`,
+        server_path: serverPath,
+        credential_type: 'api-key',
+        binding: 'user',
+        user_id: 'local|testuser',
+        status: 'configured',
+        expires_at: null,
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+        last_used_at: '2024-01-15T10:30:00Z',
+      });
+    }
+
+    // No credential configured for other servers
+    return HttpResponse.json(
+      { detail: 'No credential configured for this server' },
+      { status: 404 }
+    );
+  }),
+
+  http.post('/enforceai/upstream/servers/:serverPath/credentials', async ({ params, request }) => {
+    const serverPath = params.serverPath as string;
+    const body = (await request.json()) as {
+      credential_type: 'api-key' | 'jwt';
+      secret: string;
+      expires_at?: string | null;
+    };
+
+    // Return the created credential with the secret (only returned once)
+    return HttpResponse.json({
+      credential_id: `cred-${serverPath}-${Date.now()}`,
+      server_path: serverPath,
+      credential_type: body.credential_type,
+      secret: body.secret, // Echoed back once
+      created_at: new Date().toISOString(),
+    });
+  }),
+
+  http.post('/enforceai/upstream/credentials/:credentialId/revoke', ({ params }) => {
+    const credentialId = params.credentialId as string;
+
+    // Simple mock - just return success
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ============================================================================
+  // Upstream OAuth Flow API
+  // ============================================================================
+
+  http.post('/enforceai/upstream/servers/:serverPath/oauth/start', async ({ params, request }) => {
+    const serverPath = params.serverPath as string;
+    const body = (await request.json()) as { return_url?: string };
+
+    // Build state with server info
+    const stateData = {
+      server_path: serverPath,
+      return_url: body.return_url,
+    };
+    const state = btoa(JSON.stringify(stateData));
+
+    // Return mock authorization URL (in tests, we don't actually redirect)
+    return HttpResponse.json({
+      authorization_url: `https://mock-oauth-provider.test/authorize?state=${state}&client_id=mock-client&redirect_uri=${encodeURIComponent(body.return_url || '')}`,
+      state,
+    });
+  }),
+
+  http.post('/enforceai/upstream/servers/:serverPath/oauth/disconnect', async ({ params }) => {
+    const serverPath = params.serverPath as string;
+
+    // Simple mock - just return success
+    return new HttpResponse(null, { status: 204 });
   }),
 ];
