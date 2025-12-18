@@ -21,12 +21,15 @@ const EnforceAIAgentDetailsPage = lazy(() => import('./features/enforceai-agents
 const CredentialsPage = lazy(() => import('./features/credentials/CredentialsPage'));
 const ApiKeysPage = lazy(() => import('./features/credentials/ApiKeysPage'));
 const TokensPage = lazy(() => import('./features/credentials/TokensPage'));
+const UpstreamCredentialsPage = lazy(() => import('./features/credentials/UpstreamCredentialsPage'));
+const UpstreamOAuthCallbackPage = lazy(() => import('./features/credentials/UpstreamOAuthCallbackPage'));
 const ScopesPage = lazy(() => import('./features/scopes/ScopesPage'));
 const ToolsPage = lazy(() => import('./features/tools/ToolsPage'));
 const AuditPage = lazy(() => import('./features/audit/AuditPage'));
 const AdminPage = lazy(() => import('./features/admin/AdminPage'));
 const AdminUsersPage = lazy(() => import('./features/admin/AdminUsersPage'));
 const AdminUserDetailsPage = lazy(() => import('./features/admin/AdminUserDetailsPage'));
+const EgressAllowlistPage = lazy(() => import('./features/admin/EgressAllowlistPage'));
 const SettingsPage = lazy(() => import('./features/settings/SettingsPage'));
 const HelpPage = lazy(() => import('./features/help/HelpPage'));
 const LoginPage = lazy(() => import('./features/auth/LoginPage'));
@@ -204,6 +207,22 @@ export const router = createBrowserRouter([
           </SuspenseWrapper>
         ),
       },
+      {
+        path: '/credentials/upstream',
+        element: (
+          <SuspenseWrapper>
+            <UpstreamCredentialsPage />
+          </SuspenseWrapper>
+        ),
+      },
+      {
+        path: '/credentials/upstream/oauth/callback',
+        element: (
+          <SuspenseWrapper>
+            <UpstreamOAuthCallbackPage />
+          </SuspenseWrapper>
+        ),
+      },
       // Scopes and Policy
       {
         path: '/scopes',
@@ -280,6 +299,14 @@ export const router = createBrowserRouter([
         element: (
           <SuspenseWrapper>
             <AdminUserDetailsPage />
+          </SuspenseWrapper>
+        ),
+      },
+      {
+        path: '/admin/egress-allowlist',
+        element: (
+          <SuspenseWrapper>
+            <EgressAllowlistPage />
           </SuspenseWrapper>
         ),
       },
