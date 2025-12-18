@@ -18,6 +18,23 @@ from .session import (
 from .user import (
     UserRecord,
 )
+from .upstream_auth import (
+    UpstreamAuthConfig,
+    UpstreamAuthInjection,
+)
+from .upstream_credentials import (
+    UpstreamCredentialRecord,
+    UpstreamCredentialSecret,
+)
+from .egress_allowlist import (
+    EgressAllowlistEntryRecord,
+)
+from .upstream_management import (
+    UpstreamCredentialCreateRequest,
+    UpstreamCredentialCreateResponse,
+    UpstreamCredentialRevokeRequest,
+    UpstreamServerSummary,
+)
 
 __all__ = [
     "AgentRecord",
@@ -26,4 +43,13 @@ __all__ = [
     "TokenRevocationRecord",
     "SessionRecord",
     "UserRecord",
+    "UpstreamAuthConfig",
+    "UpstreamAuthInjection",
+    "UpstreamCredentialRecord",
+    "UpstreamCredentialSecret",
+    "EgressAllowlistEntryRecord",
+    "UpstreamCredentialCreateRequest",
+    "UpstreamCredentialCreateResponse",
+    "UpstreamCredentialRevokeRequest",
+    "UpstreamServerSummary",
 ]
