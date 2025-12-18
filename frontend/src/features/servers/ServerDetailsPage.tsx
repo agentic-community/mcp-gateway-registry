@@ -18,6 +18,7 @@ import { ServerEditModal } from './ServerEditModal';
 import { cn } from '@/lib/cn';
 import { formatDistanceToNow, format } from 'date-fns';
 import type { Tool } from '@/api/types';
+import UpstreamAuthBadge from '@/components/UpstreamAuthBadge';
 
 // ============================================================================
 // Tool Item Component
@@ -311,6 +312,21 @@ export default function ServerDetailsPage() {
                         {tag}
                       </Badge>
                     ))}
+                  </dd>
+                </div>
+              )}
+              {server.upstream_auth && (
+                <div>
+                  <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                    Upstream Authentication
+                  </dt>
+                  <dd className="mt-1">
+                    <UpstreamAuthBadge
+                      authType={server.upstream_auth.type}
+                      credentialStatus={server.upstream_credential_status}
+                      provider={server.upstream_auth.provider}
+                      compact={false}
+                    />
                   </dd>
                 </div>
               )}

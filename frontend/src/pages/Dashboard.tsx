@@ -12,6 +12,7 @@ import axios from 'axios';
 interface Server {
   name: string;
   path: string;
+  proxy_pass_url: string;
   description?: string;
   official?: boolean;
   enabled: boolean;
@@ -21,10 +22,16 @@ interface Server {
   rating?: number;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   num_tools?: number;
-  proxy_pass_url?: string;
   license?: string;
   num_stars?: number;
   is_python?: boolean;
+  upstream_auth?: {
+    mode: 'gateway-managed' | 'none';
+    type: 'none' | 'api-key' | 'oauth2' | 'oidc' | 'provider-oauth' | 'jwt' | 'mtls' | 'header-trust';
+    provider?: string;
+    credential_binding: 'service' | 'user' | 'agent' | 'user+agent';
+  };
+  upstream_credential_status?: 'configured' | 'missing' | 'expired' | 'revoked';
 }
 
 interface Agent {

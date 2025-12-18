@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import axios from 'axios';
-import { 
+import {
   EyeIcon,
   WrenchScrewdriverIcon,
   StarIcon,
@@ -13,19 +13,20 @@ import {
   CogIcon
 } from '@heroicons/react/24/outline';
 import ServerConfigModal from './ServerConfigModal';
+import UpstreamAuthBadge from './UpstreamAuthBadge';
+import type { Server as ApiServer } from '../api/types';
 
-export interface Server {
+// Extend the API Server type with local display properties
+export interface Server extends Omit<ApiServer, 'display_name' | 'is_enabled' | 'health_status' | 'proxy_pass_url'> {
   name: string;
   path: string;
-  description?: string;
-  official?: boolean;
+  proxy_pass_url: string;
   enabled: boolean;
-  tags?: string[];
+  status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   last_checked_time?: string;
   usersCount?: number;
   rating?: number;
-  status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
-  num_tools?: number;
+  official?: boolean;
 }
 
 interface ServerCardProps {
@@ -48,42 +49,35 @@ interface Tool {
 // Helper function to format time since last checked
 const formatTimeSince = (timestamp: string | null | undefined): string | null => {
   if (!timestamp) {
-    console.log('🕐 formatTimeSince: No timestamp provided', timestamp);
     return null;
   }
-  
+
   try {
     const now = new Date();
     const lastChecked = new Date(timestamp);
-    
+
     // Check if the date is valid
     if (isNaN(lastChecked.getTime())) {
-      console.log('🕐 formatTimeSince: Invalid timestamp', timestamp);
       return null;
     }
-    
+
     const diffMs = now.getTime() - lastChecked.getTime();
-    
+
     const diffSeconds = Math.floor(diffMs / 1000);
     const diffMinutes = Math.floor(diffSeconds / 60);
     const diffHours = Math.floor(diffMinutes / 60);
     const diffDays = Math.floor(diffHours / 24);
-    
-    let result;
+
     if (diffDays > 0) {
-      result = `${diffDays}d ago`;
+      return `${diffDays}d ago`;
     } else if (diffHours > 0) {
-      result = `${diffHours}h ago`;
+      return `${diffHours}h ago`;
     } else if (diffMinutes > 0) {
-      result = `${diffMinutes}m ago`;
+      return `${diffMinutes}m ago`;
     } else {
-      result = `${diffSeconds}s ago`;
+      return `${diffSeconds}s ago`;
     }
-    
-    console.log(`🕐 formatTimeSince: ${timestamp} -> ${result}`);
-    return result;
-  } catch (error) {
-    console.error('🕐 formatTimeSince error:', error, 'for timestamp:', timestamp);
+  } catch {
     return null;
   }
 };
@@ -184,7 +178,6 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
 
   // Check if this server has security pending
   const isSecurityPending = server.tags?.includes('security-pending');
-  console.log('isSecurityPending', isSecurityPending)
   return (
     <>
       <div className={`group rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 h-full flex flex-col ${
@@ -196,7 +189,7 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
         <div className="p-5 pb-4">
           <div className="flex items-start justify-between mb-4">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
                 <h3 className="text-lg font-bold text-gray-900 dark:text-white truncate">
                   {server.name}
                 </h3>
@@ -220,6 +213,15 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600">
                     SECURITY PENDING
                   </span>
+                )}
+                {/* Upstream Auth Badge */}
+                {server.upstream_auth && (
+                  <UpstreamAuthBadge
+                    authType={server.upstream_auth.type}
+                    credentialStatus={server.upstream_credential_status}
+                    provider={server.upstream_auth.provider}
+                    compact={true}
+                  />
                 )}
               </div>
               
@@ -355,17 +357,12 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, onToggle, onEdit, canMo
             {/* Controls */}
             <div className="flex items-center gap-3">
               {/* Last Checked */}
-              {(() => {
-                console.log(`🕐 ServerCard ${server.name}: last_checked_time =`, server.last_checked_time);
-                const timeText = formatTimeSince(server.last_checked_time);
-                console.log(`🕐 ServerCard ${server.name}: timeText =`, timeText);
-                return server.last_checked_time && timeText ? (
-                  <div className="text-xs text-gray-500 dark:text-gray-300 flex items-center gap-1.5">
-                    <ClockIcon className="h-3.5 w-3.5" />
-                    <span>{timeText}</span>
-                  </div>
-                ) : null;
-              })()}
+              {server.last_checked_time && formatTimeSince(server.last_checked_time) && (
+                <div className="text-xs text-gray-500 dark:text-gray-300 flex items-center gap-1.5">
+                  <ClockIcon className="h-3.5 w-3.5" />
+                  <span>{formatTimeSince(server.last_checked_time)}</span>
+                </div>
+              )}
 
               {/* Refresh Button */}
               <button

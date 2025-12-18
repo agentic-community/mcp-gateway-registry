@@ -55,6 +55,7 @@ const navigation: NavSection[] = [
         children: [
           { name: 'API Keys', href: '/credentials/api-keys' },
           { name: 'Gateway Tokens', href: '/credentials/tokens' },
+          { name: 'Upstream Credentials', href: '/credentials/upstream' },
         ],
       },
     ],
@@ -76,6 +77,7 @@ const navigation: NavSection[] = [
     title: 'Administration',
     items: [
       { name: 'Admin', href: '/admin', icon: UserCircleIcon, adminOnly: true },
+      { name: 'Network Policy', href: '/admin/egress-allowlist', icon: ShieldCheckIcon, adminOnly: true },
     ],
   },
   {

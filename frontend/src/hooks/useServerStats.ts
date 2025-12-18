@@ -4,6 +4,7 @@ import axios from 'axios';
 interface Server {
   name: string;
   path: string;
+  proxy_pass_url: string;
   description?: string;
   official?: boolean;
   enabled: boolean;
@@ -13,6 +14,13 @@ interface Server {
   rating?: number;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   num_tools?: number;
+  upstream_auth?: {
+    mode: 'gateway-managed' | 'none';
+    type: 'none' | 'api-key' | 'oauth2' | 'oidc' | 'provider-oauth' | 'jwt' | 'mtls' | 'header-trust';
+    provider?: string;
+    credential_binding: 'service' | 'user' | 'agent' | 'user+agent';
+  };
+  upstream_credential_status?: 'configured' | 'missing' | 'expired' | 'revoked';
 }
 
 interface ServerStats {
@@ -82,6 +90,7 @@ export const useServerStats = (): UseServerStatsReturn => {
         const transformed = {
           name: serverInfo.display_name || 'Unknown Server',
           path: serverInfo.path,
+          proxy_pass_url: serverInfo.proxy_pass_url || '',
           description: serverInfo.description || '',
           official: serverInfo.is_official || false,
           enabled: serverInfo.is_enabled !== undefined ? serverInfo.is_enabled : false,
@@ -90,7 +99,9 @@ export const useServerStats = (): UseServerStatsReturn => {
           usersCount: 0, // Not available in backend
           rating: serverInfo.num_stars || 0,
           status: mapHealthStatus(serverInfo.health_status || 'unknown'),
-          num_tools: serverInfo.num_tools || 0
+          num_tools: serverInfo.num_tools || 0,
+          upstream_auth: serverInfo.upstream_auth,
+          upstream_credential_status: serverInfo.upstream_credential_status
         };
         
         // Debug log the transformed server
