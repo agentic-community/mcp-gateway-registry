@@ -39,6 +39,88 @@ def _require_admin_user_context(
     return user_context
 
 
+def _normalize_upstream_auth_payload(
+    *,
+    upstream_auth: str | None,
+    auth_type: str | None,
+    auth_provider: str | None,
+    headers: object | None,
+) -> dict:
+    try:
+        from auth_server.enforceai.models.upstream_auth import (
+            normalize_upstream_auth,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed if EnforceAI is unavailable
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Upstream auth normalization unavailable",
+        ) from exc
+
+    try:
+        normalized = normalize_upstream_auth(
+            upstream_auth=upstream_auth,
+            auth_type=auth_type,
+            auth_provider=auth_provider,
+            headers=headers,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid upstream auth configuration: {exc}",
+        ) from exc
+
+    return normalized.model_dump()
+
+
+def _enforce_proxy_pass_url_allowlist(
+    *,
+    proxy_pass_url: str,
+) -> None:
+    db_path = os.getenv("ENFORCEAI_DB_PATH")
+    if db_path is None or not db_path.strip():
+        return
+
+    try:
+        from pathlib import Path
+
+        from auth_server.enforceai.egress.allowlist import (
+            check_proxy_pass_url,
+        )
+        from auth_server.enforceai.stores.sqlite.egress_allowlist_store import (
+            SqliteEgressAllowlistStore,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed if EnforceAI is unavailable
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Egress allowlist enforcement unavailable",
+        ) from exc
+
+    store = SqliteEgressAllowlistStore(db_path=Path(db_path))
+    try:
+        entries = store.list_entries(include_expired=False)
+    except Exception as exc:  # noqa: BLE001 - treat as enforcement misconfigured
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Egress allowlist store unavailable",
+        ) from exc
+
+    if not entries:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="proxy_pass_url not allowed (egress allowlist is empty)",
+        )
+
+    decision = check_proxy_pass_url(
+        proxy_pass_url=proxy_pass_url,
+        entries=entries,
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"proxy_pass_url not allowed: {decision.reason}",
+        )
+
+
 @router.get("/", response_class=HTMLResponse)
 async def read_root(
     request: Request,
@@ -326,6 +408,8 @@ async def register_service(
     logger.info(f"Service registration request from user '{user_context['username']}'")
     logger.info(f"Name: {name}, Path: {path}, URL: {proxy_pass_url}")
 
+    _enforce_proxy_pass_url_allowlist(proxy_pass_url=proxy_pass_url)
+
     # Ensure path starts with a slash
     if not path.startswith("/"):
         path = "/" + path
@@ -396,6 +480,7 @@ async def internal_register_service(
     overwrite: Annotated[bool, Form()] = True,
     auth_provider: Annotated[str | None, Form()] = None,
     auth_type: Annotated[str | None, Form()] = None,
+    upstream_auth: Annotated[str | None, Form()] = None,
     supported_transports: Annotated[str | None, Form()] = None,
     headers: Annotated[str | None, Form()] = None,
     tool_list_json: Annotated[str | None, Form()] = None,
@@ -421,6 +506,8 @@ async def internal_register_service(
         path = '/' + path
     logger.warning(f"INTERNAL REGISTER: Validated path: {path}")  # TODO: replace with debug
 
+    _enforce_proxy_pass_url_allowlist(proxy_pass_url=proxy_pass_url)
+
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
     logger.warning(f"INTERNAL REGISTER: Processed tags: {tag_list}")  # TODO: replace with debug
@@ -443,6 +530,13 @@ async def internal_register_service(
         except Exception as e:
             logger.warning(f"INTERNAL REGISTER: Failed to parse headers: {e}")
 
+    upstream_auth_payload = _normalize_upstream_auth_payload(
+        upstream_auth=upstream_auth,
+        auth_type=auth_type,
+        auth_provider=auth_provider,
+        headers=headers_list,
+    )
+
     # Process tool_list
     tool_list = []
     if tool_list_json:
@@ -459,6 +553,7 @@ async def internal_register_service(
         "proxy_pass_url": proxy_pass_url,
         "supported_transports": transports_list,
         "auth_type": auth_type if auth_type else "none",
+        "upstream_auth": upstream_auth_payload,
         "tags": tag_list,
         "num_tools": num_tools,
         "num_stars": num_stars,
@@ -864,6 +959,8 @@ async def edit_server_submit(
     
     if not service_path.startswith('/'):
         service_path = '/' + service_path
+
+    _enforce_proxy_pass_url_allowlist(proxy_pass_url=proxy_pass_url)
 
     # Check if the server exists and get service name
     server_info = server_service.get_server_info(service_path)
@@ -1843,6 +1940,7 @@ async def register_service_api(
     overwrite: Annotated[bool, Form()] = True,
     auth_provider: Annotated[str | None, Form()] = None,
     auth_type: Annotated[str | None, Form()] = None,
+    upstream_auth: Annotated[str | None, Form()] = None,
     supported_transports: Annotated[str | None, Form()] = None,
     headers: Annotated[str | None, Form()] = None,
     tool_list_json: Annotated[str | None, Form()] = None,
@@ -1904,6 +2002,8 @@ async def register_service_api(
         path = '/' + path
     logger.warning(f"SERVERS REGISTER: Validated path: {path}")
 
+    _enforce_proxy_pass_url_allowlist(proxy_pass_url=proxy_pass_url)
+
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
 
@@ -1925,6 +2025,13 @@ async def register_service_api(
         except Exception as e:
             logger.warning(f"SERVERS REGISTER: Failed to parse headers: {e}")
 
+    upstream_auth_payload = _normalize_upstream_auth_payload(
+        upstream_auth=upstream_auth,
+        auth_type=auth_type,
+        auth_provider=auth_provider,
+        headers=headers_list,
+    )
+
     # Process tool_list
     tool_list = []
     if tool_list_json:
@@ -1941,6 +2048,7 @@ async def register_service_api(
         "proxy_pass_url": proxy_pass_url,
         "supported_transports": transports_list,
         "auth_type": auth_type if auth_type else "none",
+        "upstream_auth": upstream_auth_payload,
         "tags": tag_list,
         "num_tools": num_tools,
         "num_stars": num_stars,

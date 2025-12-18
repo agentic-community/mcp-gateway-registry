@@ -60,6 +60,28 @@ class ServerService:
                         server_info["license"] = server_info.get("license", "N/A")
                         server_info["proxy_pass_url"] = server_info.get("proxy_pass_url", None)
                         server_info["tool_list"] = server_info.get("tool_list", [])
+
+                        if "upstream_auth" not in server_info:
+                            try:
+                                from auth_server.enforceai.models.upstream_auth import (
+                                    normalize_upstream_auth,
+                                )
+
+                                server_info["upstream_auth"] = normalize_upstream_auth(
+                                    auth_type=server_info.get("auth_type"),
+                                    auth_provider=server_info.get("auth_provider"),
+                                    headers=server_info.get("headers"),
+                                ).model_dump()
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to normalize upstream_auth for {server_path}: {e}"
+                                )
+                                server_info["upstream_auth"] = {
+                                    "type": "none",
+                                    "provider": None,
+                                    "credential_binding": "service",
+                                    "injection": None,
+                                }
                         
                         temp_servers[server_path] = server_info
                     else:

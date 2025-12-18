@@ -160,6 +160,8 @@ class NginxConfigService:
     async def generate_config_async(self, servers: Dict[str, Dict[str, Any]]) -> bool:
         """Generate Nginx configuration with additional server names and dynamic location blocks."""
         try:
+            servers = self._filter_servers_by_egress_allowlist(servers)
+
             # Read template
             if not self.nginx_template_path.exists():
                 logger.warning(f"Nginx template not found at {self.nginx_template_path}")
@@ -255,6 +257,62 @@ class NginxConfigService:
         except Exception as e:
             logger.error(f"Failed to generate Nginx configuration: {e}", exc_info=True)
             return False
+
+    def _filter_servers_by_egress_allowlist(
+        self,
+        servers: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        import os
+
+        db_path = os.getenv("ENFORCEAI_DB_PATH")
+        if db_path is None or not db_path.strip():
+            return servers
+
+        try:
+            from auth_server.enforceai.egress.allowlist import (
+                check_proxy_pass_url,
+            )
+            from auth_server.enforceai.stores.sqlite.egress_allowlist_store import (
+                SqliteEgressAllowlistStore,
+            )
+        except Exception as exc:
+            logger.error(
+                f"Egress allowlist enforcement unavailable; refusing to proxy: {exc}"
+            )
+            return {}
+
+        store = SqliteEgressAllowlistStore(db_path=Path(db_path))
+        try:
+            entries = store.list_entries(include_expired=False)
+        except Exception as exc:
+            logger.error(
+                f"Egress allowlist store unavailable; refusing to proxy: {exc}"
+            )
+            return {}
+
+        if not entries:
+            logger.error("Egress allowlist is empty; refusing to proxy any servers")
+            return {}
+
+        allowed: Dict[str, Dict[str, Any]] = {}
+        for path, server_info in servers.items():
+            proxy_pass_url = server_info.get("proxy_pass_url")
+            if not proxy_pass_url:
+                continue
+
+            decision = check_proxy_pass_url(
+                proxy_pass_url=str(proxy_pass_url),
+                entries=entries,
+            )
+            if not decision.allowed:
+                logger.error(
+                    f"Skipping server {path}: proxy_pass_url not allowlisted ({decision.reason})"
+                )
+                continue
+
+            allowed[path] = server_info
+
+        return allowed
             
     def reload_nginx(self) -> bool:
         """Reload Nginx configuration (if running in appropriate environment)."""
@@ -321,14 +379,25 @@ class NginxConfigService:
         # Create a single location block for this server
         # The proxy_pass URL is used exactly as provided in the server configuration
         logger.info(f"Server {path}: Using proxy_pass URL as configured: {proxy_url}")
-        
-        block = self._create_location_block(path, proxy_url, transport_type)
+
+        block = self._create_location_block(
+            path,
+            proxy_url,
+            transport_type,
+            upstream_auth=server_info.get("upstream_auth"),
+        )
         blocks.append(block)
-        
+
         return blocks
 
-
-    def _create_location_block(self, path: str, proxy_pass_url: str, transport_type: str) -> str:
+    def _create_location_block(
+        self,
+        path: str,
+        proxy_pass_url: str,
+        transport_type: str,
+        *,
+        upstream_auth: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Create a single nginx location block with transport-specific configuration."""
         
         # Extract hostname from proxy_pass_url for external services
@@ -338,75 +407,149 @@ class NginxConfigService:
         # Determine whether to use upstream hostname or preserve original host
         # For external services (https), use the upstream hostname
         # For internal services (http without dots in hostname), preserve original host
-        if parsed_url.scheme == 'https' or '.' in upstream_host:
+        if parsed_url.scheme == "https" or "." in upstream_host:
             # External service - use upstream hostname
             host_header = upstream_host
             logger.info(f"Using upstream hostname for Host header: {host_header}")
         else:
             # Internal service - preserve original host
-            host_header = '$host'
-            logger.info(f"Using original host for Host header: $host")
-        
+            host_header = "$host"
+            logger.info("Using original host for Host header: $host")
+
+        def _escape_nginx_string(value: str) -> str:
+            return value.replace("\\", "\\\\").replace('"', '\\"')
+
+        upstream_auth_type = "none"
+        upstream_credential_binding = "service"
+        upstream_provider = ""
+        upstream_header_name = ""
+        upstream_scheme = ""
+
+        if isinstance(upstream_auth, dict):
+            upstream_auth_type = str(upstream_auth.get("type") or "none")
+            upstream_credential_binding = str(
+                upstream_auth.get("credential_binding") or "service"
+            )
+            upstream_provider = str(upstream_auth.get("provider") or "")
+
+            injection = upstream_auth.get("injection")
+            if isinstance(injection, dict):
+                upstream_header_name = str(injection.get("header_name") or "")
+                upstream_scheme = str(injection.get("scheme") or "")
+
+        if not upstream_header_name:
+            if upstream_auth_type == "api-key":
+                upstream_header_name = "X-API-Key"
+            elif upstream_auth_type == "jwt":
+                upstream_header_name = "Authorization"
+
+        if upstream_auth_type == "jwt" and not upstream_scheme:
+            upstream_scheme = "Bearer"
+
+        upstream_injection_settings = ""
+        if upstream_auth_type == "api-key":
+            upstream_injection_settings = (
+                f"\n        proxy_set_header {upstream_header_name} $enforceai_upstream_api_key;"
+            )
+        elif upstream_auth_type == "jwt":
+            upstream_injection_settings = (
+                f"\n        proxy_set_header {upstream_header_name} $enforceai_upstream_authorization;"
+            )
+
         # Common proxy settings
         common_settings = f"""
-        # Use IPv4 resolver (disable IPv6)
-        resolver 8.8.8.8 8.8.4.4 valid=10s;
-        resolver_timeout 5s;
+	        # Use IPv4 resolver (disable IPv6)
+	        resolver 8.8.8.8 8.8.4.4 valid=10s;
+	        resolver_timeout 5s;
 
-        # Preserve inbound auth headers for the auth_request subrequest (/validate).
-        # auth_request can run as an internal subrequest where $http_* vars may not reflect
-        # the original client headers, so we copy them into variables here.
-        set $enforceai_authorization $http_authorization;
-        set $enforceai_x_authorization $http_x_authorization;
+	        # Per-server upstream auth context for /validate.
+	        set $enforceai_server_path "{_escape_nginx_string(path)}";
+	        set $enforceai_upstream_auth_type "{_escape_nginx_string(upstream_auth_type)}";
+	        set $enforceai_upstream_credential_binding "{_escape_nginx_string(upstream_credential_binding)}";
+	        set $enforceai_upstream_provider "{_escape_nginx_string(upstream_provider)}";
+	        set $enforceai_upstream_header_name "{_escape_nginx_string(upstream_header_name)}";
+	        set $enforceai_upstream_scheme "{_escape_nginx_string(upstream_scheme)}";
 
-        # Authenticate request - pass entire request to auth server
-        auth_request /validate;
-        
-        # Capture auth server response headers for forwarding
-        auth_request_set $auth_user $upstream_http_x_user;
-        auth_request_set $auth_username $upstream_http_x_username;
-        auth_request_set $auth_client_id $upstream_http_x_client_id;
-        auth_request_set $auth_scopes $upstream_http_x_scopes;
-        auth_request_set $auth_method $upstream_http_x_auth_method;
-        auth_request_set $auth_server_name $upstream_http_x_server_name;
-        auth_request_set $auth_tool_name $upstream_http_x_tool_name;
-        auth_request_set $auth_allowed_tools $upstream_http_x_allowed_tools;
-        
-        # Proxy to MCP server
-        proxy_pass {proxy_pass_url};
-        proxy_http_version 1.1;
-        proxy_ssl_server_name on;
+	        # Preserve inbound auth headers for the auth_request subrequest (/validate).
+	        # auth_request can run as an internal subrequest where $http_* vars may not reflect
+	        # the original client headers, so we copy them into variables here.
+	        set $enforceai_authorization $http_authorization;
+	        set $enforceai_x_authorization $http_x_authorization;
+
+	        # Authenticate request - pass entire request to auth server
+	        auth_request /validate;
+	        
+	        # Capture auth server response headers for forwarding
+	        auth_request_set $auth_user $upstream_http_x_user;
+	        auth_request_set $auth_username $upstream_http_x_username;
+	        auth_request_set $auth_client_id $upstream_http_x_client_id;
+	        auth_request_set $auth_scopes $upstream_http_x_scopes;
+	        auth_request_set $auth_method $upstream_http_x_auth_method;
+	        auth_request_set $auth_server_name $upstream_http_x_server_name;
+	        auth_request_set $auth_tool_name $upstream_http_x_tool_name;
+	        auth_request_set $auth_allowed_tools $upstream_http_x_allowed_tools;
+	        auth_request_set $mcp_principal $upstream_http_x_mcp_principal;
+	        auth_request_set $mcp_auth_type $upstream_http_x_mcp_auth_type;
+	        auth_request_set $mcp_scopes $upstream_http_x_mcp_scopes;
+	        auth_request_set $mcp_provider $upstream_http_x_mcp_provider;
+	        auth_request_set $mcp_claims $upstream_http_x_mcp_claims;
+	        auth_request_set $enforceai_upstream_authorization $upstream_http_x_enforceai_upstream_authorization;
+	        auth_request_set $enforceai_upstream_api_key $upstream_http_x_enforceai_upstream_api_key;
+	        auth_request_set $enforceai_upstream_api_key_header $upstream_http_x_enforceai_upstream_api_key_header;
+	        auth_request_set $enforceai_upstream_mode $upstream_http_x_enforceai_upstream_mode;
+	        auth_request_set $enforceai_error_code $upstream_http_x_enforceai_error_code;
+	        
+	        # Proxy to MCP server
+	        proxy_pass {proxy_pass_url};
+	        proxy_http_version 1.1;
+	        proxy_ssl_server_name on;
         proxy_set_header Host {host_header};
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         
-        # Add original URL for auth server scope validation
-        proxy_set_header X-Original-URL $scheme://$host$request_uri;
-        
-        # Pass through the original authentication headers
-        proxy_set_header Authorization $http_authorization;
-        proxy_set_header X-Authorization $http_x_authorization;
-        proxy_set_header X-User-Pool-Id $http_x_user_pool_id;
-        proxy_set_header X-Client-Id $http_x_client_id;
-        proxy_set_header X-Region $http_x_region;
+	        # Add original URL for auth server scope validation
+	        proxy_set_header X-Original-URL $scheme://$host$request_uri;
 
-        
-        # Forward auth server response headers to backend
-        proxy_set_header X-User $auth_user;
-        proxy_set_header X-Username $auth_username;
-        proxy_set_header X-Client-Id-Auth $auth_client_id;
-        proxy_set_header X-Scopes $auth_scopes;
-        proxy_set_header X-Auth-Method $auth_method;
-        proxy_set_header X-Server-Name $auth_server_name;
-        proxy_set_header X-Tool-Name $auth_tool_name;
-        
-        # Pass all original client headers
-        proxy_pass_request_headers on;
-        
-        # Handle auth errors
-        error_page 401 = @auth_error;
-        error_page 403 = @forbidden_error;"""
+	        # Strip client-supplied identity and upstream injection headers.
+	        proxy_set_header X-MCP-Principal "";
+	        proxy_set_header X-MCP-Auth-Type "";
+	        proxy_set_header X-MCP-Scopes "";
+	        proxy_set_header X-MCP-Provider "";
+	        proxy_set_header X-MCP-Claims "";
+	        proxy_set_header X-EnforceAI-Upstream-Authorization "";
+	        proxy_set_header X-EnforceAI-Upstream-Api-Key "";
+	        proxy_set_header X-EnforceAI-Upstream-Api-Key-Header "";
+	        proxy_set_header X-EnforceAI-Upstream-Mode "";
+
+	        # Strip client-supplied gateway credentials (never forwarded upstream).
+	        proxy_set_header Authorization "";
+	        proxy_set_header X-Authorization "";
+	        proxy_set_header X-API-Key "";
+	        proxy_set_header X-Gateway-Token "";
+	        proxy_set_header Cookie "";
+
+	        # Forward auth server response headers to backend
+	        proxy_set_header X-User $auth_user;
+	        proxy_set_header X-Username $auth_username;
+	        proxy_set_header X-Client-Id-Auth $auth_client_id;
+	        proxy_set_header X-Scopes $auth_scopes;
+	        proxy_set_header X-Auth-Method $auth_method;
+	        proxy_set_header X-Server-Name $auth_server_name;
+	        proxy_set_header X-Tool-Name $auth_tool_name;
+	        proxy_set_header X-MCP-Principal $mcp_principal;
+	        proxy_set_header X-MCP-Auth-Type $mcp_auth_type;
+	        proxy_set_header X-MCP-Scopes $mcp_scopes;
+	        proxy_set_header X-MCP-Provider $mcp_provider;
+	        proxy_set_header X-MCP-Claims $mcp_claims;{upstream_injection_settings}
+	        
+	        # Pass all original client headers
+	        proxy_pass_request_headers on;
+	        
+	        # Handle auth errors
+	        error_page 401 = @auth_error;
+	        error_page 403 = @forbidden_error;
+	        error_page 424 = @upstream_credentials_required;"""
         
         # Transport-specific settings
         if transport_type == "sse":
