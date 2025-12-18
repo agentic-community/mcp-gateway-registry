@@ -115,11 +115,26 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID:-mcp-gateway-m2m}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      # EnforceAI (enabled when ENFORCEAI_DB_PATH is non-empty)
+      - ENFORCEAI_AUTH_PROVIDER=${ENFORCEAI_AUTH_PROVIDER}
+      - ENFORCEAI_DB_PATH=${ENFORCEAI_DB_PATH}
+      - ENFORCEAI_SCOPES_CATALOG_PATH=${ENFORCEAI_SCOPES_CATALOG_PATH}
+      - ENFORCEAI_API_KEY_PEPPER_PATH=${ENFORCEAI_API_KEY_PEPPER_PATH}
+      - ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH=${ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH}
+      - ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR=${ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR}
+      - ENFORCEAI_GATEWAY_ACTIVE_KID=${ENFORCEAI_GATEWAY_ACTIVE_KID}
+      - ENFORCEAI_GATEWAY_ISSUER=${ENFORCEAI_GATEWAY_ISSUER}
+      - ENFORCEAI_UPSTREAM_KEK_PATH=${ENFORCEAI_UPSTREAM_KEK_PATH}
+      - ENFORCEAI_AUDIT_RETENTION_DAYS=${ENFORCEAI_AUDIT_RETENTION_DAYS:-30}
+      - ENFORCEAI_AUDIT_MAX_DB_BYTES=${ENFORCEAI_AUDIT_MAX_DB_BYTES:-500000000}
+      - OIDC_ISSUERS=${OIDC_ISSUERS:-{}}
     ports:
       - "8888:8888"
     volumes:
       - ${HOME}/mcp-gateway/logs:/app/logs
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
+      # Important: do not mount over /app/enforceai (the python package); mount state separately.
+      - ${HOME}/mcp-gateway/enforceai:/app/enforceai_state
     restart: unless-stopped
 
   # Current Time MCP Server - using pre-built image

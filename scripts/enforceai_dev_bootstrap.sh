@@ -33,6 +33,7 @@ Creates a local EnforceAI dev environment:
   - EnforceAI SQLite DB
   - gateway token RSA keys (kid-based rotation layout)
   - API key pepper
+  - upstream secret KEK (hex-encoded)
   - bootstrap user_id + agent_id
   - bootstrap gateway token
   - a sourceable env file: .enforceai/enforceai.env
@@ -46,6 +47,7 @@ Environment overrides:
   ENFORCEAI_AUTH_PROVIDER      gateway-token | api-key | oidc | mixed (default: mixed)
   ENFORCEAI_DB_PATH            Path to SQLite DB (default: $ENFORCEAI_STATE_DIR/enforceai.db)
   ENFORCEAI_SCOPES_CATALOG_PATH Path to scopes.yml (default: ./auth_server/scopes.yml)
+  ENFORCEAI_UPSTREAM_KEK_PATH  Path to upstream secret KEK (default: $ENFORCEAI_STATE_DIR/secrets/upstream_kek)
 
 Notes:
   - This is a dev convenience script. Do not use it for production provisioning.
@@ -104,6 +106,9 @@ GATEWAY_ISSUER="${ENFORCEAI_GATEWAY_ISSUER:-enforceai-gateway}"
 API_KEY_PEPPER_PATH_DEFAULT="$SECRETS_DIR/api_key_pepper"
 API_KEY_PEPPER_PATH="${ENFORCEAI_API_KEY_PEPPER_PATH:-$API_KEY_PEPPER_PATH_DEFAULT}"
 
+UPSTREAM_KEK_PATH_DEFAULT="$SECRETS_DIR/upstream_kek"
+UPSTREAM_KEK_PATH="${ENFORCEAI_UPSTREAM_KEK_PATH:-$UPSTREAM_KEK_PATH_DEFAULT}"
+
 BOOTSTRAP_USER_ID_PATH="$STATE_DIR/bootstrap_user_id"
 BOOTSTRAP_AGENT_ID_PATH="$STATE_DIR/bootstrap_agent_id"
 BOOTSTRAP_TOKEN_PATH="$STATE_DIR/bootstrap_gateway_token.txt"
@@ -122,6 +127,7 @@ export ENFORCEAI_GATEWAY_ACTIVE_KID="$GATEWAY_ACTIVE_KID"
 export ENFORCEAI_GATEWAY_ISSUER="$GATEWAY_ISSUER"
 
 export ENFORCEAI_API_KEY_PEPPER_PATH="$API_KEY_PEPPER_PATH"
+export ENFORCEAI_UPSTREAM_KEK_PATH="$UPSTREAM_KEK_PATH"
 
 echo "------------------------------------------------------"
 echo " EnforceAI Dev Bootstrap"
@@ -184,6 +190,17 @@ else
   echo "[OK] API key pepper exists: $API_KEY_PEPPER_PATH"
 fi
 
+if [[ ! -f "$UPSTREAM_KEK_PATH" || $FORCE -eq 1 ]]; then
+  "$PYTHON_BIN" - <<'PY' >"$UPSTREAM_KEK_PATH"
+import secrets
+print(secrets.token_hex(32))
+PY
+  chmod 600 "$UPSTREAM_KEK_PATH" || true
+  echo "[OK] upstream KEK: $UPSTREAM_KEK_PATH"
+else
+  echo "[OK] upstream KEK exists: $UPSTREAM_KEK_PATH"
+fi
+
 PUBLIC_KEY_PATH="$GATEWAY_PUBLIC_KEYS_DIR/$GATEWAY_ACTIVE_KID.pem"
 if [[ ! -f "$GATEWAY_PRIVATE_KEY_PATH" || ! -f "$PUBLIC_KEY_PATH" || $FORCE -eq 1 ]]; then
   if [[ -f "$GATEWAY_PRIVATE_KEY_PATH" && $FORCE -eq 0 ]]; then
@@ -224,6 +241,7 @@ export ENFORCEAI_GATEWAY_ACTIVE_KID="$GATEWAY_ACTIVE_KID"
 export ENFORCEAI_GATEWAY_ISSUER="$GATEWAY_ISSUER"
 
 export ENFORCEAI_API_KEY_PEPPER_PATH="$API_KEY_PEPPER_PATH"
+export ENFORCEAI_UPSTREAM_KEK_PATH="$UPSTREAM_KEK_PATH"
 
 export ENFORCEAI_BOOTSTRAP_USER_ID="$BOOTSTRAP_USER_ID"
 export ENFORCEAI_BOOTSTRAP_AGENT_ID="$BOOTSTRAP_AGENT_ID"
@@ -246,6 +264,7 @@ print('export ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR="/app/enforceai_state/secrets/ga
 print('export ENFORCEAI_GATEWAY_ACTIVE_KID="' + os.environ.get("ENFORCEAI_GATEWAY_ACTIVE_KID", "kid-local-1") + '"')
 print('export ENFORCEAI_GATEWAY_ISSUER="' + os.environ.get("ENFORCEAI_GATEWAY_ISSUER", "enforceai-gateway") + '"')
 print('export ENFORCEAI_API_KEY_PEPPER_PATH="/app/enforceai_state/secrets/api_key_pepper"')
+print('export ENFORCEAI_UPSTREAM_KEK_PATH="/app/enforceai_state/secrets/upstream_kek"')
 print('export ENFORCEAI_AUDIT_RETENTION_DAYS="' + os.environ.get("ENFORCEAI_AUDIT_RETENTION_DAYS", "30") + '"')
 print('export ENFORCEAI_AUDIT_MAX_DB_BYTES="' + os.environ.get("ENFORCEAI_AUDIT_MAX_DB_BYTES", "500000000") + '"')
 print('export OIDC_ISSUERS="' + os.environ.get("OIDC_ISSUERS", "{}") + '"')
