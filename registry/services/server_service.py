@@ -77,6 +77,7 @@ class ServerService:
                                     f"Failed to normalize upstream_auth for {server_path}: {e}"
                                 )
                                 server_info["upstream_auth"] = {
+                                    "mode": "none",
                                     "type": "none",
                                     "provider": None,
                                     "credential_binding": "service",

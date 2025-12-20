@@ -2,12 +2,29 @@ import json
 import asyncio
 import logging
 import os
-from typing import Annotated
+from typing import (
+    Annotated,
+    Any,
+    Optional,
+)
 
-from fastapi import APIRouter, Request, Form, Depends, HTTPException, status, Cookie
+from fastapi import (
+    APIRouter,
+    Cookie,
+    Depends,
+    Form,
+    HTTPException,
+    Response,
+    Request,
+    status,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 import httpx
+from pydantic import (
+    BaseModel,
+    Field,
+)
 
 from ..core.config import settings
 from ..auth.dependencies import web_auth, api_auth, enhanced_auth, nginx_proxied_auth
@@ -41,7 +58,7 @@ def _require_admin_user_context(
 
 def _normalize_upstream_auth_payload(
     *,
-    upstream_auth: str | None,
+    upstream_auth: object | None,
     auth_type: str | None,
     auth_provider: str | None,
     headers: object | None,
@@ -70,6 +87,64 @@ def _normalize_upstream_auth_payload(
         ) from exc
 
     return normalized.model_dump()
+
+
+def _normalize_server_path(
+    *,
+    raw_path: str,
+) -> str:
+    stripped = raw_path.strip()
+    if not stripped:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="path is required",
+        )
+    if not stripped.startswith("/"):
+        return f"/{stripped}"
+    return stripped
+
+
+class ServerCreateRequest(BaseModel):
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+    )
+    path: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+    )
+    proxy_pass_url: str = Field(
+        ...,
+        min_length=1,
+    )
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    upstream_auth: Optional[dict[str, Any]] = None
+    overwrite: bool = Field(
+        default=False,
+        description="If true, replace an existing server at the same path.",
+    )
+
+
+class ServerUpdateRequest(BaseModel):
+    name: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+    )
+    proxy_pass_url: Optional[str] = Field(
+        default=None,
+        min_length=1,
+    )
+    description: Optional[str] = Field(
+        default=None,
+        max_length=500,
+    )
+    tags: Optional[list[str]] = None
+    upstream_auth: Optional[dict[str, Any]] = None
+    enabled: Optional[bool] = None
 
 
 def _enforce_proxy_pass_url_allowlist(
@@ -277,11 +352,331 @@ async def get_servers_json(
                     "is_python": server_info.get("is_python", False),
                     "license": server_info.get("license", "N/A"),
                     "health_status": health_data["status"],  
-                    "last_checked_iso": health_data["last_checked_iso"]
+                    "last_checked_iso": health_data["last_checked_iso"],
+                    "supported_transports": server_info.get(
+                        "supported_transports",
+                        [],
+                    ),
+                    "upstream_auth": server_info.get("upstream_auth"),
+                    "upstream_credential_status": server_info.get(
+                        "upstream_credential_status",
+                    ),
                 }
             )
     
     return {"servers": service_data}
+
+
+@router.post("/servers")
+async def create_server_json(
+    payload: ServerCreateRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+):
+    """Register a new server via JSON (used by the React UI)."""
+    from ..core.nginx_service import nginx_service
+    from ..health.service import health_service
+    from ..search.service import faiss_service
+
+    ui_permissions = user_context.get("ui_permissions", {})
+    register_permissions = ui_permissions.get("register_service", [])
+    if not register_permissions:
+        logger.warning(
+            f"User {user_context.get('username')} attempted to register service without register_service permission"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register new services",
+        )
+
+    proxy_pass_url = payload.proxy_pass_url.strip()
+    _enforce_proxy_pass_url_allowlist(proxy_pass_url=proxy_pass_url)
+
+    path = _normalize_server_path(raw_path=payload.path)
+
+    upstream_auth_payload = _normalize_upstream_auth_payload(
+        upstream_auth=payload.upstream_auth,
+        auth_type=None,
+        auth_provider=None,
+        headers=None,
+    )
+
+    server_entry = {
+        "server_name": payload.name.strip(),
+        "description": (payload.description or "").strip(),
+        "path": path,
+        "proxy_pass_url": proxy_pass_url,
+        "tags": payload.tags or [],
+        "num_tools": 0,
+        "num_stars": 0,
+        "is_python": False,
+        "license": "N/A",
+        "tool_list": [],
+        "supported_transports": ["streamable-http"],
+        "auth_type": "none",
+        "upstream_auth": upstream_auth_payload,
+    }
+
+    existing_server = server_service.get_server_info(path)
+    if existing_server and not payload.overwrite:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Service with path '{path}' already exists",
+        )
+
+    success = (
+        server_service.update_server(path, server_entry)
+        if existing_server and payload.overwrite
+        else server_service.register_server(server_entry)
+    )
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Service with path '{path}' already exists or failed to save",
+        )
+
+    is_enabled = server_service.is_service_enabled(path)
+    await faiss_service.add_or_update_service(path, server_entry, is_enabled)
+
+    enabled_servers = {
+        server_path: server_service.get_server_info(server_path)
+        for server_path in server_service.get_enabled_services()
+    }
+    await nginx_service.generate_config_async(enabled_servers)
+
+    await health_service.broadcast_health_update(path)
+
+    health_data = health_service._get_service_health_data(path)
+
+    return JSONResponse(
+        status_code=201,
+        content={
+            "display_name": server_entry["server_name"],
+            "path": path,
+            "proxy_pass_url": proxy_pass_url,
+            "description": server_entry.get("description", ""),
+            "tags": server_entry.get("tags", []),
+            "is_enabled": is_enabled,
+            "health_status": health_data["status"],
+            "last_checked_iso": health_data["last_checked_iso"],
+            "num_tools": 0,
+            "num_stars": 0,
+            "is_python": False,
+            "license": "N/A",
+            "supported_transports": server_entry.get("supported_transports", []),
+            "upstream_auth": server_entry.get("upstream_auth"),
+        },
+    )
+
+
+@router.get("/servers/{service_path}")
+async def get_server_json(
+    service_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+):
+    """Get a single server's details as JSON (used by the React UI)."""
+    from ..health.service import health_service
+
+    path = _normalize_server_path(raw_path=service_path)
+
+    server_info = server_service.get_server_info(path)
+    if not server_info:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+
+    if not user_context.get("is_admin", False):
+        if not server_service.user_can_access_server_path(
+            path,
+            user_context.get("accessible_servers", []),
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
+
+    health_data = health_service._get_service_health_data(path)
+    is_enabled = server_service.is_service_enabled(path)
+
+    return {
+        "display_name": server_info.get("server_name", ""),
+        "path": path,
+        "proxy_pass_url": server_info.get("proxy_pass_url", ""),
+        "description": server_info.get("description", ""),
+        "tags": server_info.get("tags", []),
+        "is_enabled": is_enabled,
+        "health_status": health_data["status"],
+        "last_checked_iso": health_data["last_checked_iso"],
+        "num_tools": server_info.get("num_tools", 0),
+        "num_stars": server_info.get("num_stars", 0),
+        "is_python": server_info.get("is_python", False),
+        "license": server_info.get("license", "N/A"),
+        "supported_transports": server_info.get("supported_transports", []),
+        "upstream_auth": server_info.get("upstream_auth"),
+        "upstream_credential_status": server_info.get("upstream_credential_status"),
+        "tools": server_info.get("tool_list", []),
+        "metadata": server_info.get("metadata", {}),
+    }
+
+
+@router.put("/servers/{service_path}")
+async def update_server_json(
+    service_path: str,
+    payload: ServerUpdateRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+):
+    """Update a server via JSON (used by the React UI)."""
+    from ..auth.dependencies import user_has_ui_permission_for_service
+    from ..core.nginx_service import nginx_service
+    from ..health.service import health_service
+    from ..search.service import faiss_service
+
+    path = _normalize_server_path(raw_path=service_path)
+
+    server_info = server_service.get_server_info(path)
+    if not server_info:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+
+    service_name = server_info.get("server_name", "")
+    if not user_has_ui_permission_for_service(
+        "modify_service",
+        service_name,
+        user_context.get("ui_permissions", {}),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You do not have permission to modify {service_name}",
+        )
+
+    if not user_context.get("is_admin", False):
+        if not server_service.user_can_access_server_path(
+            path,
+            user_context.get("accessible_servers", []),
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to edit this server",
+            )
+
+    if payload.proxy_pass_url is not None:
+        _enforce_proxy_pass_url_allowlist(proxy_pass_url=payload.proxy_pass_url.strip())
+
+    updated_server_entry = dict(server_info)
+    if payload.name is not None:
+        updated_server_entry["server_name"] = payload.name.strip()
+    if payload.proxy_pass_url is not None:
+        updated_server_entry["proxy_pass_url"] = payload.proxy_pass_url.strip()
+    if payload.description is not None:
+        updated_server_entry["description"] = payload.description
+    if payload.tags is not None:
+        updated_server_entry["tags"] = payload.tags
+    if payload.upstream_auth is not None:
+        updated_server_entry["upstream_auth"] = _normalize_upstream_auth_payload(
+            upstream_auth=payload.upstream_auth,
+            auth_type=None,
+            auth_provider=None,
+            headers=None,
+        )
+
+    updated_server_entry["path"] = path
+
+    success = server_service.update_server(path, updated_server_entry)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save updated server data")
+
+    enabled_changed = False
+    is_enabled = server_service.is_service_enabled(path)
+    if payload.enabled is not None and payload.enabled != is_enabled:
+        enabled_changed = True
+        is_enabled = payload.enabled
+        toggle_success = server_service.toggle_service(path, is_enabled)
+        if not toggle_success:
+            raise HTTPException(status_code=500, detail="Failed to toggle service")
+
+        if is_enabled:
+            await health_service.perform_immediate_health_check(path)
+        else:
+            logger.info(f"Service {path} toggled OFF via JSON API")
+
+    await faiss_service.add_or_update_service(path, updated_server_entry, is_enabled)
+
+    enabled_servers = {
+        server_path: server_service.get_server_info(server_path)
+        for server_path in server_service.get_enabled_services()
+    }
+    await nginx_service.generate_config_async(enabled_servers)
+
+    if enabled_changed:
+        await health_service.broadcast_health_update(path)
+
+    health_data = health_service._get_service_health_data(path)
+
+    return {
+        "display_name": updated_server_entry.get("server_name", ""),
+        "path": path,
+        "proxy_pass_url": updated_server_entry.get("proxy_pass_url", ""),
+        "description": updated_server_entry.get("description", ""),
+        "tags": updated_server_entry.get("tags", []),
+        "is_enabled": is_enabled,
+        "health_status": health_data["status"],
+        "last_checked_iso": health_data["last_checked_iso"],
+        "num_tools": updated_server_entry.get("num_tools", 0),
+        "num_stars": updated_server_entry.get("num_stars", 0),
+        "is_python": updated_server_entry.get("is_python", False),
+        "license": updated_server_entry.get("license", "N/A"),
+        "supported_transports": updated_server_entry.get("supported_transports", []),
+        "upstream_auth": updated_server_entry.get("upstream_auth"),
+        "upstream_credential_status": updated_server_entry.get(
+            "upstream_credential_status"
+        ),
+    }
+
+
+@router.delete("/servers/{service_path}", status_code=204)
+async def delete_server_json(
+    service_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+):
+    """Delete a server via JSON (admin-only)."""
+    from ..core.nginx_service import nginx_service
+    from ..health.service import health_service
+    from ..search.service import faiss_service
+    from ..utils.scopes_manager import remove_server_scopes
+
+    _require_admin_user_context(user_context)
+
+    path = _normalize_server_path(raw_path=service_path)
+
+    server_info = server_service.get_server_info(path)
+    if not server_info:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+
+    success = server_service.remove_server(path)
+    if not success:
+        raise HTTPException(status_code=500, detail="Service removal failed")
+
+    await faiss_service.remove_service(path)
+
+    enabled_servers = {
+        server_path: server_service.get_server_info(server_path)
+        for server_path in server_service.get_enabled_services()
+    }
+    await nginx_service.generate_config_async(enabled_servers)
+
+    await health_service.broadcast_health_update(path)
+
+    try:
+        await remove_server_scopes(path)
+    except Exception as exc:  # noqa: BLE001 - best effort cleanup
+        logger.warning(f"Failed to remove server {path} from scopes: {exc}")
+
+    return Response(status_code=204)
+
+
+@router.post("/servers/{service_path}/refresh")
+async def refresh_server_json(
+    service_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+):
+    """Refresh a server via JSON (used by the React UI)."""
+    return await refresh_service(service_path=service_path, user_context=user_context)
 
 
 @router.post("/toggle/{service_path:path}")

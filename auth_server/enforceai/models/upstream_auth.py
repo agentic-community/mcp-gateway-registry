@@ -26,6 +26,11 @@ UpstreamAuthType = Literal[
     "header-trust",
 ]
 
+UpstreamAuthMode = Literal[
+    "gateway-managed",
+    "none",
+]
+
 UpstreamCredentialBinding = Literal[
     "service",
     "user",
@@ -133,6 +138,10 @@ class UpstreamAuthConfig(BaseModel):
         frozen=True,
     )
 
+    mode: UpstreamAuthMode = Field(
+        default="gateway-managed",
+        description="Whether upstream auth is gateway-managed or disabled for this server.",
+    )
     type: UpstreamAuthType = Field(
         ...,
         description="Upstream authentication type required by the MCP server.",
@@ -165,6 +174,15 @@ class UpstreamAuthConfig(BaseModel):
     def _validate_phase_1_constraints(
         self,
     ) -> "UpstreamAuthConfig":
+        if self.type == "none":
+            if self.mode != "none":
+                raise ValueError("upstream_auth.mode must be 'none' when type is 'none'")
+        else:
+            if self.mode != "gateway-managed":
+                raise ValueError(
+                    "upstream_auth.mode must be 'gateway-managed' when type is not 'none'"
+                )
+
         if self.type == "mtls":
             raise ValueError("upstream_auth.type=mtls is not supported yet")
         return self
@@ -219,6 +237,7 @@ def normalize_upstream_auth(
 
     if coerced_type in {"none"}:
         return UpstreamAuthConfig(
+            mode="none",
             type="none",
             provider=None,
             credential_binding="service",
@@ -227,6 +246,7 @@ def normalize_upstream_auth(
 
     if coerced_type in {"api-key"}:
         return UpstreamAuthConfig(
+            mode="gateway-managed",
             type="api-key",
             provider=None,
             credential_binding="service",
@@ -239,6 +259,7 @@ def normalize_upstream_auth(
 
     if coerced_type in {"oauth", "oauth2"}:
         return UpstreamAuthConfig(
+            mode="gateway-managed",
             type="oauth2",
             provider=auth_provider,
             credential_binding="user",
@@ -251,6 +272,7 @@ def normalize_upstream_auth(
 
     if coerced_type in {"oidc"}:
         return UpstreamAuthConfig(
+            mode="gateway-managed",
             type="oidc",
             provider=auth_provider,
             credential_binding="user",
@@ -263,6 +285,7 @@ def normalize_upstream_auth(
 
     if coerced_type in {"provider-oauth"}:
         return UpstreamAuthConfig(
+            mode="gateway-managed",
             type="provider-oauth",
             provider=auth_provider,
             credential_binding="user",
@@ -275,6 +298,7 @@ def normalize_upstream_auth(
 
     if coerced_type in {"jwt"}:
         return UpstreamAuthConfig(
+            mode="gateway-managed",
             type="jwt",
             provider=None,
             credential_binding="service",
@@ -287,6 +311,7 @@ def normalize_upstream_auth(
 
     if coerced_type in {"header-trust"}:
         return UpstreamAuthConfig(
+            mode="gateway-managed",
             type="header-trust",
             provider=None,
             credential_binding="service",
@@ -294,4 +319,3 @@ def normalize_upstream_auth(
         )
 
     raise ValueError(f"Unsupported auth_type: {auth_type}")
-

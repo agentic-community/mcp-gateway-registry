@@ -455,6 +455,28 @@ class EnforceAISettings(BaseSettings):
             )
         return value
 
+    @field_validator(
+        "gateway_private_key_path",
+        "gateway_public_keys_dir",
+        "api_key_pepper_path",
+        "upstream_kek_path",
+        "scopes_catalog_path",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_path(
+        cls,
+        value: Any,
+    ) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return stripped
+        return value
+
     @field_validator("upstream_oauth_providers", mode="before")
     @classmethod
     def _parse_upstream_oauth_providers(
