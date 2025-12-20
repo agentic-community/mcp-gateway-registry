@@ -63,6 +63,11 @@ export interface UpstreamAuthConfig {
   type: UpstreamAuthType;
   provider?: string;
   credential_binding: CredentialBinding;
+  injection?: {
+    kind: 'header';
+    header_name: string;
+    scheme?: string | null;
+  } | null;
 }
 
 export interface Server {
@@ -100,6 +105,7 @@ export interface RegisterServerRequest {
   proxy_pass_url: string;
   description?: string;
   tags?: string[];
+  upstream_auth?: UpstreamAuthConfig;
 }
 
 export interface EditServerRequest {
@@ -107,6 +113,8 @@ export interface EditServerRequest {
   proxy_pass_url?: string;
   description?: string;
   tags?: string[];
+  upstream_auth?: UpstreamAuthConfig;
+  enabled?: boolean;
 }
 
 // ============================================================================

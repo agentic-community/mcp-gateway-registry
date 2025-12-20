@@ -17,6 +17,7 @@ import { ServerEditModal } from './ServerEditModal';
 import type { Server } from '@/api/types';
 import { cn } from '@/lib/cn';
 import { formatDistanceToNow } from 'date-fns';
+import UpstreamAuthBadge from '@/components/UpstreamAuthBadge';
 
 // ============================================================================
 // Server Card Component
@@ -87,6 +88,14 @@ function ServerCard({
           <Badge variant={healthBadgeVariant} size="sm">
             {server.health_status || 'Unknown'}
           </Badge>
+          {server.upstream_auth && server.upstream_auth.type !== 'none' && (
+            <UpstreamAuthBadge
+              authType={server.upstream_auth.type}
+              credentialStatus={server.upstream_credential_status}
+              provider={server.upstream_auth.provider}
+              compact={true}
+            />
+          )}
         </div>
       </div>
 

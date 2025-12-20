@@ -396,6 +396,7 @@ export const handlers = [
       proxy_pass_url: string;
       description?: string;
       tags?: string[];
+      upstream_auth?: Server['upstream_auth'];
     };
     const newServer: Server = {
       display_name: body.name,
@@ -406,6 +407,7 @@ export const handlers = [
       is_enabled: true,
       health_status: 'unknown',
       num_tools: 0,
+      upstream_auth: body.upstream_auth,
     };
     return HttpResponse.json(newServer, { status: 201 });
   }),
@@ -421,6 +423,7 @@ export const handlers = [
       description?: string;
       tags?: string[];
       enabled?: boolean;
+      upstream_auth?: Server['upstream_auth'];
     };
     const updatedServer: Server = {
       ...server,
@@ -429,6 +432,7 @@ export const handlers = [
       description: body.description ?? server.description,
       tags: body.tags ?? server.tags,
       is_enabled: body.enabled !== undefined ? body.enabled : server.is_enabled,
+      upstream_auth: body.upstream_auth ?? server.upstream_auth,
     };
     return HttpResponse.json(updatedServer);
   }),
