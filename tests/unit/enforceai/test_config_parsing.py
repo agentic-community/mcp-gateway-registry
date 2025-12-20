@@ -44,6 +44,20 @@ class TestEnforceAIConfigParsing:
             "/.well-known/jwks.json"
         )
 
+    def test_blank_optional_paths_are_treated_as_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _set_minimal_valid_env(monkeypatch)
+        monkeypatch.setenv(
+            "ENFORCEAI_UPSTREAM_KEK_PATH",
+            "   ",
+        )
+
+        settings = EnforceAISettings(_env_file=None)
+
+        assert settings.upstream_kek_path is None
+
     def test_oidc_issuers_map_of_two_parses(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv(
             "OIDC_ISSUERS",
