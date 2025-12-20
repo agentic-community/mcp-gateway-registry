@@ -489,14 +489,90 @@ This section implements the official [Anthropic MCP Registry API specification](
   "servers": [
     {
       "path": "/example",
-      "name": "Example Server",
+      "display_name": "Example Server",
+      "proxy_pass_url": "http://localhost:3000/mcp",
       "description": "string",
+      "tags": ["database", "sql"],
       "is_enabled": true,
-      "health_status": "healthy"
+      "health_status": "healthy",
+      "last_checked_iso": "2025-12-20T12:00:00Z",
+      "upstream_auth": {
+        "mode": "gateway-managed",
+        "type": "api-key",
+        "provider": null,
+        "credential_binding": "service",
+        "injection": { "kind": "header", "header_name": "X-API-Key", "scheme": null }
+      },
+      "upstream_credential_status": "configured"
     }
   ]
 }
 ```
+
+---
+
+#### 3. Create Server (JSON)
+
+**Endpoint:** `POST /api/servers`
+
+**Purpose:** Register a new MCP server via JSON (used by the React UI).
+
+**Authentication:** Session cookie or bearer token (same as `GET /api/servers`)
+
+**Request body (JSON):**
+- `name` (required): Display name
+- `path` (required): Path identifier (`example-server` or `/example-server`)
+- `proxy_pass_url` (required): Upstream base URL
+- `description` (optional)
+- `tags` (optional, array of strings)
+- `upstream_auth` (optional): Upstream auth requirements object
+- `overwrite` (optional, boolean): Replace existing server at the same path (default: `false`)
+
+**Response:** `201 Created` with the created server record (same shape as `GET /api/servers` items)
+
+---
+
+#### 4. Get Server Details (JSON)
+
+**Endpoint:** `GET /api/servers/{service_path}`
+
+**Purpose:** Get a single server’s details in JSON (used by the React UI).
+
+**Response:** `200 OK` with the server record, plus optional `tools` when available.
+
+---
+
+#### 5. Update Server (JSON)
+
+**Endpoint:** `PUT /api/servers/{service_path}`
+
+**Purpose:** Update mutable fields (name, proxy_pass_url, description, tags, upstream_auth) and/or toggle enabled state.
+
+**Request body (JSON):**
+- `name` (optional)
+- `proxy_pass_url` (optional)
+- `description` (optional)
+- `tags` (optional)
+- `upstream_auth` (optional)
+- `enabled` (optional, boolean): Toggle enabled/disabled
+
+---
+
+#### 6. Delete Server (JSON)
+
+**Endpoint:** `DELETE /api/servers/{service_path}`
+
+**Purpose:** Remove a server.
+
+**Response:** `204 No Content`
+
+---
+
+#### 7. Refresh Server (JSON)
+
+**Endpoint:** `POST /api/servers/{service_path}/refresh`
+
+**Purpose:** Trigger an immediate health/tools refresh for a server.
 
 ---
 

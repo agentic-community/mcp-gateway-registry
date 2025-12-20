@@ -1,6 +1,7 @@
 # Session State — Latest
 
 ## Last Completed Work
+- Hardened EnforceAI settings parsing to treat blank optional path env vars (e.g., `ENFORCEAI_UPSTREAM_KEK_PATH=` from docker-compose) as unset, preventing startup failures when optional secret paths are configured as empty strings.
 - Repo initialized
 - Base architecture files created
 - Persistence backend for phase 1 selected

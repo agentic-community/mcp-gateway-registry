@@ -118,6 +118,13 @@ The system must support:
    - Required auth type and injection mechanism.
    - Credential binding (service vs per-user/per-agent).
    - Credential status for the current principal (configured, missing, expired, revoked).
+3. Server create/edit UI MUST allow operators to set (and later change) the server’s `upstream_auth` requirements:
+   - Select `type` (`none`, `api-key`, `oauth2`, `oidc`, `provider-oauth`, `jwt`, `header-trust`).
+   - Optional `provider` when applicable (e.g., `github`, `google`, `slack`).
+   - Select `credential_binding` (`service`, `user`, `agent`, `user+agent`).
+   - Optional `injection` overrides (Phase 1 supports header injection only).
+   - `mtls` must be present but disabled/deferred until backend mTLS support exists.
+   - The UI MUST communicate “Upstream auth is gateway-terminated” and MUST direct users to “Upstream Credentials” to configure secrets/tokens (never in the server create form).
 
 #### Implementation changes (expected)
 

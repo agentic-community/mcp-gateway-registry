@@ -170,6 +170,12 @@ Must support these Registry actions (existing backend endpoints):
 Must:
 - Provide search/filter by name/path/tags and enabled/disabled.
 - Provide create/edit forms with validation aligned to server fields (name/path/proxy_pass_url/tags/description/etc).
+- Include an **Upstream Authentication** section in server create/edit:
+  - `type`: `none`, `api-key`, `oauth2`, `oidc`, `provider-oauth`, `jwt`, `header-trust` (`mtls` present but disabled/deferred).
+  - Optional `provider` for provider-based OAuth servers (e.g., `github`, `google`, `slack`).
+  - `credential_binding`: `service`, `user`, `agent`, `user+agent`.
+  - Optional header injection overrides (header name + scheme).
+  - Clear message: upstream auth is handled by the gateway; secrets are configured in “Upstream Credentials” (not in the server form).
 - Provide clear permission gating in the UI (disable actions the user cannot perform; show “why”).
 
 Should:

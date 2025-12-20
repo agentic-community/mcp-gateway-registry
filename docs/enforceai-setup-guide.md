@@ -52,6 +52,7 @@ The state includes:
 - SQLite DB (`enforceai.db`) with migrations applied
 - RSA keypair for gateway token mint/verify (`secrets/`)
 - API key pepper (`secrets/api_key_pepper`)
+- Upstream secret KEK (`secrets/upstream_kek`) used for encrypting stored upstream OAuth credentials (optional feature)
 - A bootstrap `user_id` and `agent_id`
 - A bootstrap gateway token (`bootstrap_gateway_token.txt`)
 - A sourceable env file for local host runs (`enforceai.env`)
@@ -82,6 +83,15 @@ For full gateway enforcement (nginx + registry + auth-server + MCP servers), use
 Then enable EnforceAI in the `auth-server` container:
 
 ```bash
+source $HOME/mcp-gateway/enforceai/enforceai.compose.env
+docker compose up -d --force-recreate auth-server
+```
+
+If the Auth Server logs show `Upstream KEK path must be a file`, rerun the bootstrap with `--force`
+and recreate the `auth-server` container:
+
+```bash
+ENFORCEAI_STATE_DIR="$HOME/mcp-gateway/enforceai" ./scripts/enforceai_dev_bootstrap.sh --force
 source $HOME/mcp-gateway/enforceai/enforceai.compose.env
 docker compose up -d --force-recreate auth-server
 ```

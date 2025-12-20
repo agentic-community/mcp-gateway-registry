@@ -21,6 +21,9 @@ EnforceAI management endpoints are enabled when `ENFORCEAI_DB_PATH` is set.
 - `ENFORCEAI_DB_PATH`: SQLite DB path for EnforceAI state (agents, keys, revocations, audit).
 - `ENFORCEAI_SCOPES_CATALOG_PATH` (or `SCOPES_CATALOG_PATH`): path to the `scopes.yml` catalog used for validating scopes.
 
+### Optional (Upstream OAuth Credential Storage)
+- `ENFORCEAI_UPSTREAM_KEK_PATH`: path to a hex-encoded 32-byte KEK file used to encrypt stored upstream OAuth client secrets at rest.
+
 ### Auth Mode
 Pick one:
 - `ENFORCEAI_AUTH_PROVIDER=oidc`
