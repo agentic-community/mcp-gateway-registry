@@ -65,30 +65,36 @@ describe('ServerRegisterModal', () => {
     expect(body.upstream_auth?.injection?.header_name).toBe('X-API-Key');
   });
 
-  it('requires provider for provider-oauth', async () => {
-    let called = false;
+  it('requires provider for OAuth upstream auth types', async () => {
+    for (const authType of ['oauth2', 'oidc', 'provider-oauth']) {
+      server.resetHandlers();
+      let called = false;
 
-    server.use(
-      http.post('/api/servers', () => {
-        called = true;
-        return HttpResponse.json({}, { status: 201 });
-      })
-    );
+      server.use(
+        http.post('/api/servers', () => {
+          called = true;
+          return HttpResponse.json({}, { status: 201 });
+        })
+      );
 
-    const { user } = render(
-      <ServerRegisterModal open={true} onClose={() => {}} onSuccess={() => {}} />
-    );
+      const { user, unmount } = render(
+        <ServerRegisterModal open={true} onClose={() => {}} onSuccess={() => {}} />
+      );
 
-    await user.type(screen.getByLabelText('Display Name'), 'My MCP Server');
-    await user.type(screen.getByLabelText('Path'), 'my-server');
-    await user.type(screen.getByLabelText('Proxy URL'), 'http://localhost:3000/mcp');
+      await user.type(screen.getByLabelText('Display Name'), 'My MCP Server');
+      await user.type(screen.getByLabelText('Path'), 'my-server');
+      await user.type(screen.getByLabelText('Proxy URL'), 'http://localhost:3000/mcp');
 
-    await user.selectOptions(screen.getByLabelText('Auth Type'), 'provider-oauth');
+      await user.selectOptions(screen.getByLabelText('Auth Type'), authType);
 
-    await user.click(screen.getByRole('button', { name: 'Register Server' }));
+      await user.click(screen.getByRole('button', { name: 'Register Server' }));
 
-    expect(await screen.findByText('Provider is required for provider OAuth')).toBeInTheDocument();
-    expect(called).toBe(false);
+      expect(
+        await screen.findByText('Provider is required for OAuth upstream auth')
+      ).toBeInTheDocument();
+      expect(called).toBe(false);
+
+      unmount();
+    }
   });
 });
-

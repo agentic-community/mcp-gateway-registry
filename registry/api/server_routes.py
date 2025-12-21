@@ -2,6 +2,7 @@ import json
 import asyncio
 import logging
 import os
+import sqlite3
 from typing import (
     Annotated,
     Any,
@@ -193,6 +194,56 @@ def _enforce_proxy_pass_url_allowlist(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"proxy_pass_url not allowed: {decision.reason}",
+        )
+
+
+def _enforce_upstream_oauth_provider_configured(
+    *,
+    upstream_auth: dict,
+) -> None:
+    upstream_auth_type = (upstream_auth.get("type") or "").strip()
+    if upstream_auth_type not in {"oauth2", "oidc", "provider-oauth"}:
+        return
+
+    provider_id = (upstream_auth.get("provider") or "").strip()
+    if not provider_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid upstream auth configuration: provider is required for OAuth upstream auth",
+        )
+
+    db_path = os.getenv("ENFORCEAI_DB_PATH")
+    if db_path is None or not db_path.strip():
+        return
+
+    try:
+        from pathlib import Path
+
+        from auth_server.enforceai.db.connection import (
+            sqlite_connection,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed if EnforceAI is unavailable
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Upstream OAuth provider validation unavailable",
+        ) from exc
+
+    try:
+        with sqlite_connection(Path(db_path)) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM upstream_oauth_providers WHERE provider_id = ?",
+                (provider_id,),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Upstream OAuth provider registry unavailable",
+        ) from exc
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid upstream auth configuration: unknown upstream OAuth provider '{provider_id}'",
         )
 
 
@@ -399,6 +450,7 @@ async def create_server_json(
         auth_provider=None,
         headers=None,
     )
+    _enforce_upstream_oauth_provider_configured(upstream_auth=upstream_auth_payload)
 
     server_entry = {
         "server_name": payload.name.strip(),
@@ -568,12 +620,14 @@ async def update_server_json(
     if payload.tags is not None:
         updated_server_entry["tags"] = payload.tags
     if payload.upstream_auth is not None:
-        updated_server_entry["upstream_auth"] = _normalize_upstream_auth_payload(
+        upstream_auth_payload = _normalize_upstream_auth_payload(
             upstream_auth=payload.upstream_auth,
             auth_type=None,
             auth_provider=None,
             headers=None,
         )
+        _enforce_upstream_oauth_provider_configured(upstream_auth=upstream_auth_payload)
+        updated_server_entry["upstream_auth"] = upstream_auth_payload
 
     updated_server_entry["path"] = path
 

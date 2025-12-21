@@ -1,9 +1,12 @@
+import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { useQuery } from '@tanstack/react-query';
 import { Modal, ModalFooter } from '@/components/ui/Modal';
 import { Button, Input, Textarea } from '@/components/ui';
 import { useRegisterServer } from './hooks';
+import { listUpstreamOAuthProviders } from '@/api/admin';
 import type { CredentialBinding, UpstreamAuthConfig } from '@/api/types';
 
 // ============================================================================
@@ -47,12 +50,16 @@ const registerServerSchema = z.object({
   upstream_injection_header_name: z.string().max(100).optional(),
   upstream_injection_scheme: z.string().max(50).optional(),
 }).superRefine((data, ctx) => {
-  if (data.upstream_auth_type === 'provider-oauth') {
+  if (
+    data.upstream_auth_type === 'oauth2' ||
+    data.upstream_auth_type === 'oidc' ||
+    data.upstream_auth_type === 'provider-oauth'
+  ) {
     const provider = (data.upstream_auth_provider || '').trim();
     if (!provider) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Provider is required for provider OAuth',
+        message: 'Provider is required for OAuth upstream auth',
         path: ['upstream_auth_provider'],
       });
     }
@@ -94,6 +101,27 @@ export function ServerRegisterModal({
   onSuccess,
 }: ServerRegisterModalProps) {
   const { registerServer, isRegistering, error, reset } = useRegisterServer();
+  const providerQuery = useQuery({
+    queryKey: ['admin', 'upstream-oauth-providers'],
+    queryFn: listUpstreamOAuthProviders,
+    enabled: open,
+    retry: false,
+  });
+  const providerIds = useMemo(() => {
+    const ids = (providerQuery.data ?? []).map((item) => item.provider.provider_id);
+    ids.sort();
+    return ids;
+  }, [providerQuery.data]);
+  const [useManualProviderId, setUseManualProviderId] = useState(false);
+  const providerHelperText = useMemo(() => {
+    if (providerQuery.isError) {
+      return 'Provider registry unavailable. Enter a provider id manually (required for OAuth2/OIDC/Provider OAuth).';
+    }
+    if (providerIds.length > 0 && !useManualProviderId) {
+      return 'Select a provider id (required for OAuth2/OIDC/Provider OAuth).';
+    }
+    return 'Enter a provider id manually (required for OAuth2/OIDC/Provider OAuth).';
+  }, [providerIds.length, providerQuery.isError, useManualProviderId]);
 
   const {
     register,
@@ -119,6 +147,7 @@ export function ServerRegisterModal({
   const handleClose = () => {
     resetForm();
     reset();
+    setUseManualProviderId(false);
     onClose();
   };
 
@@ -176,6 +205,8 @@ export function ServerRegisterModal({
       // Error is handled by the hook
     }
   };
+
+  const providerError = errors.upstream_auth_provider?.message;
 
   return (
     <Modal
@@ -259,13 +290,65 @@ export function ServerRegisterModal({
               </select>
             </div>
 
-            <Input
-              label="Provider (optional)"
-              placeholder="github"
-              helperText="Required for Provider OAuth; optional for OAuth2/OIDC"
-              error={errors.upstream_auth_provider?.message}
-              {...register('upstream_auth_provider')}
-            />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label
+                  htmlFor="upstream_auth_provider"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-200"
+                >
+                  Provider
+                </label>
+                {providerIds.length > 0 ? (
+                  <button
+                    type="button"
+                    className="text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                    onClick={() => setUseManualProviderId((prev) => !prev)}
+                  >
+                    {useManualProviderId ? 'Use dropdown' : 'Enter manually'}
+                  </button>
+                ) : null}
+              </div>
+
+              {providerIds.length > 0 && !useManualProviderId ? (
+                <select
+                  id="upstream_auth_provider"
+                  className="block w-full rounded-md border-gray-300 text-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200"
+                  {...register('upstream_auth_provider')}
+                  aria-invalid={Boolean(providerError)}
+                  aria-describedby={providerError ? 'upstream_auth_provider-error' : undefined}
+                >
+                  <option value="">Select a provider</option>
+                  {providerIds.map((providerId) => (
+                    <option key={providerId} value={providerId}>
+                      {providerId}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Input
+                  label={undefined}
+                  id="upstream_auth_provider"
+                  placeholder="github"
+                  helperText={providerHelperText}
+                  error={providerError}
+                  {...register('upstream_auth_provider')}
+                />
+              )}
+
+              {providerIds.length > 0 && !useManualProviderId ? (
+                providerError ? (
+                  <p
+                    id="upstream_auth_provider-error"
+                    className="text-sm text-red-600 dark:text-red-400"
+                    role="alert"
+                  >
+                    {providerError}
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-600 dark:text-gray-400">{providerHelperText}</p>
+                )
+              ) : null}
+            </div>
 
             <div>
               <label

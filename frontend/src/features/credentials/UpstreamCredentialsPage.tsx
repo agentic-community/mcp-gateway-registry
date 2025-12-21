@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { PageContent } from '@/components/layout/PageContent';
 import { Card } from '@/components/ui/Card';
@@ -35,6 +35,7 @@ type StatusFilter = 'all' | UpstreamCredentialStatus;
 export default function UpstreamCredentialsPage() {
   const { addToast } = useToast();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [servers, setServers] = useState<Server[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +68,22 @@ export default function UpstreamCredentialsPage() {
   useEffect(() => {
     fetchServers();
   }, []);
+
+  useEffect(() => {
+    const configure = searchParams.get('configure');
+    if (!configure) {
+      return;
+    }
+
+    const matched = servers.find((server) => server.path === configure);
+    if (!matched) {
+      return;
+    }
+
+    setSelectedServer(matched);
+    setIsModalOpen(true);
+    navigate('/credentials/upstream', { replace: true });
+  }, [searchParams, servers, navigate]);
 
   // Filter servers that require upstream credentials
   const serversWithUpstreamAuth = useMemo(() => {
@@ -143,16 +160,8 @@ export default function UpstreamCredentialsPage() {
 
   // Handle server configuration click
   const handleServerClick = (server: Server) => {
-    const authType = server.upstream_auth?.type;
-
-    // For API key and JWT types, open the modal
-    if (authType === 'api-key' || authType === 'jwt') {
-      setSelectedServer(server);
-      setIsModalOpen(true);
-    } else {
-      // For other types (OAuth, OIDC, etc.), navigate to server details
-      navigate(`/servers/${encodeURIComponent(server.path)}`);
-    }
+    setSelectedServer(server);
+    setIsModalOpen(true);
   };
 
   // Handle modal close

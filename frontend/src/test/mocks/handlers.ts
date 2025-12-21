@@ -1,5 +1,19 @@
 import { http, HttpResponse } from 'msw';
-import type { Server, A2AAgent, EnforceAIAgent, ServerDetails, Tool, ApiKeySummary, ScopeCatalog, EgressAllowlistEntry, UpstreamOAuthCredential } from '@/api/types';
+import type {
+  Server,
+  A2AAgent,
+  EnforceAIAgent,
+  ServerDetails,
+  Tool,
+  ApiKeySummary,
+  ScopeCatalog,
+  EgressAllowlistEntry,
+  UpstreamOAuthProviderPublic,
+  UpstreamCredential,
+  StartOAuthFlowRequest,
+  DisconnectOAuthRequest,
+  CreateUpstreamCredentialRequest,
+} from '@/api/types';
 
 // Mock tools data
 export const mockTools: Tool[] = [
@@ -231,6 +245,35 @@ export const mockEgressAllowlistEntries: EgressAllowlistEntry[] = [
   },
 ];
 
+export const mockUpstreamOAuthProviders: UpstreamOAuthProviderPublic[] = [
+  {
+    provider: {
+      provider_id: 'github',
+      authorization_endpoint: 'https://example.com/oauth/authorize',
+      token_endpoint: 'https://example.com/oauth/token',
+      client_id: 'client-github-1',
+      default_scopes: ['repo', 'user:email'],
+      extra_authorize_params: { prompt: 'consent' },
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-15T00:00:00Z',
+    },
+    secret_present: true,
+  },
+  {
+    provider: {
+      provider_id: 'slack',
+      authorization_endpoint: 'https://slack.com/oauth/v2/authorize',
+      token_endpoint: 'https://slack.com/api/oauth.v2.access',
+      client_id: 'client-slack-1',
+      default_scopes: ['channels:read'],
+      extra_authorize_params: {},
+      created_at: '2024-01-05T00:00:00Z',
+      updated_at: '2024-01-10T00:00:00Z',
+    },
+    secret_present: false,
+  },
+];
+
 export const mockScopeCatalog: ScopeCatalog = {
   version: '1.0',
   generated_at: new Date().toISOString(),
@@ -345,6 +388,13 @@ export const handlers = [
   http.get('/api/auth/csrf', () => {
     return HttpResponse.json({
       csrf_token: 'test-csrf-token-12345',
+    });
+  }),
+
+  http.post('/api/auth/enforceai/token', () => {
+    return HttpResponse.json({
+      access_token: 'test-enforceai-ui-token',
+      expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
     });
   }),
 
@@ -911,6 +961,114 @@ export const handlers = [
     });
   }),
 
+  // Upstream OAuth Provider Registry endpoints
+  http.get('/enforceai/admin/upstream-oauth-providers', () => {
+    return HttpResponse.json(mockUpstreamOAuthProviders);
+  }),
+
+  http.get('/enforceai/admin/upstream-oauth-providers/:providerId', ({ params }) => {
+    const providerId = String(params.providerId);
+    const provider = mockUpstreamOAuthProviders.find(
+      (item) => item.provider.provider_id === providerId
+    );
+    if (!provider) {
+      return HttpResponse.json({ detail: 'Provider not found' }, { status: 404 });
+    }
+    return HttpResponse.json(provider);
+  }),
+
+  http.post('/enforceai/admin/upstream-oauth-providers', async ({ request }) => {
+    const body = (await request.json()) as {
+      provider_id: string;
+      authorization_endpoint: string;
+      token_endpoint: string;
+      client_id: string;
+      client_secret: string;
+      default_scopes?: string[];
+      extra_authorize_params?: Record<string, string>;
+    };
+
+    const now = new Date().toISOString();
+    const created: UpstreamOAuthProviderPublic = {
+      provider: {
+        provider_id: body.provider_id,
+        authorization_endpoint: body.authorization_endpoint,
+        token_endpoint: body.token_endpoint,
+        client_id: body.client_id,
+        default_scopes: body.default_scopes ?? [],
+        extra_authorize_params: body.extra_authorize_params ?? {},
+        created_at: now,
+        updated_at: now,
+      },
+      secret_present: Boolean(body.client_secret && body.client_secret.trim()),
+    };
+
+    mockUpstreamOAuthProviders.push(created);
+    return HttpResponse.json(created);
+  }),
+
+  http.put('/enforceai/admin/upstream-oauth-providers/:providerId', async ({ params, request }) => {
+    const providerId = String(params.providerId);
+    const index = mockUpstreamOAuthProviders.findIndex(
+      (item) => item.provider.provider_id === providerId
+    );
+    if (index < 0) {
+      return HttpResponse.json({ detail: 'Provider not found' }, { status: 404 });
+    }
+
+    const body = (await request.json()) as {
+      authorization_endpoint?: string;
+      token_endpoint?: string;
+      client_id?: string;
+      client_secret?: string;
+      default_scopes?: string[];
+      extra_authorize_params?: Record<string, string>;
+    };
+
+    const current = mockUpstreamOAuthProviders[index];
+    const nextSecretPresent =
+      body.client_secret !== undefined
+        ? Boolean(body.client_secret && body.client_secret.trim())
+        : current.secret_present;
+
+    const updated: UpstreamOAuthProviderPublic = {
+      provider: {
+        ...current.provider,
+        authorization_endpoint: body.authorization_endpoint ?? current.provider.authorization_endpoint,
+        token_endpoint: body.token_endpoint ?? current.provider.token_endpoint,
+        client_id: body.client_id ?? current.provider.client_id,
+        default_scopes: body.default_scopes ?? current.provider.default_scopes,
+        extra_authorize_params: body.extra_authorize_params ?? current.provider.extra_authorize_params,
+        updated_at: new Date().toISOString(),
+      },
+      secret_present: nextSecretPresent,
+    };
+
+    mockUpstreamOAuthProviders[index] = updated;
+    return HttpResponse.json(updated);
+  }),
+
+  http.delete('/enforceai/admin/upstream-oauth-providers/:providerId', ({ params }) => {
+    const providerId = String(params.providerId);
+    const index = mockUpstreamOAuthProviders.findIndex(
+      (item) => item.provider.provider_id === providerId
+    );
+    if (index < 0) {
+      return HttpResponse.json({ detail: 'Provider not found' }, { status: 404 });
+    }
+
+    // Simulate a referenced provider that can't be deleted.
+    if (providerId === 'github') {
+      return HttpResponse.json(
+        { detail: 'Provider is referenced by one or more servers' },
+        { status: 409 }
+      );
+    }
+
+    mockUpstreamOAuthProviders.splice(index, 1);
+    return HttpResponse.json({ ok: true });
+  }),
+
   // ============================================================================
   // Upstream Credentials API
   // ============================================================================
@@ -923,63 +1081,72 @@ export const handlers = [
 
     // Mock OAuth credentials for OAuth-type servers
     if (serverPath === 'github-mcp') {
-      const oauthCredential: UpstreamOAuthCredential = {
+      const oauthCredential: UpstreamCredential = {
         credential_id: `cred-${serverPath}`,
-        server_path: serverPath,
+        server_path: `/${serverPath}`,
         credential_type: 'provider-oauth',
-        binding: 'user',
+        credential_binding: 'user',
         user_id: 'local|testuser',
-        status: 'configured',
         provider: 'github',
-        oauth_scopes: ['repo', 'read:user', 'read:org'],
-        token_expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
-        has_refresh_token: true,
-        expires_at: null,
+        scopes: ['repo', 'read:user', 'read:org'],
+        token_type: 'Bearer',
+        expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
+        revoked_at: null,
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-01T00:00:00Z',
         last_used_at: '2024-01-15T10:30:00Z',
       };
-      return HttpResponse.json(oauthCredential);
+      return HttpResponse.json([oauthCredential]);
     }
 
     // Mock API key credentials for api-key type servers
     if (serverPath === 'sqlite') {
-      return HttpResponse.json({
+      return HttpResponse.json([
+        {
         credential_id: `cred-${serverPath}`,
-        server_path: serverPath,
+        server_path: `/${serverPath}`,
         credential_type: 'api-key',
-        binding: 'user',
+        credential_binding: 'user',
         user_id: 'local|testuser',
-        status: 'configured',
+        provider: null,
+        scopes: null,
+        token_type: null,
         expires_at: null,
+        revoked_at: null,
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-01T00:00:00Z',
         last_used_at: '2024-01-15T10:30:00Z',
-      });
+        },
+      ]);
     }
 
     // No credential configured for other servers
-    return HttpResponse.json(
-      { detail: 'No credential configured for this server' },
-      { status: 404 }
-    );
+    return HttpResponse.json([]);
   }),
 
   http.post('/enforceai/upstream/servers/:serverPath/credentials', async ({ params, request }) => {
     const serverPath = params.serverPath as string;
-    const body = (await request.json()) as {
-      credential_type: 'api-key' | 'jwt';
-      secret: string;
-      expires_at?: string | null;
-    };
+    const body = (await request.json()) as CreateUpstreamCredentialRequest;
 
     // Return the created credential with the secret (only returned once)
     return HttpResponse.json({
-      credential_id: `cred-${serverPath}-${Date.now()}`,
-      server_path: serverPath,
-      credential_type: body.credential_type,
-      secret: body.secret, // Echoed back once
-      created_at: new Date().toISOString(),
+      credential: {
+        credential_id: `cred-${serverPath}-${Date.now()}`,
+        server_path: `/${serverPath}`,
+        credential_type: body.credential_type,
+        credential_binding: body.credential_binding,
+        user_id: body.credential_binding === 'user' ? 'local|testuser' : null,
+        agent_id: body.agent_id ?? null,
+        provider: body.provider ?? null,
+        scopes: body.scopes ?? null,
+        token_type: body.token_type ?? null,
+        expires_at: body.expires_at ?? null,
+        revoked_at: null,
+        last_used_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      secret_payload: body.secret_payload ?? null,
     });
   }),
 
@@ -987,7 +1154,22 @@ export const handlers = [
     const credentialId = params.credentialId as string;
 
     // Simple mock - just return success
-    return new HttpResponse(null, { status: 204 });
+    return HttpResponse.json({
+      credential_id: credentialId,
+      server_path: '/mock',
+      credential_type: 'api-key',
+      credential_binding: 'user',
+      user_id: 'local|testuser',
+      agent_id: null,
+      provider: null,
+      scopes: null,
+      token_type: null,
+      expires_at: null,
+      revoked_at: new Date().toISOString(),
+      last_used_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
   }),
 
   // ============================================================================
@@ -996,19 +1178,14 @@ export const handlers = [
 
   http.post('/enforceai/upstream/servers/:serverPath/oauth/start', async ({ params, request }) => {
     const serverPath = params.serverPath as string;
-    const body = (await request.json()) as { return_url?: string };
-
-    // Build state with server info
-    const stateData = {
-      server_path: serverPath,
-      return_url: body.return_url,
-    };
-    const state = btoa(JSON.stringify(stateData));
+    const body = (await request.json()) as StartOAuthFlowRequest;
+    const stateId = `state-${serverPath}-${Date.now()}`;
 
     // Return mock authorization URL (in tests, we don't actually redirect)
     return HttpResponse.json({
-      authorization_url: `https://mock-oauth-provider.test/authorize?state=${state}&client_id=mock-client&redirect_uri=${encodeURIComponent(body.return_url || '')}`,
-      state,
+      authorization_url: `https://mock-oauth-provider.test/authorize?state=${encodeURIComponent(stateId)}&client_id=mock-client&redirect_uri=${encodeURIComponent(body.ui_return_url)}`,
+      state_id: stateId,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     });
   }),
 
@@ -1016,6 +1193,8 @@ export const handlers = [
     const serverPath = params.serverPath as string;
 
     // Simple mock - just return success
-    return new HttpResponse(null, { status: 204 });
+    return HttpResponse.json({
+      revoked_count: serverPath ? 1 : 0,
+    });
   }),
 ];

@@ -7,6 +7,9 @@ import type {
   EgressAllowlistEntry,
   CreateEgressAllowlistEntryRequest,
   UpdateEgressAllowlistEntryRequest,
+  UpstreamOAuthProviderPublic,
+  UpstreamOAuthProviderCreateRequest,
+  UpstreamOAuthProviderUpdateRequest,
 } from './types';
 
 // ============================================================================
@@ -59,5 +62,46 @@ export async function checkEgressPattern(pattern: string): Promise<{ allowed: bo
   return apiPost<{ allowed: boolean; reason?: string }, { pattern: string }>(
     '/enforceai/admin/egress-allowlist/check',
     { pattern }
+  );
+}
+
+// ============================================================================
+// Upstream OAuth Provider Registry API (Admin)
+// ============================================================================
+
+export async function listUpstreamOAuthProviders(): Promise<UpstreamOAuthProviderPublic[]> {
+  return apiGet<UpstreamOAuthProviderPublic[]>('/enforceai/admin/upstream-oauth-providers');
+}
+
+export async function getUpstreamOAuthProvider(
+  providerId: string
+): Promise<UpstreamOAuthProviderPublic> {
+  return apiGet<UpstreamOAuthProviderPublic>(
+    `/enforceai/admin/upstream-oauth-providers/${encodeURIComponent(providerId)}`
+  );
+}
+
+export async function createUpstreamOAuthProvider(
+  data: UpstreamOAuthProviderCreateRequest
+): Promise<UpstreamOAuthProviderPublic> {
+  return apiPost<UpstreamOAuthProviderPublic, UpstreamOAuthProviderCreateRequest>(
+    '/enforceai/admin/upstream-oauth-providers',
+    data
+  );
+}
+
+export async function updateUpstreamOAuthProvider(
+  providerId: string,
+  data: UpstreamOAuthProviderUpdateRequest
+): Promise<UpstreamOAuthProviderPublic> {
+  return apiPut<UpstreamOAuthProviderPublic, UpstreamOAuthProviderUpdateRequest>(
+    `/enforceai/admin/upstream-oauth-providers/${encodeURIComponent(providerId)}`,
+    data
+  );
+}
+
+export async function deleteUpstreamOAuthProvider(providerId: string): Promise<void> {
+  await apiDelete<{ ok: boolean }>(
+    `/enforceai/admin/upstream-oauth-providers/${encodeURIComponent(providerId)}`
   );
 }

@@ -68,7 +68,17 @@ class Settings(BaseSettings):
     @property
     def is_local_dev(self) -> bool:
         """Check if running in local development mode."""
-        return not Path("/app").exists()
+        container_root = self.container_app_dir
+        if not container_root.exists():
+            return True
+
+        if not container_root.is_dir():
+            return True
+
+        try:
+            return not os.access(container_root, os.W_OK)
+        except Exception:
+            return True
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
