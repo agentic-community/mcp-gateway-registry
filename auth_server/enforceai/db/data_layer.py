@@ -38,6 +38,9 @@ from ..stores.sqlite.upstream_credential_store import (
 from ..stores.sqlite.upstream_oauth_state_store import (
     SqliteUpstreamOAuthStateStore,
 )
+from ..stores.sqlite.upstream_oauth_provider_store import (
+    SqliteUpstreamOAuthProviderStore,
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,7 @@ class EnforceAIStores:
     egress_allowlist_store: SqliteEgressAllowlistStore
     upstream_credential_store: Optional[SqliteUpstreamCredentialStore]
     upstream_oauth_state_store: Optional[SqliteUpstreamOAuthStateStore]
+    upstream_oauth_provider_store: Optional[SqliteUpstreamOAuthProviderStore]
 
 
 class EnforceAIDataLayer:
@@ -85,12 +89,17 @@ class EnforceAIDataLayer:
     ) -> EnforceAIStores:
         upstream_credential_store: Optional[SqliteUpstreamCredentialStore] = None
         upstream_oauth_state_store: Optional[SqliteUpstreamOAuthStateStore] = None
+        upstream_oauth_provider_store: Optional[SqliteUpstreamOAuthProviderStore] = None
         if upstream_kek is not None:
             upstream_credential_store = SqliteUpstreamCredentialStore(
                 db_path=self._db_path,
                 kek=upstream_kek,
             )
             upstream_oauth_state_store = SqliteUpstreamOAuthStateStore(
+                db_path=self._db_path,
+                kek=upstream_kek,
+            )
+            upstream_oauth_provider_store = SqliteUpstreamOAuthProviderStore(
                 db_path=self._db_path,
                 kek=upstream_kek,
             )
@@ -105,4 +114,5 @@ class EnforceAIDataLayer:
             egress_allowlist_store=SqliteEgressAllowlistStore(db_path=self._db_path),
             upstream_credential_store=upstream_credential_store,
             upstream_oauth_state_store=upstream_oauth_state_store,
+            upstream_oauth_provider_store=upstream_oauth_provider_store,
         )

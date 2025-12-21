@@ -28,6 +28,11 @@ from ..models.upstream_credentials import (
 from ..models.egress_allowlist import (
     EgressAllowlistEntryRecord,
 )
+from ..models.upstream_oauth_provider import (
+    UpstreamOAuthProviderCreate,
+    UpstreamOAuthProviderPublic,
+    UpstreamOAuthProviderUpdate,
+)
 
 
 class AgentStore(Protocol):
@@ -185,6 +190,49 @@ class UpstreamCredentialStore(Protocol):
         credential_id: str,
         last_used_at: datetime,
     ) -> Optional[UpstreamCredentialRecord]:
+        ...
+
+
+class UpstreamOAuthProviderStore(Protocol):
+    def create_provider(
+        self,
+        *,
+        payload: UpstreamOAuthProviderCreate,
+    ) -> UpstreamOAuthProviderPublic:
+        ...
+
+    def get_provider(
+        self,
+        *,
+        provider_id: str,
+    ) -> Optional[UpstreamOAuthProviderPublic]:
+        ...
+
+    def list_providers(
+        self,
+    ) -> list[UpstreamOAuthProviderPublic]:
+        ...
+
+    def update_provider(
+        self,
+        *,
+        provider_id: str,
+        payload: UpstreamOAuthProviderUpdate,
+    ) -> Optional[UpstreamOAuthProviderPublic]:
+        ...
+
+    def delete_provider(
+        self,
+        *,
+        provider_id: str,
+    ) -> bool:
+        ...
+
+    def get_provider_secret_for_runtime(
+        self,
+        *,
+        provider_id: str,
+    ) -> Optional[str]:
         ...
 
 

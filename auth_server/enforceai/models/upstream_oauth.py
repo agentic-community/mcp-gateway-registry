@@ -6,6 +6,7 @@ from typing import (
     Literal,
     Optional,
 )
+from urllib.parse import urlparse
 
 from pydantic import (
     BaseModel,
@@ -26,6 +27,32 @@ UpstreamOAuthCredentialType = Literal[
 ]
 
 
+def _normalize_ui_return_url(
+    value: Optional[str],
+) -> Optional[str]:
+    if value is None:
+        return None
+
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("ui_return_url must be a non-empty string")
+
+    parsed = urlparse(stripped)
+    if parsed.scheme or parsed.netloc:
+        raise ValueError("ui_return_url must be a relative path (same-origin)")
+
+    if not stripped.startswith("/"):
+        raise ValueError("ui_return_url must start with '/'")
+
+    if stripped.startswith("//"):
+        raise ValueError("ui_return_url must not start with '//'")
+
+    if "\\" in stripped:
+        raise ValueError("ui_return_url must not contain backslashes")
+
+    return stripped
+
+
 class UpstreamOAuthStateRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -37,6 +64,7 @@ class UpstreamOAuthStateRecord(BaseModel):
     agent_id: Optional[str] = None
     provider: str = Field(..., min_length=1)
     redirect_uri: str = Field(..., min_length=1)
+    ui_return_url: Optional[str] = None
     created_at: datetime
     expires_at: datetime
 
@@ -61,6 +89,14 @@ class UpstreamOAuthStateRecord(BaseModel):
         if not stripped:
             raise ValueError("provider must be a non-empty string")
         return stripped
+
+    @field_validator("ui_return_url")
+    @classmethod
+    def _validate_ui_return_url(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
+        return _normalize_ui_return_url(value)
 
     @model_validator(mode="after")
     def _validate_binding(self) -> "UpstreamOAuthStateRecord":
@@ -97,6 +133,7 @@ class UpstreamOAuthStartRequest(BaseModel):
     agent_id: Optional[str] = None
     provider: str
     scopes: Optional[list[str]] = None
+    ui_return_url: Optional[str] = None
 
     @field_validator("server_path")
     @classmethod
@@ -121,6 +158,14 @@ class UpstreamOAuthStartRequest(BaseModel):
         if not stripped:
             raise ValueError("provider must be a non-empty string")
         return stripped
+
+    @field_validator("ui_return_url")
+    @classmethod
+    def _normalize_ui_return_url(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
+        return _normalize_ui_return_url(value)
 
     @model_validator(mode="after")
     def _validate_binding(self) -> "UpstreamOAuthStartRequest":
@@ -148,6 +193,50 @@ class UpstreamOAuthCallbackResponse(BaseModel):
     credential_id: str
     server_path: str
     provider: str
+
+
+class UpstreamOAuthServerStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    credential_type: UpstreamOAuthCredentialType
+    credential_binding: UpstreamCredentialBinding = Field(default="user")
+    agent_id: Optional[str] = None
+    provider: str
+    scopes: Optional[list[str]] = None
+    ui_return_url: str
+
+    @field_validator("provider")
+    @classmethod
+    def _normalize_provider(
+        cls,
+        value: str,
+    ) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("provider must be a non-empty string")
+        return stripped
+
+    @field_validator("ui_return_url")
+    @classmethod
+    def _normalize_ui_return_url(
+        cls,
+        value: str,
+    ) -> str:
+        normalized = _normalize_ui_return_url(value)
+        if normalized is None:
+            raise ValueError("ui_return_url must be a non-empty string")
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_binding(self) -> "UpstreamOAuthServerStartRequest":
+        if self.credential_binding not in {"user", "user+agent"}:
+            raise ValueError("credential_binding must be user or user+agent for OAuth flows")
+
+        if self.credential_binding == "user" and self.agent_id is not None:
+            raise ValueError("agent_id must be omitted for user binding")
+        if self.credential_binding == "user+agent" and self.agent_id is None:
+            raise ValueError("agent_id is required for user+agent binding")
+        return self
 
 
 class UpstreamOAuthDisconnectRequest(BaseModel):
@@ -195,8 +284,38 @@ class UpstreamOAuthDisconnectRequest(BaseModel):
         return self
 
 
+class UpstreamOAuthServerDisconnectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    credential_type: UpstreamOAuthCredentialType
+    credential_binding: UpstreamCredentialBinding = Field(default="user")
+    agent_id: Optional[str] = None
+    provider: str
+
+    @field_validator("provider")
+    @classmethod
+    def _normalize_provider(
+        cls,
+        value: str,
+    ) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("provider must be a non-empty string")
+        return stripped
+
+    @model_validator(mode="after")
+    def _validate_binding(self) -> "UpstreamOAuthServerDisconnectRequest":
+        if self.credential_binding not in {"user", "user+agent"}:
+            raise ValueError("credential_binding must be user or user+agent for OAuth flows")
+
+        if self.credential_binding == "user" and self.agent_id is not None:
+            raise ValueError("agent_id must be omitted for user binding")
+        if self.credential_binding == "user+agent" and self.agent_id is None:
+            raise ValueError("agent_id is required for user+agent binding")
+        return self
+
+
 class UpstreamOAuthDisconnectResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     revoked_count: int
-

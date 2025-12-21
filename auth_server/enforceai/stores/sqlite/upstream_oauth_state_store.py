@@ -74,6 +74,7 @@ class SqliteUpstreamOAuthStateStore:
         agent_id: Optional[str],
         provider: str,
         redirect_uri: str,
+        ui_return_url: Optional[str],
         ttl_seconds: int,
         secret_payload: dict[str, Any],
     ) -> UpstreamOAuthStateRecord:
@@ -90,6 +91,7 @@ class SqliteUpstreamOAuthStateStore:
             agent_id=agent_id,
             provider=provider,
             redirect_uri=redirect_uri,
+            ui_return_url=ui_return_url,
             created_at=now,
             expires_at=expires_at,
         )
@@ -118,12 +120,13 @@ class SqliteUpstreamOAuthStateStore:
                         agent_id,
                         provider,
                         redirect_uri,
+                        ui_return_url,
                         secret_version,
                         secret_nonce,
                         secret_ciphertext,
                         created_at,
                         expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """.strip(),
                     (
                         record.state_id,
@@ -134,6 +137,7 @@ class SqliteUpstreamOAuthStateStore:
                         record.agent_id,
                         record.provider,
                         record.redirect_uri,
+                        record.ui_return_url,
                         envelope.version,
                         envelope.nonce,
                         envelope.ciphertext,
@@ -163,6 +167,7 @@ class SqliteUpstreamOAuthStateStore:
                     agent_id,
                     provider,
                     redirect_uri,
+                    ui_return_url,
                     created_at,
                     expires_at
                 FROM upstream_oauth_states
@@ -183,8 +188,9 @@ class SqliteUpstreamOAuthStateStore:
             agent_id=row[5],
             provider=row[6],
             redirect_uri=row[7],
-            created_at=_datetime_from_iso(row[8]),
-            expires_at=_datetime_from_iso(row[9]),
+            ui_return_url=row[8],
+            created_at=_datetime_from_iso(row[9]),
+            expires_at=_datetime_from_iso(row[10]),
         )
 
     def consume_state(
@@ -209,6 +215,7 @@ class SqliteUpstreamOAuthStateStore:
                         agent_id,
                         provider,
                         redirect_uri,
+                        ui_return_url,
                         secret_version,
                         secret_nonce,
                         secret_ciphertext,
@@ -224,7 +231,7 @@ class SqliteUpstreamOAuthStateStore:
                     connection.execute("COMMIT")
                     return None
 
-                expires_at = _datetime_from_iso(row[12])
+                expires_at = _datetime_from_iso(row[13])
                 connection.execute(
                     "DELETE FROM upstream_oauth_states WHERE state_id = ?",
                     (state_id,),
@@ -248,13 +255,14 @@ class SqliteUpstreamOAuthStateStore:
             agent_id=row[5],
             provider=row[6],
             redirect_uri=row[7],
-            created_at=_datetime_from_iso(row[11]),
+            ui_return_url=row[8],
+            created_at=_datetime_from_iso(row[12]),
             expires_at=expires_at,
         )
 
-        secret_version = int(row[8])
-        secret_nonce = bytes(row[9])
-        secret_ciphertext = bytes(row[10])
+        secret_version = int(row[9])
+        secret_nonce = bytes(row[10])
+        secret_ciphertext = bytes(row[11])
 
         aad = build_aad_for_upstream_oauth_state(
             state_id=record.state_id,

@@ -50,6 +50,7 @@ class TestSqliteUpstreamOAuthStateStore:
             agent_id=None,
             provider="github",
             redirect_uri="http://localhost/enforceai/upstream/oauth/callback",
+            ui_return_url="/credentials/upstream/oauth/callback",
             ttl_seconds=60,
             secret_payload={"code_verifier": "verifier-1"},
         )
@@ -58,6 +59,7 @@ class TestSqliteUpstreamOAuthStateStore:
         assert first is not None
         record, secret = first
         assert record.state_id == created.state_id
+        assert record.ui_return_url == "/credentials/upstream/oauth/callback"
         assert secret.payload["code_verifier"] == "verifier-1"
 
         second = store.consume_state(state_id=created.state_id)
@@ -81,6 +83,7 @@ class TestSqliteUpstreamOAuthStateStore:
             agent_id=None,
             provider="github",
             redirect_uri="http://localhost/enforceai/upstream/oauth/callback",
+            ui_return_url=None,
             ttl_seconds=60,
             secret_payload={"code_verifier": "verifier-2"},
         )
@@ -113,9 +116,9 @@ class TestSqliteUpstreamOAuthStateStore:
             agent_id=None,
             provider="github",
             redirect_uri="http://localhost/enforceai/upstream/oauth/callback",
+            ui_return_url=None,
             ttl_seconds=-1,
             secret_payload={"code_verifier": "verifier-3"},
         )
 
         assert store.consume_state(state_id=created.state_id) is None
-
