@@ -85,6 +85,7 @@ providers:
     # Google specific claim mapping
     username_claim: "email"
     groups_claim: null  # Google doesn't provide groups in basic scope
+    efault_groups: ["registry-users-lob1"]
     email_claim: "email"
     name_claim: "name"
     enabled: false  # Disabled by default

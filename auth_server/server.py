@@ -2156,6 +2156,15 @@ def substitute_env_vars(config):
     else:
         return config
 
+
+def _normalize_string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
 # Global OAuth2 configuration
 OAUTH2_CONFIG = load_oauth2_config()
 
@@ -2538,6 +2547,21 @@ async def oauth2_callback(
             logger.info(f"Raw user info from {provider}: {user_info}")
             mapped_user = map_user_info(user_info, provider_config)
             logger.info(f"Mapped user info: {mapped_user}")
+
+        mapped_groups = mapped_user.get("groups", [])
+        if not isinstance(mapped_groups, list):
+            mapped_groups = []
+            mapped_user["groups"] = mapped_groups
+
+        if not mapped_groups:
+            default_groups = _normalize_string_list(provider_config.get("default_groups"))
+            if default_groups:
+                mapped_user["groups"] = default_groups
+                logger.info(
+                    "Applied OAuth2 default groups for provider '%s': %s",
+                    provider,
+                    default_groups,
+                )
         
         issuer = mapped_user.get("iss") or mapped_user.get("issuer")
         subject = mapped_user.get("sub") or mapped_user.get("subject")
