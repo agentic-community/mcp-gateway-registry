@@ -496,7 +496,10 @@ Should:
 ## Open Issues (Backend Dependencies)
 These are not UI design questions, but requirements-impacting backend work that must exist for the UI to be fully functional.
 
-1. **Single unified session across services**: `auth_server` EnforceAI endpoints currently authenticate via bearer/API-key style credentials; to meet “single session”, `auth_server` must accept the same browser session identity used by the Registry (or both must trust a shared session issuer).
+1. **Single unified session across services**: `auth_server` EnforceAI endpoints currently authenticate via bearer/API-key style credentials; to meet “single session”, the system must support a shared browser identity. Preferred approach:
+   - Keep Registry login as the user-facing session (cookie).
+   - Add a CSRF-protected “token vending” endpoint on the Registry that exchanges the cookie session for a short-lived EnforceAI management access token (stored in-memory by the SPA, never persisted).
+   - `auth_server` accepts that short-lived token as a shared session issuer for `/enforceai/*` UI calls.
 2. **Cross-user admin APIs**: current EnforceAI management endpoints are ownership-scoped by `user_id`; cross-user create/revoke/delete requires new admin-only endpoints and an admin permission model.
 3. **User directory source of truth**: add a minimal user directory store (likely in the EnforceAI DB) populated on first-seen from OIDC (`email`) and from username/password logins (`username`), so Admin → Users is searchable and comprehensible.
 4. **Registry operator endpoints**: Registry internal/operator actions are migrated to unified admin auth and audited.

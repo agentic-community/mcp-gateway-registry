@@ -537,7 +537,7 @@ This section defines the minimum stable schemas and runtime contracts required t
 - **`X-MCP-Scopes`**: space-delimited string.
 - **`X-MCP-Claims`**: allowlisted JSON; initial allowlist excludes PII and has no canonical tenant/org id yet.
 - **Missing upstream credential status**: `424 Failed Dependency` with stable `error_code=UPSTREAM_CREDENTIALS_REQUIRED`.
-- **Upstream OAuth client secrets**: stored in an external secrets manager (Vault/KMS) with a dev/local fallback to env/file configuration.
+- **Upstream OAuth provider configuration**: managed by EnforceAI admin APIs (stored encrypted-at-rest in the EnforceAI DB), with an optional external secrets manager backend and a dev/local env/file fallback for bootstrap.
 - **Token refresh strategy (Phase 1)**: on-demand refresh only (no background refresher).
 - **SSRF/egress policy**: strict allowlist; allowlist is DB-managed with optional TTL, admin-gated, and audited.
 - **Tenancy (Phase 1)**: single-tenant (no canonical `tenant_id/org_id` added to `IdentityContext`).
@@ -637,6 +637,66 @@ These endpoints are for managing upstream credentials (gateway -> upstream). The
   - `GET  /enforceai/upstream/servers/{server_id}/oauth/callback`
   - `POST /enforceai/upstream/servers/{server_id}/oauth/disconnect`
 
+#### Upstream OAuth provider registry (Admin) (Normative)
+
+Goal: allow admins to configure upstream OAuth providers (endpoints + client credentials) without requiring per-user env-var configuration and without ever exposing client secrets to the browser.
+
+Requirements:
+- Provider records MUST be stored encrypted-at-rest (same KEK as upstream credential storage).
+- Provider client secrets MUST NOT be returned by any API (create/update may accept a secret, but reads must only return `secret_present=true|false`).
+- Only EnforceAI admins may manage providers; all mutations must be CSRF-protected and audited.
+
+Endpoint set (names may vary, but semantics must hold):
+- `GET /enforceai/admin/upstream-oauth-providers`
+  - List provider configs (no secrets).
+- `POST /enforceai/admin/upstream-oauth-providers`
+  - Create a provider config (accepts client secret; does not return it).
+- `PUT /enforceai/admin/upstream-oauth-providers/{provider_id}`
+  - Update provider config; may replace secret.
+- `DELETE /enforceai/admin/upstream-oauth-providers/{provider_id}`
+  - Delete provider config (must fail if referenced by servers, or require an explicit `force` semantics).
+
+Recommended operational workflow:
+1. Admin creates/updates an upstream OAuth provider config (client id + client secret + endpoints + default scopes).
+2. Admin registers/edits an MCP server with `upstream_auth.type in {oauth2, oidc, provider-oauth}` and `upstream_auth.provider=<provider_id>`.
+3. Admin updates the scope catalog to include the server for the relevant scopes/groups.
+4. Each user connects their own upstream account via the UI “Connect” flow (stored per-user when `credential_binding=user`).
+
+#### Browser-based OAuth consent flow (Normative)
+
+Goal: allow a logged-in user (browser session) to authorize the gateway to access an upstream MCP server via OAuth, without pasting tokens into the UI.
+
+Requirements:
+
+1. The UI MUST initiate upstream OAuth using the logged-in user identity (browser session), not a manually-pasted long-lived EnforceAI credential.
+   - This requires a shared browser session identity across Registry and Auth Server (for example: Registry cookie session -> short-lived EnforceAI management token vending).
+2. The server’s `upstream_auth` contract is the source of truth for:
+   - `credential_type` (`oauth2` | `oidc` | `provider-oauth`)
+   - `provider` (e.g., `github`, `google`, `slack`)
+   - `credential_binding` (at minimum: `user`; optionally: `user+agent`)
+3. `POST /enforceai/upstream/servers/{server_id}/oauth/start` MUST:
+   - validate the target server exists and requires an OAuth-type upstream credential
+   - bind the OAuth `state` to the initiating user (and agent_id if `user+agent`)
+   - use PKCE (S256) for authorization-code flows
+   - accept an optional `ui_return_url` (same-origin) used after callback completion
+   - return an `authorization_url` for the browser to navigate to
+4. `GET /enforceai/upstream/servers/{server_id}/oauth/callback` MUST:
+   - NOT require any custom auth headers (providers will not preserve them)
+   - verify `state` is valid/unexpired and bound to the initiating user
+   - exchange `code` for tokens at the provider token endpoint
+   - store tokens encrypted-at-rest as an upstream credential record
+   - redirect the browser to `ui_return_url` with a success/failure indicator (no token leakage)
+5. The UI MUST provide a callback route (SPA page) that:
+   - shows success/failure
+   - refreshes upstream credential status for the server
+   - returns the user to the originating server/credentials context
+6. `POST /enforceai/upstream/servers/{server_id}/oauth/disconnect` MUST:
+   - revoke and/or delete stored tokens when possible
+   - update status to `missing` / `revoked` as appropriate
+
+Non-goals:
+- No token values are ever displayed in the UI. Only metadata (provider, scopes, expiry).
+
 #### Error semantics (minimum)
 
 All error responses MUST be JSON with a stable machine-readable `error_code`:
@@ -647,6 +707,7 @@ All error responses MUST be JSON with a stable machine-readable `error_code`:
 - `UPSTREAM_AUTH_MISCONFIGURED`: server config invalid/unsupported combination
 - `UPSTREAM_OAUTH_STATE_INVALID`: OAuth callback state binding invalid or expired
 - `UPSTREAM_OAUTH_TOKEN_EXCHANGE_FAILED`: provider token endpoint rejected exchange
+- `UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED`: server references a provider id that has no configured OAuth provider record
 - `UPSTREAM_MTLS_CONFIG_REQUIRED`: Future (reserved for mTLS support)
 
 ### Proxy-Time Injection Contract (Headers)
@@ -699,7 +760,7 @@ This section lists issues that should be explicitly decided or clarified before 
 1. **Where upstream injection happens**: DECIDED (Nginx `auth_request` with `/validate` computing injection).
 2. **Header format for `X-MCP-Scopes` and `X-MCP-Claims`**: DECIDED (space-delimited scopes; allowlisted JSON claims).
 3. **Status code for “missing upstream credential”**: DECIDED (`424` + stable `error_code`).
-4. **OAuth provider configuration source**: DECIDED (external secrets manager + dev env/file fallback).
+4. **OAuth provider configuration source**: DECIDED (EnforceAI admin-managed provider registry stored encrypted-at-rest, with optional external secrets manager backend and dev/local env/file fallback).
 5. **mTLS operational model**: Future (explicitly de-prioritized; decide when mTLS is prioritized).
 6. **SSRF and egress control**: DECIDED (strict allowlist, DB-managed with optional TTL, admin-gated).
 7. **Multi-tenant boundary**: DECIDED (Phase 1 is single-tenant).

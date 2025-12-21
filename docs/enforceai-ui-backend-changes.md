@@ -139,6 +139,29 @@ These actions must:
 - Avoid requiring `X-Agent-Id` binding (admin operates on a `target_user_id`).
 - Use “admin acting on target” semantics (no impersonation/act-as in Phase 1).
 
+### 4.3 Upstream OAuth provider registry (admin)
+The UI needs a safe way for admins to configure upstream OAuth providers (endpoints + client credentials) without requiring env-var configuration and without exposing client secrets in the browser.
+
+Backend must add an admin-managed provider registry with these properties:
+- Provider configs are stored in the EnforceAI DB and client secrets are encrypted-at-rest (same KEK as upstream credential storage).
+- Provider secrets are write-only from API perspective: never returned in reads; only `secret_present=true|false` is returned.
+- All mutations are CSRF-protected and audited.
+
+Minimum endpoints (example names):
+- `GET /enforceai/admin/upstream-oauth-providers`
+- `POST /enforceai/admin/upstream-oauth-providers`
+- `PUT /enforceai/admin/upstream-oauth-providers/{provider_id}`
+- `DELETE /enforceai/admin/upstream-oauth-providers/{provider_id}`
+
+Server registration contract:
+- Server records reference providers by `upstream_auth.provider` (e.g., `google`, `github`).
+- Server registration/edit UI must not accept client secrets; it should select a provider id that is already configured by an admin.
+
+Operational flow:
+1. Admin configures the provider (client id/secret) in the provider registry.
+2. Admin registers the MCP server and selects the provider id in `upstream_auth.provider`.
+3. Users connect their own upstream accounts (per-user tokens) from the Upstream Credentials UI.
+
 ## 5) Registry Admin Auth Migration (Remove HTTP Basic)
 Registry previously had internal/operator endpoints protected by HTTP Basic.
 

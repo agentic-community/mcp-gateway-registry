@@ -24,6 +24,19 @@ EnforceAI management endpoints are enabled when `ENFORCEAI_DB_PATH` is set.
 ### Optional (Upstream OAuth Credential Storage)
 - `ENFORCEAI_UPSTREAM_KEK_PATH`: path to a hex-encoded 32-byte KEK file used to encrypt stored upstream OAuth client secrets at rest.
 
+### Optional (Upstream OAuth Provider Registry)
+If upstream OAuth providers are managed via EnforceAI admin APIs (instead of environment variables), provider configs (including OAuth client secrets) are stored encrypted-at-rest in the EnforceAI DB using the same KEK.
+
+Minimum expected admin endpoints:
+- `GET /enforceai/admin/upstream-oauth-providers`
+- `POST /enforceai/admin/upstream-oauth-providers`
+- `PUT /enforceai/admin/upstream-oauth-providers/{provider_id}`
+- `DELETE /enforceai/admin/upstream-oauth-providers/{provider_id}`
+
+Notes:
+- Provider client secrets are write-only and must never be returned by the API (reads only return metadata + `secret_present`).
+- Server records reference providers by `upstream_auth.provider` (e.g., `google`, `github`).
+
 ### Auth Mode
 Pick one:
 - `ENFORCEAI_AUTH_PROVIDER=oidc`

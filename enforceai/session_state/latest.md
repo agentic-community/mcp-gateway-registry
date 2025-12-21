@@ -1,6 +1,48 @@
 # Session State — Latest
 
 ## Last Completed Work
+- Fix: upstream OAuth token expiry precision no longer truncates to whole seconds, preventing flaky early-refresh behavior in `tests/integration/test_enforceai_upstream_oauth_flow.py` where the first proxy could refresh immediately:
+  - Preserve microseconds when computing `expires_at`: `auth_server/enforceai/upstream/oauth_client.py`
+  - Preserve microseconds when persisting upstream credential timestamps: `auth_server/enforceai/stores/sqlite/upstream_credential_store.py`
+- Tests: `make test` (pass)
+- Gateway → Workspace MCP backend support hardening: allow MCP `tools/list` to succeed without an upstream OAuth credential (best-effort injection) so backends that don’t require auth for discovery can still be listed, while `tools/call` remains fail-closed:
+  - Resolver supports optional missing-credential behavior for OAuth tool discovery: `auth_server/enforceai/upstream/resolver.py`
+  - `/validate` uses best-effort upstream injection for OAuth `tools/list`: `auth_server/server.py`
+  - Added integration regressions: `tests/integration/test_enforceai_upstream_injection_validate.py`
+- Tests: `make test` (pass)
+- Upstream OAuth Provider Registry plan Phase 5: hardened server registration/edit to require valid OAuth provider references end-to-end:
+  - Registry backend now rejects OAuth server configs with missing/unknown providers when `ENFORCEAI_DB_PATH` is set: `registry/api/server_routes.py`
+  - Server create/edit UI now uses provider registry-backed dropdown (with manual fallback when admin registry is unavailable) and requires provider for `oauth2`/`oidc`/`provider-oauth`: `frontend/src/features/servers/ServerRegisterModal.tsx`, `frontend/src/features/servers/ServerEditModal.tsx`
+  - Backend integration regression for unknown provider on `/api/servers`: `tests/integration/test_registry_upstream_oauth_provider_validation.py`
+  - Frontend regression requiring provider for OAuth upstream auth types: `frontend/src/features/servers/__tests__/ServerRegisterModal.test.tsx`
+- Tests: `.venv/bin/python -m py_compile registry/api/server_routes.py tests/integration/test_registry_upstream_oauth_provider_validation.py` (pass), `npm -C frontend run typecheck` (pass), `npm -C frontend test` (pass), `make test` (pass)
+- Upstream OAuth Provider Registry plan Phase 4: added an admin UI for managing upstream OAuth providers (list/create/edit/delete) with write-only client secret handling and JSON editing for extra authorize params:
+  - Route + page: `frontend/src/features/admin/UpstreamOAuthProvidersPage.tsx` at `/admin/upstream-oauth-providers`
+  - Create/edit modal: `frontend/src/features/admin/UpstreamOAuthProviderModal.tsx` (secrets never displayed after save)
+  - Admin API client + types: `frontend/src/api/admin.ts`, `frontend/src/api/types.ts`
+  - Navigation: `frontend/src/components/layout/Sidebar.tsx` + admin dashboard card in `frontend/src/features/admin/AdminPage.tsx`
+  - MSW endpoints + tests: `frontend/src/test/mocks/handlers.ts`, `frontend/src/features/admin/__tests__/UpstreamOAuthProvidersPage.test.tsx`
+- Tests: `npm -C frontend run typecheck` (pass), `npm -C frontend test` (pass), `make test` (pass)
+- Upstream OAuth Provider Registry plan Phase 3: OAuth connect + validate-time refresh now resolve provider configs from the DB provider registry first (fallback to env `ENFORCEAI_UPSTREAM_OAUTH_PROVIDERS`), and return `X-EnforceAI-Error-Code=UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED` when a required provider isn’t configured.
+- Added shared provider resolver helper: `auth_server/enforceai/upstream/oauth_provider_resolver.py`.
+- Updated OAuth start/callback routes to use DB provider registry + secret-at-rest, with env fallback: `auth_server/enforceai/api/management_routes.py`.
+- Updated validate-time refresh to use DB provider registry + secret-at-rest, with env fallback: `auth_server/enforceai/upstream/resolver.py`.
+- Added offline integration regression proving DB provider registry is preferred over env config during token exchange + refresh: `tests/integration/test_enforceai_upstream_oauth_flow.py`.
+- Tests: `.venv/bin/python -m py_compile auth_server/enforceai/upstream/oauth_provider_resolver.py auth_server/enforceai/upstream/oauth_flow.py auth_server/enforceai/api/management_routes.py auth_server/enforceai/upstream/resolver.py tests/integration/test_enforceai_upstream_oauth_flow.py` (pass), `make test` (pass), `npm -C frontend run typecheck && npm -C frontend test` (pass)
+- Upstream OAuth Provider Registry plan Phase 2: added admin CRUD APIs in `auth_server` for provider registry (`/enforceai/admin/upstream-oauth-providers*`) with admin-only enforcement, CSRF for cookie-session flows, write-only secrets (never returned), and audited create/update/delete; delete is blocked (409) when any registry server references the provider unless `force=true` is provided.
+- Added registry server reference detection helper for deletes: `auth_server/enforceai/upstream/server_catalog.py`.
+- Tests: `.venv/bin/python -m py_compile auth_server/enforceai/upstream/server_catalog.py auth_server/enforceai/api/management_routes.py tests/integration/test_enforceai_management_routes.py` (pass), `make test` (pass), `npm -C frontend run typecheck` (pass), `npm -C frontend test` (pass)
+- Upstream OAuth Provider Registry plan Phase 1: added `0008_upstream_oauth_providers` migration, provider models (`auth_server/enforceai/models/upstream_oauth_provider.py`), SQLite store (`auth_server/enforceai/stores/sqlite/upstream_oauth_provider_store.py`) with AES-GCM envelope encryption and write-only secret semantics, and wired the store into `auth_server/enforceai/db/data_layer.py` behind `ENFORCEAI_UPSTREAM_KEK_PATH`.
+- Tests: `.venv/bin/python -m py_compile auth_server/enforceai/models/upstream_oauth_provider.py auth_server/enforceai/stores/sqlite/upstream_oauth_provider_store.py auth_server/enforceai/crypto/upstream_secrets.py auth_server/enforceai/stores/interfaces.py auth_server/enforceai/db/data_layer.py tests/unit/enforceai/test_upstream_oauth_provider_models.py tests/unit/enforceai/test_upstream_oauth_provider_store_sqlite.py tests/unit/enforceai/test_migrations.py tests/integration/test_enforceai_stage7_hardening.py` (pass), `make test` (pass), `npm -C frontend run typecheck` (pass), `npm -C frontend test` (pass)
+- Enforce GW UI upstream OAuth seamless plan Phase 5: fixed Nginx upstream injection for OAuth servers (treat `oauth2`/`oidc`/`provider-oauth` like `jwt`) and added an offline integration regression that simulates the auth_request->proxy header injection path and asserts the upstream receives the injected bearer token (including refresh).
+- Enforce GW UI upstream OAuth seamless plan Phase 3: added a CSRF-protected EnforceAI UI token vending endpoint (`POST /api/auth/enforceai/token`) and a short-lived bearer token format for `/enforceai/*` management calls.
+- Auth server now accepts the vended UI session token (HS256, `iss=enforceai-ui`, `aud=enforceai-management`) for management context derivation, tied to the server-side session store (revocations invalidate tokens).
+- Frontend now automatically vends and attaches the short-lived token for `/enforceai/*` API calls (in-memory only) and clears it on logout; MSW handlers updated accordingly.
+- Added unit + integration coverage for mint/verify, CSRF enforcement, and a registry->auth_server roundtrip using the vended token.
+- Hardened registry config + session cookie minting for environments where `/app` exists but is read-only: treat non-writable container roots as local-dev for path selection and make EnforceAI session persistence best-effort (avoid crashing tests/dev shells).
+- Hardened registry cookie-session validation: if EnforceAI DB is configured but unavailable (read-only/missing), skip server-side session store checks instead of failing all cookie-auth requests with `401`.
+- Enforce GW UI upstream OAuth seamless plan Phase 4: OAuth start now loads the server’s declared `upstream_auth` from the registry server catalog, rejects non-OAuth servers, and enforces provider/binding/type consistency; integration tests updated to use a temp registry server catalog.
+- Tests: `.venv/bin/python -m py_compile auth_server/enforceai/tokens/ui_session.py auth_server/enforceai/auth/dependency.py registry/auth/routes.py registry/auth/csrf.py tests/unit/enforceai/test_ui_session_token.py tests/integration/test_enforceai_ui_token_vending.py` (pass), `make test-unit` (pass), `make test-integration` (pass), `cd frontend && npm test` (pass)
 - Hardened EnforceAI settings parsing to treat blank optional path env vars (e.g., `ENFORCEAI_UPSTREAM_KEK_PATH=` from docker-compose) as unset, preventing startup failures when optional secret paths are configured as empty strings.
 - Repo initialized
 - Base architecture files created
@@ -116,12 +158,20 @@
 - UI Scope Catalog Management Phase 4: UI delete scope flow (completed)
 - UI Scope Catalog Management Phase 5 (optional): structured scope editor (completed)
 - UI Scope Catalog Management: allow scope management UI for `enforceai-admin` group (completed)
+- Upstream OAuth seamless plan Phase 5: Nginx config injects OAuth Authorization (completed)
+- Upstream OAuth seamless plan Phase 5: end-to-end proxy regression (completed)
 
 ## Next Steps
-1. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 15: Settings + Help + Final Polish (SettingsPage, HelpPage, 404 page, error boundary)
-2. Execute Phase 16: E2E Testing + Documentation (Playwright setup, E2E scenarios, README update)
+1. Resume `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 15: Settings + Help + Final Polish (SettingsPage, HelpPage, 404 page, error boundary)
+2. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 16: E2E Testing + Documentation (Playwright setup, E2E scenarios, README update)
 
 ## Tests Executed
+- `.venv/bin/python -m py_compile tests/integration/test_enforceai_upstream_oauth_flow.py` (pass)
+- `make test-unit` (pass)
+- `make test-integration` (pass)
+- `.venv/bin/python -m py_compile registry/core/nginx_service.py tests/unit/core/test_nginx_service.py` (pass)
+- `make test-unit` (pass)
+- `make test-integration` (pass)
 - `uv run python -m py_compile auth_server/enforceai/*.py tests/unit/enforceai/*.py` (pass)
 - `uv run pytest -q -o addopts='' tests/unit/enforceai` (8 passed)
 - `uv run python -m py_compile auth_server/enforceai/config.py tests/unit/enforceai/test_config_*.py` (pass)
@@ -406,5 +456,30 @@
   - Unit: `tests/unit/enforceai/test_upstream_oauth_state_store_sqlite.py`, `tests/unit/enforceai/test_upstream_oauth_refresh.py`
   - Integration: `tests/integration/test_enforceai_upstream_oauth_flow.py` (in-process stub provider; no network)
 - Tests: `make test-unit` and `make test-integration` (pass).
+
+### Upstream OAuth Seamless UI Phase 1 (Server-Scoped Endpoints)
+- Added `ui_return_url` to upstream OAuth state storage:
+  - Migration `0007_upstream_oauth_states_ui_return_url`
+  - Model/store updates: `auth_server/enforceai/models/upstream_oauth.py`, `auth_server/enforceai/stores/sqlite/upstream_oauth_state_store.py`
+- Added server-scoped OAuth endpoints with browser redirect callback:
+  - `POST /enforceai/upstream/servers/{server_path}/oauth/start`
+  - `GET  /enforceai/upstream/servers/{server_path}/oauth/callback` (redirects to `ui_return_url`)
+  - `POST /enforceai/upstream/servers/{server_path}/oauth/disconnect`
+- Fixed `/validate` upstream auth default: when upstream type is `none`, `upstream_auth.mode` is set to `none` so validation doesn’t fail closed.
+- Tests: `make test-unit` and `make test-integration` (pass).
+
+### Upstream OAuth Seamless UI Phase 2 (Frontend Connect/Callback/Disconnect)
+- Updated frontend EnforceAI API client to match auth-server management API shapes:
+  - OAuth: `frontend/src/api/enforceai.ts` now posts `ui_return_url`, provider, binding and parses `{authorization_url,state_id,expires_at}`.
+  - Credentials: `frontend/src/api/enforceai.ts` now treats `/enforceai/upstream/servers/{server_path}/credentials` as a list endpoint and uses backend-style `secret_payload` for create.
+- Updated frontend API types to match backend response/request shapes: `frontend/src/api/types.ts`.
+- Updated UX:
+  - `frontend/src/features/credentials/UpstreamCredentialModal.tsx` starts server-scoped OAuth connect, disconnects via server-scoped endpoint, and displays scopes/expiry from stored credential metadata.
+  - `frontend/src/features/credentials/UpstreamOAuthCallbackPage.tsx` consumes `upstream_oauth=success|error` redirect params and routes back to `/credentials/upstream?configure=...`.
+  - `frontend/src/features/credentials/UpstreamCredentialsPage.tsx` opens the credential modal for OAuth servers and honors the `configure` query param.
+- Updated frontend mocks/tests for new contracts:
+  - MSW handlers updated: `frontend/src/test/mocks/handlers.ts`
+  - Added callback page tests: `frontend/src/features/credentials/__tests__/UpstreamOAuthCallbackPage.test.tsx`
+- Tests: `cd frontend && npm run typecheck` and `cd frontend && npm test` (pass).
 
 ## Outstanding Questions
