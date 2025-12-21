@@ -29,7 +29,7 @@ from ...models.upstream_credentials import (
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(microsecond=0)
+    return datetime.now(timezone.utc)
 
 
 def _datetime_to_iso(
@@ -39,7 +39,7 @@ def _datetime_to_iso(
         return None
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace(
+    return value.astimezone(timezone.utc).isoformat().replace(
         "+00:00",
         "Z",
     )
