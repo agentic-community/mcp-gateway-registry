@@ -9,11 +9,11 @@ module "ecs_service_auth" {
   cluster_arn              = var.ecs_cluster_arn
   cpu                      = tonumber(var.cpu)
   memory                   = tonumber(var.memory)
-  desired_count            = var.enable_autoscaling ? var.autoscaling_min_capacity : var.auth_replicas
-  enable_autoscaling       = var.enable_autoscaling
-  autoscaling_min_capacity = var.autoscaling_min_capacity
-  autoscaling_max_capacity = var.autoscaling_max_capacity
-  autoscaling_policies = var.enable_autoscaling ? {
+  desired_count            = var.enable_enforceai ? 1 : (var.enable_autoscaling ? var.autoscaling_min_capacity : var.auth_replicas)
+  enable_autoscaling       = var.enable_enforceai ? false : var.enable_autoscaling
+  autoscaling_min_capacity = var.enable_enforceai ? 1 : var.autoscaling_min_capacity
+  autoscaling_max_capacity = var.enable_enforceai ? 1 : var.autoscaling_max_capacity
+  autoscaling_policies = (var.enable_enforceai || !var.enable_autoscaling) ? {} : {
     cpu = {
       policy_type = "TargetTrackingScaling"
       target_tracking_scaling_policy_configuration = {
@@ -32,7 +32,7 @@ module "ecs_service_auth" {
         target_value = var.autoscaling_target_memory
       }
     }
-  } : {}
+  }
 
   enable_execute_command = true
 
@@ -87,56 +87,124 @@ module "ecs_service_auth" {
         }
       ]
 
-      environment = [
-        {
-          name  = "REGISTRY_URL"
-          value = "https://${var.domain_name}"
-        },
-        {
-          name  = "AUTH_SERVER_URL"
-          value = "http://auth-server:8888"
-        },
-        {
-          name  = "AUTH_SERVER_EXTERNAL_URL"
-          value = "https://${var.domain_name}"
-        },
-        {
-          name  = "AWS_REGION"
-          value = data.aws_region.current.id
-        },
-        {
-          name  = "AUTH_PROVIDER"
-          value = var.keycloak_domain != "" ? "keycloak" : "default"
-        },
-        {
-          name  = "KEYCLOAK_URL"
-          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
-        },
-        {
-          name  = "KEYCLOAK_EXTERNAL_URL"
-          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
-        },
-        {
-          name  = "KEYCLOAK_REALM"
-          value = "mcp-gateway"
-        },
-        {
-          name  = "KEYCLOAK_CLIENT_ID"
-          value = "mcp-gateway-web"
-        },
-        {
-          name  = "SCOPES_CONFIG_PATH"
-          value = "/efs/auth_config/auth_config/scopes.yml"
-        },
-        {
-          name  = "SESSION_COOKIE_SECURE"
-          value = tostring(var.session_cookie_secure)
-        },
-        {
-          name  = "SESSION_COOKIE_DOMAIN"
-          value = var.session_cookie_domain
-        }
-      ]
+      environment = concat(
+        [
+          {
+            name  = "REGISTRY_URL"
+            value = "https://${var.domain_name}"
+          },
+          {
+            name  = "AUTH_SERVER_URL"
+            value = "http://auth-server:8888"
+          },
+          {
+            name  = "AUTH_SERVER_EXTERNAL_URL"
+            value = "https://${var.domain_name}"
+          },
+          {
+            name  = "AWS_REGION"
+            value = data.aws_region.current.id
+          },
+          {
+            name  = "AUTH_PROVIDER"
+            value = var.keycloak_domain != "" ? "keycloak" : "default"
+          },
+          {
+            name  = "KEYCLOAK_URL"
+            value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+          },
+          {
+            name  = "KEYCLOAK_EXTERNAL_URL"
+            value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+          },
+          {
+            name  = "KEYCLOAK_REALM"
+            value = "mcp-gateway"
+          },
+          {
+            name  = "KEYCLOAK_CLIENT_ID"
+            value = "mcp-gateway-web"
+          },
+          {
+            name  = "SCOPES_CONFIG_PATH"
+            value = "/efs/auth_config/auth_config/scopes.yml"
+          },
+          {
+            name  = "SESSION_COOKIE_SECURE"
+            value = tostring(var.session_cookie_secure)
+          },
+          {
+            name  = "SESSION_COOKIE_DOMAIN"
+            value = var.session_cookie_domain
+          },
+        ],
+        var.enable_enforceai ? [
+          {
+            name  = "ENFORCEAI_STATE_DIR"
+            value = var.enforceai_state_dir
+          },
+          {
+            name  = "ENFORCEAI_AUTO_BOOTSTRAP"
+            value = tostring(var.enforceai_auto_bootstrap)
+          },
+          {
+            name  = "ENFORCEAI_AUTH_PROVIDER"
+            value = var.enforceai_auth_provider
+          },
+          {
+            name  = "ENFORCEAI_DB_PATH"
+            value = "${var.enforceai_state_dir}/enforceai.db"
+          },
+          {
+            name  = "ENFORCEAI_SCOPES_CATALOG_PATH"
+            value = "/efs/auth_config/auth_config/scopes.yml"
+          },
+          {
+            name  = "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH"
+            value = "${var.enforceai_state_dir}/secrets/gateway_private.pem"
+          },
+          {
+            name  = "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR"
+            value = "${var.enforceai_state_dir}/secrets/gateway_public_keys"
+          },
+          {
+            name  = "ENFORCEAI_GATEWAY_ACTIVE_KID"
+            value = var.enforceai_gateway_active_kid
+          },
+          {
+            name  = "ENFORCEAI_GATEWAY_ISSUER"
+            value = var.enforceai_gateway_issuer
+          },
+          {
+            name  = "OIDC_ISSUERS"
+            value = var.enforceai_oidc_issuers_json
+          },
+        ] : [],
+        (var.enable_enforceai && var.enforceai_auto_bootstrap && var.enforceai_bootstrap_user_id != "") ? [
+          {
+            name  = "ENFORCEAI_BOOTSTRAP_USER_ID"
+            value = var.enforceai_bootstrap_user_id
+          }
+        ] : [],
+        (var.enable_enforceai && var.enforceai_auto_bootstrap && var.enforceai_bootstrap_agent_id != "") ? [
+          {
+            name  = "ENFORCEAI_BOOTSTRAP_AGENT_ID"
+            value = var.enforceai_bootstrap_agent_id
+          }
+        ] : [],
+        (var.enable_enforceai && contains(["api-key", "mixed"], var.enforceai_auth_provider)) ? [
+          {
+            name  = "ENFORCEAI_API_KEY_PEPPER_PATH"
+            value = "${var.enforceai_state_dir}/secrets/api_key_pepper"
+          }
+        ] : [],
+        (var.enable_enforceai && var.enforceai_enable_upstream_kek) ? [
+          {
+            name  = "ENFORCEAI_UPSTREAM_KEK_PATH"
+            value = "${var.enforceai_state_dir}/secrets/upstream_kek"
+          }
+        ] : []
+      )
 
       secrets = [
         {
@@ -158,6 +226,11 @@ module "ecs_service_auth" {
         {
           sourceVolume  = "auth-config"
           containerPath = "/efs/auth_config"
+          readOnly      = false
+        },
+        {
+          sourceVolume  = "enforceai-state"
+          containerPath = var.enforceai_state_dir
           readOnly      = false
         }
       ]
@@ -188,6 +261,13 @@ module "ecs_service_auth" {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
         access_point_id    = module.efs.access_points["auth_config"].id
+        transit_encryption = "ENABLED"
+      }
+    }
+    enforceai-state = {
+      efs_volume_configuration = {
+        file_system_id     = module.efs.id
+        access_point_id    = module.efs.access_points["enforceai_state"].id
         transit_encryption = "ENABLED"
       }
     }

@@ -78,4 +78,16 @@ module "mcp_gateway" {
   # Session cookie security configuration
   session_cookie_secure = var.session_cookie_secure
   session_cookie_domain = var.session_cookie_domain
+
+  # EnforceAI (Auth Server)
+  enable_enforceai              = var.enable_enforceai
+  enforceai_state_dir           = var.enforceai_state_dir
+  enforceai_auth_provider       = var.enforceai_auth_provider
+  enforceai_gateway_active_kid  = var.enforceai_gateway_active_kid
+  enforceai_gateway_issuer      = var.enforceai_gateway_issuer
+  enforceai_oidc_issuers_json   = var.enforceai_oidc_issuers_json
+  enforceai_enable_upstream_kek = var.enforceai_enable_upstream_kek
+  enforceai_auto_bootstrap      = var.enforceai_auto_bootstrap
+  enforceai_bootstrap_user_id   = var.enforceai_bootstrap_user_id
+  enforceai_bootstrap_agent_id  = var.enforceai_bootstrap_agent_id
 }

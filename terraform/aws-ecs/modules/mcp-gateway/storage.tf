@@ -156,6 +156,25 @@ module "efs" {
         Name = "${local.name_prefix} MCPGW Data"
       })
     }
+
+    enforceai_state = {
+      name = "${local.name_prefix}-enforceai-state"
+      posix_user = {
+        gid = 1000
+        uid = 1000
+      }
+      root_directory = {
+        path = "/enforceai_state"
+        creation_info = {
+          owner_gid   = 1000
+          owner_uid   = 1000
+          permissions = "700"
+        }
+      }
+      tags = merge(local.common_tags, {
+        Name = "${local.name_prefix} EnforceAI State"
+      })
+    }
   }
 
   tags = local.common_tags

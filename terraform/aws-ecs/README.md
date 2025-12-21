@@ -414,6 +414,18 @@ Skipped:     0
 Post-deployment setup completed successfully!
 ```
 
+### EnforceAI (Optional)
+
+If you enable EnforceAI (`enable_enforceai = true`), the Auth Server mounts a dedicated EFS state directory
+and exports EnforceAI env vars. For a first bring-up you can also enable:
+
+- `enforceai_auto_bootstrap = true` (creates the EnforceAI SQLite DB and missing secret files on EFS)
+- `enforceai_bootstrap_user_id = "local|admin"` (optional: creates a bootstrap agent and mints a bootstrap gateway token)
+
+The bootstrap token (if minted) is written to the EnforceAI state dir on EFS as `bootstrap_gateway_token.txt`.
+When EnforceAI is enabled, the Auth Server service is forced to a single task (autoscaling disabled) to avoid
+SQLite multi-writer issues on shared storage.
+
 ### Step 2: Access Web UI and Register Example Servers/Agents
 
 First, extract URLs from your terraform outputs:

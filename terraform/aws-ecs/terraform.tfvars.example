@@ -79,6 +79,31 @@ travel_assistant_agent_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amaz
 # OPTIONAL: ADDITIONAL CONFIGURATION
 # ============================================================================
 
+# ============================================================================
+# OPTIONAL: ENFORCEAI (AUTH SERVER)
+# ============================================================================
+
+# Enable EnforceAI in auth-server (requires EFS state initialization; see docs)
+# enable_enforceai = true
+#
+# EnforceAI auth mode: gateway-token | api-key | oidc | mixed
+# enforceai_auth_provider = "gateway-token"
+#
+# Gateway token signing/verification configuration
+# enforceai_gateway_active_kid = "kid-prod-1"
+# enforceai_gateway_issuer     = "enforceai-gateway"
+#
+# OIDC issuers JSON (required when enforceai_auth_provider = "oidc")
+# enforceai_oidc_issuers_json = "{}"
+#
+# Enable upstream OAuth credential storage (requires upstream_kek file)
+# enforceai_enable_upstream_kek = false
+
+# Optional: run EnforceAI bootstrap on auth-server startup (writes to EFS state dir)
+# enforceai_auto_bootstrap = true
+# enforceai_bootstrap_user_id = "local|admin"
+# enforceai_bootstrap_agent_id = ""
+
 # AWS Region
 # Can also be set via TF_VAR_aws_region environment variable
 # Default: "us-east-1"

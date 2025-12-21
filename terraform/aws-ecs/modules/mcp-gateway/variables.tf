@@ -119,8 +119,8 @@ variable "auth_replicas" {
   type        = number
   default     = 1
   validation {
-    condition     = var.auth_replicas > 0
-    error_message = "Auth replicas must be greater than 0."
+    condition     = var.auth_replicas > 0 && (!var.enable_enforceai || var.auth_replicas == 1)
+    error_message = "Auth replicas must be greater than 0, and must be 1 when enable_enforceai is true (SQLite state is single-writer)."
   }
 }
 
@@ -239,6 +239,75 @@ variable "enable_monitoring" {
   default     = true
 }
 
+# EnforceAI (Auth Server) Configuration
+variable "enable_enforceai" {
+  description = "Enable EnforceAI features on the auth-server (requires persistent EFS state; defaults to disabled)."
+  type        = bool
+  default     = false
+}
+
+variable "enforceai_state_dir" {
+  description = "Path inside the auth-server container where EnforceAI state (SQLite DB + secrets) is mounted."
+  type        = string
+  default     = "/app/enforceai_state"
+}
+
+variable "enforceai_auth_provider" {
+  description = "EnforceAI auth provider mode: gateway-token | api-key | oidc | mixed."
+  type        = string
+  default     = "gateway-token"
+  validation {
+    condition     = contains(["gateway-token", "api-key", "oidc", "mixed"], var.enforceai_auth_provider)
+    error_message = "enforceai_auth_provider must be one of: gateway-token, api-key, oidc, mixed"
+  }
+}
+
+variable "enforceai_gateway_active_kid" {
+  description = "Active key id for EnforceAI gateway tokens (expects a <kid>.pem in the public keys dir)."
+  type        = string
+  default     = "kid-prod-1"
+}
+
+variable "enforceai_gateway_issuer" {
+  description = "Issuer claim for EnforceAI gateway tokens."
+  type        = string
+  default     = "enforceai-gateway"
+}
+
+variable "enforceai_oidc_issuers_json" {
+  description = "OIDC_ISSUERS JSON map (required when enforceai_auth_provider is oidc)."
+  type        = string
+  default     = "{}"
+  validation {
+    condition     = var.enforceai_auth_provider != "oidc" || (trim(var.enforceai_oidc_issuers_json) != "" && trim(var.enforceai_oidc_issuers_json) != "{}")
+    error_message = "enforceai_oidc_issuers_json must be set to a non-empty JSON map when enforceai_auth_provider is oidc."
+  }
+}
+
+variable "enforceai_enable_upstream_kek" {
+  description = "Export ENFORCEAI_UPSTREAM_KEK_PATH for upstream OAuth credential storage (requires the KEK file to exist in the state dir)."
+  type        = bool
+  default     = false
+}
+
+variable "enforceai_auto_bootstrap" {
+  description = "Run an idempotent EnforceAI bootstrap step on auth-server startup (creates DB and missing secrets on the mounted state dir)."
+  type        = bool
+  default     = false
+}
+
+variable "enforceai_bootstrap_user_id" {
+  description = "If set and enforceai_auto_bootstrap is true, create a bootstrap agent for this user_id and mint a bootstrap gateway token to the state dir."
+  type        = string
+  default     = ""
+}
+
+variable "enforceai_bootstrap_agent_id" {
+  description = "Optional fixed bootstrap agent_id (uuid). If empty, a uuid is generated during bootstrap."
+  type        = string
+  default     = ""
+}
+
 variable "alarm_email" {
   description = "Email address for CloudWatch alarm notifications"
   type        = string
@@ -347,4 +416,3 @@ variable "session_cookie_domain" {
   type        = string
   default     = ""
 }
-

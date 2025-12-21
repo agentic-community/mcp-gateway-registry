@@ -129,6 +129,22 @@ aws logs filter-log-events \
 
 The repository uses a unified container build system with `build-config.yaml` as the **single source of truth**.
 
+## EnforceAI (Optional)
+
+If you enable EnforceAI via Terraform (`enable_enforceai = true`) and set `enforceai_auto_bootstrap = true`,
+the Auth Server will initialize an EnforceAI state directory on EFS and may mint a bootstrap gateway token when
+`enforceai_bootstrap_user_id` is set.
+
+To inspect the generated bootstrap token (treat as a secret):
+
+```bash
+cd terraform/aws-ecs
+./scripts/ecs-ssh.sh auth-server
+
+# inside the container
+cat /app/enforceai_state/bootstrap_gateway_token.txt
+```
+
 **All Container Images:**
 
 | Image Name | Purpose | Size | Build Time |

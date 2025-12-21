@@ -64,6 +64,7 @@ output "efs_access_points" {
     models      = module.efs.access_points["models"].id
     logs        = module.efs.access_points["logs"].id
     auth_config = module.efs.access_points["auth_config"].id
+    enforceai_state = module.efs.access_points["enforceai_state"].id
   }
   sensitive = false
 }
