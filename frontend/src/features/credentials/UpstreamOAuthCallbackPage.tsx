@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState, useRef } from 'react';
-import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Spinner, Button } from '@/components/ui';
 import {
   CheckCircleIcon,
@@ -16,10 +16,7 @@ import {
 
 type CallbackStatus = 'loading' | 'success' | 'error';
 
-interface StateData {
-  server_path?: string;
-  return_url?: string;
-}
+type UpstreamOAuthStatus = 'success' | 'error';
 
 export default function UpstreamOAuthCallbackPage() {
   const [searchParams] = useSearchParams();
@@ -35,67 +32,50 @@ export default function UpstreamOAuthCallbackPage() {
     if (hasProcessed.current) return;
     hasProcessed.current = true;
 
-    // Check for OAuth error in URL params
-    const errorParam = searchParams.get('error');
-    const errorDescription = searchParams.get('error_description');
+    const statusParam = searchParams.get('upstream_oauth') as UpstreamOAuthStatus | null;
+    const errorCode = searchParams.get('error_code');
 
-    if (errorParam) {
-      setStatus('error');
-      setErrorMessage(
-        errorDescription || errorParam || 'OAuth authorization failed'
-      );
-      // Try to extract server path from state for error recovery
-      parseState();
-      return;
+    const serverPathParam = searchParams.get('server_path');
+    if (serverPathParam) {
+      const normalized = serverPathParam.startsWith('/')
+        ? serverPathParam.slice(1)
+        : serverPathParam;
+      setServerPath(normalized || null);
     }
 
-    // Parse the state parameter
-    parseState();
-
-    // If we got here without error, the backend has processed the callback
-    // and stored the tokens. Show success.
-    setStatus('success');
-  }, [searchParams]);
-
-  const parseState = () => {
-    const stateParam = searchParams.get('state');
-    if (stateParam) {
-      try {
-        const stateData: StateData = JSON.parse(atob(stateParam));
-        if (stateData.server_path) {
-          setServerPath(stateData.server_path);
-        }
-      } catch {
-        // Invalid state, continue without server path
-      }
-    }
-
-    // Try to get provider from URL or state
     const providerParam = searchParams.get('provider');
     if (providerParam) {
       setProvider(providerParam);
     }
-  };
 
-  // Show timeout error if taking too long
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      if (status === 'loading') {
-        setStatus('error');
-        setErrorMessage('Connection timed out. Please try again.');
-      }
-    }, 10000); // 10 second timeout
+    if (statusParam === 'error') {
+      setStatus('error');
+      setErrorMessage(errorCode || 'OAuth authorization failed');
+      return;
+    }
 
-    return () => clearTimeout(timeout);
-  }, [status]);
+    if (statusParam === 'success') {
+      setStatus('success');
+      return;
+    }
+
+    setStatus('error');
+    setErrorMessage('OAuth callback is missing required status parameters.');
+  }, [searchParams]);
 
   const handleReturnToCredentials = () => {
+    if (serverPath) {
+      navigate(`/credentials/upstream?configure=${encodeURIComponent(serverPath)}`, {
+        replace: true,
+      });
+      return;
+    }
     navigate('/credentials/upstream', { replace: true });
   };
 
   const handleReturnToServer = () => {
     if (serverPath) {
-      navigate(`/servers/${serverPath}`, { replace: true });
+      navigate(`/servers/${encodeURIComponent(serverPath)}`, { replace: true });
     } else {
       handleReturnToCredentials();
     }
@@ -103,7 +83,9 @@ export default function UpstreamOAuthCallbackPage() {
 
   const handleTryAgain = () => {
     if (serverPath) {
-      navigate(`/credentials/upstream?configure=${serverPath}`, { replace: true });
+      navigate(`/credentials/upstream?configure=${encodeURIComponent(serverPath)}`, {
+        replace: true,
+      });
     } else {
       navigate('/credentials/upstream', { replace: true });
     }

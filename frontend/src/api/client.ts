@@ -11,6 +11,11 @@ import { ApiError, normalizeError } from '@/lib/errors';
 let csrfToken: string | null = null;
 let csrfFetchPromise: Promise<string> | null = null;
 
+// EnforceAI UI session token storage (in-memory only)
+let enforceAiAccessToken: string | null = null;
+let enforceAiTokenExpiresAtMs: number | null = null;
+let enforceAiTokenFetchPromise: Promise<string> | null = null;
+
 /**
  * Fetch CSRF token from the server
  * Uses a shared promise to avoid multiple concurrent fetches
@@ -36,6 +41,48 @@ async function fetchCsrfToken(client: AxiosInstance): Promise<string> {
   return csrfFetchPromise;
 }
 
+async function fetchEnforceAiAccessToken(client: AxiosInstance): Promise<string> {
+  if (enforceAiTokenFetchPromise) {
+    return enforceAiTokenFetchPromise;
+  }
+
+  enforceAiTokenFetchPromise = (async () => {
+    try {
+      const response = await client.post<{
+        access_token: string;
+        expires_at: string;
+      }>('/api/auth/enforceai/token');
+
+      const token = response.data.access_token;
+      const expiresAt = Date.parse(response.data.expires_at);
+
+      enforceAiAccessToken = token;
+      enforceAiTokenExpiresAtMs = Number.isFinite(expiresAt) ? expiresAt : null;
+
+      return token;
+    } finally {
+      enforceAiTokenFetchPromise = null;
+    }
+  })();
+
+  return enforceAiTokenFetchPromise;
+}
+
+async function getEnforceAiAccessToken(client: AxiosInstance): Promise<string> {
+  const now = Date.now();
+  const refreshSkewMs = 30_000;
+
+  if (
+    enforceAiAccessToken &&
+    enforceAiTokenExpiresAtMs &&
+    now < enforceAiTokenExpiresAtMs - refreshSkewMs
+  ) {
+    return enforceAiAccessToken;
+  }
+
+  return fetchEnforceAiAccessToken(client);
+}
+
 /**
  * Clear the cached CSRF token (call on logout or 403 CSRF errors)
  */
@@ -44,11 +91,21 @@ export function clearCsrfToken(): void {
   csrfFetchPromise = null;
 }
 
+export function clearEnforceAiAccessToken(): void {
+  enforceAiAccessToken = null;
+  enforceAiTokenExpiresAtMs = null;
+  enforceAiTokenFetchPromise = null;
+}
+
 /**
  * Get the current CSRF token (for testing purposes)
  */
 export function getCsrfToken(): string | null {
   return csrfToken;
+}
+
+export function getEnforceAiTokenForTesting(): string | null {
+  return enforceAiAccessToken;
 }
 
 /**
@@ -69,12 +126,20 @@ function createApiClient(): AxiosInstance {
       // Add request ID for correlation
       config.headers['X-Request-Id'] = uuidv4();
 
+      const requestUrl = config.url || '';
+      const isEnforceAiRequest = requestUrl.startsWith('/enforceai');
+      if (isEnforceAiRequest && !config.headers['Authorization']) {
+        const token = await getEnforceAiAccessToken(client);
+        config.headers['Authorization'] = `Bearer ${token}`;
+      }
+
       // Skip CSRF for GET requests, login endpoint, or if explicitly skipped
       const isLoginRequest = config.url === '/api/auth/login';
       const skipCsrf =
         config.method?.toUpperCase() === 'GET' ||
         config.headers['X-Skip-CSRF'] === 'true' ||
-        isLoginRequest;
+        isLoginRequest ||
+        Boolean(config.headers['Authorization']);
 
       if (config.headers['X-Skip-CSRF']) {
         delete config.headers['X-Skip-CSRF'];
@@ -101,6 +166,7 @@ function createApiClient(): AxiosInstance {
     async (error: AxiosError) => {
       const originalRequest = error.config as AxiosRequestConfig & {
         _csrfRetry?: boolean;
+        _enforceAiRetry?: boolean;
       };
 
       // Handle CSRF token errors - retry once with fresh token
@@ -123,6 +189,19 @@ function createApiClient(): AxiosInstance {
 
           return client(originalRequest);
         }
+      }
+
+      if (
+        error.response?.status === 401 &&
+        !originalRequest._enforceAiRetry &&
+        (originalRequest.url || '').startsWith('/enforceai')
+      ) {
+        originalRequest._enforceAiRetry = true;
+        clearEnforceAiAccessToken();
+        const token = await getEnforceAiAccessToken(client);
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers['Authorization'] = `Bearer ${token}`;
+        return client(originalRequest);
       }
 
       // Normalize the error for consistent handling

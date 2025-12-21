@@ -360,38 +360,40 @@ export interface ScopeInfo {
 // Upstream Credential Types
 // ============================================================================
 
-/** Upstream credential metadata (never includes secret) */
+/** Upstream credential record returned by EnforceAI management APIs (never includes secret). */
 export interface UpstreamCredential {
   credential_id: string;
   server_path: string;
   credential_type: UpstreamAuthType;
-  binding: CredentialBinding;
-  user_id?: string;
-  agent_id?: string;
-  status: UpstreamCredentialStatus;
+  credential_binding: CredentialBinding;
+  user_id?: string | null;
+  agent_id?: string | null;
+  provider?: string | null;
+  scopes?: string[] | null;
+  token_type?: string | null;
   expires_at?: string | null;
+  revoked_at?: string | null;
   created_at: string;
   updated_at: string;
   last_used_at?: string | null;
 }
 
-/** Request to create an upstream credential (API key or static JWT) */
+/** Request to create an upstream credential (secret is in `secret_payload`). */
 export interface CreateUpstreamCredentialRequest {
-  credential_type: 'api-key' | 'jwt';
-  /** The secret value (API key or JWT token) */
-  secret: string;
-  /** Optional expiration date */
+  credential_type: UpstreamAuthType;
+  credential_binding: CredentialBinding;
+  agent_id?: string | null;
+  provider?: string | null;
+  scopes?: string[] | null;
+  token_type?: string | null;
   expires_at?: string | null;
+  secret_payload?: Record<string, unknown> | null;
 }
 
-/** Response after creating an upstream credential - includes secret once */
+/** Response after creating an upstream credential - includes `secret_payload` once. */
 export interface CreateUpstreamCredentialResponse {
-  credential_id: string;
-  server_path: string;
-  credential_type: UpstreamAuthType;
-  /** The secret value - only returned once at creation time */
-  secret: string;
-  created_at: string;
+  credential: UpstreamCredential;
+  secret_payload?: Record<string, unknown> | null;
 }
 
 /** Request to revoke an upstream credential */
@@ -403,41 +405,37 @@ export interface RevokeUpstreamCredentialRequest {
 // Upstream OAuth Credential Types
 // ============================================================================
 
-/** OAuth credential metadata (for oauth2, oidc, provider-oauth) */
-export interface UpstreamOAuthCredential {
-  credential_id: string;
-  server_path: string;
-  credential_type: 'oauth2' | 'oidc' | 'provider-oauth';
-  binding: CredentialBinding;
-  user_id?: string;
-  agent_id?: string;
-  status: UpstreamCredentialStatus;
-  /** OAuth provider name (e.g., 'github', 'google', 'slack') */
-  provider?: string;
-  /** OAuth scopes granted */
-  oauth_scopes?: string[];
-  /** Token expiration time */
-  token_expires_at?: string | null;
-  /** Whether a refresh token is available */
-  has_refresh_token?: boolean;
-  expires_at?: string | null;
-  created_at: string;
-  updated_at: string;
-  last_used_at?: string | null;
-}
+export type UpstreamOAuthCredentialType = 'oauth2' | 'oidc' | 'provider-oauth';
 
 /** Response from starting an OAuth flow */
 export interface StartOAuthFlowResponse {
   /** The authorization URL to redirect the user to */
   authorization_url: string;
-  /** State parameter for CSRF protection */
-  state: string;
+  /** State id for tracking callback */
+  state_id: string;
+  /** When the state expires */
+  expires_at: string;
 }
 
 /** Request to disconnect an OAuth credential */
 export interface DisconnectOAuthRequest {
-  /** Optional reason for disconnecting */
-  reason?: string;
+  credential_type: UpstreamOAuthCredentialType;
+  credential_binding: 'user' | 'user+agent';
+  agent_id?: string | null;
+  provider: string;
+}
+
+export interface DisconnectOAuthResponse {
+  revoked_count: number;
+}
+
+export interface StartOAuthFlowRequest {
+  credential_type: UpstreamOAuthCredentialType;
+  credential_binding: 'user' | 'user+agent';
+  agent_id?: string | null;
+  provider: string;
+  scopes?: string[] | null;
+  ui_return_url: string;
 }
 
 // ============================================================================
@@ -463,6 +461,45 @@ export interface UpdateEgressAllowlistEntryRequest {
   pattern?: string;
   description?: string;
   expires_at?: string | null;
+}
+
+// ============================================================================
+// Upstream OAuth Provider Registry Types (Admin)
+// ============================================================================
+
+export interface UpstreamOAuthProviderRecord {
+  provider_id: string;
+  authorization_endpoint: string;
+  token_endpoint: string;
+  client_id: string;
+  default_scopes: string[];
+  extra_authorize_params: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpstreamOAuthProviderPublic {
+  provider: UpstreamOAuthProviderRecord;
+  secret_present: boolean;
+}
+
+export interface UpstreamOAuthProviderCreateRequest {
+  provider_id: string;
+  authorization_endpoint: string;
+  token_endpoint: string;
+  client_id: string;
+  client_secret: string;
+  default_scopes?: string[];
+  extra_authorize_params?: Record<string, string>;
+}
+
+export interface UpstreamOAuthProviderUpdateRequest {
+  authorization_endpoint?: string;
+  token_endpoint?: string;
+  client_id?: string;
+  client_secret?: string;
+  default_scopes?: string[];
+  extra_authorize_params?: Record<string, string>;
 }
 
 // ============================================================================

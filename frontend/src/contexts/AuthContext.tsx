@@ -7,7 +7,7 @@ import React, {
   useRef,
   ReactNode,
 } from 'react';
-import { apiClient, clearCsrfToken } from '../api/client';
+import { apiClient, clearCsrfToken, clearEnforceAiAccessToken } from '../api/client';
 import type { AuthProviders } from '../api/types';
 
 // Session configuration
@@ -224,6 +224,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     } finally {
       setUser(null);
       clearCsrfToken();
+      clearEnforceAiAccessToken();
       clearSessionTimers();
     }
   };

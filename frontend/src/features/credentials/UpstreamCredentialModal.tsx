@@ -7,7 +7,6 @@
  */
 
 import { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
 import { Modal, ModalFooter } from '@/components/ui/Modal';
 import { Button, Input, Checkbox } from '@/components/ui';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -39,7 +38,6 @@ import type {
   UpstreamCredential,
   CreateUpstreamCredentialResponse,
   UpstreamAuthType,
-  UpstreamOAuthCredential,
 } from '@/api/types';
 
 // ============================================================================
@@ -121,12 +119,11 @@ export function UpstreamCredentialModal({
   onSuccess,
 }: UpstreamCredentialModalProps) {
   const { addToast } = useToast();
-  const location = useLocation();
 
   // State
   const [view, setView] = useState<ModalView>('loading');
   const [existingCredential, setExistingCredential] = useState<UpstreamCredential | null>(null);
-  const [oauthCredential, setOAuthCredential] = useState<UpstreamOAuthCredential | null>(null);
+  const [oauthCredential, setOAuthCredential] = useState<UpstreamCredential | null>(null);
   const [createdCredential, setCreatedCredential] = useState<CreateUpstreamCredentialResponse | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -141,6 +138,28 @@ export function UpstreamCredentialModal({
   const isApiKeyOrJwt = authType === 'api-key' || authType === 'jwt';
   const isOAuth = isOAuthType(authType);
   const provider = server.upstream_auth?.provider;
+  const credentialBinding = server.upstream_auth?.credential_binding || 'user';
+
+  const extractCreatedSecret = (): string => {
+    const secretPayload = createdCredential?.secret_payload;
+    if (!secretPayload) {
+      return '';
+    }
+
+    if (authType === 'api-key') {
+      const apiKey = (secretPayload as Record<string, unknown>)['api_key'];
+      return typeof apiKey === 'string' ? apiKey : '';
+    }
+
+    if (authType === 'jwt') {
+      const token =
+        (secretPayload as Record<string, unknown>)['token'] ??
+        (secretPayload as Record<string, unknown>)['jwt'];
+      return typeof token === 'string' ? token : '';
+    }
+
+    return '';
+  };
 
   // Load existing credential when modal opens
   useEffect(() => {
@@ -169,7 +188,10 @@ export function UpstreamCredentialModal({
     try {
       if (isOAuth) {
         // Load OAuth credential
-        const credential = await getUpstreamOAuthCredential(server.path);
+        const credential = await getUpstreamOAuthCredential(server.path, {
+          credential_type: authType as 'oauth2' | 'oidc' | 'provider-oauth',
+          provider: provider || undefined,
+        });
         setOAuthCredential(credential);
         setView(credential ? 'oauth-view' : 'oauth-connect');
       } else {
@@ -215,10 +237,16 @@ export function UpstreamCredentialModal({
     setIsSubmitting(true);
 
     try {
+      const secretPayload =
+        authType === 'api-key'
+          ? { api_key: secretValue.trim() }
+          : { token: secretValue.trim() };
+
       const result = await createUpstreamCredential(server.path, {
         credential_type: authType as 'api-key' | 'jwt',
-        secret: secretValue.trim(),
+        credential_binding: credentialBinding,
         expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+        secret_payload: secretPayload,
       });
 
       setCreatedCredential(result);
@@ -295,10 +323,36 @@ export function UpstreamCredentialModal({
     setIsConnecting(true);
 
     try {
-      // Build return URL to come back to this modal
-      const returnUrl = `${window.location.origin}/credentials/upstream/oauth/callback`;
+      if (!provider) {
+        addToast({
+          type: 'error',
+          title: 'Missing provider',
+          message: 'This server requires a provider identifier for OAuth.',
+        });
+        setIsConnecting(false);
+        return;
+      }
 
-      const result = await startUpstreamOAuth(server.path, returnUrl);
+      if (credentialBinding !== 'user') {
+        addToast({
+          type: 'error',
+          title: 'Unsupported binding',
+          message: `OAuth binding '${credentialBinding}' is not supported in the UI yet.`,
+        });
+        setIsConnecting(false);
+        return;
+      }
+
+      const uiReturnUrl = `/credentials/upstream/oauth/callback?server_path=${encodeURIComponent(
+        server.path
+      )}`;
+
+      const result = await startUpstreamOAuth(server.path, {
+        credential_type: authType as 'oauth2' | 'oidc' | 'provider-oauth',
+        credential_binding: 'user',
+        provider,
+        ui_return_url: uiReturnUrl,
+      });
 
       // Redirect to provider authorization URL
       window.location.href = result.authorization_url;
@@ -317,7 +371,29 @@ export function UpstreamCredentialModal({
     setIsSubmitting(true);
 
     try {
-      await disconnectUpstreamOAuth(server.path);
+      if (!provider) {
+        addToast({
+          type: 'error',
+          title: 'Missing provider',
+          message: 'This server requires a provider identifier for OAuth.',
+        });
+        return;
+      }
+
+      if (credentialBinding !== 'user') {
+        addToast({
+          type: 'error',
+          title: 'Unsupported binding',
+          message: `OAuth binding '${credentialBinding}' is not supported in the UI yet.`,
+        });
+        return;
+      }
+
+      await disconnectUpstreamOAuth(server.path, {
+        credential_type: authType as 'oauth2' | 'oidc' | 'provider-oauth',
+        credential_binding: 'user',
+        provider,
+      });
 
       addToast({
         type: 'success',
@@ -342,6 +418,9 @@ export function UpstreamCredentialModal({
   const downloadAsFile = () => {
     if (!createdCredential) return;
 
+    const secret = extractCreatedSecret();
+    if (!secret) return;
+
     const content = `# Upstream Credential
 # Server: ${server.display_name || server.path}
 # Type: ${getAuthTypeLabel(authType as UpstreamAuthType)}
@@ -350,7 +429,7 @@ export function UpstreamCredentialModal({
 # IMPORTANT: This is a copy of the secret you provided.
 # The gateway has stored this securely for upstream authentication.
 
-${getSecretLabel(authType as UpstreamAuthType)}: ${createdCredential.secret}
+${getSecretLabel(authType as UpstreamAuthType)}: ${secret}
 `;
 
     const blob = new Blob([content], { type: 'text/plain' });
@@ -478,21 +557,27 @@ ${getSecretLabel(authType as UpstreamAuthType)}: ${createdCredential.secret}
               <span className="text-sm text-gray-500 dark:text-gray-400">Status</span>
               <Badge
                 variant={
-                  oauthCredential.status === 'configured'
-                    ? 'success'
-                    : oauthCredential.status === 'expired'
+                  oauthCredential.revoked_at
+                    ? 'error'
+                    : oauthCredential.expires_at &&
+                        new Date(oauthCredential.expires_at) <= new Date()
                       ? 'error'
-                      : 'warning'
+                      : 'success'
                 }
               >
-                {oauthCredential.status}
+                {oauthCredential.revoked_at
+                  ? 'revoked'
+                  : oauthCredential.expires_at &&
+                      new Date(oauthCredential.expires_at) <= new Date()
+                    ? 'expired'
+                    : 'configured'}
               </Badge>
             </div>
-            {oauthCredential.oauth_scopes && oauthCredential.oauth_scopes.length > 0 && (
+            {oauthCredential.scopes && oauthCredential.scopes.length > 0 && (
               <div className="flex items-start justify-between">
                 <span className="text-sm text-gray-500 dark:text-gray-400">Scopes</span>
                 <div className="flex flex-wrap gap-1 max-w-[200px] justify-end">
-                  {oauthCredential.oauth_scopes.map((scope) => (
+                  {oauthCredential.scopes.map((scope) => (
                     <Badge key={scope} variant="neutral" size="sm">
                       {scope}
                     </Badge>
@@ -506,20 +591,12 @@ ${getSecretLabel(authType as UpstreamAuthType)}: ${createdCredential.secret}
                 {new Date(oauthCredential.created_at).toLocaleDateString()}
               </span>
             </div>
-            {oauthCredential.token_expires_at && (
+            {oauthCredential.expires_at && (
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-500 dark:text-gray-400">Token Expires</span>
                 <span className="text-sm text-gray-900 dark:text-gray-100">
-                  {new Date(oauthCredential.token_expires_at).toLocaleString()}
+                  {new Date(oauthCredential.expires_at).toLocaleString()}
                 </span>
-              </div>
-            )}
-            {oauthCredential.has_refresh_token !== undefined && (
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-500 dark:text-gray-400">Auto-Refresh</span>
-                <Badge variant={oauthCredential.has_refresh_token ? 'success' : 'warning'}>
-                  {oauthCredential.has_refresh_token ? 'Enabled' : 'Disabled'}
-                </Badge>
               </div>
             )}
             {oauthCredential.last_used_at && (
@@ -689,10 +766,10 @@ ${getSecretLabel(authType as UpstreamAuthType)}: ${createdCredential.secret}
             </label>
             <div className="relative">
               <code className="block w-full p-3 pr-24 bg-gray-100 dark:bg-gray-800 rounded-md text-sm font-mono text-gray-900 dark:text-gray-100 break-all border border-gray-200 dark:border-gray-700">
-                {createdCredential.secret}
+                {extractCreatedSecret()}
               </code>
               <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                <CopyButton text={createdCredential.secret} />
+                <CopyButton text={extractCreatedSecret()} />
               </div>
             </div>
           </div>
@@ -711,9 +788,14 @@ ${getSecretLabel(authType as UpstreamAuthType)}: ${createdCredential.secret}
               variant="secondary"
               size="sm"
               onClick={() => {
+                const secret = extractCreatedSecret();
+                if (!secret) {
+                  return;
+                }
+
                 const headerValue = authType === 'api-key'
-                  ? createdCredential.secret
-                  : `Bearer ${createdCredential.secret}`;
+                  ? secret
+                  : `Bearer ${secret}`;
                 const headerName = authType === 'api-key' ? 'X-API-Key' : 'Authorization';
                 navigator.clipboard.writeText(`${headerName}: ${headerValue}`);
               }}
@@ -784,20 +866,26 @@ ${getSecretLabel(authType as UpstreamAuthType)}: ${createdCredential.secret}
               <span className="text-sm text-gray-500 dark:text-gray-400">Status</span>
               <Badge
                 variant={
-                  existingCredential.status === 'configured'
-                    ? 'success'
-                    : existingCredential.status === 'expired'
+                  existingCredential.revoked_at
+                    ? 'error'
+                    : existingCredential.expires_at &&
+                        new Date(existingCredential.expires_at) <= new Date()
                       ? 'error'
-                      : 'warning'
+                      : 'success'
                 }
               >
-                {existingCredential.status}
+                {existingCredential.revoked_at
+                  ? 'revoked'
+                  : existingCredential.expires_at &&
+                      new Date(existingCredential.expires_at) <= new Date()
+                    ? 'expired'
+                    : 'configured'}
               </Badge>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-500 dark:text-gray-400">Binding</span>
               <span className="text-sm text-gray-900 dark:text-gray-100">
-                {existingCredential.binding}
+                {existingCredential.credential_binding}
               </span>
             </div>
             <div className="flex items-center justify-between">

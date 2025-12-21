@@ -201,13 +201,32 @@ describe('UpstreamCredentialModal', () => {
 
       server.use(
         http.post('/enforceai/upstream/servers/:serverPath/credentials', async ({ request }) => {
-          const body = (await request.json()) as { secret: string };
+          const body = (await request.json()) as {
+            credential_type: string;
+            credential_binding: string;
+            secret_payload?: Record<string, unknown> | null;
+          };
+          const secret = (body.secret_payload || {})['api_key'] as string;
           return HttpResponse.json({
-            credential_id: 'new-cred-123',
-            server_path: 'github-mcp-test',
-            credential_type: 'api-key',
-            secret: body.secret,
-            created_at: new Date().toISOString(),
+            credential: {
+              credential_id: 'new-cred-123',
+              server_path: '/github-mcp-test',
+              credential_type: body.credential_type,
+              credential_binding: body.credential_binding,
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: null,
+              scopes: null,
+              token_type: null,
+              expires_at: null,
+              revoked_at: null,
+              last_used_at: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+            secret_payload: {
+              api_key: secret,
+            },
           });
         })
       );
@@ -245,13 +264,32 @@ describe('UpstreamCredentialModal', () => {
 
       server.use(
         http.post('/enforceai/upstream/servers/:serverPath/credentials', async ({ request }) => {
-          const body = (await request.json()) as { secret: string };
+          const body = (await request.json()) as {
+            credential_type: string;
+            credential_binding: string;
+            secret_payload?: Record<string, unknown> | null;
+          };
+          const secret = (body.secret_payload || {})['api_key'] as string;
           return HttpResponse.json({
-            credential_id: 'new-cred-123',
-            server_path: 'github-mcp-test',
-            credential_type: 'api-key',
-            secret: body.secret,
-            created_at: new Date().toISOString(),
+            credential: {
+              credential_id: 'new-cred-123',
+              server_path: '/github-mcp-test',
+              credential_type: body.credential_type,
+              credential_binding: body.credential_binding,
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: null,
+              scopes: null,
+              token_type: null,
+              expires_at: null,
+              revoked_at: null,
+              last_used_at: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+            secret_payload: {
+              api_key: secret,
+            },
           });
         })
       );
@@ -296,13 +334,32 @@ describe('UpstreamCredentialModal', () => {
 
       server.use(
         http.post('/enforceai/upstream/servers/:serverPath/credentials', async ({ request }) => {
-          const body = (await request.json()) as { secret: string };
+          const body = (await request.json()) as {
+            credential_type: string;
+            credential_binding: string;
+            secret_payload?: Record<string, unknown> | null;
+          };
+          const secret = (body.secret_payload || {})['api_key'] as string;
           return HttpResponse.json({
-            credential_id: 'new-cred-123',
-            server_path: 'github-mcp-test',
-            credential_type: 'api-key',
-            secret: body.secret,
-            created_at: new Date().toISOString(),
+            credential: {
+              credential_id: 'new-cred-123',
+              server_path: '/github-mcp-test',
+              credential_type: body.credential_type,
+              credential_binding: body.credential_binding,
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: null,
+              scopes: null,
+              token_type: null,
+              expires_at: null,
+              revoked_at: null,
+              last_used_at: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+            secret_payload: {
+              api_key: secret,
+            },
           });
         })
       );
@@ -344,17 +401,24 @@ describe('UpstreamCredentialModal', () => {
     it('shows existing credential view when credential exists', async () => {
       server.use(
         http.get('/enforceai/upstream/servers/:serverPath/credentials', () => {
-          return HttpResponse.json({
-            credential_id: 'existing-cred-123',
-            server_path: 'github-mcp-test',
-            credential_type: 'api-key',
-            binding: 'user',
-            user_id: 'local|testuser',
-            status: 'configured',
-            expires_at: null,
-            created_at: '2024-01-01T00:00:00Z',
-            updated_at: '2024-01-01T00:00:00Z',
-          });
+          return HttpResponse.json([
+            {
+              credential_id: 'existing-cred-123',
+              server_path: '/github-mcp-test',
+              credential_type: 'api-key',
+              credential_binding: 'user',
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: null,
+              scopes: null,
+              token_type: null,
+              expires_at: null,
+              revoked_at: null,
+              last_used_at: null,
+              created_at: '2024-01-01T00:00:00Z',
+              updated_at: '2024-01-01T00:00:00Z',
+            },
+          ]);
         })
       );
 
@@ -381,15 +445,24 @@ describe('UpstreamCredentialModal', () => {
 
       server.use(
         http.get('/enforceai/upstream/servers/:serverPath/credentials', () => {
-          return HttpResponse.json({
-            credential_id: 'existing-cred-123',
-            server_path: 'github-mcp-test',
-            credential_type: 'api-key',
-            binding: 'user',
-            status: 'configured',
-            created_at: '2024-01-01T00:00:00Z',
-            updated_at: '2024-01-01T00:00:00Z',
-          });
+          return HttpResponse.json([
+            {
+              credential_id: 'existing-cred-123',
+              server_path: '/github-mcp-test',
+              credential_type: 'api-key',
+              credential_binding: 'user',
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: null,
+              scopes: null,
+              token_type: null,
+              expires_at: null,
+              revoked_at: null,
+              last_used_at: null,
+              created_at: '2024-01-01T00:00:00Z',
+              updated_at: '2024-01-01T00:00:00Z',
+            },
+          ]);
         })
       );
 
@@ -423,18 +496,42 @@ describe('UpstreamCredentialModal', () => {
 
       server.use(
         http.get('/enforceai/upstream/servers/:serverPath/credentials', () => {
-          return HttpResponse.json({
-            credential_id: 'existing-cred-123',
-            server_path: 'github-mcp-test',
-            credential_type: 'api-key',
-            binding: 'user',
-            status: 'configured',
-            created_at: '2024-01-01T00:00:00Z',
-            updated_at: '2024-01-01T00:00:00Z',
-          });
+          return HttpResponse.json([
+            {
+              credential_id: 'existing-cred-123',
+              server_path: '/github-mcp-test',
+              credential_type: 'api-key',
+              credential_binding: 'user',
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: null,
+              scopes: null,
+              token_type: null,
+              expires_at: null,
+              revoked_at: null,
+              last_used_at: null,
+              created_at: '2024-01-01T00:00:00Z',
+              updated_at: '2024-01-01T00:00:00Z',
+            },
+          ]);
         }),
         http.post('/enforceai/upstream/credentials/:credentialId/revoke', () => {
-          return new HttpResponse(null, { status: 204 });
+          return HttpResponse.json({
+            credential_id: 'existing-cred-123',
+            server_path: '/github-mcp-test',
+            credential_type: 'api-key',
+            credential_binding: 'user',
+            user_id: 'local|testuser',
+            agent_id: null,
+            provider: null,
+            scopes: null,
+            token_type: null,
+            expires_at: null,
+            revoked_at: new Date().toISOString(),
+            last_used_at: null,
+            created_at: '2024-01-01T00:00:00Z',
+            updated_at: new Date().toISOString(),
+          });
         })
       );
 
@@ -472,15 +569,24 @@ describe('UpstreamCredentialModal', () => {
 
       server.use(
         http.get('/enforceai/upstream/servers/:serverPath/credentials', () => {
-          return HttpResponse.json({
-            credential_id: 'existing-cred-123',
-            server_path: 'github-mcp-test',
-            credential_type: 'api-key',
-            binding: 'user',
-            status: 'configured',
-            created_at: '2024-01-01T00:00:00Z',
-            updated_at: '2024-01-01T00:00:00Z',
-          });
+          return HttpResponse.json([
+            {
+              credential_id: 'existing-cred-123',
+              server_path: '/github-mcp-test',
+              credential_type: 'api-key',
+              credential_binding: 'user',
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: null,
+              scopes: null,
+              token_type: null,
+              expires_at: null,
+              revoked_at: null,
+              last_used_at: null,
+              created_at: '2024-01-01T00:00:00Z',
+              updated_at: '2024-01-01T00:00:00Z',
+            },
+          ]);
         })
       );
 
@@ -549,13 +655,32 @@ describe('UpstreamCredentialModal', () => {
 
       server.use(
         http.post('/enforceai/upstream/servers/:serverPath/credentials', async ({ request }) => {
-          const body = (await request.json()) as { secret: string };
+          const body = (await request.json()) as {
+            credential_type: string;
+            credential_binding: string;
+            secret_payload?: Record<string, unknown> | null;
+          };
+          const secret = (body.secret_payload || {})['api_key'] as string;
           return HttpResponse.json({
-            credential_id: 'new-cred-123',
-            server_path: 'github-mcp-test',
-            credential_type: 'api-key',
-            secret: body.secret,
-            created_at: new Date().toISOString(),
+            credential: {
+              credential_id: 'new-cred-123',
+              server_path: '/github-mcp-test',
+              credential_type: body.credential_type,
+              credential_binding: body.credential_binding,
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: null,
+              scopes: null,
+              token_type: null,
+              expires_at: null,
+              revoked_at: null,
+              last_used_at: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+            secret_payload: {
+              api_key: secret,
+            },
           });
         })
       );
@@ -647,7 +772,8 @@ describe('UpstreamCredentialModal', () => {
           startCalled = true;
           return HttpResponse.json({
             authorization_url: 'https://github.com/login/oauth/authorize?state=test',
-            state: 'test-state',
+            state_id: 'test-state-id',
+            expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
           });
         })
       );
@@ -703,22 +829,24 @@ describe('UpstreamCredentialModal', () => {
     beforeEach(() => {
       server.use(
         http.get('/enforceai/upstream/servers/:serverPath/credentials', () => {
-          return HttpResponse.json({
-            credential_id: 'oauth-cred-123',
-            server_path: 'github-oauth-connected',
-            credential_type: 'provider-oauth',
-            binding: 'user',
-            user_id: 'local|testuser',
-            status: 'configured',
-            provider: 'github',
-            oauth_scopes: ['repo', 'read:user'],
-            token_expires_at: new Date(Date.now() + 3600000).toISOString(),
-            has_refresh_token: true,
-            expires_at: null,
-            created_at: '2024-01-01T00:00:00Z',
-            updated_at: '2024-01-01T00:00:00Z',
-            last_used_at: '2024-01-15T10:30:00Z',
-          });
+          return HttpResponse.json([
+            {
+              credential_id: 'oauth-cred-123',
+              server_path: '/github-oauth-connected',
+              credential_type: 'provider-oauth',
+              credential_binding: 'user',
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: 'github',
+              scopes: ['repo', 'read:user'],
+              token_type: 'Bearer',
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              revoked_at: null,
+              last_used_at: '2024-01-15T10:30:00Z',
+              created_at: '2024-01-01T00:00:00Z',
+              updated_at: '2024-01-01T00:00:00Z',
+            },
+          ]);
         })
       );
     });
@@ -778,23 +906,6 @@ describe('UpstreamCredentialModal', () => {
       expect(screen.getByText('read:user')).toBeInTheDocument();
     });
 
-    it('shows auto-refresh status', async () => {
-      render(
-        <UpstreamCredentialModal
-          open={true}
-          server={mockServerOAuthConnected}
-          onClose={mockOnClose}
-          onSuccess={mockOnSuccess}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Github Connection')).toBeInTheDocument();
-      });
-
-      expect(screen.getByText('Auto-Refresh')).toBeInTheDocument();
-      expect(screen.getByText('Enabled')).toBeInTheDocument();
-    });
   });
 
   describe('OAuth Disconnect Flow', () => {
@@ -815,21 +926,27 @@ describe('UpstreamCredentialModal', () => {
     beforeEach(() => {
       server.use(
         http.get('/enforceai/upstream/servers/:serverPath/credentials', () => {
-          return HttpResponse.json({
-            credential_id: 'oauth-cred-456',
-            server_path: 'github-oauth-to-disconnect',
-            credential_type: 'provider-oauth',
-            binding: 'user',
-            status: 'configured',
-            provider: 'github',
-            oauth_scopes: ['repo'],
-            has_refresh_token: true,
-            created_at: '2024-01-01T00:00:00Z',
-            updated_at: '2024-01-01T00:00:00Z',
-          });
+          return HttpResponse.json([
+            {
+              credential_id: 'oauth-cred-456',
+              server_path: '/github-oauth-to-disconnect',
+              credential_type: 'provider-oauth',
+              credential_binding: 'user',
+              user_id: 'local|testuser',
+              agent_id: null,
+              provider: 'github',
+              scopes: ['repo'],
+              token_type: 'Bearer',
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              revoked_at: null,
+              last_used_at: null,
+              created_at: '2024-01-01T00:00:00Z',
+              updated_at: '2024-01-01T00:00:00Z',
+            },
+          ]);
         }),
         http.post('/enforceai/upstream/servers/:serverPath/oauth/disconnect', () => {
-          return new HttpResponse(null, { status: 204 });
+          return HttpResponse.json({ revoked_count: 1 });
         })
       );
     });

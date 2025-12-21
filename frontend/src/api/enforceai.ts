@@ -21,8 +21,11 @@ import type {
   UpstreamCredential,
   CreateUpstreamCredentialRequest,
   CreateUpstreamCredentialResponse,
-  UpstreamOAuthCredential,
+  StartOAuthFlowRequest,
   StartOAuthFlowResponse,
+  DisconnectOAuthRequest,
+  DisconnectOAuthResponse,
+  UpstreamOAuthCredentialType,
 } from './types';
 
 // ============================================================================
@@ -373,9 +376,13 @@ export async function getUpstreamCredential(
   serverPath: string
 ): Promise<UpstreamCredential | null> {
   try {
-    return await apiGet<UpstreamCredential>(
+    const records = await apiGet<UpstreamCredential[]>(
       `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/credentials`
     );
+    const record = records.find(
+      (item) => item.credential_type === 'api-key' || item.credential_type === 'jwt'
+    );
+    return record || null;
   } catch (error) {
     const apiError = error as ApiError;
     // 404 means no credential configured - return null
@@ -406,8 +413,8 @@ export async function createUpstreamCredential(
 export async function revokeUpstreamCredential(
   credentialId: string,
   reason?: string
-): Promise<void> {
-  return apiPost<void>(
+): Promise<UpstreamCredential> {
+  return apiPost<UpstreamCredential>(
     `/enforceai/upstream/credentials/${encodeURIComponent(credentialId)}/revoke`,
     reason ? { reason } : {}
   );
@@ -417,17 +424,37 @@ export async function revokeUpstreamCredential(
 // Upstream OAuth Credentials API
 // ============================================================================
 
-/**
- * Get upstream OAuth credential for a server
- * Returns OAuth-specific metadata (provider, scopes, expiry)
- */
 export async function getUpstreamOAuthCredential(
-  serverPath: string
-): Promise<UpstreamOAuthCredential | null> {
+  serverPath: string,
+  data?: {
+    credential_type?: UpstreamOAuthCredentialType;
+    provider?: string;
+  }
+): Promise<UpstreamCredential | null> {
   try {
-    return await apiGet<UpstreamOAuthCredential>(
+    const records = await apiGet<UpstreamCredential[]>(
       `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/credentials`
     );
+    const record = records.find((item) => {
+      if (
+        item.credential_type !== 'oauth2' &&
+        item.credential_type !== 'oidc' &&
+        item.credential_type !== 'provider-oauth'
+      ) {
+        return false;
+      }
+
+      if (data?.credential_type && item.credential_type !== data.credential_type) {
+        return false;
+      }
+
+      if (data?.provider && item.provider !== data.provider) {
+        return false;
+      }
+
+      return true;
+    });
+    return record || null;
   } catch (error) {
     const apiError = error as ApiError;
     // 404 means no credential configured - return null
@@ -444,11 +471,11 @@ export async function getUpstreamOAuthCredential(
  */
 export async function startUpstreamOAuth(
   serverPath: string,
-  returnUrl?: string
+  data: StartOAuthFlowRequest
 ): Promise<StartOAuthFlowResponse> {
   return apiPost<StartOAuthFlowResponse>(
     `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/oauth/start`,
-    { return_url: returnUrl }
+    data
   );
 }
 
@@ -457,10 +484,10 @@ export async function startUpstreamOAuth(
  */
 export async function disconnectUpstreamOAuth(
   serverPath: string,
-  reason?: string
-): Promise<void> {
-  return apiPost<void>(
+  data: DisconnectOAuthRequest
+): Promise<DisconnectOAuthResponse> {
+  return apiPost<DisconnectOAuthResponse>(
     `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/oauth/disconnect`,
-    reason ? { reason } : {}
+    data
   );
 }
