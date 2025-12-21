@@ -9,6 +9,7 @@ from datetime import (
     datetime,
     timezone,
 )
+import jwt
 from fastapi import (
     Depends,
     HTTPException,
@@ -71,6 +72,10 @@ from ..upstream.oauth_client import (
 )
 from gateway_session import (
     normalize_session_data,
+)
+from ..tokens.ui_session import (
+    ENFORCEAI_UI_SESSION_TOKEN_ISSUER,
+    verify_enforceai_ui_session_token,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,6 +254,87 @@ def _get_cookie_signer(
     )
 
 
+def _get_cookie_secret_key(
+    request: Request,
+) -> str:
+    secret_key = getattr(request.app.state, "session_secret_key", None)
+    if isinstance(secret_key, str) and secret_key.strip():
+        return secret_key.strip()
+
+    raise DependencyUnavailableError(
+        "Session secret key unavailable",
+        public_message="Enforcement misconfigured",
+    )
+
+
+def _peek_unverified_issuer(
+    token: str,
+) -> Optional[str]:
+    try:
+        claims = jwt.decode(
+            token,
+            options={
+                "verify_signature": False,
+                "verify_aud": False,
+            },
+        )
+    except Exception:
+        return None
+
+    issuer = claims.get("iss") if isinstance(claims, dict) else None
+    if not isinstance(issuer, str) or not issuer.strip():
+        return None
+    return issuer.strip()
+
+
+def _resolve_management_context_from_ui_session_token(
+    *,
+    request: Request,
+    stores: EnforceAIStores,
+    catalog: ScopeCatalog,
+) -> Optional[EnforceAIManagementContext]:
+    try:
+        credential = extract_credential_input(request.headers)
+    except EnforceAIError:
+        return None
+
+    if credential.kind != "bearer":
+        return None
+
+    issuer = _peek_unverified_issuer(credential.value)
+    if issuer != ENFORCEAI_UI_SESSION_TOKEN_ISSUER:
+        return None
+
+    claims = verify_enforceai_ui_session_token(
+        credential.value,
+        secret_key=_get_cookie_secret_key(request),
+    )
+
+    record = stores.session_store.get_session_by_id(session_id=claims.sid)
+    if record is None or record.revoked_at is not None:
+        raise UnauthorizedError("Session invalidated")
+
+    if record.user_id != claims.sub:
+        raise UnauthorizedError("Unauthorized")
+
+    stores.session_store.touch_session(
+        session_id=claims.sid,
+        now=datetime.now(timezone.utc).replace(microsecond=0),
+    )
+
+    groups = list(claims.groups)
+    is_admin = ENFORCEAI_ADMIN_GROUP in groups
+
+    return EnforceAIManagementContext(
+        user_id=claims.sub,
+        actor_agent_id=claims.sid,
+        provider="ui-session-token",
+        groups=groups,
+        is_admin=is_admin,
+        catalog=catalog,
+    )
+
+
 def _resolve_management_context_from_cookie(
     *,
     request: Request,
@@ -320,6 +406,14 @@ async def get_enforceai_management_context(
 
     try:
         if _has_header_credentials(request):
+            ui_context = _resolve_management_context_from_ui_session_token(
+                request=request,
+                stores=stores,
+                catalog=catalog,
+            )
+            if ui_context is not None:
+                return ui_context
+
             identity = await resolver.resolve_identity(headers=request.headers)
             groups = identity.user_roles or []
             is_admin = ENFORCEAI_ADMIN_GROUP in groups

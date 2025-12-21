@@ -149,23 +149,32 @@ def get_user_session_data(
 
         enforceai_db_path = getattr(settings, "enforceai_db_path", None)
         if enforceai_db_path is not None:
-            EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
-            store = SqliteSessionStore(db_path=enforceai_db_path)
-            record = store.get_session_by_id(session_id=normalized.session_id)
-            if record is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Session invalidated",
+            try:
+                EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
+                store = SqliteSessionStore(db_path=enforceai_db_path)
+                record = store.get_session_by_id(session_id=normalized.session_id)
+            except OSError:
+                logger.warning(
+                    "Skipping server-side session validation; EnforceAI DB unavailable",
+                    exc_info=True,
                 )
-            if record.revoked_at is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Session invalidated",
+            except Exception:
+                logger.exception("Skipping server-side session validation due to unexpected error")
+            else:
+                if record is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Session invalidated",
+                    )
+                if record.revoked_at is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Session invalidated",
+                    )
+                store.touch_session(
+                    session_id=normalized.session_id,
+                    now=datetime.now(timezone.utc).replace(microsecond=0),
                 )
-            store.touch_session(
-                session_id=normalized.session_id,
-                now=datetime.now(timezone.utc).replace(microsecond=0),
-            )
 
         logger.debug(f"Session data extracted for user: {data.get('username')}")
         return data
@@ -682,16 +691,28 @@ def create_session_cookie(
     session_id: Optional[str] = None
     enforceai_db_path = getattr(settings, "enforceai_db_path", None)
     if enforceai_db_path is not None:
-        EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
-        store = SqliteSessionStore(db_path=enforceai_db_path)
-        session_id = secrets.token_urlsafe(24)
-        store.create_session(
-            session_id=session_id,
-            user_id=user_id,
-            auth_method="oidc" if is_oidc_session else "password",
-            expires_at=datetime.now(timezone.utc).replace(microsecond=0)
-            + timedelta(seconds=settings.session_max_age_seconds),
-        )
+        try:
+            EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
+            store = SqliteSessionStore(db_path=enforceai_db_path)
+            session_id = secrets.token_urlsafe(24)
+            store.create_session(
+                session_id=session_id,
+                user_id=user_id,
+                auth_method="oidc" if is_oidc_session else "password",
+                expires_at=datetime.now(timezone.utc).replace(microsecond=0)
+                + timedelta(seconds=settings.session_max_age_seconds),
+            )
+        except OSError:
+            logger.warning(
+                "Failed to persist EnforceAI session record; continuing without server-side session",
+                exc_info=True,
+            )
+            session_id = None
+        except Exception:
+            logger.exception(
+                "Unexpected error persisting EnforceAI session record; continuing without server-side session"
+            )
+            session_id = None
 
     session_data = build_session_cookie_payload(
         username=username,

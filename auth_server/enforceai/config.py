@@ -43,6 +43,10 @@ DEFAULT_JWKS_CACHE_TTL_SECONDS: int = 300
 DEFAULT_OIDC_CLOCK_SKEW_SECONDS: int = 60
 DEFAULT_UPSTREAM_OAUTH_STATE_TTL_SECONDS: int = 10 * 60
 DEFAULT_UPSTREAM_OAUTH_REFRESH_SKEW_SECONDS: int = 60
+DEFAULT_REGISTRY_SERVERS_DIR_CANDIDATES: tuple[Path, ...] = (
+    Path("/app/registry/servers"),
+    Path.cwd() / "registry" / "servers",
+)
 
 AuthProviderMode = Literal[
     "oidc",
@@ -416,6 +420,15 @@ class EnforceAISettings(BaseSettings):
         description="Path to scopes.yml catalog used for FGAC enforcement",
     )
 
+    registry_servers_dir: Optional[Path] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "ENFORCEAI_REGISTRY_SERVERS_DIR",
+            "REGISTRY_SERVERS_DIR",
+        ),
+        description="Directory containing registry server definition JSON files (used to validate upstream_auth).",
+    )
+
     audit_retention_days: int = Field(
         default=30,
         ge=0,
@@ -461,6 +474,7 @@ class EnforceAISettings(BaseSettings):
         "api_key_pepper_path",
         "upstream_kek_path",
         "scopes_catalog_path",
+        "registry_servers_dir",
         mode="before",
     )
     @classmethod
@@ -630,3 +644,17 @@ class EnforceAISettings(BaseSettings):
                 )
 
         return self
+
+    def resolve_registry_servers_dir(self) -> Optional[Path]:
+        """Resolve the effective registry servers directory (best-effort)."""
+        if self.registry_servers_dir is not None:
+            return self.registry_servers_dir
+
+        for candidate in DEFAULT_REGISTRY_SERVERS_DIR_CANDIDATES:
+            try:
+                if candidate.exists() and candidate.is_dir():
+                    return candidate
+            except Exception:
+                continue
+
+        return None

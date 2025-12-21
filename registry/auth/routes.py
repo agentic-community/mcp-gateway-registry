@@ -25,6 +25,9 @@ from auth_server.enforceai.stores.sqlite.session_store import (
 from auth_server.enforceai.db.data_layer import (
     EnforceAIDataLayer,
 )
+from auth_server.enforceai.tokens.ui_session import (
+    mint_enforceai_ui_session_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -420,4 +423,44 @@ async def get_csrf_token(
             session_id=session_id,
         ),
         "expires_in_seconds": settings.csrf_token_max_age_seconds,
+    }
+
+
+@router.post("/enforceai/token")
+async def mint_enforceai_management_token(
+    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+):
+    """Vend a short-lived EnforceAI management token for the current session.
+
+    This endpoint is intended for the browser UI. It requires a valid session
+    cookie and is CSRF-protected by the registry middleware.
+    """
+    data = get_user_session_data(session)
+
+    session_id = data.get("session_id")
+    user_id = data.get("user_id")
+    groups = data.get("groups", [])
+
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+    token, expires_at = mint_enforceai_ui_session_token(
+        secret_key=settings.secret_key,
+        user_id=user_id,
+        session_id=session_id,
+        groups=groups if isinstance(groups, list) else [],
+    )
+
+    return {
+        "access_token": token,
+        "expires_at": expires_at.isoformat(),
     }
