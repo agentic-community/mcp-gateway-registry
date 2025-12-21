@@ -43,6 +43,7 @@ Core EnforceAI configuration variables:
 | `ENFORCEAI_AUTH_PROVIDER` | EnforceAI auth mode (`oidc`, `gateway-token`, `api-key`, `mixed`) | `mixed` | ✅ |
 | `OIDC_ISSUERS` | JSON map keyed by `iss` with OIDC issuer config | `{"https://issuer": {"jwks_uri": "https://issuer/jwks.json", "audiences": ["mcp-registry"]}}` | If using `oidc`/`mixed` |
 | `ENFORCEAI_SCOPES_CATALOG_PATH` | Path to `scopes.yml` used for scope validation/catalog | `/etc/mcp/scopes.yml` | ✅ |
+| `ENFORCEAI_REGISTRY_SERVERS_DIR` | Directory containing registry server definition JSON files (needed for upstream OAuth flows and upstream_auth validation) | `/app/registry/servers` | If using upstream OAuth / upstream_auth |
 | `ENFORCEAI_API_KEY_PEPPER_PATH` | File path to pepper bytes for API key hashing | `/etc/mcp/api_key_pepper` | If using `api-key`/`mixed` |
 | `ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH` | PEM private key for minting gateway tokens | `/etc/mcp/gateway_private.pem` | If minting/using gateway tokens |
 | `ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR` | Directory containing `<kid>.pem` public keys | `/etc/mcp/gateway_public_keys` | If using gateway tokens |
@@ -361,6 +362,7 @@ When using Keycloak as the authentication provider, the following configuration 
 | `grant_type` | OAuth grant type | ✅ | `"authorization_code"` |
 | `username_claim` | JWT claim for username | ✅ | `"email"` |
 | `groups_claim` | JWT claim for groups | ❌ | `"cognito:groups"` |
+| `default_groups` | Fallback groups when provider returns none (mapped to scopes via `auth_server/scopes.yml`) | ❌ | `["registry-users-lob1"]` |
 | `email_claim` | JWT claim for email | ✅ | `"email"` |
 | `name_claim` | JWT claim for name | ✅ | `"name"` |
 | `enabled` | Whether provider is enabled | ✅ | `true` |
@@ -377,6 +379,7 @@ To enable Google login:
 - Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
 - Set `GOOGLE_ENABLED=true`
 - Configure the Google OAuth client redirect URI as `${AUTH_SERVER_EXTERNAL_URL}/oauth2/callback/google`
+- If you want Google users to have access by default, set `default_groups` for the `google` provider and ensure those groups exist in `auth_server/scopes.yml` under `group_mappings`
 
 ---
 
