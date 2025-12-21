@@ -220,25 +220,28 @@ export const mockApiKeys: ApiKeySummary[] = [
 
 export const mockEgressAllowlistEntries: EgressAllowlistEntry[] = [
   {
-    entry_id: 'entry-1',
-    pattern: 'localhost:*',
-    description: 'Allow all localhost connections for development',
+    entry_id: 1,
+    kind: 'hostname',
+    value: 'localhost',
+    comment: 'Allow localhost connections for development',
     expires_at: null,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
   },
   {
-    entry_id: 'entry-2',
-    pattern: '*.example.com',
-    description: 'Allow all example.com subdomains',
+    entry_id: 2,
+    kind: 'domain-suffix',
+    value: 'example.com',
+    comment: 'Allow all example.com subdomains',
     expires_at: '2025-12-31T23:59:59Z',
     created_at: '2024-01-05T00:00:00Z',
     updated_at: '2024-01-05T00:00:00Z',
   },
   {
-    entry_id: 'entry-3',
-    pattern: 'api.trusted-service.io',
-    description: 'Production API endpoint',
+    entry_id: 3,
+    kind: 'hostname',
+    value: 'api.trusted-service.io',
+    comment: 'Production API endpoint',
     expires_at: null,
     created_at: '2024-01-10T00:00:00Z',
     updated_at: '2024-01-15T00:00:00Z',
@@ -909,14 +912,16 @@ export const handlers = [
 
   http.post('/enforceai/admin/egress-allowlist', async ({ request }) => {
     const body = (await request.json()) as {
-      pattern: string;
-      description?: string;
+      kind: EgressAllowlistEntry['kind'];
+      value: string;
+      comment?: string;
       expires_at?: string | null;
     };
     const newEntry: EgressAllowlistEntry = {
-      entry_id: 'entry-' + Date.now(),
-      pattern: body.pattern,
-      description: body.description,
+      entry_id: Date.now(),
+      kind: body.kind,
+      value: body.value,
+      comment: body.comment ?? null,
       expires_at: body.expires_at ?? null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -925,19 +930,22 @@ export const handlers = [
   }),
 
   http.put('/enforceai/admin/egress-allowlist/:entryId', async ({ params, request }) => {
-    const entry = mockEgressAllowlistEntries.find((e) => e.entry_id === params.entryId);
+    const entryId = Number(params.entryId);
+    const entry = mockEgressAllowlistEntries.find((e) => e.entry_id === entryId);
     if (!entry) {
       return HttpResponse.json({ detail: 'Entry not found' }, { status: 404 });
     }
     const body = (await request.json()) as {
-      pattern?: string;
-      description?: string;
+      kind?: EgressAllowlistEntry['kind'];
+      value?: string;
+      comment?: string;
       expires_at?: string | null;
     };
     const updatedEntry: EgressAllowlistEntry = {
       ...entry,
-      pattern: body.pattern ?? entry.pattern,
-      description: body.description !== undefined ? body.description : entry.description,
+      kind: body.kind ?? entry.kind,
+      value: body.value ?? entry.value,
+      comment: body.comment !== undefined ? body.comment : entry.comment,
       expires_at: body.expires_at !== undefined ? body.expires_at : entry.expires_at,
       updated_at: new Date().toISOString(),
     };
@@ -945,7 +953,8 @@ export const handlers = [
   }),
 
   http.delete('/enforceai/admin/egress-allowlist/:entryId', ({ params }) => {
-    const entry = mockEgressAllowlistEntries.find((e) => e.entry_id === params.entryId);
+    const entryId = Number(params.entryId);
+    const entry = mockEgressAllowlistEntries.find((e) => e.entry_id === entryId);
     if (!entry) {
       return HttpResponse.json({ detail: 'Entry not found' }, { status: 404 });
     }
@@ -953,11 +962,10 @@ export const handlers = [
   }),
 
   http.post('/enforceai/admin/egress-allowlist/check', async ({ request }) => {
-    const body = (await request.json()) as { pattern: string };
-    // Simple mock check - always return allowed for now
+    const body = (await request.json()) as { proxy_pass_url: string };
     return HttpResponse.json({
       allowed: true,
-      reason: 'Pattern matches allowlist',
+      reason: `Allowed by mock allowlist for ${body.proxy_pass_url}`,
     });
   }),
 

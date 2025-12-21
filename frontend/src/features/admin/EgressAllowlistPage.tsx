@@ -106,7 +106,7 @@ export default function EgressAllowlistPage() {
       addToast({
         type: 'success',
         title: 'Entry deleted',
-        message: `Pattern "${entryToDelete.pattern}" has been removed from the allowlist`,
+        message: `${entryToDelete.kind} "${entryToDelete.value}" has been removed from the allowlist`,
       });
       fetchEntries();
     } catch (err: any) {
@@ -174,11 +174,11 @@ export default function EgressAllowlistPage() {
                   </h3>
                   <p className="mt-1 text-sm text-yellow-700 dark:text-yellow-300">
                     This allowlist prevents Server-Side Request Forgery (SSRF) attacks by restricting
-                    which upstream URLs can be registered as MCP servers. Only patterns listed here
-                    will be accepted during server registration.
+                    which upstream URLs can be registered as MCP servers. Only destinations listed
+                    here will be accepted during server registration.
                   </p>
                   <p className="mt-2 text-sm text-yellow-700 dark:text-yellow-300 font-medium">
-                    Exercise caution when adding patterns. Wildcards should be used sparingly.
+                    Exercise caution when allowing broad destinations.
                   </p>
                 </div>
               </div>
@@ -189,7 +189,7 @@ export default function EgressAllowlistPage() {
               <div className="flex items-center space-x-2">
                 <ShieldCheckIcon className="h-5 w-5 text-gray-400" />
                 <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                  Allowed Patterns
+                  Allowed Destinations
                 </h2>
                 <Badge variant="neutral" size="sm">
                   {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
@@ -201,7 +201,7 @@ export default function EgressAllowlistPage() {
                 leftIcon={<PlusIcon className="h-4 w-4" />}
                 onClick={handleCreateClick}
               >
-                Add Pattern
+                Add Entry
               </Button>
             </div>
 
@@ -228,14 +228,14 @@ export default function EgressAllowlistPage() {
                 <EmptyState
                   icon={<ShieldCheckIcon className="w-12 h-12" />}
                   title="No allowlist entries"
-                  description="Add patterns to control which upstream servers can be proxied"
+                  description="Add entries to control which upstream servers can be proxied"
                   action={
                     <Button
                       variant="primary"
                       leftIcon={<PlusIcon className="h-4 w-4" />}
                       onClick={handleCreateClick}
                     >
-                      Add First Pattern
+                      Add First Entry
                     </Button>
                   }
                 />
@@ -252,8 +252,11 @@ export default function EgressAllowlistPage() {
                         <div className="flex items-start justify-between">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center space-x-2 mb-2">
+                              <Badge variant="neutral" size="sm">
+                                {entry.kind}
+                              </Badge>
                               <code className="text-sm font-mono font-semibold text-gray-900 dark:text-gray-100">
-                                {entry.pattern}
+                                {entry.value}
                               </code>
                               {expired && (
                                 <Badge variant="error" size="sm">
@@ -266,9 +269,9 @@ export default function EgressAllowlistPage() {
                                 </Badge>
                               )}
                             </div>
-                            {entry.description && (
+                            {entry.comment && (
                               <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                                {entry.description}
+                                {entry.comment}
                               </p>
                             )}
                             <div className="flex items-center space-x-4 text-xs text-gray-500 dark:text-gray-400">
@@ -322,7 +325,7 @@ export default function EgressAllowlistPage() {
         title="Delete Allowlist Entry"
         message={
           entryToDelete
-            ? `Are you sure you want to delete the pattern "${entryToDelete.pattern}"? This may prevent servers using this pattern from being registered.`
+            ? `Are you sure you want to delete ${entryToDelete.kind} "${entryToDelete.value}"? This may prevent servers using this destination from being registered.`
             : ''
         }
         confirmLabel="Delete"

@@ -15,41 +15,45 @@ import {
 } from '@/api/admin';
 import type {
   EgressAllowlistEntry,
+  EgressAllowlistEntryKind,
   CreateEgressAllowlistEntryRequest,
   UpdateEgressAllowlistEntryRequest,
 } from '@/api/types';
 
 /**
- * Check if a pattern matches potentially sensitive internal network targets.
- * Returns a warning message if the pattern is potentially dangerous in production.
+ * Check if an allowlist entry may be risky in production.
+ * Returns a warning message for potentially sensitive internal network targets.
  */
-function getPatternSecurityWarning(pattern: string): string | null {
-  const trimmedPattern = pattern.trim().toLowerCase();
+function getEntrySecurityWarning(
+  kind: EgressAllowlistEntryKind,
+  value: string
+): string | null {
+  const trimmedValue = value.trim().toLowerCase();
+  if (!trimmedValue) return null;
 
-  // Skip empty patterns
-  if (!trimmedPattern) {
-    return null;
+  if (kind === 'ip-cidr') {
+    if (trimmedValue === '0.0.0.0/0' || trimmedValue === '::/0') {
+      return 'This CIDR allows all IPs. This may pose a security risk (SSRF) in production environments.';
+    }
   }
 
-  // Patterns that are typically safe only in development
   const internalPatterns: { pattern: RegExp; description: string }[] = [
-    { pattern: /^localhost(:|$)/i, description: 'localhost' },
+    { pattern: /^localhost$/i, description: 'localhost' },
     { pattern: /^127\./i, description: 'loopback addresses (127.x.x.x)' },
-    { pattern: /^0\.0\.0\.0/i, description: 'all interfaces (0.0.0.0)' },
+    { pattern: /^0\.0\.0\.0$/i, description: 'all interfaces (0.0.0.0)' },
     { pattern: /^10\./i, description: 'private network (10.x.x.x)' },
-    { pattern: /^172\.(1[6-9]|2[0-9]|3[0-1])\./i, description: 'private network (172.16-31.x.x)' },
-    { pattern: /^192\.168\./i, description: 'private network (192.168.x.x)' },
-    { pattern: /^\[?::1\]?/i, description: 'IPv6 loopback (::1)' },
-    { pattern: /^\[?fe80:/i, description: 'IPv6 link-local (fe80::)' },
-    { pattern: /^\[?fc00:/i, description: 'IPv6 unique local (fc00::)' },
-    { pattern: /^\[?fd00:/i, description: 'IPv6 unique local (fd00::)' },
-    { pattern: /^169\.254\./i, description: 'link-local (169.254.x.x)' },
-    { pattern: /^\*$/i, description: 'wildcard matching all hosts' },
+    { pattern: /^172\.(1[6-9]|2[0-9]|3[0-1])\./i, description: 'private network (172.16-31.x.x.x)' },
+    { pattern: /^192\.168\./i, description: 'private network (192.168.x.x.x)' },
+    { pattern: /^::1$/i, description: 'IPv6 loopback (::1)' },
+    { pattern: /^fe80:/i, description: 'IPv6 link-local (fe80::)' },
+    { pattern: /^fc00:/i, description: 'IPv6 unique local (fc00::)' },
+    { pattern: /^fd00:/i, description: 'IPv6 unique local (fd00::)' },
+    { pattern: /^169\.254\./i, description: 'link-local (169.254.x.x.x)' },
   ];
 
-  for (const { pattern: regex, description } of internalPatterns) {
-    if (regex.test(trimmedPattern)) {
-      return `This pattern matches ${description}. This is typically safe for local development but may pose a security risk (SSRF) in production environments.`;
+  for (const { pattern, description } of internalPatterns) {
+    if (pattern.test(trimmedValue)) {
+      return `This entry includes ${description}. This is typically safe for local development but may pose a security risk (SSRF) in production environments.`;
     }
   }
 
@@ -76,11 +80,12 @@ export function EgressAllowlistModal({
   const isEditMode = Boolean(entry);
 
   // Form state
-  const [pattern, setPattern] = useState('');
-  const [description, setDescription] = useState('');
+  const [kind, setKind] = useState<EgressAllowlistEntryKind>('hostname');
+  const [value, setValue] = useState('');
+  const [comment, setComment] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [errors, setErrors] = useState<{
-    pattern?: string;
+    value?: string;
     expiresAt?: string;
   }>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -89,8 +94,9 @@ export function EgressAllowlistModal({
   useEffect(() => {
     if (open) {
       if (entry) {
-        setPattern(entry.pattern);
-        setDescription(entry.description || '');
+        setKind(entry.kind);
+        setValue(entry.value);
+        setComment(entry.comment || '');
         // Convert ISO string to datetime-local format
         if (entry.expires_at) {
           const date = new Date(entry.expires_at);
@@ -100,25 +106,37 @@ export function EgressAllowlistModal({
           setExpiresAt('');
         }
       } else {
-        setPattern('');
-        setDescription('');
+        setKind('hostname');
+        setValue('');
+        setComment('');
         setExpiresAt('');
       }
       setErrors({});
     }
   }, [open, entry]);
 
-  // Validate pattern
-  const validatePattern = (value: string): string | undefined => {
-    if (!value.trim()) {
-      return 'Pattern is required';
+  const validateValue = (
+    kind: EgressAllowlistEntryKind,
+    value: string
+  ): string | undefined => {
+    const trimmed = value.trim();
+    if (!trimmed) return 'Value is required';
+    if (/[\r\n]/.test(trimmed)) return 'Value must not contain newline characters';
+
+    if (trimmed.includes('://') || trimmed.includes('/')) {
+      return 'Value must be a hostname, domain suffix, or CIDR (not a full URL)';
     }
 
-    // Basic validation for hostname/URL pattern
-    // Allow wildcards (*), hostnames, URLs, and IP addresses
-    const validPatternRegex = /^[\w\-.*:/?#[\]@!$&'()+,;=%]+$/;
-    if (!validPatternRegex.test(value)) {
-      return 'Invalid pattern format';
+    if (kind !== 'ip-cidr' && trimmed.includes(':')) {
+      return 'Do not include a port; enter only the hostname/domain (e.g. host.docker.internal)';
+    }
+
+    if (kind === 'domain-suffix' && trimmed.includes('*')) {
+      return 'Domain suffix must not include *';
+    }
+
+    if (kind === 'ip-cidr' && !trimmed.includes('/')) {
+      return 'CIDR must include a prefix length (e.g. 10.0.0.0/8)';
     }
 
     return undefined;
@@ -143,12 +161,12 @@ export function EgressAllowlistModal({
     e.preventDefault();
 
     // Validate form
-    const patternError = validatePattern(pattern);
+    const valueError = validateValue(kind, value);
     const expiresAtError = validateExpiresAt(expiresAt);
 
-    if (patternError || expiresAtError) {
+    if (valueError || expiresAtError) {
       setErrors({
-        pattern: patternError,
+        value: valueError,
         expiresAt: expiresAtError,
       });
       return;
@@ -160,8 +178,9 @@ export function EgressAllowlistModal({
       if (isEditMode && entry) {
         // Update existing entry
         const updateData: UpdateEgressAllowlistEntryRequest = {
-          pattern: pattern.trim(),
-          description: description.trim() || undefined,
+          kind,
+          value: value.trim(),
+          comment: comment.trim() || undefined,
           expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
         };
 
@@ -170,13 +189,14 @@ export function EgressAllowlistModal({
         addToast({
           type: 'success',
           title: 'Entry updated',
-          message: `Pattern "${pattern}" has been updated`,
+          message: `${kind} "${value}" has been updated`,
         });
       } else {
         // Create new entry
         const createData: CreateEgressAllowlistEntryRequest = {
-          pattern: pattern.trim(),
-          description: description.trim() || undefined,
+          kind,
+          value: value.trim(),
+          comment: comment.trim() || undefined,
           expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
         };
 
@@ -185,7 +205,7 @@ export function EgressAllowlistModal({
         addToast({
           type: 'success',
           title: 'Entry created',
-          message: `Pattern "${pattern}" has been added to the allowlist`,
+          message: `${kind} "${value}" has been added to the allowlist`,
         });
       }
 
@@ -203,19 +223,17 @@ export function EgressAllowlistModal({
     }
   };
 
-  // Handle pattern change with validation
-  const handlePatternChange = (value: string) => {
-    setPattern(value);
-    if (errors.pattern) {
-      const error = validatePattern(value);
-      setErrors({ ...errors, pattern: error });
+  const handleValueChange = (value: string) => {
+    setValue(value);
+    if (errors.value) {
+      const error = validateValue(kind, value);
+      setErrors({ ...errors, value: error });
     }
   };
 
-  // Compute security warning for the current pattern
-  const patternWarning = useMemo(() => {
-    return getPatternSecurityWarning(pattern);
-  }, [pattern]);
+  const entryWarning = useMemo(() => {
+    return getEntrySecurityWarning(kind, value);
+  }, [kind, value]);
 
   // Handle expiration date change with validation
   const handleExpiresAtChange = (value: string) => {
@@ -233,57 +251,89 @@ export function EgressAllowlistModal({
       title={isEditMode ? 'Edit Allowlist Entry' : 'Add Allowlist Entry'}
       description={
         isEditMode
-          ? 'Update the pattern, description, or expiration date'
-          : 'Add a new pattern to control which upstream servers can be proxied'
+          ? 'Update the destination, comment, or expiration date'
+          : 'Allow a destination host/network for upstream proxying'
       }
     >
       <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Pattern Input */}
-        <div>
-          <label
-            htmlFor="pattern"
-            className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
-          >
-            Pattern <span className="text-red-500">*</span>
-          </label>
-          <Input
-            id="pattern"
-            type="text"
-            value={pattern}
-            onChange={(e) => handlePatternChange(e.target.value)}
-            placeholder="e.g., localhost:*, *.example.com, https://api.example.com/*"
-            error={errors.pattern}
-            disabled={isSubmitting}
-            required
-          />
-          {errors.pattern && (
-            <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.pattern}</p>
-          )}
-          {patternWarning && !errors.pattern && (
-            <div className="mt-2 flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md">
-              <ExclamationTriangleIcon className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-amber-700 dark:text-amber-300">{patternWarning}</p>
-            </div>
-          )}
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Use wildcards (*) for flexible matching. Examples: localhost:*, *.example.com,
-            192.168.*.*
-          </p>
+        {/* Kind + Value */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label
+              htmlFor="kind"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
+              Kind <span className="text-red-500">*</span>
+            </label>
+            <select
+              id="kind"
+              className="mt-1 block w-full rounded-md border-gray-300 text-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200"
+              value={kind}
+              onChange={(e) => {
+                const nextKind = e.target.value as EgressAllowlistEntryKind;
+                setKind(nextKind);
+                const nextError = validateValue(nextKind, value);
+                setErrors((prev) => ({ ...prev, value: nextError }));
+              }}
+              disabled={isSubmitting}
+            >
+              <option value="hostname">Hostname</option>
+              <option value="domain-suffix">Domain Suffix</option>
+              <option value="ip-cidr">IP CIDR</option>
+            </select>
+          </div>
+
+          <div className="sm:col-span-2">
+            <label
+              htmlFor="value"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
+              Value <span className="text-red-500">*</span>
+            </label>
+            <Input
+              id="value"
+              type="text"
+              value={value}
+              onChange={(e) => handleValueChange(e.target.value)}
+              placeholder={
+                kind === 'hostname'
+                  ? 'host.docker.internal'
+                  : kind === 'domain-suffix'
+                    ? 'example.com'
+                    : '10.0.0.0/8'
+              }
+              error={errors.value}
+              disabled={isSubmitting}
+              required
+            />
+            {errors.value && (
+              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.value}</p>
+            )}
+            {entryWarning && !errors.value && (
+              <div className="mt-2 flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md">
+                <ExclamationTriangleIcon className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-700 dark:text-amber-300">{entryWarning}</p>
+              </div>
+            )}
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Enter a hostname/domain/CIDR only (no scheme, port, or path).
+            </p>
+          </div>
         </div>
 
-        {/* Description Input */}
+        {/* Comment Input */}
         <div>
           <label
-            htmlFor="description"
+            htmlFor="comment"
             className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
           >
-            Description
+            Comment
           </label>
           <Textarea
-            id="description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Optional description for this allowlist entry"
+            id="comment"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Optional: why this destination is allowed"
             rows={3}
             disabled={isSubmitting}
           />

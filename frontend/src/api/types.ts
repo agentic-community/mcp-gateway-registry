@@ -442,24 +442,29 @@ export interface StartOAuthFlowRequest {
 // Egress Allowlist Types (Admin)
 // ============================================================================
 
+export type EgressAllowlistEntryKind = 'hostname' | 'domain-suffix' | 'ip-cidr';
+
 export interface EgressAllowlistEntry {
-  entry_id: string;
-  pattern: string;
-  description?: string;
+  entry_id: number;
+  kind: EgressAllowlistEntryKind;
+  value: string;
+  comment?: string | null;
   expires_at?: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface CreateEgressAllowlistEntryRequest {
-  pattern: string;
-  description?: string;
+  kind: EgressAllowlistEntryKind;
+  value: string;
+  comment?: string;
   expires_at?: string | null;
 }
 
 export interface UpdateEgressAllowlistEntryRequest {
-  pattern?: string;
-  description?: string;
+  kind?: EgressAllowlistEntryKind;
+  value?: string;
+  comment?: string;
   expires_at?: string | null;
 }
 

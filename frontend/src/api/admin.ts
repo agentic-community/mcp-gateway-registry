@@ -39,7 +39,7 @@ export async function createEgressAllowlistEntry(
  * Update an existing egress allowlist entry
  */
 export async function updateEgressAllowlistEntry(
-  entryId: string,
+  entryId: number,
   data: UpdateEgressAllowlistEntryRequest
 ): Promise<EgressAllowlistEntry> {
   return apiPut<EgressAllowlistEntry, UpdateEgressAllowlistEntryRequest>(
@@ -51,17 +51,19 @@ export async function updateEgressAllowlistEntry(
 /**
  * Delete an egress allowlist entry
  */
-export async function deleteEgressAllowlistEntry(entryId: string): Promise<void> {
+export async function deleteEgressAllowlistEntry(entryId: number): Promise<void> {
   return apiDelete<void>(`/enforceai/admin/egress-allowlist/${entryId}`);
 }
 
 /**
- * Check if a pattern is allowed
+ * Check if a proxy_pass_url is allowed by the current allowlist.
  */
-export async function checkEgressPattern(pattern: string): Promise<{ allowed: boolean; reason?: string }> {
-  return apiPost<{ allowed: boolean; reason?: string }, { pattern: string }>(
+export async function checkProxyPassUrl(
+  proxyPassUrl: string
+): Promise<{ allowed: boolean; reason: string }> {
+  return apiPost<{ allowed: boolean; reason: string }, { proxy_pass_url: string }>(
     '/enforceai/admin/egress-allowlist/check',
-    { pattern }
+    { proxy_pass_url: proxyPassUrl }
   );
 }
 
