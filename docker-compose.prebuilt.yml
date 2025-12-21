@@ -119,6 +119,8 @@ services:
       - ENFORCEAI_AUTH_PROVIDER=${ENFORCEAI_AUTH_PROVIDER}
       - ENFORCEAI_DB_PATH=${ENFORCEAI_DB_PATH}
       - ENFORCEAI_SCOPES_CATALOG_PATH=${ENFORCEAI_SCOPES_CATALOG_PATH}
+      # Required for upstream OAuth flows: auth-server must read registry server definitions.
+      - ENFORCEAI_REGISTRY_SERVERS_DIR=/app/registry/servers
       - ENFORCEAI_API_KEY_PEPPER_PATH=${ENFORCEAI_API_KEY_PEPPER_PATH}
       - ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH=${ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH}
       - ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR=${ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR}
@@ -133,6 +135,7 @@ services:
     volumes:
       - ${HOME}/mcp-gateway/logs:/app/logs
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
+      - ${HOME}/mcp-gateway/servers:/app/registry/servers:ro
       # Important: do not mount over /app/enforceai (the python package); mount state separately.
       - ${HOME}/mcp-gateway/enforceai:/app/enforceai_state
     restart: unless-stopped
