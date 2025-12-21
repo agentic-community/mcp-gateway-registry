@@ -47,7 +47,9 @@ class TestSettings:
 
     @patch.dict(os.environ, {}, clear=True)
     @patch('pathlib.Path.exists')
-    def test_path_properties(self, mock_exists):
+    @patch("registry.core.config.os.access", return_value=True)
+    @patch("pathlib.Path.is_dir", return_value=True)
+    def test_path_properties(self, mock_is_dir, mock_access, mock_exists):
         """Test that path properties return correct paths."""
         # Mock that /app exists to simulate container environment
         mock_exists.return_value = True
@@ -66,7 +68,9 @@ class TestSettings:
 
     @patch.dict(os.environ, {}, clear=True)
     @patch('pathlib.Path.exists')
-    def test_file_path_properties(self, mock_exists):
+    @patch("registry.core.config.os.access", return_value=True)
+    @patch("pathlib.Path.is_dir", return_value=True)
+    def test_file_path_properties(self, mock_is_dir, mock_access, mock_exists):
         """Test file path properties."""
         # Mock that /app exists to simulate container environment
         mock_exists.return_value = True
@@ -110,7 +114,9 @@ class TestSettings:
 
     @patch.dict(os.environ, {}, clear=True)
     @patch('pathlib.Path.exists')
-    def test_custom_container_paths(self, mock_exists):
+    @patch("registry.core.config.os.access", return_value=True)
+    @patch("pathlib.Path.is_dir", return_value=True)
+    def test_custom_container_paths(self, mock_is_dir, mock_access, mock_exists):
         """Test custom container paths."""
         # Mock that /custom/app exists to simulate container environment
         mock_exists.return_value = True

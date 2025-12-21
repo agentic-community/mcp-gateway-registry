@@ -1429,6 +1429,11 @@ async def validate_request(request: Request):
                 request.headers.get("X-EnforceAI-Upstream-Credential-Binding") or "service"
             ).strip()
             upstream_provider = request.headers.get("X-EnforceAI-Upstream-Provider")
+            default_upstream_mode = "none" if upstream_type == "none" else "gateway-managed"
+            upstream_mode = (
+                request.headers.get("X-EnforceAI-Upstream-Mode") or default_upstream_mode
+            ).strip()
+            upstream_mode = upstream_mode or default_upstream_mode
             upstream_header_name = request.headers.get("X-EnforceAI-Upstream-Header-Name")
             upstream_scheme = request.headers.get("X-EnforceAI-Upstream-Scheme")
 
@@ -1449,6 +1454,7 @@ async def validate_request(request: Request):
                 )
 
             upstream_auth = UpstreamAuthConfig(
+                mode=upstream_mode,
                 type=upstream_type,
                 provider=upstream_provider,
                 credential_binding=upstream_binding,
@@ -1465,6 +1471,14 @@ async def validate_request(request: Request):
                     oauth_token_client = get_upstream_oauth_token_client()
                     oauth_refresh_skew_seconds = settings.upstream_oauth_refresh_skew_seconds
 
+                allow_missing_upstream = False
+                if tool_name == "tools/list" and upstream_auth.type in {
+                    "oauth2",
+                    "oidc",
+                    "provider-oauth",
+                }:
+                    allow_missing_upstream = True
+
                 injection_result = await resolve_upstream_injection(
                     server_path=server_path,
                     upstream_auth=upstream_auth,
@@ -1473,6 +1487,7 @@ async def validate_request(request: Request):
                     oauth_providers=oauth_providers,
                     oauth_token_client=oauth_token_client,
                     oauth_refresh_skew_seconds=oauth_refresh_skew_seconds,
+                    allow_missing_credential=allow_missing_upstream,
                 )
             except UpstreamInjectionError as exc:
                 raise HTTPException(

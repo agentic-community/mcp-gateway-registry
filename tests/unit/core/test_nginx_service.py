@@ -389,3 +389,50 @@ http {
         assert "location /api/test/ {" in config_content
         assert "location api/test2 {" in config_content
         assert "location /api/test3// {" in config_content 
+
+    def test_oauth2_upstream_auth_injects_authorization_header(self, nginx_service):
+        servers = {
+            "/fininfo/": {
+                "proxy_pass_url": "http://localhost:8001",
+                "upstream_auth": {
+                    "mode": "gateway-managed",
+                    "type": "oauth2",
+                    "provider": "github",
+                    "credential_binding": "user",
+                    "injection": {
+                        "kind": "header",
+                        "header_name": "Authorization",
+                        "scheme": "Bearer",
+                    },
+                },
+            },
+        }
+
+        result = nginx_service.generate_config(servers)
+
+        assert result is True
+        config_content = self.mock_settings.nginx_config_path.read_text()
+        assert 'set $enforceai_upstream_auth_type "oauth2";' in config_content
+        assert 'set $enforceai_upstream_scheme "Bearer";' in config_content
+        assert "proxy_set_header Authorization $enforceai_upstream_authorization;" in config_content
+
+    def test_oauth2_upstream_auth_defaults_header_and_scheme(self, nginx_service):
+        servers = {
+            "/fininfo/": {
+                "proxy_pass_url": "http://localhost:8001",
+                "upstream_auth": {
+                    "mode": "gateway-managed",
+                    "type": "oauth2",
+                    "provider": "github",
+                    "credential_binding": "user",
+                },
+            },
+        }
+
+        result = nginx_service.generate_config(servers)
+
+        assert result is True
+        config_content = self.mock_settings.nginx_config_path.read_text()
+        assert 'set $enforceai_upstream_header_name "Authorization";' in config_content
+        assert 'set $enforceai_upstream_scheme "Bearer";' in config_content
+        assert "proxy_set_header Authorization $enforceai_upstream_authorization;" in config_content

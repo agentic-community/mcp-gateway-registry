@@ -182,6 +182,7 @@ class TestEnforceAIStage7Hardening:
             egress_allowlist_store=stores.egress_allowlist_store,
             upstream_credential_store=None,
             upstream_oauth_state_store=None,
+            upstream_oauth_provider_store=None,
         )
         monkeypatch.setattr(
             auth_server_module,
@@ -266,6 +267,7 @@ class TestEnforceAIStage7Hardening:
             egress_allowlist_store=stores.egress_allowlist_store,
             upstream_credential_store=None,
             upstream_oauth_state_store=None,
+            upstream_oauth_provider_store=None,
         )
         auth_server_module.app.dependency_overrides[
             enforceai_dependency.get_enforceai_stores

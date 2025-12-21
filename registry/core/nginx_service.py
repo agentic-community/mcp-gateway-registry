@@ -427,6 +427,9 @@ class NginxConfigService:
 
         if isinstance(upstream_auth, dict):
             upstream_auth_type = str(upstream_auth.get("type") or "none")
+            upstream_auth_type = (
+                upstream_auth_type.strip().lower().replace("_", "-") or "none"
+            )
             upstream_credential_binding = str(
                 upstream_auth.get("credential_binding") or "service"
             )
@@ -440,10 +443,10 @@ class NginxConfigService:
         if not upstream_header_name:
             if upstream_auth_type == "api-key":
                 upstream_header_name = "X-API-Key"
-            elif upstream_auth_type == "jwt":
+            elif upstream_auth_type in {"jwt", "oauth2", "oidc", "provider-oauth"}:
                 upstream_header_name = "Authorization"
 
-        if upstream_auth_type == "jwt" and not upstream_scheme:
+        if upstream_auth_type in {"jwt", "oauth2", "oidc", "provider-oauth"} and not upstream_scheme:
             upstream_scheme = "Bearer"
 
         upstream_injection_settings = ""
@@ -451,7 +454,7 @@ class NginxConfigService:
             upstream_injection_settings = (
                 f"\n        proxy_set_header {upstream_header_name} $enforceai_upstream_api_key;"
             )
-        elif upstream_auth_type == "jwt":
+        elif upstream_auth_type in {"jwt", "oauth2", "oidc", "provider-oauth"}:
             upstream_injection_settings = (
                 f"\n        proxy_set_header {upstream_header_name} $enforceai_upstream_authorization;"
             )

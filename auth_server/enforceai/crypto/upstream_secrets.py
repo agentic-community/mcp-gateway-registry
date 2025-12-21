@@ -68,6 +68,13 @@ def build_aad_for_upstream_oauth_state(
     return f"upstream-oauth-state|{state_id}|{server_path}|{credential_type}".encode("utf-8")
 
 
+def build_aad_for_upstream_oauth_provider(
+    *,
+    provider_id: str,
+) -> bytes:
+    return f"upstream-oauth-provider|{provider_id}".encode("utf-8")
+
+
 def encrypt_secret_payload(
     *,
     key: bytes,

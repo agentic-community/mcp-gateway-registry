@@ -51,6 +51,9 @@ def _is_csrf_exempt_path(
     if not path.startswith("/api/auth/"):
         return False
 
+    if path == "/api/auth/enforceai/token":
+        return False
+
     if path == "/api/auth/logout":
         return False
 
@@ -112,4 +115,3 @@ def enforce_csrf_for_request(
             status_code=403,
             detail=error,
         )
-

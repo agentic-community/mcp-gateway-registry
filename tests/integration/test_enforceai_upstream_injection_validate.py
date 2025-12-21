@@ -63,13 +63,17 @@ def _headers_for(
     *,
     server_name: str = "fininfo",
     method: str = "tools/list",
+    tool_name: str | None = None,
     extra: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    params: dict[str, object] = {}
+    if method == "tools/call" and tool_name is not None:
+        params = {"name": tool_name, "arguments": {}}
     payload: dict[str, object] = {
         "jsonrpc": "2.0",
         "id": "req-1",
         "method": method,
-        "params": {},
+        "params": params,
     }
     headers = {
         "X-Original-URL": f"http://localhost/{server_name}/",
@@ -233,6 +237,154 @@ class TestEnforceAIUpstreamInjectionValidate:
                     "X-EnforceAI-Upstream-Credential-Binding": "user",
                     "X-EnforceAI-Upstream-Header-Name": "X-API-Key",
                 }
+            ),
+        )
+        assert response.status_code == 424
+        assert response.headers.get("X-EnforceAI-Error-Code") == "UPSTREAM_CREDENTIALS_REQUIRED"
+
+    def test_validate_allows_tools_list_without_oauth_credential(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(path=tmp_path / "scopes.yml")
+        upstream_kek_path = tmp_path / "upstream_kek"
+        upstream_kek_path.write_text("44" * 32)
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores(upstream_kek=load_upstream_kek(upstream_kek_path))
+
+        user_id = "https://issuer.example|user-1"
+        agent_id = str(uuid.uuid4())
+        stores.agent_store.create_agent(
+            user_id=user_id,
+            agent_id=agent_id,
+            scopes=["scope-good"],
+        )
+
+        key_files = enforceai_gateway_key_files
+        keyring = GatewayKeyring.load(
+            private_key_path=key_files.private_key_path,
+            public_keys_dir=key_files.public_keys_dir,
+            active_kid=key_files.active_kid,
+        )
+        token = mint_gateway_token(
+            keyring=keyring,
+            issuer="enforceai-gateway",
+            user_id=user_id,
+            agent_id=agent_id,
+            scopes=["scope-good"],
+            ttl_seconds=3600,
+            jti="jti-upstream-4",
+        )
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_UPSTREAM_KEK_PATH": str(upstream_kek_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(key_files.private_key_path),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(key_files.public_keys_dir),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+        load_gateway_keyring_cached.cache_clear()
+
+        client = TestClient(auth_server_module.app)
+        response = client.get(
+            "/validate",
+            headers=_headers_for(
+                method="tools/list",
+                extra={
+                    "X-Gateway-Token": token,
+                    "X-EnforceAI-Server-Path": "/fininfo",
+                    "X-EnforceAI-Upstream-Auth-Type": "provider-oauth",
+                    "X-EnforceAI-Upstream-Credential-Binding": "user",
+                    "X-EnforceAI-Upstream-Provider": "google",
+                    "X-EnforceAI-Upstream-Header-Name": "Authorization",
+                    "X-EnforceAI-Upstream-Scheme": "Bearer",
+                },
+            ),
+        )
+        assert response.status_code == 200
+        assert response.headers.get("X-EnforceAI-Upstream-Mode") == "none"
+        assert response.headers.get("X-EnforceAI-Upstream-Authorization") in {"", None}
+
+    def test_validate_still_requires_oauth_credential_for_tools_call(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(path=tmp_path / "scopes.yml")
+        upstream_kek_path = tmp_path / "upstream_kek"
+        upstream_kek_path.write_text("55" * 32)
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores(upstream_kek=load_upstream_kek(upstream_kek_path))
+
+        user_id = "https://issuer.example|user-1"
+        agent_id = str(uuid.uuid4())
+        stores.agent_store.create_agent(
+            user_id=user_id,
+            agent_id=agent_id,
+            scopes=["scope-good"],
+        )
+
+        key_files = enforceai_gateway_key_files
+        keyring = GatewayKeyring.load(
+            private_key_path=key_files.private_key_path,
+            public_keys_dir=key_files.public_keys_dir,
+            active_kid=key_files.active_kid,
+        )
+        token = mint_gateway_token(
+            keyring=keyring,
+            issuer="enforceai-gateway",
+            user_id=user_id,
+            agent_id=agent_id,
+            scopes=["scope-good"],
+            ttl_seconds=3600,
+            jti="jti-upstream-5",
+        )
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_UPSTREAM_KEK_PATH": str(upstream_kek_path),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(key_files.private_key_path),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(key_files.public_keys_dir),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+        load_gateway_keyring_cached.cache_clear()
+
+        client = TestClient(auth_server_module.app)
+        response = client.get(
+            "/validate",
+            headers=_headers_for(
+                method="tools/call",
+                tool_name="good_tool",
+                extra={
+                    "X-Gateway-Token": token,
+                    "X-EnforceAI-Server-Path": "/fininfo",
+                    "X-EnforceAI-Upstream-Auth-Type": "provider-oauth",
+                    "X-EnforceAI-Upstream-Credential-Binding": "user",
+                    "X-EnforceAI-Upstream-Provider": "google",
+                    "X-EnforceAI-Upstream-Header-Name": "Authorization",
+                    "X-EnforceAI-Upstream-Scheme": "Bearer",
+                },
             ),
         )
         assert response.status_code == 424
