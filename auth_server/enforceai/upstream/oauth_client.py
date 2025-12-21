@@ -15,7 +15,7 @@ import httpx
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(microsecond=0)
+    return datetime.now(timezone.utc)
 
 
 def _normalize_token_type(
@@ -199,4 +199,3 @@ class OAuthTokenClient:
             expires_at=expires_at,
             scopes=scopes,
         )
-

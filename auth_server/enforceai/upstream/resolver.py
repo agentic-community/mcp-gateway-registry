@@ -26,15 +26,16 @@ from ..models.upstream_auth import (
 from ..models.upstream_credentials import (
     UpstreamCredentialRecord,
 )
-from ..secrets.upstream_oauth_client import (
-    load_upstream_oauth_client_secret,
-)
 from .oauth_client import (
     OAuthTokenClient,
     OAuthTokenClientError,
 )
 from ..config import (
     UpstreamOAuthProviderConfig,
+)
+from .oauth_provider_resolver import (
+    UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED,
+    resolve_upstream_oauth_provider,
 )
 
 _CLAIMS_MAX_BYTES: int = 4096
@@ -256,6 +257,7 @@ async def resolve_upstream_injection(
     oauth_providers: Optional[Mapping[str, UpstreamOAuthProviderConfig]] = None,
     oauth_token_client: Optional[OAuthTokenClient] = None,
     oauth_refresh_skew_seconds: int = 60,
+    allow_missing_credential: bool = False,
 ) -> UpstreamInjectionResult:
     canonical_server_path = _canonicalize_server_path(server_path)
 
@@ -336,6 +338,18 @@ async def resolve_upstream_injection(
         provider=upstream_auth.provider,
     )
     if record is None:
+        if allow_missing_credential:
+            return UpstreamInjectionResult(
+                mcp_principal=mcp_principal,
+                mcp_auth_type=mcp_auth_type,
+                mcp_scopes=mcp_scopes,
+                mcp_provider=mcp_provider,
+                mcp_claims=mcp_claims,
+                mode="none",
+                upstream_authorization="",
+                upstream_api_key="",
+                upstream_api_key_header="",
+            )
         if state == "expired":
             raise UpstreamInjectionError(
                 status_code=424,
@@ -389,19 +403,6 @@ async def resolve_upstream_injection(
                 error_code="UPSTREAM_AUTH_MISCONFIGURED",
                 public_message="Upstream OAuth provider is required",
             )
-        if oauth_providers is None:
-            raise UpstreamInjectionError(
-                status_code=503,
-                error_code="UPSTREAM_AUTH_MISCONFIGURED",
-                public_message="Upstream OAuth providers unavailable",
-            )
-        provider_config = oauth_providers.get(upstream_auth.provider)
-        if provider_config is None:
-            raise UpstreamInjectionError(
-                status_code=409,
-                error_code="UPSTREAM_AUTH_MISCONFIGURED",
-                public_message="Unknown upstream OAuth provider",
-            )
 
         access_token = _extract_oauth_access_token(payload)
         now = _utc_now()
@@ -426,12 +427,32 @@ async def resolve_upstream_injection(
                     public_message="Upstream OAuth token client unavailable",
                 )
 
-            client_secret = load_upstream_oauth_client_secret(provider=provider_config)
+            try:
+                resolved_provider = resolve_upstream_oauth_provider(
+                    provider_id=upstream_auth.provider,
+                    stores=stores,
+                    env_providers=oauth_providers,
+                    require_client_secret=True,
+                )
+            except ValueError as exc:
+                raise UpstreamInjectionError(
+                    status_code=424,
+                    error_code=UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED,
+                    public_message="Upstream OAuth provider not configured",
+                ) from exc
+
+            if resolved_provider is None or resolved_provider.client_secret is None:
+                raise UpstreamInjectionError(
+                    status_code=424,
+                    error_code=UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED,
+                    public_message="Upstream OAuth provider not configured",
+                )
+
             try:
                 refreshed = await oauth_token_client.refresh_token(
-                    token_endpoint=provider_config.token_endpoint,
-                    client_id=provider_config.client_id,
-                    client_secret=client_secret,
+                    token_endpoint=resolved_provider.token_endpoint,
+                    client_id=resolved_provider.client_id,
+                    client_secret=resolved_provider.client_secret,
                     refresh_token=refresh_token,
                 )
             except OAuthTokenClientError as exc:
@@ -460,6 +481,27 @@ async def resolve_upstream_injection(
                 secret_payload=new_secret_payload,
             )
             access_token = refreshed.access_token
+
+        try:
+            resolved_provider = resolve_upstream_oauth_provider(
+                provider_id=upstream_auth.provider,
+                stores=stores,
+                env_providers=oauth_providers,
+                require_client_secret=False,
+            )
+        except ValueError as exc:
+            raise UpstreamInjectionError(
+                status_code=424,
+                error_code=UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED,
+                public_message="Upstream OAuth provider not configured",
+            ) from exc
+
+        if resolved_provider is None:
+            raise UpstreamInjectionError(
+                status_code=424,
+                error_code=UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED,
+                public_message="Upstream OAuth provider not configured",
+            )
 
         authorization = _compose_authorization_value(scheme=injection.scheme, token=access_token)
         store.update_last_used_at(credential_id=record.credential_id, last_used_at=_utc_now())

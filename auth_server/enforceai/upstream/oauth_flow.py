@@ -8,9 +8,6 @@ from typing import (
 )
 from urllib.parse import urlencode
 
-from ..config import (
-    UpstreamOAuthProviderConfig,
-)
 from ..models.upstream_oauth import (
     UpstreamOAuthCredentialType,
 )
@@ -54,13 +51,17 @@ class OAuthConsumeResult:
     user_id: str
     agent_id: Optional[str]
     redirect_uri: str
+    ui_return_url: Optional[str]
     code_verifier: str
 
 
 def start_oauth_flow(
     *,
     state_store: SqliteUpstreamOAuthStateStore,
-    provider: UpstreamOAuthProviderConfig,
+    authorization_endpoint: str,
+    client_id: str,
+    default_scopes: list[str],
+    extra_authorize_params: dict[str, str],
     provider_id: str,
     server_path: str,
     credential_type: UpstreamOAuthCredentialType,
@@ -68,6 +69,7 @@ def start_oauth_flow(
     user_id: str,
     agent_id: Optional[str],
     redirect_uri: str,
+    ui_return_url: Optional[str],
     scopes: Optional[list[str]],
     ttl_seconds: int,
 ) -> OAuthStartResult:
@@ -77,7 +79,7 @@ def start_oauth_flow(
 
     normalized_scopes = _normalize_scopes(
         requested=scopes,
-        defaults=provider.default_scopes,
+        defaults=default_scopes,
         credential_type=credential_type,
     )
 
@@ -89,6 +91,7 @@ def start_oauth_flow(
         agent_id=agent_id,
         provider=provider_id,
         redirect_uri=redirect_uri,
+        ui_return_url=ui_return_url,
         ttl_seconds=ttl_seconds,
         secret_payload={
             "code_verifier": code_verifier,
@@ -98,7 +101,7 @@ def start_oauth_flow(
 
     query: dict[str, str] = {
         "response_type": "code",
-        "client_id": provider.client_id,
+        "client_id": client_id,
         "redirect_uri": redirect_uri,
         "scope": " ".join(normalized_scopes),
         "state": state.state_id,
@@ -108,12 +111,12 @@ def start_oauth_flow(
     if credential_type == "oidc":
         query["nonce"] = nonce
 
-    for key, value in provider.extra_authorize_params.items():
+    for key, value in extra_authorize_params.items():
         if key not in query:
             query[key] = value
 
     return OAuthStartResult(
-        authorization_url=f"{provider.authorization_endpoint}?{urlencode(query)}",
+        authorization_url=f"{authorization_endpoint}?{urlencode(query)}",
         state_id=state.state_id,
         expires_at=state.expires_at,
     )
@@ -146,6 +149,6 @@ def consume_oauth_state(
         user_id=record.user_id,
         agent_id=record.agent_id,
         redirect_uri=record.redirect_uri,
+        ui_return_url=record.ui_return_url,
         code_verifier=code_verifier_raw,
     )
-

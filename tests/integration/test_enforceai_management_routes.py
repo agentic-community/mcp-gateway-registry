@@ -701,6 +701,162 @@ class TestEnforceAIManagementRoutes:
         assert denied.status_code == 403
         assert denied.json()["detail"] == "Admin required"
 
+    def test_admin_can_manage_upstream_oauth_providers_and_delete_is_blocked_when_referenced(
+        self,
+        tmp_path: Path,
+        enforceai_env,
+        enforceai_sqlite_db_path: Path,
+        enforceai_gateway_key_files,
+    ) -> None:
+        catalog_path = _write_scope_catalog(path=tmp_path / "scopes.yml")
+        upstream_kek_path = tmp_path / "upstream_kek"
+        upstream_kek_path.write_text("11" * 32, encoding="utf-8")
+
+        registry_servers_dir = tmp_path / "registry_servers"
+        registry_servers_dir.mkdir(parents=True, exist_ok=True)
+
+        enforceai_env(
+            {
+                "ENFORCEAI_DB_PATH": str(enforceai_sqlite_db_path),
+                "ENFORCEAI_AUTH_PROVIDER": "gateway-token",
+                "ENFORCEAI_SCOPES_CATALOG_PATH": str(catalog_path),
+                "ENFORCEAI_UPSTREAM_KEK_PATH": str(upstream_kek_path),
+                "ENFORCEAI_REGISTRY_SERVERS_DIR": str(registry_servers_dir),
+                "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH": str(
+                    enforceai_gateway_key_files.private_key_path
+                ),
+                "ENFORCEAI_GATEWAY_PUBLIC_KEYS_DIR": str(
+                    enforceai_gateway_key_files.public_keys_dir
+                ),
+                "ENFORCEAI_GATEWAY_ACTIVE_KID": enforceai_gateway_key_files.active_kid,
+                "ENFORCEAI_GATEWAY_ISSUER": "enforceai-gateway",
+            }
+        )
+        _reset_enforcement_caches()
+
+        data_layer = EnforceAIDataLayer(db_path=enforceai_sqlite_db_path)
+        data_layer.initialize()
+        stores = data_layer.build_stores()
+
+        session_id = str(uuid.uuid4())
+        user_id = "https://issuer.example|cookie-admin-providers-1"
+        client = _make_cookie_client(
+            stores=stores,
+            session_id=session_id,
+            user_id=user_id,
+            groups=["enforceai-admin"],
+            username="cookie-admin-providers-1",
+            email="cookie-admin-providers-1@example.com",
+        )
+
+        csrf_token = mint_csrf_token(
+            secret_key=auth_server_module.SECRET_KEY,
+            session_id=session_id,
+        )
+
+        missing_csrf = client.post(
+            "/enforceai/admin/upstream-oauth-providers",
+            json={
+                "provider_id": "github",
+                "authorization_endpoint": "https://example.com/auth",
+                "token_endpoint": "https://example.com/token",
+                "client_id": "client",
+                "client_secret": "secret-1",
+                "default_scopes": ["repo"],
+            },
+        )
+        assert missing_csrf.status_code == 403
+
+        created = client.post(
+            "/enforceai/admin/upstream-oauth-providers",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "provider_id": "github",
+                "authorization_endpoint": "https://example.com/auth",
+                "token_endpoint": "https://example.com/token",
+                "client_id": "client",
+                "client_secret": "secret-1",
+                "default_scopes": ["repo"],
+            },
+        )
+        assert created.status_code == 200
+        assert "client_secret" not in created.text
+        created_payload = created.json()
+        assert created_payload["provider"]["provider_id"] == "github"
+        assert created_payload["secret_present"] is True
+
+        listed = client.get("/enforceai/admin/upstream-oauth-providers")
+        assert listed.status_code == 200
+        assert "client_secret" not in listed.text
+        assert [item["provider"]["provider_id"] for item in listed.json()] == ["github"]
+
+        fetched = client.get("/enforceai/admin/upstream-oauth-providers/github")
+        assert fetched.status_code == 200
+        assert "client_secret" not in fetched.text
+        assert fetched.json()["provider"]["client_id"] == "client"
+
+        updated = client.put(
+            "/enforceai/admin/upstream-oauth-providers/github",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"client_id": "client-rotated", "client_secret": "secret-2"},
+        )
+        assert updated.status_code == 200
+        assert "client_secret" not in updated.text
+        assert updated.json()["provider"]["client_id"] == "client-rotated"
+        assert updated.json()["secret_present"] is True
+
+        (registry_servers_dir / "fininfo.json").write_text(
+            json.dumps(
+                {
+                    "name": "fininfo",
+                    "path": "/fininfo",
+                    "proxy_pass_url": "https://example.com/mcp",
+                    "upstream_auth": {
+                        "mode": "gateway-managed",
+                        "type": "oauth2",
+                        "provider": "github",
+                        "credential_binding": "user",
+                        "injection": {
+                            "kind": "header",
+                            "header_name": "Authorization",
+                            "scheme": "Bearer",
+                        },
+                    },
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+        delete_blocked = client.delete(
+            "/enforceai/admin/upstream-oauth-providers/github",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert delete_blocked.status_code == 409
+
+        delete_forced = client.delete(
+            "/enforceai/admin/upstream-oauth-providers/github?force=true",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert delete_forced.status_code == 200
+        assert delete_forced.json() == {"ok": True}
+
+        non_admin_session_id = str(uuid.uuid4())
+        non_admin_user_id = "https://issuer.example|cookie-admin-providers-2"
+        non_admin_client = _make_cookie_client(
+            stores=stores,
+            session_id=non_admin_session_id,
+            user_id=non_admin_user_id,
+            groups=[],
+            username="cookie-admin-providers-2",
+            email="cookie-admin-providers-2@example.com",
+        )
+
+        denied = non_admin_client.get("/enforceai/admin/upstream-oauth-providers")
+        assert denied.status_code == 403
+        assert denied.json()["detail"] == "Admin required"
+
     def test_upstream_credentials_create_list_revoke_no_secret_on_list(
         self,
         tmp_path: Path,
@@ -1413,6 +1569,7 @@ class TestEnforceAIManagementRoutes:
             egress_allowlist_store=stores.egress_allowlist_store,
             upstream_credential_store=stores.upstream_credential_store,
             upstream_oauth_state_store=stores.upstream_oauth_state_store,
+            upstream_oauth_provider_store=stores.upstream_oauth_provider_store,
         )
 
         auth_server_module.app.dependency_overrides[

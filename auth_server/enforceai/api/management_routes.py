@@ -6,6 +6,12 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import (
+    parse_qsl,
+    urlencode,
+    urlsplit,
+    urlunsplit,
+)
 
 from fastapi import (
     APIRouter,
@@ -13,6 +19,9 @@ from fastapi import (
     HTTPException,
     Header,
     Request,
+)
+from fastapi.responses import (
+    RedirectResponse,
 )
 from pydantic import (
     BaseModel,
@@ -67,10 +76,17 @@ from ..models.upstream_management import (
     UpstreamCredentialRevokeRequest,
     UpstreamServerSummary,
 )
+from ..models.upstream_oauth_provider import (
+    UpstreamOAuthProviderCreate,
+    UpstreamOAuthProviderPublic,
+    UpstreamOAuthProviderUpdate,
+)
 from ..models.upstream_oauth import (
     UpstreamOAuthCallbackResponse,
     UpstreamOAuthDisconnectRequest,
     UpstreamOAuthDisconnectResponse,
+    UpstreamOAuthServerDisconnectRequest,
+    UpstreamOAuthServerStartRequest,
     UpstreamOAuthStartRequest,
     UpstreamOAuthStartResponse,
 )
@@ -87,9 +103,6 @@ from ..egress.allowlist import (
     check_proxy_pass_url,
     normalize_allowlist_entry_value,
 )
-from ..secrets.upstream_oauth_client import (
-    load_upstream_oauth_client_secret,
-)
 from ..upstream.oauth_client import (
     OAuthTokenClient,
     OAuthTokenClientError,
@@ -97,6 +110,17 @@ from ..upstream.oauth_client import (
 from ..upstream.oauth_flow import (
     consume_oauth_state,
     start_oauth_flow,
+)
+from ..upstream.headers import (
+    ENFORCEAI_ERROR_CODE_HEADER,
+)
+from ..upstream.server_catalog import (
+    load_upstream_auth_for_server,
+    list_servers_referencing_upstream_oauth_provider,
+)
+from ..upstream.oauth_provider_resolver import (
+    UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED,
+    resolve_upstream_oauth_provider,
 )
 
 logger = logging.getLogger(__name__)
@@ -618,6 +642,18 @@ def _require_upstream_oauth_state_store(
     return store
 
 
+def _require_upstream_oauth_provider_store(
+    stores: EnforceAIStores,
+) -> object:
+    store = getattr(stores, "upstream_oauth_provider_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Upstream OAuth provider store unavailable (missing ENFORCEAI_UPSTREAM_KEK_PATH)",
+        )
+    return store
+
+
 def _normalize_server_path(
     raw: str,
 ) -> str:
@@ -626,7 +662,26 @@ def _normalize_server_path(
         raise HTTPException(status_code=400, detail="server_path is required")
     if not stripped.startswith("/"):
         stripped = "/" + stripped
-    return stripped
+    return stripped.rstrip("/") or "/"
+
+
+def _append_query_params(
+    *,
+    url: str,
+    params: dict[str, str],
+) -> str:
+    split = urlsplit(url)
+    query = list(parse_qsl(split.query, keep_blank_values=True))
+    query.extend((key, value) for key, value in params.items() if value is not None)
+    return urlunsplit(
+        (
+            split.scheme,
+            split.netloc,
+            split.path,
+            urlencode(query),
+            split.fragment,
+        )
+    )
 
 
 def _owned_agent_ids_for_user(
@@ -844,6 +899,202 @@ async def admin_check_proxy_pass_url_allowlist(
         reason=decision.reason,
         matched_entry=decision.matched_entry,
     )
+
+
+@router.get(
+    "/admin/upstream-oauth-providers",
+    response_model=list[UpstreamOAuthProviderPublic],
+)
+async def admin_list_upstream_oauth_providers(
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> list[UpstreamOAuthProviderPublic]:
+    _require_admin(context)
+    provider_store = _require_upstream_oauth_provider_store(stores)
+    return provider_store.list_providers()
+
+
+@router.post(
+    "/admin/upstream-oauth-providers",
+    response_model=UpstreamOAuthProviderPublic,
+)
+async def admin_create_upstream_oauth_provider(
+    request: Request,
+    payload: UpstreamOAuthProviderCreate,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamOAuthProviderPublic:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+    provider_store = _require_upstream_oauth_provider_store(stores)
+
+    try:
+        created = provider_store.create_provider(payload=payload)
+    except ValueError as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/upstream-oauth-providers/create",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"error": str(exc), "provider_id": payload.provider_id},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="admin/upstream-oauth-providers/create",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "provider_id": created.provider.provider_id,
+            "authorization_endpoint": created.provider.authorization_endpoint,
+            "token_endpoint": created.provider.token_endpoint,
+        },
+    )
+    return created
+
+
+@router.get(
+    "/admin/upstream-oauth-providers/{provider_id}",
+    response_model=UpstreamOAuthProviderPublic,
+)
+async def admin_get_upstream_oauth_provider(
+    provider_id: str,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamOAuthProviderPublic:
+    _require_admin(context)
+    provider_store = _require_upstream_oauth_provider_store(stores)
+    record = provider_store.get_provider(provider_id=provider_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return record
+
+
+@router.put(
+    "/admin/upstream-oauth-providers/{provider_id}",
+    response_model=UpstreamOAuthProviderPublic,
+)
+async def admin_update_upstream_oauth_provider(
+    provider_id: str,
+    request: Request,
+    payload: UpstreamOAuthProviderUpdate,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamOAuthProviderPublic:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+    provider_store = _require_upstream_oauth_provider_store(stores)
+
+    try:
+        updated = provider_store.update_provider(
+            provider_id=provider_id,
+            payload=payload,
+        )
+    except ValueError as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="admin/upstream-oauth-providers/update",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"error": str(exc), "provider_id": provider_id},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="admin/upstream-oauth-providers/update",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "provider_id": provider_id,
+            "secret_rotated": payload.client_secret is not None,
+        },
+    )
+    return updated
+
+
+@router.delete(
+    "/admin/upstream-oauth-providers/{provider_id}",
+    response_model=dict[str, bool],
+)
+async def admin_delete_upstream_oauth_provider(
+    provider_id: str,
+    request: Request,
+    force: bool = False,
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> dict[str, bool]:
+    _require_admin(context)
+    request_id = _get_request_id(request)
+    provider_store = _require_upstream_oauth_provider_store(stores)
+
+    referenced_by: list[str] = []
+    registry_servers_dir = settings.resolve_registry_servers_dir()
+    if registry_servers_dir is None:
+        if not force:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot verify provider references (registry servers dir unavailable). Use force=true to delete.",
+            )
+    else:
+        try:
+            referenced_by = list_servers_referencing_upstream_oauth_provider(
+                provider_id=provider_id,
+                servers_dir=registry_servers_dir,
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            _emit_management_audit_event(
+                stores=stores,
+                action="admin/upstream-oauth-providers/delete",
+                outcome="deny",
+                user_id=context.user_id,
+                agent_id=context.actor_agent_id,
+                request_id=request_id,
+                details={"error": str(exc), "provider_id": provider_id},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Enforcement dependency unavailable",
+            ) from exc
+
+        if referenced_by and not force:
+            raise HTTPException(
+                status_code=409,
+                detail="Provider is referenced by one or more servers",
+            )
+
+    deleted = provider_store.delete_provider(provider_id=provider_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="admin/upstream-oauth-providers/delete",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "provider_id": provider_id,
+            "force": force,
+            "referenced_by": referenced_by,
+        },
+    )
+
+    return {"ok": True}
 
 
 @router.get(
@@ -1103,9 +1354,19 @@ async def start_upstream_oauth_flow(
     request_id = _get_request_id(request)
     state_store = _require_upstream_oauth_state_store(stores)
 
-    provider = settings.upstream_oauth_providers.get(payload.provider)
-    if provider is None:
-        raise HTTPException(status_code=400, detail="Unknown upstream OAuth provider")
+    resolved_provider = resolve_upstream_oauth_provider(
+        provider_id=payload.provider,
+        stores=stores,
+        settings=settings,
+        env_providers=settings.upstream_oauth_providers,
+        require_client_secret=False,
+    )
+    if resolved_provider is None:
+        raise HTTPException(
+            status_code=424,
+            detail="Upstream OAuth provider not configured",
+            headers={ENFORCEAI_ERROR_CODE_HEADER: UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED},
+        )
 
     agent_id: Optional[str] = None
     if payload.credential_binding == "user+agent":
@@ -1121,7 +1382,10 @@ async def start_upstream_oauth_flow(
     try:
         started = start_oauth_flow(
             state_store=state_store,
-            provider=provider,
+            authorization_endpoint=resolved_provider.authorization_endpoint,
+            client_id=resolved_provider.client_id,
+            default_scopes=resolved_provider.default_scopes,
+            extra_authorize_params=resolved_provider.extra_authorize_params,
             provider_id=payload.provider,
             server_path=payload.server_path,
             credential_type=payload.credential_type,
@@ -1129,6 +1393,7 @@ async def start_upstream_oauth_flow(
             user_id=context.user_id,
             agent_id=agent_id,
             redirect_uri=redirect_uri,
+            ui_return_url=payload.ui_return_url,
             scopes=payload.scopes,
             ttl_seconds=settings.upstream_oauth_state_ttl_seconds,
         )
@@ -1155,6 +1420,310 @@ async def start_upstream_oauth_flow(
         state_id=started.state_id,
         expires_at=started.expires_at,
     )
+
+
+@router.post(
+    "/upstream/servers/{server_path:path}/oauth/start",
+    response_model=UpstreamOAuthStartResponse,
+)
+async def start_upstream_server_oauth_flow(
+    server_path: str,
+    payload: UpstreamOAuthServerStartRequest,
+    request: Request,
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamOAuthStartResponse:
+    request_id = _get_request_id(request)
+    state_store = _require_upstream_oauth_state_store(stores)
+
+    normalized_server_path = _normalize_server_path(server_path)
+    server_path_param = normalized_server_path.lstrip("/")
+    if not server_path_param:
+        raise HTTPException(status_code=400, detail="server_path is required")
+
+    registry_servers_dir = settings.resolve_registry_servers_dir()
+    if registry_servers_dir is None:
+        raise HTTPException(status_code=503, detail="Registry server catalog unavailable")
+
+    try:
+        upstream_auth = load_upstream_auth_for_server(
+            server_path=normalized_server_path,
+            servers_dir=registry_servers_dir,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=503, detail="Registry server catalog unavailable")
+    except ValueError as exc:
+        message = str(exc) or "Server not found"
+        if message == "Server not found":
+            raise HTTPException(status_code=404, detail="Server not found")
+        raise HTTPException(status_code=400, detail=message) from exc
+
+    if upstream_auth.type not in {"oauth2", "oidc", "provider-oauth"}:
+        raise HTTPException(status_code=400, detail="Server does not require upstream OAuth")
+
+    if upstream_auth.provider is None:
+        raise HTTPException(status_code=400, detail="Server upstream_auth.provider is required")
+
+    expected_credential_type: str = upstream_auth.type
+    if payload.credential_type != expected_credential_type:
+        raise HTTPException(status_code=400, detail="OAuth credential_type mismatch")
+
+    if payload.credential_binding != upstream_auth.credential_binding:
+        raise HTTPException(status_code=400, detail="OAuth credential_binding mismatch")
+
+    if payload.provider != upstream_auth.provider:
+        raise HTTPException(status_code=400, detail="OAuth provider mismatch")
+
+    resolved_provider = resolve_upstream_oauth_provider(
+        provider_id=upstream_auth.provider,
+        stores=stores,
+        settings=settings,
+        env_providers=settings.upstream_oauth_providers,
+        require_client_secret=False,
+    )
+    if resolved_provider is None:
+        raise HTTPException(
+            status_code=424,
+            detail="Upstream OAuth provider not configured",
+            headers={ENFORCEAI_ERROR_CODE_HEADER: UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED},
+        )
+
+    agent_id: Optional[str] = None
+    if payload.credential_binding == "user+agent":
+        agent_id = payload.agent_id
+        if agent_id is None:
+            raise HTTPException(status_code=400, detail="agent_id is required")
+        record = stores.agent_store.get_agent_by_id(agent_id=agent_id)
+        if record is None or record.user_id != context.user_id:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    redirect_uri = str(
+        request.url_for(
+            "upstream_server_oauth_callback",
+            server_path=server_path_param,
+        )
+    )
+
+    try:
+        started = start_oauth_flow(
+            state_store=state_store,
+            authorization_endpoint=resolved_provider.authorization_endpoint,
+            client_id=resolved_provider.client_id,
+            default_scopes=resolved_provider.default_scopes,
+            extra_authorize_params=resolved_provider.extra_authorize_params,
+            provider_id=upstream_auth.provider,
+            server_path=normalized_server_path,
+            credential_type=payload.credential_type,
+            credential_binding=payload.credential_binding,
+            user_id=context.user_id,
+            agent_id=agent_id,
+            redirect_uri=redirect_uri,
+            ui_return_url=payload.ui_return_url,
+            scopes=payload.scopes,
+            ttl_seconds=settings.upstream_oauth_state_ttl_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="upstream/servers/oauth/start",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "server_path": normalized_server_path,
+            "credential_type": payload.credential_type,
+            "credential_binding": payload.credential_binding,
+            "provider": payload.provider,
+        },
+    )
+
+    return UpstreamOAuthStartResponse(
+        authorization_url=started.authorization_url,
+        state_id=started.state_id,
+        expires_at=started.expires_at,
+    )
+
+
+@router.get(
+    "/upstream/servers/{server_path:path}/oauth/callback",
+    name="upstream_server_oauth_callback",
+)
+async def upstream_server_oauth_callback(
+    server_path: str,
+    request: Request,
+    state: str,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+    settings: EnforceAISettings = Depends(get_enforceai_settings),
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+    token_client: OAuthTokenClient = Depends(get_upstream_oauth_token_client),
+) -> RedirectResponse:
+    request_id = _get_request_id(request)
+    normalized_server_path = _normalize_server_path(server_path)
+
+    state_store = _require_upstream_oauth_state_store(stores)
+    upstream_store = _require_upstream_credential_store(stores)
+
+    try:
+        consumed = consume_oauth_state(
+            state_store=state_store,
+            state_id=state,
+            actor_user_id=context.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if consumed.server_path != normalized_server_path:
+        raise HTTPException(status_code=400, detail="OAuth state does not match server_path")
+
+    ui_return_url = consumed.ui_return_url
+    if ui_return_url is None or not ui_return_url.strip():
+        raise HTTPException(status_code=400, detail="OAuth state missing ui_return_url")
+
+    if error is not None and error.strip():
+        target = _append_query_params(
+            url=ui_return_url,
+            params={
+                "upstream_oauth": "error",
+                "error_code": "authorization_failed",
+                "server_path": consumed.server_path,
+                "provider": consumed.provider,
+            },
+        )
+        return RedirectResponse(url=target, status_code=302)
+
+    if code is None or not code.strip():
+        target = _append_query_params(
+            url=ui_return_url,
+            params={
+                "upstream_oauth": "error",
+                "error_code": "missing_code",
+                "server_path": consumed.server_path,
+                "provider": consumed.provider,
+            },
+        )
+        return RedirectResponse(url=target, status_code=302)
+
+    resolved_provider = None
+    try:
+        resolved_provider = resolve_upstream_oauth_provider(
+            provider_id=consumed.provider,
+            stores=stores,
+            settings=settings,
+            env_providers=settings.upstream_oauth_providers,
+            require_client_secret=True,
+        )
+    except ValueError:
+        resolved_provider = None
+
+    if resolved_provider is None or resolved_provider.client_secret is None:
+        target = _append_query_params(
+            url=ui_return_url,
+            params={
+                "upstream_oauth": "error",
+                "error_code": "provider_not_configured",
+                "server_path": consumed.server_path,
+                "provider": consumed.provider,
+            },
+        )
+        return RedirectResponse(url=target, status_code=302)
+
+    try:
+        tokens = await token_client.exchange_authorization_code(
+            token_endpoint=resolved_provider.token_endpoint,
+            client_id=resolved_provider.client_id,
+            client_secret=resolved_provider.client_secret,
+            code=code.strip(),
+            redirect_uri=consumed.redirect_uri,
+            code_verifier=consumed.code_verifier,
+        )
+    except OAuthTokenClientError as exc:
+        _emit_management_audit_event(
+            stores=stores,
+            action="upstream/servers/oauth/callback",
+            outcome="deny",
+            user_id=context.user_id,
+            agent_id=context.actor_agent_id,
+            request_id=request_id,
+            details={"error": exc.message},
+        )
+        target = _append_query_params(
+            url=ui_return_url,
+            params={
+                "upstream_oauth": "error",
+                "error_code": "token_exchange_failed",
+                "server_path": consumed.server_path,
+                "provider": consumed.provider,
+            },
+        )
+        return RedirectResponse(url=target, status_code=302)
+
+    existing = upstream_store.list_credentials(
+        server_path=consumed.server_path,
+        user_id=context.user_id,
+        agent_id=consumed.agent_id,
+        include_revoked=False,
+    )
+    for record in existing:
+        if (
+            record.credential_type == consumed.credential_type
+            and record.credential_binding == consumed.credential_binding
+            and record.provider == consumed.provider
+        ):
+            upstream_store.revoke_credential(credential_id=record.credential_id)
+
+    secret_payload: dict[str, object] = {
+        "access_token": tokens.access_token,
+    }
+    if tokens.refresh_token is not None:
+        secret_payload["refresh_token"] = tokens.refresh_token
+    if tokens.id_token is not None:
+        secret_payload["id_token"] = tokens.id_token
+
+    created = upstream_store.create_credential(
+        server_path=consumed.server_path,
+        credential_type=consumed.credential_type,
+        credential_binding=consumed.credential_binding,
+        user_id=context.user_id,
+        agent_id=consumed.agent_id,
+        provider=consumed.provider,
+        scopes=tokens.scopes,
+        token_type=tokens.token_type,
+        expires_at=tokens.expires_at,
+        secret_payload=secret_payload,
+    )
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="upstream/servers/oauth/callback",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "credential_id": created.credential_id,
+            "server_path": created.server_path,
+            "credential_type": created.credential_type,
+            "credential_binding": created.credential_binding,
+            "provider": created.provider,
+        },
+    )
+
+    target = _append_query_params(
+        url=ui_return_url,
+        params={
+            "upstream_oauth": "success",
+            "server_path": created.server_path,
+            "provider": created.provider or "",
+            "credential_id": created.credential_id,
+        },
+    )
+    return RedirectResponse(url=target, status_code=302)
 
 
 @router.get(
@@ -1190,17 +1759,33 @@ async def upstream_oauth_callback(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    provider = settings.upstream_oauth_providers.get(consumed.provider)
-    if provider is None:
-        raise HTTPException(status_code=400, detail="Unknown upstream OAuth provider")
+    try:
+        resolved_provider = resolve_upstream_oauth_provider(
+            provider_id=consumed.provider,
+            stores=stores,
+            settings=settings,
+            env_providers=settings.upstream_oauth_providers,
+            require_client_secret=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=424,
+            detail="Upstream OAuth provider not configured",
+            headers={ENFORCEAI_ERROR_CODE_HEADER: UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED},
+        ) from exc
 
-    client_secret = load_upstream_oauth_client_secret(provider=provider)
+    if resolved_provider is None or resolved_provider.client_secret is None:
+        raise HTTPException(
+            status_code=424,
+            detail="Upstream OAuth provider not configured",
+            headers={ENFORCEAI_ERROR_CODE_HEADER: UPSTREAM_OAUTH_PROVIDER_NOT_CONFIGURED},
+        )
 
     try:
         tokens = await token_client.exchange_authorization_code(
-            token_endpoint=provider.token_endpoint,
-            client_id=provider.client_id,
-            client_secret=client_secret,
+            token_endpoint=resolved_provider.token_endpoint,
+            client_id=resolved_provider.client_id,
+            client_secret=resolved_provider.client_secret,
             code=code.strip(),
             redirect_uri=consumed.redirect_uri,
             code_verifier=consumed.code_verifier,
@@ -1322,6 +1907,66 @@ async def disconnect_upstream_oauth(
         request_id=request_id,
         details={
             "server_path": payload.server_path,
+            "credential_type": payload.credential_type,
+            "credential_binding": payload.credential_binding,
+            "provider": payload.provider,
+            "revoked_count": revoked,
+        },
+    )
+
+    return UpstreamOAuthDisconnectResponse(revoked_count=revoked)
+
+
+@router.post(
+    "/upstream/servers/{server_path:path}/oauth/disconnect",
+    response_model=UpstreamOAuthDisconnectResponse,
+)
+async def disconnect_upstream_server_oauth(
+    server_path: str,
+    payload: UpstreamOAuthServerDisconnectRequest,
+    request: Request,
+    context: EnforceAIManagementContext = Depends(get_enforceai_management_context),
+    stores: EnforceAIStores = Depends(get_enforceai_stores),
+) -> UpstreamOAuthDisconnectResponse:
+    request_id = _get_request_id(request)
+    upstream_store = _require_upstream_credential_store(stores)
+
+    normalized_server_path = _normalize_server_path(server_path)
+
+    agent_id: Optional[str] = None
+    if payload.credential_binding == "user+agent":
+        agent_id = payload.agent_id
+        if agent_id is None:
+            raise HTTPException(status_code=400, detail="agent_id is required")
+        record = stores.agent_store.get_agent_by_id(agent_id=agent_id)
+        if record is None or record.user_id != context.user_id:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    records = upstream_store.list_credentials(
+        server_path=normalized_server_path,
+        user_id=context.user_id,
+        agent_id=agent_id,
+        include_revoked=False,
+    )
+    revoked = 0
+    for record in records:
+        if (
+            record.credential_type == payload.credential_type
+            and record.credential_binding == payload.credential_binding
+            and record.provider == payload.provider
+        ):
+            upstream_store.revoke_credential(credential_id=record.credential_id)
+            revoked += 1
+
+    _emit_management_audit_event(
+        stores=stores,
+        action="upstream/servers/oauth/disconnect",
+        outcome="allow",
+        user_id=context.user_id,
+        agent_id=context.actor_agent_id,
+        request_id=request_id,
+        details={
+            "server_path": normalized_server_path,
             "credential_type": payload.credential_type,
             "credential_binding": payload.credential_binding,
             "provider": payload.provider,
