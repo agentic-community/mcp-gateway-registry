@@ -13,6 +13,7 @@ import {
   ShieldCheckIcon,
   DocumentTextIcon,
   Cog6ToothIcon,
+  LinkIcon,
 } from '@heroicons/react/24/outline';
 
 /**
@@ -45,6 +46,13 @@ export default function AdminPage() {
       title: 'System Configuration',
       description: 'View operator configuration and system settings',
       link: '/settings',
+    },
+    {
+      icon: <LinkIcon className="h-8 w-8" />,
+      title: 'Upstream OAuth Providers',
+      description: 'Manage OAuth client configurations used for gateway-terminated upstream OAuth',
+      link: '/admin/upstream-oauth-providers',
+      badge: 'Phase 4',
     },
   ];
 

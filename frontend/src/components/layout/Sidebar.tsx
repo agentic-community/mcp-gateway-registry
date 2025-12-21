@@ -5,6 +5,7 @@ import {
   CpuChipIcon,
   UserGroupIcon,
   KeyIcon,
+  LinkIcon,
   ShieldCheckIcon,
   WrenchScrewdriverIcon,
   DocumentMagnifyingGlassIcon,
@@ -78,6 +79,7 @@ const navigation: NavSection[] = [
     items: [
       { name: 'Admin', href: '/admin', icon: UserCircleIcon, adminOnly: true },
       { name: 'Network Policy', href: '/admin/egress-allowlist', icon: ShieldCheckIcon, adminOnly: true },
+      { name: 'Upstream OAuth Providers', href: '/admin/upstream-oauth-providers', icon: LinkIcon, adminOnly: true },
     ],
   },
   {

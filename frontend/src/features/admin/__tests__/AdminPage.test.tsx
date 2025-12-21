@@ -72,11 +72,18 @@ describe('AdminPage', () => {
       ).toBeInTheDocument();
     });
 
+    it('displays Upstream OAuth Providers section with Phase 4 badge', () => {
+      render(<AdminPage />);
+
+      expect(screen.getByText('Upstream OAuth Providers')).toBeInTheDocument();
+      expect(screen.getByText('Phase 4')).toBeInTheDocument();
+    });
+
     it('renders Open buttons for each section', () => {
       render(<AdminPage />);
 
       const openButtons = screen.getAllByText('Open');
-      expect(openButtons.length).toBe(4);
+      expect(openButtons.length).toBe(5);
     });
   });
 

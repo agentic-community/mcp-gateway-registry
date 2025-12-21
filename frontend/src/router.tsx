@@ -30,6 +30,7 @@ const AdminPage = lazy(() => import('./features/admin/AdminPage'));
 const AdminUsersPage = lazy(() => import('./features/admin/AdminUsersPage'));
 const AdminUserDetailsPage = lazy(() => import('./features/admin/AdminUserDetailsPage'));
 const EgressAllowlistPage = lazy(() => import('./features/admin/EgressAllowlistPage'));
+const UpstreamOAuthProvidersPage = lazy(() => import('./features/admin/UpstreamOAuthProvidersPage'));
 const SettingsPage = lazy(() => import('./features/settings/SettingsPage'));
 const HelpPage = lazy(() => import('./features/help/HelpPage'));
 const LoginPage = lazy(() => import('./features/auth/LoginPage'));
@@ -307,6 +308,14 @@ export const router = createBrowserRouter([
         element: (
           <SuspenseWrapper>
             <EgressAllowlistPage />
+          </SuspenseWrapper>
+        ),
+      },
+      {
+        path: '/admin/upstream-oauth-providers',
+        element: (
+          <SuspenseWrapper>
+            <UpstreamOAuthProvidersPage />
           </SuspenseWrapper>
         ),
       },
