@@ -66,4 +66,7 @@ temp/
 
 # Specific large directories
 mcp-atlassian/
-# frontend/build/ - KEEP THIS, needed by registry service
+
+# Keep the Vite production build output for the registry SPA.
+!frontend/build/
+!frontend/build/**
