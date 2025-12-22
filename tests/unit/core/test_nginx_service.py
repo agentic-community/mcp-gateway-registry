@@ -94,10 +94,10 @@ http {
         
         # Check generated content
         config_content = self.mock_settings.nginx_config_path.read_text()
-        assert "location /api/server1 {" in config_content
-        assert "location /api/server2 {" in config_content
-        assert "proxy_pass http://localhost:8001;" in config_content
-        assert "proxy_pass http://localhost:8002;" in config_content
+        assert "location /api/server1/mcp {" in config_content
+        assert "location /api/server2/mcp {" in config_content
+        assert "proxy_pass http://localhost:8001/mcp;" in config_content
+        assert "proxy_pass http://localhost:8002/mcp;" in config_content
 
     def test_generate_config_no_template(self, nginx_service):
         """Test config generation when template doesn't exist."""
@@ -135,7 +135,7 @@ http {
         
         assert result is True
         config_content = self.mock_settings.nginx_config_path.read_text()
-        assert "location /api/server1 {" in config_content
+        assert "location /api/server1/mcp {" in config_content
         assert "location /api/server2 {" not in config_content
 
     def test_generate_config_template_read_error(self, nginx_service):
@@ -204,6 +204,13 @@ http {
         assert result is True
         config_content = self.mock_settings.nginx_config_path.read_text()
 
+        assert "auth_request /__enforceai_validate_" in config_content
+        assert "location = /__enforceai_validate_" in config_content
+        assert 'proxy_set_header X-EnforceAI-Server-Path "/fininfo";' in config_content
+        assert 'proxy_set_header X-EnforceAI-Upstream-Auth-Type "api-key";' in config_content
+        assert (
+            'proxy_set_header X-EnforceAI-Upstream-Credential-Binding "user";' in config_content
+        )
         assert 'set $enforceai_server_path "/fininfo";' in config_content
         assert 'set $enforceai_upstream_auth_type "api-key";' in config_content
         assert 'set $enforceai_upstream_credential_binding "user";' in config_content
@@ -370,7 +377,7 @@ http {
         
         # Placeholder should be replaced with location block
         assert "{{LOCATION_BLOCKS}}" not in config_content
-        assert "location /api/test {" in config_content
+        assert "location /api/test/mcp {" in config_content
 
     def test_path_normalization(self, nginx_service):
         """Test that server paths are handled correctly."""
@@ -385,10 +392,10 @@ http {
         assert result is True
         config_content = self.mock_settings.nginx_config_path.read_text()
         
-        # All paths should be included as-is (no normalization in current implementation)
-        assert "location /api/test/ {" in config_content
-        assert "location api/test2 {" in config_content
-        assert "location /api/test3// {" in config_content 
+        # Gateway exposes normalized /mcp endpoints for streamable-http.
+        assert "location /api/test/mcp {" in config_content
+        assert "location /api/test2/mcp {" in config_content
+        assert "location /api/test3/mcp {" in config_content
 
     def test_oauth2_upstream_auth_injects_authorization_header(self, nginx_service):
         servers = {
@@ -436,3 +443,35 @@ http {
         assert 'set $enforceai_upstream_header_name "Authorization";' in config_content
         assert 'set $enforceai_upstream_scheme "Bearer";' in config_content
         assert "proxy_set_header Authorization $enforceai_upstream_authorization;" in config_content
+
+    def test_generate_config_sse_transport_exposes_sse_endpoint(self, nginx_service):
+        servers = {
+            "/fininfo": {
+                "proxy_pass_url": "http://localhost:8009",
+                "supported_transports": ["sse"],
+            },
+        }
+
+        result = nginx_service.generate_config(servers)
+
+        assert result is True
+        config_content = self.mock_settings.nginx_config_path.read_text()
+        assert "location /fininfo/sse {" in config_content
+        assert "proxy_pass http://localhost:8009/sse;" in config_content
+
+    def test_generate_config_multiple_transports_exposes_both_endpoints(self, nginx_service):
+        servers = {
+            "/both": {
+                "proxy_pass_url": "http://localhost:8010",
+                "supported_transports": ["streamable-http", "sse"],
+            },
+        }
+
+        result = nginx_service.generate_config(servers)
+
+        assert result is True
+        config_content = self.mock_settings.nginx_config_path.read_text()
+        assert "location /both/mcp {" in config_content
+        assert "proxy_pass http://localhost:8010/mcp;" in config_content
+        assert "location /both/sse {" in config_content
+        assert "proxy_pass http://localhost:8010/sse;" in config_content

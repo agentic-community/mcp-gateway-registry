@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import httpx
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
@@ -13,6 +14,73 @@ logger = logging.getLogger(__name__)
 
 class NginxConfigService:
     """Service for generating Nginx configuration for registered servers."""
+
+    def _build_internal_validate_location_path(
+        self,
+        *,
+        location_path: str,
+        server_path_for_auth: str,
+        transport_type: str,
+    ) -> str:
+        digest_source = f"{location_path}|{server_path_for_auth}|{transport_type}".encode(
+            "utf-8"
+        )
+        digest = hashlib.sha256(digest_source).hexdigest()[:12]
+        return f"/__enforceai_validate_{digest}"
+
+    def _normalize_gateway_base_path(
+        self,
+        path: str,
+    ) -> str:
+        normalized = path.strip()
+        if not normalized:
+            return "/"
+
+        normalized = "/" + normalized.lstrip("/")
+        if normalized != "/":
+            normalized = normalized.rstrip("/")
+
+        return normalized or "/"
+
+    def _normalize_endpoint_suffix(
+        self,
+        endpoint: Optional[str],
+        *,
+        default: str,
+    ) -> str:
+        if endpoint is None or not str(endpoint).strip():
+            endpoint_value = default
+        else:
+            endpoint_value = str(endpoint).strip()
+
+        if not endpoint_value.startswith("/"):
+            endpoint_value = f"/{endpoint_value}"
+
+        return endpoint_value
+
+    def _build_upstream_endpoint_url(
+        self,
+        proxy_pass_url: str,
+        *,
+        endpoint_suffix: str,
+    ) -> str:
+        proxy_pass_url = str(proxy_pass_url).strip()
+        if not proxy_pass_url:
+            return proxy_pass_url
+
+        base_url = proxy_pass_url.rstrip("/")
+
+        # If the user already provided a URL that includes a transport endpoint, do not
+        # append a second endpoint suffix.
+        if (
+            base_url.endswith("/mcp")
+            or "/mcp/" in base_url
+            or base_url.endswith("/sse")
+            or "/sse/" in base_url
+        ):
+            return proxy_pass_url
+
+        return f"{base_url}{endpoint_suffix}"
 
     def __init__(self):
         # Determine which template to use based on SSL certificate availability
@@ -348,54 +416,67 @@ class NginxConfigService:
         """Generate nginx location blocks for different transport types."""
         blocks = []
         proxy_pass_url = server_info.get("proxy_pass_url", "")
-        supported_transports = server_info.get("supported_transports", ["streamable-http"])
-        
-        # Use the proxy_pass_url exactly as specified in the JSON file
-        # Users are responsible for including /mcp, /sse, or any other path in the URL
-        proxy_url = proxy_pass_url
-        
-        # Determine transport type based on supported_transports
-        if not supported_transports:
-            # Default to streamable-http if no transports specified
-            transport_type = "streamable-http"
-            logger.info(f"Server {path}: No supported_transports specified, defaulting to streamable-http")
-        elif "streamable-http" in supported_transports and "sse" in supported_transports:
-            # If both are supported, prefer streamable-http
-            transport_type = "streamable-http"
-            logger.info(f"Server {path}: Both streamable-http and sse supported, preferring streamable-http")
-        elif "sse" in supported_transports:
-            # SSE only
-            transport_type = "sse"
-            logger.info(f"Server {path}: Only sse transport supported, using sse")
-        elif "streamable-http" in supported_transports:
-            # Streamable-http only
-            transport_type = "streamable-http"
-            logger.info(f"Server {path}: Only streamable-http transport supported, using streamable-http")
-        else:
-            # Default to streamable-http if unknown transport
-            transport_type = "streamable-http"
-            logger.info(f"Server {path}: Unknown transport types {supported_transports}, defaulting to streamable-http")
-        
-        # Create a single location block for this server
-        # The proxy_pass URL is used exactly as provided in the server configuration
-        logger.info(f"Server {path}: Using proxy_pass URL as configured: {proxy_url}")
+        supported_transports = server_info.get("supported_transports") or ["streamable-http"]
 
-        block = self._create_location_block(
-            path,
-            proxy_url,
-            transport_type,
-            upstream_auth=server_info.get("upstream_auth"),
-        )
-        blocks.append(block)
+        if not isinstance(supported_transports, list) or not supported_transports:
+            supported_transports = ["streamable-http"]
+
+        gateway_base = self._normalize_gateway_base_path(path)
+        upstream_auth = server_info.get("upstream_auth")
+
+        for transport_type in supported_transports:
+            if transport_type == "stdio":
+                continue
+
+            if transport_type == "streamable-http":
+                gateway_location_path = (
+                    "/mcp" if gateway_base == "/" else f"{gateway_base}/mcp"
+                )
+                endpoint_suffix = self._normalize_endpoint_suffix(
+                    server_info.get("mcp_endpoint"),
+                    default="/mcp",
+                )
+            elif transport_type == "sse":
+                gateway_location_path = (
+                    "/sse" if gateway_base == "/" else f"{gateway_base}/sse"
+                )
+                endpoint_suffix = self._normalize_endpoint_suffix(
+                    server_info.get("sse_endpoint"),
+                    default="/sse",
+                )
+            else:
+                logger.info(
+                    f"Server {path}: Unknown transport '{transport_type}', skipping"
+                )
+                continue
+
+            proxy_url = self._build_upstream_endpoint_url(
+                str(proxy_pass_url),
+                endpoint_suffix=endpoint_suffix,
+            )
+            logger.info(
+                f"Server {path}: Routing {gateway_location_path} -> {proxy_url} ({transport_type})"
+            )
+
+            blocks.append(
+                self._create_location_block(
+                    location_path=gateway_location_path,
+                    server_path_for_auth=path,
+                    proxy_pass_url=proxy_url,
+                    transport_type=transport_type,
+                    upstream_auth=upstream_auth,
+                )
+            )
 
         return blocks
 
     def _create_location_block(
         self,
-        path: str,
+        *,
+        location_path: str,
+        server_path_for_auth: str,
         proxy_pass_url: str,
         transport_type: str,
-        *,
         upstream_auth: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Create a single nginx location block with transport-specific configuration."""
@@ -418,6 +499,12 @@ class NginxConfigService:
 
         def _escape_nginx_string(value: str) -> str:
             return value.replace("\\", "\\\\").replace('"', '\\"')
+
+        internal_validate_location = self._build_internal_validate_location_path(
+            location_path=location_path,
+            server_path_for_auth=server_path_for_auth,
+            transport_type=transport_type,
+        )
 
         upstream_auth_type = "none"
         upstream_credential_binding = "service"
@@ -466,7 +553,7 @@ class NginxConfigService:
 	        resolver_timeout 5s;
 
 	        # Per-server upstream auth context for /validate.
-	        set $enforceai_server_path "{_escape_nginx_string(path)}";
+	        set $enforceai_server_path "{_escape_nginx_string(server_path_for_auth)}";
 	        set $enforceai_upstream_auth_type "{_escape_nginx_string(upstream_auth_type)}";
 	        set $enforceai_upstream_credential_binding "{_escape_nginx_string(upstream_credential_binding)}";
 	        set $enforceai_upstream_provider "{_escape_nginx_string(upstream_provider)}";
@@ -480,7 +567,7 @@ class NginxConfigService:
 	        set $enforceai_x_authorization $http_x_authorization;
 
 	        # Authenticate request - pass entire request to auth server
-	        auth_request /validate;
+	        auth_request {internal_validate_location};
 	        
 	        # Capture auth server response headers for forwarding
 	        auth_request_set $auth_user $upstream_http_x_user;
@@ -553,6 +640,36 @@ class NginxConfigService:
 	        error_page 401 = @auth_error;
 	        error_page 403 = @forbidden_error;
 	        error_page 424 = @upstream_credentials_required;"""
+
+        validate_location_block = f"""
+    # Internal auth_request endpoint for {location_path} ({transport_type})
+    location = {internal_validate_location} {{
+        internal;
+
+        proxy_pass http://auth-server:8888/validate;
+
+        # Pass original request info (auth_request uses a subrequest; these vars are expected to reflect the parent request).
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-URL $scheme://$host$request_uri;
+
+        # Per-server upstream auth context as literals (do not rely on nginx variable inheritance into auth_request subrequests).
+        proxy_set_header X-EnforceAI-Server-Path "{_escape_nginx_string(server_path_for_auth)}";
+        proxy_set_header X-EnforceAI-Upstream-Auth-Type "{_escape_nginx_string(upstream_auth_type)}";
+        proxy_set_header X-EnforceAI-Upstream-Credential-Binding "{_escape_nginx_string(upstream_credential_binding)}";
+        proxy_set_header X-EnforceAI-Upstream-Provider "{_escape_nginx_string(upstream_provider)}";
+        proxy_set_header X-EnforceAI-Upstream-Header-Name "{_escape_nginx_string(upstream_header_name)}";
+        proxy_set_header X-EnforceAI-Upstream-Scheme "{_escape_nginx_string(upstream_scheme)}";
+
+        # Forward all original headers (including Authorization and X-Body from Lua).
+        proxy_pass_request_headers on;
+
+        # Short timeouts for auth validation
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 10s;
+        proxy_send_timeout 10s;
+    }}
+"""
         
         # Transport-specific settings
         if transport_type == "sse":
@@ -620,10 +737,9 @@ class NginxConfigService:
         
         # Use the location path exactly as specified in the server configuration
         # Users have full control over the location path format (with or without trailing slash)
-        location_path = path
         logger.info(f"Creating location block for {location_path} with {transport_type} transport")
         
-        return f"""
+        return f"""{validate_location_block}
     location {location_path} {{{transport_settings}{common_settings}
     }}"""
 
