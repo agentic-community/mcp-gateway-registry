@@ -34,7 +34,7 @@ IdentityContext {
 
 ### 2.2 Identity Component Sources
 | Component | Source |
-|----------|--------|
+|----------|--------|vg
 | user_id | IdP JWT or API-key record |
 | agent_id | Gateway registry or header |
 | scopes | Gateway-managed agent config |
