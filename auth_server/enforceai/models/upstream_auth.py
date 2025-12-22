@@ -54,6 +54,22 @@ def _coerce_legacy_auth_type(
     return normalized.replace("_", "-")
 
 
+def _normalize_legacy_auth_type(
+    value: str,
+) -> str:
+    normalized = value.strip().lower().replace("_", "-")
+    aliases = {
+        # OAuth 2.1 variants commonly used by upstream servers/configs.
+        "oauth21": "oauth2",
+        "oauth2.1": "oauth2",
+        "oauth-2.1": "oauth2",
+        "oauth2-1": "oauth2",
+        "oauth-2-1": "oauth2",
+        "oauth-21": "oauth2",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def _parse_headers_list(
     raw: object,
 ) -> list[dict[str, str]]:
@@ -219,6 +235,7 @@ def normalize_upstream_auth(
         return UpstreamAuthConfig.model_validate(raw)
 
     coerced_type = _coerce_legacy_auth_type(auth_type) or "none"
+    coerced_type = _normalize_legacy_auth_type(coerced_type)
 
     inferred_injection: Optional[UpstreamAuthInjection] = None
     headers_list = _parse_headers_list(headers)

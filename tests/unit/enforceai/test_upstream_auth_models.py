@@ -15,6 +15,36 @@ from auth_server.enforceai.models.upstream_auth import (
 
 @pytest.mark.unit
 class TestUpstreamAuthModels:
+    @pytest.mark.parametrize(
+        "auth_type",
+        [
+            "oauth21",
+            "oauth2.1",
+            "oauth-2.1",
+            "oauth2-1",
+            "oauth-2-1",
+            "oauth_2_1",
+            "OAUTH21",
+        ],
+    )
+    def test_normalize_legacy_oauth21_aliases_to_oauth2(
+        self,
+        auth_type: str,
+    ) -> None:
+        normalized = normalize_upstream_auth(
+            auth_type=auth_type,
+            auth_provider="google",
+            headers=[
+                {"Authorization": "Bearer $TOKEN"},
+            ],
+        )
+        assert normalized.type == "oauth2"
+        assert normalized.provider == "google"
+        assert normalized.credential_binding == "user"
+        assert normalized.injection is not None
+        assert normalized.injection.header_name == "Authorization"
+        assert normalized.injection.scheme == "Bearer"
+
     def test_normalize_legacy_none(
         self,
     ) -> None:
@@ -80,4 +110,3 @@ class TestUpstreamAuthModels:
             normalize_upstream_auth(
                 upstream_auth={"type": "mtls", "credential_binding": "service"},
             )
-
