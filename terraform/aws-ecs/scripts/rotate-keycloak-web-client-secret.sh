@@ -26,9 +26,117 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-print_success() { echo -e "${GREEN}✓${NC} $1"; }
-print_error() { echo -e "${RED}✗${NC} $1"; }
-print_info() { echo -e "${YELLOW}ℹ${NC} $1"; }
+print_success() { echo -e "${GREEN}OK${NC} $1"; }
+print_error() { echo -e "${RED}ERROR${NC} $1"; }
+print_info() { echo -e "${YELLOW}INFO${NC} $1"; }
+
+detect_aws_region() {
+    local region=""
+
+    if [ -n "${AWS_REGION:-}" ]; then
+        region="$AWS_REGION"
+    elif [ -n "${AWS_DEFAULT_REGION:-}" ]; then
+        region="$AWS_DEFAULT_REGION"
+    fi
+
+    if [ -z "$region" ] && [ -n "${TERRAFORM_DIR:-}" ] && [ -f "$TERRAFORM_DIR/terraform.tfvars" ]; then
+        region="$(awk -F= '/^[[:space:]]*aws_region[[:space:]]*=/{gsub(/"/,"",$2); gsub(/[[:space:]]/,"",$2); print $2; exit}' "$TERRAFORM_DIR/terraform.tfvars" 2>/dev/null || true)"
+    fi
+
+    if [ -z "$region" ] && command -v aws >/dev/null 2>&1; then
+        region="$(aws configure get region 2>/dev/null || true)"
+        if [ "$region" = "None" ]; then
+            region=""
+        fi
+    fi
+
+    if [ -z "$region" ]; then
+        region="us-east-1"
+    fi
+
+    echo "$region"
+}
+
+# Verify that a Secrets Manager secret is valid JSON for ECS JSON-key extraction.
+# ECS task definitions reference these secrets via `...:client_secret::`, which
+# requires the stored SecretString to be valid JSON with a `client_secret` key.
+verify_secretsmanager_client_secret() {
+    local secret_id="$1"
+    local expected_client_id="$2"
+    local expected_client_secret="$3"
+    local region="$4"
+
+    local secret_string=""
+    secret_string="$(aws secretsmanager get-secret-value \
+        --secret-id "$secret_id" \
+        --region "$region" \
+        --query SecretString \
+        --output text 2>/dev/null || true)"
+
+    if [ -z "$secret_string" ]; then
+        print_error "Secrets Manager secret '$secret_id' is empty or unreadable"
+        return 1
+    fi
+
+    if ! echo "$secret_string" | jq -e . >/dev/null 2>&1; then
+        print_error "Secrets Manager secret '$secret_id' is not valid JSON"
+        echo "SecretString (truncated): ${secret_string:0:200}"
+        return 1
+    fi
+
+    local actual_client_id=""
+    local actual_client_secret=""
+    actual_client_id="$(echo "$secret_string" | jq -r '.client_id // empty' 2>/dev/null || true)"
+    actual_client_secret="$(echo "$secret_string" | jq -r '.client_secret // empty' 2>/dev/null || true)"
+
+    if [ "$actual_client_id" != "$expected_client_id" ]; then
+        print_error "Secret '$secret_id' has unexpected client_id '${actual_client_id}' (expected '${expected_client_id}')"
+        return 1
+    fi
+
+    if [ -z "$actual_client_secret" ]; then
+        print_error "Secret '$secret_id' is missing client_secret"
+        return 1
+    fi
+
+    if [ "$actual_client_secret" != "$expected_client_secret" ]; then
+        print_error "Secret '$secret_id' client_secret does not match the Keycloak-generated value"
+        echo "This will cause Keycloak /token to return 401 (invalid_client)."
+        return 1
+    fi
+
+    return 0
+}
+
+_update_secretsmanager_secrets_by_prefix() {
+    local secret_name_prefix="$1"
+    local secret_payload="$2"
+    local region="$3"
+
+    local matches=""
+    matches="$(aws secretsmanager list-secrets \
+        --region "$region" \
+        --query "SecretList[?starts_with(Name, \`${secret_name_prefix}\`)].Name" \
+        --output text 2>/dev/null || true)"
+
+    if [ -z "$matches" ]; then
+        print_error "No Secrets Manager secrets found with prefix '${secret_name_prefix}' in region '${region}'."
+        return 1
+    fi
+
+    for secret_id in $matches; do
+        if [ -z "$secret_id" ]; then
+            continue
+        fi
+        print_info "Updating Secrets Manager secret: $secret_id"
+        aws secretsmanager update-secret \
+            --secret-id "$secret_id" \
+            --secret-string "$secret_payload" \
+            --region "$region" > /dev/null
+    done
+
+    return 0
+}
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,17 +175,18 @@ fi
 KEYCLOAK_URL="${KEYCLOAK_ADMIN_URL:-https://kc.mycorp.click}"
 REALM="mcp-gateway"
 CLIENT_ID="mcp-gateway-web"
-AWS_REGION="${AWS_REGION:-us-west-2}"
+AWS_REGION_EFFECTIVE="$(detect_aws_region)"
 
 print_info "Keycloak URL: $KEYCLOAK_URL"
 print_info "Realm: $REALM"
 print_info "Client ID: $CLIENT_ID"
+print_info "AWS region: $AWS_REGION_EFFECTIVE"
 
 # Get the client secret from AWS Secrets Manager
 print_info "Retrieving client secret from AWS Secrets Manager..."
 SECRET_JSON=$(aws secretsmanager get-secret-value \
     --secret-id mcp-gateway-keycloak-client-secret \
-    --region "$AWS_REGION" \
+    --region "$AWS_REGION_EFFECTIVE" \
     --query 'SecretString' \
     --output text)
 
@@ -147,12 +256,33 @@ print_success "New client secret generated in Keycloak"
 
 # Update the secret in AWS Secrets Manager with the Keycloak-generated secret
 print_info "Updating AWS Secrets Manager with Keycloak-generated secret..."
-aws secretsmanager update-secret \
-    --secret-id mcp-gateway-keycloak-client-secret \
-    --secret-string "{\"client_id\": \"${CLIENT_ID}\", \"client_secret\": \"${GENERATED_SECRET}\"}" \
-    --region "$AWS_REGION" > /dev/null
+SECRET_PAYLOAD="$(jq -n \
+    --arg client_id "${CLIENT_ID}" \
+    --arg client_secret "${GENERATED_SECRET}" \
+    '{client_id: $client_id, client_secret: $client_secret}' \
+)"
+_update_secretsmanager_secrets_by_prefix \
+    "mcp-gateway-keycloak-client-secret" \
+    "$SECRET_PAYLOAD" \
+    "$AWS_REGION_EFFECTIVE"
 
 print_success "Secrets Manager updated"
+for secret_id in $(aws secretsmanager list-secrets \
+    --region "$AWS_REGION_EFFECTIVE" \
+    --query "SecretList[?starts_with(Name, \`mcp-gateway-keycloak-client-secret\`)].Name" \
+    --output text 2>/dev/null || true); do
+    if [ -z "$secret_id" ]; then
+        continue
+    fi
+    if ! verify_secretsmanager_client_secret \
+        "$secret_id" \
+        "$CLIENT_ID" \
+        "$GENERATED_SECRET" \
+        "$AWS_REGION_EFFECTIVE"; then
+        print_error "Secrets Manager verification failed for '$secret_id'. Aborting."
+        exit 1
+    fi
+done
 
 # Verify the client is configured correctly
 print_info "Verifying client configuration..."

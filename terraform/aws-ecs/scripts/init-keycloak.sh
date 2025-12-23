@@ -29,6 +29,127 @@ NC='\033[0m' # No Color
 echo -e "${YELLOW}Keycloak initialization script for MCP Gateway Registry${NC}"
 echo "=============================================="
 
+detect_aws_region() {
+    local region=""
+
+    if [ -n "${AWS_REGION:-}" ]; then
+        region="$AWS_REGION"
+    elif [ -n "${AWS_DEFAULT_REGION:-}" ]; then
+        region="$AWS_DEFAULT_REGION"
+    fi
+
+    if [ -z "$region" ] && [ -n "${SCRIPT_DIR:-}" ] && [ -f "$SCRIPT_DIR/../terraform.tfvars" ]; then
+        region="$(awk -F= '/^[[:space:]]*aws_region[[:space:]]*=/{gsub(/"/,"",$2); gsub(/[[:space:]]/,"",$2); print $2; exit}' "$SCRIPT_DIR/../terraform.tfvars" 2>/dev/null || true)"
+    fi
+
+    if [ -z "$region" ] && command -v aws >/dev/null 2>&1; then
+        region="$(aws configure get region 2>/dev/null || true)"
+        if [ "$region" = "None" ]; then
+            region=""
+        fi
+    fi
+
+    if [ -z "$region" ]; then
+        region="us-east-1"
+    fi
+
+    echo "$region"
+}
+
+# Verify that a Secrets Manager secret is valid JSON for ECS JSON-key extraction.
+# ECS task definitions reference these secrets via `...:client_secret::`, which
+# requires the stored SecretString to be valid JSON with a `client_secret` key.
+verify_secretsmanager_client_secret() {
+    local secret_id="$1"
+    local expected_client_id="$2"
+    local expected_client_secret="$3"
+    local region="$4"
+
+    local secret_string=""
+    secret_string="$(aws secretsmanager get-secret-value \
+        --secret-id "$secret_id" \
+        --region "$region" \
+        --query SecretString \
+        --output text 2>/dev/null || true)"
+
+    if [ -z "$secret_string" ]; then
+        echo -e "${RED}Error: Secrets Manager secret '$secret_id' is empty or unreadable${NC}"
+        return 1
+    fi
+
+    if ! echo "$secret_string" | jq -e . >/dev/null 2>&1; then
+        echo -e "${RED}Error: Secrets Manager secret '$secret_id' is not valid JSON${NC}"
+        echo "SecretString (truncated): ${secret_string:0:200}"
+        return 1
+    fi
+
+    local actual_client_id=""
+    local actual_client_secret=""
+    actual_client_id="$(echo "$secret_string" | jq -r '.client_id // empty' 2>/dev/null || true)"
+    actual_client_secret="$(echo "$secret_string" | jq -r '.client_secret // empty' 2>/dev/null || true)"
+
+    if [ "$actual_client_id" != "$expected_client_id" ]; then
+        echo -e "${RED}Error: Secrets Manager secret '$secret_id' has unexpected client_id '${actual_client_id}' (expected '${expected_client_id}')${NC}"
+        return 1
+    fi
+
+    if [ -z "$actual_client_secret" ]; then
+        echo -e "${RED}Error: Secrets Manager secret '$secret_id' is missing client_secret${NC}"
+        return 1
+    fi
+
+    if [ "$actual_client_secret" != "$expected_client_secret" ]; then
+        echo -e "${RED}Error: Secrets Manager secret '$secret_id' client_secret does not match the Keycloak-generated value${NC}"
+        echo "This will cause Keycloak /token to return 401 (invalid_client)."
+        return 1
+    fi
+
+    return 0
+}
+
+_update_secretsmanager_secrets_by_prefix() {
+    local secret_name_prefix="$1"
+    local secret_payload="$2"
+    local region="$3"
+
+    local matches=""
+    matches="$(aws secretsmanager list-secrets \
+        --region "$region" \
+        --query "SecretList[?starts_with(Name, \`${secret_name_prefix}\`)].Name" \
+        --output text 2>/dev/null || true)"
+
+    if [ -z "$matches" ]; then
+        echo -e "${YELLOW}Warning: No Secrets Manager secrets found with prefix '${secret_name_prefix}' in region '${region}'.${NC}"
+        echo "Attempting to update the base secret name anyway: ${secret_name_prefix}"
+        matches="$secret_name_prefix"
+    fi
+
+    local updated_any=false
+    for secret_id in $matches; do
+        if [ -z "$secret_id" ]; then
+            continue
+        fi
+
+        echo "Updating Secrets Manager secret: $secret_id"
+        if aws secretsmanager update-secret \
+            --secret-id "$secret_id" \
+            --secret-string "$secret_payload" \
+            --region "$region" >/dev/null 2>&1; then
+            updated_any=true
+        else
+            echo -e "${RED}Error: Failed to update Secrets Manager secret '$secret_id' in region '${region}'.${NC}"
+            return 1
+        fi
+    done
+
+    if [ "$updated_any" != "true" ]; then
+        echo -e "${RED}Error: No Secrets Manager secrets were updated for prefix '${secret_name_prefix}'.${NC}"
+        return 1
+    fi
+
+    return 0
+}
+
 # Function to wait for Keycloak to be ready
 wait_for_keycloak() {
     echo -n "Waiting for Keycloak to be ready..."
@@ -774,34 +895,83 @@ setup_client_secrets() {
     # Save web client secret to AWS Secrets Manager
     if [ -n "$web_secret" ] && command -v aws &> /dev/null; then
         echo "Saving web client secret to AWS Secrets Manager..."
-        if aws secretsmanager update-secret \
-            --secret-id mcp-gateway-keycloak-client-secret \
-            --secret-string "{\"client_id\": \"mcp-gateway-web\", \"client_secret\": \"${web_secret}\"}" \
-            --region "${AWS_REGION:-us-west-2}" &>/dev/null; then
+        # Important: ECS task definitions reference this secret via `:client_secret::`,
+        # which requires the stored SecretString to be valid JSON with a `client_secret` key.
+        # Use jq to ensure proper JSON escaping for the secret value.
+        local web_secret_json
+        web_secret_json="$(jq -n \
+            --arg client_id "mcp-gateway-web" \
+            --arg client_secret "$web_secret" \
+            '{client_id: $client_id, client_secret: $client_secret}' \
+        )"
+        if _update_secretsmanager_secrets_by_prefix \
+            "mcp-gateway-keycloak-client-secret" \
+            "$web_secret_json" \
+            "${AWS_REGION_EFFECTIVE}"; then
             echo -e "${GREEN}Web client secret saved to AWS Secrets Manager!${NC}"
+            # Verify every matching secret so ECS JSON-key extraction works regardless of name suffix.
+            for secret_id in $(aws secretsmanager list-secrets \
+                --region "${AWS_REGION_EFFECTIVE}" \
+                --query "SecretList[?starts_with(Name, \`mcp-gateway-keycloak-client-secret\`)].Name" \
+                --output text 2>/dev/null || true); do
+                if [ -z "$secret_id" ]; then
+                    continue
+                fi
+                if ! verify_secretsmanager_client_secret \
+                    "$secret_id" \
+                    "mcp-gateway-web" \
+                    "$web_secret" \
+                    "${AWS_REGION_EFFECTIVE}"; then
+                    echo -e "${RED}Error: Secrets Manager web client secret verification failed for '$secret_id'. Aborting.${NC}"
+                    exit 1
+                fi
+            done
         else
             echo -e "${YELLOW}Warning: Could not save web client secret to Secrets Manager${NC}"
             echo "You can manually update it with:"
             echo "  aws secretsmanager update-secret --secret-id mcp-gateway-keycloak-client-secret \\"
-            echo "    --secret-string '{\"client_id\": \"mcp-gateway-web\", \"client_secret\": \"${web_secret}\"}' \\"
-            echo "    --region \${AWS_REGION:-us-west-2}"
+            echo "    --secret-string '$(echo "$web_secret_json" | tr -d '\n')' \\"
+            echo "    --region ${AWS_REGION_EFFECTIVE}"
         fi
     fi
 
     # Save M2M client secret to AWS Secrets Manager
     if [ -n "$m2m_secret" ] && command -v aws &> /dev/null; then
         echo "Saving M2M client secret to AWS Secrets Manager..."
-        if aws secretsmanager update-secret \
-            --secret-id mcp-gateway-keycloak-m2m-client-secret \
-            --secret-string "{\"client_id\": \"mcp-gateway-m2m\", \"client_secret\": \"${m2m_secret}\"}" \
-            --region "${AWS_REGION:-us-west-2}" &>/dev/null; then
+        # See note above: must be valid JSON for ECS `:client_secret::` extraction.
+        local m2m_secret_json
+        m2m_secret_json="$(jq -n \
+            --arg client_id "mcp-gateway-m2m" \
+            --arg client_secret "$m2m_secret" \
+            '{client_id: $client_id, client_secret: $client_secret}' \
+        )"
+        if _update_secretsmanager_secrets_by_prefix \
+            "mcp-gateway-keycloak-m2m-client-secret" \
+            "$m2m_secret_json" \
+            "${AWS_REGION_EFFECTIVE}"; then
             echo -e "${GREEN}M2M client secret saved to AWS Secrets Manager!${NC}"
+            for secret_id in $(aws secretsmanager list-secrets \
+                --region "${AWS_REGION_EFFECTIVE}" \
+                --query "SecretList[?starts_with(Name, \`mcp-gateway-keycloak-m2m-client-secret\`)].Name" \
+                --output text 2>/dev/null || true); do
+                if [ -z "$secret_id" ]; then
+                    continue
+                fi
+                if ! verify_secretsmanager_client_secret \
+                    "$secret_id" \
+                    "mcp-gateway-m2m" \
+                    "$m2m_secret" \
+                    "${AWS_REGION_EFFECTIVE}"; then
+                    echo -e "${RED}Error: Secrets Manager M2M client secret verification failed for '$secret_id'. Aborting.${NC}"
+                    exit 1
+                fi
+            done
         else
             echo -e "${YELLOW}Warning: Could not save M2M client secret to Secrets Manager${NC}"
             echo "You can manually update it with:"
             echo "  aws secretsmanager update-secret --secret-id mcp-gateway-keycloak-m2m-client-secret \\"
-            echo "    --secret-string '{\"client_id\": \"mcp-gateway-m2m\", \"client_secret\": \"${m2m_secret}\"}' \\"
-            echo "    --region \${AWS_REGION:-us-west-2}"
+            echo "    --secret-string '$(echo "$m2m_secret_json" | tr -d '\n')' \\"
+            echo "    --region ${AWS_REGION_EFFECTIVE}"
         fi
     fi
 
@@ -981,19 +1151,23 @@ main() {
     KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
     echo "Using Keycloak API URL: $KEYCLOAK_URL"
 
+    AWS_REGION_EFFECTIVE="$(detect_aws_region)"
+
     # Display loaded configuration
     echo ""
     echo "Configuration:"
     echo "  - KEYCLOAK_URL: $KEYCLOAK_URL"
     echo "  - AUTH_SERVER_EXTERNAL_URL: ${AUTH_SERVER_EXTERNAL_URL:-<not set>}"
     echo "  - REGISTRY_URL: ${REGISTRY_URL:-<not set>}"
+    echo "  - AWS_REGION: ${AWS_REGION_EFFECTIVE}"
     echo ""
 
     # Try to load admin credentials from SSM Parameter Store if not set
     if [ -z "$KEYCLOAK_ADMIN_PASSWORD" ]; then
         echo "Attempting to load KEYCLOAK_ADMIN_PASSWORD from SSM Parameter Store..."
         if command -v aws &> /dev/null; then
-            SSM_PASSWORD=$(aws ssm get-parameter --name "/keycloak/admin_password" --with-decryption --query 'Parameter.Value' --output text --region "${AWS_REGION:-us-west-2}" 2>/dev/null)
+            AWS_REGION_EFFECTIVE="$(detect_aws_region)"
+            SSM_PASSWORD=$(aws ssm get-parameter --name "/keycloak/admin_password" --with-decryption --query 'Parameter.Value' --output text --region "${AWS_REGION_EFFECTIVE}" 2>/dev/null)
             if [ -n "$SSM_PASSWORD" ] && [ "$SSM_PASSWORD" != "null" ]; then
                 KEYCLOAK_ADMIN_PASSWORD="$SSM_PASSWORD"
                 echo -e "${GREEN}Loaded KEYCLOAK_ADMIN_PASSWORD from SSM Parameter Store${NC}"
