@@ -127,7 +127,7 @@ module "ecs_service_auth" {
           },
           {
             name  = "SCOPES_CONFIG_PATH"
-            value = "/efs/auth_config/auth_config/scopes.yml"
+            value = "/efs/auth_config/scopes.yml"
           },
           {
             name  = "SESSION_COOKIE_SECURE"
@@ -157,7 +157,7 @@ module "ecs_service_auth" {
           },
           {
             name  = "ENFORCEAI_SCOPES_CATALOG_PATH"
-            value = "/efs/auth_config/auth_config/scopes.yml"
+            value = "/efs/auth_config/scopes.yml"
           },
           {
             name  = "ENFORCEAI_GATEWAY_PRIVATE_KEY_PATH"
@@ -441,7 +441,7 @@ module "ecs_service_registry" {
         },
         {
           name  = "SCOPES_CONFIG_PATH"
-          value = "/app/auth_server/scopes.yml"
+          value = "/efs/auth_config/scopes.yml"
         },
         {
           name  = "EMBEDDINGS_PROVIDER"
@@ -515,8 +515,8 @@ module "ecs_service_registry" {
         },
         {
           sourceVolume  = "auth-config"
-          containerPath = "/app/auth_server"
-          readOnly      = false
+          containerPath = "/efs/auth_config"
+          readOnly      = true
         }
       ]
 
