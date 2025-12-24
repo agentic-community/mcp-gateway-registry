@@ -84,7 +84,7 @@ travel_assistant_agent_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amaz
 # ============================================================================
 
 # Enable EnforceAI in auth-server (requires EFS state initialization; see docs)
-# enable_enforceai = true
+enable_enforceai = true
 #
 # EnforceAI auth mode: gateway-token | api-key | oidc | mixed
 # enforceai_auth_provider = "gateway-token"
@@ -100,8 +100,8 @@ travel_assistant_agent_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amaz
 # enforceai_enable_upstream_kek = false
 
 # Optional: run EnforceAI bootstrap on auth-server startup (writes to EFS state dir)
-# enforceai_auto_bootstrap = true
-# enforceai_bootstrap_user_id = "local|admin"
+enforceai_auto_bootstrap = true
+enforceai_bootstrap_user_id = "local|admin"
 # enforceai_bootstrap_agent_id = ""
 
 # AWS Region

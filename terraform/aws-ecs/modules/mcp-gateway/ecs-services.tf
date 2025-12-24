@@ -144,6 +144,10 @@ module "ecs_service_auth" {
             value = var.enforceai_state_dir
           },
           {
+            name  = "ENFORCEAI_REQUIRED"
+            value = "true"
+          },
+          {
             name  = "ENFORCEAI_AUTO_BOOTSTRAP"
             value = tostring(var.enforceai_auto_bootstrap)
           },

@@ -243,7 +243,11 @@ variable "enable_monitoring" {
 variable "enable_enforceai" {
   description = "Enable EnforceAI features on the auth-server (requires persistent EFS state; defaults to disabled)."
   type        = bool
-  default     = false
+  default     = true
+  validation {
+    condition     = var.enable_enforceai
+    error_message = "EnforceAI must be enabled (enable_enforceai=true)."
+  }
 }
 
 variable "enforceai_state_dir" {
