@@ -187,6 +187,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# EnforceAI required guard (fail-fast)
+def _enforce_enforceai_required() -> None:
+    enforceai_required_raw = _os.environ.get("ENFORCEAI_REQUIRED", "false")
+    enforceai_required = enforceai_required_raw.strip().lower() in {"1", "true", "yes"}
+    if not enforceai_required:
+        return
+
+    db_path = (_os.environ.get("ENFORCEAI_DB_PATH") or "").strip()
+    if not db_path:
+        raise RuntimeError(
+            "ENFORCEAI_REQUIRED=true but ENFORCEAI_DB_PATH is not set; refusing to start"
+        )
+
+    scopes_catalog_path = (
+        (_os.environ.get("ENFORCEAI_SCOPES_CATALOG_PATH") or "").strip()
+        or (_os.environ.get("SCOPES_CATALOG_PATH") or "").strip()
+    )
+    if not scopes_catalog_path:
+        raise RuntimeError(
+            "ENFORCEAI_REQUIRED=true but ENFORCEAI_SCOPES_CATALOG_PATH is not set; refusing to start"
+        )
+
+    try:
+        EnforceAIDataLayer(db_path=Path(db_path)).initialize()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "ENFORCEAI_REQUIRED=true but EnforceAI DB initialization failed; refusing to start"
+        ) from exc
+
+
+_enforce_enforceai_required()
+
 # Configuration for token generation
 JWT_ISSUER = "mcp-auth-server"
 JWT_AUDIENCE = "mcp-registry"
@@ -412,17 +444,25 @@ def validate_session_cookie(cookie_value: str) -> Dict[str, any]:
                 EnforceAIDataLayer(db_path=db_path).initialize()
                 store = SqliteSessionStore(db_path=db_path)
                 record = store.get_session_by_id(session_id=normalized.session_id)
-                if record is None or record.revoked_at is not None:
+
+                if record is None:
+                    logger.info(
+                        "No server-side session record found; accepting stateless session cookie"
+                    )
+                elif record.revoked_at is not None:
                     raise ValueError("Session invalidated")
-                store.touch_session(
-                    session_id=normalized.session_id,
-                    now=datetime.now(timezone.utc).replace(microsecond=0),
-                )
+                else:
+                    store.touch_session(
+                        session_id=normalized.session_id,
+                        now=datetime.now(timezone.utc).replace(microsecond=0),
+                    )
             except ValueError:
                 raise
-            except Exception as exc:
-                logger.error(f"Session store validation failed: {exc}")
-                raise ValueError("Session invalidated") from exc
+            except Exception:
+                logger.warning(
+                    "Skipping server-side session validation; EnforceAI DB unavailable",
+                    exc_info=True,
+                )
 
         # Extract user info
         username = normalized.user_id
@@ -690,11 +730,37 @@ app = FastAPI(
 add_auth_metrics_middleware(app)
 
 try:
-    enforceai_management_router = _load_enforceai_management_router()
-    if enforceai_management_router is not None:
-        app.include_router(enforceai_management_router)
+    if _os.environ.get("ENFORCEAI_DB_PATH"):
+        enforceai_management_router = _load_enforceai_management_router()
+        if enforceai_management_router is not None:
+            app.include_router(enforceai_management_router)
+    else:
+        logger.info("ENFORCEAI_DB_PATH not set; skipping EnforceAI management routes")
 except Exception:  # noqa: BLE001 - best-effort; server should still start
     logger.exception("Failed to mount EnforceAI management routes")
+
+try:
+    from auth_server.enforceai.errors import (  # type: ignore[import-not-found]
+        DependencyUnavailableError,
+        EnforceAIError,
+    )
+except Exception:  # noqa: BLE001
+    DependencyUnavailableError = None  # type: ignore[assignment]
+    EnforceAIError = None  # type: ignore[assignment]
+
+
+if EnforceAIError is not None:
+
+    @app.exception_handler(EnforceAIError)  # type: ignore[arg-type]
+    async def _handle_enforceai_error(
+        request: Request,
+        exc: "EnforceAIError",
+    ) -> JSONResponse:
+        del request
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.public_message},
+        )
 
 
 @app.on_event("startup")
@@ -1161,6 +1227,8 @@ async def validate_request(request: Request):
                 original_path = ""
         body = request.headers.get("X-Body")
         
+        is_registry_api_request = original_path.startswith("/api/")
+
         # Extract server_name from original_url early for logging
         server_name_from_url = None
         if original_url:
@@ -1173,6 +1241,9 @@ async def validate_request(request: Request):
                 logger.info(f"Extracted server_name '{server_name_from_url}' from original_url: {original_url}")
             except Exception as e:
                 logger.warning(f"Failed to extract server_name from original_url {original_url}: {e}")
+
+        if is_registry_api_request:
+            server_name_from_url = None
         
         # Read request body
         request_payload = None
