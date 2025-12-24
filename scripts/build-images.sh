@@ -1,10 +1,29 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build and push Docker images from build-config.yaml to AWS ECR
 # Usage: ./scripts/build-images.sh [build|push|build-push] [IMAGE=name]
 # Example: ./scripts/build-images.sh build IMAGE=registry
 # Example: ./scripts/build-images.sh build-push
 
 set -e
+
+# macOS ships bash 3.2 by default, which doesn't support associative arrays.
+# Re-exec with a newer bash if available (e.g., Homebrew bash).
+if [[ -n "${BASH_VERSINFO:-}" && "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+        if [[ -x "$candidate" ]]; then
+            if "$candidate" -lc '[[ -n "${BASH_VERSINFO:-}" && "${BASH_VERSINFO[0]}" -ge 4 ]]' >/dev/null 2>&1; then
+                exec "$candidate" "$0" "$@"
+            fi
+        fi
+    done
+
+    echo ""
+    echo "ERROR: scripts/build-images.sh requires bash 4+ (current: $BASH_VERSION)."
+    echo "Fix (macOS): brew install bash, then rerun."
+    echo "Or run explicitly: /opt/homebrew/bin/bash ./scripts/build-images.sh build-push IMAGE=auth_server"
+    echo ""
+    exit 2
+fi
 
 # Disable AWS CLI pager to prevent interactive prompts
 export AWS_PAGER=""
@@ -20,6 +39,48 @@ NC='\033[0m' # No Color
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+resolve_aws_cli() {
+    local explicit="${AWS_BIN:-}"
+    local candidate=""
+    local version=""
+
+    if [[ -n "$explicit" ]]; then
+        if [[ ! -x "$explicit" ]]; then
+            log_error "AWS_BIN is set but not executable: $explicit"
+            exit 1
+        fi
+        echo "$explicit"
+        return 0
+    fi
+
+    candidate="$(command -v aws || true)"
+    if [[ -n "$candidate" ]]; then
+        version="$("$candidate" --version 2>&1 || true)"
+        if echo "$version" | grep -q "aws-cli/2"; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    for candidate in /opt/homebrew/bin/aws /usr/local/bin/aws /usr/bin/aws; do
+        if [[ -x "$candidate" ]]; then
+            version="$("$candidate" --version 2>&1 || true)"
+            if echo "$version" | grep -q "aws-cli/2"; then
+                echo "$candidate"
+                return 0
+            fi
+        fi
+    done
+
+    if [[ -n "$version" ]]; then
+        log_error "Found AWS CLI but not v2: $version"
+    else
+        log_error "AWS CLI not found on PATH"
+    fi
+    log_error "Install AWS CLI v2 (recommended), or set AWS_BIN to a working aws binary."
+    exit 1
+}
 
 # CRITICAL: Check if AWS_REGION is set
 if [[ -z "${AWS_REGION:-}" ]]; then
@@ -78,6 +139,10 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Resolve AWS CLI binary (prefer AWS CLI v2 even when running in a Python venv)
+AWS_CLI="$(resolve_aws_cli)"
+log_info "Using AWS CLI: $AWS_CLI ($("$AWS_CLI" --version 2>&1))"
+
 # Validate configuration file exists
 if [ ! -f "$CONFIG_FILE" ]; then
     log_error "Configuration file not found: $CONFIG_FILE"
@@ -85,7 +150,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 # Parse AWS account ID and construct ECR registry dynamically based on AWS_REGION
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+AWS_ACCOUNT_ID=$("$AWS_CLI" sts get-caller-identity --query Account --output text)
 ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
 if [ -z "$AWS_ACCOUNT_ID" ]; then
@@ -276,11 +341,11 @@ push_image() {
 
     # Create ECR repository if it doesn't exist
     log_info "Checking ECR repository: $repo_name"
-    aws ecr describe-repositories \
+    "$AWS_CLI" ecr describe-repositories \
         --repository-names "$repo_name" \
         --region "$AWS_REGION" 2>/dev/null || {
         log_info "Repository doesn't exist, creating: $repo_name"
-        aws ecr create-repository \
+        "$AWS_CLI" ecr create-repository \
             --repository-name "$repo_name" \
             --region "$AWS_REGION"
         log_success "Created ECR repository: $repo_name"
@@ -288,7 +353,7 @@ push_image() {
 
     # Login to ECR
     log_info "Authenticating with ECR..."
-    aws ecr get-login-password --region "$AWS_REGION" | \
+    "$AWS_CLI" ecr get-login-password --region "$AWS_REGION" | \
         docker login --username AWS --password-stdin "$ECR_REGISTRY" || {
         log_error "Failed to authenticate with ECR"
         return 1
