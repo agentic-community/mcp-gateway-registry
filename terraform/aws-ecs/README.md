@@ -659,6 +659,43 @@ aws secretsmanager get-secret-value \
   --region $AWS_REGION
 ```
 
+#### EnforceAI UI Shows 403/500 Errors
+
+Symptoms you might see in the browser console:
+- `/api/servers` or `/api/agents` returns `403`
+- `/enforceai/agents` or `/enforceai/scopes/catalog` returns `404`, `500`, or `503`
+
+Checklist:
+1. Confirm scopes are initialized on EFS (required for group-to-scope mapping):
+
+```bash
+./scripts/run-scopes-init-task.sh --aws-region "$AWS_REGION"
+```
+
+2. If you intend to use EnforceAI, enable it in `terraform.tfvars` and redeploy:
+
+```hcl
+enable_enforceai = true
+enforceai_auto_bootstrap = true
+enforceai_auth_provider = "gateway-token"
+```
+
+3. Validate the Auth Server task has EnforceAI environment variables set (especially `ENFORCEAI_DB_PATH` and `ENFORCEAI_SCOPES_CATALOG_PATH`):
+
+```bash
+aws ecs describe-services \
+  --cluster "$(jq -r '.ecs_cluster_name.value' scripts/terraform-outputs.json)" \
+  --services mcp-gateway-v2-auth \
+  --region "$AWS_REGION" \
+  --query 'services[0].{ServiceName:serviceName,TaskDef:taskDefinition}'
+```
+
+4. Check CloudWatch logs for the registry and auth-server services:
+
+```bash
+./scripts/view-cloudwatch-logs.sh --filter "ERROR|Exception|EnforceAI|SCOPES_INIT"
+```
+
 ### Getting Help
 
 Check logs first:
