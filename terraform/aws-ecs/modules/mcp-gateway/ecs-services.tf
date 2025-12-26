@@ -216,6 +216,10 @@ module "ecs_service_auth" {
           valueFrom = aws_secretsmanager_secret.secret_key.arn
         },
         {
+          name      = "ADMIN_PASSWORD"
+          valueFrom = aws_secretsmanager_secret.admin_password.arn
+        },
+        {
           name      = "KEYCLOAK_CLIENT_SECRET"
           valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
         }
@@ -257,22 +261,28 @@ module "ecs_service_auth" {
     mcp-logs = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["logs"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["logs"].id
+        }
       }
     }
     auth-config = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["auth_config"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["auth_config"].id
+        }
       }
     }
     enforceai-state = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["enforceai_state"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["enforceai_state"].id
+        }
       }
     }
   }
@@ -542,36 +552,46 @@ module "ecs_service_registry" {
     mcp-servers = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["servers"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["servers"].id
+        }
       }
     }
     mcp-agents = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["agents"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["agents"].id
+        }
       }
     }
     mcp-models = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["models"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["models"].id
+        }
       }
     }
     mcp-logs = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["logs"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["logs"].id
+        }
       }
     }
     auth-config = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["auth_config"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["auth_config"].id
+        }
       }
     }
   }
@@ -883,8 +903,10 @@ module "ecs_service_mcpgw" {
     mcpgw-data = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["mcpgw_data"].id
         transit_encryption = "ENABLED"
+        authorization_config = {
+          access_point_id = module.efs.access_points["mcpgw_data"].id
+        }
       }
     }
   }

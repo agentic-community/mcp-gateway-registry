@@ -60,11 +60,13 @@ output "efs_arn" {
 output "efs_access_points" {
   description = "EFS access point IDs"
   value = {
-    servers     = module.efs.access_points["servers"].id
-    models      = module.efs.access_points["models"].id
-    logs        = module.efs.access_points["logs"].id
-    auth_config = module.efs.access_points["auth_config"].id
+    agents          = module.efs.access_points["agents"].id
+    servers         = module.efs.access_points["servers"].id
+    models          = module.efs.access_points["models"].id
+    logs            = module.efs.access_points["logs"].id
+    auth_config     = module.efs.access_points["auth_config"].id
     enforceai_state = module.efs.access_points["enforceai_state"].id
+    mcpgw_data      = module.efs.access_points["mcpgw_data"].id
   }
   sensitive = false
 }
