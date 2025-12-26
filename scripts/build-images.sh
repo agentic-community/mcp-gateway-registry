@@ -11,7 +11,9 @@ set -e
 if [[ -n "${BASH_VERSINFO:-}" && "${BASH_VERSINFO[0]}" -lt 4 ]]; then
     for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
         if [[ -x "$candidate" ]]; then
-            if "$candidate" -lc '[[ -n "${BASH_VERSINFO:-}" && "${BASH_VERSINFO[0]}" -ge 4 ]]' >/dev/null 2>&1; then
+            # Avoid `-l` here: user shell init files can fail (e.g., pyenv hooks),
+            # preventing the version probe and leaving us on bash 3.2.
+            if "$candidate" -c '[[ -n "${BASH_VERSINFO:-}" && "${BASH_VERSINFO[0]}" -ge 4 ]]' >/dev/null 2>&1; then
                 exec "$candidate" "$0" "$@"
             fi
         fi
@@ -121,6 +123,11 @@ echo ""
 CONFIG_FILE="${REPO_ROOT}/build-config.yaml"
 ACTION="${1:-build-push}"
 TARGET_IMAGE="${IMAGE:-}"
+
+# ECS/Fargate is typically linux/amd64. On Apple Silicon, pushing an arm64-only
+# image will fail in ECS with "Manifest does not contain descriptor matching
+# platform 'linux/amd64'".
+DOCKER_PLATFORM_PUSH="${DOCKER_PLATFORM_PUSH:-linux/amd64}"
 
 # Logging functions
 log_info() {
@@ -287,6 +294,7 @@ build_image() {
     local dockerfile="$3"
     local context="$4"
     local build_args="${BUILD_ARGS[$image_name]:-}"
+    local platform_flag=""
 
     log_info "Building $image_name..."
 
@@ -294,6 +302,11 @@ build_image() {
     if [ ! -f "$REPO_ROOT/$dockerfile" ]; then
         log_error "Dockerfile not found: $REPO_ROOT/$dockerfile"
         return 1
+    fi
+
+    if [[ "$ACTION" == "push" || "$ACTION" == "build-push" ]]; then
+        platform_flag="--platform ${DOCKER_PLATFORM_PUSH}"
+        log_info "Docker platform (push): ${DOCKER_PLATFORM_PUSH}"
     fi
 
     # Setup A2A agent dependencies if needed
@@ -312,6 +325,7 @@ build_image() {
 
     # Build the Docker image using buildx (faster, better caching, future-proof)
     docker buildx build \
+        $platform_flag \
         --load \
         -f "$REPO_ROOT/$dockerfile" \
         -t "$repo_name:latest" \
