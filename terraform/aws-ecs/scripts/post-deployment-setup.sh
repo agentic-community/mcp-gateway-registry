@@ -37,6 +37,9 @@
 
 set -euo pipefail
 
+# Disable AWS CLI pager to prevent interactive prompts
+export AWS_PAGER=""
+
 # Colors
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -83,6 +86,51 @@ log_warning() {
 log_error() {
     echo -e "${RED}[ERROR]${NC} $*"
 }
+
+resolve_aws_cli() {
+    local explicit="${AWS_BIN:-}"
+    local candidate=""
+    local version=""
+
+    if [[ -n "$explicit" ]]; then
+        if [[ ! -x "$explicit" ]]; then
+            log_error "AWS_BIN is set but not executable: $explicit"
+            exit 1
+        fi
+        echo "$explicit"
+        return 0
+    fi
+
+    candidate="$(command -v aws || true)"
+    if [[ -n "$candidate" ]]; then
+        version="$("$candidate" --version 2>&1 || true)"
+        if echo "$version" | grep -q "aws-cli/2"; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    for candidate in /opt/homebrew/bin/aws /usr/local/bin/aws /usr/bin/aws; do
+        if [[ -x "$candidate" ]]; then
+            version="$("$candidate" --version 2>&1 || true)"
+            if echo "$version" | grep -q "aws-cli/2"; then
+                echo "$candidate"
+                return 0
+            fi
+        fi
+    done
+
+    if [[ -n "$version" ]]; then
+        log_error "Found AWS CLI but not v2: $version"
+    else
+        log_error "AWS CLI v2 not found on PATH"
+    fi
+    log_error "Install AWS CLI v2 (recommended), or set AWS_BIN to a working aws binary."
+    exit 1
+}
+
+AWS_CLI="$(resolve_aws_cli)"
+export AWS_BIN="$AWS_CLI"
 
 
 log_step() {
@@ -144,10 +192,6 @@ _check_prerequisites() {
         missing+=("jq")
     fi
 
-    if ! command -v aws &> /dev/null; then
-        missing+=("aws-cli")
-    fi
-
     if ! command -v terraform &> /dev/null; then
         missing+=("terraform")
     fi
@@ -162,9 +206,14 @@ _check_prerequisites() {
         exit 1
     fi
 
-    # Check AWS credentials
-    if ! aws sts get-caller-identity &> /dev/null; then
+    log_info "Using AWS CLI: $AWS_CLI ($("$AWS_CLI" --version 2>&1))"
+
+    # Check AWS credentials (and surface underlying errors)
+    local identity_error=""
+    identity_error="$("$AWS_CLI" sts get-caller-identity --region "$AWS_REGION" 1>/dev/null 2>&1 || true)"
+    if [[ -n "$identity_error" ]]; then
         log_error "AWS credentials not configured or invalid."
+        log_error "aws sts get-caller-identity error: $identity_error"
         exit 1
     fi
 
@@ -355,7 +404,7 @@ _verify_ecs_services() {
         # Check MCP Gateway services in mcp-gateway-ecs-cluster
         for service in "${mcp_gateway_services[@]}"; do
             local status
-            status=$(aws ecs describe-services \
+            status=$("$AWS_CLI" ecs describe-services \
                 --cluster "$ECS_CLUSTER_NAME" \
                 --services "$service" \
                 --region "$AWS_REGION" \
@@ -377,7 +426,7 @@ _verify_ecs_services() {
 
         # Check Keycloak in its own cluster
         local kc_status
-        kc_status=$(aws ecs describe-services \
+        kc_status=$("$AWS_CLI" ecs describe-services \
             --cluster "$keycloak_cluster" \
             --services "$keycloak_service" \
             --region "$AWS_REGION" \
@@ -517,7 +566,7 @@ _restart_services() {
     for service in "${services_to_restart[@]}"; do
         log_info "  Restarting: $service"
 
-        if aws ecs update-service \
+        if "$AWS_CLI" ecs update-service \
             --cluster "$ECS_CLUSTER_NAME" \
             --service "$service" \
             --force-new-deployment \
@@ -538,7 +587,7 @@ _restart_services() {
 
         for service in "${services_to_restart[@]}"; do
             local status
-            status=$(aws ecs describe-services \
+            status=$("$AWS_CLI" ecs describe-services \
                 --cluster "$ECS_CLUSTER_NAME" \
                 --services "$service" \
                 --region "$AWS_REGION" \

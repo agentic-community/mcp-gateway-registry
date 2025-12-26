@@ -35,6 +35,9 @@
 
 set -euo pipefail
 
+# Disable AWS CLI pager to prevent interactive prompts
+export AWS_PAGER=""
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -69,6 +72,51 @@ log_warning() {
 log_error() {
     echo -e "${RED}[ERROR]${NC} $*"
 }
+
+resolve_aws_cli() {
+    local explicit="${AWS_BIN:-}"
+    local candidate=""
+    local version=""
+
+    if [[ -n "$explicit" ]]; then
+        if [[ ! -x "$explicit" ]]; then
+            log_error "AWS_BIN is set but not executable: $explicit"
+            exit 1
+        fi
+        echo "$explicit"
+        return 0
+    fi
+
+    candidate="$(command -v aws || true)"
+    if [[ -n "$candidate" ]]; then
+        version="$("$candidate" --version 2>&1 || true)"
+        if echo "$version" | grep -q "aws-cli/2"; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    for candidate in /opt/homebrew/bin/aws /usr/local/bin/aws /usr/bin/aws; do
+        if [[ -x "$candidate" ]]; then
+            version="$("$candidate" --version 2>&1 || true)"
+            if echo "$version" | grep -q "aws-cli/2"; then
+                echo "$candidate"
+                return 0
+            fi
+        fi
+    done
+
+    if [[ -n "$version" ]]; then
+        log_error "Found AWS CLI but not v2: $version"
+    else
+        log_error "AWS CLI v2 not found on PATH"
+    fi
+    log_error "Install AWS CLI v2 (recommended), or set AWS_BIN to a working aws binary."
+    exit 1
+}
+
+AWS_CLI="$(resolve_aws_cli)"
+export AWS_BIN="$AWS_CLI"
 
 show_help() {
     grep '^#' "$0" | tail -n +2 | sed 's/^# //' | sed 's/^#//'
@@ -124,12 +172,12 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
     if AWS_REGION="$AWS_REGION" bash "$BUILD_SCRIPT"; then
         log_success "Docker image built and pushed successfully"
         # Extract image URI from the build output by getting the latest image
-        IMAGE_URI="$(aws ecr describe-images \
+        IMAGE_URI="$("$AWS_CLI" ecr describe-images \
             --repository-name mcp-gateway-scopes-init \
             --region "$AWS_REGION" \
             --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
             --output text 2>/dev/null)"
-        ACCOUNT_ID="$(aws sts get-caller-identity --region "$AWS_REGION" --query Account --output text 2>/dev/null)"
+        ACCOUNT_ID="$("$AWS_CLI" sts get-caller-identity --region "$AWS_REGION" --query Account --output text 2>/dev/null)"
         IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/mcp-gateway-scopes-init:${IMAGE_URI}"
         log_success "Image URI: $IMAGE_URI"
     else
@@ -139,12 +187,12 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
 else
     log_info "Skipping Docker image build as requested"
     # Get the latest image from ECR
-    IMAGE_TAG="$(aws ecr describe-images \
+    IMAGE_TAG="$("$AWS_CLI" ecr describe-images \
         --repository-name mcp-gateway-scopes-init \
         --region "$AWS_REGION" \
         --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
         --output text 2>/dev/null)"
-    ACCOUNT_ID="$(aws sts get-caller-identity --region "$AWS_REGION" --query Account --output text 2>/dev/null)"
+    ACCOUNT_ID="$("$AWS_CLI" sts get-caller-identity --region "$AWS_REGION" --query Account --output text 2>/dev/null)"
     IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/mcp-gateway-scopes-init:${IMAGE_TAG}"
     log_success "Using existing image: $IMAGE_URI"
 fi
@@ -189,7 +237,7 @@ log_success "Access Point ID: $ACCESS_POINT_ID"
 # Get VPC configuration from registry service
 log_info "Step 3/6: Fetching VPC configuration from registry service..."
 
-SUBNET_IDS=$(aws ecs describe-services \
+SUBNET_IDS=$("$AWS_CLI" ecs describe-services \
     --cluster "$CLUSTER_NAME" \
     --services "mcp-gateway-v2-registry" \
     --region "$AWS_REGION" \
@@ -202,7 +250,7 @@ if [[ -z "$SUBNET_IDS" ]]; then
 fi
 log_success "Subnets: $SUBNET_IDS"
 
-SECURITY_GROUP_IDS=$(aws ecs describe-services \
+SECURITY_GROUP_IDS=$("$AWS_CLI" ecs describe-services \
     --cluster "$CLUSTER_NAME" \
     --services "mcp-gateway-v2-registry" \
     --region "$AWS_REGION" \
@@ -217,12 +265,12 @@ log_success "Security Groups: $SECURITY_GROUP_IDS"
 
 # Get AWS account ID
 if [[ -z "$AWS_PROFILE" || "$AWS_PROFILE" == "default" ]]; then
-    AWS_ACCOUNT=$(aws sts get-caller-identity \
+    AWS_ACCOUNT=$("$AWS_CLI" sts get-caller-identity \
         --region "$AWS_REGION" \
         --query Account \
         --output text 2>/dev/null)
 else
-    AWS_ACCOUNT=$(aws sts get-caller-identity \
+    AWS_ACCOUNT=$("$AWS_CLI" sts get-caller-identity \
         --region "$AWS_REGION" \
         --profile "$AWS_PROFILE" \
         --query Account \
@@ -236,7 +284,7 @@ fi
 log_success "AWS Account: $AWS_ACCOUNT"
 
 # Get execution role from existing auth-server task
-EXECUTION_ROLE=$(aws ecs describe-task-definition \
+EXECUTION_ROLE=$("$AWS_CLI" ecs describe-task-definition \
     --task-definition mcp-gateway-v2-auth \
     --region "$AWS_REGION" \
     --query 'taskDefinition.executionRoleArn' \
@@ -302,13 +350,13 @@ TASK_DEF_FILE="/tmp/mcp-gateway-scopes-init-taskdef-$$.json"
 echo "$TASK_DEF" > "$TASK_DEF_FILE"
 
 if [[ -z "$AWS_PROFILE" || "$AWS_PROFILE" == "default" ]]; then
-    TASK_DEF_ARN=$(aws ecs register-task-definition \
+    TASK_DEF_ARN=$("$AWS_CLI" ecs register-task-definition \
         --cli-input-json "file://$TASK_DEF_FILE" \
         --region "$AWS_REGION" \
         --query 'taskDefinition.taskDefinitionArn' \
         --output text 2>/dev/null)
 else
-    TASK_DEF_ARN=$(aws ecs register-task-definition \
+    TASK_DEF_ARN=$("$AWS_CLI" ecs register-task-definition \
         --cli-input-json "file://$TASK_DEF_FILE" \
         --region "$AWS_REGION" \
         --profile "$AWS_PROFILE" \
@@ -328,19 +376,27 @@ log_success "Task definition registered: $TASK_DEF_ARN"
 # Step 5: Create CloudWatch log group if needed
 log_info "Step 5/6: Checking CloudWatch log group..."
 
-LOG_CHECK_CMD="aws logs describe-log-groups --log-group-name-prefix /ecs/mcp-gateway-scopes-init --region $AWS_REGION"
+LOG_CHECK_CMD=(
+    "$AWS_CLI"
+    logs
+    describe-log-groups
+    --log-group-name-prefix
+    /ecs/mcp-gateway-scopes-init
+    --region
+    "$AWS_REGION"
+)
 if [[ -n "$AWS_PROFILE" && "$AWS_PROFILE" != "default" ]]; then
-    LOG_CHECK_CMD="$LOG_CHECK_CMD --profile $AWS_PROFILE"
+    LOG_CHECK_CMD+=(--profile "$AWS_PROFILE")
 fi
 
-if ! $LOG_CHECK_CMD --query 'logGroups[0].logGroupName' 2>/dev/null | grep -q "mcp-gateway-scopes-init"; then
+if ! "${LOG_CHECK_CMD[@]}" --query 'logGroups[0].logGroupName' 2>/dev/null | grep -q "mcp-gateway-scopes-init"; then
     log_info "Creating CloudWatch log group..."
     if [[ -z "$AWS_PROFILE" || "$AWS_PROFILE" == "default" ]]; then
-        aws logs create-log-group \
+        "$AWS_CLI" logs create-log-group \
             --log-group-name "/ecs/mcp-gateway-scopes-init" \
             --region "$AWS_REGION" 2>/dev/null || true
     else
-        aws logs create-log-group \
+        "$AWS_CLI" logs create-log-group \
             --log-group-name "/ecs/mcp-gateway-scopes-init" \
             --region "$AWS_REGION" \
             --profile "$AWS_PROFILE" 2>/dev/null || true
@@ -358,7 +414,7 @@ SUBNET_JSON=$(echo "$SUBNET_IDS" | awk '{for(i=1;i<=NF;i++) print "\""$i"\""}' |
 SG_JSON=$(echo "$SECURITY_GROUP_IDS" | awk '{for(i=1;i<=NF;i++) print "\""$i"\""}' | paste -sd ',' -)
 
 if [[ -z "$AWS_PROFILE" || "$AWS_PROFILE" == "default" ]]; then
-    TASK_ARN=$(aws ecs run-task \
+    TASK_ARN=$("$AWS_CLI" ecs run-task \
         --cluster "$CLUSTER_NAME" \
         --task-definition "mcp-gateway-scopes-init" \
         --launch-type FARGATE \
@@ -367,7 +423,7 @@ if [[ -z "$AWS_PROFILE" || "$AWS_PROFILE" == "default" ]]; then
         --query 'tasks[0].taskArn' \
         --output text 2>/dev/null)
 else
-    TASK_ARN=$(aws ecs run-task \
+    TASK_ARN=$("$AWS_CLI" ecs run-task \
         --cluster "$CLUSTER_NAME" \
         --task-definition "mcp-gateway-scopes-init" \
         --launch-type FARGATE \
@@ -394,14 +450,14 @@ INTERVAL=5
 
 while [[ $ELAPSED -lt $WAIT_TIMEOUT ]]; do
     if [[ -z "$AWS_PROFILE" || "$AWS_PROFILE" == "default" ]]; then
-        TASK_STATUS=$(aws ecs describe-tasks \
+        TASK_STATUS=$("$AWS_CLI" ecs describe-tasks \
             --cluster "$CLUSTER_NAME" \
             --tasks "$TASK_ARN" \
             --region "$AWS_REGION" \
             --query 'tasks[0].{lastStatus:lastStatus,exitCode:containers[0].exitCode}' \
             --output json 2>/dev/null)
     else
-        TASK_STATUS=$(aws ecs describe-tasks \
+        TASK_STATUS=$("$AWS_CLI" ecs describe-tasks \
             --cluster "$CLUSTER_NAME" \
             --tasks "$TASK_ARN" \
             --region "$AWS_REGION" \
@@ -443,14 +499,14 @@ LOG_STREAM="ecs/scopes-init/$TASK_ID"
 sleep 2
 
 if [[ -z "$AWS_PROFILE" || "$AWS_PROFILE" == "default" ]]; then
-    LOGS=$(aws logs get-log-events \
+    LOGS=$("$AWS_CLI" logs get-log-events \
         --log-group-name "/ecs/mcp-gateway-scopes-init" \
         --log-stream-name "$LOG_STREAM" \
         --region "$AWS_REGION" \
         --query 'events[*].message' \
         --output text 2>/dev/null || echo "")
 else
-    LOGS=$(aws logs get-log-events \
+    LOGS=$("$AWS_CLI" logs get-log-events \
         --log-group-name "/ecs/mcp-gateway-scopes-init" \
         --log-stream-name "$LOG_STREAM" \
         --region "$AWS_REGION" \

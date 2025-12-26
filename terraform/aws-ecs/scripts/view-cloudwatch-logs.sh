@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 ################################################################################
 # View CloudWatch Logs for ECS Tasks
@@ -45,6 +45,29 @@
 
 set -euo pipefail
 
+# macOS ships bash 3.2 by default, which doesn't support associative arrays.
+# Re-exec with a newer bash if available (e.g., Homebrew bash).
+if [[ -n "${BASH_VERSINFO:-}" && "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+        if [[ -x "$candidate" ]]; then
+            # Avoid `-l` here: user shell init files can fail (e.g., pyenv hooks),
+            # preventing the version probe and leaving us on bash 3.2.
+            if "$candidate" -c '[[ -n "${BASH_VERSINFO:-}" && "${BASH_VERSINFO[0]}" -ge 4 ]]' >/dev/null 2>&1; then
+                exec "$candidate" "$0" "$@"
+            fi
+        fi
+    done
+
+    echo ""
+    echo "ERROR: view-cloudwatch-logs.sh requires bash 4+ (current: $BASH_VERSION)."
+    echo "Fix (macOS): brew install bash, then rerun."
+    echo ""
+    exit 2
+fi
+
+# Disable AWS CLI pager to prevent interactive prompts
+export AWS_PAGER=""
+
 # Colors
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -85,6 +108,51 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $*"
 }
 
+resolve_aws_cli() {
+    local explicit="${AWS_BIN:-}"
+    local candidate=""
+    local version=""
+
+    if [[ -n "$explicit" ]]; then
+        if [[ ! -x "$explicit" ]]; then
+            log_error "AWS_BIN is set but not executable: $explicit"
+            exit 1
+        fi
+        echo "$explicit"
+        return 0
+    fi
+
+    candidate="$(command -v aws || true)"
+    if [[ -n "$candidate" ]]; then
+        version="$("$candidate" --version 2>&1 || true)"
+        if echo "$version" | grep -q "aws-cli/2"; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    for candidate in /opt/homebrew/bin/aws /usr/local/bin/aws /usr/bin/aws; do
+        if [[ -x "$candidate" ]]; then
+            version="$("$candidate" --version 2>&1 || true)"
+            if echo "$version" | grep -q "aws-cli/2"; then
+                echo "$candidate"
+                return 0
+            fi
+        fi
+    done
+
+    if [[ -n "$version" ]]; then
+        log_error "Found AWS CLI but not v2: $version"
+    else
+        log_error "AWS CLI v2 not found on PATH"
+    fi
+    log_error "Install AWS CLI v2 (recommended), or set AWS_BIN to a working aws binary."
+    exit 1
+}
+
+AWS_CLI="$(resolve_aws_cli)"
+export AWS_BIN="$AWS_CLI"
+
 log_component() {
     echo -e "${CYAN}[$1]${NC} $2"
 }
@@ -98,14 +166,14 @@ _discover_ecs_log_groups() {
     log_info "Discovering ECS services and log groups..."
 
     # Get all log groups matching ECS patterns
-    local ecs_logs=$(aws logs describe-log-groups \
+    local ecs_logs=$("$AWS_CLI" logs describe-log-groups \
         --log-group-name-prefix "/ecs/" \
         --region "$AWS_REGION" \
         --query 'logGroups[*].logGroupName' \
         --output text 2>/dev/null || true)
 
     if [[ -z "$ecs_logs" ]]; then
-        ecs_logs=$(aws logs describe-log-groups \
+        ecs_logs=$("$AWS_CLI" logs describe-log-groups \
             --log-group-name-prefix "/aws/ecs/" \
             --region "$AWS_REGION" \
             --query 'logGroups[*].logGroupName' \
@@ -113,7 +181,7 @@ _discover_ecs_log_groups() {
     fi
 
     # Also add ALB logs
-    local alb_logs=$(aws logs describe-log-groups \
+    local alb_logs=$("$AWS_CLI" logs describe-log-groups \
         --log-group-name-prefix "/aws/alb" \
         --region "$AWS_REGION" \
         --query 'logGroups[*].logGroupName' \
@@ -205,7 +273,7 @@ _calculate_end_time() {
 _check_log_group_exists() {
     local log_group="$1"
 
-    if aws logs describe-log-groups \
+    if "$AWS_CLI" logs describe-log-groups \
         --log-group-name-prefix "$log_group" \
         --region "$AWS_REGION" \
         &>/dev/null; then
@@ -243,7 +311,7 @@ _tail_logs() {
 
     if [[ "$follow" == "true" ]]; then
         # Real-time tailing
-        aws logs tail "$log_group" \
+        "$AWS_CLI" logs tail "$log_group" \
             --follow \
             --since "${MINUTES}m" \
             --region "$AWS_REGION" \
@@ -258,7 +326,7 @@ _tail_logs() {
         local start_time=$(_calculate_start_time)
         local end_time=$(_calculate_end_time)
 
-        aws logs filter-log-events \
+        "$AWS_CLI" logs filter-log-events \
             --log-group-name "$log_group" \
             --start-time "$start_time" \
             --end-time "$end_time" \
@@ -384,9 +452,9 @@ if ! [[ "$MINUTES" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-# Verify AWS CLI is available
-if ! command -v aws &> /dev/null; then
-    log_error "AWS CLI is not installed or not in PATH"
+# Verify AWS CLI is available (resolved via AWS_BIN or PATH)
+if [[ -z "${AWS_CLI:-}" || ! -x "$AWS_CLI" ]]; then
+    log_error "AWS CLI v2 is not available (set AWS_BIN or install aws-cli v2)"
     exit 1
 fi
 
