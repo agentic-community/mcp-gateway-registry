@@ -1,6 +1,24 @@
 # Session State — Latest
 
 ## Last Completed Work
+- AWS ECS deployment debugging + fixes to keep EnforceAI required (no bypass), based on verified ECS/CloudWatch evidence:
+  - Root causes:
+    - Auth service rollout failures due to `linux/amd64` pull errors when pushing arm64-only images from Apple Silicon (`CannotPullContainerError: image Manifest does not contain descriptor matching platform 'linux/amd64'`).
+    - EnforceAI returning `503 {"detail":"Enforcement misconfigured"}` because auth-server could not read `ENFORCEAI_SCOPES_CATALOG_PATH` (`/efs/auth_config/scopes.yml`) due to EFS access point path mismatch (scopes-init wrote to access point root `/auth_config`, while services mounted EFS root without access points).
+  - Build tooling:
+    - `scripts/build-images.sh` now re-execs with bash 4+ reliably (avoid `bash -l` pyenv init failures) and sets `--platform ${DOCKER_PLATFORM_PUSH:-linux/amd64}` for push flows so ECS/Fargate can pull images.
+    - AWS helper scripts prefer AWS CLI v2 via `AWS_BIN` (avoid venv `aws` issues): `terraform/aws-ecs/scripts/post-deployment-setup.sh`, `terraform/aws-ecs/scripts/run-scopes-init-task.sh`, `terraform/aws-ecs/scripts/view-cloudwatch-logs.sh`.
+  - Terraform:
+    - Use EFS access points correctly via `authorization_config.access_point_id` (so `/efs/auth_config/scopes.yml` exists where services expect): `terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf`.
+    - Wire `ADMIN_PASSWORD` secret into auth-server task definition (supports `/internal/reload-scopes` and password-admin seeding): `terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf`.
+  - One-off ops scripts:
+    - Added `terraform/aws-ecs/scripts/run-servers-seed-task.sh` to copy bundled demo servers (`registry/servers/*.json`) into the EFS servers access point so the AWS UI isn’t empty on first deploy.
+    - Seed task overrides registry entrypoint (avoids `ADMIN_PASSWORD` requirement) and avoids `cp -a` ownership preservation (EFS access points reject chown).
+  - Docs:
+    - Updated `terraform/aws-ecs/README.md` with AWS update workflow + troubleshooting for amd64 image pushes, EnforceAI 503 misconfiguration, demo server seeding, and security group deletion stalls.
+    - Updated `docs/enforceai-setup-guide.md` with AWS ECS notes and pointers to the Terraform guide.
+- Verification notes:
+  - `aws ecs execute-command` was not available on the operator machine due to missing `SessionManagerPlugin`; relied on CloudWatch logs + ECS task definition inspection instead.
 - Fix: upstream OAuth token expiry precision no longer truncates to whole seconds, preventing flaky early-refresh behavior in `tests/integration/test_enforceai_upstream_oauth_flow.py` where the first proxy could refresh immediately:
   - Preserve microseconds when computing `expires_at`: `auth_server/enforceai/upstream/oauth_client.py`
   - Preserve microseconds when persisting upstream credential timestamps: `auth_server/enforceai/stores/sqlite/upstream_credential_store.py`
@@ -162,10 +180,15 @@
 - Upstream OAuth seamless plan Phase 5: end-to-end proxy regression (completed)
 
 ## Next Steps
-1. Resume `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 15: Settings + Help + Final Polish (SettingsPage, HelpPage, 404 page, error boundary)
-2. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 16: E2E Testing + Documentation (Playwright setup, E2E scenarios, README update)
+1. AWS: apply Terraform module updates (EFS access point mounts + auth `ADMIN_PASSWORD` secret) and verify task definitions now include EFS `authorizationConfig.accessPointId`.
+2. AWS: ensure `/auth_config/scopes.yml` exists on the EFS auth_config access point (run scopes init task if needed), then restart auth/registry and re-verify:
+   - `GET /enforceai/scopes/catalog` returns 200 (no 503)
+   - `GET /api/servers` returns demo servers after running `terraform/aws-ecs/scripts/run-servers-seed-task.sh` and restarting registry.
+3. Resume `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 15: Settings + Help + Final Polish (SettingsPage, HelpPage, 404 page, error boundary)
+4. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 16: E2E Testing + Documentation (Playwright setup, E2E scenarios, README update)
 
 ## Tests Executed
+- `bash -n scripts/build-images.sh terraform/aws-ecs/scripts/post-deployment-setup.sh terraform/aws-ecs/scripts/run-scopes-init-task.sh terraform/aws-ecs/scripts/view-cloudwatch-logs.sh terraform/aws-ecs/scripts/run-servers-seed-task.sh` (pass)
 - `.venv/bin/python -m py_compile tests/integration/test_enforceai_upstream_oauth_flow.py` (pass)
 - `make test-unit` (pass)
 - `make test-integration` (pass)
