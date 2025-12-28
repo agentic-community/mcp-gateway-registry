@@ -180,7 +180,14 @@ terraform version
 cd mcp-gateway-registry
 uv sync
 source .venv/bin/activate
-aws --version
+
+# Ensure you're using AWS CLI v2 (avoid pip/venv-installed awscli)
+aws --version  # should include "aws-cli/2"
+
+# If you have multiple `aws` binaries, pin AWS CLI v2 explicitly:
+export AWS_BIN="${AWS_BIN:-/opt/homebrew/bin/aws}"
+$AWS_BIN --version
+$AWS_BIN sts get-caller-identity
 ```
 
 **Configure AWS CLI:**
@@ -207,6 +214,14 @@ export AWS_REGION=us-east-1
 # Build and push all images
 make build-push
 ```
+
+Notes:
+- If you are building from Apple Silicon (arm64) but deploying to ECS/Fargate (typically linux/amd64), push amd64 images:
+  - `export DOCKER_PLATFORM_PUSH=linux/amd64`
+- If you have multiple `aws` binaries (for example, a venv-installed `aws`), pin AWS CLI v2 explicitly:
+  - `export AWS_BIN=/opt/homebrew/bin/aws`
+- On macOS, `make build-push` runs `scripts/build-images.sh` which requires bash 4+ (macOS default bash is 3.2):
+  - `brew install bash`
 
 ### Step 3: Configure terraform.tfvars
 
@@ -320,6 +335,32 @@ terraform apply \
 terraform apply
 ```
 
+### Updating an Existing Deployment
+
+Recommended workflow when you change configuration or images:
+
+```bash
+# 0) Pin AWS CLI v2 if you have a venv-installed `aws`
+export AWS_BIN=/opt/homebrew/bin/aws
+export AWS_REGION=us-east-1
+
+# 1) (Optional) Rebuild/push images
+# On Apple Silicon, push amd64 images for ECS/Fargate
+export DOCKER_PLATFORM_PUSH=linux/amd64
+make build-push
+
+# 2) Apply Terraform changes
+cd terraform/aws-ecs
+terraform init -upgrade
+terraform plan
+terraform apply
+```
+
+Notes:
+- Always run `terraform plan` before `terraform apply` for a clear diff.
+- If you want to focus only on the MCP Gateway module (and avoid unrelated diffs in Keycloak/tag-only resources), you can apply just the module:
+  - `terraform apply -target=module.mcp_gateway`
+
 ### Step 5: Post-Deployment Setup
 
 See [Post-Deployment](#post-deployment) section for:
@@ -425,6 +466,21 @@ and exports EnforceAI env vars. For a first bring-up you can also enable:
 The bootstrap token (if minted) is written to the EnforceAI state dir on EFS as `bootstrap_gateway_token.txt`.
 When EnforceAI is enabled, the Auth Server service is forced to a single task (autoscaling disabled) to avoid
 SQLite multi-writer issues on shared storage.
+
+### Demo Servers on AWS (Recommended)
+
+In AWS, the registry mounts EFS at `/app/registry/servers`. On a fresh deployment, that directory is empty,
+so the demo server JSON files bundled into the container image are hidden and the UI may show 0 servers.
+
+Seed the bundled demo servers into the EFS servers access point:
+
+```bash
+cd terraform/aws-ecs
+make save-outputs
+./scripts/run-servers-seed-task.sh --aws-region "$AWS_REGION"
+```
+
+Then restart the registry service (or wait for it to be redeployed) and refresh the UI.
 
 ### Step 2: Access Web UI and Register Example Servers/Agents
 
@@ -620,9 +676,19 @@ aws ecs describe-tasks \
 
 # Common causes:
 # - ECR image pull failure (wrong region or permissions)
+# - Apple Silicon arm64-only images pushed (ECS expects linux/amd64)
 # - Resource limits (insufficient CPU/memory)
 # - Invalid environment variables
 # - Secrets Manager access denied
+```
+
+If you see `CannotPullContainerError` and an error like:
+`image Manifest does not contain descriptor matching platform 'linux/amd64'`,
+re-push images as amd64:
+
+```bash
+export DOCKER_PLATFORM_PUSH=linux/amd64
+make build-push
 ```
 
 #### SSL Certificate Validation Pending
@@ -672,6 +738,23 @@ Checklist:
 ./scripts/run-scopes-init-task.sh --aws-region "$AWS_REGION"
 ```
 
+If `/enforceai/scopes/catalog` returns `503 {"detail":"Enforcement misconfigured"}`, EnforceAI is failing closed:
+the Auth Server cannot load its scopes catalog from EFS.
+
+Verify the Auth Server task definition mounts EFS via the `auth_config` access point:
+
+```bash
+AUTH_TASK_DEF=$(aws ecs describe-services --region "$AWS_REGION" \
+  --cluster mcp-gateway-ecs-cluster --services mcp-gateway-v2-auth \
+  --query 'services[0].taskDefinition' --output text)
+
+aws ecs describe-task-definition --region "$AWS_REGION" --task-definition "$AUTH_TASK_DEF" \
+  --query 'taskDefinition.volumes[?name==`auth_config`].efsVolumeConfiguration.authorizationConfig'
+```
+
+Expected:
+- `authorizationConfig.accessPointId` is set (not `null`).
+
 2. If you intend to use EnforceAI, enable it in `terraform.tfvars` and redeploy:
 
 ```hcl
@@ -690,10 +773,34 @@ aws ecs describe-services \
   --query 'services[0].{ServiceName:serviceName,TaskDef:taskDefinition}'
 ```
 
-4. Check CloudWatch logs for the registry and auth-server services:
+4. Seed demo servers into EFS if the UI shows 0 servers:
+
+```bash
+./scripts/run-servers-seed-task.sh --aws-region "$AWS_REGION"
+```
+
+5. Check CloudWatch logs for the registry and auth-server services:
 
 ```bash
 ./scripts/view-cloudwatch-logs.sh --filter "ERROR|Exception|EnforceAI|SCOPES_INIT"
+```
+
+#### Terraform Hanging While Destroying a Security Group
+
+AWS security groups can take a long time to delete when they are still referenced (most commonly by other
+security groups’ ingress rules, ENIs, or load balancers). Verify dependencies:
+
+```bash
+SG_ID="sg-xxxxxxxxxxxxxxxxx"
+
+aws ec2 describe-network-interfaces --region "$AWS_REGION" \
+  --filters Name=group-id,Values="$SG_ID" \
+  --query 'NetworkInterfaces[].{Id:NetworkInterfaceId,Status:Status,Desc:Description}' --output table
+
+aws ec2 describe-security-groups --region "$AWS_REGION" \
+  --group-ids "$SG_ID" \
+  --query 'SecurityGroups[0].{GroupId:GroupId,Name:GroupName,IpPermissions:IpPermissions,IpPermissionsEgress:IpPermissionsEgress}' \
+  --output json
 ```
 
 ### Getting Help

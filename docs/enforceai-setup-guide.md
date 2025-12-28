@@ -6,6 +6,17 @@ It complements:
 - `docs/complete-setup-guide.md` (full EC2 + Docker stack)
 - `docs/macos-setup-guide.md` (local macOS dev stack)
 
+## AWS ECS Notes (Terraform Deployment)
+
+For production-style AWS ECS deployments (EFS + ALB + HTTPS), follow `terraform/aws-ecs/README.md`.
+
+Common AWS-specific gotchas:
+- If you build images on Apple Silicon, push `linux/amd64` images for ECS/Fargate:
+  - `export DOCKER_PLATFORM_PUSH=linux/amd64`
+- If `/enforceai/scopes/catalog` returns `503 {"detail":"Enforcement misconfigured"}`, the Auth Server is failing closed because it cannot load the scopes catalog from EFS. Re-run scopes init and confirm the Auth Server task mounts the EFS `auth_config` access point.
+- On first deploy, the UI may show 0 servers because EFS starts empty. Seed demo servers into EFS:
+  - `cd terraform/aws-ecs && make save-outputs && ./scripts/run-servers-seed-task.sh --aws-region "$AWS_REGION"`
+
 ## What You Get
 
 When EnforceAI is enabled (`ENFORCEAI_DB_PATH` is set), the Auth Server (`auth_server/server.py`) adds:
