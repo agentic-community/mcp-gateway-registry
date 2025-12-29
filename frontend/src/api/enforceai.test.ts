@@ -252,12 +252,12 @@ describe('EnforceAI API - Audit Events', () => {
       const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
 
       const originalCreateElement = document.createElement.bind(document);
-      let createdAnchor: HTMLAnchorElement | null = null;
+      const anchor = originalCreateElement('a') as HTMLAnchorElement;
       const createElementSpy = vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
-        const el = originalCreateElement(tagName);
         if (tagName.toLowerCase() === 'a') {
-          createdAnchor = el as HTMLAnchorElement;
+          return anchor;
         }
+        const el = originalCreateElement(tagName);
         return el;
       });
 
@@ -266,7 +266,7 @@ describe('EnforceAI API - Audit Events', () => {
 
         expect(createObjectUrl).toHaveBeenCalledTimes(1);
         expect(clickSpy).toHaveBeenCalledTimes(1);
-        expect(createdAnchor?.download).toBe('audit_events_mock.csv');
+        expect(anchor.download).toBe('audit_events_mock.csv');
       } finally {
         clickSpy.mockRestore();
         createElementSpy.mockRestore();
