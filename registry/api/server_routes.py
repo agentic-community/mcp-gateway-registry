@@ -2,7 +2,6 @@ import json
 import asyncio
 import logging
 import os
-import sqlite3
 from typing import (
     Annotated,
     Any,
@@ -22,231 +21,40 @@ from fastapi import (
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 import httpx
-from pydantic import (
-    BaseModel,
-    Field,
-)
 
 from ..core.config import settings
 from ..auth.dependencies import web_auth, api_auth, enhanced_auth, nginx_proxied_auth
 from ..services.server_service import server_service
+from .server_internal_routes import (
+    internal_add_server_to_groups,
+    internal_create_group,
+    internal_delete_group,
+    internal_healthcheck,
+    internal_list_groups,
+    internal_remove_server_from_groups,
+    router as internal_router,
+)
+from .server_routes_common import (
+    ServerCreateRequest,
+    ServerUpdateRequest,
+    _apply_remove_side_effects,
+    _apply_toggle_side_effects,
+    _build_server_entry_from_form,
+    _enforce_proxy_pass_url_allowlist,
+    _enforce_upstream_oauth_provider_configured,
+    _normalize_server_path,
+    _normalize_upstream_auth_payload,
+    _require_can_modify_servers,
+    _require_admin_user_context,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+router.include_router(internal_router)
 
 # Templates
 templates = Jinja2Templates(directory=settings.templates_dir)
-
-
-def _require_admin_user_context(
-    user_context: dict | None,
-) -> dict:
-    if user_context is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-        )
-
-    if not user_context.get("is_admin", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin required",
-        )
-
-    return user_context
-
-
-def _normalize_upstream_auth_payload(
-    *,
-    upstream_auth: object | None,
-    auth_type: str | None,
-    auth_provider: str | None,
-    headers: object | None,
-) -> dict:
-    try:
-        from auth_server.enforceai.models.upstream_auth import (
-            normalize_upstream_auth,
-        )
-    except Exception as exc:  # noqa: BLE001 - fail closed if EnforceAI is unavailable
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Upstream auth normalization unavailable",
-        ) from exc
-
-    try:
-        normalized = normalize_upstream_auth(
-            upstream_auth=upstream_auth,
-            auth_type=auth_type,
-            auth_provider=auth_provider,
-            headers=headers,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid upstream auth configuration: {exc}",
-        ) from exc
-
-    return normalized.model_dump()
-
-
-def _normalize_server_path(
-    *,
-    raw_path: str,
-) -> str:
-    stripped = raw_path.strip()
-    if not stripped:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="path is required",
-        )
-    if not stripped.startswith("/"):
-        return f"/{stripped}"
-    return stripped
-
-
-class ServerCreateRequest(BaseModel):
-    name: str = Field(
-        ...,
-        min_length=1,
-        max_length=100,
-    )
-    path: str = Field(
-        ...,
-        min_length=1,
-        max_length=50,
-    )
-    proxy_pass_url: str = Field(
-        ...,
-        min_length=1,
-    )
-    description: Optional[str] = None
-    tags: Optional[list[str]] = None
-    upstream_auth: Optional[dict[str, Any]] = None
-    overwrite: bool = Field(
-        default=False,
-        description="If true, replace an existing server at the same path.",
-    )
-
-
-class ServerUpdateRequest(BaseModel):
-    name: Optional[str] = Field(
-        default=None,
-        min_length=1,
-        max_length=100,
-    )
-    proxy_pass_url: Optional[str] = Field(
-        default=None,
-        min_length=1,
-    )
-    description: Optional[str] = Field(
-        default=None,
-        max_length=500,
-    )
-    tags: Optional[list[str]] = None
-    upstream_auth: Optional[dict[str, Any]] = None
-    enabled: Optional[bool] = None
-
-
-def _enforce_proxy_pass_url_allowlist(
-    *,
-    proxy_pass_url: str,
-) -> None:
-    db_path = os.getenv("ENFORCEAI_DB_PATH")
-    if db_path is None or not db_path.strip():
-        return
-
-    try:
-        from pathlib import Path
-
-        from auth_server.enforceai.egress.allowlist import (
-            check_proxy_pass_url,
-        )
-        from auth_server.enforceai.stores.sqlite.egress_allowlist_store import (
-            SqliteEgressAllowlistStore,
-        )
-    except Exception as exc:  # noqa: BLE001 - fail closed if EnforceAI is unavailable
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Egress allowlist enforcement unavailable",
-        ) from exc
-
-    store = SqliteEgressAllowlistStore(db_path=Path(db_path))
-    try:
-        entries = store.list_entries(include_expired=False)
-    except Exception as exc:  # noqa: BLE001 - treat as enforcement misconfigured
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Egress allowlist store unavailable",
-        ) from exc
-
-    if not entries:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="proxy_pass_url not allowed (egress allowlist is empty)",
-        )
-
-    decision = check_proxy_pass_url(
-        proxy_pass_url=proxy_pass_url,
-        entries=entries,
-    )
-    if not decision.allowed:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"proxy_pass_url not allowed: {decision.reason}",
-        )
-
-
-def _enforce_upstream_oauth_provider_configured(
-    *,
-    upstream_auth: dict,
-) -> None:
-    upstream_auth_type = (upstream_auth.get("type") or "").strip()
-    if upstream_auth_type not in {"oauth2", "oidc", "provider-oauth"}:
-        return
-
-    provider_id = (upstream_auth.get("provider") or "").strip()
-    if not provider_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid upstream auth configuration: provider is required for OAuth upstream auth",
-        )
-
-    db_path = os.getenv("ENFORCEAI_DB_PATH")
-    if db_path is None or not db_path.strip():
-        return
-
-    try:
-        from pathlib import Path
-
-        from auth_server.enforceai.db.connection import (
-            sqlite_connection,
-        )
-    except Exception as exc:  # noqa: BLE001 - fail closed if EnforceAI is unavailable
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Upstream OAuth provider validation unavailable",
-        ) from exc
-
-    try:
-        with sqlite_connection(Path(db_path)) as connection:
-            row = connection.execute(
-                "SELECT 1 FROM upstream_oauth_providers WHERE provider_id = ?",
-                (provider_id,),
-            ).fetchone()
-    except sqlite3.Error as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Upstream OAuth provider registry unavailable",
-        ) from exc
-
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid upstream auth configuration: unknown upstream OAuth provider '{provider_id}'",
-        )
-
-
 @router.get("/", response_class=HTMLResponse)
 async def read_root(
     request: Request,
@@ -706,20 +514,16 @@ async def delete_server_json(
     if not success:
         raise HTTPException(status_code=500, detail="Service removal failed")
 
-    await faiss_service.remove_service(path)
-
-    enabled_servers = {
-        server_path: server_service.get_server_info(server_path)
-        for server_path in server_service.get_enabled_services()
-    }
-    await nginx_service.generate_config_async(enabled_servers)
-
-    await health_service.broadcast_health_update(path)
-
-    try:
-        await remove_server_scopes(path)
-    except Exception as exc:  # noqa: BLE001 - best effort cleanup
-        logger.warning(f"Failed to remove server {path} from scopes: {exc}")
+    await _apply_remove_side_effects(
+        service_path=path,
+        server_service=server_service,
+        faiss_service=faiss_service,
+        health_service=health_service,
+        nginx_service=nginx_service,
+        remove_server_scopes=remove_server_scopes,
+        scopes_error_log_level="warning",
+        logger=logger,
+    )
 
     return Response(status_code=204)
 
@@ -912,434 +716,6 @@ async def register_service(
             "service": server_entry,
         },
     )
-
-
-@router.post("/internal/register")
-async def internal_register_service(
-    request: Request,
-    name: Annotated[str, Form()],
-    description: Annotated[str, Form()],
-    path: Annotated[str, Form()],
-    proxy_pass_url: Annotated[str, Form()],
-    tags: Annotated[str, Form()] = "",
-    num_tools: Annotated[int, Form()] = 0,
-    num_stars: Annotated[int, Form()] = 0,
-    is_python: Annotated[bool, Form()] = False,
-    license_str: Annotated[str, Form(alias="license")] = "N/A",
-    overwrite: Annotated[bool, Form()] = True,
-    auth_provider: Annotated[str | None, Form()] = None,
-    auth_type: Annotated[str | None, Form()] = None,
-    upstream_auth: Annotated[str | None, Form()] = None,
-    supported_transports: Annotated[str | None, Form()] = None,
-    headers: Annotated[str | None, Form()] = None,
-    tool_list_json: Annotated[str | None, Form()] = None,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal service registration endpoint for mcpgw-server (requires admin auth)."""
-    logger.warning("INTERNAL REGISTER: Function called - starting execution")  # TODO: replace with debug
-
-    from ..search.service import faiss_service
-    from ..health.service import health_service
-    from ..core.nginx_service import nginx_service
-
-    logger.warning(f"INTERNAL REGISTER: Request parameters - name={name}, path={path}, proxy_pass_url={proxy_pass_url}")  # TODO: replace with debug
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-
-    logger.warning(f"INTERNAL REGISTER: Authentication successful for user {username}")  # TODO: replace with debug
-    logger.info(f"Internal service registration request from admin user '{username}'")
-
-    # Validate path format
-    if not path.startswith('/'):
-        path = '/' + path
-    logger.warning(f"INTERNAL REGISTER: Validated path: {path}")  # TODO: replace with debug
-
-    _enforce_proxy_pass_url_allowlist(proxy_pass_url=proxy_pass_url)
-
-    # Process tags
-    tag_list = [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
-    logger.warning(f"INTERNAL REGISTER: Processed tags: {tag_list}")  # TODO: replace with debug
-
-    # Process supported_transports
-    if supported_transports:
-        try:
-            transports_list = json.loads(supported_transports) if supported_transports.startswith('[') else [t.strip() for t in supported_transports.split(',')]
-        except Exception as e:
-            logger.warning(f"INTERNAL REGISTER: Failed to parse supported_transports, using default: {e}")
-            transports_list = ["streamable-http"]
-    else:
-        transports_list = ["streamable-http"]
-
-    # Process headers
-    headers_list = []
-    if headers:
-        try:
-            headers_list = json.loads(headers) if isinstance(headers, str) else headers
-        except Exception as e:
-            logger.warning(f"INTERNAL REGISTER: Failed to parse headers: {e}")
-
-    upstream_auth_payload = _normalize_upstream_auth_payload(
-        upstream_auth=upstream_auth,
-        auth_type=auth_type,
-        auth_provider=auth_provider,
-        headers=headers_list,
-    )
-
-    # Process tool_list
-    tool_list = []
-    if tool_list_json:
-        try:
-            tool_list = json.loads(tool_list_json) if isinstance(tool_list_json, str) else tool_list_json
-        except Exception as e:
-            logger.warning(f"INTERNAL REGISTER: Failed to parse tool_list_json: {e}")
-
-    # Create server entry
-    server_entry = {
-        "server_name": name,
-        "description": description,
-        "path": path,
-        "proxy_pass_url": proxy_pass_url,
-        "supported_transports": transports_list,
-        "auth_type": auth_type if auth_type else "none",
-        "upstream_auth": upstream_auth_payload,
-        "tags": tag_list,
-        "num_tools": num_tools,
-        "num_stars": num_stars,
-        "is_python": is_python,
-        "license": license_str,
-        "tool_list": tool_list
-    }
-
-    # Add optional fields if provided
-    if auth_provider:
-        server_entry["auth_provider"] = auth_provider
-    if headers_list:
-        server_entry["headers"] = headers_list
-
-    logger.warning(f"INTERNAL REGISTER: Created server entry: {server_entry}")  # TODO: replace with debug
-    logger.warning(f"INTERNAL REGISTER: Overwrite parameter: {overwrite}")  # TODO: replace with debug
-
-    # Check if server exists and handle overwrite logic
-    existing_server = server_service.get_server_info(path)
-    if existing_server and not overwrite:
-        logger.warning(f"INTERNAL REGISTER: Server exists and overwrite=False for path {path}")  # TODO: replace with debug
-        return JSONResponse(
-            status_code=409,  # Conflict status code for existing resource
-            content={
-                "error": "Service registration failed",
-                "reason": f"A service with path '{path}' already exists",
-                "suggestion": "Set overwrite=true or use the remove command first"
-            },
-        )
-
-    # Register the server (this will overwrite if server exists and overwrite=True)
-    logger.warning("INTERNAL REGISTER: Calling server_service.register_server")  # TODO: replace with debug
-    if existing_server and overwrite:
-        logger.warning(f"INTERNAL REGISTER: Overwriting existing server at path {path}")  # TODO: replace with debug
-        success = server_service.update_server(path, server_entry)
-    else:
-        success = server_service.register_server(server_entry)
-
-    if not success:
-        logger.warning(f"INTERNAL REGISTER: Registration failed for path {path}")  # TODO: replace with debug
-        return JSONResponse(
-            status_code=409,  # Conflict status code for existing resource
-            content={
-                "error": "Service registration failed",
-                "reason": f"Failed to register service at path '{path}'",
-                "suggestion": "Check server logs for detailed error information"
-            },
-        )
-
-    logger.warning("INTERNAL REGISTER: Auto-enabling newly registered server")  # TODO: replace with debug
-
-    # Automatically enable the newly registered server BEFORE FAISS indexing
-    try:
-        toggle_success = server_service.toggle_service(path, True)
-        if toggle_success:
-            logger.info(f"Successfully auto-enabled server {path} after registration")
-        else:
-            logger.warning(f"Failed to auto-enable server {path} after registration")
-    except Exception as e:
-        logger.error(f"Error auto-enabling server {path}: {e}")
-        # Non-fatal error - server is registered but not enabled
-
-    logger.warning(f"INTERNAL REGISTER: Server registered successfully, adding to FAISS index")  # TODO: replace with debug
-
-    # Add to FAISS index with current enabled state (should be True after auto-enable)
-    is_enabled = server_service.is_service_enabled(path)
-    await faiss_service.add_or_update_service(path, server_entry, is_enabled)
-
-    logger.warning("INTERNAL REGISTER: Regenerating Nginx configuration")  # TODO: replace with debug
-
-    # Regenerate Nginx configuration
-    enabled_servers = {
-        server_path: server_service.get_server_info(server_path)
-        for server_path in server_service.get_enabled_services()
-    }
-    await nginx_service.generate_config_async(enabled_servers)
-
-    logger.warning("INTERNAL REGISTER: Broadcasting health status update")  # TODO: replace with debug
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(path)
-
-    logger.warning("INTERNAL REGISTER: Updating scopes.yml for new server")  # TODO: replace with debug
-
-    # Update scopes.yml with the new server's tools
-    from ..utils.scopes_manager import update_server_scopes
-
-    # Get the tool list from the server entry
-    tool_names = []
-    if "tool_list" in server_entry and server_entry["tool_list"]:
-        tool_names = [tool["name"] for tool in server_entry["tool_list"] if "name" in tool]
-
-    # Update scopes and reload auth server
-    try:
-        await update_server_scopes(path, name, tool_names)
-        logger.info(f"Successfully updated scopes for server {path} with {len(tool_names)} tools")
-    except Exception as e:
-        logger.error(f"Failed to update scopes for server {path}: {e}")
-        # Non-fatal error - server is registered but scopes not updated
-
-    logger.warning(f"INTERNAL REGISTER: Registration complete, returning success response")  # TODO: replace with debug
-    logger.info(f"New service registered via internal endpoint: '{name}' at path '{path}' by admin '{username}'")
-
-    return JSONResponse(
-        status_code=201,
-        content={
-            "message": "Service registered successfully",
-            "service": server_entry,
-        },
-    )
-
-
-@router.post("/internal/remove")
-async def internal_remove_service(
-    request: Request,
-    service_path: Annotated[str, Form()],
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal service removal endpoint for mcpgw-server (requires admin auth)."""
-    from ..search.service import faiss_service
-    from ..health.service import health_service
-    from ..core.nginx_service import nginx_service
-
-    logger.warning("INTERNAL REMOVE: Function called - starting execution")  # TODO: replace with debug
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-
-    logger.info(f"Internal service removal request from admin user '{username}' for service '{service_path}'")
-
-    # Validate path format
-    if not service_path.startswith('/'):
-        service_path = '/' + service_path
-
-    logger.warning(f"INTERNAL REMOVE: Normalized service path: {service_path}")  # TODO: replace with debug
-
-    # Check if server exists
-    server_info = server_service.get_server_info(service_path)
-    if not server_info:
-        logger.warning(f"INTERNAL REMOVE: Service not found at path '{service_path}'")  # TODO: replace with debug
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": "Service not found",
-                "reason": f"No service registered at path '{service_path}'",
-                "suggestion": "Check the service path and ensure it is registered"
-            },
-        )
-
-    logger.warning(f"INTERNAL REMOVE: Service found, proceeding with removal")  # TODO: replace with debug
-
-    # Remove the server
-    success = server_service.remove_server(service_path)
-
-    if not success:
-        logger.warning(f"INTERNAL REMOVE: Failed to remove service at path '{service_path}'")  # TODO: replace with debug
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Service removal failed",
-                "reason": f"Failed to remove service at path '{service_path}'",
-                "suggestion": "Check server logs for detailed error information"
-            },
-        )
-
-    logger.warning(f"INTERNAL REMOVE: Service removed successfully, updating FAISS index")  # TODO: replace with debug
-
-    # Remove from FAISS index
-    await faiss_service.remove_service(service_path)
-
-    logger.warning("INTERNAL REMOVE: Regenerating Nginx configuration")  # TODO: replace with debug
-
-    # Regenerate Nginx configuration
-    enabled_servers = {
-        server_path: server_service.get_server_info(server_path)
-        for server_path in server_service.get_enabled_services()
-    }
-    await nginx_service.generate_config_async(enabled_servers)
-
-    logger.warning("INTERNAL REMOVE: Broadcasting health status update")  # TODO: replace with debug
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(service_path)
-
-    logger.warning("INTERNAL REMOVE: Removing server from scopes.yml")  # TODO: replace with debug
-
-    # Remove server from scopes.yml and reload auth server
-    from ..utils.scopes_manager import remove_server_scopes
-
-    try:
-        await remove_server_scopes(service_path)
-        logger.info(f"Successfully removed server {service_path} from scopes")
-    except Exception as e:
-        logger.error(f"Failed to remove server {service_path} from scopes: {e}")
-        # Non-fatal error - server is removed but scopes not updated
-
-    logger.warning(f"INTERNAL REMOVE: Removal complete, returning success response")  # TODO: replace with debug
-    logger.info(f"Service removed via internal endpoint: '{service_path}' by admin '{username}'")
-
-    return JSONResponse(
-        status_code=200,
-        content={
-            "message": "Service removed successfully",
-            "service_path": service_path,
-        },
-    )
-
-
-@router.post("/internal/toggle")
-async def internal_toggle_service(
-    request: Request,
-    service_path: Annotated[str, Form()],
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal service toggle endpoint for mcpgw-server (requires admin auth)."""
-    from ..search.service import faiss_service
-    from ..health.service import health_service
-    from ..core.nginx_service import nginx_service
-
-    logger.warning("INTERNAL TOGGLE: Function called - starting execution")  # TODO: replace with debug
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-    logger.warning(f"INTERNAL TOGGLE: Admin authentication successful for user '{username}'")  # TODO: replace with debug
-
-    # Ensure service_path starts with /
-    if not service_path.startswith("/"):
-        service_path = "/" + service_path
-
-    # Check if server exists
-    server_info = server_service.get_server_info(service_path)
-    if not server_info:
-        logger.warning(f"INTERNAL TOGGLE: Service not found at path '{service_path}'")  # TODO: replace with debug
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": "Service not found",
-                "reason": f"No service registered at path '{service_path}'",
-                "suggestion": "Check the service path and ensure it is registered"
-            },
-        )
-
-    logger.warning(f"INTERNAL TOGGLE: Service found, proceeding with toggle")  # TODO: replace with debug
-
-    # Get current state and toggle it
-    current_state = server_service.is_service_enabled(service_path)
-    new_state = not current_state
-    success = server_service.toggle_service(service_path, new_state)
-
-    if not success:
-        logger.warning(f"INTERNAL TOGGLE: Failed to toggle service at path '{service_path}'")  # TODO: replace with debug
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Service toggle failed",
-                "reason": f"Failed to toggle service at path '{service_path}'",
-                "suggestion": "Check server logs for detailed error information"
-            },
-        )
-
-    server_name = server_info["server_name"]
-    logger.info(f"Toggled '{server_name}' ({service_path}) to {new_state} by admin '{username}'")
-
-    # If enabling, perform immediate health check
-    status_result = "disabled"
-    last_checked_iso = None
-    if new_state:
-        logger.info(f"Performing immediate health check for {service_path} upon toggle ON...")
-        try:
-            status_result, last_checked_dt = await health_service.perform_immediate_health_check(service_path)
-            last_checked_iso = last_checked_dt.isoformat() if last_checked_dt else None
-            logger.info(f"Immediate health check for {service_path} completed. Status: {status_result}")
-        except Exception as e:
-            logger.error(f"ERROR during immediate health check for {service_path}: {e}")
-            status_result = f"error: immediate check failed ({type(e).__name__})"
-    else:
-        # When disabling, set status to disabled
-        status_result = "disabled"
-        logger.info(f"Service {service_path} toggled OFF. Status set to disabled.")
-
-    # Update FAISS metadata with new enabled state
-    await faiss_service.add_or_update_service(service_path, server_info, new_state)
-
-    # Regenerate Nginx configuration
-    enabled_servers = {
-        path: server_service.get_server_info(path)
-        for path in server_service.get_enabled_services()
-    }
-    await nginx_service.generate_config_async(enabled_servers)
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(service_path)
-
-    logger.warning(f"INTERNAL TOGGLE: Toggle complete, returning success response")  # TODO: replace with debug
-    return JSONResponse(
-        status_code=200,
-        content={
-            "message": f"Service toggled successfully",
-            "service_path": service_path,
-            "new_enabled_state": new_state,
-            "status": status_result,
-            "last_checked_iso": last_checked_iso,
-            "num_tools": server_info.get("num_tools", 0)
-        },
-    )
-
-
-@router.post("/internal/healthcheck")
-async def internal_healthcheck(
-    request: Request,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal health check endpoint for mcpgw-server (requires admin auth)."""
-    from ..health.service import health_service
-
-    logger.warning("INTERNAL HEALTHCHECK: Function called - starting execution")  # TODO: replace with debug
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-    logger.warning(f"INTERNAL HEALTHCHECK: Admin authenticated successfully: {username}")  # TODO: replace with debug
-
-    # Get health status for all servers
-    try:
-        health_data = health_service.get_all_health_status()
-        logger.info(f"Retrieved health status for {len(health_data)} servers")
-
-        return JSONResponse(
-            status_code=200,
-            content=health_data
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to retrieve health status: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve health status: {str(e)}"
-        )
 
 
 @router.get("/edit/{service_path:path}", response_class=HTMLResponse)
@@ -1736,400 +1112,6 @@ async def refresh_service(
         "num_tools": server_info.get("num_tools", 0)
     }
 
-@router.post("/internal/add-to-groups")
-async def internal_add_server_to_groups(
-    request: Request,
-    server_name: Annotated[str, Form()],
-    group_names: Annotated[str, Form()],  # Comma-separated list
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal endpoint to add a server to specific scopes groups (requires admin auth)."""
-    from ..utils.scopes_manager import add_server_to_groups
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-
-    # Parse group names from comma-separated string
-    groups = [group.strip() for group in group_names.split(",") if group.strip()]
-    if not groups:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No valid group names provided"
-        )
-
-    # Convert server name to path format
-    server_path = f"/{server_name}" if not server_name.startswith("/") else server_name
-
-    logger.info(f"Adding server {server_path} to groups {groups} via internal endpoint by admin '{username}'")
-
-    try:
-        success = await add_server_to_groups(server_path, groups)
-
-        if success:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "message": "Server successfully added to groups",
-                    "server_path": server_path,
-                    "groups": groups
-                }
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to add server to groups"
-            )
-
-    except Exception as e:
-        logger.error(f"Error adding server {server_path} to groups {groups}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
-        )
-
-
-@router.post("/internal/remove-from-groups")
-async def internal_remove_server_from_groups(
-    request: Request,
-    server_name: Annotated[str, Form()],
-    group_names: Annotated[str, Form()],  # Comma-separated list
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal endpoint to remove a server from specific scopes groups (requires admin auth)."""
-    from ..utils.scopes_manager import remove_server_from_groups
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-
-    # Parse group names from comma-separated string
-    groups = [group.strip() for group in group_names.split(",") if group.strip()]
-    if not groups:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No valid group names provided"
-        )
-
-    # Convert server name to path format
-    server_path = f"/{server_name}" if not server_name.startswith("/") else server_name
-
-    logger.info(f"Removing server {server_path} from groups {groups} via internal endpoint by admin '{username}'")
-
-    try:
-        success = await remove_server_from_groups(server_path, groups)
-
-        if success:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "message": "Server successfully removed from groups",
-                    "server_path": server_path,
-                    "groups": groups
-                }
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to remove server from groups"
-            )
-
-    except Exception as e:
-        logger.error(f"Error removing server {server_path} from groups {groups}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
-        )
-
-
-@router.get("/internal/list")
-async def internal_list_services(
-    request: Request,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal service listing endpoint for mcpgw-server (requires admin auth)."""
-    logger.warning("INTERNAL LIST: Function called - starting execution")  # TODO: replace with debug
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-
-    logger.info(f"Internal service list request from admin user '{username}'")
-
-    # Get all servers (admin access - no permission filtering)
-    all_servers = server_service.get_all_servers()
-
-    logger.warning(f"INTERNAL LIST: Found {len(all_servers)} servers")  # TODO: replace with debug
-
-    # Transform the data to include enabled status and health information
-    services = []
-    for service_path, server_info in all_servers.items():
-        from ..health.service import health_service
-
-        # Get real health status from health service
-        health_data = health_service._get_service_health_data(service_path)
-
-        service_data = {
-            "server_name": server_info.get("server_name", "Unknown"),
-            "path": service_path,
-            "description": server_info.get("description", ""),
-            "proxy_pass_url": server_info.get("proxy_pass_url", ""),
-            "is_enabled": server_service.is_service_enabled(service_path),
-            "tags": server_info.get("tags", []),
-            "num_tools": server_info.get("num_tools", 0),
-            "num_stars": server_info.get("num_stars", 0),
-            "is_python": server_info.get("is_python", False),
-            "license": server_info.get("license", "N/A"),
-            "health_status": health_data["status"],
-            "last_checked_iso": health_data["last_checked_iso"],
-            "tool_list": server_info.get("tool_list", [])
-        }
-        services.append(service_data)
-
-    logger.warning(f"INTERNAL LIST: Returning {len(services)} services")  # TODO: replace with debug
-    logger.info(f"Internal service list completed for admin user '{username}' - returned {len(services)} services")
-
-    return JSONResponse(
-        status_code=200,
-        content={
-            "services": services,
-            "total_count": len(services)
-        },
-    )
-
-
-@router.post("/internal/create-group")
-async def internal_create_group(
-    request: Request,
-    group_name: Annotated[str, Form()],
-    description: Annotated[str, Form()] = "",
-    create_in_keycloak: Annotated[bool, Form()] = True,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal endpoint to create a new group in both Keycloak and scopes.yml (requires admin auth)."""
-    from ..utils.scopes_manager import create_group_in_scopes
-    from ..utils.keycloak_manager import create_keycloak_group, group_exists_in_keycloak
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-
-    # Validate group name
-    if not group_name or not group_name.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Group name is required"
-        )
-
-    logger.info(f"Creating group '{group_name}' via internal endpoint by admin '{username}'")
-
-    try:
-        # Create in Keycloak first if requested
-        keycloak_created = False
-        if create_in_keycloak:
-            try:
-                # Check if group already exists in Keycloak
-                if await group_exists_in_keycloak(group_name):
-                    logger.warning(f"Group '{group_name}' already exists in Keycloak")
-                else:
-                    await create_keycloak_group(group_name, description)
-                    keycloak_created = True
-                    logger.info(f"Group '{group_name}' created in Keycloak")
-            except Exception as e:
-                logger.error(f"Failed to create group in Keycloak: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to create group in Keycloak: {str(e)}"
-                )
-
-        # Create in scopes.yml
-        scopes_success = await create_group_in_scopes(group_name, description)
-
-        if scopes_success:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "message": "Group successfully created",
-                    "group_name": group_name,
-                    "created_in_keycloak": keycloak_created,
-                    "created_in_scopes": True
-                }
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create group in scopes.yml (may already exist)"
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating group '{group_name}': {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
-        )
-
-
-@router.post("/internal/delete-group")
-async def internal_delete_group(
-    request: Request,
-    group_name: Annotated[str, Form()],
-    delete_from_keycloak: Annotated[bool, Form()] = True,
-    force: Annotated[bool, Form()] = False,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal endpoint to delete a group from both Keycloak and scopes.yml (requires admin auth)."""
-    from ..utils.scopes_manager import delete_group_from_scopes
-    from ..utils.keycloak_manager import delete_keycloak_group, group_exists_in_keycloak
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-
-    # Validate group name
-    if not group_name or not group_name.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Group name is required"
-        )
-
-    # Prevent deletion of system groups
-    system_groups = [
-        "UI-Scopes",
-        "group_mappings",
-        "mcp-registry-admin",
-        "mcp-registry-user",
-        "mcp-registry-developer",
-        "mcp-registry-operator"
-    ]
-
-    if group_name in system_groups:
-        logger.warning(f"Attempt to delete system group '{group_name}' by admin '{username}'")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Cannot delete system group '{group_name}'"
-        )
-
-    logger.info(f"Deleting group '{group_name}' via internal endpoint by admin '{username}'")
-
-    try:
-        # Delete from scopes.yml first
-        scopes_success = await delete_group_from_scopes(group_name, remove_from_mappings=True)
-
-        if not scopes_success:
-            logger.warning(f"Group '{group_name}' not found in scopes.yml or deletion failed")
-
-        # Delete from Keycloak if requested
-        keycloak_deleted = False
-        if delete_from_keycloak:
-            try:
-                if await group_exists_in_keycloak(group_name):
-                    await delete_keycloak_group(group_name)
-                    keycloak_deleted = True
-                    logger.info(f"Group '{group_name}' deleted from Keycloak")
-                else:
-                    logger.warning(f"Group '{group_name}' not found in Keycloak")
-            except Exception as e:
-                logger.error(f"Failed to delete group from Keycloak: {e}")
-                # Continue anyway - scopes deletion might have succeeded
-
-        if scopes_success or keycloak_deleted:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "message": "Group deletion completed",
-                    "group_name": group_name,
-                    "deleted_from_keycloak": keycloak_deleted,
-                    "deleted_from_scopes": scopes_success
-                }
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Group '{group_name}' not found in either Keycloak or scopes.yml"
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting group '{group_name}': {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
-        )
-
-
-@router.get("/internal/list-groups")
-async def internal_list_groups(
-    request: Request,
-    include_keycloak: bool = True,
-    include_scopes: bool = True,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-):
-    """Internal endpoint to list groups from Keycloak and/or scopes.yml (requires admin auth)."""
-    from ..utils.scopes_manager import list_groups_from_scopes
-    from ..utils.keycloak_manager import list_keycloak_groups
-
-    user_context = _require_admin_user_context(user_context)
-    username = user_context.get("username", "unknown")
-
-    logger.info(f"Listing groups via internal endpoint by admin '{username}'")
-
-    try:
-        result = {
-            "keycloak_groups": [],
-            "scopes_groups": {},
-            "synchronized": [],
-            "keycloak_only": [],
-            "scopes_only": []
-        }
-
-        # Get groups from Keycloak
-        keycloak_group_names = set()
-        if include_keycloak:
-            try:
-                keycloak_groups = await list_keycloak_groups()
-                result["keycloak_groups"] = [
-                    {
-                        "name": group.get("name"),
-                        "id": group.get("id"),
-                        "path": group.get("path", "")
-                    }
-                    for group in keycloak_groups
-                ]
-                keycloak_group_names = {group.get("name") for group in keycloak_groups}
-                logger.info(f"Found {len(keycloak_groups)} groups in Keycloak")
-            except Exception as e:
-                logger.error(f"Failed to list Keycloak groups: {e}")
-                result["keycloak_error"] = str(e)
-
-        # Get groups from scopes.yml
-        scopes_group_names = set()
-        if include_scopes:
-            try:
-                scopes_data = await list_groups_from_scopes()
-                result["scopes_groups"] = scopes_data.get("groups", {})
-                scopes_group_names = set(scopes_data.get("groups", {}).keys())
-                logger.info(f"Found {len(scopes_group_names)} groups in scopes.yml")
-            except Exception as e:
-                logger.error(f"Failed to list scopes groups: {e}")
-                result["scopes_error"] = str(e)
-
-        # Find synchronized and out-of-sync groups
-        if include_keycloak and include_scopes:
-            result["synchronized"] = list(keycloak_group_names & scopes_group_names)
-            result["keycloak_only"] = list(keycloak_group_names - scopes_group_names)
-            result["scopes_only"] = list(scopes_group_names - keycloak_group_names)
-
-        return JSONResponse(
-            status_code=200,
-            content=result
-        )
-
-    except Exception as e:
-        logger.error(f"Error listing groups: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)}"
-        )
-
-
 @router.post("/tokens/generate")
 async def generate_user_token(
     request: Request,
@@ -2439,9 +1421,8 @@ async def register_service_api(
     ```
     """
     logger.info(f"API register service request from user '{user_context.get('username')}' for service '{name}'")
+    _require_can_modify_servers(user_context)
 
-    # Implementation extracted from internal_register_service to avoid duplicating auth logic
-    # Auth is already validated by nginx_proxied_auth dependency
     from ..search.service import faiss_service
     from ..health.service import health_service
     from ..core.nginx_service import nginx_service
@@ -2452,65 +1433,24 @@ async def register_service_api(
     logger.warning(f"SERVERS REGISTER: Validated path: {path}")
 
     _enforce_proxy_pass_url_allowlist(proxy_pass_url=proxy_pass_url)
-
-    # Process tags
-    tag_list = [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
-
-    # Process supported_transports
-    if supported_transports:
-        try:
-            transports_list = json.loads(supported_transports) if supported_transports.startswith('[') else [t.strip() for t in supported_transports.split(',')]
-        except Exception as e:
-            logger.warning(f"SERVERS REGISTER: Failed to parse supported_transports, using default: {e}")
-            transports_list = ["streamable-http"]
-    else:
-        transports_list = ["streamable-http"]
-
-    # Process headers
-    headers_list = []
-    if headers:
-        try:
-            headers_list = json.loads(headers) if isinstance(headers, str) else headers
-        except Exception as e:
-            logger.warning(f"SERVERS REGISTER: Failed to parse headers: {e}")
-
-    upstream_auth_payload = _normalize_upstream_auth_payload(
-        upstream_auth=upstream_auth,
-        auth_type=auth_type,
+    path, server_entry = _build_server_entry_from_form(
+        name=name,
+        description=description,
+        path=path,
+        proxy_pass_url=proxy_pass_url,
+        tags=tags,
+        num_tools=num_tools,
+        num_stars=num_stars,
+        is_python=is_python,
+        license_str=license_str,
         auth_provider=auth_provider,
-        headers=headers_list,
+        auth_type=auth_type,
+        upstream_auth=upstream_auth,
+        supported_transports=supported_transports,
+        headers=headers,
+        tool_list_json=tool_list_json,
+        logger=logger,
     )
-
-    # Process tool_list
-    tool_list = []
-    if tool_list_json:
-        try:
-            tool_list = json.loads(tool_list_json) if isinstance(tool_list_json, str) else tool_list_json
-        except Exception as e:
-            logger.warning(f"SERVERS REGISTER: Failed to parse tool_list_json: {e}")
-
-    # Create server entry
-    server_entry = {
-        "server_name": name,
-        "description": description,
-        "path": path,
-        "proxy_pass_url": proxy_pass_url,
-        "supported_transports": transports_list,
-        "auth_type": auth_type if auth_type else "none",
-        "upstream_auth": upstream_auth_payload,
-        "tags": tag_list,
-        "num_tools": num_tools,
-        "num_stars": num_stars,
-        "is_python": is_python,
-        "license": license_str,
-        "tool_list": tool_list
-    }
-
-    # Add optional fields if provided
-    if auth_provider:
-        server_entry["auth_provider"] = auth_provider
-    if headers_list:
-        server_entry["headers"] = headers_list
 
     # Check if server exists and handle overwrite logic
     existing_server = server_service.get_server_info(path)
@@ -2569,8 +1509,9 @@ async def register_service_api(
 
 @router.post("/servers/toggle")
 async def toggle_service_api(
-    path: Annotated[str, Form()],
-    new_state: Annotated[bool, Form()],
+    path: Annotated[str | None, Form()] = None,
+    service_path: Annotated[str | None, Form()] = None,
+    new_state: Annotated[bool | None, Form()] = None,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
@@ -2583,8 +1524,9 @@ async def toggle_service_api(
     **Authorization:** Requires valid JWT token from auth system
 
     **Request body (form data):**
-    - `path` (required): Service path
-    - `new_state` (required): New state (true=enabled, false=disabled)
+    - `path` (preferred): Service path
+    - `service_path` (legacy client compatibility): Service path
+    - `new_state` (optional): If provided, set to desired state. If omitted, flips current state.
 
     **Response:**
     Returns the updated service status.
@@ -2601,61 +1543,62 @@ async def toggle_service_api(
     from ..health.service import health_service
     from ..core.nginx_service import nginx_service
 
-    logger.info(f"API toggle service request from user '{user_context.get('username')}' for path '{path}' to {new_state}")
+    _require_can_modify_servers(user_context)
+
+    raw_path = path or service_path
+    if raw_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="path is required",
+        )
+
+    logger.info(
+        f"API toggle service request from user '{user_context.get('username')}' for path '{raw_path}' to {new_state}"
+    )
 
     # Normalize path
-    if not path.startswith('/'):
-        path = '/' + path
+    if not raw_path.startswith('/'):
+        raw_path = '/' + raw_path
+    path = raw_path
 
     # Check if server exists
     server_info = server_service.get_server_info(path)
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not registered")
 
+    desired_state = new_state
+    if desired_state is None:
+        desired_state = not server_service.is_service_enabled(path)
+
     # Toggle the service
-    success = server_service.toggle_service(path, new_state)
+    success = server_service.toggle_service(path, desired_state)
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to toggle service")
 
-    logger.info(f"Toggled '{server_info['server_name']}' ({path}) to {new_state} by user '{user_context.get('username')}'")
+    logger.info(
+        f"Toggled '{server_info['server_name']}' ({path}) to {desired_state} by user '{user_context.get('username')}'"
+    )
 
-    # If enabling, perform immediate health check
-    status = "disabled"
-    last_checked_iso = None
-    if new_state:
-        logger.info(f"Performing immediate health check for {path} upon toggle ON...")
-        try:
-            status, last_checked_dt = await health_service.perform_immediate_health_check(path)
-            last_checked_iso = last_checked_dt.isoformat() if last_checked_dt else None
-            logger.info(f"Immediate health check for {path} completed. Status: {status}")
-        except Exception as e:
-            logger.error(f"ERROR during immediate health check for {path}: {e}")
-            status = f"error: immediate check failed ({type(e).__name__})"
-    else:
-        # When disabling, set status to disabled
-        status = "disabled"
-        logger.info(f"Service {path} toggled OFF. Status set to disabled.")
-
-    # Update FAISS metadata with new enabled state
-    await faiss_service.add_or_update_service(path, server_info, new_state)
-
-    # Regenerate Nginx configuration
-    enabled_servers = {
-        server_path: server_service.get_server_info(server_path)
-        for server_path in server_service.get_enabled_services()
-    }
-    await nginx_service.generate_config_async(enabled_servers)
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(path)
+    status, last_checked_iso = await _apply_toggle_side_effects(
+        service_path=path,
+        server_info=server_info,
+        new_state=desired_state,
+        server_service=server_service,
+        faiss_service=faiss_service,
+        health_service=health_service,
+        nginx_service=nginx_service,
+        logger=logger,
+    )
 
     return JSONResponse(
         status_code=200,
         content={
             "message": f"Toggle request for {path} processed.",
+            "path": path,
+            "is_enabled": desired_state,
             "service_path": path,
-            "new_enabled_state": new_state,
+            "new_enabled_state": desired_state,
             "status": status,
             "last_checked_iso": last_checked_iso,
             "num_tools": server_info.get("num_tools", 0)
@@ -2695,6 +1638,8 @@ async def remove_service_api(
     from ..core.nginx_service import nginx_service
     from ..utils.scopes_manager import remove_server_scopes
 
+    _require_can_modify_servers(user_context)
+
     logger.info(f"API remove service request from user '{user_context.get('username')}' for path '{path}'")
 
     # Normalize path
@@ -2728,27 +1673,20 @@ async def remove_service_api(
             },
         )
 
-    logger.info(f"Service removed successfully: {path} by user {user_context.get('username')}")
+    logger.info(
+        f"Service removed successfully: {path} by user {user_context.get('username')}"
+    )
 
-    # Remove from FAISS index
-    await faiss_service.remove_service(path)
-
-    # Regenerate Nginx configuration
-    enabled_servers = {
-        server_path: server_service.get_server_info(server_path)
-        for server_path in server_service.get_enabled_services()
-    }
-    await nginx_service.generate_config_async(enabled_servers)
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(path)
-
-    # Remove server from scopes.yml and reload auth server
-    try:
-        await remove_server_scopes(path)
-        logger.info(f"Successfully removed server {path} from scopes")
-    except Exception as e:
-        logger.warning(f"Failed to remove server {path} from scopes: {e}")
+    await _apply_remove_side_effects(
+        service_path=path,
+        server_service=server_service,
+        faiss_service=faiss_service,
+        health_service=health_service,
+        nginx_service=nginx_service,
+        remove_server_scopes=remove_server_scopes,
+        scopes_error_log_level="warning",
+        logger=logger,
+    )
 
     return JSONResponse(
         status_code=200,
