@@ -1,16 +1,19 @@
 /**
- * AuditPage - Audit guidance and future viewer placeholder
- * Provides information on how to access audit logs and understand audit events
+ * AuditPage - Audit explorer and guidance
+ * Provides an explorer for viewing audit events and documentation on audit logs
  */
 
 import { useState } from 'react';
+import { Tab, TabGroup, TabList, TabPanel, TabPanels } from '@headlessui/react';
 import { PageContent } from '@/components/layout/PageContent';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { CopyButton } from '@/components/ui/CopyButton';
+import { AuditExplorer } from './AuditExplorer';
+import { cn } from '@/lib/cn';
 import {
-  InformationCircleIcon,
+  TableCellsIcon,
   DocumentTextIcon,
   MagnifyingGlassIcon,
   ClipboardDocumentIcon,
@@ -68,40 +71,64 @@ const getSeverityVariant = (severity: string) => {
 };
 
 /**
+ * Tab button styling helper
+ */
+function TabButton({
+  children,
+  icon: Icon,
+}: {
+  children: React.ReactNode;
+  icon: React.ComponentType<{ className?: string }>;
+}) {
+  return (
+    <Tab
+      className={({ selected }) =>
+        cn(
+          'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg outline-none transition-colors',
+          selected
+            ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
+            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800'
+        )
+      }
+    >
+      <Icon className="h-5 w-5" />
+      {children}
+    </Tab>
+  );
+}
+
+/**
  * AuditPage component
  */
 export default function AuditPage() {
-  const [sampleRequestId] = useState(() => `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
+  const [sampleRequestId] = useState(
+    () => `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  );
 
   return (
     <>
       <PageHeader
         title="Audit"
-        description="Guidance on accessing audit events and understanding enforcement logs"
+        description="Explore audit events and access enforcement logs"
       />
 
       <PageContent>
-        <div className="space-y-6">
-          {/* Future viewer placeholder */}
-          <Card>
-            <div className="p-6">
-              <div className="flex items-start gap-3">
-                <InformationCircleIcon className="h-6 w-6 text-blue-500 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
-                    Audit Event Viewer Coming Soon
-                  </h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    A dedicated audit event viewer with filtering capabilities is planned for a
-                    future release. In the meantime, use the guidance below to access audit logs
-                    directly.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </Card>
+        <TabGroup>
+          <TabList className="flex gap-2 mb-6">
+            <TabButton icon={TableCellsIcon}>Explorer</TabButton>
+            <TabButton icon={DocumentTextIcon}>Guidance</TabButton>
+          </TabList>
 
-          {/* How to access audit logs */}
+          <TabPanels>
+            {/* Explorer Tab */}
+            <TabPanel>
+              <AuditExplorer />
+            </TabPanel>
+
+            {/* Guidance Tab */}
+            <TabPanel>
+              <div className="space-y-6">
+                {/* How to access audit logs */}
           <Card>
             <div className="p-6">
               <div className="flex items-center gap-2 mb-4">
@@ -273,7 +300,10 @@ export default function AuditPage() {
               </ul>
             </div>
           </Card>
-        </div>
+              </div>
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
       </PageContent>
     </>
   );

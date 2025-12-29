@@ -26,6 +26,9 @@ import type {
   DisconnectOAuthRequest,
   DisconnectOAuthResponse,
   UpstreamOAuthCredentialType,
+  AuditEventsQuery,
+  AdminAuditEventsQuery,
+  AuditEventsListResponse,
 } from './types';
 
 // ============================================================================
@@ -490,4 +493,190 @@ export async function disconnectUpstreamOAuth(
     `/enforceai/upstream/servers/${encodeURIComponent(serverPath)}/oauth/disconnect`,
     data
   );
+}
+
+// ============================================================================
+// EnforceAI Audit Events API
+// ============================================================================
+
+/**
+ * Build query string from AuditEventsQuery parameters
+ */
+function buildAuditQueryString(query: AuditEventsQuery): string {
+  const params = new URLSearchParams();
+
+  if (query.since) {
+    params.append('since', query.since);
+  }
+  if (query.until) {
+    params.append('until', query.until);
+  }
+  if (query.limit !== undefined) {
+    params.append('limit', String(query.limit));
+  }
+  if (query.cursor) {
+    params.append('cursor', query.cursor);
+  }
+  if (query.agent_id) {
+    params.append('agent_id', query.agent_id);
+  }
+  if (query.action && query.action.length > 0) {
+    for (const action of query.action) {
+      params.append('action', action);
+    }
+  }
+  if (query.outcome && query.outcome.length > 0) {
+    for (const outcome of query.outcome) {
+      params.append('outcome', outcome);
+    }
+  }
+  if (query.request_id) {
+    params.append('request_id', query.request_id);
+  }
+  if (query.server) {
+    params.append('server', query.server);
+  }
+  if (query.tool) {
+    params.append('tool', query.tool);
+  }
+
+  const queryString = params.toString();
+  return queryString ? `?${queryString}` : '';
+}
+
+/**
+ * Fetch audit events for the current user
+ * Events are filtered by the authenticated user's ID (server-side)
+ */
+export async function getAuditEvents(
+  query: AuditEventsQuery = {}
+): Promise<AuditEventsListResponse> {
+  const queryString = buildAuditQueryString(query);
+  return apiGet<AuditEventsListResponse>(`/enforceai/audit/events${queryString}`);
+}
+
+/**
+ * Fetch audit events for all users (admin only)
+ * Optionally filter by user_id
+ */
+export async function getAdminAuditEvents(
+  query: AdminAuditEventsQuery = {}
+): Promise<AuditEventsListResponse> {
+  const params = new URLSearchParams();
+
+  // Add user_id filter if provided
+  if (query.user_id) {
+    params.append('user_id', query.user_id);
+  }
+
+  // Add base query params
+  if (query.since) {
+    params.append('since', query.since);
+  }
+  if (query.until) {
+    params.append('until', query.until);
+  }
+  if (query.limit !== undefined) {
+    params.append('limit', String(query.limit));
+  }
+  if (query.cursor) {
+    params.append('cursor', query.cursor);
+  }
+  if (query.agent_id) {
+    params.append('agent_id', query.agent_id);
+  }
+  if (query.action && query.action.length > 0) {
+    for (const action of query.action) {
+      params.append('action', action);
+    }
+  }
+  if (query.outcome && query.outcome.length > 0) {
+    for (const outcome of query.outcome) {
+      params.append('outcome', outcome);
+    }
+  }
+  if (query.request_id) {
+    params.append('request_id', query.request_id);
+  }
+  if (query.server) {
+    params.append('server', query.server);
+  }
+  if (query.tool) {
+    params.append('tool', query.tool);
+  }
+
+  const queryString = params.toString();
+  return apiGet<AuditEventsListResponse>(
+    `/enforceai/admin/audit/events${queryString ? `?${queryString}` : ''}`
+  );
+}
+
+/**
+ * Export audit events as CSV (admin only)
+ * Triggers a file download in the browser
+ */
+export async function exportAdminAuditEvents(
+  query: AdminAuditEventsQuery = {}
+): Promise<void> {
+  const params = new URLSearchParams();
+
+  // Add user_id filter if provided
+  if (query.user_id) {
+    params.append('user_id', query.user_id);
+  }
+
+  // Add base query params
+  if (query.since) {
+    params.append('since', query.since);
+  }
+  if (query.until) {
+    params.append('until', query.until);
+  }
+  if (query.agent_id) {
+    params.append('agent_id', query.agent_id);
+  }
+  if (query.action && query.action.length > 0) {
+    for (const action of query.action) {
+      params.append('action', action);
+    }
+  }
+  if (query.outcome && query.outcome.length > 0) {
+    for (const outcome of query.outcome) {
+      params.append('outcome', outcome);
+    }
+  }
+  if (query.request_id) {
+    params.append('request_id', query.request_id);
+  }
+  if (query.server) {
+    params.append('server', query.server);
+  }
+  if (query.tool) {
+    params.append('tool', query.tool);
+  }
+
+  const queryString = params.toString();
+  const url = `/enforceai/admin/audit/events/export${queryString ? `?${queryString}` : ''}`;
+
+  // Create a temporary link and click it to trigger download
+  const response = await fetch(url, {
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Export failed: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  const contentDisposition = response.headers.get('Content-Disposition');
+  const filename = contentDisposition?.match(/filename="([^"]+)"/)?.[1] || 'audit_events.csv';
+
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = downloadUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(downloadUrl);
 }

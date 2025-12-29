@@ -523,3 +523,45 @@ export interface ApiErrorResponse {
   status_code?: number;
   error_code?: string;
 }
+
+// ============================================================================
+// EnforceAI: Audit Event Types
+// ============================================================================
+
+/** A single audit event record */
+export interface AuditEvent {
+  event_id: number;
+  occurred_at: string; // ISO 8601 datetime
+  user_id: string;
+  agent_id: string;
+  action: string;
+  outcome: 'allow' | 'deny' | string;
+  request_id: string | null;
+  details: Record<string, unknown> | null;
+}
+
+/** Response from the audit events list endpoint */
+export interface AuditEventsListResponse {
+  items: AuditEvent[];
+  next_cursor: string | null;
+  server_time: string; // ISO 8601 datetime
+}
+
+/** Query parameters for fetching audit events */
+export interface AuditEventsQuery {
+  since?: string; // ISO 8601 datetime
+  until?: string; // ISO 8601 datetime
+  limit?: number;
+  cursor?: string;
+  agent_id?: string;
+  action?: string[];
+  outcome?: string[];
+  request_id?: string;
+  server?: string;
+  tool?: string;
+}
+
+/** Query parameters for admin audit events (includes user_id filter) */
+export interface AdminAuditEventsQuery extends AuditEventsQuery {
+  user_id?: string; // Filter by specific user (optional for admin)
+}
