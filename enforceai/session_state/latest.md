@@ -1,6 +1,13 @@
 # Session State — Latest
 
 ## Last Completed Work
+- Code quality / maintainability iterations (keep behavior stable, keep tests green):
+  - Modularized `registry/api/server_routes.py` by extracting all `/internal/*` endpoints into `registry/api/server_internal_routes.py` and shared helpers/models into `registry/api/server_routes_common.py` (router composition keeps paths stable).
+  - Reduced duplication between `/api/internal/register` and `/api/servers/register` by extracting shared parsing/build helpers into `registry/api/server_routes_common.py` (kept endpoint semantics stable; tests still pass).
+  - Made `/api/servers/toggle` backward compatible (accepts `service_path` and optional `new_state`, returns `path`/`is_enabled`) and added integration coverage.
+  - Secured `/api/servers/register|toggle|remove` by requiring `can_modify_servers` (previously authn-only) and added integration coverage.
+  - Deduplicated `/api/internal/*` and `/api/servers/*` toggle/remove side-effects via shared helpers in `registry/api/server_routes_common.py`.
+  - Validation: `make test` pass; `make lint` pass; `cd frontend && npm run build` pass.
 - AWS ECS deployment debugging + fixes to keep EnforceAI required (no bypass), based on verified ECS/CloudWatch evidence:
   - Root causes:
     - Auth service rollout failures due to `linux/amd64` pull errors when pushing arm64-only images from Apple Silicon (`CannotPullContainerError: image Manifest does not contain descriptor matching platform 'linux/amd64'`).
@@ -195,6 +202,7 @@
 - Nginx location path handling: MCP server paths in registry JSON must include trailing slash (e.g., `/sqlite/`) for proper nginx `proxy_pass` URI rewriting; without trailing slash, nginx sends full request path to upstream instead of stripping location prefix; this is required when using `rewrite_by_lua_file` in nginx config.
 
 ## Current Task
+- Code quality: iterative review + modularization (in progress)
 - UI Frontend Phase 14: Admin Cross-User Operations (completed)
 - UI Scope Catalog Management Phase 0: catalog path + `etag` (completed)
 - UI Scope Catalog Management Phase 1: admin scope CRUD API (completed)
@@ -218,6 +226,9 @@
 4. Execute `enforceai/plans/plan-enforce-gw-ui-frontend-phased.md` Phase 16: E2E Testing + Documentation (Playwright setup, E2E scenarios, README update)
 
 ## Tests Executed
+- `make test` (pass)
+- `make lint` (pass)
+- `cd frontend && npm run build` (pass)
 - `bash -n scripts/build-images.sh terraform/aws-ecs/scripts/post-deployment-setup.sh terraform/aws-ecs/scripts/run-scopes-init-task.sh terraform/aws-ecs/scripts/view-cloudwatch-logs.sh terraform/aws-ecs/scripts/run-servers-seed-task.sh` (pass)
 - `.venv/bin/python -m py_compile tests/integration/test_enforceai_upstream_oauth_flow.py` (pass)
 - `make test-unit` (pass)
