@@ -250,6 +250,34 @@ Dry run:
 python -m cli.enforceai_audit_cleanup --dry-run
 ```
 
-## 9. Notes on Docker Compose
+## 9. Audit UI
+
+The Audit page in the web UI provides a visual explorer for audit events stored in the SQLite database.
+
+### Self-Service Mode (Default)
+- Navigate to `/audit` in the web UI
+- View your own audit events (filtered by your `user_id`)
+- Filter by time range (15m, 1h, 24h, 7d), outcome (allowed/denied), and advanced filters (agent, action, request ID, server, tool)
+- Click any event to view full details in the drawer
+- Use "Find related events" to see all events sharing a request ID
+
+### Admin Mode
+Users in the `enforceai-admin` group can toggle Admin Mode to:
+- View audit events for all users
+- Filter by specific `user_id`
+- Export events to CSV (downloads to browser)
+
+Admin mode shows a warning banner and all admin audit access is itself audited.
+
+### API Endpoints
+- `GET /enforceai/audit/events` - Self-service (current user's events)
+- `GET /enforceai/admin/audit/events` - Admin (all users, requires `enforceai-admin`)
+- `GET /enforceai/admin/audit/events/export` - CSV export (admin only)
+
+Query parameters: `since`, `until`, `limit`, `cursor`, `outcome[]`, `action[]`, `agent_id`, `request_id`, `server`, `tool`, `user_id` (admin only).
+
+CSV export is capped at 10,000 events and will fail with HTTP 413 if the result set is larger (narrow filters and retry). Exporting all users requires an explicit confirmation in the UI.
+
+## 10. Notes on Docker Compose
 
 `docker-compose.yml` now passes through `ENFORCEAI_*` and mounts `$HOME/mcp-gateway/enforceai` into the `auth-server` container at `/app/enforceai_state` (so it does not shadow the `enforceai` Python package).

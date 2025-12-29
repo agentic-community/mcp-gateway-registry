@@ -1,6 +1,15 @@
-# EnforceAI Audit UI — Requirements & Design (Draft)
-*Created: 2025-12-28*  
-*Status: Draft (design-only; no implementation)*
+# EnforceAI Audit UI — Requirements & Design
+*Created: 2025-12-28*
+*Status: Implemented (2025-12-28)*
+
+## Implementation Summary
+The audit UI has been fully implemented per this design:
+- **Backend**: `GET /enforceai/audit/events` (self-service), `GET /enforceai/admin/audit/events` (admin), `GET /enforceai/admin/audit/events/export` (CSV export)
+- **Frontend**: `AuditExplorer` component with time/outcome/advanced filters, admin mode toggle, event table, event details drawer, CSV export button
+- **Files**: `auth_server/enforceai/api/management_routes.py`, `frontend/src/features/audit/*`, `tests/integration/test_enforceai_audit_api.py`
+- **Tests**: backend integration/unit tests and frontend unit tests updated/added
+
+---
 
 ## 1. Background
 EnforceAI emits audit events for:
@@ -73,7 +82,6 @@ The Audit experience is a single route (`/audit`) with sub-views:
 ### 7.1 Default experience
 - Default time window: `Last 60 minutes` (configurable).
 - Default “until” anchor: **Now** (time-bounded; no live refresh required).
-- Maximum lookback supported by the UI (default): **7 days**.
 - Default filter scope:
   - Non-admin: current `user_id` only (implicit).
   - Admin: requires explicit “target” selection to expand scope (see Admin Mode).
@@ -84,7 +92,7 @@ Minimum filters:
   - Presets (`15m`, `1h`, `24h`, `7d`)
   - Custom start/end
   - End time defaults to **Now** when unset
-  - Validate range does not exceed **7d** (or show warning + clamp)
+  - No maximum lookback limit; large ranges rely on pagination/limits
 - **Outcome**: allow/deny (multi-select)
 - **Action**: multi-select or search-with-chips
 - **Agent**: agent_id picker (searchable) + “any”
@@ -159,7 +167,7 @@ This section is a UI dependency proposal (not an implementation request).
 
 ### 10.2 List events (admin)
 - `GET /enforceai/admin/audit/events`
-  - Same filters plus `user_id` / `target_user_id`
+  - Same filters plus optional `user_id`
 
 ### 10.3 Response shape
 - `items`: list of audit event records
@@ -167,13 +175,13 @@ This section is a UI dependency proposal (not an implementation request).
 - `server_time`: UTC ISO (for UI clock skew hints)
 
 ### 10.4 CSV export (admin-only)
-- `GET /enforceai/admin/audit/events.csv`
+- `GET /enforceai/admin/audit/events/export`
   - Same filters as `GET /enforceai/admin/audit/events`
   - Explicit limits and a warning banner in the UI (export can be sensitive)
   - Allow exporting either a selected `user_id` or `All users` (the latter requires extra confirmation)
-  - Limit exports to **10,000 rows**; if exceeded, require narrowing filters
+  - Limit exports to **10,000 rows**; if exceeded, require narrowing filters (HTTP 413)
   - CSV columns (flattened):
-    - Core: `occurred_at`, `user_id`, `agent_id`, `action`, `outcome`, `request_id`
+    - Core: `event_id`, `occurred_at`, `user_id`, `agent_id`, `action`, `outcome`, `request_id`
     - Common details (best-effort): `server`, `tool`, `reason`, `matched_scope`, `provider`
     - Remainder: `details_json` (full original `details` as JSON string, redacted as needed)
 
@@ -188,7 +196,7 @@ This section is a UI dependency proposal (not an implementation request).
 - Audit windows include both UI windows and time windows.
 - Audit Explorer supports both self-service and admin usage (admin scope selection required).
 - Viewer is time-bounded, anchored on “Now”; no live refresh required.
-- Maximum lookback supported by the UI (default) is `7d`.
+- No maximum lookback limit for audit queries.
 - No free-text search requirement (structured filters only).
 - Viewer is read-only (no “respond from audit” actions).
 - CSV export is admin-only.
@@ -197,4 +205,11 @@ This section is a UI dependency proposal (not an implementation request).
 - CSV export flattens common fields and is capped at `10k` rows.
 
 ## 13. Remaining Open Questions
-None.
+None. All requirements have been implemented.
+
+## 14. Implementation Notes (Post-Implementation)
+- Admin group changed from `registry-admins` to `enforceai-admin` for consistency with other EnforceAI admin endpoints
+- CSV export endpoint streams CSV output and enforces a 10,000 row cap
+- Export action is itself audited (`admin/audit/export` action) for compliance
+- Frontend uses blob URL and temporary anchor element for browser download trigger
+- All tests updated to provide `AuthProvider` context since `AuditExplorer` uses `useAuth()` hook

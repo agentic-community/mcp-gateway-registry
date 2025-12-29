@@ -51,7 +51,7 @@ This plan breaks the Audit UI implementation into 9 phases, each scoped for an a
 - [ ] `query_events()` returns filtered, paginated results
 - [ ] API requires authentication and filters by `user_id`
 - [ ] Default time window is last 60 minutes
-- [ ] Maximum lookback enforced (7 days)
+- [ ] No maximum lookback enforced
 - [ ] All unit tests pass
 - [ ] All integration tests pass
 
@@ -388,11 +388,11 @@ This plan breaks the Audit UI implementation into 9 phases, each scoped for an a
 ### Scope
 
 1. **Backend export endpoint**
-   - `GET /enforceai/admin/audit/events.csv`
+   - `GET /enforceai/admin/audit/events/export`
    - Same filters as JSON endpoint
    - Limit: 10,000 rows (return error if exceeded)
    - Columns:
-     - Core: `occurred_at`, `user_id`, `agent_id`, `action`, `outcome`, `request_id`
+     - Core: `event_id`, `occurred_at`, `user_id`, `agent_id`, `action`, `outcome`, `request_id`
      - Common details: `server`, `tool`, `reason`, `matched_scope`, `provider`
      - `details_json` (full JSON string)
 

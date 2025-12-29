@@ -135,6 +135,33 @@
 - UI Frontend Phase 13 (2025-12-17): implemented Admin Users Directory with user search functionality; AdminLayout wrapper with amber warning banner for elevated permissions context; AdminPage landing page with quick stats and admin tools sections (User Directory, Access Control [Phase 14], Audit & Logs, System Configuration); AdminUsersPage with debounced search, results table with canonical user_id and copy buttons; AdminUserDetailsPage with user info card, agent summary (active/revoked counts), Phase 14 cross-user operations placeholder; admin API functions (searchAdminUsers, getAdminUser, getAdminUserAgents); admin hooks (useAdminUsers, useAdminUser, useAdminUserAgents); comprehensive unit tests (43 new tests); 656 tests passing
 - Scopes Catalog Backend Endpoint (2025-12-17): added GET /enforceai/scopes/catalog endpoint to serve scope catalog to frontend; created Pydantic response models (ScopeCatalogResponse, ScopeDefinitionResponse, ServerPermissionResponse, etc.); endpoint is publicly accessible (no auth required) since scope catalog is display data; updated frontend hooks to call /enforceai/scopes/catalog instead of /api/scopes/catalog; updated ScopeCatalog TypeScript interface with version and generated_at fields; updated all test mock handlers and test files to use new endpoint path; scopes page now displays 5 scopes from catalog
 - UI Frontend Phase 14 (2025-12-17): implemented Admin Cross-User Operations with full CRUD for managing other users' resources; added admin API functions to enforceai.ts (adminCreateAgentForUser, adminRevokeAgentForUser, adminRevokeAllTokensForUser, adminGetApiKeysForUser, adminRevokeApiKeyForUser, adminRevokeTokenForUser); created admin mutation hooks (useAdminCreateAgent, useAdminRevokeAgent, useAdminRevokeAllTokens, useAdminCreateApiKey, useAdminRevokeApiKey, useAdminRevokeToken, useAdminUserAgentApiKeys); added TypeToConfirmDialog component for type-to-confirm pattern on destructive actions with optional reason field; created TargetUserBanner component showing "Acting on user: [email]" context with audit warning; created AdminModals.tsx with AdminCreateAgentModal (with ScopePicker), AdminRevokeAgentModal (type agent_id + reason), AdminRevokeAllTokensModal, AdminRevokeApiKeyModal, AdminRevokeTokenModal (by JTI); updated AdminUserDetailsPage with full cross-user operations including AgentCard component with expandable API keys section; added comprehensive MSW mock handlers for all admin endpoints; 564 tests passing
+- EnforceAI Audit UI Implementation (2025-12-28): implemented full audit event exploration with admin mode and CSV export per `docs/enforceai-audit-ui-design.md`:
+  - **Phase 7 (Admin Audit API Backend)**:
+    - Added `GET /enforceai/audit/events` endpoint for self-service audit viewing (user's own events)
+    - Added `GET /enforceai/admin/audit/events` endpoint for admin audit viewing (all users, requires `enforceai-admin` group)
+    - Response includes `items`, `next_cursor`, `server_time` with pagination support
+    - Query parameters: `since`, `limit`, `cursor`, `outcome[]`, `action[]`, `agent_id`, `request_id`, `server`, `tool`, `user_id` (admin only)
+    - Backend files: `auth_server/enforceai/api/management_routes.py`, `tests/integration/test_enforceai_audit_api.py`
+    - All 12 audit API tests passing
+  - **Phase 8 (Admin Mode UI)**:
+    - Added `AdminAuditEventsQuery` type extending `AuditEventsQuery` with `user_id` field
+    - Added `getAdminAuditEvents` API function and `useAdminAuditEvents` React Query hook
+    - Added admin mode toggle button (visible to admins only) with amber styling
+    - Added admin mode banner showing "Viewing audit events for all users"
+    - Added User ID filter field in advanced filters (admin mode only)
+    - Updated `AdvancedFilters` interface to include `userId` field
+    - Updated `hasActiveAdvancedFilters` and `countActiveAdvancedFilters` to accept `isAdmin` parameter
+    - Files: `frontend/src/api/types.ts`, `frontend/src/api/enforceai.ts`, `frontend/src/features/audit/hooks.ts`, `frontend/src/features/audit/AuditAdvancedFilters.tsx`, `frontend/src/features/audit/AuditExplorer.tsx`
+    - Tests: `frontend/src/features/audit/__tests__/AuditPage.test.tsx` updated with `withAuth: true` for all renders
+  - **Phase 9 (CSV Export)**:
+    - Added `GET /enforceai/admin/audit/events/export` backend endpoint returning CSV (streamed) with a 10,000 row cap (HTTP 413 when exceeded)
+    - CSV columns: `event_id`, `occurred_at`, `user_id`, `agent_id`, `action`, `outcome`, `request_id`, `server`, `tool`, `reason`, `matched_scope`, `provider`, `details_json`
+    - Added `exportAdminAuditEvents` frontend function triggering browser download via blob URL
+    - Added "Export CSV" button (admin mode only) with explicit confirmation and loading state
+    - Export action is audited (`admin/audit/export` action in audit log)
+    - Backend tests: `test_export_requires_admin`, `test_export_returns_csv`
+    - Files: `auth_server/enforceai/api/management_routes.py`, `frontend/src/api/enforceai.ts`, `frontend/src/features/audit/AuditExplorer.tsx`
+  - Tests: backend integration/unit tests and frontend unit tests updated/added
 
 ## Decisions
 - Phase 1 persistence: local SQLite database with storage-agnostic interfaces to enable later migration to Postgres.
@@ -178,6 +205,9 @@
 - UI Scope Catalog Management: allow scope management UI for `enforceai-admin` group (completed)
 - Upstream OAuth seamless plan Phase 5: Nginx config injects OAuth Authorization (completed)
 - Upstream OAuth seamless plan Phase 5: end-to-end proxy regression (completed)
+- EnforceAI Audit UI Phase 7: Admin Audit API Backend (completed)
+- EnforceAI Audit UI Phase 8: Admin Mode UI (completed)
+- EnforceAI Audit UI Phase 9: CSV Export Admin-Only (completed)
 
 ## Next Steps
 1. AWS: apply Terraform module updates (EFS access point mounts + auth `ADMIN_PASSWORD` secret) and verify task definitions now include EFS `authorizationConfig.accessPointId`.
@@ -305,6 +335,12 @@
 - `.venv/bin/python -m py_compile tests/integration/test_enforceai_management_routes.py` (pass)
 - `.venv/bin/python -m pytest -q -o addopts='' tests/integration/test_enforceai_management_routes.py` (pass)
 - `.venv/bin/python -m pytest` (pass)
+
+## EnforceAI Audit UI Tests (2025-12-28)
+- `.venv/bin/python -m pytest tests/integration/test_enforceai_audit_api.py` (12 passed)
+- `.venv/bin/python -m pytest` (607 passed)
+- `npm -C frontend run typecheck` (pass)
+- `npm -C frontend test` (914 passed)
 
 ## Stage 7 Progress
 - Stage 7.1: extended AuditStore retention primitives and SQLite implementation with unit tests
