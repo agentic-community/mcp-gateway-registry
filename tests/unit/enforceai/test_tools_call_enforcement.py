@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import auth_server.server as auth_server_module
+import auth_server.routes.validate_routes as validate_routes_module
 from auth_server.enforceai.errors import (
     DependencyUnavailableError,
 )
@@ -153,17 +154,17 @@ class TestToolsCallEnforcement:
         audit_store = _RecordingAuditStore()
 
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_identity_resolver",
             lambda: resolver,
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "load_scope_catalog",
             lambda: _catalog_allows(tool_name="good_tool"),
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_enforceai_stores",
             lambda: _FakeStores(audit_store=audit_store),
         )
@@ -197,17 +198,17 @@ class TestToolsCallEnforcement:
         audit_store = _RecordingAuditStore()
 
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_identity_resolver",
             lambda: resolver,
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "load_scope_catalog",
             lambda: _catalog_allows(tool_name="good_tool"),
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_enforceai_stores",
             lambda: _FakeStores(audit_store=audit_store),
         )
@@ -241,17 +242,17 @@ class TestToolsCallEnforcement:
         audit_store = _RecordingAuditStore()
 
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_identity_resolver",
             lambda: resolver,
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "load_scope_catalog",
             lambda: _catalog_allows(tool_name="good_tool"),
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_enforceai_stores",
             lambda: _FakeStores(audit_store=audit_store),
         )
@@ -284,7 +285,7 @@ class TestToolsCallEnforcement:
         resolver = _FakeResolver(identity=identity)
 
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_identity_resolver",
             lambda: resolver,
         )
@@ -293,7 +294,7 @@ class TestToolsCallEnforcement:
             raise DependencyUnavailableError("catalog down")
 
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "load_scope_catalog",
             _boom,
         )
@@ -323,17 +324,17 @@ class TestToolsCallEnforcement:
         audit_store = _RecordingAuditStore(raise_on_append=True)
 
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_identity_resolver",
             lambda: resolver,
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "load_scope_catalog",
             lambda: _catalog_allows(tool_name="good_tool"),
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_enforceai_stores",
             lambda: _FakeStores(audit_store=audit_store),
         )

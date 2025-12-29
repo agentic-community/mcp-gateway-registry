@@ -82,7 +82,14 @@ logger = logging.getLogger(__name__)
 
 IDENTITY_STATE_KEY: str = "enforceai_identity"
 CATALOG_STATE_KEY: str = "enforceai_scope_catalog"
-SESSION_COOKIE_NAME: str = "mcp_gateway_session"
+try:
+    from ...session_config import (
+        SESSION_COOKIE_NAME,
+    )
+except ImportError:  # pragma: no cover
+    from session_config import (
+        SESSION_COOKIE_NAME,
+    )
 SESSION_MAX_AGE_SECONDS: int = 60 * 60 * 8
 ENFORCEAI_ADMIN_GROUP: str = "enforceai-admin"
 

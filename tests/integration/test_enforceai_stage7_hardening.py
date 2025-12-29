@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 import auth_server.server as auth_server_module
+import auth_server.routes.validate_routes as validate_routes_module
 from auth_server.enforceai.auth import dependency as enforceai_dependency
 from auth_server.enforceai.crypto.keyring import (
     GatewayKeyring,
@@ -185,7 +186,7 @@ class TestEnforceAIStage7Hardening:
             upstream_oauth_provider_store=None,
         )
         monkeypatch.setattr(
-            auth_server_module,
+            validate_routes_module,
             "get_enforceai_stores",
             lambda: failing_stores,
         )
