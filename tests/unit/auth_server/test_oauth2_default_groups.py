@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 from fastapi import Request
 
-import auth_server.server as auth_server_module
+import auth_server.routes.oauth2_routes as oauth2_routes_module
 
 
 @pytest.mark.unit
@@ -17,7 +17,7 @@ class TestOAuth2DefaultGroups:
             return "signed-session"
 
         monkeypatch.setattr(
-            auth_server_module,
+            oauth2_routes_module,
             "OAUTH2_CONFIG",
             {
                 "providers": {
@@ -44,11 +44,11 @@ class TestOAuth2DefaultGroups:
         )
 
         monkeypatch.setattr(
-            auth_server_module.signer,
+            oauth2_routes_module.signer,
             "loads",
             lambda *_args, **_kwargs: {"state": "expected", "provider": "google", "redirect_uri": "/"},
         )
-        monkeypatch.setattr(auth_server_module.signer, "dumps", fake_dumps)
+        monkeypatch.setattr(oauth2_routes_module.signer, "dumps", fake_dumps)
 
         async def fake_exchange_code_for_token(*_args, **_kwargs) -> dict:
             return {"access_token": "token"}
@@ -56,15 +56,15 @@ class TestOAuth2DefaultGroups:
         async def fake_get_user_info(*_args, **_kwargs) -> dict:
             return {"email": "user@example.com", "name": "User Name", "id": "12345"}
 
-        monkeypatch.setattr(auth_server_module, "exchange_code_for_token", fake_exchange_code_for_token)
-        monkeypatch.setattr(auth_server_module, "get_user_info", fake_get_user_info)
+        monkeypatch.setattr(oauth2_routes_module, "exchange_code_for_token", fake_exchange_code_for_token)
+        monkeypatch.setattr(oauth2_routes_module, "get_user_info", fake_get_user_info)
 
         request = Mock(spec=Request)
         request.headers = {"host": "localhost:8888"}
         request.url = Mock()
         request.url.scheme = "http"
 
-        response = await auth_server_module.oauth2_callback(
+        response = await oauth2_routes_module.oauth2_callback(
             provider="google",
             request=request,
             code="code",
