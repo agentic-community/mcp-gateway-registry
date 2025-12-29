@@ -17,7 +17,15 @@ logger = logging.getLogger(__name__)
 _ENV_TRUE_VALUES: set[str] = {"1", "true", "yes", "on"}
 
 CSRF_TOKEN_MAX_AGE_SECONDS: int = int(os.environ.get("CSRF_TOKEN_MAX_AGE_SECONDS", "3600"))
-SESSION_COOKIE_NAME: str = "mcp_gateway_session"
+
+try:
+    from ..session_config import (
+        SESSION_COOKIE_NAME,
+    )
+except ImportError:  # pragma: no cover
+    from session_config import (
+        SESSION_COOKIE_NAME,
+    )
 
 SECRET_KEY: str = os.environ.get("SECRET_KEY") or ""
 if not SECRET_KEY.strip():
