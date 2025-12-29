@@ -281,7 +281,7 @@ if EnforceAIError is not None:
     @app.exception_handler(EnforceAIError)  # type: ignore[arg-type]
     async def _handle_enforceai_error(
         request: Request,
-        exc: "EnforceAIError",
+        exc: Any,
     ) -> JSONResponse:
         del request
         return JSONResponse(
