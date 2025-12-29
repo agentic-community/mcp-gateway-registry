@@ -79,7 +79,7 @@ Additional endpoints exist for admin operations (for example egress allowlisting
 ### Credentials
 All endpoints require a valid identity resolved by the Stage 4 resolver (or the EnforceAI UI session mechanisms):
 - Cookie session (web UI): `Cookie: enforceai_session=<signed>`
-- UI session token (web UI): `Authorization: Bearer <ui_session_token>` (issuer: `enforceai-ui-session`)
+- UI session token (web UI): `Authorization: Bearer <ui_session_token>` (issuer: `enforceai-ui`; JWT header `typ`: `enforceai-ui-session`)
 - OIDC: `Authorization: Bearer <oidc_jwt>` and `X-Agent-Id: <uuidv4>`
 - Gateway token: `Authorization: Bearer <gateway_token>` or `X-Gateway-Token: <gateway_token>`
 - API key: `X-API-Key: eak_<key_id>.<secret>`

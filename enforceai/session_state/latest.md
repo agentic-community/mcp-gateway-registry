@@ -14,6 +14,8 @@
   - Extracted `/enforceai/upstream/servers*` and `/enforceai/upstream/credentials/*` routes into `auth_server/enforceai/api/upstream_credentials_routes.py` and moved shared upstream helpers into `auth_server/enforceai/api/upstream_common.py`.
   - Extracted upstream OAuth flow routes (start, callbacks, disconnect) into `auth_server/enforceai/api/upstream_oauth_routes.py` (paths and `url_for` route names unchanged).
   - Extracted agents, API keys, and token endpoints into `auth_server/enforceai/api/agents_routes.py`, `auth_server/enforceai/api/api_keys_routes.py`, and `auth_server/enforceai/api/tokens_routes.py` (paths unchanged via `include_router`; `management_routes.py` now mostly composition + `/admin/ping`).
+  - Corrected docs to match code for EnforceAI UI session token: `iss=enforceai-ui` and JWT header `typ=enforceai-ui-session` (`enforceai/instructions/ENFORCEAI_MANAGEMENT.md`).
+  - Began modularizing `auth_server/server.py` by extracting `GET /health` and `GET /config` into `auth_server/routes/core_routes.py` and mounting via `app.include_router`.
   - Validation: `make test` pass; `make lint` pass; `cd frontend && npm run build` pass; latest refactor validation: `.venv/bin/python -m py_compile auth_server/enforceai/api/management_routes.py auth_server/enforceai/api/agents_routes.py auth_server/enforceai/api/api_keys_routes.py auth_server/enforceai/api/tokens_routes.py` (pass), `make test-fast` (pass), `make lint` (pass).
 - AWS ECS deployment debugging + fixes to keep EnforceAI required (no bypass), based on verified ECS/CloudWatch evidence:
   - Root causes:
