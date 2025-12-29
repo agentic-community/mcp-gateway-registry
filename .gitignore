@@ -265,6 +265,7 @@ frontend/.fusebox/
 frontend/.dynamodb/
 frontend/.tern-port
 frontend/storybook-static/
+frontend/tests/reports/
 
 # Node.js (global patterns)
 node_modules/
