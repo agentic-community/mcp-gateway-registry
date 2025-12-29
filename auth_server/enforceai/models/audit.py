@@ -16,6 +16,14 @@ from .._validation import (
 )
 
 
+# Default time window for audit queries (60 minutes in seconds)
+DEFAULT_AUDIT_WINDOW_SECONDS: int = 60 * 60
+
+# Default and maximum page sizes
+DEFAULT_AUDIT_PAGE_SIZE: int = 100
+MAX_AUDIT_PAGE_SIZE: int = 500
+
+
 class AuditEventRecord(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -46,3 +54,16 @@ class AuditEventRecord(BaseModel):
         value: str,
     ) -> str:
         return _validate_uuid4(value, label="agent_id")
+
+
+class AuditEventsQueryResult(BaseModel):
+    """Result of a paginated audit events query."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    items: list[AuditEventRecord]
+    next_cursor: Optional[str] = None
+    server_time: datetime

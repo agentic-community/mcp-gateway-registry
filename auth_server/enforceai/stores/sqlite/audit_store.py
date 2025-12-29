@@ -10,6 +10,9 @@ from ...db.connection import (
 )
 from ...models.audit import (
     AuditEventRecord,
+    AuditEventsQueryResult,
+    DEFAULT_AUDIT_PAGE_SIZE,
+    MAX_AUDIT_PAGE_SIZE,
 )
 
 
@@ -284,4 +287,151 @@ class SqliteAuditStore:
             outcome=row[5],
             request_id=row[6],
             details=_json_loads_optional(row[7]),
+        )
+
+    def query_events(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        actions: Optional[list[str]] = None,
+        outcomes: Optional[list[str]] = None,
+        request_id: Optional[str] = None,
+        server: Optional[str] = None,
+        tool: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        limit: int = DEFAULT_AUDIT_PAGE_SIZE,
+        cursor: Optional[str] = None,
+        max_limit: int = MAX_AUDIT_PAGE_SIZE,
+    ) -> AuditEventsQueryResult:
+        """
+        Query audit events with filtering and pagination.
+
+        Args:
+            user_id: Filter by user ID (required for self-service queries)
+            agent_id: Filter by agent ID
+            actions: Filter by action names (OR logic)
+            outcomes: Filter by outcome values (OR logic)
+            request_id: Filter by exact request ID match
+            server: Filter by server (from details.server)
+            tool: Filter by tool (from details.tool)
+            since: Filter events after this time
+            until: Filter events before this time
+            limit: Maximum number of events to return
+            cursor: Pagination cursor (event_id to start after)
+
+        Returns:
+            AuditEventsQueryResult with items, next_cursor, and server_time
+        """
+        _validate_positive_limit(limit=limit)
+        _validate_positive_limit(limit=max_limit)
+        if limit > max_limit:
+            limit = max_limit
+
+        filters: list[str] = []
+        params: list[object] = []
+
+        if user_id is not None:
+            filters.append("user_id = ?")
+            params.append(user_id)
+
+        if agent_id is not None:
+            filters.append("agent_id = ?")
+            params.append(agent_id)
+
+        if actions is not None and len(actions) > 0:
+            placeholders = ",".join("?" for _ in actions)
+            filters.append(f"action IN ({placeholders})")
+            params.extend(actions)
+
+        if outcomes is not None and len(outcomes) > 0:
+            placeholders = ",".join("?" for _ in outcomes)
+            filters.append(f"outcome IN ({placeholders})")
+            params.extend(outcomes)
+
+        if request_id is not None:
+            filters.append("request_id = ?")
+            params.append(request_id)
+
+        if server is not None:
+            filters.append("json_extract(details_json, '$.server') = ?")
+            params.append(server)
+
+        if tool is not None:
+            filters.append("json_extract(details_json, '$.tool') = ?")
+            params.append(tool)
+
+        if since is not None:
+            filters.append("occurred_at >= ?")
+            params.append(
+                _datetime_to_iso(_ensure_aware_utc(since).replace(microsecond=0))
+            )
+
+        if until is not None:
+            filters.append("occurred_at <= ?")
+            params.append(
+                _datetime_to_iso(_ensure_aware_utc(until).replace(microsecond=0))
+            )
+
+        if cursor is not None:
+            try:
+                cursor_id = int(cursor)
+                filters.append("id < ?")
+                params.append(cursor_id)
+            except ValueError:
+                pass
+
+        where_clause = " AND ".join(filters) if filters else "1=1"
+
+        query = f"""
+            SELECT
+                id,
+                occurred_at,
+                user_id,
+                agent_id,
+                action,
+                outcome,
+                request_id,
+                details_json
+            FROM audit_events
+            WHERE {where_clause}
+            ORDER BY id DESC
+            LIMIT ?
+        """.strip()
+
+        params.append(limit + 1)
+
+        with sqlite_connection(self._db_path) as connection:
+            rows = connection.execute(
+                query,
+                tuple(params),
+            ).fetchall()
+
+        has_more = len(rows) > limit
+        if has_more:
+            rows = rows[:limit]
+
+        items = [
+            AuditEventRecord(
+                event_id=row[0],
+                occurred_at=_datetime_from_iso(row[1]),
+                user_id=row[2],
+                agent_id=row[3],
+                action=row[4],
+                outcome=row[5],
+                request_id=row[6],
+                details=_json_loads_optional(row[7]),
+            )
+            for row in rows
+        ]
+
+        next_cursor: Optional[str] = None
+        if has_more and items:
+            next_cursor = str(items[-1].event_id)
+
+        return AuditEventsQueryResult(
+            items=items,
+            next_cursor=next_cursor,
+            server_time=datetime.now(timezone.utc).replace(microsecond=0),
         )
