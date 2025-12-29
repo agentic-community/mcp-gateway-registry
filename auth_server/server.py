@@ -59,11 +59,69 @@ try:
 except ImportError:  # pragma: no cover
     from metrics_middleware import add_auth_metrics_middleware
 
+# Import core route modules (support repo + Docker module layouts)
+try:
+    from .routes.core_routes import router as core_router
+except ImportError:  # pragma: no cover
+    from routes.core_routes import router as core_router
+
+# Import OAuth2 config + routes (support repo + Docker module layouts)
+try:
+    from .routes.oauth2_context import (
+        CSRF_TOKEN_MAX_AGE_SECONDS,
+        SECRET_KEY,
+        SESSION_COOKIE_NAME,
+        signer,
+    )
+    from .routes.oauth2_routes import (
+        router as oauth2_router,
+    )
+except ImportError:  # pragma: no cover
+    from routes.oauth2_context import (
+        CSRF_TOKEN_MAX_AGE_SECONDS,
+        SECRET_KEY,
+        SESSION_COOKIE_NAME,
+        signer,
+    )
+    from routes.oauth2_routes import (
+        router as oauth2_router,
+    )
+
 # Import provider factory (support repo + Docker module layouts)
 try:
     from .providers.factory import get_auth_provider
 except ImportError:  # pragma: no cover
     from providers.factory import get_auth_provider
+
+try:
+    from .providers.cognito_validator import SimplifiedCognitoValidator
+except ImportError:  # pragma: no cover
+    from providers.cognito_validator import SimplifiedCognitoValidator
+
+try:
+    from .constants import (
+        JWT_AUDIENCE,
+        JWT_ISSUER,
+    )
+except ImportError:  # pragma: no cover
+    from constants import (
+        JWT_AUDIENCE,
+        JWT_ISSUER,
+    )
+
+try:
+    from .routes.internal_routes import (
+        router as internal_router,
+    )
+except ImportError:  # pragma: no cover
+    from routes.internal_routes import (
+        router as internal_router,
+    )
+
+try:
+    import auth_server.scopes_config as scopes_config
+except Exception:  # noqa: BLE001
+    import scopes_config  # type: ignore[no-redef]
 
 @dataclass(frozen=True)
 class _EnforceAIRuntime:
@@ -219,39 +277,6 @@ def _enforce_enforceai_required() -> None:
 
 _enforce_enforceai_required()
 
-# Configuration for token generation
-JWT_ISSUER = "mcp-auth-server"
-JWT_AUDIENCE = "mcp-registry"
-MAX_TOKEN_LIFETIME_HOURS = 24
-DEFAULT_TOKEN_LIFETIME_HOURS = 8
-
-# Rate limiting for token generation (simple in-memory counter)
-user_token_generation_counts = {}
-MAX_TOKENS_PER_USER_PER_HOUR = int(os.environ.get('MAX_TOKENS_PER_USER_PER_HOUR', '100'))
-
-# Load scopes configuration
-def load_scopes_config():
-    """Load the scopes configuration from scopes.yml"""
-    try:
-        # Check for environment variable first (for EFS-mounted config)
-        scopes_path = os.environ.get('SCOPES_CONFIG_PATH')
-        if scopes_path:
-            scopes_file = Path(scopes_path)
-        else:
-            # Fall back to default location (baked into image)
-            scopes_file = Path(__file__).parent / "scopes.yml"
-
-        with open(scopes_file, 'r') as f:
-            config = yaml.safe_load(f)
-            logger.info(f"Loaded scopes configuration from {scopes_file} with {len(config.get('group_mappings', {}))} group mappings")
-            return config
-    except Exception as e:
-        logger.error(f"Failed to load scopes configuration: {e}")
-        return {}
-
-# Global scopes configuration (will be reloaded dynamically)
-SCOPES_CONFIG = load_scopes_config()
-
 # Utility functions for GDPR/SOX compliance
 def mask_sensitive_id(value: str) -> str:
     """Mask sensitive IDs showing only first and last 4 characters."""
@@ -380,7 +405,8 @@ def map_groups_to_scopes(groups: List[str]) -> List[str]:
         List of MCP scopes
     """
     scopes = []
-    group_mappings = SCOPES_CONFIG.get('group_mappings', {})
+    current_scopes_config = scopes_config.get_scopes_config()
+    group_mappings = current_scopes_config.get('group_mappings', {})
     
     for group in groups:
         if group in group_mappings:
@@ -575,9 +601,13 @@ def validate_server_tool_access(server_name: str, method: str, tool_name: str, u
         logger.info(f"Requested method: '{method}'")
         logger.info(f"Requested tool: '{tool_name}'")
         logger.info(f"User scopes: {user_scopes}")
-        logger.info(f"Available scopes config keys: {list(SCOPES_CONFIG.keys()) if SCOPES_CONFIG else 'None'}")
-        
-        if not SCOPES_CONFIG:
+        current_scopes_config = scopes_config.get_scopes_config()
+        logger.info(
+            "Available scopes config keys: %s",
+            list(current_scopes_config.keys()) if current_scopes_config else "None",
+        )
+
+        if not current_scopes_config:
             logger.warning("No scopes configuration loaded, allowing access")
             logger.info(f"=== VALIDATE_SERVER_TOOL_ACCESS END: ALLOWED (no config) ===")
             return True
@@ -585,7 +615,7 @@ def validate_server_tool_access(server_name: str, method: str, tool_name: str, u
         # Check each user scope to see if it grants access
         for scope in user_scopes:
             logger.info(f"--- Checking scope: '{scope}' ---")
-            scope_config = SCOPES_CONFIG.get(scope, [])
+            scope_config = current_scopes_config.get(scope, [])
             
             if not scope_config:
                 logger.info(f"Scope '{scope}' not found in configuration")
@@ -659,66 +689,6 @@ def validate_server_tool_access(server_name: str, method: str, tool_name: str, u
         logger.info(f"=== VALIDATE_SERVER_TOOL_ACCESS END: ERROR ===")
         return False  # Deny access on error
 
-def validate_scope_subset(user_scopes: List[str], requested_scopes: List[str]) -> bool:
-    """
-    Validate that requested scopes are a subset of user's current scopes.
-    
-    Args:
-        user_scopes: List of scopes the user currently has
-        requested_scopes: List of scopes being requested for the token
-        
-    Returns:
-        True if requested scopes are valid (subset of user scopes), False otherwise
-    """
-    if not requested_scopes:
-        return True  # Empty request is valid
-    
-    user_scope_set = set(user_scopes)
-    requested_scope_set = set(requested_scopes)
-    
-    is_valid = requested_scope_set.issubset(user_scope_set)
-    
-    if not is_valid:
-        invalid_scopes = requested_scope_set - user_scope_set
-        logger.warning(f"Invalid scopes requested: {invalid_scopes}")
-    
-    return is_valid
-
-def check_rate_limit(username: str) -> bool:
-    """
-    Check if user has exceeded token generation rate limit.
-    
-    Args:
-        username: Username to check
-        
-    Returns:
-        True if under rate limit, False if exceeded
-    """
-    current_time = int(time.time())
-    current_hour = current_time // 3600
-    
-    # Clean up old entries (older than 1 hour)
-    keys_to_remove = []
-    for key in user_token_generation_counts.keys():
-        stored_hour = int(key.split(':')[1])
-        if current_hour - stored_hour > 1:
-            keys_to_remove.append(key)
-    
-    for key in keys_to_remove:
-        del user_token_generation_counts[key]
-    
-    # Check current hour count
-    rate_key = f"{username}:{current_hour}"
-    current_count = user_token_generation_counts.get(rate_key, 0)
-    
-    if current_count >= MAX_TOKENS_PER_USER_PER_HOUR:
-        logger.warning(f"Rate limit exceeded for user {hash_username(username)}: {current_count} tokens this hour")
-        return False
-    
-    # Increment counter
-    user_token_generation_counts[rate_key] = current_count + 1
-    return True
-
 # Create FastAPI app
 app = FastAPI(
     title="Simplified Auth Server",
@@ -728,6 +698,11 @@ app = FastAPI(
 
 # Add metrics collection middleware
 add_auth_metrics_middleware(app)
+app.include_router(core_router)
+app.include_router(oauth2_router)
+app.include_router(internal_router)
+app.state.session_secret_key = SECRET_KEY
+app.state.session_signer = signer
 
 try:
     if _os.environ.get("ENFORCEAI_DB_PATH"):
@@ -805,384 +780,12 @@ def _seed_enforceai_password_admin_user() -> None:
     except Exception:
         logger.exception("Failed to seed EnforceAI password admin user")
 
-class TokenValidationResponse(BaseModel):
-    """Response model for token validation"""
-    valid: bool
-    scopes: List[str] = []
-    error: Optional[str] = None
-    method: Optional[str] = None
-    client_id: Optional[str] = None
-    username: Optional[str] = None
-
-class GenerateTokenRequest(BaseModel):
-    """Request model for token generation"""
-    user_context: Dict[str, Any]
-    requested_scopes: List[str] = []
-    expires_in_hours: int = DEFAULT_TOKEN_LIFETIME_HOURS
-    description: Optional[str] = None
-
-class GenerateTokenResponse(BaseModel):
-    """Response model for token generation"""
-    access_token: str
-    refresh_token: Optional[str] = None
-    token_type: str = "Bearer"
-    expires_in: int
-    refresh_expires_in: Optional[int] = None
-    scope: str
-    issued_at: int
-    description: Optional[str] = None
-
-class SimplifiedCognitoValidator:
-    """
-    Simplified Cognito token validator that doesn't rely on environment variables
-    """
-    
-    def __init__(self, region: str = "us-east-1"):
-        """
-        Initialize with minimal configuration
-        
-        Args:
-            region: Default AWS region
-        """
-        self.default_region = region
-        self._cognito_clients = {}  # Cache boto3 clients by region
-        self._jwks_cache = {}  # Cache JWKS by user pool
-        
-    def _get_cognito_client(self, region: str):
-        """Get or create boto3 cognito client for region"""
-        if region not in self._cognito_clients:
-            self._cognito_clients[region] = boto3.client('cognito-idp', region_name=region)
-        return self._cognito_clients[region]
-    
-    def _get_jwks(self, user_pool_id: str, region: str) -> Dict:
-        """
-        Get JSON Web Key Set (JWKS) from Cognito with caching
-        """
-        cache_key = f"{region}:{user_pool_id}"
-        
-        if cache_key not in self._jwks_cache:
-            try:
-                issuer = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
-                jwks_url = f"{issuer}/.well-known/jwks.json"
-                
-                response = requests.get(jwks_url, timeout=10)
-                response.raise_for_status()
-                jwks = response.json()
-                
-                self._jwks_cache[cache_key] = jwks
-                logger.debug(f"Retrieved JWKS for {cache_key} with {len(jwks.get('keys', []))} keys")
-                
-            except Exception as e:
-                logger.error(f"Failed to retrieve JWKS from {jwks_url}: {e}")
-                raise ValueError(f"Cannot retrieve JWKS: {e}")
-        
-        return self._jwks_cache[cache_key]
-
-    def validate_jwt_token(self, 
-                          access_token: str, 
-                          user_pool_id: str, 
-                          client_id: str,
-                          region: str = None) -> Dict:
-        """
-        Validate JWT access token
-        
-        Args:
-            access_token: The bearer token to validate
-            user_pool_id: Cognito User Pool ID
-            client_id: Expected client ID
-            region: AWS region (uses default if not provided)
-            
-        Returns:
-            Dict containing token claims if valid
-            
-        Raises:
-            ValueError: If token is invalid
-        """
-        if not region:
-            region = self.default_region
-            
-        try:
-            # Decode header to get key ID
-            unverified_header = jwt.get_unverified_header(access_token)
-            kid = unverified_header.get('kid')
-            
-            if not kid:
-                raise ValueError("Token missing 'kid' in header")
-            
-            # Get JWKS and find matching key
-            jwks = self._get_jwks(user_pool_id, region)
-            signing_key = None
-            
-            for key in jwks.get('keys', []):
-                if key.get('kid') == kid:
-                    # Handle different versions of PyJWT
-                    try:
-                        # For newer versions of PyJWT
-                        from jwt.algorithms import RSAAlgorithm
-                        signing_key = RSAAlgorithm.from_jwk(key)
-                    except (ImportError, AttributeError):
-                        try:
-                            # For older versions of PyJWT
-                            from jwt.algorithms import get_default_algorithms
-                            algorithms = get_default_algorithms()
-                            signing_key = algorithms['RS256'].from_jwk(key)
-                        except (ImportError, AttributeError):
-                            # For PyJWT 2.0.0+
-                            signing_key = PyJWK.from_jwk(json.dumps(key)).key
-                    break
-            
-            if not signing_key:
-                raise ValueError(f"No matching key found for kid: {kid}")
-            
-            # Set up issuer for validation
-            issuer = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
-            
-            # Validate and decode token
-            claims = jwt.decode(
-                access_token,
-                signing_key,
-                algorithms=['RS256'],
-                issuer=issuer,
-                options={
-                    "verify_aud": False,  # M2M tokens might not have audience
-                    "verify_exp": True,   # Always check expiration
-                    "verify_iat": True,   # Check issued at time
-                }
-            )
-            
-            # Additional validations
-            token_use = claims.get('token_use')
-            if token_use not in ['access', 'id']:  # Allow both access and id tokens
-                raise ValueError(f"Invalid token_use: {token_use}")
-            
-            # For M2M tokens, check client_id
-            token_client_id = claims.get('client_id')
-            if token_client_id and token_client_id != client_id:
-                logger.warning(f"Token issued for different client: {token_client_id} vs expected {client_id}")
-                # Don't fail immediately - could be user token with different structure
-            
-            logger.info(f"Successfully validated JWT token for client/user")
-            return claims
-            
-        except jwt.ExpiredSignatureError:
-            error_msg = "Token has expired"
-            logger.warning(error_msg)
-            raise ValueError(error_msg)
-        except jwt.InvalidTokenError as e:
-            error_msg = f"Invalid token: {e}"
-            logger.warning(error_msg)
-            raise ValueError(error_msg)
-        except Exception as e:
-            error_msg = f"JWT validation error: {e}"
-            logger.error(error_msg)
-            raise ValueError(f"Token validation failed: {e}")
-
-    def validate_with_boto3(self, 
-                           access_token: str, 
-                           region: str = None) -> Dict:
-        """
-        Validate token using boto3 GetUser API (works for user tokens)
-        
-        Args:
-            access_token: The bearer token to validate
-            region: AWS region
-            
-        Returns:
-            Dict containing user information if valid
-            
-        Raises:
-            ValueError: If token is invalid
-        """
-        if not region:
-            region = self.default_region
-            
-        try:
-            cognito_client = self._get_cognito_client(region)
-            response = cognito_client.get_user(AccessToken=access_token)
-            
-            # Extract user attributes
-            user_attributes = {}
-            for attr in response.get('UserAttributes', []):
-                user_attributes[attr['Name']] = attr['Value']
-            
-            result = {
-                'username': response.get('Username'),
-                'user_attributes': user_attributes,
-                'user_status': response.get('UserStatus'),
-                'token_use': 'access',  # boto3 method implies access token
-                'auth_method': 'boto3'
-            }
-            
-            logger.info(f"Successfully validated token via boto3 for user {hash_username(result['username'])}")
-            return result
-            
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            error_message = e.response['Error']['Message']
-            
-            if error_code == 'NotAuthorizedException':
-                error_msg = "Invalid or expired access token"
-                logger.warning(f"Cognito error {error_code}: {error_message}")
-                raise ValueError(error_msg)
-            elif error_code == 'UserNotFoundException':
-                error_msg = "User not found"
-                logger.warning(f"Cognito error {error_code}: {error_message}")
-                raise ValueError(error_msg)
-            else:
-                logger.error(f"Cognito error {error_code}: {error_message}")
-                raise ValueError(f"Token validation failed: {error_message}")
-                
-        except Exception as e:
-            logger.error(f"Boto3 validation error: {e}")
-            raise ValueError(f"Token validation failed: {e}")
-
-    def validate_self_signed_token(self, access_token: str) -> Dict:
-        """
-        Validate self-signed JWT token generated by this auth server.
-        
-        Args:
-            access_token: The JWT token to validate
-            
-        Returns:
-            Dict containing validation results
-            
-        Raises:
-            ValueError: If token is invalid
-        """
-        try:
-            # Decode and validate JWT using shared SECRET_KEY
-            claims = jwt.decode(
-                access_token, 
-                SECRET_KEY, 
-                algorithms=['HS256'],
-                issuer=JWT_ISSUER,
-                audience=JWT_AUDIENCE,
-                options={
-                    "verify_exp": True,
-                    "verify_iat": True,
-                    "verify_iss": True,
-                    "verify_aud": True
-                },
-                leeway=30  # 30 second leeway for clock skew
-            )
-            
-            # Validate token_use
-            token_use = claims.get('token_use')
-            if token_use != 'access':
-                raise ValueError(f"Invalid token_use: {token_use}")
-            
-            # Extract scopes from space-separated string
-            scope_string = claims.get('scope', '')
-            scopes = scope_string.split() if scope_string else []
-            
-            logger.info(f"Successfully validated self-signed token for user: {claims.get('sub')}")
-            
-            return {
-                'valid': True,
-                'method': 'self_signed',
-                'data': claims,
-                'client_id': claims.get('client_id', 'user-generated'),
-                'username': claims.get('sub', ''),
-                'expires_at': claims.get('exp'),
-                'scopes': scopes,
-                'groups': [],  # Self-signed tokens don't have groups
-                'token_type': 'user_generated'
-            }
-            
-        except jwt.ExpiredSignatureError:
-            error_msg = "Self-signed token has expired"
-            logger.warning(error_msg)
-            raise ValueError(error_msg)
-        except jwt.InvalidTokenError as e:
-            error_msg = f"Invalid self-signed token: {e}"
-            logger.warning(error_msg)
-            raise ValueError(error_msg)
-        except Exception as e:
-            error_msg = f"Self-signed token validation error: {e}"
-            logger.error(error_msg)
-            raise ValueError(f"Self-signed token validation failed: {e}")
-
-    def validate_token(self, 
-                      access_token: str, 
-                      user_pool_id: str, 
-                      client_id: str,
-                      region: str = None) -> Dict:
-        """
-        Comprehensive token validation with fallback methods.
-        Now supports both Cognito tokens and self-signed tokens.
-        
-        Args:
-            access_token: The bearer token to validate
-            user_pool_id: Cognito User Pool ID
-            client_id: Expected client ID
-            region: AWS region
-            
-        Returns:
-            Dict containing validation results and token information
-        """
-        if not region:
-            region = self.default_region
-            
-        # First try self-signed token validation (faster)
-        try:
-            # Quick check if it might be our token by attempting to decode without verification
-            unverified_claims = jwt.decode(access_token, options={"verify_signature": False})
-            if unverified_claims.get('iss') == JWT_ISSUER:
-                logger.debug("Token appears to be self-signed, validating...")
-                return self.validate_self_signed_token(access_token)
-        except Exception:
-            # Not our token or malformed, continue to Cognito validation
-            pass
-            
-        # Try JWT validation with Cognito
-        try:
-            jwt_claims = self.validate_jwt_token(access_token, user_pool_id, client_id, region)
-            
-            # Extract scopes and other info
-            scopes = []
-            if 'scope' in jwt_claims:
-                scopes = jwt_claims['scope'].split() if jwt_claims['scope'] else []
-            
-            return {
-                'valid': True,
-                'method': 'jwt',
-                'data': jwt_claims,
-                'client_id': jwt_claims.get('client_id') or '',
-                'username': jwt_claims.get('cognito:username') or jwt_claims.get('username') or '',
-                'expires_at': jwt_claims.get('exp'),
-                'scopes': scopes,
-                'groups': jwt_claims.get('cognito:groups', [])
-            }
-            
-        except ValueError as jwt_error:
-            logger.debug(f"JWT validation failed: {jwt_error}, trying boto3")
-            
-            # Try boto3 validation as fallback
-            try:
-                boto3_data = self.validate_with_boto3(access_token, region)
-                
-                return {
-                    'valid': True,
-                    'method': 'boto3',
-                    'data': boto3_data,
-                    'client_id': '',  # boto3 method doesn't provide client_id
-                    'username': boto3_data.get('username') or '',
-                    'user_attributes': boto3_data.get('user_attributes', {}),
-                    'scopes': [],  # boto3 method doesn't provide scopes
-                    'groups': []
-                }
-                
-            except ValueError as boto3_error:
-                logger.debug(f"Boto3 validation failed: {boto3_error}")
-                raise ValueError(f"All validation methods failed. JWT: {jwt_error}, Boto3: {boto3_error}")
-
 # Create global validator instance
-validator = SimplifiedCognitoValidator()
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "simplified-auth-server"}
+validator = SimplifiedCognitoValidator(
+    secret_key=SECRET_KEY,
+    jwt_issuer=JWT_ISSUER,
+    jwt_audience=JWT_AUDIENCE,
+)
 
 @app.get("/validate")
 async def validate_request(request: Request):
@@ -1843,232 +1446,6 @@ async def validate_request(request: Request):
     finally:
         pass
 
-@app.get("/config")
-async def get_auth_config():
-    """Return the authentication configuration info"""
-    try:
-        auth_provider = get_auth_provider()
-        provider_info = auth_provider.get_provider_info()
-        
-        if provider_info.get('provider_type') == 'keycloak':
-            return {
-                "auth_type": "keycloak",
-                "description": "Keycloak JWT token validation",
-                "required_headers": [
-                    "Authorization: Bearer <token>"
-                ],
-                "optional_headers": [],
-                "provider_info": provider_info
-            }
-        else:
-            return {
-                "auth_type": "cognito",
-                "description": "Header-based Cognito token validation",
-                "required_headers": [
-                    "Authorization: Bearer <token>",
-                    "X-User-Pool-Id: <pool_id>",
-                    "X-Client-Id: <client_id>"
-                ],
-                "optional_headers": [
-                    "X-Region: <region> (default: us-east-1)"
-                ],
-                "provider_info": provider_info
-            }
-    except Exception as e:
-        logger.error(f"Error getting auth config: {e}")
-        return {
-            "auth_type": "unknown",
-            "description": f"Error getting provider config: {e}",
-            "error": str(e)
-        }
-
-@app.post("/internal/tokens", response_model=GenerateTokenResponse)
-async def generate_user_token(
-    request: GenerateTokenRequest
-):
-    """
-    Generate a JWT token for a user with specified scopes.
-    
-    This is an internal API endpoint meant to be called only by the registry service.
-    The generated token will have the same or fewer privileges than the user currently has.
-    
-    Args:
-        request: Token generation request containing user context and requested scopes
-        internal_api_key: Internal API key for authentication
-        
-    Returns:
-        Generated JWT token with expiration info
-        
-    Raises:
-        HTTPException: If request is invalid or user doesn't have required permissions
-    """
-    try:
-        # Note: No internal API key validation needed since registry already validates user session
-        
-        # Extract user context
-        user_context = request.user_context
-        username = user_context.get('username')
-        user_scopes = user_context.get('scopes', [])
-        
-        if not username:
-            raise HTTPException(
-                status_code=400,
-                detail="Username is required in user context",
-                headers={"Connection": "close"}
-            )
-        
-        # Check rate limiting
-        if not check_rate_limit(username):
-            raise HTTPException(
-                status_code=429,
-                detail=f"Rate limit exceeded. Maximum {MAX_TOKENS_PER_USER_PER_HOUR} tokens per hour.",
-                headers={"Connection": "close"}
-            )
-        
-        # Validate expiration time
-        expires_in_hours = request.expires_in_hours
-        if expires_in_hours <= 0 or expires_in_hours > MAX_TOKEN_LIFETIME_HOURS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid expiration time. Must be between 1 and {MAX_TOKEN_LIFETIME_HOURS} hours.",
-                headers={"Connection": "close"}
-            )
-        
-        # Use user's current scopes if no specific scopes requested
-        requested_scopes = request.requested_scopes if request.requested_scopes else user_scopes
-        
-        # Validate that requested scopes are subset of user's current scopes
-        if not validate_scope_subset(user_scopes, requested_scopes):
-            invalid_scopes = set(requested_scopes) - set(user_scopes)
-            raise HTTPException(
-                status_code=403,
-                detail=f"Requested scopes exceed user permissions. Invalid scopes: {list(invalid_scopes)}",
-                headers={"Connection": "close"}
-            )
-        
-        # Generate JWT access token
-        current_time = int(time.time())
-        expires_at = current_time + (expires_in_hours * 3600)
-
-        access_payload = {
-            "iss": JWT_ISSUER,
-            "aud": JWT_AUDIENCE,
-            "sub": username,
-            "scope": " ".join(requested_scopes),
-            "exp": expires_at,
-            "iat": current_time,
-            "jti": str(uuid.uuid4()),  # Unique token ID
-            "token_use": "access",
-            "client_id": "user-generated",
-            "token_type": "user_generated"
-        }
-
-        # Add description if provided
-        if request.description:
-            access_payload["description"] = request.description
-
-        # Sign the access token using HS256 with shared SECRET_KEY
-        access_token = jwt.encode(access_payload, SECRET_KEY, algorithm='HS256')
-
-        # No refresh tokens - users should configure longer token lifetimes in Keycloak if needed
-        refresh_token = None
-        refresh_expires_in_seconds = 0
-
-        logger.info(f"Generated access token for user '{hash_username(username)}' with scopes: {requested_scopes}, expires in {expires_in_hours} hours (no refresh token - configure longer token lifetime in Keycloak if needed)")
-
-        return GenerateTokenResponse(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_in=expires_in_hours * 3600,
-            refresh_expires_in=refresh_expires_in_seconds,
-            scope=" ".join(requested_scopes),
-            issued_at=current_time,
-            description=request.description
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error generating token: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Internal error generating token",
-            headers={"Connection": "close"}
-        )
-
-@app.post("/internal/reload-scopes")
-async def reload_scopes(
-    request: Request,
-    authorization: Optional[str] = Header(None)
-):
-    """
-    Reload the scopes.yml configuration file.
-    Requires admin authentication via Basic Auth with ADMIN_USER/ADMIN_PASSWORD.
-    """
-    import base64
-
-    # Check for HTTP Basic Authentication
-    if not authorization or not authorization.startswith("Basic "):
-        logger.warning("No Basic Auth header found for reload-scopes request")
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Basic"}
-        )
-
-    try:
-        # Decode Basic Auth credentials
-        encoded_credentials = authorization.split(" ")[1]
-        decoded_credentials = base64.b64decode(encoded_credentials).decode("utf-8")
-        username, password = decoded_credentials.split(":", 1)
-    except (IndexError, ValueError, Exception) as e:
-        logger.warning(f"Failed to decode Basic Auth credentials: {e}")
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid authentication format",
-            headers={"WWW-Authenticate": "Basic"}
-        )
-
-    # Verify admin credentials from environment
-    admin_user = os.environ.get("ADMIN_USER", "admin")
-    admin_password = os.environ.get("ADMIN_PASSWORD")
-
-    if not admin_password:
-        logger.error("ADMIN_PASSWORD environment variable not set")
-        raise HTTPException(
-            status_code=500,
-            detail="Server configuration error"
-        )
-
-    if username != admin_user or password != admin_password:
-        logger.warning(f"Failed admin authentication attempt for reload-scopes from {username}")
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid admin credentials",
-            headers={"WWW-Authenticate": "Basic"}
-        )
-
-    # Reload the scopes configuration
-    global SCOPES_CONFIG
-    try:
-        SCOPES_CONFIG = load_scopes_config()
-        logger.info(f"Successfully reloaded scopes configuration by admin '{username}'")
-
-        return JSONResponse(
-            status_code=200,
-            content={
-                "message": "Scopes configuration reloaded successfully",
-                "timestamp": datetime.utcnow().isoformat(),
-                "group_mappings_count": len(SCOPES_CONFIG.get('group_mappings', {}))
-            }
-        )
-    except Exception as e:
-        logger.error(f"Failed to reload scopes configuration: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to reload scopes: {str(e)}"
-        )
-
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Simplified Auth Server")
@@ -2102,7 +1479,12 @@ def main():
     
     # Update global validator with default region
     global validator
-    validator = SimplifiedCognitoValidator(region=args.region)
+    validator = SimplifiedCognitoValidator(
+        region=args.region,
+        secret_key=SECRET_KEY,
+        jwt_issuer=JWT_ISSUER,
+        jwt_audience=JWT_AUDIENCE,
+    )
     
     logger.info(f"Starting simplified auth server on {args.host}:{args.port}")
     logger.info(f"Default region: {args.region}")
@@ -2111,149 +1493,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# Environment parsing helpers for oauth2_providers.yml.
-_ENV_TRUE_VALUES: set[str] = {"1", "true", "yes", "on"}
-
-
-def _parse_env_bool(
-    value: str,
-) -> bool | None:
-    candidate = value.strip().lower()
-    if not candidate:
-        return None
-
-    if candidate in _ENV_TRUE_VALUES:
-        return True
-
-    if candidate in {"0", "false", "no", "off"}:
-        return False
-
-    return None
-
-
-def _apply_provider_enabled_env(
-    config: dict,
-) -> dict:
-    """Enable OAuth2 providers via `<PROVIDER>_ENABLED=true` env vars.
-
-    Notes:
-    - This is intentionally enable-only (truthy values). Many deploy configs set
-      `*_ENABLED=false` by default, and we do not want those defaults to disable
-      providers that are enabled in YAML.
-    """
-    providers = config.get("providers")
-    if not isinstance(providers, dict):
-        return config
-
-    for provider_name, provider_config in providers.items():
-        if not isinstance(provider_config, dict):
-            continue
-
-        env_key = f"{provider_name.upper()}_ENABLED"
-        env_value = os.environ.get(env_key)
-        if env_value is None:
-            continue
-
-        parsed = _parse_env_bool(env_value)
-        if parsed is None:
-            logger.warning(
-                f"Ignoring {env_key}={env_value!r}: expected one of "
-                f"{sorted(_ENV_TRUE_VALUES)} (enable-only)."
-            )
-            continue
-
-        if parsed is True:
-            provider_config["enabled"] = True
-            logger.info(f"Enabled OAuth2 provider '{provider_name}' via {env_key}=true")
-
-    return config
-
-
-# Load OAuth2 providers configuration
-def load_oauth2_config():
-    """Load the OAuth2 providers configuration from oauth2_providers.yml"""
-    try:
-        oauth2_file = Path(__file__).parent / "oauth2_providers.yml"
-        with open(oauth2_file, 'r') as f:
-            config = yaml.safe_load(f)
-            
-        # Substitute environment variables in configuration
-        processed_config = substitute_env_vars(config)
-        processed_config = _apply_provider_enabled_env(processed_config)
-        return processed_config
-    except Exception as e:
-        logger.error(f"Failed to load OAuth2 configuration: {e}")
-        return {"providers": {}, "session": {}, "registry": {}}
-
-def auto_derive_cognito_domain(user_pool_id: str) -> str:
-    """
-    Auto-derive Cognito domain from User Pool ID.
-    
-    Example: us-east-1_KmP5A3La3 → us-east-1kmp5a3la3
-    """
-    if not user_pool_id:
-        return ""
-    
-    # Remove underscore and convert to lowercase
-    domain = user_pool_id.replace('_', '').lower()
-    logger.info(f"Auto-derived Cognito domain '{domain}' from user pool ID '{user_pool_id}'")
-    return domain
-
-def substitute_env_vars(config):
-    """Recursively substitute environment variables in configuration"""
-    if isinstance(config, dict):
-        return {k: substitute_env_vars(v) for k, v in config.items()}
-    elif isinstance(config, list):
-        return [substitute_env_vars(item) for item in config]
-    elif isinstance(config, str) and "${" in config:
-        try:
-            # Handle special case for auto-derived Cognito domain
-            if "COGNITO_DOMAIN:-auto" in config:
-                # Check if COGNITO_DOMAIN is set, if not auto-derive from user pool ID
-                cognito_domain = os.environ.get('COGNITO_DOMAIN')
-                if not cognito_domain:
-                    user_pool_id = os.environ.get('COGNITO_USER_POOL_ID', '')
-                    cognito_domain = auto_derive_cognito_domain(user_pool_id)
-                
-                # Replace the template with the derived domain
-                config = config.replace('${COGNITO_DOMAIN:-auto}', cognito_domain)
-            
-            template = Template(config)
-            return template.substitute(os.environ)
-        except KeyError as e:
-            logger.warning(f"Environment variable not found for template {config}: {e}")
-            return config
-    else:
-        return config
-
-
-def _normalize_string_list(value: object) -> list[str]:
-    if isinstance(value, list):
-        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
-    return []
-
-
-# Global OAuth2 configuration
-OAUTH2_CONFIG = load_oauth2_config()
-
-# Initialize SECRET_KEY and signer for session management
-SECRET_KEY = os.environ.get('SECRET_KEY')
-if not SECRET_KEY:
-    # Generate a secure random key (32 bytes = 256 bits of entropy)
-    SECRET_KEY = secrets.token_hex(32)
-    logger.warning("No SECRET_KEY environment variable found. Using a randomly generated key. "
-                   "While this is more secure than a hardcoded default, it will change on restart. "
-                   "Set a permanent SECRET_KEY environment variable for production.")
-
-signer = URLSafeTimedSerializer(SECRET_KEY)
-app.state.session_secret_key = SECRET_KEY
-app.state.session_signer = signer
-
-CSRF_TOKEN_MAX_AGE_SECONDS = int(os.environ.get("CSRF_TOKEN_MAX_AGE_SECONDS", "3600"))
-SESSION_COOKIE_NAME = "mcp_gateway_session"
 SAFE_CSRF_METHODS: set[str] = {"GET", "HEAD", "OPTIONS", "TRACE"}
 
 
@@ -2318,626 +1557,4 @@ async def enforce_csrf_middleware(
 
     return await call_next(request)
 
-def get_enabled_providers():
-    """Get list of enabled OAuth2 providers, filtered by AUTH_PROVIDER env var if set"""
-    enabled = []
-
-    # Check if AUTH_PROVIDER env var is set to filter to only one provider
-    auth_provider_env = os.getenv("AUTH_PROVIDER")
-
-    # First, collect all enabled providers from YAML
-    yaml_enabled_providers = []
-    for provider_name, config in OAUTH2_CONFIG.get("providers", {}).items():
-        if config.get("enabled", False):
-            yaml_enabled_providers.append(provider_name)
-
-    if auth_provider_env:
-        logger.info(f"AUTH_PROVIDER is set to '{auth_provider_env}', filtering providers accordingly")
-
-        # Check if the specified provider exists in the config
-        if auth_provider_env not in OAUTH2_CONFIG.get("providers", {}):
-            logger.error(f"AUTH_PROVIDER '{auth_provider_env}' not found in oauth2_providers.yml configuration")
-            return []
-
-        # Check if the specified provider is enabled in YAML
-        provider_config = OAUTH2_CONFIG["providers"][auth_provider_env]
-        if not provider_config.get("enabled", False):
-            logger.warning(f"AUTH_PROVIDER '{auth_provider_env}' is set but this provider is disabled in oauth2_providers.yml")
-            logger.warning(f"To fix this, either set AUTH_PROVIDER to one of the enabled providers: {yaml_enabled_providers} or enable '{auth_provider_env}' in oauth2_providers.yml")
-            return []
-
-        # Warn about providers being filtered out
-        filtered_providers = [p for p in yaml_enabled_providers if p != auth_provider_env]
-        if filtered_providers:
-            logger.warning(f"AUTH_PROVIDER override: Filtering out enabled providers {filtered_providers} - only showing '{auth_provider_env}'")
-            logger.warning(f"To show all enabled providers, remove the AUTH_PROVIDER environment variable")
-    else:
-        logger.info("AUTH_PROVIDER not set, returning all enabled providers from config")
-
-    for provider_name, config in OAUTH2_CONFIG.get("providers", {}).items():
-        if config.get("enabled", False):
-            # If AUTH_PROVIDER is set, only include that specific provider
-            if auth_provider_env and provider_name != auth_provider_env:
-                logger.debug(f"Skipping provider '{provider_name}' due to AUTH_PROVIDER filter")
-                continue
-
-            enabled.append({
-                "name": provider_name,
-                "display_name": config.get("display_name", provider_name.title())
-            })
-            logger.debug(f"Enabled provider: {provider_name}")
-
-    logger.info(f"Returning {len(enabled)} enabled providers: {[p['name'] for p in enabled]}")
-    return enabled
-
-@app.get("/oauth2/providers")
-async def get_oauth2_providers():
-    """Get list of enabled OAuth2 providers for the login page"""
-    try:
-        # Debug: log environment variable for troubleshooting
-        auth_provider_env = os.getenv("AUTH_PROVIDER")
-        logger.info(f"Debug: AUTH_PROVIDER environment variable = '{auth_provider_env}'")
-
-        providers = get_enabled_providers()
-        return {"providers": providers}
-    except Exception as e:
-        logger.error(f"Error getting OAuth2 providers: {e}")
-        return {"providers": [], "error": str(e)}
-
-@app.get("/oauth2/login/{provider}")
-async def oauth2_login(provider: str, request: Request, redirect_uri: str = None):
-    """Initiate OAuth2 login flow"""
-    try:
-        if provider not in OAUTH2_CONFIG.get("providers", {}):
-            raise HTTPException(status_code=404, detail=f"Provider {provider} not found")
-        
-        provider_config = OAUTH2_CONFIG["providers"][provider]
-        if not provider_config.get("enabled", False):
-            raise HTTPException(status_code=400, detail=f"Provider {provider} is disabled")
-        
-        # Generate state parameter for security
-        state = secrets.token_urlsafe(32)
-        
-        # Store state and redirect URI in session for callback validation
-        session_data = {
-            "state": state,
-            "provider": provider,
-            "redirect_uri": redirect_uri or OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/")
-        }
-        
-        # Create temporary session for OAuth2 flow
-        temp_session = signer.dumps(session_data)
-        
-        # Use configured external URL or build dynamically
-        auth_server_external_url = os.environ.get('AUTH_SERVER_EXTERNAL_URL')
-        if auth_server_external_url:
-            # Use configured external URL (recommended for production)
-            auth_server_url = auth_server_external_url.rstrip('/')
-            logger.info(f"Using configured AUTH_SERVER_EXTERNAL_URL: {auth_server_url}")
-        else:
-            # Fall back to dynamic construction (for development)
-            host = request.headers.get("host", "localhost:8888")
-            scheme = "https" if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https" else "http"
-            
-            # Special case for localhost to include port
-            if "localhost" in host and ":" not in host:
-                auth_server_url = f"{scheme}://localhost:8888"
-            else:
-                auth_server_url = f"{scheme}://{host}"
-            
-            logger.warning(f"AUTH_SERVER_EXTERNAL_URL not set, using dynamic URL: {auth_server_url}")
-        
-        callback_uri = f"{auth_server_url}/oauth2/callback/{provider}"
-        logger.info(f"OAuth2 callback URI: {callback_uri}")
-        
-        auth_params = {
-            "client_id": provider_config["client_id"],
-            "response_type": provider_config["response_type"],
-            "scope": " ".join(provider_config["scopes"]),
-            "state": state,
-            "redirect_uri": callback_uri
-        }
-        
-        auth_url = f"{provider_config['auth_url']}?{urllib.parse.urlencode(auth_params)}"
-        
-        # Create response with temporary session cookie
-        response = RedirectResponse(url=auth_url, status_code=302)
-        response.set_cookie(
-            key="oauth2_temp_session",
-            value=temp_session,
-            max_age=600,  # 10 minutes for OAuth2 flow
-            httponly=True,
-            samesite="lax"
-        )
-        
-        logger.info(f"Initiated OAuth2 login for provider {provider}")
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error initiating OAuth2 login for {provider}: {e}")
-        error_url = OAUTH2_CONFIG.get("registry", {}).get("error_redirect", "/login")
-        return RedirectResponse(url=f"{error_url}?error=oauth2_init_failed", status_code=302)
-
-@app.get("/oauth2/callback/{provider}")
-async def oauth2_callback(
-    provider: str,
-    request: Request,
-    code: str = None, 
-    state: str = None, 
-    error: str = None,
-    oauth2_temp_session: str = Cookie(None)
-):
-    """Handle OAuth2 callback and create user session"""
-    try:
-        if error:
-            logger.warning(f"OAuth2 error from {provider}: {error}")
-            error_url = OAUTH2_CONFIG.get("registry", {}).get("error_redirect", "/login")
-            return RedirectResponse(url=f"{error_url}?error=oauth2_error&details={error}", status_code=302)
-        
-        if not code or not state or not oauth2_temp_session:
-            raise HTTPException(status_code=400, detail="Missing required OAuth2 parameters")
-        
-        # Validate temporary session
-        try:
-            temp_session_data = signer.loads(oauth2_temp_session, max_age=600)
-        except (SignatureExpired, BadSignature):
-            raise HTTPException(status_code=400, detail="Invalid or expired OAuth2 session")
-        
-        # Validate state parameter
-        if state != temp_session_data.get("state"):
-            raise HTTPException(status_code=400, detail="Invalid state parameter")
-        
-        # Validate provider
-        if provider != temp_session_data.get("provider"):
-            raise HTTPException(status_code=400, detail="Provider mismatch")
-        
-        provider_config = OAUTH2_CONFIG["providers"][provider]
-        
-        # Exchange authorization code for access token
-        # Use configured external URL or build dynamically
-        auth_server_external_url = os.environ.get('AUTH_SERVER_EXTERNAL_URL')
-        if auth_server_external_url:
-            # Use configured external URL (recommended for production)
-            auth_server_url = auth_server_external_url.rstrip('/')
-            logger.info(f"Using configured AUTH_SERVER_EXTERNAL_URL for token exchange: {auth_server_url}")
-        else:
-            # Fall back to dynamic construction (for development)
-            host = request.headers.get("host", "localhost:8888")
-            scheme = "https" if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https" else "http"
-            
-            # Special case for localhost to include port
-            if "localhost" in host and ":" not in host:
-                auth_server_url = f"{scheme}://localhost:8888"
-            else:
-                auth_server_url = f"{scheme}://{host}"
-            
-            logger.warning(f"AUTH_SERVER_EXTERNAL_URL not set, using dynamic URL for token exchange: {auth_server_url}")
-            
-        token_data = await exchange_code_for_token(provider, code, provider_config, auth_server_url)
-        logger.info(f"Token data keys: {list(token_data.keys())}")
-
-        user_info: dict[str, Any] | None = None
-        
-        # For Cognito and Keycloak, try to extract user info from JWT tokens
-        if provider in ["cognito", "keycloak"]:
-            try:
-                if provider == "cognito":
-                    # Extract Cognito configuration from environment
-                    user_pool_id = os.environ.get('COGNITO_USER_POOL_ID')
-                    client_id = provider_config["client_id"]
-                    region = os.environ.get('AWS_REGION', 'us-east-1')
-
-                    if user_pool_id and client_id:
-                        # Use our existing token validation to get groups from JWT
-                        validator = SimplifiedCognitoValidator(region)
-                        token_validation = validator.validate_token(
-                            token_data["access_token"],
-                            user_pool_id,
-                            client_id,
-                            region
-                        )
-
-                        logger.info(f"Token validation result: {token_validation}")
-
-                        # Extract user info from token validation
-                        mapped_user = {
-                            "username": token_validation.get("username"),
-                            "email": token_validation.get("username"),  # Cognito username is usually email
-                            "name": token_validation.get("username"),
-                            "groups": token_validation.get("groups", [])
-                        }
-                        logger.info(f"User extracted from JWT token: {mapped_user}")
-                    else:
-                        logger.warning("Missing Cognito configuration for JWT validation, falling back to userInfo")
-                        raise ValueError("Missing Cognito config")
-                elif provider == "keycloak":
-                    # For Keycloak, decode the ID token to get user information
-                    if "id_token" in token_data:
-                        import jwt
-                        # Decode without verification for now (we trust the token since we just got it)
-                        id_token_claims = jwt.decode(token_data["id_token"], options={"verify_signature": False})
-                        logger.info(f"ID token claims: {id_token_claims}")
-
-                        # Extract user info from ID token claims
-                        mapped_user = {
-                            "username": id_token_claims.get("preferred_username") or id_token_claims.get("sub"),
-                            "email": id_token_claims.get("email"),
-                            "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
-                            "groups": id_token_claims.get("groups", [])
-                        }
-                        logger.info(f"User extracted from Keycloak ID token: {mapped_user}")
-                    else:
-                        logger.warning("No ID token found in Keycloak response, falling back to userInfo")
-                        raise ValueError("Missing ID token")
-                    
-            except Exception as e:
-                logger.warning(f"JWT token validation failed: {e}, falling back to userInfo endpoint")
-                # Fallback to userInfo endpoint
-                user_info = await get_user_info(token_data["access_token"], provider_config)
-                logger.info(f"Raw user info from {provider}: {user_info}")
-                mapped_user = map_user_info(user_info, provider_config)
-                logger.info(f"Mapped user info from userInfo: {mapped_user}")
-        elif provider == "entra":
-            # For Entra ID, prioritize ID token claims over userinfo endpoint
-            try:
-                if "id_token" in token_data:
-                    import jwt
-                    # Decode without verification (we trust the token since we just got it from Microsoft)
-                    id_token_claims = jwt.decode(token_data["id_token"], options={"verify_signature": False})
-                    logger.info(f"Entra ID token claims: {id_token_claims}")
-
-                    # Extract user info from ID token claims
-                    # Entra ID can return groups as either 'groups' or 'roles' depending on configuration
-                    groups = id_token_claims.get("groups", [])
-                    if not groups:
-                        groups = id_token_claims.get("roles", [])
-
-                    mapped_user = {
-                        "username": id_token_claims.get("preferred_username") or id_token_claims.get("email") or id_token_claims.get("upn") or id_token_claims.get("sub"),
-                        "email": id_token_claims.get("email") or id_token_claims.get("preferred_username"),
-                        "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
-                        "groups": groups
-                    }
-                    logger.info(f"User extracted from Entra ID token: {mapped_user}")
-                else:
-                    logger.warning("No ID token found in Entra response, falling back to userInfo")
-                    raise ValueError("Missing ID token")
-
-            except Exception as e:
-                logger.warning(f"Entra ID token parsing failed: {e}, falling back to userInfo endpoint")
-                # Fallback to userInfo endpoint
-                user_info = await get_user_info(token_data["access_token"], provider_config)
-                logger.info(f"Raw user info from {provider}: {user_info}")
-                mapped_user = map_user_info(user_info, provider_config)
-                logger.info(f"Mapped user info from userInfo: {mapped_user}")
-        else:
-            # For other providers, use userInfo endpoint
-            user_info = await get_user_info(token_data["access_token"], provider_config)
-            logger.info(f"Raw user info from {provider}: {user_info}")
-            mapped_user = map_user_info(user_info, provider_config)
-            logger.info(f"Mapped user info: {mapped_user}")
-
-        mapped_groups = mapped_user.get("groups", [])
-        if not isinstance(mapped_groups, list):
-            mapped_groups = []
-            mapped_user["groups"] = mapped_groups
-
-        if not mapped_groups:
-            default_groups = _normalize_string_list(provider_config.get("default_groups"))
-            if default_groups:
-                mapped_user["groups"] = default_groups
-                logger.info(
-                    "Applied OAuth2 default groups for provider '%s': %s",
-                    provider,
-                    default_groups,
-                )
-        
-        issuer = mapped_user.get("iss") or mapped_user.get("issuer")
-        subject = mapped_user.get("sub") or mapped_user.get("subject")
-
-        # Google userInfo (v2) returns `id` instead of OIDC `sub`; set sensible defaults
-        # so sessions can still be persisted/invalidation can work even without an ID token.
-        if provider == "google":
-            issuer = issuer or "https://accounts.google.com"
-            if subject is None and isinstance(user_info, dict):
-                raw_subject = user_info.get("sub") or user_info.get("id")
-                if isinstance(raw_subject, str) and raw_subject.strip():
-                    subject = raw_subject.strip()
-
-        if issuer is None or subject is None:
-            try:
-                if "id_token" in token_data:
-                    id_claims = jwt.decode(
-                        token_data["id_token"],
-                        options={"verify_signature": False},
-                    )
-                    issuer = issuer or id_claims.get("iss")
-                    subject = subject or id_claims.get("sub")
-            except Exception:
-                issuer = issuer
-                subject = subject
-
-        if issuer is None or subject is None:
-            try:
-                access_claims = jwt.decode(
-                    token_data["access_token"],
-                    options={"verify_signature": False},
-                )
-                issuer = issuer or access_claims.get("iss")
-                subject = subject or access_claims.get("sub")
-            except Exception:
-                issuer = issuer
-                subject = subject
-
-        session_id = str(uuid.uuid4())
-        user_id_value = None
-        if isinstance(issuer, str) and issuer.strip() and isinstance(subject, str) and subject.strip():
-            user_id_value = f"{issuer.strip()}|{subject.strip()}"
-
-        db_path_raw = _os.environ.get("ENFORCEAI_DB_PATH")
-        if user_id_value is None:
-            email_value = mapped_user.get("email")
-            if isinstance(email_value, str) and email_value.strip():
-                user_id_value = f"{provider}|{email_value.strip().lower()}"
-            else:
-                username_value = mapped_user.get("username")
-                if isinstance(username_value, str) and username_value.strip():
-                    user_id_value = f"{provider}|{username_value.strip()}"
-
-        if user_id_value and db_path_raw:
-            try:
-                db_path = Path(db_path_raw.strip())
-                EnforceAIDataLayer(db_path=db_path).initialize()
-                store = SqliteSessionStore(db_path=db_path)
-                store.create_session(
-                    session_id=session_id,
-                    user_id=user_id_value,
-                    auth_method="oidc",
-                    expires_at=datetime.now(timezone.utc).replace(microsecond=0)
-                    + timedelta(
-                        seconds=OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
-                    ),
-                )
-                email_value = mapped_user.get("email")
-                if isinstance(email_value, str) and email_value.strip():
-                    groups_value = mapped_user.get("groups", [])
-                    role_value = (
-                        "admin"
-                        if isinstance(groups_value, list) and "enforceai-admin" in groups_value
-                        else "user"
-                    )
-                    SqliteUserStore(db_path=db_path).upsert_oidc_user(
-                        user_id=user_id_value,
-                        email=email_value.strip(),
-                        role=role_value,
-                    )
-            except Exception:
-                logger.exception(
-                    "Failed to persist OAuth2 session (continuing without server-side invalidation)"
-                )
-
-        session_data = build_session_cookie_payload(
-            username=mapped_user["username"],
-            email=mapped_user.get("email"),
-            name=mapped_user.get("name"),
-            groups=mapped_user.get("groups", []),
-            provider=provider,
-            legacy_auth_method="oauth2",
-            max_age_seconds=OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800),
-            session_id=session_id,
-            user_id=user_id_value,
-        )
-        if user_id_value and isinstance(issuer, str) and issuer.strip() and isinstance(subject, str) and subject.strip():
-            session_data["iss"] = issuer.strip()
-            session_data["sub"] = subject.strip()
-            session_data["user_id"] = user_id_value
-        
-        registry_session = signer.dumps(session_data)
-        
-        # Redirect to registry with session cookie
-        redirect_url = temp_session_data.get("redirect_uri", OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/"))
-        response = RedirectResponse(url=redirect_url, status_code=302)
-        
-        # Set registry-compatible session cookie
-        # Check if HTTPS is terminated at load balancer (x-forwarded-proto header)
-        x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
-        is_https = x_forwarded_proto == "https" or request.url.scheme == "https"
-
-        # Only set secure=True if the original request was HTTPS
-        cookie_secure_config = OAUTH2_CONFIG.get("session", {}).get("secure", False)
-        cookie_secure = cookie_secure_config and is_https
-        cookie_samesite = OAUTH2_CONFIG.get("session", {}).get("samesite", "lax")
-        cookie_domain = OAUTH2_CONFIG.get("session", {}).get("domain", "")
-
-        # Handle domain configuration - only use explicitly configured values
-        # Empty string or placeholder means no domain attribute (exact host only)
-        if not cookie_domain or cookie_domain == "${SESSION_COOKIE_DOMAIN}":
-            cookie_domain = None
-            logger.info(f"No cookie domain configured - cookie will be set for exact host only")
-        else:
-            logger.info(f"Using explicitly configured cookie domain: {cookie_domain}")
-
-        logger.info(f"Auth server setting session cookie: secure={cookie_secure} (config={cookie_secure_config}, is_https={is_https}), samesite={cookie_samesite}, domain={cookie_domain or 'not set'}, x-forwarded-proto={x_forwarded_proto}, request_scheme={request.url.scheme}")
-
-        cookie_params = {
-            "key": "mcp_gateway_session",  # Same as registry SESSION_COOKIE_NAME
-            "value": registry_session,
-            "max_age": OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800),
-            "httponly": OAUTH2_CONFIG.get("session", {}).get("httponly", True),
-            "samesite": cookie_samesite,
-            "secure": cookie_secure,
-            "path": "/"  # Ensure cookie is sent for all paths
-        }
-
-        # Only set domain if configured or inferred (for cross-subdomain cookies)
-        if cookie_domain:
-            cookie_params["domain"] = cookie_domain
-
-        response.set_cookie(**cookie_params)
-        
-        # Clear temporary OAuth2 session
-        response.delete_cookie("oauth2_temp_session")
-        
-        logger.info(f"Successfully authenticated user {hash_username(mapped_user['username'])} via {provider}")
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in OAuth2 callback for {provider}: {e}")
-        error_url = OAUTH2_CONFIG.get("registry", {}).get("error_redirect", "/login")
-        return RedirectResponse(url=f"{error_url}?error=oauth2_callback_failed", status_code=302)
-    
-async def exchange_code_for_token(provider: str, code: str, provider_config: dict, auth_server_url: str = None) -> dict:
-    """Exchange authorization code for access token"""
-    if auth_server_url is None:
-        auth_server_url = os.environ.get('AUTH_SERVER_URL', 'http://localhost:8888')
-        
-    async with httpx.AsyncClient() as client:
-        token_data = {
-            "grant_type": provider_config["grant_type"],
-            "client_id": provider_config["client_id"],
-            "client_secret": provider_config["client_secret"],
-            "code": code,
-            "redirect_uri": f"{auth_server_url}/oauth2/callback/{provider}"
-        }
-        
-        headers = {"Accept": "application/json"}
-        if provider == "github":
-            headers["Accept"] = "application/json"
-        
-        response = await client.post(
-            provider_config["token_url"],
-            data=token_data,
-            headers=headers
-        )
-        response.raise_for_status()
-        return response.json()
-
-async def get_user_info(access_token: str, provider_config: dict) -> dict:
-    """Get user information from OAuth2 provider"""
-    async with httpx.AsyncClient() as client:
-        headers = {"Authorization": f"Bearer {access_token}"}
-        
-        response = await client.get(
-            provider_config["user_info_url"],
-            headers=headers
-        )
-        response.raise_for_status()
-        return response.json()
-
-def map_user_info(user_info: dict, provider_config: dict) -> dict:
-    """Map provider-specific user info to our standard format"""
-    mapped = {
-        "username": user_info.get(provider_config["username_claim"]),
-        "email": user_info.get(provider_config["email_claim"]),
-        "name": user_info.get(provider_config["name_claim"]),
-        "groups": []
-    }
-    
-    # Handle groups if provider supports them
-    groups_claim = provider_config.get("groups_claim")
-    logger.info(f"Looking for groups using claim: {groups_claim}")
-    logger.info(f"Available claims in user_info: {list(user_info.keys())}")
-    
-    if groups_claim and groups_claim in user_info:
-        groups = user_info[groups_claim]
-        if isinstance(groups, list):
-            mapped["groups"] = groups
-        elif isinstance(groups, str):
-            mapped["groups"] = [groups]
-        logger.info(f"Found groups via {groups_claim}: {mapped['groups']}")
-    else:
-        # Try alternative group claims for Cognito
-        for possible_group_claim in ["cognito:groups", "groups", "custom:groups"]:
-            if possible_group_claim in user_info:
-                groups = user_info[possible_group_claim]
-                if isinstance(groups, list):
-                    mapped["groups"] = groups
-                elif isinstance(groups, str):
-                    mapped["groups"] = [groups]
-                logger.info(f"Found groups via alternative claim {possible_group_claim}: {mapped['groups']}")
-                break
-        
-        if not mapped["groups"]:
-            logger.warning(f"No groups found in user_info. Available fields: {list(user_info.keys())}")
-    
-    return mapped
-
-@app.get("/oauth2/logout/{provider}")
-async def oauth2_logout(provider: str, request: Request, redirect_uri: str = None):
-    """Initiate OAuth2 logout flow to clear provider session"""
-    try:
-        if provider not in OAUTH2_CONFIG.get("providers", {}):
-            raise HTTPException(status_code=404, detail=f"Provider {provider} not found")
-        
-        provider_config = OAUTH2_CONFIG["providers"][provider]
-        logout_url = provider_config.get("logout_url")
-        
-        if not logout_url:
-            # If provider doesn't support logout URL, just redirect
-            redirect_url = redirect_uri or OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/login")
-            response = RedirectResponse(url=redirect_url, status_code=302)
-            response.delete_cookie(SESSION_COOKIE_NAME)
-            return response
-        
-        # For Cognito, we need to construct the full redirect URI
-        full_redirect_uri = redirect_uri or "/logout"
-        if not full_redirect_uri.startswith("http"):
-            # Make it a full URL - extract registry URL from request's referer or use environment
-            registry_base = os.environ.get('REGISTRY_URL')
-            if not registry_base:
-                # Try to derive from the request
-                referer = request.headers.get("referer", "")
-                if referer:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(referer)
-                    registry_base = f"{parsed.scheme}://{parsed.netloc}"
-                else:
-                    registry_base = "http://localhost"
-            
-            full_redirect_uri = f"{registry_base.rstrip('/')}{full_redirect_uri}"
-        
-        # Build logout URL with correct parameters for Cognito
-        logout_params = {
-            "client_id": provider_config["client_id"],
-            "logout_uri": full_redirect_uri
-        }
-        
-        logout_redirect_url = f"{logout_url}?{urllib.parse.urlencode(logout_params)}"
-        
-        logger.info(f"Redirecting to {provider} logout: {logout_redirect_url}")
-        response = RedirectResponse(url=logout_redirect_url, status_code=302)
-
-        cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
-        if cookie_value:
-            try:
-                session_payload = signer.loads(cookie_value, max_age=28800)
-                normalized = normalize_session_data(
-                    session_payload,
-                    default_provider="local",
-                    max_age_seconds=28800,
-                )
-                db_path_raw = _os.environ.get("ENFORCEAI_DB_PATH")
-                if db_path_raw:
-                    db_path = Path(db_path_raw.strip())
-                    EnforceAIDataLayer(db_path=db_path).initialize()
-                    SqliteSessionStore(db_path=db_path).revoke_session(
-                        session_id=normalized.session_id,
-                        revoked_reason="logout",
-                    )
-            except Exception:
-                logger.exception("Failed to revoke server-side session on oauth2 logout")
-
-        response.delete_cookie(SESSION_COOKIE_NAME)
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error initiating logout for {provider}: {e}")
-        # Fallback to local redirect
-        redirect_url = redirect_uri or OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/login")
-        return RedirectResponse(url=redirect_url, status_code=302)
+# OAuth2 routes live in `auth_server/routes/oauth2_routes.py` and are mounted on the app above.
