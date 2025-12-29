@@ -362,6 +362,44 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/servers/register:
+    post:
+      tags:
+        - Admin Operations
+      summary: Register service (JWT/session)
+      description: >
+        Register a service via the gateway-authenticated API. Requires authentication and `can_modify_servers=true`.
+        This is intended for M2M automation and external callers and uses the same form contract as `/api/internal/register`.
+      operationId: serversRegisterService
+      security:
+        - SessionCookie: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InternalServiceRegistration'
+      responses:
+        '201':
+          description: Service registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceResponse'
+        '403':
+          description: User lacks modify permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Service already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/internal/remove:
     post:
       tags:
@@ -386,6 +424,54 @@ paths:
       responses:
         '200':
           description: Service removed successfully
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/servers/remove:
+    post:
+      tags:
+        - Admin Operations
+      summary: Remove service (JWT/session)
+      description: >
+        Remove a service via the gateway-authenticated API. Requires authentication and `can_modify_servers=true`.
+      operationId: serversRemoveService
+      security:
+        - SessionCookie: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - path
+              properties:
+                path:
+                  type: string
+                  description: Service path to remove
+      responses:
+        '200':
+          description: Service removed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  path:
+                    type: string
+        '403':
+          description: User lacks modify permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Service not found
           content:
@@ -421,6 +507,58 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ToggleResponse'
+
+  /api/servers/toggle:
+    post:
+      tags:
+        - Admin Operations
+      summary: Toggle or set service state (JWT/session)
+      description: >
+        Toggle or set a service enabled/disabled state via the gateway-authenticated API.
+        Requires authentication and `can_modify_servers=true`.
+        - Provide `new_state` to set explicitly.
+        - Omit `new_state` to flip the current state (client compatibility).
+      operationId: serversToggleService
+      security:
+        - SessionCookie: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - path
+              properties:
+                path:
+                  type: string
+                  description: Service path (preferred)
+                service_path:
+                  type: string
+                  description: Service path (legacy client compatibility)
+                new_state:
+                  type: boolean
+                  description: Desired enabled state (optional)
+      responses:
+        '200':
+          description: Service toggled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToggleResponse'
+        '403':
+          description: User lacks modify permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/internal/healthcheck:
     post:
@@ -739,30 +877,39 @@ components:
     InternalServiceRegistration:
       type: object
       required:
-        - service_path
+        - name
+        - description
+        - path
+        - proxy_pass_url
       properties:
-        service_path:
-          type: string
         name:
           type: string
         description:
           type: string
+        path:
+          type: string
         proxy_pass_url:
+          type: string
+        tags:
           type: string
         auth_provider:
           type: string
         auth_type:
           type: string
+        upstream_auth:
+          type: string
+          description: Upstream auth configuration as a JSON string
         supported_transports:
-          type: array
-          items:
-            type: string
+          type: string
+          description: Supported transports as a JSON array string or comma-separated string
         headers:
-          type: object
+          type: string
+          description: Custom headers as a JSON object string
         tool_list_json:
           type: string
         overwrite:
           type: boolean
+          default: true
 
     ServiceResponse:
       type: object
