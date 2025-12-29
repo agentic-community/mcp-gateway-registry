@@ -7,7 +7,14 @@
   - Made `/api/servers/toggle` backward compatible (accepts `service_path` and optional `new_state`, returns `path`/`is_enabled`) and added integration coverage.
   - Secured `/api/servers/register|toggle|remove` by requiring `can_modify_servers` (previously authn-only) and added integration coverage.
   - Deduplicated `/api/internal/*` and `/api/servers/*` toggle/remove side-effects via shared helpers in `registry/api/server_routes_common.py`.
-  - Validation: `make test` pass; `make lint` pass; `cd frontend && npm run build` pass.
+  - Aligned `api/registry_client.py` `InternalServiceRegistration` with the `/api/servers/register` form contract and added unit coverage.
+  - Updated `docs/api-specs/server-management.yaml` to document `/api/servers/register|toggle|remove` and the `can_modify_servers=true` requirement.
+  - Reduced `auth_server/enforceai/api/management_routes.py` size by extracting audit routes and egress allowlist routes into dedicated router modules (paths unchanged via `include_router`).
+  - Extracted `/enforceai/admin/upstream-oauth-providers*` routes into `auth_server/enforceai/api/upstream_oauth_provider_routes.py` and moved upstream store-required helpers into `auth_server/enforceai/api/management_common.py`.
+  - Extracted `/enforceai/upstream/servers*` and `/enforceai/upstream/credentials/*` routes into `auth_server/enforceai/api/upstream_credentials_routes.py` and moved shared upstream helpers into `auth_server/enforceai/api/upstream_common.py`.
+  - Extracted upstream OAuth flow routes (start, callbacks, disconnect) into `auth_server/enforceai/api/upstream_oauth_routes.py` (paths and `url_for` route names unchanged).
+  - Extracted agents, API keys, and token endpoints into `auth_server/enforceai/api/agents_routes.py`, `auth_server/enforceai/api/api_keys_routes.py`, and `auth_server/enforceai/api/tokens_routes.py` (paths unchanged via `include_router`; `management_routes.py` now mostly composition + `/admin/ping`).
+  - Validation: `make test` pass; `make lint` pass; `cd frontend && npm run build` pass; latest refactor validation: `.venv/bin/python -m py_compile auth_server/enforceai/api/management_routes.py auth_server/enforceai/api/agents_routes.py auth_server/enforceai/api/api_keys_routes.py auth_server/enforceai/api/tokens_routes.py` (pass), `make test-fast` (pass), `make lint` (pass).
 - AWS ECS deployment debugging + fixes to keep EnforceAI required (no bypass), based on verified ECS/CloudWatch evidence:
   - Root causes:
     - Auth service rollout failures due to `linux/amd64` pull errors when pushing arm64-only images from Apple Silicon (`CannotPullContainerError: image Manifest does not contain descriptor matching platform 'linux/amd64'`).
