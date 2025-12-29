@@ -81,8 +81,8 @@ class TestRegistryEgressAllowlistEnforcement:
             coro.close()
             return None
 
-        with patch("registry.api.server_routes.server_service") as mock_service, patch(
-            "registry.api.server_routes.asyncio.create_task",
+        with patch("registry.api.server_external_routes.server_service") as mock_service, patch(
+            "registry.api.server_external_routes.asyncio.create_task",
             side_effect=_close_coroutine,
         ):
             mock_service.get_server_info.return_value = None

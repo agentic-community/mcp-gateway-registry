@@ -44,7 +44,7 @@ class TestRegistryServersToggleContract:
             "num_tools": 1,
         }
 
-        with patch("registry.api.server_routes.server_service") as mock_service, patch(
+        with patch("registry.api.server_external_routes.server_service") as mock_service, patch(
             "registry.search.service.faiss_service"
         ) as mock_faiss, patch(
             "registry.core.nginx_service.nginx_service"
@@ -88,7 +88,7 @@ class TestRegistryServersToggleContract:
             "num_tools": 1,
         }
 
-        with patch("registry.api.server_routes.server_service") as mock_service, patch(
+        with patch("registry.api.server_external_routes.server_service") as mock_service, patch(
             "registry.search.service.faiss_service"
         ) as mock_faiss, patch(
             "registry.core.nginx_service.nginx_service"
@@ -122,4 +122,3 @@ class TestRegistryServersToggleContract:
         assert payload["new_enabled_state"] is False
 
         mock_service.toggle_service.assert_called_once_with("/svc", False)
-

@@ -33,7 +33,7 @@ class TestRegistryServersWriteAuthz:
             }
         )
 
-        with patch("registry.api.server_routes.server_service"):
+        with patch("registry.api.server_external_routes.server_service"):
             response = test_client.post(
                 "/api/servers/register",
                 data={
@@ -60,7 +60,7 @@ class TestRegistryServersWriteAuthz:
             }
         )
 
-        with patch("registry.api.server_routes.server_service"):
+        with patch("registry.api.server_external_routes.server_service"):
             response = test_client.post(
                 "/api/servers/toggle",
                 data={
@@ -85,7 +85,7 @@ class TestRegistryServersWriteAuthz:
             }
         )
 
-        with patch("registry.api.server_routes.server_service"):
+        with patch("registry.api.server_external_routes.server_service"):
             response = test_client.post(
                 "/api/servers/remove",
                 data={
@@ -95,4 +95,3 @@ class TestRegistryServersWriteAuthz:
 
         assert response.status_code == 403
         assert response.json()["detail"] == "Insufficient privileges to modify servers"
-
