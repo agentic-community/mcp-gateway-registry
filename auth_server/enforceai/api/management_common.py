@@ -50,6 +50,42 @@ def _require_admin(
     )
 
 
+def _require_upstream_credential_store(
+    stores: EnforceAIStores,
+) -> object:
+    store = getattr(stores, "upstream_credential_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Upstream credential store unavailable (missing ENFORCEAI_UPSTREAM_KEK_PATH)",
+        )
+    return store
+
+
+def _require_upstream_oauth_state_store(
+    stores: EnforceAIStores,
+) -> object:
+    store = getattr(stores, "upstream_oauth_state_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Upstream OAuth state store unavailable (missing ENFORCEAI_UPSTREAM_KEK_PATH)",
+        )
+    return store
+
+
+def _require_upstream_oauth_provider_store(
+    stores: EnforceAIStores,
+) -> object:
+    store = getattr(stores, "upstream_oauth_provider_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Upstream OAuth provider store unavailable (missing ENFORCEAI_UPSTREAM_KEK_PATH)",
+        )
+    return store
+
+
 def _emit_management_audit_event(
     *,
     stores: EnforceAIStores,
@@ -111,4 +147,3 @@ def _map_management_error(
         status_code=503,
         detail="Enforcement dependency unavailable",
     )
-
