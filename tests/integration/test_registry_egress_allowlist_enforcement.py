@@ -28,6 +28,7 @@ class TestRegistryEgressAllowlistEnforcement:
                 "username": "admin-user",
                 "is_admin": True,
                 "accessible_servers": ["all"],
+                "can_modify_servers": True,
             }
         )
 
