@@ -4,8 +4,8 @@ MCP Gateway Registry Client - Standalone Pydantic-based client for the Registry 
 
 This client provides a type-safe interface to the MCP Gateway Registry API endpoints
 documented in:
-- /home/ubuntu/repos/mcp-gateway-registry/docs/api-specs/server-management.yaml (Server Management)
-- /home/ubuntu/repos/mcp-gateway-registry/docs/api-specs/a2a-agent-management.yaml (Agent Management)
+- docs/api-specs/server-management.yaml (Server Management)
+- docs/api-specs/a2a-agent-management.yaml (Agent Management)
 
 Authentication is handled via JWT tokens retrieved from AWS SSM Parameter Store using
 the get-m2m-token.sh script.
@@ -54,16 +54,41 @@ class ServiceRegistration(BaseModel):
 class InternalServiceRegistration(BaseModel):
     """Internal service registration model (Admin/M2M registration)."""
 
-    service_path: str = Field(..., alias="path", description="Service path (e.g., /cloudflare-docs)")
-    name: Optional[str] = Field(None, description="Service name")
-    description: Optional[str] = Field(None, description="Service description")
-    proxy_pass_url: Optional[str] = Field(None, description="Proxy pass URL")
+    service_path: str = Field(
+        ...,
+        alias="path",
+        description="Service path (e.g., /cloudflare-docs)",
+    )
+    name: str = Field(
+        ...,
+        description="Service name",
+    )
+    description: str = Field(
+        ...,
+        description="Service description",
+    )
+    proxy_pass_url: str = Field(
+        ...,
+        description="Proxy pass URL",
+    )
     auth_provider: Optional[str] = Field(None, description="Authentication provider")
     auth_type: Optional[str] = Field(None, description="Authentication type")
-    supported_transports: Optional[List[str]] = Field(None, description="Supported transports")
-    headers: Optional[Dict[str, str]] = Field(None, description="Custom headers")
-    tool_list_json: Optional[str] = Field(None, description="Tool list as JSON string")
-    overwrite: Optional[bool] = Field(False, description="Overwrite if exists")
+    supported_transports: Optional[str] = Field(
+        None,
+        description="Supported transports (JSON array string or comma-separated)",
+    )
+    headers: Optional[str] = Field(
+        None,
+        description="Custom headers (JSON object string)",
+    )
+    tool_list_json: Optional[str] = Field(
+        None,
+        description="Tool list as JSON string",
+    )
+    overwrite: Optional[bool] = Field(
+        True,
+        description="Overwrite if exists",
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
