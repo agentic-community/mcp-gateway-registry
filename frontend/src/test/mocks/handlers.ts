@@ -13,6 +13,8 @@ import type {
   StartOAuthFlowRequest,
   DisconnectOAuthRequest,
   CreateUpstreamCredentialRequest,
+  AuditEvent,
+  AuditEventsListResponse,
 } from '@/api/types';
 
 // Mock tools data
@@ -276,6 +278,120 @@ export const mockUpstreamOAuthProviders: UpstreamOAuthProviderPublic[] = [
     secret_present: false,
   },
 ];
+
+// Factory function to create mock audit events
+export function createMockAuditEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
+  const now = new Date();
+  return {
+    event_id: Math.floor(Math.random() * 100000),
+    occurred_at: now.toISOString(),
+    user_id: 'test|user123',
+    agent_id: '9d2724e9-1753-4493-8993-0d6986754414',
+    action: 'tools/call',
+    outcome: 'allow',
+    request_id: `req-${Date.now()}`,
+    details: {
+      server: 'sqlite',
+      tool: 'read_query',
+    },
+    ...overrides,
+  };
+}
+
+// Pre-generated mock audit events
+export const mockAuditEvents: AuditEvent[] = [
+  createMockAuditEvent({
+    event_id: 1001,
+    occurred_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    action: 'tools/call',
+    outcome: 'allow',
+    request_id: 'req-001',
+    details: { server: 'sqlite', tool: 'read_query' },
+  }),
+  createMockAuditEvent({
+    event_id: 1002,
+    occurred_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    action: 'tools/list',
+    outcome: 'allow',
+    request_id: 'req-002',
+    details: { server: 'sqlite' },
+  }),
+  createMockAuditEvent({
+    event_id: 1003,
+    occurred_at: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+    action: 'tools/call',
+    outcome: 'deny',
+    request_id: 'req-003',
+    details: { server: 'filesystem', tool: 'write_file', reason: 'scope violation' },
+  }),
+  createMockAuditEvent({
+    event_id: 1004,
+    occurred_at: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+    action: 'management/agents/create',
+    outcome: 'allow',
+    request_id: 'req-004',
+    details: { target_agent_id: 'new-agent-123' },
+  }),
+  createMockAuditEvent({
+    event_id: 1005,
+    occurred_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    action: 'tools/call',
+    outcome: 'allow',
+    request_id: 'req-005',
+    details: { server: 'sqlite', tool: 'list_tables' },
+  }),
+];
+
+// CSV escaping helper (minimal RFC4180 support)
+// Wrap in quotes when needed and escape " as "".
+function escapeCsvField(value: string): string {
+  const needsQuotes = /[",\n\r]/.test(value);
+  const escaped = value.replace(/"/g, '""');
+  return needsQuotes ? `"${escaped}"` : escaped;
+}
+
+function buildAuditExportCsv(events: AuditEvent[]): string {
+  const header = [
+    'event_id',
+    'occurred_at',
+    'user_id',
+    'agent_id',
+    'action',
+    'outcome',
+    'request_id',
+    'server',
+    'tool',
+    'reason',
+    'matched_scope',
+    'provider',
+    'details_json',
+  ];
+
+  const lines: string[] = [header.join(',')];
+
+  for (const event of events) {
+    const details = (event.details ?? {}) as Record<string, unknown>;
+    const row = [
+      String(event.event_id),
+      event.occurred_at,
+      event.user_id,
+      event.agent_id,
+      event.action,
+      event.outcome,
+      event.request_id ?? '',
+      String(details.server ?? ''),
+      String(details.tool ?? ''),
+      String(details.reason ?? ''),
+      String(details.matched_scope ?? ''),
+      String(details.provider ?? ''),
+      event.details ? JSON.stringify(event.details) : '',
+    ].map((value) => escapeCsvField(value));
+
+    lines.push(row.join(','));
+  }
+
+  return lines.join('\n');
+}
 
 export const mockScopeCatalog: ScopeCatalog = {
   version: '1.0',
@@ -1203,6 +1319,203 @@ export const handlers = [
     // Simple mock - just return success
     return HttpResponse.json({
       revoked_count: serverPath ? 1 : 0,
+    });
+  }),
+
+  // ============================================================================
+  // Audit Events API
+  // ============================================================================
+
+  http.get('/enforceai/audit/events', ({ request }) => {
+    const url = new URL(request.url);
+    const limit = Number(url.searchParams.get('limit')) || 100;
+    const cursor = url.searchParams.get('cursor');
+    const actions = url.searchParams.getAll('action');
+    const outcomes = url.searchParams.getAll('outcome');
+    const agentId = url.searchParams.get('agent_id');
+    const requestId = url.searchParams.get('request_id');
+    const server = url.searchParams.get('server');
+    const tool = url.searchParams.get('tool');
+
+    let filteredEvents = [...mockAuditEvents];
+
+    // Apply filters
+    if (actions.length > 0) {
+      filteredEvents = filteredEvents.filter((e) => actions.includes(e.action));
+    }
+    if (outcomes.length > 0) {
+      filteredEvents = filteredEvents.filter((e) => outcomes.includes(e.outcome));
+    }
+    if (agentId) {
+      filteredEvents = filteredEvents.filter((e) => e.agent_id === agentId);
+    }
+    if (requestId) {
+      filteredEvents = filteredEvents.filter((e) => e.request_id === requestId);
+    }
+    if (server) {
+      filteredEvents = filteredEvents.filter(
+        (e) => e.details && (e.details as Record<string, unknown>).server === server
+      );
+    }
+    if (tool) {
+      filteredEvents = filteredEvents.filter(
+        (e) => e.details && (e.details as Record<string, unknown>).tool === tool
+      );
+    }
+
+    // Sort by event_id descending (most recent first)
+    filteredEvents.sort((a, b) => b.event_id - a.event_id);
+
+    // Apply cursor pagination
+    let startIndex = 0;
+    if (cursor) {
+      const cursorId = Number(cursor);
+      const cursorIndex = filteredEvents.findIndex((e) => e.event_id === cursorId);
+      if (cursorIndex >= 0) {
+        startIndex = cursorIndex + 1;
+      }
+    }
+
+    // Apply limit and determine if there's more data
+    const items = filteredEvents.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < filteredEvents.length;
+
+    const response: AuditEventsListResponse = {
+      items,
+      next_cursor: hasMore && items.length > 0 ? String(items[items.length - 1].event_id) : null,
+      server_time: new Date().toISOString(),
+    };
+
+    return HttpResponse.json(response);
+  }),
+
+  // Admin Audit Events API (all users)
+  http.get('/enforceai/admin/audit/events', ({ request }) => {
+    const url = new URL(request.url);
+    const limit = Number(url.searchParams.get('limit')) || 100;
+    const cursor = url.searchParams.get('cursor');
+    const userId = url.searchParams.get('user_id');
+    const actions = url.searchParams.getAll('action');
+    const outcomes = url.searchParams.getAll('outcome');
+    const agentId = url.searchParams.get('agent_id');
+    const requestId = url.searchParams.get('request_id');
+    const server = url.searchParams.get('server');
+    const tool = url.searchParams.get('tool');
+
+    let filteredEvents = [...mockAuditEvents];
+
+    // Apply filters
+    if (userId) {
+      filteredEvents = filteredEvents.filter((e) => e.user_id === userId);
+    }
+    if (actions.length > 0) {
+      filteredEvents = filteredEvents.filter((e) => actions.includes(e.action));
+    }
+    if (outcomes.length > 0) {
+      filteredEvents = filteredEvents.filter((e) => outcomes.includes(e.outcome));
+    }
+    if (agentId) {
+      filteredEvents = filteredEvents.filter((e) => e.agent_id === agentId);
+    }
+    if (requestId) {
+      filteredEvents = filteredEvents.filter((e) => e.request_id === requestId);
+    }
+    if (server) {
+      filteredEvents = filteredEvents.filter(
+        (e) => e.details && (e.details as Record<string, unknown>).server === server
+      );
+    }
+    if (tool) {
+      filteredEvents = filteredEvents.filter(
+        (e) => e.details && (e.details as Record<string, unknown>).tool === tool
+      );
+    }
+
+    // Sort by event_id descending (most recent first)
+    filteredEvents.sort((a, b) => b.event_id - a.event_id);
+
+    // Apply cursor pagination
+    let startIndex = 0;
+    if (cursor) {
+      const cursorId = Number(cursor);
+      const cursorIndex = filteredEvents.findIndex((e) => e.event_id === cursorId);
+      if (cursorIndex >= 0) {
+        startIndex = cursorIndex + 1;
+      }
+    }
+
+    // Apply limit and determine if there's more data
+    const items = filteredEvents.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < filteredEvents.length;
+
+    const response: AuditEventsListResponse = {
+      items,
+      next_cursor: hasMore && items.length > 0 ? String(items[items.length - 1].event_id) : null,
+      server_time: new Date().toISOString(),
+    };
+
+    return HttpResponse.json(response);
+  }),
+
+  // Admin Audit Events CSV Export
+  http.get('/enforceai/admin/audit/events/export', ({ request }) => {
+    const url = new URL(request.url);
+    const userId = url.searchParams.get('user_id');
+    const actions = url.searchParams.getAll('action');
+    const outcomes = url.searchParams.getAll('outcome');
+    const agentId = url.searchParams.get('agent_id');
+    const requestId = url.searchParams.get('request_id');
+    const server = url.searchParams.get('server');
+    const tool = url.searchParams.get('tool');
+
+    let filteredEvents = [...mockAuditEvents];
+
+    if (userId) {
+      filteredEvents = filteredEvents.filter((e) => e.user_id === userId);
+    }
+    if (actions.length > 0) {
+      filteredEvents = filteredEvents.filter((e) => actions.includes(e.action));
+    }
+    if (outcomes.length > 0) {
+      filteredEvents = filteredEvents.filter((e) => outcomes.includes(e.outcome));
+    }
+    if (agentId) {
+      filteredEvents = filteredEvents.filter((e) => e.agent_id === agentId);
+    }
+    if (requestId) {
+      filteredEvents = filteredEvents.filter((e) => e.request_id === requestId);
+    }
+    if (server) {
+      filteredEvents = filteredEvents.filter(
+        (e) => e.details && (e.details as Record<string, unknown>).server === server
+      );
+    }
+    if (tool) {
+      filteredEvents = filteredEvents.filter(
+        (e) => e.details && (e.details as Record<string, unknown>).tool === tool
+      );
+    }
+
+    filteredEvents.sort((a, b) => b.event_id - a.event_id);
+
+    // Mirror backend behavior: cap at 10k and error if exceeded
+    const MAX_EXPORT_EVENTS = 10000;
+    if (filteredEvents.length > MAX_EXPORT_EVENTS) {
+      return HttpResponse.json(
+        { detail: `Too many events to export (> ${MAX_EXPORT_EVENTS}). Narrow filters and try again.` },
+        { status: 413 }
+      );
+    }
+
+    const csv = buildAuditExportCsv(filteredEvents);
+    const filename = 'audit_events_mock.csv';
+
+    return new HttpResponse(csv, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      },
     });
   }),
 ];
