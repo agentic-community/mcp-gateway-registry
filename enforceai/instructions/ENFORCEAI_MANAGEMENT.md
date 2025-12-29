@@ -74,13 +74,21 @@ Base prefix: `/enforceai`
 - `POST /enforceai/agents/{agent_id}/tokens/mint`
 - `POST /enforceai/tokens/revoke`
 
+Additional endpoints exist for admin operations (for example egress allowlisting, upstream OAuth provider registry), upstream credential management/flows, and audit querying/export. See `auth_server/enforceai/api/management_routes.py` (source of truth) and the Auth Server OpenAPI.
+
 ### Credentials
-All endpoints require a valid identity resolved by the Stage 4 resolver:
+All endpoints require a valid identity resolved by the Stage 4 resolver (or the EnforceAI UI session mechanisms):
+- Cookie session (web UI): `Cookie: enforceai_session=<signed>`
+- UI session token (web UI): `Authorization: Bearer <ui_session_token>` (issuer: `enforceai-ui-session`)
 - OIDC: `Authorization: Bearer <oidc_jwt>` and `X-Agent-Id: <uuidv4>`
 - Gateway token: `Authorization: Bearer <gateway_token>` or `X-Gateway-Token: <gateway_token>`
 - API key: `X-API-Key: eak_<key_id>.<secret>`
 
-Exactly one credential source must be provided per request.
+Exactly one credential mechanism must be provided per request.
+
+Notes:
+- For compatibility, bearer credentials may also be supplied via `X-Authorization` instead of `Authorization`.
+- If both `Authorization` and `X-Authorization` are present, they must contain the same bearer token and are treated as a single credential.
 
 ## CLI (Stage 6.3)
 CLI lives at `cli/enforceai_cli.py`.
