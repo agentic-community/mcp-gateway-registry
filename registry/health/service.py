@@ -224,11 +224,14 @@ class HealthMonitoringService:
             try:
                 close_tasks.append(conn.close())
             except Exception:
-                pass
+                logger.debug("Failed to schedule WebSocket close", exc_info=True)
             try:
                 remove_tasks.append(self.websocket_manager.remove_connection(conn))
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to schedule WebSocket removal from manager",
+                    exc_info=True,
+                )
                 
         if close_tasks:
             await asyncio.gather(*close_tasks, return_exceptions=True)

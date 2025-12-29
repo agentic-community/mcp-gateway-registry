@@ -242,7 +242,9 @@ http {
 
     def test_reload_nginx_success(self, nginx_service):
         """Test successful nginx reload."""
-        with patch('subprocess.run') as mock_run:
+        with patch("shutil.which", return_value="/usr/sbin/nginx"), patch(
+            "subprocess.run"
+        ) as mock_run:
             mock_run.side_effect = [
                 Mock(returncode=0),
                 Mock(returncode=0),
@@ -252,13 +254,15 @@ http {
             
             assert result is True
             assert mock_run.call_args_list == [
-                call(["nginx", "-t"], capture_output=True, text=True),
-                call(["nginx", "-s", "reload"], capture_output=True, text=True),
+                call(["/usr/sbin/nginx", "-t"], capture_output=True, text=True),
+                call(["/usr/sbin/nginx", "-s", "reload"], capture_output=True, text=True),
             ]
 
     def test_reload_nginx_failure(self, nginx_service):
         """Test nginx reload failure."""
-        with patch('subprocess.run') as mock_run:
+        with patch("shutil.which", return_value="/usr/sbin/nginx"), patch(
+            "subprocess.run"
+        ) as mock_run:
             mock_run.side_effect = [
                 Mock(returncode=0),
                 Mock(returncode=1, stderr="nginx: [error] invalid configuration"),
@@ -270,14 +274,17 @@ http {
 
     def test_reload_nginx_not_found(self, nginx_service):
         """Test nginx reload when nginx binary not found."""
-        with patch('subprocess.run', side_effect=FileNotFoundError("nginx not found")):
+        with patch("shutil.which", return_value=None):
             result = nginx_service.reload_nginx()
             
             assert result is False
 
     def test_reload_nginx_exception(self, nginx_service):
         """Test nginx reload with unexpected exception."""
-        with patch('subprocess.run', side_effect=Exception("Unexpected error")):
+        with patch("shutil.which", return_value="/usr/sbin/nginx"), patch(
+            "subprocess.run",
+            side_effect=Exception("Unexpected error"),
+        ):
             result = nginx_service.reload_nginx()
             
             assert result is False
@@ -321,8 +328,10 @@ http {
 
     def test_logging_reload_success(self, nginx_service):
         """Test logging for successful nginx reload."""
-        with patch('registry.core.nginx_service.logger') as mock_logger, \
-             patch('subprocess.run') as mock_run:
+        with patch("registry.core.nginx_service.logger") as mock_logger, patch(
+            "shutil.which",
+            return_value="/usr/sbin/nginx",
+        ), patch("subprocess.run") as mock_run:
             
             mock_run.side_effect = [
                 Mock(returncode=0),
@@ -336,8 +345,10 @@ http {
 
     def test_logging_reload_failure(self, nginx_service):
         """Test logging for nginx reload failure."""
-        with patch('registry.core.nginx_service.logger') as mock_logger, \
-             patch('subprocess.run') as mock_run:
+        with patch("registry.core.nginx_service.logger") as mock_logger, patch(
+            "shutil.which",
+            return_value="/usr/sbin/nginx",
+        ), patch("subprocess.run") as mock_run:
             
             mock_run.side_effect = [
                 Mock(returncode=0),
@@ -351,8 +362,10 @@ http {
 
     def test_logging_nginx_not_found(self, nginx_service):
         """Test logging when nginx binary is not found."""
-        with patch('registry.core.nginx_service.logger') as mock_logger, \
-             patch('subprocess.run', side_effect=FileNotFoundError()):
+        with patch("registry.core.nginx_service.logger") as mock_logger, patch(
+            "shutil.which",
+            return_value=None,
+        ):
             
             nginx_service.reload_nginx()
             

@@ -115,6 +115,7 @@ class NginxConfigService:
         6. Backward compatibility with EC2_PUBLIC_DNS env var
         """
         import os
+        import shutil
         import subprocess
 
         # Priority 1: Check GATEWAY_ADDITIONAL_SERVER_NAMES env var (user-provided)
@@ -182,8 +183,11 @@ class NginxConfigService:
 
         # Priority 5: Try generic hostname command (works on most Linux systems)
         try:
+            hostname_executable = shutil.which("hostname")
+            if not hostname_executable:
+                raise FileNotFoundError("hostname not found")
             result = subprocess.run(
-                ["hostname", "-I"],
+                [hostname_executable, "-I"],
                 capture_output=True,
                 text=True,
                 timeout=2.0
@@ -195,6 +199,8 @@ class NginxConfigService:
                     private_ip = ips[0]
                     logger.info(f"Auto-detected private IP via hostname command: {private_ip}")
                     return private_ip
+        except FileNotFoundError:
+            logger.debug("hostname command not available")
         except Exception as e:
             logger.debug(f"Generic hostname detection failed: {e}")
 
@@ -385,30 +391,38 @@ class NginxConfigService:
     def reload_nginx(self) -> bool:
         """Reload Nginx configuration (if running in appropriate environment)."""
         try:
+            import shutil
             import subprocess
 
+            nginx_executable = shutil.which("nginx")
+            if not nginx_executable:
+                logger.warning("Nginx not found - skipping reload")
+                return False
+
             # Test the configuration first before reloading
-            test_result = subprocess.run(["nginx", "-t"], capture_output=True, text=True)
+            test_result = subprocess.run(
+                [nginx_executable, "-t"],
+                capture_output=True,
+                text=True,
+            )
             if test_result.returncode != 0:
                 logger.error(f"Nginx configuration test failed: {test_result.stderr}")
                 logger.info("Skipping Nginx reload due to configuration errors")
                 return False
 
-            result = subprocess.run(["nginx", "-s", "reload"], capture_output=True, text=True)
+            result = subprocess.run(
+                [nginx_executable, "-s", "reload"],
+                capture_output=True,
+                text=True,
+            )
             if result.returncode == 0:
                 logger.info("Nginx configuration reloaded successfully")
                 return True
             else:
                 logger.error(f"Failed to reload Nginx: {result.stderr}")
                 return False
-        except FileNotFoundError:
-            logger.warning("Nginx not found - skipping reload")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error reloading Nginx: {e}", exc_info=True)
-            return False
-        except Exception as e:
-            logger.error(f"Error reloading Nginx: {e}")
+        except Exception:
+            logger.exception("Unexpected error reloading Nginx")
             return False
 
 

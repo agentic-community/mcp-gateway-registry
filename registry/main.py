@@ -295,11 +295,20 @@ else:
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
+
+    host = os.getenv("REGISTRY_HOST", "127.0.0.1")
+    try:
+        port = int(os.getenv("REGISTRY_PORT", "7860"))
+    except ValueError:
+        logger.warning("Invalid REGISTRY_PORT; falling back to 7860")
+        port = 7860
+
     uvicorn.run(
-        "registry.main:app", 
-        host="0.0.0.0", 
-        port=7860, 
+        "registry.main:app",
+        host=host,
+        port=port,
         reload=True,
         log_level="info"
-    ) 
+    )
