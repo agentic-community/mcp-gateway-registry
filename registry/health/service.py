@@ -13,170 +13,7 @@ from registry.constants import HealthStatus
 
 logger = logging.getLogger(__name__)
 
-
-class HighPerformanceWebSocketManager:
-    """High-performance WebSocket manager for 400-1000+ concurrent connections."""
-    
-    def __init__(self):
-        self.connections: Set[WebSocket] = set()
-        self.connection_metadata: Dict[WebSocket, Dict] = {}
-        
-        # Rate limiting and batching
-        self.pending_updates: Dict[str, Dict] = {}  # service_path -> latest_data
-        self.last_broadcast_time = 0
-        self.min_broadcast_interval = settings.websocket_broadcast_interval_ms / 1000.0
-        self.max_batch_size = settings.websocket_max_batch_size
-        
-        # Connection health tracking
-        self.failed_connections: Set[WebSocket] = set()
-        self.cleanup_task: Optional[asyncio.Task] = None
-        
-        # Performance metrics
-        self.broadcast_count = 0
-        self.failed_send_count = 0
-        
-    async def add_connection(self, websocket: WebSocket) -> bool:
-        """Add a new WebSocket connection with connection limits."""
-        try:
-            # Connection limit for memory management
-            if len(self.connections) >= settings.max_websocket_connections:
-                logger.warning(f"Connection limit reached: {len(self.connections)}")
-                await websocket.close(code=1008, reason="Server at capacity")
-                return False
-                
-            await websocket.accept()
-            self.connections.add(websocket)
-            self.connection_metadata[websocket] = {
-                "connected_at": time(),
-                "last_ping": time(),
-                "client_ip": getattr(websocket.client, 'host', 'unknown') if websocket.client else 'unknown'
-            }
-            
-            logger.debug(f"WebSocket connected: {len(self.connections)} total connections")
-            
-            # Send initial status efficiently
-            await self._send_initial_status_optimized(websocket)
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error adding WebSocket connection: {e}")
-            return False
-    
-    async def remove_connection(self, websocket: WebSocket):
-        """Remove a WebSocket connection."""
-        self.connections.discard(websocket)
-        self.connection_metadata.pop(websocket, None)
-        self.failed_connections.discard(websocket)
-        
-        logger.debug(f"WebSocket disconnected: {len(self.connections)} total connections")
-    
-    async def _send_initial_status_optimized(self, websocket: WebSocket):
-        """Send initial status using cached data to avoid blocking."""
-        try:
-            # Use cached health data to avoid blocking on service calls
-            cached_data = health_service._get_cached_health_data()
-            if cached_data:
-                await websocket.send_text(json.dumps(cached_data))
-        except Exception as e:
-            logger.warning(f"Failed to send initial status: {e}")
-            await self.remove_connection(websocket)
-    
-    async def broadcast_update(self, service_path: Optional[str] = None, health_data: Optional[Dict] = None):
-        """High-performance broadcasting with batching and rate limiting."""
-        if not self.connections:
-            return
-            
-        current_time = time()
-        
-        # Rate limiting: prevent too frequent broadcasts
-        if current_time - self.last_broadcast_time < self.min_broadcast_interval:
-            # Queue the update for later batch processing
-            if service_path and health_data:
-                self.pending_updates[service_path] = health_data
-            return
-        
-        # Prepare broadcast data
-        if service_path and health_data:
-            # Single service update
-            broadcast_data = {service_path: health_data}
-        else:
-            # Batch updates or full status
-            if self.pending_updates:
-                # Send pending updates in batches
-                batch_data = dict(list(self.pending_updates.items())[:self.max_batch_size])
-                broadcast_data = batch_data
-                # Remove sent items from pending
-                for key in batch_data.keys():
-                    self.pending_updates.pop(key, None)
-            else:
-                # Full status update (avoid this when possible)
-                broadcast_data = health_service._get_cached_health_data()
-        
-        if broadcast_data:
-            await self._send_to_connections_optimized(broadcast_data)
-            self.last_broadcast_time = current_time
-    
-    async def _send_to_connections_optimized(self, data: Dict):
-        """Optimized concurrent sending with automatic cleanup."""
-        if not self.connections:
-            return
-            
-        message = json.dumps(data)
-        connections_list = list(self.connections)  # Snapshot for safe iteration
-        
-        # Split into chunks for better memory management with many connections
-        chunk_size = 100  # Process 100 connections at a time
-        
-        for i in range(0, len(connections_list), chunk_size):
-            chunk = connections_list[i:i + chunk_size]
-            
-            # Send to chunk concurrently
-            tasks = [self._safe_send_message(conn, message) for conn in chunk]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # Track failed connections
-            for conn, result in zip(chunk, results):
-                if isinstance(result, Exception):
-                    self.failed_connections.add(conn)
-                    self.failed_send_count += 1
-        
-        # Cleanup failed connections in batch (non-blocking)
-        if self.failed_connections:
-            asyncio.create_task(self._cleanup_failed_connections())
-            
-        self.broadcast_count += 1
-    
-    async def _safe_send_message(self, connection: WebSocket, message: str):
-        """Send message with timeout and error handling."""
-        try:
-            # Use timeout to prevent hanging on slow connections
-            await asyncio.wait_for(connection.send_text(message), timeout=settings.websocket_send_timeout_seconds)
-            return True
-        except asyncio.TimeoutError:
-            return TimeoutError("Send timeout")
-        except Exception as e:
-            return e
-    
-    async def _cleanup_failed_connections(self):
-        """Cleanup failed connections without blocking main operations."""
-        failed_count = len(self.failed_connections)
-        if failed_count == 0:
-            return
-            
-        for conn in list(self.failed_connections):
-            await self.remove_connection(conn)
-            
-        logger.info(f"Cleaned up {failed_count} failed WebSocket connections")
-    
-    def get_stats(self) -> Dict:
-        """Get performance statistics."""
-        return {
-            "active_connections": len(self.connections),
-            "pending_updates": len(self.pending_updates),
-            "total_broadcasts": self.broadcast_count,
-            "failed_sends": self.failed_send_count,
-            "failed_connections": len(self.failed_connections)
-        }
+from .websocket_manager import HighPerformanceWebSocketManager
 
 
 class HealthMonitoringService:
@@ -187,7 +24,9 @@ class HealthMonitoringService:
         self.server_last_check_time: Dict[str, datetime] = {}
         
         # High-performance WebSocket manager
-        self.websocket_manager = HighPerformanceWebSocketManager()
+        self.websocket_manager = HighPerformanceWebSocketManager(
+            get_cached_health_data=self._get_cached_health_data,
+        )
         
         # Background task management
         self.health_check_task: Optional[asyncio.Task] = None
@@ -1030,11 +869,33 @@ class HealthMonitoringService:
 
         return current_status, last_checked_time
 
+    def get_service_health_data(
+        self,
+        service_path: str,
+        server_info: Optional[Dict] = None,
+    ) -> Dict:
+        """Get health data for a specific service.
+
+        Args:
+            service_path: Service path (e.g. `/myservice`).
+            server_info: Optional server info dict to avoid repeated lookups.
+
+        Returns:
+            Dictionary with health fields (status, last_checked_iso, num_tools).
+        """
+        if server_info is None:
+            from ..services.server_service import server_service
+
+            server_info = server_service.get_server_info(service_path) or {}
+
+        return self._get_service_health_data_fast(
+            service_path,
+            server_info,
+        )
+
     def _get_service_health_data(self, service_path: str) -> Dict:
         """Get health data for a specific service - legacy method, use _get_service_health_data_fast for better performance."""
-        from ..services.server_service import server_service
-        server_info = server_service.get_server_info(service_path)
-        return self._get_service_health_data_fast(service_path, server_info or {})
+        return self.get_service_health_data(service_path)
         
     def _get_service_health_data_fast(self, service_path: str, server_info: Dict) -> Dict:
         """Get health data for a specific service - optimized version."""
