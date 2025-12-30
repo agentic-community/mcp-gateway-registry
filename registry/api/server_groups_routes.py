@@ -13,12 +13,15 @@ from fastapi import (
 from ..auth.dependencies import (
     nginx_proxied_auth,
 )
-from .server_internal_routes import (
-    internal_add_server_to_groups,
-    internal_create_group,
-    internal_delete_group,
-    internal_list_groups,
-    internal_remove_server_from_groups,
+from .server_group_ops import (
+    _add_server_to_groups,
+    _create_group,
+    _delete_group,
+    _list_groups,
+    _remove_server_from_groups,
+)
+from .server_routes_common import (
+    _require_admin_user_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,11 +58,11 @@ async def add_server_to_groups_api(
         server_name,
     )
 
-    return await internal_add_server_to_groups(
-        request,
-        server_name,
-        group_names,
+    return await _add_server_to_groups(
+        server_name=server_name,
+        group_names=group_names,
         user_context=user_context,
+        require_user_context=_require_admin_user_context,
     )
 
 
@@ -92,11 +95,11 @@ async def remove_server_from_groups_api(
         server_name,
     )
 
-    return await internal_remove_server_from_groups(
-        request,
-        server_name,
-        group_names,
+    return await _remove_server_from_groups(
+        server_name=server_name,
+        group_names=group_names,
         user_context=user_context,
+        require_user_context=_require_admin_user_context,
     )
 
 
@@ -131,12 +134,12 @@ async def create_group_api(
         group_name,
     )
 
-    return await internal_create_group(
-        request,
-        group_name,
-        description,
-        create_in_keycloak,
+    return await _create_group(
+        group_name=group_name,
+        description=description,
+        create_in_keycloak=create_in_keycloak,
         user_context=user_context,
+        require_user_context=_require_admin_user_context,
     )
 
 
@@ -171,12 +174,12 @@ async def delete_group_api(
         group_name,
     )
 
-    return await internal_delete_group(
-        request,
-        group_name,
-        delete_from_keycloak,
-        force,
+    return await _delete_group(
+        group_name=group_name,
+        delete_from_keycloak=delete_from_keycloak,
+        force=force,
         user_context=user_context,
+        require_user_context=_require_admin_user_context,
     )
 
 
@@ -204,10 +207,9 @@ async def list_groups_api(
         user_context.get("username") if user_context else "unknown",
     )
 
-    return await internal_list_groups(
-        request,
-        include_keycloak,
-        include_scopes,
+    return await _list_groups(
+        include_keycloak=include_keycloak,
+        include_scopes=include_scopes,
         user_context=user_context,
+        require_user_context=_require_admin_user_context,
     )
-
