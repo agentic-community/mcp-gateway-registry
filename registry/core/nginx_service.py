@@ -1,8 +1,12 @@
+import json
 import logging
 import asyncio
 import httpx
 import hashlib
+import os
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
@@ -10,6 +14,129 @@ from .config import settings
 from registry.constants import HealthStatus, REGISTRY_CONSTANTS
 
 logger = logging.getLogger(__name__)
+
+
+async def _detect_ec2_private_ip() -> Optional[str]:
+    try:
+        async with httpx.AsyncClient() as client:
+            token_response = await client.put(
+                "http://169.254.169.254/latest/api/token",
+                headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"},
+                timeout=2.0,
+            )
+
+            if token_response.status_code != 200:
+                return None
+
+            token = token_response.text
+            ip_response = await client.get(
+                "http://169.254.169.254/latest/meta-data/local-ipv4",
+                headers={"X-aws-ec2-metadata-token": token},
+                timeout=2.0,
+            )
+            if ip_response.status_code != 200:
+                return None
+
+            private_ip = ip_response.text.strip()
+            logger.info("Auto-detected EC2 private IP: %s", private_ip)
+            return private_ip
+
+    except (httpx.TimeoutException, httpx.ConnectError):
+        logger.debug("EC2 metadata service not available - not running on EC2")
+        return None
+    except Exception as exc:
+        logger.debug("EC2 metadata detection failed: %s", exc)
+        return None
+
+
+async def _detect_ecs_container_ip() -> Optional[str]:
+    ecs_uri = os.environ.get("ECS_CONTAINER_METADATA_URI") or os.environ.get(
+        "ECS_CONTAINER_METADATA_URI_V4"
+    )
+    if not ecs_uri:
+        return None
+
+    try:
+        async with httpx.AsyncClient() as client:
+            metadata_response = await client.get(
+                f"{ecs_uri}",
+                timeout=2.0,
+            )
+        if metadata_response.status_code != 200:
+            return None
+
+        metadata = json.loads(metadata_response.text)
+        if "Networks" not in metadata or not metadata["Networks"]:
+            return None
+
+        private_ip = metadata["Networks"][0].get("IPv4Addresses", [None])[0]
+        if not private_ip:
+            return None
+
+        logger.info("Auto-detected ECS container IP: %s", private_ip)
+        return private_ip
+    except Exception as exc:
+        logger.debug("ECS metadata detection failed: %s", exc)
+        return None
+
+
+def _detect_kubernetes_pod_ip() -> Optional[str]:
+    pod_ip = os.environ.get("POD_IP")
+    if not pod_ip:
+        return None
+
+    logger.info("Auto-detected Kubernetes pod IP: %s", pod_ip)
+    return pod_ip
+
+
+def _detect_private_ip_from_hostname() -> Optional[str]:
+    try:
+        hostname_executable = shutil.which("hostname")
+        if not hostname_executable:
+            raise FileNotFoundError("hostname not found")
+        result = subprocess.run(
+            [hostname_executable, "-I"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        if result.returncode != 0:
+            return None
+
+        ips = result.stdout.strip().split()
+        if not ips:
+            return None
+
+        private_ip = ips[0]
+        logger.info("Auto-detected private IP via hostname command: %s", private_ip)
+        return private_ip
+    except FileNotFoundError:
+        logger.debug("hostname command not available")
+        return None
+    except Exception as exc:
+        logger.debug("Generic hostname detection failed: %s", exc)
+        return None
+
+
+def _get_gateway_additional_names_from_env() -> Optional[str]:
+    gateway_names = os.environ.get("GATEWAY_ADDITIONAL_SERVER_NAMES", "")
+    if not gateway_names:
+        return None
+
+    logger.info(
+        "Using GATEWAY_ADDITIONAL_SERVER_NAMES from environment: %s",
+        gateway_names,
+    )
+    return gateway_names.strip()
+
+
+def _get_deprecated_ec2_public_dns_from_env() -> Optional[str]:
+    fallback_dns = os.environ.get("EC2_PUBLIC_DNS", "")
+    if not fallback_dns:
+        return None
+
+    logger.info("Using EC2_PUBLIC_DNS environment variable (deprecated): %s", fallback_dns)
+    return fallback_dns
 
 
 class NginxConfigService:
@@ -114,100 +241,28 @@ class NginxConfigService:
         5. Generic hostname command fallback
         6. Backward compatibility with EC2_PUBLIC_DNS env var
         """
-        import os
-        import shutil
-        import subprocess
-
-        # Priority 1: Check GATEWAY_ADDITIONAL_SERVER_NAMES env var (user-provided)
-        gateway_names = os.environ.get('GATEWAY_ADDITIONAL_SERVER_NAMES', '')
+        gateway_names = _get_gateway_additional_names_from_env()
         if gateway_names:
-            logger.info(f"Using GATEWAY_ADDITIONAL_SERVER_NAMES from environment: {gateway_names}")
-            return gateway_names.strip()
+            return gateway_names
 
-        # Priority 2: Try EC2 metadata service for private IP
-        try:
-            async with httpx.AsyncClient() as client:
-                # Get session token for IMDSv2
-                token_response = await client.put(
-                    "http://169.254.169.254/latest/api/token",
-                    headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"},
-                    timeout=2.0
-                )
+        ec2_private_ip = await _detect_ec2_private_ip()
+        if ec2_private_ip:
+            return ec2_private_ip
 
-                if token_response.status_code == 200:
-                    token = token_response.text
+        ecs_private_ip = await _detect_ecs_container_ip()
+        if ecs_private_ip:
+            return ecs_private_ip
 
-                    # Try to get private IP from EC2 metadata
-                    ip_response = await client.get(
-                        "http://169.254.169.254/latest/meta-data/local-ipv4",
-                        headers={"X-aws-ec2-metadata-token": token},
-                        timeout=2.0
-                    )
-
-                    if ip_response.status_code == 200:
-                        private_ip = ip_response.text.strip()
-                        logger.info(f"Auto-detected EC2 private IP: {private_ip}")
-                        return private_ip
-
-        except (httpx.TimeoutException, httpx.ConnectError):
-            logger.debug("EC2 metadata service not available - not running on EC2")
-        except Exception as e:
-            logger.debug(f"EC2 metadata detection failed: {e}")
-
-        # Priority 3: Try ECS metadata service
-        ecs_uri = os.environ.get('ECS_CONTAINER_METADATA_URI') or os.environ.get('ECS_CONTAINER_METADATA_URI_V4')
-        if ecs_uri:
-            try:
-                async with httpx.AsyncClient() as client:
-                    metadata_response = await client.get(
-                        f"{ecs_uri}",
-                        timeout=2.0
-                    )
-                    if metadata_response.status_code == 200:
-                        import json
-                        metadata = json.loads(metadata_response.text)
-                        # Try to extract IP from ECS metadata
-                        if 'Networks' in metadata and metadata['Networks']:
-                            private_ip = metadata['Networks'][0].get('IPv4Addresses', [None])[0]
-                            if private_ip:
-                                logger.info(f"Auto-detected ECS container IP: {private_ip}")
-                                return private_ip
-            except Exception as e:
-                logger.debug(f"ECS metadata detection failed: {e}")
-
-        # Priority 4: Try EKS/Kubernetes detection
-        pod_ip = os.environ.get('POD_IP')
+        pod_ip = _detect_kubernetes_pod_ip()
         if pod_ip:
-            logger.info(f"Auto-detected Kubernetes pod IP: {pod_ip}")
             return pod_ip
 
-        # Priority 5: Try generic hostname command (works on most Linux systems)
-        try:
-            hostname_executable = shutil.which("hostname")
-            if not hostname_executable:
-                raise FileNotFoundError("hostname not found")
-            result = subprocess.run(
-                [hostname_executable, "-I"],
-                capture_output=True,
-                text=True,
-                timeout=2.0
-            )
-            if result.returncode == 0:
-                ips = result.stdout.strip().split()
-                if ips:
-                    # Use first IP (usually the private IP on single-interface systems)
-                    private_ip = ips[0]
-                    logger.info(f"Auto-detected private IP via hostname command: {private_ip}")
-                    return private_ip
-        except FileNotFoundError:
-            logger.debug("hostname command not available")
-        except Exception as e:
-            logger.debug(f"Generic hostname detection failed: {e}")
+        hostname_ip = _detect_private_ip_from_hostname()
+        if hostname_ip:
+            return hostname_ip
 
-        # Priority 6: Backward compatibility with old EC2_PUBLIC_DNS env var
-        fallback_dns = os.environ.get('EC2_PUBLIC_DNS', '')
+        fallback_dns = _get_deprecated_ec2_public_dns_from_env()
         if fallback_dns:
-            logger.info(f"Using EC2_PUBLIC_DNS environment variable (deprecated): {fallback_dns}")
             return fallback_dns
 
         # No additional server names available
