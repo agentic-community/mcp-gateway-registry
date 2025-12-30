@@ -29,7 +29,7 @@ class TestRegistryCsrfProtection:
         cookie_value = create_session_cookie("testuser")
         server_data = ServerInfoFactory()
 
-        with patch("registry.api.server_routes.server_service") as mock_service:
+        with patch("registry.api.server_ui_routes.server_service") as mock_service:
             response = test_client.post(
                 "/api/register",
                 cookies={settings.session_cookie_name: cookie_value},
@@ -62,7 +62,7 @@ class TestRegistryCsrfProtection:
         server_data = ServerInfoFactory()
 
         with (
-            patch("registry.api.server_routes.server_service") as mock_service,
+            patch("registry.api.server_ui_routes.server_service") as mock_service,
             patch("registry.search.service.faiss_service") as mock_faiss,
             patch("registry.core.nginx_service.nginx_service") as mock_nginx,
             patch("registry.health.service.health_service") as mock_health,
@@ -92,4 +92,3 @@ class TestRegistryCsrfProtection:
             )
 
         assert response.status_code == 201
-

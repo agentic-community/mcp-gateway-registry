@@ -45,8 +45,8 @@ class TestServerRoutes:
             "is_admin": True,
         }
 
-        with patch("registry.api.server_routes.enhanced_auth", return_value=user_context), patch(
-            "registry.api.server_routes.server_service"
+        with patch("registry.api.server_ui_routes.enhanced_auth", return_value=user_context), patch(
+            "registry.api.server_ui_routes.server_service"
         ) as mock_service:
             mock_service.get_all_servers.return_value = {}
             mock_service.is_service_enabled.return_value = False
@@ -87,7 +87,7 @@ class TestServerRoutes:
 
         server_data = ServerInfoFactory()
         
-        with patch('registry.api.server_routes.server_service') as mock_service, \
+        with patch('registry.api.server_ui_routes.server_service') as mock_service, \
              patch('registry.search.service.faiss_service') as mock_faiss, \
              patch('registry.core.nginx_service.nginx_service') as mock_nginx, \
              patch('registry.health.service.health_service') as mock_health:
@@ -145,7 +145,7 @@ class TestServerRoutes:
 
         server_data = ServerInfoFactory()
         
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.register_server.return_value = False
             
             response = test_client.post("/api/register", data={
@@ -188,7 +188,7 @@ class TestServerRoutes:
 
         server_data = ServerInfoFactory()
         
-        with patch('registry.api.server_routes.server_service') as mock_service, \
+        with patch('registry.api.server_ui_routes.server_service') as mock_service, \
              patch('registry.search.service.faiss_service') as mock_faiss, \
              patch('registry.core.nginx_service.nginx_service') as mock_nginx, \
              patch('registry.health.service.health_service') as mock_health:
@@ -236,7 +236,7 @@ class TestServerRoutes:
             "is_admin": True,
         }
 
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.get_server_info.return_value = None
             
             response = test_client.post("/api/toggle/nonexistent", data={
@@ -274,7 +274,7 @@ class TestServerRoutes:
 
         server_data = ServerInfoFactory()
         
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.get_server_info.return_value = server_data
             
             response = test_client.get(f"/api/server_details{server_data['path']}")
@@ -310,7 +310,7 @@ class TestServerRoutes:
             "is_admin": True,
         }
 
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.get_server_info.return_value = None
             
             response = test_client.get("/api/server_details/nonexistent")
@@ -349,7 +349,7 @@ class TestServerRoutes:
             "/test2": ServerInfoFactory()
         }
         
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.get_all_servers.return_value = servers
             
             response = test_client.get("/api/server_details/all")
@@ -389,7 +389,7 @@ class TestServerRoutes:
 
         server_data = ServerInfoFactory()
         
-        with patch('registry.api.server_routes.server_service') as mock_service, \
+        with patch('registry.api.server_ui_routes.server_service') as mock_service, \
              patch('registry.search.service.faiss_service') as mock_faiss, \
              patch('registry.core.nginx_service.nginx_service') as mock_nginx, \
              patch('registry.health.service.health_service') as mock_health:
@@ -436,7 +436,7 @@ class TestServerRoutes:
             "is_admin": True,
         }
 
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.get_server_info.return_value = None
             
             response = test_client.post("/api/refresh/nonexistent")
@@ -472,7 +472,7 @@ class TestServerRoutes:
 
         server_data = ServerInfoFactory()
         
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.get_server_info.return_value = server_data
             
             response = test_client.get(f"/api/edit{server_data['path']}")
@@ -507,7 +507,7 @@ class TestServerRoutes:
             "is_admin": True,
         }
 
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.get_server_info.return_value = None
             
             response = test_client.get("/api/edit/nonexistent")
@@ -543,7 +543,7 @@ class TestServerRoutes:
 
         server_data = ServerInfoFactory()
         
-        with patch('registry.api.server_routes.server_service') as mock_service, \
+        with patch('registry.api.server_ui_routes.server_service') as mock_service, \
              patch('registry.search.service.faiss_service') as mock_faiss, \
              patch('registry.core.nginx_service.nginx_service') as mock_nginx:
             
@@ -591,7 +591,7 @@ class TestServerRoutes:
             "is_admin": True,
         }
 
-        with patch('registry.api.server_routes.server_service') as mock_service:
+        with patch('registry.api.server_ui_routes.server_service') as mock_service:
             mock_service.get_server_info.return_value = None
             
             response = test_client.post("/api/edit/nonexistent", data={

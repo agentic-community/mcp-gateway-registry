@@ -84,26 +84,40 @@ class TestRegistryEgressAllowlistEnforcement:
         with patch("registry.api.server_external_routes.server_service") as mock_service, patch(
             "registry.api.server_external_routes.asyncio.create_task",
             side_effect=_close_coroutine,
+        ), patch(
+            "registry.health.service.health_service.perform_immediate_health_check",
+            new=AsyncMock(),
+        ), patch(
+            "registry.search.service.faiss_service.save_data",
+            new=AsyncMock(),
+        ), patch(
+            "registry.search.service.faiss_service.add_or_update_service",
+            new=AsyncMock(),
+        ), patch(
+            "registry.core.nginx_service.nginx_service.generate_config_async",
+            new=AsyncMock(),
+        ), patch(
+            "registry.health.service.health_service.broadcast_health_update",
+            new=AsyncMock(),
+        ), patch(
+            "registry.utils.scopes_manager.update_server_scopes",
+            new=AsyncMock(),
         ):
             mock_service.get_server_info.return_value = None
             mock_service.register_server.return_value = True
             mock_service.update_server.return_value = True
+            mock_service.toggle_service.return_value = True
+            mock_service.is_service_enabled.return_value = True
+            mock_service.get_enabled_services.return_value = ["/svc"]
 
-            with patch(
-                "registry.health.service.health_service.perform_immediate_health_check",
-                new=AsyncMock(),
-            ), patch(
-                "registry.search.service.faiss_service.save_data",
-                new=AsyncMock(),
-            ):
-                response = test_client.post(
-                    "/api/servers/register",
-                    data={
-                        "name": "svc",
-                        "description": "svc",
-                        "path": "/svc",
-                        "proxy_pass_url": "https://example.com/mcp",
-                    },
-                )
+            response = test_client.post(
+                "/api/servers/register",
+                data={
+                    "name": "svc",
+                    "description": "svc",
+                    "path": "/svc",
+                    "proxy_pass_url": "https://example.com/mcp",
+                },
+            )
 
         assert response.status_code == 201

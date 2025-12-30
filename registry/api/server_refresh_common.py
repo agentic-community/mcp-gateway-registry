@@ -19,11 +19,8 @@ async def _refresh_service_impl(
     """Refresh service health and tool information (shared by UI + JSON endpoints)."""
     from ..search.service import faiss_service
     from ..health.service import health_service
-    from ..core.mcp_client import mcp_client_service
     from ..core.nginx_service import nginx_service
     from ..auth.dependencies import user_has_ui_permission_for_service
-
-    _ = mcp_client_service
 
     if not service_path.startswith("/"):
         service_path = "/" + service_path
