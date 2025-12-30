@@ -48,6 +48,7 @@ from ..upstream.headers import (
 from ..upstream.oauth_client import (
     OAuthTokenClient,
     OAuthTokenClientError,
+    OAuthTokenSet,
 )
 from ..upstream.oauth_flow import (
     consume_oauth_state,
@@ -71,6 +72,47 @@ from .upstream_common import (
 )
 
 router = APIRouter()
+
+
+def _build_secret_payload(
+    tokens: OAuthTokenSet,
+) -> dict[str, object]:
+    secret_payload: dict[str, object] = {
+        "access_token": tokens.access_token,
+    }
+    if tokens.refresh_token is not None:
+        secret_payload["refresh_token"] = tokens.refresh_token
+    if tokens.id_token is not None:
+        secret_payload["id_token"] = tokens.id_token
+    return secret_payload
+
+
+def _revoke_matching_credentials(
+    *,
+    upstream_store: object,
+    server_path: str,
+    user_id: str,
+    agent_id: Optional[str],
+    credential_type: str,
+    credential_binding: str,
+    provider: str,
+) -> int:
+    records = upstream_store.list_credentials(
+        server_path=server_path,
+        user_id=user_id,
+        agent_id=agent_id,
+        include_revoked=False,
+    )
+    revoked = 0
+    for record in records:
+        if (
+            record.credential_type == credential_type
+            and record.credential_binding == credential_binding
+            and record.provider == provider
+        ):
+            upstream_store.revoke_credential(credential_id=record.credential_id)
+            revoked += 1
+    return revoked
 
 
 def _append_query_params(
@@ -415,27 +457,17 @@ async def upstream_server_oauth_callback(
         )
         return RedirectResponse(url=target, status_code=302)
 
-    existing = upstream_store.list_credentials(
+    _revoke_matching_credentials(
+        upstream_store=upstream_store,
         server_path=consumed.server_path,
         user_id=context.user_id,
         agent_id=consumed.agent_id,
-        include_revoked=False,
+        credential_type=consumed.credential_type,
+        credential_binding=consumed.credential_binding,
+        provider=consumed.provider,
     )
-    for record in existing:
-        if (
-            record.credential_type == consumed.credential_type
-            and record.credential_binding == consumed.credential_binding
-            and record.provider == consumed.provider
-        ):
-            upstream_store.revoke_credential(credential_id=record.credential_id)
 
-    secret_payload: dict[str, object] = {
-        "access_token": tokens.access_token,
-    }
-    if tokens.refresh_token is not None:
-        secret_payload["refresh_token"] = tokens.refresh_token
-    if tokens.id_token is not None:
-        secret_payload["id_token"] = tokens.id_token
+    secret_payload = _build_secret_payload(tokens)
 
     created = upstream_store.create_credential(
         server_path=consumed.server_path,
@@ -554,27 +586,17 @@ async def upstream_oauth_callback(
         )
         raise HTTPException(status_code=502, detail="Upstream OAuth token exchange failed") from exc
 
-    existing = upstream_store.list_credentials(
+    _revoke_matching_credentials(
+        upstream_store=upstream_store,
         server_path=consumed.server_path,
         user_id=context.user_id,
         agent_id=consumed.agent_id,
-        include_revoked=False,
+        credential_type=consumed.credential_type,
+        credential_binding=consumed.credential_binding,
+        provider=consumed.provider,
     )
-    for record in existing:
-        if (
-            record.credential_type == consumed.credential_type
-            and record.credential_binding == consumed.credential_binding
-            and record.provider == consumed.provider
-        ):
-            upstream_store.revoke_credential(credential_id=record.credential_id)
 
-    secret_payload: dict[str, object] = {
-        "access_token": tokens.access_token,
-    }
-    if tokens.refresh_token is not None:
-        secret_payload["refresh_token"] = tokens.refresh_token
-    if tokens.id_token is not None:
-        secret_payload["id_token"] = tokens.id_token
+    secret_payload = _build_secret_payload(tokens)
 
     created = upstream_store.create_credential(
         server_path=consumed.server_path,
@@ -634,21 +656,15 @@ async def disconnect_upstream_oauth(
         if record is None or record.user_id != context.user_id:
             raise HTTPException(status_code=404, detail="Agent not found")
 
-    records = upstream_store.list_credentials(
+    revoked = _revoke_matching_credentials(
+        upstream_store=upstream_store,
         server_path=payload.server_path,
         user_id=context.user_id,
         agent_id=agent_id,
-        include_revoked=False,
+        credential_type=payload.credential_type,
+        credential_binding=payload.credential_binding,
+        provider=payload.provider,
     )
-    revoked = 0
-    for record in records:
-        if (
-            record.credential_type == payload.credential_type
-            and record.credential_binding == payload.credential_binding
-            and record.provider == payload.provider
-        ):
-            upstream_store.revoke_credential(credential_id=record.credential_id)
-            revoked += 1
 
     _emit_management_audit_event(
         stores=stores,
@@ -694,21 +710,15 @@ async def disconnect_upstream_server_oauth(
         if record is None or record.user_id != context.user_id:
             raise HTTPException(status_code=404, detail="Agent not found")
 
-    records = upstream_store.list_credentials(
+    revoked = _revoke_matching_credentials(
+        upstream_store=upstream_store,
         server_path=normalized_server_path,
         user_id=context.user_id,
         agent_id=agent_id,
-        include_revoked=False,
+        credential_type=payload.credential_type,
+        credential_binding=payload.credential_binding,
+        provider=payload.provider,
     )
-    revoked = 0
-    for record in records:
-        if (
-            record.credential_type == payload.credential_type
-            and record.credential_binding == payload.credential_binding
-            and record.provider == payload.provider
-        ):
-            upstream_store.revoke_credential(credential_id=record.credential_id)
-            revoked += 1
 
     _emit_management_audit_event(
         stores=stores,
@@ -727,4 +737,3 @@ async def disconnect_upstream_server_oauth(
     )
 
     return UpstreamOAuthDisconnectResponse(revoked_count=revoked)
-
