@@ -132,6 +132,19 @@ class TestAuthDependencies:
             assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
             assert "Invalid session data" in exc_info.value.detail
 
+    def test_get_current_user_unexpected_error(self, mock_settings):
+        """Returns 401 when cookie validation raises an unexpected error."""
+        with patch('registry.auth.dependencies.settings', mock_settings), \
+             patch('registry.auth.dependencies.signer') as mock_signer:
+
+            mock_signer.loads.side_effect = Exception("unexpected")
+
+            with pytest.raises(HTTPException) as exc_info:
+                get_current_user("broken_session")
+
+            assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+            assert "Authentication failed" in exc_info.value.detail
+
     def test_api_auth_success(self, mock_settings, valid_session_cookie):
         """Test API authentication success."""
         with patch('registry.auth.dependencies.settings', mock_settings):
@@ -161,3 +174,19 @@ class TestAuthDependencies:
             
             assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
             assert "Authentication required" in exc_info.value.detail
+
+    def test_redact_headers_for_logging_masks_sensitive_headers(self):
+        """Masks sensitive header values when logging."""
+        from registry.auth.dependencies import _redact_headers_for_logging
+
+        redacted = _redact_headers_for_logging(
+            {
+                "Authorization": "Bearer secret",
+                "cookie": "session=supersecret",
+                "X-User": "alice",
+            }
+        )
+
+        assert redacted["Authorization"] == "***REDACTED***"
+        assert redacted["cookie"] == "***REDACTED***"
+        assert redacted["X-User"] == "alice"

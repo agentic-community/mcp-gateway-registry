@@ -1,33 +1,60 @@
-import secrets
-from datetime import (
-    datetime,
-    timezone,
-    timedelta,
-)
-from typing import Annotated, List, Dict, Any, Optional
+from __future__ import annotations
+
+from typing import Annotated, Dict, Any
 import logging
-import yaml
-from pathlib import Path
 
 from fastapi import Depends, HTTPException, status, Cookie, Header, Request
-from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
+from itsdangerous import URLSafeTimedSerializer
 
 from ..core.config import settings
-from gateway_session import (
-    build_session_cookie_payload,
-    normalize_session_data,
+from .session import (
+    create_session_cookie_value,
+    get_current_user_from_cookie,
+    get_user_session_data_from_cookie,
 )
-from auth_server.enforceai.stores.sqlite.session_store import (
-    SqliteSessionStore,
+from .scopes import (
+    SCOPES_CONFIG,
+    get_accessible_agents_for_user,
+    get_accessible_services_for_user,
+    get_ui_permissions_for_user,
+    get_user_accessible_servers,
+    map_cognito_groups_to_scopes,
+    user_can_access_server,
+    user_can_modify_servers,
+    user_has_ui_permission_for_service,
+    user_has_wildcard_access,
 )
-from auth_server.enforceai.db.data_layer import (
-    EnforceAIDataLayer,
+from .user_context import (
+    build_registry_user_context,
 )
 
 logger = logging.getLogger(__name__)
 
 # Initialize session signer
 signer = URLSafeTimedSerializer(settings.secret_key)
+
+_SENSITIVE_HEADER_KEYS: set[str] = {
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "api-key",
+    "x-auth-token",
+    "x-amz-security-token",
+}
+
+
+def _redact_headers_for_logging(
+    headers: Dict[str, str],
+) -> Dict[str, str]:
+    redacted: Dict[str, str] = {}
+    for key, value in headers.items():
+        if key.lower() in _SENSITIVE_HEADER_KEYS:
+            redacted[key] = "***REDACTED***"
+        else:
+            redacted[key] = value
+    return redacted
 
 
 def get_current_user(
@@ -42,47 +69,11 @@ def get_current_user(
     Raises:
         HTTPException: If user is not authenticated
     """
-    if not session:
-        logger.warning("No session cookie provided")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
-        )
-    
-    try:
-        data = signer.loads(session, max_age=settings.session_max_age_seconds)
-        username = data.get('username')
-        
-        if not username:
-            logger.warning("No username found in session data")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid session data"
-            )
-        
-        logger.debug(f"Authentication successful for user: {username}")
-        return username
-        
-    except SignatureExpired:
-        logger.warning("Session cookie has expired")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session has expired"
-        )
-    except BadSignature:
-        logger.warning("Invalid session cookie signature")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid session"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Session validation error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication failed"
-        )
+    return get_current_user_from_cookie(
+        signer=signer,
+        session_cookie=session,
+        max_age_seconds=settings.session_max_age_seconds,
+    )
 
 
 def get_user_session_data(
@@ -97,400 +88,13 @@ def get_user_session_data(
     Raises:
         HTTPException: If user is not authenticated
     """
-    if not session:
-        logger.warning("No session cookie provided for session data extraction")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
-        )
-    
-    try:
-        data = signer.loads(session, max_age=settings.session_max_age_seconds)
-
-        normalized = normalize_session_data(
-            data,
-            default_provider="local",
-            max_age_seconds=settings.session_max_age_seconds,
-        )
-
-        if normalized.username is None or not normalized.username.strip():
-            logger.warning("No username found in session data")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid session data"
-            )
-
-        legacy_auth_method = normalized.legacy_auth_method or ""
-
-        # Set defaults for traditional auth users (legacy behavior)
-        if legacy_auth_method != "oauth2":
-            # Traditional users get admin privileges
-            data.setdefault("groups", ["mcp-registry-admin"])
-            data.setdefault(
-                "scopes",
-                [
-                    "mcp-servers-unrestricted/read",
-                    "mcp-servers-unrestricted/execute",
-                ],
-            )
-
-        data["v"] = normalized.v
-        data["session_id"] = normalized.session_id
-        data["user_id"] = normalized.user_id
-        data["auth_method"] = normalized.auth_method
-        data["legacy_auth_method"] = normalized.legacy_auth_method
-        data["provider"] = normalized.provider
-        data["username"] = normalized.username
-        data["email"] = normalized.email
-        data["name"] = normalized.name
-        data["groups"] = normalized.groups or data.get("groups", [])
-        data["issued_at"] = normalized.issued_at
-        data["expires_at"] = normalized.expires_at
-
-        enforceai_db_path = getattr(settings, "enforceai_db_path", None)
-        if enforceai_db_path is not None:
-            try:
-                EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
-                store = SqliteSessionStore(db_path=enforceai_db_path)
-                record = store.get_session_by_id(session_id=normalized.session_id)
-            except OSError:
-                logger.warning(
-                    "Skipping server-side session validation; EnforceAI DB unavailable",
-                    exc_info=True,
-                )
-            except Exception:
-                logger.exception("Skipping server-side session validation due to unexpected error")
-            else:
-                if record is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Session invalidated",
-                    )
-                if record.revoked_at is not None:
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Session invalidated",
-                    )
-                store.touch_session(
-                    session_id=normalized.session_id,
-                    now=datetime.now(timezone.utc).replace(microsecond=0),
-                )
-
-        logger.debug(f"Session data extracted for user: {data.get('username')}")
-        return data
-        
-    except SignatureExpired:
-        logger.warning("Session cookie has expired")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session has expired"
-        )
-    except BadSignature:
-        logger.warning("Invalid session cookie signature")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid session"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Session data extraction error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication failed"
-        )
-
-
-def load_scopes_config() -> Dict[str, Any]:
-    """Load the scopes configuration from auth_server/scopes.yml"""
-    try:
-        # Check for SCOPES_CONFIG_PATH environment variable first
-        import os
-        scopes_path = os.getenv("SCOPES_CONFIG_PATH")
-
-        # Print to stderr for immediate visibility before logging is configured
-        print(f"[SCOPES_INIT] SCOPES_CONFIG_PATH env var: {scopes_path}", flush=True)
-
-        # Fall back to default location if env var not set
-        if not scopes_path:
-            scopes_file = Path(__file__).parent.parent.parent / "auth_server" / "scopes.yml"
-        else:
-            scopes_file = Path(scopes_path)
-
-        # If file doesn't exist, try the EFS mounted location (auth_config subdirectory)
-        if not scopes_file.exists():
-            alt_scopes_file = Path(__file__).parent.parent.parent / "auth_server" / "auth_config" / "scopes.yml"
-            if alt_scopes_file.exists():
-                scopes_file = alt_scopes_file
-                print(f"[SCOPES_INIT] File not found at primary location, using EFS mount location: {scopes_file}", flush=True)
-
-        print(f"[SCOPES_INIT] Looking for scopes config at: {scopes_file}", flush=True)
-        print(f"[SCOPES_INIT] Scopes file exists: {scopes_file.exists()}", flush=True)
-
-        if not scopes_file.exists():
-            print(f"[SCOPES_INIT] ERROR: Scopes config file not found at {scopes_file}", flush=True)
-            auth_server_dir = scopes_file.parent
-            print(f"[SCOPES_INIT] Auth server directory exists: {auth_server_dir.exists()}", flush=True)
-            if auth_server_dir.exists():
-                print(f"[SCOPES_INIT] Auth server directory contents: {list(auth_server_dir.iterdir())}", flush=True)
-            logger.warning(f"Scopes config file not found at {scopes_file}")
-            return {}
-
-        with open(scopes_file, 'r') as f:
-            config = yaml.safe_load(f)
-            logger.info(f"Loaded scopes configuration with {len(config.get('group_mappings', {}))} group mappings")
-            return config
-    except Exception as e:
-        logger.error(f"Failed to load scopes configuration: {e}", exc_info=True)
-        return {}
-
-
-# Global scopes configuration
-SCOPES_CONFIG = load_scopes_config()
-
-
-def map_cognito_groups_to_scopes(groups: List[str]) -> List[str]:
-    """
-    Map Cognito groups to MCP scopes using the scopes.yml configuration.
-    
-    Args:
-        groups: List of Cognito group names
-        
-    Returns:
-        List of MCP scopes
-    """
-    scopes = []
-    group_mappings = SCOPES_CONFIG.get('group_mappings', {})
-    
-    for group in groups:
-        if group in group_mappings:
-            group_scopes = group_mappings[group]
-            scopes.extend(group_scopes)
-            logger.debug(f"Mapped group '{group}' to scopes: {group_scopes}")
-        else:
-            logger.debug(f"No scope mapping found for group: {group}")
-    
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_scopes = []
-    for scope in scopes:
-        if scope not in seen:
-            seen.add(scope)
-            unique_scopes.append(scope)
-    
-    logger.info(f"Final mapped scopes: {unique_scopes}")
-    return unique_scopes
-
-
-def get_ui_permissions_for_user(user_scopes: List[str]) -> Dict[str, List[str]]:
-    """
-    Get UI permissions for a user based on their scopes.
-
-    Args:
-        user_scopes: List of user's scopes (includes UI scope names like 'mcp-registry-admin')
-
-    Returns:
-        Dict mapping UI actions to lists of services they can perform the action on
-        Example: {'list_service': ['mcpgw', 'auth_server'], 'toggle_service': ['mcpgw']}
-    """
-    ui_permissions = {}
-    ui_scopes = SCOPES_CONFIG.get('UI-Scopes', {})
-
-    for scope in user_scopes:
-        if scope in ui_scopes:
-            scope_config = ui_scopes[scope]
-            logger.debug(f"Processing UI scope '{scope}' with config: {scope_config}")
-
-            # Process each permission in the scope
-            for permission, services in scope_config.items():
-                if permission not in ui_permissions:
-                    ui_permissions[permission] = set()
-
-                # Handle "all" case
-                if services == ['all'] or (isinstance(services, list) and 'all' in services):
-                    ui_permissions[permission].add('all')
-                    logger.debug(f"UI permission '{permission}' granted for all services")
-                else:
-                    # Add specific services
-                    if isinstance(services, list):
-                        ui_permissions[permission].update(services)
-                        logger.debug(f"UI permission '{permission}' granted for services: {services}")
-
-    # Convert sets back to lists
-    result = {k: list(v) for k, v in ui_permissions.items()}
-    logger.info(f"Final UI permissions for user: {result}")
-    return result
-
-
-def user_has_ui_permission_for_service(permission: str, service_name: str, user_ui_permissions: Dict[str, List[str]]) -> bool:
-    """
-    Check if user has a specific UI permission for a specific service.
-    
-    Args:
-        permission: The UI permission to check (e.g., 'list_service', 'toggle_service')
-        service_name: The service name to check permission for
-        user_ui_permissions: User's UI permissions dict from get_ui_permissions_for_user()
-        
-    Returns:
-        True if user has the permission for the service, False otherwise
-    """
-    if permission not in user_ui_permissions:
-        return False
-    
-    allowed_services = user_ui_permissions[permission]
-    
-    # Check if user has permission for all services or the specific service
-    has_permission = 'all' in allowed_services or service_name in allowed_services
-    
-    logger.debug(f"Permission check: {permission} for {service_name} = {has_permission} (allowed: {allowed_services})")
-    return has_permission
-
-
-def get_accessible_services_for_user(user_ui_permissions: Dict[str, List[str]]) -> List[str]:
-    """
-    Get list of services the user can see based on their list_service permission.
-
-    Args:
-        user_ui_permissions: User's UI permissions dict from get_ui_permissions_for_user()
-
-    Returns:
-        List of service names the user can see, or ['all'] if they can see all services
-    """
-    list_permissions = user_ui_permissions.get('list_service', [])
-
-    if 'all' in list_permissions:
-        return ['all']
-
-    return list_permissions
-
-
-def get_accessible_agents_for_user(user_ui_permissions: Dict[str, List[str]]) -> List[str]:
-    """
-    Get list of agents the user can see based on their list_agents permission.
-
-    Args:
-        user_ui_permissions: User's UI permissions dict from get_ui_permissions_for_user()
-
-    Returns:
-        List of agent paths the user can see, or ['all'] if they can see all agents
-    """
-    list_permissions = user_ui_permissions.get('list_agents', [])
-
-    if 'all' in list_permissions:
-        return ['all']
-
-    return list_permissions
-
-
-def get_servers_for_scope(scope: str) -> List[str]:
-    """
-    Get list of server names that a scope provides access to.
-
-    Args:
-        scope: The scope to check (e.g., 'mcp-servers-restricted/read')
-
-    Returns:
-        List of server names the scope grants access to
-    """
-    scope_config = SCOPES_CONFIG.get(scope, [])
-    server_names = []
-
-    for server_config in scope_config:
-        if isinstance(server_config, dict) and 'server' in server_config:
-            server_names.append(server_config['server'])
-
-    return list(set(server_names))  # Remove duplicates
-
-
-def user_has_wildcard_access(user_scopes: List[str]) -> bool:
-    """
-    Check if user has wildcard access to all servers via their scopes.
-
-    A user has wildcard access if any of their scopes includes server: '*'.
-    This is determined dynamically from the scopes configuration, not hardcoded group names.
-
-    Args:
-        user_scopes: List of user's scopes
-
-    Returns:
-        True if user has wildcard access to all servers, False otherwise
-    """
-    for scope in user_scopes:
-        servers = get_servers_for_scope(scope)
-        if '*' in servers:
-            logger.debug(f"User scope '{scope}' grants wildcard access to all servers")
-            return True
-
-    return False
-
-
-def get_user_accessible_servers(user_scopes: List[str]) -> List[str]:
-    """
-    Get list of all servers the user has access to based on their scopes.
-    
-    Args:
-        user_scopes: List of user's scopes
-        
-    Returns:
-        List of server names the user can access
-    """
-    accessible_servers = set()
-    
-    logger.info(f"DEBUG: get_user_accessible_servers called with scopes: {user_scopes}")
-    logger.info(f"DEBUG: Available scope configs: {list(SCOPES_CONFIG.keys())}")
-    
-    for scope in user_scopes:
-        logger.info(f"DEBUG: Processing scope: {scope}")
-        server_names = get_servers_for_scope(scope)
-        logger.info(f"DEBUG: Scope {scope} maps to servers: {server_names}")
-        accessible_servers.update(server_names)
-    
-    logger.info(f"DEBUG: Final accessible servers: {list(accessible_servers)}")
-    logger.debug(f"User with scopes {user_scopes} has access to servers: {list(accessible_servers)}")
-    return list(accessible_servers)
-
-
-def user_can_modify_servers(user_groups: List[str], user_scopes: List[str]) -> bool:
-    """
-    Check if user can modify servers (toggle, edit).
-    
-    Args:
-        user_groups: List of user's groups
-        user_scopes: List of user's scopes
-        
-    Returns:
-        True if user can modify servers, False otherwise
-    """
-    # Admin users can always modify
-    if 'mcp-registry-admin' in user_groups:
-        return True
-    
-    # Users with unrestricted execute access can modify
-    if 'mcp-servers-unrestricted/execute' in user_scopes:
-        return True
-    
-    # mcp-registry-user group cannot modify servers
-    if 'mcp-registry-user' in user_groups and 'mcp-registry-admin' not in user_groups:
-        return False
-    
-    # For other cases, check if they have any execute permissions
-    execute_scopes = [scope for scope in user_scopes if '/execute' in scope]
-    return len(execute_scopes) > 0
-
-
-def user_can_access_server(server_name: str, user_scopes: List[str]) -> bool:
-    """
-    Check if user can access a specific server.
-    
-    Args:
-        server_name: Name of the server to check
-        user_scopes: List of user's scopes
-        
-    Returns:
-        True if user can access the server, False otherwise
-    """
-    accessible_servers = get_user_accessible_servers(user_scopes)
-    return server_name in accessible_servers
+    return get_user_session_data_from_cookie(
+        signer=signer,
+        session_cookie=session,
+        max_age_seconds=settings.session_max_age_seconds,
+        enforceai_db_path=getattr(settings, "enforceai_db_path", None),
+        default_provider="local",
+    )
 
 
 def api_auth(
@@ -551,38 +155,19 @@ def enhanced_auth(
             scopes = ['mcp-registry-admin', 'mcp-servers-unrestricted/read', 'mcp-servers-unrestricted/execute']
         logger.info(f"Traditional user {username} with groups {groups} mapped to scopes: {scopes}")
     
-    # Get UI permissions
-    ui_permissions = get_ui_permissions_for_user(scopes)
-
-    # Get accessible servers (from server scopes)
-    accessible_servers = get_user_accessible_servers(scopes)
-
-    # Get accessible services (from UI permissions)
-    accessible_services = get_accessible_services_for_user(ui_permissions)
-
-    # Get accessible agents (from UI permissions)
-    accessible_agents = get_accessible_agents_for_user(ui_permissions)
-
-    # Check modification permissions
-    can_modify = user_can_modify_servers(groups, scopes)
-
-    user_context = {
-        "user_id": session_data.get("user_id", f"local|{username}"),
-        "session_id": session_data.get("session_id"),
-        "email": session_data.get("email"),
-        "username": username,
-        "groups": groups,
-        "scopes": scopes,
-        "auth_method": auth_method,
-        "legacy_auth_method": legacy_auth_method,
-        "provider": session_data.get("provider", "local"),
-        "accessible_servers": accessible_servers,
-        "accessible_services": accessible_services,
-        "accessible_agents": accessible_agents,
-        "ui_permissions": ui_permissions,
-        "can_modify_servers": can_modify,
-        "is_admin": user_has_wildcard_access(scopes),
-    }
+    user_context = build_registry_user_context(
+        username=username,
+        groups=groups,
+        scopes=scopes,
+        auth_method=auth_method,
+        provider=session_data.get("provider", "local"),
+        extra={
+            "user_id": session_data.get("user_id", f"local|{username}"),
+            "session_id": session_data.get("session_id"),
+            "email": session_data.get("email"),
+            "legacy_auth_method": legacy_auth_method,
+        },
+    )
 
     logger.debug(f"Enhanced auth context for {username}: {user_context}")
     return user_context
@@ -608,19 +193,18 @@ def nginx_proxied_auth(
     Returns:
         Dict containing username, groups, scopes, and permission flags
     """
-    # CRITICAL DIAGNOSTIC: Log ALL incoming headers and auth parameters
-    logger.debug(f"[NGINX_AUTH_DEBUG] Request path: {request.url.path}")
-    logger.debug(f"[NGINX_AUTH_DEBUG] Request method: {request.method}")
-    logger.debug(f"[NGINX_AUTH_DEBUG] X-User header: '{x_user}' (type: {type(x_user).__name__})")
-    logger.debug(f"[NGINX_AUTH_DEBUG] X-Username header: '{x_username}' (type: {type(x_username).__name__})")
-    logger.debug(f"[NGINX_AUTH_DEBUG] X-Scopes header: '{x_scopes}' (type: {type(x_scopes).__name__})")
-    logger.debug(f"[NGINX_AUTH_DEBUG] X-Auth-Method header: '{x_auth_method}' (type: {type(x_auth_method).__name__})")
-    logger.debug(f"[NGINX_AUTH_DEBUG] Session cookie present: {session is not None}")
-    logger.debug(f"[NGINX_AUTH_DEBUG] Authorization header: {request.headers.get('authorization', 'NOT PRESENT')[:50] if request.headers.get('authorization') else 'NOT PRESENT'}")
-
-    # Log ALL headers for complete diagnostic
-    all_headers = dict(request.headers)
-    logger.debug(f"[NGINX_AUTH_DEBUG] ALL REQUEST HEADERS: {all_headers}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("[NGINX_AUTH_DEBUG] Request path: %s", request.url.path)
+        logger.debug("[NGINX_AUTH_DEBUG] Request method: %s", request.method)
+        logger.debug("[NGINX_AUTH_DEBUG] X-User header present: %s", bool(x_user))
+        logger.debug("[NGINX_AUTH_DEBUG] X-Username header present: %s", bool(x_username))
+        logger.debug("[NGINX_AUTH_DEBUG] X-Scopes header present: %s", bool(x_scopes))
+        logger.debug("[NGINX_AUTH_DEBUG] X-Auth-Method header: %s", x_auth_method)
+        logger.debug("[NGINX_AUTH_DEBUG] Session cookie present: %s", session is not None)
+        logger.debug(
+            "[NGINX_AUTH_DEBUG] Request headers (redacted): %s",
+            _redact_headers_for_logging(dict(request.headers)),
+        )
 
     # First, try to get user context from nginx headers (JWT Bearer token flow)
     if x_user or x_username:
@@ -642,34 +226,13 @@ def nginx_proxied_auth(
 
         logger.info(f"nginx-proxied auth for user: {username}, method: {x_auth_method}, scopes: {scopes}")
 
-        # Get accessible servers based on scopes
-        accessible_servers = get_user_accessible_servers(scopes)
-
-        # Get UI permissions
-        ui_permissions = get_ui_permissions_for_user(scopes)
-
-        # Get accessible services
-        accessible_services = get_accessible_services_for_user(ui_permissions)
-
-        # Get accessible agents
-        accessible_agents = get_accessible_agents_for_user(ui_permissions)
-
-        # Check modification permissions
-        can_modify = user_can_modify_servers(groups, scopes)
-
-        user_context = {
-            'username': username,
-            'groups': groups,
-            'scopes': scopes,
-            'auth_method': x_auth_method or 'keycloak',
-            'provider': x_auth_method or 'keycloak',  # Use actual auth method as provider
-            'accessible_servers': accessible_servers,
-            'accessible_services': accessible_services,
-            'accessible_agents': accessible_agents,
-            'ui_permissions': ui_permissions,
-            'can_modify_servers': can_modify,
-            'is_admin': user_has_wildcard_access(scopes)
-        }
+        user_context = build_registry_user_context(
+            username=username,
+            groups=groups,
+            scopes=scopes,
+            auth_method=x_auth_method or "keycloak",
+            provider=x_auth_method or "keycloak",
+        )
 
         logger.debug(f"nginx-proxied auth context for {username}: {user_context}")
         return user_context
@@ -685,47 +248,14 @@ def create_session_cookie(
     provider: str = "local",
 ) -> str:
     """Create a session cookie for a user."""
-    is_oidc_session = auth_method == "oauth2"
-    user_id = f"{provider}|{username}" if is_oidc_session else f"local|{username}"
-    groups = [] if is_oidc_session else ["enforceai-admin", "mcp-registry-admin"]
-    session_id: Optional[str] = None
-    enforceai_db_path = getattr(settings, "enforceai_db_path", None)
-    if enforceai_db_path is not None:
-        try:
-            EnforceAIDataLayer(db_path=enforceai_db_path).initialize()
-            store = SqliteSessionStore(db_path=enforceai_db_path)
-            session_id = secrets.token_urlsafe(24)
-            store.create_session(
-                session_id=session_id,
-                user_id=user_id,
-                auth_method="oidc" if is_oidc_session else "password",
-                expires_at=datetime.now(timezone.utc).replace(microsecond=0)
-                + timedelta(seconds=settings.session_max_age_seconds),
-            )
-        except OSError:
-            logger.warning(
-                "Failed to persist EnforceAI session record; continuing without server-side session",
-                exc_info=True,
-            )
-            session_id = None
-        except Exception:
-            logger.exception(
-                "Unexpected error persisting EnforceAI session record; continuing without server-side session"
-            )
-            session_id = None
-
-    session_data = build_session_cookie_payload(
+    return create_session_cookie_value(
+        signer=signer,
         username=username,
-        email=None,
-        name=None,
-        groups=groups,
+        auth_method=auth_method,
         provider=provider,
-        legacy_auth_method=auth_method,
-        max_age_seconds=settings.session_max_age_seconds,
-        session_id=session_id,
-        user_id=user_id,
+        session_max_age_seconds=settings.session_max_age_seconds,
+        enforceai_db_path=getattr(settings, "enforceai_db_path", None),
     )
-    return signer.dumps(session_data)
 
 
 def validate_login_credentials(username: str, password: str) -> bool:
