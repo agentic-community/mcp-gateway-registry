@@ -54,6 +54,9 @@
     "vite": "^6.0.3",
     "vitest": "^2.1.8"
   },
+  "overrides": {
+    "esbuild": "0.25.12"
+  },
   "msw": {
     "workerDirectory": [
       "public"
