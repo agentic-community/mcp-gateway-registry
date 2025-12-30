@@ -86,7 +86,7 @@ async def get_servers_json(
 
         from ..health.service import health_service
 
-        health_data = health_service._get_service_health_data(path)
+        health_data = health_service.get_service_health_data(path)
 
         service_data.append(
             {
@@ -191,7 +191,7 @@ async def create_server_json(
 
     await health_service.broadcast_health_update(path)
 
-    health_data = health_service._get_service_health_data(path)
+    health_data = health_service.get_service_health_data(path)
 
     return JSONResponse(
         status_code=201,
@@ -238,7 +238,7 @@ async def get_server_json(
                 detail="You do not have access to this server",
             )
 
-    health_data = health_service._get_service_health_data(path)
+    health_data = health_service.get_service_health_data(path)
     is_enabled = server_service.is_service_enabled(path)
 
     return {
@@ -354,7 +354,7 @@ async def update_server_json(
     if enabled_changed:
         await health_service.broadcast_health_update(path)
 
-    health_data = health_service._get_service_health_data(path)
+    health_data = health_service.get_service_health_data(path)
 
     return {
         "display_name": updated_server_entry.get("server_name", ""),

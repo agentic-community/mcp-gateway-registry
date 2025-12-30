@@ -129,7 +129,7 @@ async def read_root(
         if search_query and search_query not in searchable_text:
             continue
 
-        health_data = health_service._get_service_health_data(path)
+        health_data = health_service.get_service_health_data(path)
 
         service_data.append(
             {

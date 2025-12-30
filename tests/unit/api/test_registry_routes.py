@@ -125,7 +125,7 @@ class TestV0ListServers:
             server_service, "is_service_enabled", return_value=True
         ), patch.object(
             health_service,
-            "_get_service_health_data",
+            "get_service_health_data",
             return_value={
                 "status": "healthy",
                 "last_checked_iso": "2025-10-12T10:00:00Z",
@@ -164,7 +164,7 @@ class TestV0ListServers:
             server_service, "is_service_enabled", return_value=True
         ), patch.object(
             health_service,
-            "_get_service_health_data",
+            "get_service_health_data",
             return_value={
                 "status": "healthy",
                 "last_checked_iso": "2025-10-12T10:00:00Z",
@@ -194,7 +194,7 @@ class TestV0ListServers:
             server_service, "is_service_enabled", return_value=True
         ), patch.object(
             health_service,
-            "_get_service_health_data",
+            "get_service_health_data",
             return_value={
                 "status": "healthy",
                 "last_checked_iso": "2025-10-12T10:00:00Z",
@@ -227,7 +227,7 @@ class TestV0ListServers:
             server_service, "is_service_enabled", return_value=True
         ), patch.object(
             health_service,
-            "_get_service_health_data",
+            "get_service_health_data",
             return_value={
                 "status": "healthy",
                 "last_checked_iso": "2025-10-12T10:00:00Z",
@@ -288,7 +288,7 @@ class TestV0ListServerVersions:
             server_service, "is_service_enabled", return_value=True
         ), patch.object(
             health_service,
-            "_get_service_health_data",
+            "get_service_health_data",
             return_value={
                 "status": "healthy",
                 "last_checked_iso": "2025-10-12T10:00:00Z",
@@ -375,7 +375,7 @@ class TestV0GetServerVersion:
             server_service, "is_service_enabled", return_value=True
         ), patch.object(
             health_service,
-            "_get_service_health_data",
+            "get_service_health_data",
             return_value={
                 "status": "healthy",
                 "last_checked_iso": "2025-10-12T10:00:00Z",
@@ -411,7 +411,7 @@ class TestV0GetServerVersion:
             server_service, "is_service_enabled", return_value=True
         ), patch.object(
             health_service,
-            "_get_service_health_data",
+            "get_service_health_data",
             return_value={
                 "status": "healthy",
                 "last_checked_iso": "2025-10-12T10:00:00Z",
@@ -478,7 +478,7 @@ class TestV0GetServerVersion:
             server_service, "is_service_enabled", return_value=True
         ), patch.object(
             health_service,
-            "_get_service_health_data",
+            "get_service_health_data",
             return_value={
                 "status": "healthy",
                 "last_checked_iso": "2025-10-12T10:00:00Z",

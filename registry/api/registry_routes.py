@@ -86,7 +86,7 @@ async def list_servers(
 
     for path, server_info in all_servers.items():
         # Add health status and enabled state for transformation
-        health_data = health_service._get_service_health_data(path)
+        health_data = health_service.get_service_health_data(path)
 
         server_info_with_status = server_info.copy()
         server_info_with_status["health_status"] = health_data["status"]
@@ -183,7 +183,7 @@ async def list_server_versions(
             )
 
     # Add health and status info using the correct path
-    health_data = health_service._get_service_health_data(path)
+    health_data = health_service.get_service_health_data(path)
 
     server_info_with_status = server_info.copy()
     server_info_with_status["health_status"] = health_data["status"]
@@ -286,7 +286,7 @@ async def get_server_version(
         )
 
     # Add health and status info
-    health_data = health_service._get_service_health_data(path)
+    health_data = health_service.get_service_health_data(path)
 
     server_info_with_status = server_info.copy()
     server_info_with_status["health_status"] = health_data["status"]

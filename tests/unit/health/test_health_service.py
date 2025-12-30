@@ -148,3 +148,16 @@ class TestHealthMonitoringService:
 
         assert result["/test1"]["num_tools"] == 1
         assert result["/test2"]["num_tools"] == 2
+
+    def test_get_service_health_data_uses_server_info_lookup_when_not_provided(
+        self,
+        health_service: HealthMonitoringService,
+    ) -> None:
+        """Looks up server info when not provided and returns fast health data."""
+        with patch("registry.services.server_service.server_service") as mock_server_service:
+            mock_server_service.get_server_info.return_value = {"num_tools": 7}
+            mock_server_service.is_service_enabled.return_value = True
+
+            result = health_service.get_service_health_data("/test")
+
+        assert result["num_tools"] == 7

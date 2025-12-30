@@ -170,7 +170,10 @@ async def internal_list_services(
     services = []
     for service_path, server_info in all_servers.items():
         # Get real health status from health service
-        health_data = health_service._get_service_health_data(service_path)
+        health_data = health_service.get_service_health_data(
+            service_path,
+            server_info=server_info,
+        )
 
         service_data = {
             "server_name": server_info.get("server_name", "Unknown"),
