@@ -18,6 +18,24 @@ spec:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
     spec:
+      initContainers:
+        - name: wait-for-mongodb
+          image: python:3.13-alpine
+          command: ['sh', '-c']
+          envFrom:
+            - secretRef:
+                name: mongo-credentials
+          args:
+            - |
+              echo "Installing pymongo..."
+              pip install --no-cache-dir pymongo
+
+              echo "Waiting for MongoDB replica set to be ready..."
+              python3 /app/wait.py
+          volumeMounts:
+            - mountPath: /app/wait.py
+              name: script
+              subPath: wait.py
       containers:
         - name: {{ .Values.app.name }}
           image: "{{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}"
@@ -32,3 +50,9 @@ spec:
                 name: {{ .Values.app.envSecretName }}
             - secretRef:
                 name: keycloak-client-secret
+            - secretRef:
+                name: mongo-credentials
+      volumes:
+        - name: script
+          configMap:
+            name: setup-mongodb

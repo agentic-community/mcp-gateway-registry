@@ -2,7 +2,7 @@
 global:
   image:
     repository: mcpgateway/registry
-    tag: v1.0.7
+    tag: v1.0.9-patch1
     pullPolicy: IfNotPresent
 
 # Application configuration
