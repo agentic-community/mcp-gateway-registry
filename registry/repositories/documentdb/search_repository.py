@@ -62,19 +62,36 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             index_names = [idx["name"] for idx in indexes]
 
             if "embedding_vector_idx" not in index_names:
-                logger.info("Creating HNSW vector index for embeddings...")
-                await collection.create_index(
-                    [("embedding", "vector")],
-                    name="embedding_vector_idx",
-                    vectorOptions={
-                        "type": "hnsw",
-                        "similarity": "cosine",
-                        "dimensions": settings.embeddings_model_dimensions,
-                        "m": 16,
-                        "efConstruction": 128
-                    }
-                )
-                logger.info("Created HNSW vector index")
+                try:
+                    logger.info("Creating HNSW vector index for embeddings...")
+                    await collection.create_index(
+                        [("embedding", "vector")],
+                        name="embedding_vector_idx",
+                        vectorOptions={
+                            "type": "hnsw",
+                            "similarity": "cosine",
+                            "dimensions": settings.embeddings_model_dimensions,
+                            "m": 16,
+                            "efConstruction": 128
+                        }
+                    )
+                    logger.info("Created HNSW vector index")
+                except Exception as vector_error:
+                    # Check if this is a MongoDB CE error (vectorOptions not supported)
+                    if "vectorOptions" in str(vector_error) or "not valid for an index specification" in str(vector_error):
+                        logger.warning(
+                            "Vector indexes not supported (MongoDB CE detected). "
+                            "Creating regular index on embedding field."
+                        )
+                        # Create a regular index on the embedding field for faster retrieval
+                        await collection.create_index(
+                            [("embedding", 1)],
+                            name="embedding_vector_idx"
+                        )
+                        logger.info("Created regular embedding index")
+                    else:
+                        # Re-raise if it's a different error
+                        raise vector_error
             else:
                 logger.info("Vector index already exists")
 
@@ -697,10 +714,19 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # Check if this is MongoDB CE without vector search support
             from pymongo.errors import OperationFailure
 
-            if isinstance(e, OperationFailure) and e.code == 31082:
+            if isinstance(e, OperationFailure) and (e.code == 31082 or "vectorSearch" in str(e)):
                 # MongoDB CE doesn't support $vectorSearch - fall back to client-side search
                 logger.warning(
                     "Vector search not supported (MongoDB CE detected). "
+                    "Falling back to client-side cosine similarity search."
+                )
+                return await self._client_side_search(
+                    query, query_embedding, entity_types, max_results
+                )
+            elif "vectorSearch" in str(e) or "$search" in str(e):
+                # General vector search not supported - fall back to client-side search
+                logger.warning(
+                    "Vector search not supported by this MongoDB instance. "
                     "Falling back to client-side cosine similarity search."
                 )
                 return await self._client_side_search(
