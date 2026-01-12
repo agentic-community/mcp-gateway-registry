@@ -209,7 +209,8 @@ MAX_WAIT=120
 while [ $WAIT_TIME -lt $MAX_WAIT ]; do
     if [ -f "/etc/nginx/conf.d/nginx_rev_proxy.conf" ]; then
         # Check if placeholders have been replaced
-        if ! grep -q "{{EC2_PUBLIC_DNS}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
+        if ! grep -q "{{ADDITIONAL_SERVER_NAMES}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
+           ! grep -q "{{ANTHROPIC_API_VERSION}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
            ! grep -q "{{LOCATION_BLOCKS}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf"; then
             echo "Nginx configuration generated successfully"
             break
