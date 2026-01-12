@@ -15,7 +15,7 @@ providers:
     groups_claim: "groups"
     email_claim: "email"
     name_claim: "name"
-    enabled: true
+    enabled: "${KEYCLOAK_ENABLED}"
 
   cognito:
     display_name: "AWS Cognito"
@@ -34,7 +34,7 @@ providers:
     groups_claim: "cognito:groups"
     email_claim: "email"
     name_claim: "name"
-    enabled: false
+    enabled: "${COGNITO_ENABLED}"
 
   entra:
     display_name: "Microsoft Entra ID"
@@ -53,7 +53,7 @@ providers:
     groups_claim: "groups"
     email_claim: "email"
     name_claim: "name"
-    enabled: false
+    enabled: "${ENTRA_ENABLED}"
 
   github:
     display_name: "GitHub"
@@ -70,7 +70,7 @@ providers:
     groups_claim: null  # GitHub doesn't provide groups in basic scope
     email_claim: "email"
     name_claim: "name"
-    enabled: false  # Enable web-based OAuth2 flow for GitHub
+    enabled: "${GITHUB_ENABLED}"
 
   google:
     display_name: "Google"
@@ -87,7 +87,7 @@ providers:
     groups_claim: null  # Google doesn't provide groups in basic scope
     email_claim: "email"
     name_claim: "name"
-    enabled: false  # Disabled by default
+    enabled: "${GOOGLE_ENABLED}"
 
 # Default session settings
 session:
