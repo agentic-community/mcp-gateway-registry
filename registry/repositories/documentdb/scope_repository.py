@@ -76,14 +76,26 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            group_doc = await collection.find_one({"_id": group_name})
-            if not group_doc:
-                logger.debug(f"DocumentDB READ: Group '{group_name}' not found")
-                return {}
+            # Find all scope documents where group_mappings array contains this keycloak group
+            # Documents are keyed by scope name (_id), with group_mappings listing keycloak groups
+            cursor = collection.find({"group_mappings": group_name})
 
-            scopes = group_doc.get("ui_permissions", {})
-            logger.debug(f"DocumentDB READ: Found {len(scopes)} UI scopes for group '{group_name}'")
-            return scopes
+            # Merge UI permissions from all matching scopes
+            merged_permissions: Dict[str, Any] = {}
+            async for doc in cursor:
+                ui_perms = doc.get("ui_permissions", {})
+                for key, value in ui_perms.items():
+                    if key not in merged_permissions:
+                        merged_permissions[key] = []
+                    if isinstance(value, list):
+                        for item in value:
+                            if item not in merged_permissions[key]:
+                                merged_permissions[key].append(item)
+                    elif value not in merged_permissions[key]:
+                        merged_permissions[key].append(value)
+
+            logger.debug(f"DocumentDB READ: Found UI scopes for group '{group_name}': {list(merged_permissions.keys())}")
+            return merged_permissions
         except Exception as e:
             logger.error(f"Error getting UI scopes for group '{group_name}': {e}", exc_info=True)
             return {}
@@ -98,14 +110,13 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            group_doc = await collection.find_one({"_id": keycloak_group})
-            if not group_doc:
-                logger.debug(f"DocumentDB READ: Group '{keycloak_group}' not found")
-                return []
+            # Find all scope documents where group_mappings array contains this keycloak_group
+            # Documents are keyed by scope name (_id), with group_mappings listing keycloak groups
+            cursor = collection.find({"group_mappings": keycloak_group})
+            scope_names = [doc["_id"] async for doc in cursor]
 
-            mappings = group_doc.get("group_mappings", [])
-            logger.debug(f"DocumentDB READ: Found {len(mappings)} mappings for group '{keycloak_group}'")
-            return mappings
+            logger.debug(f"DocumentDB READ: Found {len(scope_names)} scope mappings for group '{keycloak_group}'")
+            return scope_names
         except Exception as e:
             logger.error(f"Error getting group mappings for '{keycloak_group}': {e}", exc_info=True)
             return []
