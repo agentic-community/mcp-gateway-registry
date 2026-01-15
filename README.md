@@ -415,7 +415,7 @@ cp .env.example .env
 ```
 
 **Step 2: Download embeddings model**
-Download the required sentence-transformers model to the shared models directory:
+Download the required sentence-transformers model to the shared models directory using the [HuggingFace CLI](https://huggingface.co/docs/huggingface_hub/main/en/guides/cli) (`pip install -U huggingface_hub`):
 ```bash
 hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2
 ```
