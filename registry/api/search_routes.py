@@ -23,6 +23,12 @@ def get_search_repo() -> SearchRepositoryBase:
 
 
 class MatchingToolResult(BaseModel):
+    """Tool matching result - basic info for display.
+
+    Note: inputSchema is NOT included here to avoid duplication.
+    Full tool details including inputSchema are in the tools[] array.
+    """
+
     tool_name: str
     description: Optional[str] = None
     relevance_score: float = Field(0.0, ge=0.0, le=1.0)
@@ -46,6 +52,7 @@ class ToolSearchResult(BaseModel):
     server_name: str
     tool_name: str
     description: Optional[str] = None
+    inputSchema: Optional[dict] = Field(default=None, description="JSON Schema for tool input")
     relevance_score: float = Field(..., ge=0.0, le=1.0)
     match_context: Optional[str] = None
 
@@ -219,6 +226,7 @@ async def semantic_search(
                 server_name=server_name,
                 tool_name=tool.get("tool_name", ""),
                 description=tool.get("description"),
+                inputSchema=tool.get("inputSchema"),
                 relevance_score=tool.get("relevance_score", 0.0),
                 match_context=tool.get("match_context"),
             )

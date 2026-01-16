@@ -185,10 +185,9 @@ async def reload_scopes_config(storage_backend: Optional[str] = None) -> Dict[st
     if storage_backend in ("documentdb", "mongodb-ce"):
         return await load_scopes_from_repository()
     else:
-        # For file backend, also load the repository singleton so that
-        # direct repository queries work (e.g., map_cognito_groups_to_scopes)
+        # For file backend, also load into the repository so get_ui_scopes works
         from ..repositories.factory import get_scope_repository
         scope_repo = get_scope_repository()
         await scope_repo.load_all()
-        
+
         return load_scopes_from_yaml(os.getenv("SCOPES_CONFIG_PATH"))

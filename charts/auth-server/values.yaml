@@ -2,7 +2,7 @@
 global:
   image:
     repository: mcpgateway/auth-server
-    tag: v1.0.7
+    tag: v1.0.10
     pullPolicy: IfNotPresent
 
 # Application configuration

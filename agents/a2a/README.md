@@ -8,6 +8,7 @@ Two AI agents built with AWS Bedrock AgentCore and the Strands framework for fli
 - Searches for available flights between cities
 - Provides flight recommendations based on price and preferences
 - Returns detailed flight information (times, prices, airlines)
+- **Discovers other agents** through the MCP Gateway Registry and dynamically adds them as tools
 - [Full specification](https://github.com/agentic-community/mcp-gateway-registry/issues/196)
 
 **Flight Booking Agent** (`flight_booking_agent`)
@@ -29,12 +30,13 @@ Run agents locally with full FastAPI server including custom API endpoints.
 
 **Deploy:**
 ```bash
-# Configure AWS credentials (one of these methods)
-export AWS_PROFILE=your_profile_name
+# 1. Get AWS credentials (for Isengard users)
+isengard credentials --account YOUR_ACCOUNT --role YOUR_ROLE --export
 
-# Or use EC2 IAM role (no export needed)
+# This exports: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
+# Docker will automatically pick these up from your environment
 
-# Then deploy (auto-detects your system architecture)
+# 2. Deploy (auto-detects your system architecture)
 # From repo root:
 agents/a2a/deploy_local.sh
 
@@ -216,6 +218,119 @@ agents/a2a/shutdown_local.sh
 
 This is useful when you want to completely clean up before redeploying or when done testing locally.
 
+## Agent-to-Agent Discovery
+
+The Travel Assistant Agent can discover and invoke other agents at runtime using the MCP Gateway Registry's semantic search API. This enables dynamic agent composition where agents find collaborators based on capabilities.
+
+### Prerequisites
+
+1. **MCP Gateway Registry running** with at least one A2A agent registered
+2. **Authentication configured** - one of the following options:
+
+**Option 1: Direct JWT Token (recommended for testing)**
+```bash
+# Copy the token from .oauth-tokens/ingress.json into agents/a2a/.env
+REGISTRY_JWT_TOKEN=<your-jwt-token>
+```
+
+**Option 2: M2M Client Credentials (recommended for production)**
+```bash
+# Configure Keycloak M2M credentials in agents/a2a/.env
+M2M_CLIENT_ID=agent-test-agent-m2m
+M2M_CLIENT_SECRET=<your-client-secret>
+KEYCLOAK_URL=http://keycloak:8080
+```
+
+### Configuration
+
+Create or update `agents/a2a/.env` file:
+
+```bash
+# Copy from example
+cp agents/a2a/.env.example agents/a2a/.env
+
+# Edit with your credentials
+# Option 1: Use direct JWT token (takes precedence)
+REGISTRY_JWT_TOKEN=<token-from-.oauth-tokens/ingress.json>
+
+# Option 2: Use M2M credentials (fallback if JWT not set)
+TRAVEL_AGENT_M2M_CLIENT_ID=agent-test-agent-m2m
+TRAVEL_AGENT_M2M_CLIENT_SECRET=<secret-from-.oauth-tokens/agent-test-agent-m2m.json>
+```
+
+### Discovery Tools
+
+The Travel Assistant Agent provides three tools for agent discovery:
+
+| Tool | Description |
+|------|-------------|
+| `discover_remote_agents` | Search registry for agents by natural language query |
+| `view_cached_remote_agents` | List all discovered agents in cache |
+| `invoke_remote_agent` | Send a message to a cached agent via A2A protocol |
+
+### Testing Discovery
+
+1. **Start the MCP Gateway Registry** (if not already running):
+```bash
+docker-compose up -d
+```
+
+2. **Register the Flight Booking Agent** in the registry (via UI or CLI)
+
+3. **Deploy agents locally:**
+```bash
+agents/a2a/deploy_local.sh
+```
+
+4. **Test discovery via A2A protocol:**
+```bash
+# Send a message that triggers discovery
+curl -X POST http://localhost:9001/a2a \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "message/send",
+    "params": {
+      "message": {
+        "role": "user",
+        "parts": [{"kind": "text", "text": "Find agents that can book flights"}]
+      }
+    },
+    "id": 1
+  }'
+```
+
+5. **View agent logs** to see discovery in action:
+```bash
+docker logs -f travel-assistant-agent
+```
+
+You should see logs like:
+```
+RegistryDiscoveryClient initialized with direct JWT token for http://registry
+Tool called: discover_remote_agents(query='book flights', max_results=5)
+Found 1 agents
+Cached agent: Flight Booking Agent (ID: /flight-booking-agent)
+```
+
+### Example Flow
+
+```
+User: "I need to book a flight from NYC to LA"
+
+Travel Assistant Agent:
+  1. discover_remote_agents("agent that can book flights")
+     -> Returns: Flight Booking Agent (score: 0.85)
+
+  2. invoke_remote_agent("/flight-booking-agent", "Book flight NYC to LA")
+     -> Flight Booking Agent processes request
+     -> Returns booking confirmation
+
+  3. Returns combined response to user
+```
+
+---
+
 ## Key Differences
 
 | Feature | Local Docker | AgentCore Runtime |
@@ -223,6 +338,7 @@ This is useful when you want to completely clean up before redeploying or when d
 | A2A Protocol | ✅ | ✅ |
 | Custom API Endpoints | ✅ | ❌ |
 | Health Check `/ping` | ✅ | ❌ |
+| Agent Discovery | ✅ | ✅ |
 | Deployment | Docker Compose | AgentCore CLI |
 
 **Note:** Custom FastAPI endpoints (like `/api/search-flights`) are only available in local Docker deployments. **AgentCore Runtime only wraps the container and exposes the standard A2A conversational interface.**

@@ -362,7 +362,7 @@ services:
   # Vector search is implemented in application code (see search_repository.py)
   # Running without authentication for local development simplicity
   mongodb:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/mongo:${MONGODB_VERSION:-8.2}
+    image: ${DOCKERHUB_ORG:-mcpgateway}/mongo:${MONGODB_VERSION:-latest}
     container_name: mcp-mongodb
     command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb
     ports:
@@ -372,7 +372,7 @@ services:
       - mongodb-config:/data/configdb
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 60s
+      interval: 60s 
       timeout: 5s
       retries: 5
       start_period: 20s

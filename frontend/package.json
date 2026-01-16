@@ -16,7 +16,7 @@
     "postcss": "^8.4.47",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.1",
+    "react-router-dom": "^6.30.3",
     "react-scripts": "5.0.1",
     "tailwindcss": "^3.3.6",
     "typescript": "^4.9.5"
@@ -25,7 +25,8 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "postinstall": "patch-package"
   },
   "eslintConfig": {
     "extends": [
@@ -50,5 +51,9 @@
     "nth-check": "^2.1.1",
     "webpack-dev-server": "^5.2.1",
     "resolve-url-loader": "^5.0.0"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1",
+    "postinstall-postinstall": "^2.1.0"
   }
 }

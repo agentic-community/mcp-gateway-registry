@@ -12,7 +12,6 @@ import requests
 import json
 import yaml
 import time
-import uuid
 import hashlib
 from jwt.api_jwk import PyJWK
 from datetime import datetime
@@ -1253,36 +1252,36 @@ async def generate_user_token(
     request: GenerateTokenRequest
 ):
     """
-    Generate a JWT token for a user with specified scopes.
-    
+    Generate a JWT token for a user using Keycloak M2M client credentials.
+
+    This endpoint generates a Keycloak M2M token that is validated the same way
+    as other Keycloak tokens in the system, ensuring consistent authentication.
+
     This is an internal API endpoint meant to be called only by the registry service.
     The generated token will have the same or fewer privileges than the user currently has.
-    
+
     Args:
         request: Token generation request containing user context and requested scopes
-        internal_api_key: Internal API key for authentication
-        
+
     Returns:
         Generated JWT token with expiration info
-        
+
     Raises:
         HTTPException: If request is invalid or user doesn't have required permissions
     """
     try:
-        # Note: No internal API key validation needed since registry already validates user session
-        
         # Extract user context
         user_context = request.user_context
         username = user_context.get('username')
         user_scopes = user_context.get('scopes', [])
-        
+
         if not username:
             raise HTTPException(
                 status_code=400,
                 detail="Username is required in user context",
                 headers={"Connection": "close"}
             )
-        
+
         # Check rate limiting
         if not check_rate_limit(username):
             raise HTTPException(
@@ -1290,19 +1289,10 @@ async def generate_user_token(
                 detail=f"Rate limit exceeded. Maximum {MAX_TOKENS_PER_USER_PER_HOUR} tokens per hour.",
                 headers={"Connection": "close"}
             )
-        
-        # Validate expiration time
-        expires_in_hours = request.expires_in_hours
-        if expires_in_hours <= 0 or expires_in_hours > MAX_TOKEN_LIFETIME_HOURS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid expiration time. Must be between 1 and {MAX_TOKEN_LIFETIME_HOURS} hours.",
-                headers={"Connection": "close"}
-            )
-        
+
         # Use user's current scopes if no specific scopes requested
         requested_scopes = request.requested_scopes if request.requested_scopes else user_scopes
-        
+
         # Validate that requested scopes are subset of user's current scopes
         if not validate_scope_subset(user_scopes, requested_scopes):
             invalid_scopes = set(requested_scopes) - set(user_scopes)
@@ -1311,47 +1301,59 @@ async def generate_user_token(
                 detail=f"Requested scopes exceed user permissions. Invalid scopes: {list(invalid_scopes)}",
                 headers={"Connection": "close"}
             )
-        
-        # Generate JWT access token
-        current_time = int(time.time())
-        expires_at = current_time + (expires_in_hours * 3600)
 
-        access_payload = {
-            "iss": JWT_ISSUER,
-            "aud": JWT_AUDIENCE,
-            "sub": username,
-            "scope": " ".join(requested_scopes),
-            "exp": expires_at,
-            "iat": current_time,
-            "jti": str(uuid.uuid4()),  # Unique token ID
-            "token_use": "access",
-            "client_id": "user-generated",
-            "token_type": "user_generated"
-        }
+        # Get Keycloak M2M token using client credentials flow
+        try:
+            auth_provider = get_auth_provider()
+            provider_info = auth_provider.get_provider_info()
 
-        # Add description if provided
-        if request.description:
-            access_payload["description"] = request.description
+            if provider_info.get('provider_type') != 'keycloak':
+                raise HTTPException(
+                    status_code=500,
+                    detail="Token generation requires Keycloak provider",
+                    headers={"Connection": "close"}
+                )
 
-        # Sign the access token using HS256 with shared SECRET_KEY
-        access_token = jwt.encode(access_payload, SECRET_KEY, algorithm='HS256')
+            # Request token from Keycloak using M2M client credentials
+            # Note: We don't pass user's requested scopes to Keycloak because the M2M
+            # client has its own configured scopes. The returned token will have scopes
+            # based on the M2M client configuration in Keycloak.
+            token_data = auth_provider.get_m2m_token(scope="openid email profile")
 
-        # No refresh tokens - users should configure longer token lifetimes in Keycloak if needed
-        refresh_token = None
-        refresh_expires_in_seconds = 0
+            access_token = token_data.get("access_token")
+            refresh_token_value = token_data.get("refresh_token")
+            expires_in = token_data.get("expires_in", 300)
+            refresh_expires_in = token_data.get("refresh_expires_in", 0)
+            scope = token_data.get("scope", "openid email profile")
 
-        logger.info(f"Generated access token for user '{hash_username(username)}' with scopes: {requested_scopes}, expires in {expires_in_hours} hours (no refresh token - configure longer token lifetime in Keycloak if needed)")
+            if not access_token:
+                raise ValueError("No access token returned from Keycloak")
 
-        return GenerateTokenResponse(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_in=expires_in_hours * 3600,
-            refresh_expires_in=refresh_expires_in_seconds,
-            scope=" ".join(requested_scopes),
-            issued_at=current_time,
-            description=request.description
-        )
-        
+            current_time = int(time.time())
+
+            logger.info(
+                f"Generated Keycloak M2M token for user '{hash_username(username)}' "
+                f"with scopes: {requested_scopes}, expires in {expires_in} seconds"
+            )
+
+            return GenerateTokenResponse(
+                access_token=access_token,
+                refresh_token=refresh_token_value,
+                expires_in=expires_in,
+                refresh_expires_in=refresh_expires_in,
+                scope=scope,
+                issued_at=current_time,
+                description=request.description
+            )
+
+        except ValueError as e:
+            logger.error(f"Keycloak token generation failed: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate token from Keycloak: {e}",
+                headers={"Connection": "close"}
+            )
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1527,7 +1529,15 @@ def substitute_env_vars(config):
                 config = config.replace('${COGNITO_DOMAIN:-auto}', cognito_domain)
             
             template = Template(config)
-            return template.substitute(os.environ)
+            result = template.substitute(os.environ)
+
+            # Convert string booleans to actual booleans
+            if result.lower() == "true":
+                return True
+            elif result.lower() == "false":
+                return False
+
+            return result
         except KeyError as e:
             logger.warning(f"Environment variable not found for template {config}: {e}")
             return config

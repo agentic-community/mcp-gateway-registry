@@ -13,8 +13,17 @@ services:
       - DB_PATH=/app/data/flights.db
       - AWS_REGION=us-east-1
       - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
       - AGENT_NAME=travel-assistant
       - AGENTCORE_RUNTIME_URL=http://travel-assistant-agent:9000/
+      - KEYCLOAK_URL=${KEYCLOAK_URL}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
+      - MCP_REGISTRY_URL=${MCP_REGISTRY_URL}
+      - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}
+      - M2M_CLIENT_ID=${TRAVEL_AGENT_M2M_CLIENT_ID}
+      - M2M_CLIENT_SECRET=${TRAVEL_AGENT_M2M_CLIENT_SECRET}
     volumes:
       - travel_assistant_data:/app/data
     healthcheck:
@@ -38,8 +47,17 @@ services:
       - DB_PATH=/app/data/bookings.db
       - AWS_REGION=us-east-1
       - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
       - AGENT_NAME=flight-booking
       - AGENTCORE_RUNTIME_URL=http://flight-booking-agent:9000/
+      - KEYCLOAK_URL=${KEYCLOAK_URL}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
+      - MCP_REGISTRY_URL=${MCP_REGISTRY_URL}
+      - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}
+      - M2M_CLIENT_ID=${FLIGHT_BOOKING_M2M_CLIENT_ID}
+      - M2M_CLIENT_SECRET=${FLIGHT_BOOKING_M2M_CLIENT_SECRET}
     volumes:
       - flight_booking_data:/app/data
     healthcheck:
@@ -54,3 +72,13 @@ volumes:
     driver: local
   flight_booking_data:
     driver: local
+    
+networks:
+  default:
+    # Use the external network created by the main mcp-gateway-registry docker-compose
+    # "default" is the logical network name used within this compose file
+    # "name" overrides the actual Docker network name (prevents creating a2a_default)
+    # "external: true" means this network already exists and should not be created
+    # This allows agents to communicate with gateway/registry services on the same network
+    name: mcp-gateway-registry_default
+    external: true

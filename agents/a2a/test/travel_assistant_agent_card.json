@@ -8,7 +8,7 @@
   "defaultOutputModes": [
     "text"
   ],
-  "description": "Flight search and trip planning agent",
+  "description": "Flight search and trip planning agent with dynamic agent discovery",
   "name": "Travel Assistant Agent",
   "preferredTransport": "JSONRPC",
   "protocolVersion": "0.3.0",
@@ -35,6 +35,24 @@
       "description": "Create and save a trip planning record.",
       "id": "create_trip_plan",
       "name": "create_trip_plan",
+      "tags": []
+    },
+    {
+      "description": "Discover remote agents from the mcp-registry with natural language query.\nCache them for visibility and invocation for later tool calls from LLM",
+      "id": "discover_remote_agents",
+      "name": "discover_remote_agents",
+      "tags": []
+    },
+    {
+      "description": "View all cached remote agents available for invocation.",
+      "id": "view_cached_remote_agents",
+      "name": "view_cached_remote_agents",
+      "tags": []
+    },
+    {
+      "description": "Invoke a cached remote agent by ID with a natural language message.",
+      "id": "invoke_remote_agent",
+      "name": "invoke_remote_agent",
       "tags": []
     }
   ],

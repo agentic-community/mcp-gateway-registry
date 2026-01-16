@@ -739,8 +739,25 @@ class FaissService:
         return min(2.0, boost)
 
 
-    def _extract_matching_tools(self, query: str, server_info: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Extract tool matches using simple keyword overlap."""
+    def _extract_matching_tools(
+        self,
+        query: str,
+        server_info: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Extract tool matches using keyword overlap and server name matching.
+
+        When the query contains the server name (e.g., "context7"), all tools
+        from that server are returned with a base relevance score. This handles
+        queries like "use context7 to look up MongoDB docs" where the user
+        explicitly mentions the server but not specific tool names.
+
+        Args:
+            query: The search query
+            server_info: Server information including tool_list
+
+        Returns:
+            List of matching tools with relevance scores
+        """
         tools = server_info.get("tool_list") or []
         if not tools:
             return []
@@ -760,6 +777,17 @@ class FaissService:
         ]
         if not tokens:
             return []
+
+        # Check if query contains server name - if so, include all tools
+        server_name = server_info.get("server_name", "").lower()
+        server_name_tokens = [
+            t for t in re.split(r"\W+", server_name)
+            if t and len(t) > 2
+        ]
+        server_name_match = any(
+            token in server_name or any(snt in token or token in snt for snt in server_name_tokens)
+            for token in tokens
+        )
 
         matches: List[Tuple[float, Dict[str, Any]]] = []
         for tool in tools:
@@ -785,11 +813,32 @@ class FaissService:
             # Calculate matches with higher weight for tool name matches
             tool_name_lower = tool_name.lower()
             name_matches = sum(1 for token in tokens if token in tool_name_lower)
-            desc_matches = sum(1 for token in tokens if token in tool_desc.lower() or token in tool_args.lower())
+            desc_matches = sum(
+                1 for token in tokens
+                if token in tool_desc.lower() or token in tool_args.lower()
+            )
 
             # Weight tool name matches more heavily (2x)
             weighted_matches = (name_matches * 2.0) + desc_matches
             max_possible_score = len(tokens) * 2.0  # If all tokens match in name
+
+            # If server name matches query, include tool with base score
+            if weighted_matches == 0 and server_name_match:
+                # Server name matched - include this tool with base relevance
+                base_score = 0.5  # Base score for server-name-matched tools
+                matches.append(
+                    (
+                        base_score,
+                        {
+                            "tool_name": tool_name,
+                            "description": tool_desc,
+                            "match_context": (tool_desc or tool_args or "")[:180],
+                            "schema": tool.get("schema", {}),
+                            "raw_score": base_score,
+                        },
+                    )
+                )
+                continue
 
             if weighted_matches == 0:
                 continue

@@ -1,0 +1,29 @@
+{{ if .Values.mongodb.enabled }}
+apiVersion: mongodbcommunity.mongodb.com/v1
+kind: MongoDBCommunity
+metadata:
+  name: {{ default .Values.mongodb.host "mcp-registry-mongodb" }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  members: {{ default .Values.mongodb.replicas "3"}}
+  type: ReplicaSet
+  version: {{ default .Values.mongodb.version "8.0.16" | quote }}
+  security:
+    authentication:
+      modes: ["SCRAM"]
+  users:
+    - name: {{ .Values.mongodb.user }}
+      db: admin
+      passwordSecretRef:
+        name: my-user-password
+      roles:
+        - name: clusterAdmin
+          db: admin
+        - name: root
+          db: admin
+        - name: userAdminAnyDatabase
+          db: admin
+      scramCredentialsSecretName: my-scram
+  additionalMongodConfig:
+    storage.wiredTiger.engineConfig.journalCompressor: zlib
+{{ end }}

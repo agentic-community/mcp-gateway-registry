@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-mongodb
+  namespace: {{ .Release.Namespace }}
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-for-mongodb
+          image: python:3.13-alpine
+          command: ['sh', '-c']
+          envFrom:
+            - secretRef:
+                name: mongo-credentials
+          args:
+            - |
+              echo "Installing pymongo..."
+              pip install --no-cache-dir pymongo
+              
+              echo "Waiting for MongoDB replica set to be ready..."
+              python3 /app/wait.py
+          volumeMounts:
+            - mountPath: /app/wait.py
+              name: script
+              subPath: wait.py
+      containers:
+        - name: job
+          image: python:3.13-slim
+          command: ["/bin/sh", "-c"]
+          args: [
+            "pip install --no-cache-dir pyyaml motor && python /app/script.py"
+          ]
+          envFrom:
+            - secretRef:
+                name: mongo-credentials
+          volumeMounts:
+            - mountPath: /app/script.py
+              name: script
+              subPath: script.py
+            - mountPath: /app/config/scopes.yml
+              name: script
+              subPath: scopes.yml
+      restartPolicy: Never
+      volumes:
+        - name: script
+          configMap:
+            name: setup-mongodb
+  backoffLimit: 4

@@ -129,6 +129,8 @@ Interactive terminal interface for chatting with AI models and discovering MCP t
 
 ## What's New
 
+- **🔎 Enhanced Hybrid Search** - Improved semantic search combining vector similarity with tokenized keyword matching for servers, tools, and agents. Explicit name references now boost relevance scores, ensuring exact matches appear first. [Hybrid Search Architecture](docs/design/hybrid-search-architecture.md)
+- **🛡️ Security Scan Results in UI** - Security scan results are now displayed directly on Server and Agent cards with color-coded shield icons (gray/green/red). Click the shield icon to view detailed scan results and trigger rescans from the UI. [Security Scanner Documentation](docs/security-scanner.md)
 - **🧪 Comprehensive Test Suite & Updated LLM Documentation** - Full pytest test suite with 701+ passing tests (unit, integration, E2E) running automatically on all PRs via GitHub Actions. 35% minimum coverage (targeting 80%), ~30 second execution with 8 parallel workers. Updated llms.txt provides comprehensive documentation for LLM coding assistants covering storage backend migration (file → DocumentDB/MongoDB), repository patterns, AWS ECS deployment, Microsoft Entra ID integration, dual security scanning, federation architecture, rating system, testing standards, and critical code organization antipatterns. [Testing Guide](docs/testing/README.md) | [docs/llms.txt](docs/llms.txt)
 - **📊 DocumentDB & MongoDB CE Storage Backend** - Production-grade distributed storage with MongoDB-compatible backends. DocumentDB provides native HNSW vector search for sub-100ms semantic queries in production deployments, while MongoDB Community Edition 8.2 enables full-featured local development with replica sets. Both backends use the same repository abstraction layer with automatic collection management, optimized indexes, and application-level vector search for MongoDB CE. Switch between MongoDB CE (local testing) and DocumentDB (production) with a single environment variable. Note: File-based storage is deprecated and will be removed in a future release. MongoDB CE is recommended for local development. [Configuration Guide](docs/configuration.md#storage-backend-configuration) | [Storage Architecture](docs/design/storage-architecture-mongodb-documentdb.md)
 - **🔒 A2A Agent Security Scanning** - Integrated security scanning for A2A agents using [Cisco AI Defense A2A Scanner](https://github.com/cisco-ai-defense/a2a-scanner). Automatic security scans during agent registration with YARA pattern matching, A2A specification validation, and heuristic threat detection. Features include automatic tagging of unsafe agents, configurable blocking policies, and detailed scan reports with API endpoints for viewing results and triggering rescans.
@@ -168,8 +170,8 @@ The registry includes two example A2A agents that demonstrate how both human dev
 **View in Registry UI:**
 Open the registry and navigate to the **A2A Agents** tab to browse registered agents with their full metadata, capabilities, and skills.
 
-**Search via Semantic API:**
-Agents and developers can search for agents by natural language description:
+**Search via CLI:**
+Developers can search for agents by natural language description:
 
 ```bash
 # Search for agents that can help book a trip
@@ -186,6 +188,40 @@ Travel Assistant Agent                   | /travel-assistant-agent   |  0.8610
 Flight Booking Agent                     | /flight-booking-agent     |  1.2134
 --------------------------------------------------------------------------------------------------------------
 ```
+
+### Agent-to-Agent Discovery API
+
+The registry provides a **semantic search API** that agents can use as a tool to discover other A2A agents at runtime. This API enables dynamic agent composition where agents find collaborators based on capabilities rather than hardcoded references.
+
+**Discovery API Endpoint:**
+```
+POST /api/agents/discover/semantic?query=<natural-language-query>&max_results=5
+Authorization: Bearer <jwt-token>
+```
+
+**Response includes:**
+- Agent name, description, and endpoint URL
+- Agent card metadata with skills and capabilities
+- Relevance score for ranking matches
+- Trust level and visibility settings
+
+**How agents use it:**
+1. An agent calls the registry's semantic search API with a natural language query (e.g., "agent that can book flights")
+2. The registry returns matching agents with their endpoint URLs and full agent card metadata
+3. The agent uses the agent card to understand capabilities and invokes the discovered agent via A2A protocol
+
+**Example - Travel Assistant discovering and invoking Flight Booking Agent:**
+```
+User: "I need to book a flight from NYC to LA"
+
+Travel Assistant:
+  1. Calls registry API: POST /api/agents/discover/semantic?query="book flights"
+  2. Registry returns Flight Booking Agent with endpoint URL and agent card
+  3. Uses agent card to understand capabilities, then sends A2A message to Flight Booking Agent
+  4. Returns booking confirmation to user
+```
+
+This pattern enables agents to dynamically extend their capabilities by discovering specialized agents for tasks they cannot handle directly.
 
 **Agent Cards:** View the agent card metadata at [agents/a2a/test/](agents/a2a/test/) to see the complete agent definitions including skills, protocols, and capabilities.
 
@@ -379,7 +415,7 @@ cp .env.example .env
 ```
 
 **Step 2: Download embeddings model**
-Download the required sentence-transformers model to the shared models directory:
+Download the required sentence-transformers model to the shared models directory using the [HuggingFace CLI](https://huggingface.co/docs/huggingface_hub/main/en/guides/cli) (`pip install -U huggingface_hub`):
 ```bash
 hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2
 ```

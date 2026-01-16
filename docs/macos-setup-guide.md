@@ -118,6 +118,10 @@ In the `.env` file, make these changes:
 # Set authentication provider to Keycloak
 AUTH_PROVIDER=keycloak
 
+# Set auth server URL for local development
+# This URL must be accessible from your browser for OAuth redirects
+AUTH_SERVER_EXTERNAL_URL=http://localhost
+
 # Set secure passwords (CHANGE THESE!)
 KEYCLOAK_ADMIN_PASSWORD=your_secure_admin_password_here
 KEYCLOAK_DB_PASSWORD=your_secure_db_password_here

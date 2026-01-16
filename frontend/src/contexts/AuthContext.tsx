@@ -66,6 +66,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         provider: userData.provider,
         can_modify_servers: userData.can_modify_servers || false,
         is_admin: userData.is_admin || false,
+        ui_permissions: userData.ui_permissions || {},
       });
     } catch (error) {
       // User not authenticated

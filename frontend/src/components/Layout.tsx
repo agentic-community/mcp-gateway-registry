@@ -200,7 +200,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         <main className={`flex-1 flex flex-col transition-all duration-300 ${
           sidebarOpen ? 'md:ml-64 lg:ml-72 xl:ml-80' : ''
         }`}>
-          <div className="flex-1 flex flex-col px-4 sm:px-6 lg:px-8 py-4 md:py-8 overflow-hidden">
+          <div className="flex-1 flex flex-col px-4 sm:px-6 lg:px-8 py-4 md:py-8 overflow-y-auto">
             {React.cloneElement(children as React.ReactElement, { activeFilter })}
           </div>
         </main>

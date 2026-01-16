@@ -49,12 +49,17 @@ def _get_config_from_env() -> dict:
         "database": os.getenv("DOCUMENTDB_DATABASE", "mcp_registry"),
         "namespace": os.getenv("DOCUMENTDB_NAMESPACE", "default"),
         "scopes_file": os.getenv("SCOPES_FILE", "/app/config/scopes.yml"),
+        "username": os.getenv("DOCUMENTDB_USERNAME", ""),
+        "password": os.getenv("DOCUMENTDB_PASSWORD", ""),
+        "replicaset": os.getenv("DOCUMENTDB_REPLICA_SET", "rs0"),
     }
 
 
 def _initialize_replica_set(
     host: str,
     port: int,
+    username: str,
+    password: str,
 ) -> None:
     """Initialize MongoDB replica set using pymongo (synchronous)."""
     from pymongo import MongoClient
@@ -64,7 +69,7 @@ def _initialize_replica_set(
     try:
         # Connect without replica set for initialization
         client = MongoClient(
-            f"mongodb://{host}:{port}/",
+            f"mongodb://{username}:{password}@{host}:{port}/?authMechanism=SCRAM-SHA-256&authSource=admin",
             serverSelectionTimeoutMS=5000,
             directConnection=True,
         )
@@ -259,11 +264,10 @@ async def _initialize_mongodb_ce() -> None:
     time.sleep(10)
 
     # Initialize replica set (synchronous)
-    _initialize_replica_set(config["host"], config["port"])
+    _initialize_replica_set(config["host"], config["port"], config["username"], config["password"])
 
     # Connect with motor for async operations
-    connection_string = f"mongodb://{config['host']}:{config['port']}/{config['database']}?replicaSet=rs0"
-
+    connection_string = f"mongodb://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}&authMechanism=SCRAM-SHA-256&authSource=admin"
     try:
         client = AsyncIOMotorClient(
             connection_string,

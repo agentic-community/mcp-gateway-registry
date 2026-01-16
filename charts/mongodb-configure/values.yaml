@@ -1,0 +1,14 @@
+# MongoDB configuration
+mongodb:
+  database: mcp_registry
+  # host: Can be either:
+  #   - A Kubernetes service name (e.g., "mcp-registry-mongodb-svc") - will be templated to include namespace
+  #   - A full hostname/FQDN (e.g., "mongodb.example.com" or "10.0.1.100") - will be used as-is
+  host: mcp-registry-mongodb-svc
+  namespace: default
+  password: CHANGEME
+  port: 27017
+  replica_set: mcp-registry-mongodb
+  username: my-user
+  use_tls: false
+  storage_backend: mongodb-ce

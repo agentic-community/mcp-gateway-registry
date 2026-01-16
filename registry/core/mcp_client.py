@@ -334,13 +334,17 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> List[dict] 
 
 
 def _extract_tool_details(tools_response) -> List[dict]:
-    """Extract tool details from MCP tools response"""
+    """Extract tool details from MCP tools response."""
     tool_details_list = []
-    
+
     if tools_response and hasattr(tools_response, 'tools'):
         for tool in tools_response.tools:
             tool_name = getattr(tool, 'name', 'Unknown Name')
             tool_desc = getattr(tool, 'description', None) or getattr(tool, '__doc__', None)
+
+            # Log tool description for debugging
+            desc_preview = repr(tool_desc)[:100] if tool_desc else 'None'
+            logger.debug(f"Tool '{tool_name}' description: {desc_preview}")
 
             # Parse docstring into sections
             parsed_desc = {
@@ -397,6 +401,7 @@ def _extract_tool_details(tools_response) -> List[dict]:
 
             tool_details_list.append({
                 "name": tool_name,
+                "description": tool_desc or "",
                 "parsed_description": parsed_desc,
                 "schema": tool_schema
             })

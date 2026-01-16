@@ -42,4 +42,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:9000/ping || exit 1
 
 # Run the agent with uv (uses the virtual environment created by uv sync)
-CMD ["uv", "run", "--no-sync", "agent.py"]
+CMD ["uv", "run", "--no-sync", "server.py"]

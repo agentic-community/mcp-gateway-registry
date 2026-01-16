@@ -90,7 +90,7 @@ log_component() {
 }
 
 show_help() {
-    grep '^#' "$0" | tail -n +2 | sed 's/^# //' | sed 's/^#//'\
+    grep '^#' "$0" | tail -n +2 | sed 's/^# //' | sed 's/^#//'
     exit 0
 }
 

@@ -2,6 +2,8 @@
 
 ## Introduction
 
+[Watch the Security Scanning Demo Video](https://github.com/user-attachments/assets/9450f027-ef7f-4ed7-a55c-ce970bf26fd8)
+
 As organizations integrate Model Context Protocol (MCP) servers and Agent-to-Agent (A2A) agents into their AI workflows, supply chain security becomes critical. These third-party components provide tools and capabilities to AI systems, making them potential vectors for security vulnerabilities, malicious code injection, and data exfiltration.
 
 The MCP Gateway Registry addresses this challenge by integrating automated security scanning powered by two specialized tools:

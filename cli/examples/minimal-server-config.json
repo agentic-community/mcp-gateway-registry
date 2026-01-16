@@ -3,5 +3,6 @@
   "description": "A minimal server configuration with only required fields",
   "path": "/minimal-server",
   "proxy_pass_url": "http://minimal-server:9001/",
-  "supported_transports": ["streamable-http"]
+  "supported_transports": ["streamable-http"],
+  "tags": ["mcp", "minimal", "example"]
 }

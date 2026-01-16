@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ArrowPathIcon, CogIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
+import React, { useState, useMemo } from 'react';
+import { ArrowPathIcon, CogIcon, InformationCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import axios from 'axios';
 import { SemanticServerHit, SemanticToolHit, SemanticAgentHit } from '../hooks/useSemanticSearch';
 import ServerConfigModal from './ServerConfigModal';
@@ -16,6 +16,59 @@ interface SemanticSearchResultsProps {
   agents: SemanticAgentHit[];
 }
 
+interface ToolSchemaModalProps {
+  toolName: string;
+  serverName: string;
+  schema: Record<string, any> | null;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+const ToolSchemaModal: React.FC<ToolSchemaModalProps> = ({
+  toolName,
+  serverName,
+  schema,
+  isOpen,
+  onClose
+}) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {toolName}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{serverName}</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="p-4 overflow-auto flex-1">
+          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+            Input Schema
+          </p>
+          {schema && Object.keys(schema).length > 0 ? (
+            <pre className="text-xs bg-gray-100 dark:bg-gray-900 p-3 rounded-lg overflow-auto text-gray-800 dark:text-gray-200">
+              {JSON.stringify(schema, null, 2)}
+            </pre>
+          ) : (
+            <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+              No input schema available for this tool.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const formatPercent = (value: number) => `${Math.round(Math.min(value, 1) * 100)}%`;
 
 const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
@@ -31,6 +84,33 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
   const [detailsAgent, setDetailsAgent] = useState<SemanticAgentHit | null>(null);
   const [agentDetailsData, setAgentDetailsData] = useState<any>(null);
   const [agentDetailsLoading, setAgentDetailsLoading] = useState(false);
+  const [selectedToolSchema, setSelectedToolSchema] = useState<{
+    toolName: string;
+    serverName: string;
+    schema: Record<string, any> | null;
+  } | null>(null);
+
+  // Build a lookup map from server_path + tool_name to inputSchema
+  const toolSchemaMap = useMemo(() => {
+    const map = new Map<string, Record<string, any>>();
+    for (const tool of tools) {
+      const key = `${tool.server_path}:${tool.tool_name}`;
+      if (tool.inputSchema) {
+        map.set(key, tool.inputSchema);
+      }
+    }
+    return map;
+  }, [tools]);
+
+  const openToolSchema = (
+    serverPath: string,
+    serverName: string,
+    toolName: string
+  ) => {
+    const key = `${serverPath}:${toolName}`;
+    const schema = toolSchemaMap.get(key) || null;
+    setSelectedToolSchema({ toolName, serverName, schema });
+  };
 
   const openAgentDetails = async (agentHit: SemanticAgentHit) => {
     setDetailsAgent(agentHit);
@@ -159,12 +239,22 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     </p>
                     <ul className="space-y-2">
                       {server.matching_tools.slice(0, 3).map((tool) => (
-                        <li key={tool.tool_name} className="text-sm text-gray-700 dark:text-gray-200">
-                          <span className="font-medium text-gray-900 dark:text-white">{tool.tool_name}</span>
-                          <span className="mx-2 text-gray-400">•</span>
-                          <span className="text-gray-600 dark:text-gray-300">
-                            {tool.description || tool.match_context || 'No description'}
-                          </span>
+                        <li key={tool.tool_name} className="text-sm text-gray-700 dark:text-gray-200 flex items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium text-gray-900 dark:text-white">{tool.tool_name}</span>
+                            <span className="mx-2 text-gray-400">-</span>
+                            <span className="text-gray-600 dark:text-gray-300 line-clamp-1">
+                              {tool.description || tool.match_context || 'No description'}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openToolSchema(server.path, server.server_name, tool.tool_name)}
+                            className="flex-shrink-0 p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 rounded transition-colors"
+                            title="View input schema"
+                          >
+                            <InformationCircleIcon className="h-4 w-4" />
+                          </button>
                         </li>
                       ))}
                     </ul>
@@ -190,22 +280,36 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
             {tools.map((tool) => (
               <div
                 key={`${tool.server_path}-${tool.tool_name}`}
-                className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+                className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"
               >
-                <div>
+                <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gray-900 dark:text-white">
                     {tool.tool_name}
                     <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
                       ({tool.server_name})
                     </span>
                   </p>
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                  <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
                     {tool.description || tool.match_context || 'No description available.'}
                   </p>
                 </div>
-                <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200 px-3 py-1 text-xs font-semibold">
-                  {formatPercent(tool.relevance_score)} match
-                </span>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedToolSchema({
+                      toolName: tool.tool_name,
+                      serverName: tool.server_name,
+                      schema: tool.inputSchema || null
+                    })}
+                    className="p-1.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                    title="View input schema"
+                  >
+                    <InformationCircleIcon className="h-4 w-4" />
+                  </button>
+                  <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200 px-3 py-1 text-xs font-semibold">
+                    {formatPercent(tool.relevance_score)} match
+                  </span>
+                </div>
               </div>
             ))}
           </div>
@@ -318,6 +422,16 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         onClose={() => setDetailsAgent(null)}
         loading={agentDetailsLoading}
         fullDetails={agentDetailsData}
+      />
+    )}
+
+    {selectedToolSchema && (
+      <ToolSchemaModal
+        toolName={selectedToolSchema.toolName}
+        serverName={selectedToolSchema.serverName}
+        schema={selectedToolSchema.schema}
+        isOpen
+        onClose={() => setSelectedToolSchema(null)}
       />
     )}
     </>

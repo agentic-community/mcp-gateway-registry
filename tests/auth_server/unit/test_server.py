@@ -7,7 +7,7 @@ rate limiting, and helper functions.
 
 import logging
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import jwt
 import pytest
@@ -713,9 +713,22 @@ class TestGenerateTokenEndpoint:
 
     @patch('auth_server.server.get_auth_provider')
     def test_generate_token_success(self, mock_get_provider, auth_env_vars):
-        """Test successful token generation."""
+        """Test successful token generation using Keycloak M2M."""
         # Arrange
         import auth_server.server as server_module
+
+        # Mock Keycloak provider
+        mock_provider = Mock()
+        mock_provider.get_provider_info.return_value = {'provider_type': 'keycloak'}
+        # M2M token uses fixed scopes for IdP compatibility, not user-requested scopes
+        mock_provider.get_m2m_token.return_value = {
+            'access_token': 'mock_keycloak_m2m_token',
+            'refresh_token': None,
+            'expires_in': 28800,
+            'refresh_expires_in': 0,
+            'scope': 'openid email profile'
+        }
+        mock_get_provider.return_value = mock_provider
 
         client = TestClient(server_module.app)
 
@@ -736,8 +749,12 @@ class TestGenerateTokenEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "access_token" in data
+        assert data["access_token"] == "mock_keycloak_m2m_token"
         assert data["token_type"] == "Bearer"
-        assert data["scope"] == "read:servers"
+        # Scope in response comes from Keycloak M2M client configuration
+        assert data["scope"] == "openid email profile"
+        # Verify Keycloak M2M was called with IdP-compatible scopes
+        mock_provider.get_m2m_token.assert_called_once_with(scope="openid email profile")
 
     @patch('auth_server.server.get_auth_provider')
     def test_generate_token_missing_username(self, mock_get_provider, auth_env_vars):
@@ -796,6 +813,17 @@ class TestGenerateTokenEndpoint:
         server_module.MAX_TOKENS_PER_USER_PER_HOUR = 2
         server_module.user_token_generation_counts.clear()
 
+        # Mock Keycloak provider for successful token generation
+        mock_provider = Mock()
+        mock_provider.get_provider_info.return_value = {'provider_type': 'keycloak'}
+        mock_provider.get_m2m_token.return_value = {
+            'access_token': 'mock_keycloak_m2m_token',
+            'refresh_token': None,
+            'expires_in': 28800,
+            'refresh_expires_in': 0,
+            'scope': 'read:servers'
+        }
+        mock_get_provider.return_value = mock_provider
 
         client = TestClient(server_module.app)
 

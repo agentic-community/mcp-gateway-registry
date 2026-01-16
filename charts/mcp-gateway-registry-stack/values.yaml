@@ -17,6 +17,18 @@ global:
       alb.ingress.kubernetes.io/target-type: ip
       alb.ingress.kubernetes.io/success-codes: 200,302
 
+mongodb-kubernetes:
+  operator:
+    enableClusterMongoDBRoles: false
+    telemetry:
+      installClusterRole: false
+
+# MongoDB configuration
+mongodb:
+  enabled: true
+  user: my-user # username for MongDB
+  password: CHANGEME # Set the password for the MongoDB user
+
 # Keycloak configuration
 keycloak:
   image:
@@ -78,9 +90,15 @@ keycloak-configure:
     adminUser: user
   # authServer.externalUrl will be templated in the subchart using global.domain
 
+# Mongodb configuration job
+mongodb-configure:
+  enabled: true # Whether to run the MongoDB configuration job
+
 # Registry service configuration
 registry:
   # app.secretKey and app.authServerUrl will be templated in the subchart using global values
+  app:
+    replicas: 1
   ingress:
     enabled: true
     ingressClassName: alb
@@ -94,6 +112,8 @@ registry:
 # Auth server configuration
 auth-server:
   # app.secretKey, app.externalUrl, app.sessionCookieDomain will be templated using global values
+  app:
+    replicas: 1
   keycloak:
     enabled: true
     realm: mcp-gateway

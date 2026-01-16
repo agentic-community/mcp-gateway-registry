@@ -126,6 +126,10 @@ module "ecs_service_auth" {
           value = "mcp-gateway-web"
         },
         {
+          name  = "KEYCLOAK_M2M_CLIENT_ID"
+          value = "mcp-gateway-m2m"
+        },
+        {
           name  = "SCOPES_CONFIG_PATH"
           value = "/efs/auth_config/auth_config/scopes.yml"
         },
@@ -193,6 +197,28 @@ module "ecs_service_auth" {
           }
         ] : []
       )
+      secrets = [
+        {
+          name      = "SECRET_KEY"
+          valueFrom = aws_secretsmanager_secret.secret_key.arn
+        },
+        {
+          name      = "KEYCLOAK_CLIENT_SECRET"
+          valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
+        },
+        {
+          name      = "KEYCLOAK_M2M_CLIENT_SECRET"
+          valueFrom = "${aws_secretsmanager_secret.keycloak_m2m_client_secret.arn}:client_secret::"
+        },
+        {
+          name      = "DOCUMENTDB_USERNAME"
+          valueFrom = "${var.documentdb_credentials_secret_arn}:username::"
+        },
+        {
+          name      = "DOCUMENTDB_PASSWORD"
+          valueFrom = "${var.documentdb_credentials_secret_arn}:password::"
+        }
+      ]
 
       mountPoints = [
         {

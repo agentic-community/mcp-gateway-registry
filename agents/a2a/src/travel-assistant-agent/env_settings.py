@@ -23,7 +23,7 @@ class EnvSettings:
         self.agent_name: str = os.getenv("AGENT_NAME", "travel-assistant")
         self.agent_version: str = os.getenv("AGENT_VERSION", "1.0.0")
 
-        # MCP Gateway Registry URL (TODO: replace later)
+        # MCP Gateway Registry URL
         self.mcp_registry_url: str = os.getenv("MCP_REGISTRY_URL", "http://localhost:7860")
 
         # Agent's public URL (AgentCore Runtime injects automatically)
@@ -33,6 +33,20 @@ class EnvSettings:
         self.host: str = "0.0.0.0"
         self.port: int = 9000
 
+        # Keycloak configuration for M2M authentication
+        self.keycloak_url: str = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
+        self.keycloak_realm: str = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
+        self.m2m_client_id: str = os.getenv("M2M_CLIENT_ID", "")
+        self.m2m_client_secret: str = os.getenv("M2M_CLIENT_SECRET", "")
+
+        # Optional: Direct JWT token (bypasses M2M authentication)
+        # If set, this token is used directly instead of fetching from Keycloak
+        self.registry_jwt_token: str = os.getenv("REGISTRY_JWT_TOKEN", "")
+
         logger.info(f"EnvSettings initialized: agent_name={self.agent_name}, version={self.agent_version}")
+        if self.registry_jwt_token:
+            logger.info("Using direct JWT token for registry authentication")
+        elif self.m2m_client_id and self.m2m_client_secret:
+            logger.info("Using M2M client credentials for registry authentication")
         logger.debug(f"Database path: {self.db_path}")
         logger.debug(f"Agent URL: {self.agent_url}")

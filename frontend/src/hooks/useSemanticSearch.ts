@@ -30,6 +30,7 @@ export interface SemanticToolHit {
   server_name: string;
   tool_name: string;
   description?: string;
+  inputSchema?: Record<string, any>;
   relevance_score: number;
   match_context?: string;
 }

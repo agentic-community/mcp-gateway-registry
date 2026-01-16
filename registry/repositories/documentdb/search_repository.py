@@ -1,7 +1,8 @@
 """DocumentDB-based repository for hybrid search (text + vector)."""
 
 import logging
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
@@ -10,15 +11,62 @@ from ...schemas.agent_models import AgentCard
 from ..interfaces import SearchRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
-
 logger = logging.getLogger(__name__)
+
+
+# Stopwords to filter out when tokenizing queries for keyword matching
+_STOPWORDS: set[str] = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "can", "to", "of", "in", "on", "at", "by",
+    "for", "with", "about", "as", "into", "through", "from", "what", "when",
+    "where", "who", "which", "how", "why", "get", "set", "put"
+}
+
+
+def _tokenize_query(query: str) -> list[str]:
+    """Tokenize a query string into meaningful keywords.
+
+    Splits on non-word characters, filters stopwords and short tokens.
+
+    Args:
+        query: The search query string
+
+    Returns:
+        List of lowercase tokens suitable for keyword matching
+    """
+    tokens = [
+        token.lower()
+        for token in re.split(r"\W+", query)
+        if token and len(token) > 2 and token.lower() not in _STOPWORDS
+    ]
+    return tokens
+
+
+def _tokens_match_text(
+    tokens: list[str],
+    text: str,
+) -> bool:
+    """Check if any token matches within the given text.
+
+    Args:
+        tokens: List of query tokens
+        text: Text to search within
+
+    Returns:
+        True if any token is found in the text
+    """
+    if not tokens or not text:
+        return False
+    text_lower = text.lower()
+    return any(token in text_lower for token in tokens)
 
 
 class DocumentDBSearchRepository(SearchRepositoryBase):
     """DocumentDB implementation with hybrid search (text + vector)."""
 
     def __init__(self):
-        self._collection: Optional[AsyncIOMotorCollection] = None
+        self._collection: AsyncIOMotorCollection | None = None
         self._collection_name = get_collection_name(
             f"mcp_embeddings_{settings.embeddings_model_dimensions}"
         )
@@ -62,19 +110,36 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             index_names = [idx["name"] for idx in indexes]
 
             if "embedding_vector_idx" not in index_names:
-                logger.info("Creating HNSW vector index for embeddings...")
-                await collection.create_index(
-                    [("embedding", "vector")],
-                    name="embedding_vector_idx",
-                    vectorOptions={
-                        "type": "hnsw",
-                        "similarity": "cosine",
-                        "dimensions": settings.embeddings_model_dimensions,
-                        "m": 16,
-                        "efConstruction": 128
-                    }
-                )
-                logger.info("Created HNSW vector index")
+                try:
+                    logger.info("Creating HNSW vector index for embeddings...")
+                    await collection.create_index(
+                        [("embedding", "vector")],
+                        name="embedding_vector_idx",
+                        vectorOptions={
+                            "type": "hnsw",
+                            "similarity": "cosine",
+                            "dimensions": settings.embeddings_model_dimensions,
+                            "m": 16,
+                            "efConstruction": 128
+                        }
+                    )
+                    logger.info("Created HNSW vector index")
+                except Exception as vector_error:
+                    # Check if this is a MongoDB CE error (vectorOptions not supported)
+                    if "vectorOptions" in str(vector_error) or "not valid for an index specification" in str(vector_error):
+                        logger.warning(
+                            "Vector indexes not supported (MongoDB CE detected). "
+                            "Creating regular index on embedding field."
+                        )
+                        # Create a regular index on the embedding field for faster retrieval
+                        await collection.create_index(
+                            [("embedding", 1)],
+                            name="embedding_vector_idx"
+                        )
+                        logger.info("Created regular embedding index")
+                    else:
+                        # Re-raise if it's a different error
+                        raise vector_error
             else:
                 logger.info("Vector index already exists")
 
@@ -89,7 +154,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
     async def index_server(
         self,
         path: str,
-        server_info: Dict[str, Any],
+        server_info: dict[str, Any],
         is_enabled: bool = False,
     ) -> None:
         """Index a server for search."""
@@ -125,7 +190,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "embedding": embedding,
             "embedding_metadata": embedding_config.get_embedding_metadata(),
             "tools": [
-                {"name": t.get("name"), "description": t.get("description")}
+                {
+                    "name": t.get("name"),
+                    "description": t.get("description"),
+                    # Support both "inputSchema" (MCP standard) and "schema" (legacy)
+                    "inputSchema": t.get("inputSchema") or t.get("schema", {}),
+                }
                 for t in server_info.get("tool_list", [])
             ],
             "metadata": server_info,
@@ -161,8 +231,16 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if tags:
             text_parts.append("Tags: " + ", ".join(tags))
 
+        # Include capability keys (feature flags like "streaming")
         if agent_card.capabilities:
             text_parts.append("Capabilities: " + ", ".join(agent_card.capabilities))
+
+        # Include skill names and descriptions for better semantic search
+        if agent_card.skills:
+            for skill in agent_card.skills:
+                text_parts.append(skill.name)
+                if skill.description:
+                    text_parts.append(skill.description)
 
         text_for_embedding = " ".join(filter(None, text_parts))
 
@@ -198,8 +276,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
     def _calculate_cosine_similarity(
         self,
-        vec1: List[float],
-        vec2: List[float]
+        vec1: list[float],
+        vec2: list[float]
     ) -> float:
         """Calculate cosine similarity between two vectors.
 
@@ -210,7 +288,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if not vec1 or not vec2 or len(vec1) != len(vec2):
             return 0.0
 
-        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        dot_product = sum(a * b for a, b in zip(vec1, vec2, strict=True))
         magnitude1 = math.sqrt(sum(a * a for a in vec1))
         magnitude2 = math.sqrt(sum(b * b for b in vec2))
 
@@ -240,10 +318,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
     async def _client_side_search(
         self,
         query: str,
-        query_embedding: List[float],
-        entity_types: Optional[List[str]] = None,
+        query_embedding: list[float],
+        entity_types: list[str] | None = None,
         max_results: int = 10,
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """Fallback search using client-side cosine similarity for MongoDB CE.
 
         This method is used when MongoDB doesn't support native vector search.
@@ -274,6 +352,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             all_docs = await cursor.to_list(length=None)
             logger.info(f"Client-side search: Retrieved {len(all_docs)} documents with embeddings")
 
+            # Tokenize query for keyword matching
+            query_tokens = _tokenize_query(query)
+            logger.debug(f"Client-side search tokens: {query_tokens}")
+
             # Calculate cosine similarity for each document
             scored_docs = []
             for doc in all_docs:
@@ -284,35 +366,51 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 # Calculate vector similarity
                 vector_score = self._calculate_cosine_similarity(query_embedding, embedding)
 
-                # Add text-based boost (same logic as server-side search)
+                # Add text-based boost using tokenized matching
                 text_boost = 0.0
                 name = doc.get("name", "")
                 description = doc.get("description", "")
                 tags = doc.get("tags", [])
                 tools = doc.get("tools", [])
-                query_lower = query.lower()
                 matching_tools = []
 
-                # Case-insensitive substring matching for text boost
-                if name and query_lower in name.lower():
+                # Token-based matching for text boost
+                # Check path match first (highest priority - user explicitly named the server)
+                path = doc.get("path", "")
+                server_name_matched = False
+                if path and _tokens_match_text(query_tokens, path):
+                    text_boost += 5.0
+                    server_name_matched = True
+                if name and _tokens_match_text(query_tokens, name):
                     text_boost += 3.0
-                if description and query_lower in description.lower():
+                    server_name_matched = True
+                if description and _tokens_match_text(query_tokens, description):
                     text_boost += 2.0
-                # Check if query matches any tag
-                if tags and any(query_lower in tag.lower() for tag in tags):
+                # Check if any token matches any tag
+                if tags and any(_tokens_match_text(query_tokens, tag) for tag in tags):
                     text_boost += 1.5
-                # Check if query matches any tool name or description
+
+                # Check if any token matches any tool name or description
                 for tool in tools:
                     tool_name = tool.get("name", "")
                     tool_desc = tool.get("description") or ""
-                    if (tool_name and query_lower in tool_name.lower()) or \
-                       (tool_desc and query_lower in tool_desc.lower()):
+                    tool_matched = _tokens_match_text(query_tokens, tool_name) or \
+                        _tokens_match_text(query_tokens, tool_desc)
+
+                    if tool_matched:
                         text_boost += 1.0
-                        # Store full tool object for frontend
                         matching_tools.append({
                             "tool_name": tool_name,
                             "description": tool_desc,
-                            "relevance_score": 1.0,  # Tool matched, full score
+                            "relevance_score": 1.0,
+                            "match_context": tool_desc or f"Tool: {tool_name}"
+                        })
+                    elif server_name_matched:
+                        # If server name/path matched, include all tools with base score
+                        matching_tools.append({
+                            "tool_name": tool_name,
+                            "description": tool_desc,
+                            "relevance_score": 0.8,
                             "match_context": tool_desc or f"Tool: {tool_name}"
                         })
 
@@ -322,7 +420,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 # Hybrid score: vector score + normalized text boost
                 # Normalize vector_score to [0, 1] range (cosine can be [-1, 1])
                 normalized_vector_score = (vector_score + 1.0) / 2.0
-                relevance_score = normalized_vector_score + (text_boost * 0.03)
+                # Increased multiplier (0.05) to give keyword matches more weight
+                # Path match (5.0) adds +0.25, Name match (3.0) adds +0.15
+                relevance_score = normalized_vector_score + (text_boost * 0.05)
                 relevance_score = max(0.0, min(1.0, relevance_score))
 
                 scored_docs.append({
@@ -354,9 +454,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # Format results to match the API contract
             grouped_results = {"servers": [], "tools": [], "agents": []}
 
+            tool_count = 0
             for item in servers:
                 doc = item["doc"]
                 relevance_score = item["relevance_score"]
+                matching_tools = doc.get("_matching_tools", [])
 
                 result_entry = {
                     "entity_type": "mcp_server",
@@ -368,9 +470,35 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "is_enabled": doc.get("is_enabled", False),
                     "relevance_score": relevance_score,
                     "match_context": doc.get("description"),
-                    "matching_tools": doc.get("_matching_tools", [])
+                    "matching_tools": matching_tools
                 }
                 grouped_results["servers"].append(result_entry)
+
+                # Also add matching tools to the top-level tools array
+                # Build a lookup map from tool name to inputSchema from original tools
+                original_tools = doc.get("tools", [])
+                tool_schema_map = {
+                    t.get("name", ""): t.get("inputSchema", {})
+                    for t in original_tools
+                }
+
+                server_path = doc.get("path", "")
+                server_name = doc.get("name", "")
+                for tool in matching_tools:
+                    if tool_count >= 3:
+                        break
+                    tool_name = tool.get("tool_name", "")
+                    grouped_results["tools"].append({
+                        "entity_type": "tool",
+                        "server_path": server_path,
+                        "server_name": server_name,
+                        "tool_name": tool_name,
+                        "description": tool.get("description", ""),
+                        "inputSchema": tool_schema_map.get(tool_name, {}),
+                        "relevance_score": tool.get("relevance_score", relevance_score),
+                        "match_context": tool.get("match_context", "")
+                    })
+                    tool_count += 1
 
             for item in agents:
                 doc = item["doc"]
@@ -402,6 +530,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "path": doc.get("path"),
                     "tool_name": doc.get("name"),
                     "description": doc.get("description"),
+                    "inputSchema": doc.get("inputSchema", {}),
                     "relevance_score": relevance_score,
                     "match_context": doc.get("description")
                 }
@@ -425,9 +554,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
     async def search(
         self,
         query: str,
-        entity_types: Optional[List[str]] = None,
+        entity_types: list[str] | None = None,
         max_results: int = 10,
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """Perform hybrid search (text + vector).
 
         Note: DocumentDB vector search returns results sorted by similarity
@@ -459,6 +588,26 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             if entity_types:
                 pipeline.append({"$match": {"entity_type": {"$in": entity_types}}})
 
+            # Tokenize query and create regex pattern for matching any token
+            query_tokens = _tokenize_query(query)
+            # Create regex that matches any token (e.g., "current|time|timezone")
+            # Escape special regex characters in tokens for safety
+            escaped_tokens = [re.escape(token) for token in query_tokens]
+            token_regex = "|".join(escaped_tokens) if escaped_tokens else query
+            logger.debug(f"Hybrid search token regex: {token_regex}")
+
+            # NOTE: DocumentDB does not support $unionWith, so we run a separate
+            # keyword query and merge results in Python code after the main pipeline.
+            # Build keyword match filter for later use
+            keyword_match_filter = {
+                "$or": [
+                    {"name": {"$regex": token_regex, "$options": "i"}},
+                    {"path": {"$regex": token_regex, "$options": "i"}}
+                ]
+            }
+            if entity_types:
+                keyword_match_filter["entity_type"] = {"$in": entity_types}
+
             # Add text-based scoring for re-ranking
             # Higher scores for matches in name (3.0), description (2.0), tags (1.5), tools (1.0 per match)
             pipeline.append({
@@ -471,7 +620,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                     {
                                         "$regexMatch": {
                                             "input": {"$ifNull": ["$name", ""]},
-                                            "regex": query,
+                                            "regex": token_regex,
                                             "options": "i"
                                         }
                                     },
@@ -485,7 +634,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                     {
                                         "$regexMatch": {
                                             "input": {"$ifNull": ["$description", ""]},
-                                            "regex": query,
+                                            "regex": token_regex,
                                             "options": "i"
                                         }
                                     },
@@ -506,7 +655,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                                         "cond": {
                                                             "$regexMatch": {
                                                                 "input": "$$tag",
-                                                                "regex": query,
+                                                                "regex": token_regex,
                                                                 "options": "i"
                                                             }
                                                         }
@@ -531,14 +680,14 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                                 {
                                                     "$regexMatch": {
                                                         "input": {"$ifNull": ["$$tool.name", ""]},
-                                                        "regex": query,
+                                                        "regex": token_regex,
                                                         "options": "i"
                                                     }
                                                 },
                                                 {
                                                     "$regexMatch": {
                                                         "input": {"$ifNull": ["$$tool.description", ""]},
-                                                        "regex": query,
+                                                        "regex": token_regex,
                                                         "options": "i"
                                                     }
                                                 }
@@ -561,14 +710,14 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                             {
                                                 "$regexMatch": {
                                                     "input": {"$ifNull": ["$$tool.name", ""]},
-                                                    "regex": query,
+                                                    "regex": token_regex,
                                                     "options": "i"
                                                 }
                                             },
                                             {
                                                 "$regexMatch": {
                                                     "input": {"$ifNull": ["$$tool.description", ""]},
-                                                    "regex": query,
+                                                    "regex": token_regex,
                                                     "options": "i"
                                                 }
                                             }
@@ -603,6 +752,58 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             cursor = collection.aggregate(pipeline)
             results = await cursor.to_list(length=max_results)
 
+            # DocumentDB doesn't support $unionWith, so we run a separate keyword
+            # query to find documents that match by name/path but may not appear
+            # in vector search results (e.g., servers explicitly named like "context7")
+            keyword_cursor = collection.find(keyword_match_filter).limit(5)
+            keyword_results = await keyword_cursor.to_list(length=5)
+
+            # Merge keyword results with vector results, avoiding duplicates
+            # Calculate text_boost and matching_tools for keyword results since they
+            # didn't go through the aggregation pipeline
+            result_ids = {doc.get("_id") for doc in results}
+            for kw_doc in keyword_results:
+                if kw_doc.get("_id") not in result_ids:
+                    # Calculate text_boost for keyword-matched docs
+                    kw_text_boost = 0.0
+                    doc_name = (kw_doc.get("name") or "").lower()
+                    doc_path = (kw_doc.get("path") or "").lower()
+                    doc_desc = (kw_doc.get("description") or "").lower()
+
+                    for token in query_tokens:
+                        token_lower = token.lower()
+                        if token_lower in doc_name:
+                            kw_text_boost += 3.0  # Name match
+                        if token_lower in doc_path:
+                            kw_text_boost += 3.0  # Path match
+                        if token_lower in doc_desc:
+                            kw_text_boost += 2.0  # Description match
+
+                    kw_doc["text_boost"] = kw_text_boost
+
+                    # Calculate matching_tools for keyword-matched docs
+                    tools = kw_doc.get("tools", [])
+                    matching_tools = []
+                    for tool in tools:
+                        tool_name = (tool.get("name") or "").lower()
+                        tool_desc = (tool.get("description") or "").lower()
+                        # Check if any token matches tool name or description
+                        tool_matches = any(
+                            token.lower() in tool_name or token.lower() in tool_desc
+                            for token in query_tokens
+                        )
+                        if tool_matches:
+                            matching_tools.append({
+                                "tool_name": tool.get("name", ""),
+                                "description": tool.get("description", ""),
+                                "relevance_score": 1.0,
+                                "match_context": tool.get("description") or f"Tool: {tool.get('name', '')}"
+                            })
+                    kw_doc["matching_tools"] = matching_tools
+
+                    results.append(kw_doc)
+                    result_ids.add(kw_doc.get("_id"))
+
             # Return results with keys matching the API contract (same as FAISS service)
             # Calculate cosine similarity scores manually since DocumentDB doesn't expose them
             # Limit to top 3 per entity type
@@ -626,18 +827,22 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 doc_embedding = doc.get("embedding", [])
                 vector_score = self._calculate_cosine_similarity(query_embedding, doc_embedding)
 
-                # Get text boost (already calculated in pipeline)
+                # Get text boost (calculated in pipeline or for keyword results)
                 text_boost = doc.get("text_boost", 0.0)
 
-                # Hybrid score: Keep DocumentDB's vector ranking but show the actual similarity
-                # Text boost adds a small bonus if there are keyword matches
-                # Vector score is 0-1, text_boost can be 0-6.5 (3+2+1.5 max), so normalize text_boost to 0-0.195 range
+                # Hybrid score: Combine vector similarity with keyword matching boost
                 # Normalize vector_score to [0, 1] range (cosine can be [-1, 1])
                 normalized_vector_score = (vector_score + 1.0) / 2.0
-                relevance_score = normalized_vector_score + (text_boost * 0.03)
+
+                # Text boost multiplier: 0.1 gives significant weight to keyword matches
+                # Name match (3.0) adds +0.30, Description (2.0) adds +0.20
+                # This ensures exact name matches rank higher than semantic-only matches
+                text_boost_contribution = text_boost * 0.1
+                relevance_score = normalized_vector_score + text_boost_contribution
                 relevance_score = max(0.0, min(1.0, relevance_score))  # Clamp to [0, 1]
 
                 if entity_type == "mcp_server":
+                    matching_tools = doc.get("matching_tools", [])
                     result_entry = {
                         "entity_type": "mcp_server",
                         "path": doc.get("path"),
@@ -648,10 +853,36 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "is_enabled": doc.get("is_enabled", False),
                         "relevance_score": relevance_score,
                         "match_context": doc.get("description"),
-                        "matching_tools": doc.get("matching_tools", [])
+                        "matching_tools": matching_tools
                     }
                     grouped_results["servers"].append(result_entry)
                     server_count += 1
+
+                    # Also add matching tools to the top-level tools array
+                    # Build a lookup map from tool name to inputSchema from original tools
+                    original_tools = doc.get("tools", [])
+                    tool_schema_map = {
+                        t.get("name", ""): t.get("inputSchema", {})
+                        for t in original_tools
+                    }
+
+                    server_path = doc.get("path", "")
+                    server_name = doc.get("name", "")
+                    for tool in matching_tools:
+                        if tool_count >= 3:
+                            break
+                        tool_name = tool.get("tool_name", "")
+                        grouped_results["tools"].append({
+                            "entity_type": "tool",
+                            "server_path": server_path,
+                            "server_name": server_name,
+                            "tool_name": tool_name,
+                            "description": tool.get("description", ""),
+                            "inputSchema": tool_schema_map.get(tool_name, {}),
+                            "relevance_score": tool.get("relevance_score", relevance_score),
+                            "match_context": tool.get("match_context", "")
+                        })
+                        tool_count += 1
 
                 elif entity_type == "a2a_agent":
                     metadata = doc.get("metadata", {})
@@ -678,11 +909,25 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "path": doc.get("path"),
                         "tool_name": doc.get("name"),
                         "description": doc.get("description"),
+                        "inputSchema": doc.get("inputSchema", {}),
                         "relevance_score": relevance_score,
                         "match_context": doc.get("description")
                     }
                     grouped_results["tools"].append(result_entry)
                     tool_count += 1
+
+            # Sort each group by relevance_score (descending) to ensure highest matches
+            # appear first. This is needed because the DB sorts by text_boost only,
+            # but relevance_score combines both vector similarity and text boost.
+            grouped_results["servers"].sort(
+                key=lambda x: x.get("relevance_score", 0), reverse=True
+            )
+            grouped_results["tools"].sort(
+                key=lambda x: x.get("relevance_score", 0), reverse=True
+            )
+            grouped_results["agents"].sort(
+                key=lambda x: x.get("relevance_score", 0), reverse=True
+            )
 
             logger.info(
                 f"Hybrid search for '{query}' returned "
@@ -697,10 +942,19 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # Check if this is MongoDB CE without vector search support
             from pymongo.errors import OperationFailure
 
-            if isinstance(e, OperationFailure) and e.code == 31082:
+            if isinstance(e, OperationFailure) and (e.code == 31082 or "vectorSearch" in str(e)):
                 # MongoDB CE doesn't support $vectorSearch - fall back to client-side search
                 logger.warning(
                     "Vector search not supported (MongoDB CE detected). "
+                    "Falling back to client-side cosine similarity search."
+                )
+                return await self._client_side_search(
+                    query, query_embedding, entity_types, max_results
+                )
+            elif "vectorSearch" in str(e) or "$search" in str(e):
+                # General vector search not supported - fall back to client-side search
+                logger.warning(
+                    "Vector search not supported by this MongoDB instance. "
                     "Falling back to client-side cosine similarity search."
                 )
                 return await self._client_side_search(

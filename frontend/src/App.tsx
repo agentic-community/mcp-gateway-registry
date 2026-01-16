@@ -5,6 +5,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import TokenGeneration from './pages/TokenGeneration';
+import RegisterPage from './pages/RegisterPage';
 import Login from './pages/Login';
 import OAuthCallback from './pages/OAuthCallback';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -28,6 +29,13 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <TokenGeneration />
+                </Layout>
+              </ProtectedRoute>
+            } />
+            <Route path="/servers/register" element={
+              <ProtectedRoute>
+                <Layout>
+                  <RegisterPage />
                 </Layout>
               </ProtectedRoute>
             } />

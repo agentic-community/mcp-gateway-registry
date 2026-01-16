@@ -348,6 +348,9 @@ def test_extract_tool_details(mock_tools_response):
     assert result[0]["parsed_description"]["main"] == "Test tool for testing."
     assert "param1" in result[0]["parsed_description"]["args"]
     assert "schema" in result[0]
+    # Verify raw description is also stored
+    assert "description" in result[0]
+    assert "Test tool for testing" in result[0]["description"]
 
 
 @pytest.mark.unit

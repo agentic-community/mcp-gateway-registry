@@ -912,6 +912,41 @@ class TestToolExtraction:
         if len(tools) >= 2:
             assert "search_tool" in tools[0]["tool_name"]
 
+    def test_extract_matching_tools_server_name_match(self, faiss_service):
+        """Test _extract_matching_tools returns tools when query contains server name.
+
+        This handles cases like "use context7 to look up mongodb docs" where the
+        query mentions the server name but not specific tool names.
+        """
+        server_info = {
+            "server_name": "Context7 MCP Server",
+            "tool_list": [
+                {
+                    "name": "resolve-library-id",
+                    "schema": {"type": "object"},
+                },
+                {
+                    "name": "query-docs",
+                    "schema": {"type": "object"},
+                }
+            ]
+        }
+
+        # Query contains "context7" but no tool-specific keywords
+        tools = faiss_service._extract_matching_tools(
+            "MongoDB vector index support context7",
+            server_info
+        )
+
+        # Should return both tools since server name matches
+        assert len(tools) == 2
+        tool_names = [t["tool_name"] for t in tools]
+        assert "resolve-library-id" in tool_names
+        assert "query-docs" in tool_names
+        # All tools should have base score of 0.5
+        for tool in tools:
+            assert tool["raw_score"] == 0.5
+
 
 # =============================================================================
 # DISTANCE/RELEVANCE CONVERSION TESTS

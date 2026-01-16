@@ -38,7 +38,7 @@ strands_agent = Agent(
     description="Flight booking and reservation management agent",
     tools=FLIGHT_BOOKING_TOOLS,
     callback_handler=None,
-    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    model="global.anthropic.claude-sonnet-4-5-20250929-v1:0",
 )
 
 env_settings = get_env()
