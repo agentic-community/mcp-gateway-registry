@@ -60,6 +60,18 @@ resource "aws_security_group_rule" "keycloak_ecs_ingress_lb" {
   source_security_group_id = aws_security_group.keycloak_lb.id
 }
 
+# ECS Ingress from CloudFront Load Balancer SG (when CloudFront is enabled)
+resource "aws_security_group_rule" "keycloak_ecs_ingress_lb_cloudfront" {
+  count                    = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  description              = "Ingress from CloudFront LB security group to Keycloak ECS task"
+  type                     = "ingress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.keycloak_ecs.id
+  source_security_group_id = aws_security_group.keycloak_lb_cloudfront[0].id
+}
+
 # Load Balancer Security Group
 resource "aws_security_group" "keycloak_lb" {
   name        = "keycloak-lb"
@@ -85,6 +97,52 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_http" {
   security_group_id = aws_security_group.keycloak_lb.id
 }
 
+# Load Balancer Ingress from prefix list (HTTP) - optional, for CloudFront or other CDN
+# Default prefix list is AWS CloudFront origin-facing IPs (com.amazonaws.global.cloudfront.origin-facing)
+# CloudFront terminates HTTPS and connects to ALB over HTTP
+# Note: CloudFront prefix list has ~45 entries which count against SG rules limit,
+# so we create a separate security group to avoid hitting the 60 rules/SG limit
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  count = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  name  = local.cloudfront_prefix_list_name
+}
+
+resource "aws_security_group" "keycloak_lb_cloudfront" {
+  count       = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  name        = "keycloak-lb-cloudfront"
+  description = "Security group for CloudFront access to Keycloak ALB"
+  vpc_id      = module.vpc.vpc_id
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "keycloak-lb-cloudfront"
+    }
+  )
+}
+
+resource "aws_security_group_rule" "keycloak_lb_cloudfront_ingress" {
+  count             = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  description       = "Ingress from prefix list to load balancer (HTTP) - default: CloudFront origin-facing IPs"
+  type              = "ingress"
+  from_port         = 80
+  to_port           = 80
+  protocol          = "tcp"
+  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront[0].id]
+  security_group_id = aws_security_group.keycloak_lb_cloudfront[0].id
+}
+
+resource "aws_security_group_rule" "keycloak_lb_cloudfront_egress" {
+  count                    = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  description              = "Egress from CloudFront SG to Keycloak ECS task"
+  type                     = "egress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.keycloak_lb_cloudfront[0].id
+  source_security_group_id = aws_security_group.keycloak_ecs.id
+}
+
 # Load Balancer Ingress from allowed CIDR blocks (HTTPS)
 resource "aws_security_group_rule" "keycloak_lb_ingress_https" {
   description       = "Ingress from allowed CIDR blocks to load balancer (HTTPS)"
@@ -95,6 +153,7 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_https" {
   cidr_blocks       = var.ingress_cidr_blocks
   security_group_id = aws_security_group.keycloak_lb.id
 }
+
 
 # Load Balancer Ingress from MCP Gateway Auth Server (HTTPS)
 # Note: This rule is for direct VPC traffic. For traffic via NAT gateway,

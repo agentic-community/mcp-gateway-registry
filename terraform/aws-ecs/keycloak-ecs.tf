@@ -3,6 +3,15 @@
 #
 
 locals {
+  # Determine Keycloak hostname based on deployment mode
+  # CloudFront mode: use CloudFront domain, Custom DNS mode: use keycloak_domain
+  keycloak_hostname = var.enable_cloudfront && !var.enable_route53_dns ? (
+    var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
+  ) : local.keycloak_domain
+
+  # Full HTTPS URL for Keycloak (required for KC_HOSTNAME_URL and KC_HOSTNAME_ADMIN_URL)
+  keycloak_hostname_url = "https://${local.keycloak_hostname}"
+
   keycloak_container_env = [
     {
       name  = "AWS_REGION"
@@ -17,16 +26,24 @@ locals {
       value = "true"
     },
     {
-      name  = "KC_HOSTNAME"
-      value = local.keycloak_domain
+      # KC_HOSTNAME_URL tells Keycloak the full external URL including protocol
+      # This is required for CloudFront mode where Keycloak needs to know it's behind HTTPS
+      name  = "KC_HOSTNAME_URL"
+      value = local.keycloak_hostname_url
+    },
+    {
+      # KC_HOSTNAME_ADMIN_URL for admin console access
+      name  = "KC_HOSTNAME_ADMIN_URL"
+      value = local.keycloak_hostname_url
     },
     {
       name  = "KC_HOSTNAME_STRICT"
       value = "false"
     },
     {
+      # HTTPS strict mode - Keycloak will require HTTPS for all requests
       name  = "KC_HOSTNAME_STRICT_HTTPS"
-      value = "false"
+      value = "true"
     },
     {
       name  = "KC_HEALTH_ENABLED"

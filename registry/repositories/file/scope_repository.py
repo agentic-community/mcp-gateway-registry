@@ -21,25 +21,32 @@ class FileScopeRepository(ScopeRepositoryBase):
     def __init__(self):
         self._scopes_data: Dict[str, Any] = {}
         self._scopes_file = Path("/app/auth_server/scopes.yml")
+        self._alt_scopes_file = Path("/app/auth_server/auth_config/scopes.yml")
 
     async def load_all(self) -> None:
         """Load all scopes from scopes.yml file."""
-        logger.info(f"Loading scopes from {self._scopes_file}...")
-
-        if not self._scopes_file.exists():
-            logger.error(f"Scopes file not found at {self._scopes_file}")
+        # Check primary location first, then alternative (EFS mount)
+        if self._scopes_file.exists():
+            scopes_file = self._scopes_file
+        elif self._alt_scopes_file.exists():
+            scopes_file = self._alt_scopes_file
+            logger.info(f"Using alternative scopes file at {scopes_file}")
+        else:
+            logger.error(f"Scopes file not found at {self._scopes_file} or {self._alt_scopes_file}")
             self._scopes_data = {}
             return
 
+        logger.info(f"Loading scopes from {scopes_file}...")
+
         try:
-            with open(self._scopes_file, 'r') as f:
+            with open(scopes_file, 'r') as f:
                 self._scopes_data = yaml.safe_load(f)
 
             if not isinstance(self._scopes_data, dict):
                 logger.warning("Invalid scopes file format, resetting")
                 self._scopes_data = {}
             else:
-                logger.info(f"Successfully loaded scopes from {self._scopes_file}")
+                logger.info(f"Successfully loaded scopes from {scopes_file}")
 
         except Exception as e:
             logger.error(f"Failed to read scopes file: {e}", exc_info=True)

@@ -1,0 +1,71 @@
+# Generic MCP Server Dockerfile - CPU-only PyTorch variant for smaller image size
+# For servers that need sentence-transformers (like mcpgw)
+# Using ECR Public Gallery to avoid Docker Hub rate limits
+FROM public.ecr.aws/docker/library/python:3.12-slim
+
+# Build arg for server directory (when building from repo root)
+ARG SERVER_DIR
+
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    build-essential \
+    netcat-openbsd \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy server files - handle both build contexts
+COPY ${SERVER_DIR:-.}/ /app/
+
+# Copy registry module for embeddings support (only when building from root with SERVER_DIR set)
+COPY --chown=root:root . /tmp/build-context/
+RUN if [ -d /tmp/build-context/registry ]; then \
+        cp -r /tmp/build-context/registry /app/registry && \
+        echo "Registry module copied successfully"; \
+    else \
+        echo "Registry module not found in build context (expected for non-mcpgw servers)"; \
+    fi && \
+    rm -rf /tmp/build-context
+
+# Install uv and setup Python environment
+# Install CPU-only PyTorch FIRST from the CPU wheel index
+RUN pip install uv && \
+    uv venv .venv --python 3.12 && \
+    . .venv/bin/activate && \
+    uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining dependencies from pyproject.toml
+RUN . .venv/bin/activate && \
+    if [ -f /app/pyproject.toml ]; then \
+        uv pip install --requirement /app/pyproject.toml; \
+    fi
+
+# Expose default port (can be overridden by environment variable)
+EXPOSE 8000
+
+# Health check (generic for all MCP servers)
+HEALTHCHECK --interval=500s --timeout=10s --start-period=30s --retries=3 \
+    CMD nc -z localhost ${PORT:-8000} || exit 1
+
+# Create entrypoint script
+RUN echo '#!/bin/bash\n\
+set -e\n\
+SERVER_PORT=${PORT:-8000}\n\
+if [ ! -z "$POLYGON_API_KEY" ]; then\n\
+    echo "POLYGON_API_KEY=$POLYGON_API_KEY" > /app/.env\n\
+fi\n\
+if [ ! -z "$REGISTRY_BASE_URL" ]; then\n\
+    echo "REGISTRY_BASE_URL=$REGISTRY_BASE_URL" > /app/.env\n\
+    echo "REGISTRY_USERNAME=$REGISTRY_USERNAME" >> /app/.env\n\
+    echo "REGISTRY_PASSWORD=$REGISTRY_PASSWORD" >> /app/.env\n\
+fi\n\
+source .venv/bin/activate\n\
+exec python server.py --port $SERVER_PORT' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

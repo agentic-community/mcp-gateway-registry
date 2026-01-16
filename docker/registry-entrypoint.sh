@@ -116,6 +116,11 @@ echo "Lua script created."
 # --- Nginx Configuration ---
 echo "Preparing Nginx configuration..."
 
+# Remove default nginx site to prevent conflicts with our config
+echo "Removing default nginx site configuration..."
+rm -f /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-available/default
+
 # Template paths matching REGISTRY_CONSTANTS in registry/constants.py
 NGINX_TEMPLATE_HTTP_ONLY="/app/docker/nginx_rev_proxy_http_only.conf"
 NGINX_TEMPLATE_HTTP_AND_HTTPS="/app/docker/nginx_rev_proxy_http_and_https.conf"

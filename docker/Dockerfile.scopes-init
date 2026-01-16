@@ -1,4 +1,4 @@
-FROM busybox:latest
+FROM public.ecr.aws/docker/library/busybox:latest
 
 # Copy scopes.yml into the container
 COPY auth_server/scopes.yml /scopes.yml

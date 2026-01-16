@@ -9,6 +9,10 @@ locals {
   # When not using regional domains, this is the root_domain
   hosted_zone_domain = var.use_regional_domains ? var.base_domain : var.root_domain
 
+  # Computed prefix list name for ALB security groups
+  # If explicitly set, use that value; otherwise use CloudFront prefix list when CloudFront is enabled
+  cloudfront_prefix_list_name = var.cloudfront_prefix_list_name != "" ? var.cloudfront_prefix_list_name : (var.enable_cloudfront ? "com.amazonaws.global.cloudfront.origin-facing" : "")
+
   common_tags = {
     Project     = "mcp-gateway-registry"
     Component   = "keycloak"

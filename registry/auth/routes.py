@@ -56,7 +56,24 @@ async def oauth2_login_redirect(provider: str, request: Request):
     """Redirect to auth server for OAuth2 login"""
     try:
         # Build redirect URL to auth server - use external URL for browser redirects
-        registry_url = str(request.base_url).rstrip('/')
+        # When behind CloudFront, request.base_url may have wrong scheme/host
+        # Check CloudFront and X-Forwarded headers to build correct URL
+        host = request.headers.get("host", "")
+        cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "")
+        x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        
+        # Determine scheme - prefer CloudFront header, then X-Forwarded-Proto
+        if cloudfront_proto.lower() == "https" or x_forwarded_proto.lower() == "https":
+            scheme = "https"
+        else:
+            scheme = request.url.scheme
+        
+        # Build registry URL from headers (more reliable behind proxies)
+        if host:
+            registry_url = f"{scheme}://{host}"
+        else:
+            registry_url = str(request.base_url).rstrip('/')
+        
         auth_external_url = settings.auth_server_external_url
         auth_url = f"{auth_external_url}/oauth2/login/{provider}?redirect_uri={registry_url}/"
         logger.info(f"request.base_url: {request.base_url}, registry_url: {registry_url}, auth_external_url: {auth_external_url}, auth_url: {auth_url}")
@@ -208,8 +225,15 @@ async def logout_handler(
             auth_external_url = settings.auth_server_external_url
             
             # Build redirect URI based on current host
+            # Check CloudFront header first, then x-forwarded-proto, then request scheme
             host = request.headers.get("host", "localhost:7860")
-            scheme = "https" if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https" else "http"
+            cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "")
+            x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
+            
+            if cloudfront_proto.lower() == "https" or x_forwarded_proto.lower() == "https" or request.url.scheme == "https":
+                scheme = "https"
+            else:
+                scheme = "http"
             
             # Handle localhost specially to ensure correct port
             if "localhost" in host and ":" not in host:

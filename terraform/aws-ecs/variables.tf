@@ -7,7 +7,7 @@ variable "name" {
 variable "aws_region" {
   description = "AWS region for deployment. Can be set via TF_VAR_aws_region environment variable or terraform.tfvars"
   type        = string
-  default     = "us-east-1"
+  default     = "us-west-2"
 }
 
 variable "vpc_cidr" {
@@ -245,9 +245,8 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
-
 # =============================================================================
-# DOCUMENTDB ELASTIC CLUSTER CONFIGURATION
+# DOCUMENTDB CONFIGURATION (from upstream v1.0.9)
 # =============================================================================
 
 variable "documentdb_admin_username" {
@@ -258,9 +257,10 @@ variable "documentdb_admin_username" {
 }
 
 variable "documentdb_admin_password" {
-  description = "DocumentDB Elastic Cluster admin password (minimum 8 characters)"
+  description = "DocumentDB Elastic Cluster admin password (minimum 8 characters). Only required when storage_backend is 'documentdb'."
   type        = string
   sensitive   = true
+  default     = ""  # Not required when using file storage backend
 }
 
 variable "documentdb_shard_capacity" {
@@ -344,3 +344,24 @@ variable "documentdb_use_iam" {
   default     = false
 }
 
+# =============================================================================
+# CLOUDFRONT CONFIGURATION (CloudFront HTTPS Support feature)
+# =============================================================================
+
+variable "enable_cloudfront" {
+  description = "Enable CloudFront distributions for HTTPS without custom domain. Uses default *.cloudfront.net certificates."
+  type        = bool
+  default     = false
+}
+
+variable "cloudfront_prefix_list_name" {
+  description = "Name of the managed prefix list for ALB ingress (e.g., CloudFront origin-facing IPs). Leave empty to disable prefix list rule. Default is AWS CloudFront prefix list."
+  type        = string
+  default     = ""  # Set to "com.amazonaws.global.cloudfront.origin-facing" when enable_cloudfront=true
+}
+
+variable "enable_route53_dns" {
+  description = "Enable Route53 DNS records and ACM certificates for custom domain. Set to false when using CloudFront-only deployment."
+  type        = bool
+  default     = true
+}

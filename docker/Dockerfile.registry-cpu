@@ -1,0 +1,93 @@
+# Registry Dockerfile - CPU-only PyTorch variant for smaller image size
+# Using ECR Public Gallery to avoid Docker Hub rate limits
+FROM public.ecr.aws/docker/library/python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies including nginx with lua module and Node.js
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx \
+    nginx-extras \
+    lua-cjson \
+    curl \
+    procps \
+    openssl \
+    git \
+    build-essential \
+    ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Build argument for version (will be set at build time from git)
+ARG BUILD_VERSION="1.0.0"
+ENV BUILD_VERSION=$BUILD_VERSION
+
+# Install CPU-only PyTorch first from the CPU wheel index
+RUN pip install uv && \
+    uv venv .venv --python 3.12 && \
+    . .venv/bin/activate && \
+    uv pip install torch --index-url https://download.pytorch.org/whl/cpu && \
+    uv pip install \
+    "fastapi>=0.115.12" \
+    "itsdangerous>=2.2.0" \
+    "jinja2>=3.1.6" \
+    "mcp>=1.6.0" \
+    "pydantic>=2.11.3" \
+    "httpx>=0.27.0" \
+    "python-dotenv>=1.1.0" \
+    "python-multipart>=0.0.20" \
+    "uvicorn[standard]>=0.34.2" \
+    "faiss-cpu>=1.7.4" \
+    "sentence-transformers>=2.2.2" \
+    "websockets>=15.0.1" \
+    "scikit-learn>=1.3.0" \
+    "huggingface-hub[cli,hf_xet]>=0.31.1" \
+    "hf_xet>=0.1.0" \
+    "cisco-ai-mcp-scanner==3.2.3"
+
+# Copy the application code
+COPY . /app/
+
+# Copy nginx configurations (both HTTP-only and HTTP+HTTPS versions)
+COPY docker/nginx_rev_proxy_http_only.conf /app/docker/nginx_rev_proxy_http_only.conf
+COPY docker/nginx_rev_proxy_http_and_https.conf /app/docker/nginx_rev_proxy_http_and_https.conf
+
+# Build React frontend
+WORKDIR /app/frontend
+COPY frontend/package.json ./
+RUN npm install --legacy-peer-deps
+COPY frontend/ ./
+RUN npm run build
+
+# Return to app directory
+WORKDIR /app
+
+# Install the registry package
+RUN . .venv/bin/activate && uv pip install -e .
+
+# Download the sentence-transformers embeddings model during build
+# This adds ~90MB to the image but eliminates runtime download requirement
+RUN mkdir -p /app/registry/models && \
+    . .venv/bin/activate && \
+    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('/app/registry/models/all-MiniLM-L6-v2')"
+
+# Create logs directory
+RUN mkdir -p /app/logs
+
+# Expose ports for nginx (HTTP/HTTPS) and registry
+EXPOSE 80 443 7860
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:7860/health || exit 1
+
+# Entrypoint script
+COPY docker/registry-entrypoint.sh /app/registry-entrypoint.sh
+RUN chmod +x /app/registry-entrypoint.sh
+
+ENTRYPOINT ["/app/registry-entrypoint.sh"]

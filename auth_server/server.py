@@ -65,6 +65,35 @@ MAX_TOKENS_PER_USER_PER_HOUR = int(os.environ.get('MAX_TOKENS_PER_USER_PER_HOUR'
 SCOPES_CONFIG = {}
 
 # Utility functions for GDPR/SOX compliance
+
+def is_request_https(request) -> bool:
+    """
+    Detect if the original request was HTTPS.
+    
+    Priority order:
+    1. X-Cloudfront-Forwarded-Proto header (CloudFront deployments)
+    2. x-forwarded-proto header (ALB/custom domain deployments)
+    3. Request URL scheme (direct access)
+    
+    Args:
+        request: FastAPI Request object
+        
+    Returns:
+        True if the original request was HTTPS
+    """
+    # Check CloudFront header first (ALB won't overwrite this)
+    cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "")
+    if cloudfront_proto.lower() == "https":
+        return True
+    
+    # Fall back to standard x-forwarded-proto
+    x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    if x_forwarded_proto.lower() == "https":
+        return True
+    
+    # Finally check request scheme
+    return request.url.scheme == "https"
+
 def mask_sensitive_id(value: str) -> str:
     """Mask sensitive IDs showing only first and last 4 characters."""
     if not value or len(value) <= 8:
@@ -1609,37 +1638,36 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
         # Generate state parameter for security
         state = secrets.token_urlsafe(32)
         
-        # Store state and redirect URI in session for callback validation
+        # Determine the OAuth2 callback URI based on the request origin
+        # This is critical for dual-mode (CloudFront + custom domain) deployments
+        # The callback_uri MUST match exactly between authorization and token exchange
+        host = request.headers.get("host", "localhost:8888")
+        # Check CloudFront header first, then X-Forwarded-Proto for HTTPS detection
+        cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "").lower()
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
+        scheme = "https" if cloudfront_proto == "https" or forwarded_proto == "https" or request.url.scheme == "https" else "http"
+        logger.info(f"OAuth2 login - host: {host}, x-cloudfront-forwarded-proto: {cloudfront_proto}, x-forwarded-proto: {forwarded_proto}, scheme: {scheme}")
+        
+        # Special case for localhost to include port
+        if "localhost" in host and ":" not in host:
+            auth_server_url = f"{scheme}://localhost:8888"
+        else:
+            auth_server_url = f"{scheme}://{host}"
+        
+        callback_uri = f"{auth_server_url}/oauth2/callback/{provider}"
+        logger.info(f"OAuth2 callback URI (from request host): {callback_uri}")
+        
+        # Store state, redirect URI, and callback_uri in session for callback validation
+        # The callback_uri is stored so token exchange uses the exact same URI
         session_data = {
             "state": state,
             "provider": provider,
-            "redirect_uri": redirect_uri or OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/")
+            "redirect_uri": redirect_uri or OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/"),
+            "callback_uri": callback_uri  # Store for token exchange
         }
         
         # Create temporary session for OAuth2 flow
         temp_session = signer.dumps(session_data)
-        
-        # Use configured external URL or build dynamically
-        auth_server_external_url = os.environ.get('AUTH_SERVER_EXTERNAL_URL')
-        if auth_server_external_url:
-            # Use configured external URL (recommended for production)
-            auth_server_url = auth_server_external_url.rstrip('/')
-            logger.info(f"Using configured AUTH_SERVER_EXTERNAL_URL: {auth_server_url}")
-        else:
-            # Fall back to dynamic construction (for development)
-            host = request.headers.get("host", "localhost:8888")
-            scheme = "https" if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https" else "http"
-            
-            # Special case for localhost to include port
-            if "localhost" in host and ":" not in host:
-                auth_server_url = f"{scheme}://localhost:8888"
-            else:
-                auth_server_url = f"{scheme}://{host}"
-            
-            logger.warning(f"AUTH_SERVER_EXTERNAL_URL not set, using dynamic URL: {auth_server_url}")
-        
-        callback_uri = f"{auth_server_url}/oauth2/callback/{provider}"
-        logger.info(f"OAuth2 callback URI: {callback_uri}")
         
         auth_params = {
             "client_id": provider_config["client_id"],
@@ -1707,24 +1735,27 @@ async def oauth2_callback(
         provider_config = OAUTH2_CONFIG["providers"][provider]
         
         # Exchange authorization code for access token
-        # Use configured external URL or build dynamically
-        auth_server_external_url = os.environ.get('AUTH_SERVER_EXTERNAL_URL')
-        if auth_server_external_url:
-            # Use configured external URL (recommended for production)
-            auth_server_url = auth_server_external_url.rstrip('/')
-            logger.info(f"Using configured AUTH_SERVER_EXTERNAL_URL for token exchange: {auth_server_url}")
+        # Use the callback_uri stored in the session (must match what was used in authorization)
+        callback_uri = temp_session_data.get("callback_uri")
+        if callback_uri:
+            # Extract auth_server_url from the stored callback_uri
+            # callback_uri format: {auth_server_url}/oauth2/callback/{provider}
+            auth_server_url = callback_uri.rsplit(f"/oauth2/callback/{provider}", 1)[0]
+            logger.info(f"Using stored callback_uri for token exchange: {callback_uri}")
         else:
-            # Fall back to dynamic construction (for development)
-            host = request.headers.get("host", "localhost:8888")
-            scheme = "https" if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https" else "http"
-            
-            # Special case for localhost to include port
-            if "localhost" in host and ":" not in host:
-                auth_server_url = f"{scheme}://localhost:8888"
+            # Fallback for sessions created before this fix
+            auth_server_external_url = os.environ.get('AUTH_SERVER_EXTERNAL_URL')
+            if auth_server_external_url:
+                auth_server_url = auth_server_external_url.rstrip('/')
+                logger.info(f"Fallback: Using AUTH_SERVER_EXTERNAL_URL for token exchange: {auth_server_url}")
             else:
-                auth_server_url = f"{scheme}://{host}"
-            
-            logger.warning(f"AUTH_SERVER_EXTERNAL_URL not set, using dynamic URL for token exchange: {auth_server_url}")
+                host = request.headers.get("host", "localhost:8888")
+                scheme = "https" if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https" else "http"
+                if "localhost" in host and ":" not in host:
+                    auth_server_url = f"{scheme}://localhost:8888"
+                else:
+                    auth_server_url = f"{scheme}://{host}"
+                logger.warning(f"Fallback: Using dynamic URL for token exchange: {auth_server_url}")
             
         token_data = await exchange_code_for_token(provider, code, provider_config, auth_server_url)
         logger.info(f"Token data keys: {list(token_data.keys())}")
@@ -1845,9 +1876,8 @@ async def oauth2_callback(
         response = RedirectResponse(url=redirect_url, status_code=302)
         
         # Set registry-compatible session cookie
-        # Check if HTTPS is terminated at load balancer (x-forwarded-proto header)
-        x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
-        is_https = x_forwarded_proto == "https" or request.url.scheme == "https"
+        # Check if HTTPS is terminated at load balancer/CloudFront
+        is_https = is_request_https(request)
 
         # Only set secure=True if the original request was HTTPS
         cookie_secure_config = OAUTH2_CONFIG.get("session", {}).get("secure", False)
@@ -1863,7 +1893,7 @@ async def oauth2_callback(
         else:
             logger.info(f"Using explicitly configured cookie domain: {cookie_domain}")
 
-        logger.info(f"Auth server setting session cookie: secure={cookie_secure} (config={cookie_secure_config}, is_https={is_https}), samesite={cookie_samesite}, domain={cookie_domain or 'not set'}, x-forwarded-proto={x_forwarded_proto}, request_scheme={request.url.scheme}")
+        logger.info(f"Auth server setting session cookie: secure={cookie_secure} (config={cookie_secure_config}, is_https={is_https}), samesite={cookie_samesite}, domain={cookie_domain or 'not set'}, x-forwarded-proto={request.headers.get('x-forwarded-proto', 'not set')}, request_scheme={request.url.scheme}")
 
         cookie_params = {
             "key": "mcp_gateway_session",  # Same as registry SESSION_COOKIE_NAME
@@ -1985,8 +2015,8 @@ async def oauth2_logout(provider: str, request: Request, redirect_uri: str = Non
             redirect_url = redirect_uri or OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/login")
             return RedirectResponse(url=redirect_url, status_code=302)
         
-        # For Cognito, we need to construct the full redirect URI
-        full_redirect_uri = redirect_uri or "/logout"
+        # Build full redirect URI
+        full_redirect_uri = redirect_uri or "/login"
         if not full_redirect_uri.startswith("http"):
             # Make it a full URL - extract registry URL from request's referer or use environment
             registry_base = os.environ.get('REGISTRY_URL')
@@ -2002,11 +2032,20 @@ async def oauth2_logout(provider: str, request: Request, redirect_uri: str = Non
             
             full_redirect_uri = f"{registry_base.rstrip('/')}{full_redirect_uri}"
         
-        # Build logout URL with correct parameters for Cognito
-        logout_params = {
-            "client_id": provider_config["client_id"],
-            "logout_uri": full_redirect_uri
-        }
+        # Detect provider type and build appropriate logout URL
+        # Keycloak uses post_logout_redirect_uri, Cognito uses logout_uri
+        if "keycloak" in provider.lower() or "/realms/" in logout_url:
+            # Keycloak logout parameters
+            logout_params = {
+                "client_id": provider_config["client_id"],
+                "post_logout_redirect_uri": full_redirect_uri
+            }
+        else:
+            # Cognito logout parameters
+            logout_params = {
+                "client_id": provider_config["client_id"],
+                "logout_uri": full_redirect_uri
+            }
         
         logout_redirect_url = f"{logout_url}?{urllib.parse.urlencode(logout_params)}"
         
