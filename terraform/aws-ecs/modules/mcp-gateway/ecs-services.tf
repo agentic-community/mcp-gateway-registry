@@ -706,6 +706,19 @@ module "ecs_service_registry" {
 }
 
 
+# Allow mcpgw to communicate with registry on port 7860
+resource "aws_vpc_security_group_ingress_rule" "mcpgw_to_registry" {
+  security_group_id            = module.ecs_service_registry.security_group_id
+  referenced_security_group_id = module.ecs_service_mcpgw.security_group_id
+  from_port                    = 7860
+  to_port                      = 7860
+  ip_protocol                  = "tcp"
+  description                  = "Allow mcpgw to access registry API"
+
+  tags = local.common_tags
+}
+
+
 # Allow registry to communicate with auth server on port 8888
 resource "aws_vpc_security_group_ingress_rule" "registry_to_auth" {
   security_group_id            = module.ecs_service_auth.security_group_id
