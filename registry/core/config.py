@@ -28,10 +28,15 @@ class Settings(BaseSettings):
     auth_server_external_url: str = "http://localhost:8888"  # External URL for OAuth redirects
     
     # Embeddings settings [Default]
-    embeddings_provider: str = "sentence-transformers"  # 'sentence-transformers' or 'litellm'
+    # Provider options: 'sentence-transformers', 'litellm', or 'fastembed'
+    embeddings_provider: str = "sentence-transformers"
     embeddings_model_name: str = "all-MiniLM-L6-v2"
-    embeddings_model_dimensions: int = 384 # 384 for default and 1024 for bedrock titan v2
-    print(embeddings_provider, embeddings_model_name, embeddings_model_dimensions)
+    embeddings_model_dimensions: int = 384  # 384 for default and 1024 for bedrock titan v2
+
+    # Fallback settings (FastEmbed pre-baked model)
+    embeddings_enable_fallback: bool = True
+    embeddings_fallback_model: str = "BAAI/bge-small-en-v1.5"
+    embeddings_fallback_dimensions: int = 384
 
     # LiteLLM-specific settings (only used when embeddings_provider='litellm')
     # For Bedrock: Set to None and configure AWS credentials via standard methods
@@ -115,6 +120,13 @@ class Settings(BaseSettings):
         if self.is_local_dev:
             return Path.cwd() / "registry" / "models" / self.embeddings_model_name
         return self.container_registry_dir / "models" / self.embeddings_model_name
+
+    @property
+    def fastembed_cache_dir(self) -> Path:
+        """Directory containing pre-baked FastEmbed models."""
+        if self.is_local_dev:
+            return Path.cwd() / "registry" / ".fastembed_cache"
+        return self.container_registry_dir / ".fastembed_cache"
 
     @property
     def servers_dir(self) -> Path:

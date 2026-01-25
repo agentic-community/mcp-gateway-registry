@@ -20,7 +20,10 @@ from registry.embeddings.client import (
     EmbeddingsClient,
     LiteLLMClient,
     SentenceTransformersClient,
+    FastEmbedClient,
     create_embeddings_client,
+    FALLBACK_MODEL_NAME,
+    FALLBACK_MODEL_DIMENSIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -947,8 +950,493 @@ class TestCreateEmbeddingsClient:
             create_embeddings_client(
                 provider="invalid",
                 model_name="some-model",
+                enable_fallback=False,
             )
 
         error_message = str(exc_info.value)
         assert "sentence-transformers" in error_message
         assert "litellm" in error_message
+        assert "fastembed" in error_message
+
+
+# =============================================================================
+# FIXTURES: FastEmbed
+# =============================================================================
+
+
+@pytest.fixture
+def mock_fastembed_model():
+    """
+    Create a mock FastEmbed TextEmbedding model.
+
+    Returns:
+        Mock TextEmbedding instance
+    """
+    mock_model = MagicMock()
+
+    def mock_embed(texts):
+        """Mock embed function that returns a generator."""
+        for _ in texts:
+            yield np.array([0.1, 0.2, 0.3] * 128, dtype=np.float32)  # 384 dim
+
+    mock_model.embed = mock_embed
+    return mock_model
+
+
+# =============================================================================
+# TESTS: FastEmbedClient
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.search
+class TestFastEmbedClient:
+    """Tests for FastEmbedClient implementation."""
+
+    def test_initialization(self, tmp_path):
+        """Test FastEmbedClient initialization."""
+        # Arrange
+        model_name = "BAAI/bge-small-en-v1.5"
+        cache_dir = tmp_path / "cache"
+
+        # Act
+        client = FastEmbedClient(
+            model_name=model_name,
+            cache_dir=cache_dir,
+        )
+
+        # Assert
+        assert client.model_name == model_name
+        assert client.cache_dir == cache_dir
+        assert client._model is None
+        assert client._dimension is None
+
+    def test_initialization_default_model(self):
+        """Test FastEmbedClient with default model."""
+        # Arrange & Act
+        client = FastEmbedClient()
+
+        # Assert
+        assert client.model_name == "BAAI/bge-small-en-v1.5"
+        assert client.cache_dir is None
+
+    def test_load_model(self, mock_fastembed_model):
+        """Test loading FastEmbed model."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+
+            # Act
+            client._load_model()
+
+            # Assert
+            mock_te_class.assert_called_once_with(
+                model_name="BAAI/bge-small-en-v1.5"
+            )
+            assert client._model == mock_fastembed_model
+            assert client._dimension == 384
+
+    def test_load_model_with_cache_dir(
+        self, mock_fastembed_model, tmp_path
+    ):
+        """Test loading model with custom cache directory."""
+        # Arrange
+        cache_dir = tmp_path / "fastembed_cache"
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(
+                model_name="BAAI/bge-small-en-v1.5",
+                cache_dir=cache_dir,
+            )
+
+            # Act
+            client._load_model()
+
+            # Assert
+            mock_te_class.assert_called_once_with(
+                model_name="BAAI/bge-small-en-v1.5",
+                cache_dir=str(cache_dir),
+            )
+
+    def test_load_model_only_once(self, mock_fastembed_model):
+        """Test that model is only loaded once."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+
+            # Act
+            client._load_model()
+            client._load_model()
+            client._load_model()
+
+            # Assert
+            assert mock_te_class.call_count == 1
+
+    def test_load_model_import_error(self):
+        """Test handling when FastEmbed is not installed."""
+        # Arrange
+        with patch.dict("sys.modules", {"fastembed": None}):
+            with patch("builtins.__import__", side_effect=ImportError("No module named 'fastembed'")):
+                client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+
+                # Act & Assert
+                with pytest.raises(RuntimeError, match="Failed to load FastEmbed model"):
+                    client._load_model()
+
+    def test_load_model_failure(self):
+        """Test handling of model loading failure."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.side_effect = Exception("Model download failed")
+            client = FastEmbedClient(model_name="invalid-model")
+
+            # Act & Assert
+            with pytest.raises(RuntimeError, match="Failed to load FastEmbed model"):
+                client._load_model()
+
+    def test_encode_single_text(self, mock_fastembed_model):
+        """Test encoding a single text."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+
+            # Act
+            result = client.encode(["test text"])
+
+            # Assert
+            assert isinstance(result, np.ndarray)
+            assert result.shape == (1, 384)
+            assert result.dtype == np.float32
+
+    def test_encode_multiple_texts(self, mock_fastembed_model):
+        """Test encoding multiple texts."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+            texts = ["first text", "second text", "third text"]
+
+            # Act
+            result = client.encode(texts)
+
+            # Assert
+            assert isinstance(result, np.ndarray)
+            assert result.shape == (3, 384)
+            assert result.dtype == np.float32
+
+    def test_encode_lazy_loads_model(self, mock_fastembed_model):
+        """Test that encode lazy loads the model if not already loaded."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+            assert client._model is None
+
+            # Act
+            client.encode(["test"])
+
+            # Assert
+            assert client._model is not None
+            mock_te_class.assert_called_once()
+
+    def test_encode_failure(self, mock_fastembed_model):
+        """Test handling of encoding failure."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            mock_fastembed_model.embed = MagicMock(side_effect=Exception("Encoding error"))
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+            client._model = mock_fastembed_model  # Pre-set model
+
+            # Act & Assert
+            with pytest.raises(RuntimeError, match="Failed to encode texts with FastEmbed"):
+                client.encode(["test"])
+
+    def test_get_embedding_dimension(self, mock_fastembed_model):
+        """Test getting embedding dimension."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+
+            # Act
+            dimension = client.get_embedding_dimension()
+
+            # Assert
+            assert dimension == 384
+
+    def test_get_embedding_dimension_lazy_loads_model(
+        self, mock_fastembed_model
+    ):
+        """Test that get_embedding_dimension lazy loads model if needed."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+            assert client._dimension is None
+
+            # Act
+            dimension = client.get_embedding_dimension()
+
+            # Assert
+            assert dimension == 384
+            assert client._dimension == 384
+            mock_te_class.assert_called_once()
+
+    def test_get_embedding_dimension_cached(
+        self, mock_fastembed_model
+    ):
+        """Test that dimension is cached after first load."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+            client = FastEmbedClient(model_name="BAAI/bge-small-en-v1.5")
+            client._load_model()
+
+            # Act
+            dimension1 = client.get_embedding_dimension()
+            dimension2 = client.get_embedding_dimension()
+
+            # Assert
+            assert dimension1 == 384
+            assert dimension2 == 384
+            # Should only load model once
+            assert mock_te_class.call_count == 1
+
+
+# =============================================================================
+# TESTS: FastEmbed Factory and Fallback Mechanism
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.search
+class TestFastEmbedFactory:
+    """Tests for FastEmbed via factory function."""
+
+    def test_create_fastembed_client(self, mock_fastembed_model):
+        """Test creating FastEmbedClient via factory."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+
+            # Act
+            client = create_embeddings_client(
+                provider="fastembed",
+                model_name="BAAI/bge-small-en-v1.5",
+            )
+
+            # Assert
+            assert isinstance(client, FastEmbedClient)
+            assert client.model_name == "BAAI/bge-small-en-v1.5"
+
+    def test_create_fastembed_client_case_insensitive(
+        self, mock_fastembed_model
+    ):
+        """Test that provider name is case-insensitive for FastEmbed."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+
+            # Act
+            client = create_embeddings_client(
+                provider="FASTEMBED",
+                model_name="BAAI/bge-small-en-v1.5",
+            )
+
+            # Assert
+            assert isinstance(client, FastEmbedClient)
+
+    def test_create_fastembed_client_with_cache_dir(
+        self, mock_fastembed_model, tmp_path
+    ):
+        """Test creating FastEmbedClient with cache directory."""
+        # Arrange
+        cache_dir = tmp_path / "cache"
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.return_value = mock_fastembed_model
+
+            # Act
+            client = create_embeddings_client(
+                provider="fastembed",
+                model_name="BAAI/bge-small-en-v1.5",
+                cache_dir=cache_dir,
+            )
+
+            # Assert
+            assert isinstance(client, FastEmbedClient)
+            assert client.cache_dir == cache_dir
+
+
+@pytest.mark.unit
+@pytest.mark.search
+class TestFallbackMechanism:
+    """Tests for fallback mechanism."""
+
+    def test_fallback_constants(self):
+        """Test fallback constants are correctly set."""
+        # Assert
+        assert FALLBACK_MODEL_NAME == "BAAI/bge-small-en-v1.5"
+        assert FALLBACK_MODEL_DIMENSIONS == 384
+
+    def test_fallback_on_primary_failure(self, mock_fastembed_model):
+        """Test that fallback activates when primary fails."""
+        # Arrange
+        with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
+            mock_st_class.side_effect = RuntimeError("Download failed")
+
+            with patch("fastembed.TextEmbedding") as mock_te_class:
+                mock_te_class.return_value = mock_fastembed_model
+
+                # Act
+                client = create_embeddings_client(
+                    provider="sentence-transformers",
+                    model_name="all-MiniLM-L6-v2",
+                    enable_fallback=True,
+                )
+
+                # Assert
+                assert isinstance(client, FastEmbedClient)
+
+    def test_no_fallback_when_disabled(self):
+        """Test that fallback doesn't activate when disabled."""
+        # Arrange
+        with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
+            mock_st_class.side_effect = RuntimeError("Download failed")
+
+            # Act & Assert
+            with pytest.raises(RuntimeError, match="Download failed"):
+                create_embeddings_client(
+                    provider="sentence-transformers",
+                    model_name="nonexistent-model",
+                    enable_fallback=False,
+                )
+
+    def test_fallback_uses_fastembed_cache_dir(
+        self, mock_fastembed_model, tmp_path
+    ):
+        """Test that fallback uses fastembed_cache_dir when provided."""
+        # Arrange
+        fastembed_cache = tmp_path / "fastembed"
+        fastembed_cache.mkdir()
+
+        with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
+            mock_st_class.side_effect = RuntimeError("Download failed")
+
+            with patch("fastembed.TextEmbedding") as mock_te_class:
+                mock_te_class.return_value = mock_fastembed_model
+
+                # Act
+                client = create_embeddings_client(
+                    provider="sentence-transformers",
+                    model_name="all-MiniLM-L6-v2",
+                    enable_fallback=True,
+                    fastembed_cache_dir=fastembed_cache,
+                )
+
+                # Assert
+                assert isinstance(client, FastEmbedClient)
+                # Verify cache_dir was passed to TextEmbedding
+                mock_te_class.assert_called_once()
+                call_kwargs = mock_te_class.call_args[1]
+                assert call_kwargs.get("cache_dir") == str(fastembed_cache)
+
+    def test_fallback_falls_back_to_cache_dir(
+        self, mock_fastembed_model, tmp_path
+    ):
+        """Test that fallback falls back to cache_dir when fastembed_cache_dir is not provided."""
+        # Arrange
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
+            mock_st_class.side_effect = RuntimeError("Download failed")
+
+            with patch("fastembed.TextEmbedding") as mock_te_class:
+                mock_te_class.return_value = mock_fastembed_model
+
+                # Act
+                client = create_embeddings_client(
+                    provider="sentence-transformers",
+                    model_name="all-MiniLM-L6-v2",
+                    cache_dir=cache_dir,
+                    enable_fallback=True,
+                )
+
+                # Assert
+                assert isinstance(client, FastEmbedClient)
+
+    def test_no_fallback_for_fastembed_provider(self):
+        """Test that fastembed provider doesn't trigger fallback on failure."""
+        # Arrange
+        with patch("fastembed.TextEmbedding") as mock_te_class:
+            mock_te_class.side_effect = RuntimeError("Model not found")
+
+            # Act & Assert
+            with pytest.raises(RuntimeError, match="Model not found"):
+                create_embeddings_client(
+                    provider="fastembed",
+                    model_name="invalid-model",
+                    enable_fallback=True,
+                )
+
+    def test_fallback_logs_warning(
+        self, mock_fastembed_model, caplog
+    ):
+        """Test that fallback activation is logged as warning."""
+        # Arrange
+        with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
+            mock_st_class.side_effect = RuntimeError("Download failed")
+
+            with patch("fastembed.TextEmbedding") as mock_te_class:
+                mock_te_class.return_value = mock_fastembed_model
+
+                # Act
+                with caplog.at_level(logging.WARNING):
+                    create_embeddings_client(
+                        provider="sentence-transformers",
+                        model_name="all-MiniLM-L6-v2",
+                        enable_fallback=True,
+                    )
+
+                # Assert
+                assert "FastEmbed fallback" in caplog.text
+
+    def test_fallback_reraises_when_fallback_fails(self):
+        """Test that original error is re-raised when fallback also fails."""
+        # Arrange
+        with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
+            mock_st_class.side_effect = RuntimeError("Primary failed")
+
+            with patch("fastembed.TextEmbedding") as mock_te_class:
+                mock_te_class.side_effect = RuntimeError("Fallback also failed")
+
+                # Act & Assert
+                with pytest.raises(RuntimeError, match="Primary failed"):
+                    create_embeddings_client(
+                        provider="sentence-transformers",
+                        model_name="all-MiniLM-L6-v2",
+                        enable_fallback=True,
+                    )
+
+    def test_litellm_fallback_on_failure(self, mock_fastembed_model):
+        """Test that LiteLLM provider also falls back to FastEmbed."""
+        # Arrange
+        with patch("litellm.embedding") as mock_embedding:
+            mock_embedding.side_effect = RuntimeError("API error")
+
+            with patch("fastembed.TextEmbedding") as mock_te_class:
+                mock_te_class.return_value = mock_fastembed_model
+
+                # Act
+                client = create_embeddings_client(
+                    provider="litellm",
+                    model_name="openai/text-embedding-3-small",
+                    enable_fallback=True,
+                )
+
+                # Assert
+                assert isinstance(client, FastEmbedClient)

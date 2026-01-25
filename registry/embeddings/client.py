@@ -2,7 +2,8 @@
 Embeddings client abstraction for vendor-agnostic embeddings generation.
 
 This module provides a unified interface for generating embeddings from multiple
-providers including local sentence-transformers models and cloud-based APIs via LiteLLM.
+providers including local sentence-transformers models, cloud-based APIs via LiteLLM,
+and FastEmbed for lightweight, pre-baked fallback support.
 """
 
 import logging
@@ -14,6 +15,7 @@ from abc import (
 from pathlib import Path
 from typing import (
     List,
+    Literal,
     Optional,
 )
 
@@ -21,6 +23,13 @@ import numpy as np
 
 
 logger = logging.getLogger(__name__)
+
+# Type alias for supported embedding providers
+EmbeddingProvider = Literal["sentence-transformers", "litellm", "fastembed"]
+
+# FastEmbed fallback configuration
+FALLBACK_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+FALLBACK_MODEL_DIMENSIONS = 384
 
 
 class EmbeddingsClient(ABC):
@@ -332,6 +341,149 @@ class LiteLLMClient(EmbeddingsClient):
             ) from e
 
 
+class FastEmbedClient(EmbeddingsClient):
+    """Client for FastEmbed models with pre-baked fallback support.
+
+    FastEmbed uses ONNX Runtime for efficient CPU inference, making it ideal
+    as a fallback when the primary embedding model fails to load.
+
+    Attributes:
+        model_name: FastEmbed model identifier (default: BAAI/bge-small-en-v1.5)
+        cache_dir: Directory containing pre-baked model files
+    """
+
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-small-en-v1.5",
+        cache_dir: Optional[Path] = None,
+    ):
+        """
+        Initialize the FastEmbed client.
+
+        Args:
+            model_name: FastEmbed model name (default: BAAI/bge-small-en-v1.5)
+            cache_dir: Directory containing pre-baked model files
+        """
+        self.model_name = model_name
+        self.cache_dir = cache_dir
+        self._model: Optional["TextEmbedding"] = None
+        self._dimension: Optional[int] = None
+
+    def _load_model(self) -> None:
+        """Load the FastEmbed model."""
+        if self._model is not None:
+            return
+
+        try:
+            from fastembed import TextEmbedding
+
+            # Configure cache directory for pre-baked models
+            kwargs = {"model_name": self.model_name}
+            if self.cache_dir:
+                kwargs["cache_dir"] = str(self.cache_dir)
+
+            logger.info(
+                f"Loading FastEmbed model: {self.model_name} "
+                f"(cache_dir: {self.cache_dir})"
+            )
+            self._model = TextEmbedding(**kwargs)
+
+            # Determine dimension from a test embedding
+            test_embedding = list(self._model.embed(["test"]))[0]
+            self._dimension = len(test_embedding)
+
+            logger.info(
+                f"FastEmbed model loaded successfully. Dimension: {self._dimension}"
+            )
+
+        except ImportError as e:
+            logger.error(
+                "FastEmbed is not installed. Install it with: uv add fastembed"
+            )
+            raise RuntimeError(
+                "FastEmbed is not installed. Install it with: uv add fastembed"
+            ) from e
+        except Exception as e:
+            logger.error(
+                f"Failed to load FastEmbed model: {e}", exc_info=True
+            )
+            raise RuntimeError(f"Failed to load FastEmbed model: {e}") from e
+
+    def encode(
+        self,
+        texts: List[str],
+    ) -> np.ndarray:
+        """
+        Generate embeddings using FastEmbed.
+
+        Args:
+            texts: List of text strings to encode
+
+        Returns:
+            NumPy array of embeddings
+
+        Raises:
+            RuntimeError: If encoding fails
+        """
+        if self._model is None:
+            self._load_model()
+
+        try:
+            # FastEmbed returns a generator, convert to list then array
+            embeddings_generator = self._model.embed(texts)
+            embeddings_list = list(embeddings_generator)
+            return np.array(embeddings_list, dtype=np.float32)
+        except Exception as e:
+            logger.error(f"Failed to encode texts with FastEmbed: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to encode texts with FastEmbed: {e}") from e
+
+    def get_embedding_dimension(self) -> int:
+        """
+        Get the embedding dimension.
+
+        Returns:
+            Integer dimension of embedding vectors
+
+        Raises:
+            RuntimeError: If model is not loaded
+        """
+        if self._dimension is None:
+            self._load_model()
+        return self._dimension
+
+
+def _try_load_fastembed_fallback(
+    cache_dir: Optional[Path] = None,
+) -> Optional[EmbeddingsClient]:
+    """
+    Attempt to load FastEmbed fallback model.
+
+    Args:
+        cache_dir: Directory containing pre-baked model files
+
+    Returns:
+        FastEmbedClient if successful, None otherwise
+    """
+    try:
+        logger.warning(
+            "Primary embedding model failed. Attempting FastEmbed fallback..."
+        )
+        client = FastEmbedClient(
+            model_name=FALLBACK_MODEL_NAME,
+            cache_dir=cache_dir,
+        )
+        # Trigger model loading to verify it works
+        dimension = client.get_embedding_dimension()
+        logger.warning(
+            f"FastEmbed fallback loaded successfully. "
+            f"Model: {FALLBACK_MODEL_NAME}, Dimension: {dimension}"
+        )
+        return client
+    except Exception as e:
+        logger.error(f"FastEmbed fallback also failed: {e}")
+        return None
+
+
 def create_embeddings_client(
     provider: str,
     model_name: str,
@@ -341,25 +493,30 @@ def create_embeddings_client(
     api_base: Optional[str] = None,
     aws_region: Optional[str] = None,
     embedding_dimension: Optional[int] = None,
+    enable_fallback: bool = True,
+    fastembed_cache_dir: Optional[Path] = None,
 ) -> EmbeddingsClient:
     """
     Factory function to create an embeddings client based on provider.
 
     Args:
-        provider: Provider type ('sentence-transformers' or 'litellm')
+        provider: Provider type ('sentence-transformers', 'litellm', or 'fastembed')
         model_name: Model identifier
         model_dir: Optional local model directory (sentence-transformers only)
-        cache_dir: Optional cache directory (sentence-transformers only)
+        cache_dir: Optional cache directory
         api_key: Optional API key (litellm only)
         api_base: Optional API base URL (litellm only)
         aws_region: Optional AWS region (litellm with Bedrock only)
         embedding_dimension: Optional embedding dimension
+        enable_fallback: If True, fall back to FastEmbed on primary failure
+        fastembed_cache_dir: Optional cache directory for FastEmbed fallback model
 
     Returns:
         EmbeddingsClient instance
 
     Raises:
         ValueError: If provider is not supported
+        RuntimeError: If all providers (including fallback) fail
 
     Note:
         For AWS Bedrock, AWS credentials should be configured via standard AWS
@@ -367,38 +524,62 @@ def create_embeddings_client(
     """
     provider_lower = provider.lower()
 
-    if provider_lower == "sentence-transformers":
-        logger.info(
-            f"Creating SentenceTransformersClient with model: {model_name}"
-        )
-        return SentenceTransformersClient(
-            model_name=model_name,
-            model_dir=model_dir,
-            cache_dir=cache_dir,
-        )
-
-    elif provider_lower == "litellm":
-        # Validate that model name has provider prefix
-        if "/" not in model_name:
-            raise ValueError(
-                f"Invalid model name for LiteLLM provider: '{model_name}'. "
-                f"LiteLLM requires provider-prefixed model names. "
-                f"Examples: 'openai/text-embedding-3-small', 'bedrock/amazon.titan-embed-text-v1', "
-                f"'cohere/embed-english-v3.0'. "
-                f"If you want to use '{model_name}', set EMBEDDINGS_PROVIDER=sentence-transformers"
+    # Try primary provider
+    try:
+        if provider_lower == "fastembed":
+            logger.info(f"Creating FastEmbedClient with model: {model_name}")
+            return FastEmbedClient(
+                model_name=model_name,
+                cache_dir=cache_dir,
             )
 
-        logger.info(f"Creating LiteLLMClient with model: {model_name}")
-        return LiteLLMClient(
-            model_name=model_name,
-            api_key=api_key,
-            api_base=api_base,
-            aws_region=aws_region,
-            embedding_dimension=embedding_dimension,
+        elif provider_lower == "sentence-transformers":
+            logger.info(
+                f"Creating SentenceTransformersClient with model: {model_name}"
+            )
+            return SentenceTransformersClient(
+                model_name=model_name,
+                model_dir=model_dir,
+                cache_dir=cache_dir,
+            )
+
+        elif provider_lower == "litellm":
+            # Validate that model name has provider prefix
+            if "/" not in model_name:
+                raise ValueError(
+                    f"Invalid model name for LiteLLM provider: '{model_name}'. "
+                    f"LiteLLM requires provider-prefixed model names. "
+                    f"Examples: 'openai/text-embedding-3-small', 'bedrock/amazon.titan-embed-text-v1', "
+                    f"'cohere/embed-english-v3.0'. "
+                    f"If you want to use '{model_name}', set EMBEDDINGS_PROVIDER=sentence-transformers"
+                )
+
+            logger.info(f"Creating LiteLLMClient with model: {model_name}")
+            return LiteLLMClient(
+                model_name=model_name,
+                api_key=api_key,
+                api_base=api_base,
+                aws_region=aws_region,
+                embedding_dimension=embedding_dimension,
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported embeddings provider: {provider}. "
+                "Supported providers: 'sentence-transformers', 'litellm', 'fastembed'"
+            )
+
+    except Exception as primary_error:
+        logger.error(
+            f"Primary embedding provider '{provider}' failed: {primary_error}"
         )
 
-    else:
-        raise ValueError(
-            f"Unsupported embeddings provider: {provider}. "
-            "Supported providers: 'sentence-transformers', 'litellm'"
-        )
+        if enable_fallback and provider_lower != "fastembed":
+            # Use fastembed_cache_dir if provided, otherwise use cache_dir
+            fallback_cache = fastembed_cache_dir or cache_dir
+            fallback_client = _try_load_fastembed_fallback(fallback_cache)
+            if fallback_client:
+                return fallback_client
+
+        # Re-raise if no fallback or fallback failed
+        raise

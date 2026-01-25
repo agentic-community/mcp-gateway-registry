@@ -1,6 +1,7 @@
 import json
 import asyncio
 import logging
+import time
 from datetime import datetime
 import re
 from pathlib import Path
@@ -21,6 +22,7 @@ from ..core.schemas import ServerInfo
 from ..schemas.agent_models import AgentCard
 from ..embeddings import (
     EmbeddingsClient,
+    FastEmbedClient,
     create_embeddings_client,
 )
 
@@ -57,7 +59,7 @@ class FaissService:
         await self._load_faiss_data()
         
     async def _load_embedding_model(self):
-        """Load the embeddings model using the configured provider."""
+        """Load the embeddings model using the configured provider with fallback support."""
         logger.info(
             f"Loading embedding model with provider: {settings.embeddings_provider}"
         )
@@ -65,12 +67,19 @@ class FaissService:
         # Ensure servers directory exists
         settings.servers_dir.mkdir(parents=True, exist_ok=True)
 
+        # Track load time for health status
+        start_time = time.time()
+
         try:
             # Prepare cache directory for sentence-transformers
             model_cache_path = settings.container_registry_dir / ".cache"
             model_cache_path.mkdir(parents=True, exist_ok=True)
 
-            # Create embeddings client using factory
+            # Prepare fastembed cache directory
+            fastembed_cache_path = settings.fastembed_cache_dir
+            fastembed_cache_path.mkdir(parents=True, exist_ok=True)
+
+            # Create embeddings client using factory with fallback enabled
             self.embedding_model = create_embeddings_client(
                 provider=settings.embeddings_provider,
                 model_name=settings.embeddings_model_name,
@@ -90,19 +99,43 @@ class FaissService:
                 if settings.embeddings_provider == "litellm"
                 else None,
                 embedding_dimension=settings.embeddings_model_dimensions,
+                enable_fallback=settings.embeddings_enable_fallback,
+                fastembed_cache_dir=fastembed_cache_path,
             )
 
             # Get and log the embedding dimension
             embedding_dim = self.embedding_model.get_embedding_dimension()
-            logger.info(
-                f"Embedding model loaded successfully. Provider: {settings.embeddings_provider}, "
-                f"Model: {settings.embeddings_model_name}, Dimension: {embedding_dim}"
-            )
 
-            # Warn if dimension doesn't match configuration
+            # Calculate and record load time
+            load_time_ms = (time.time() - start_time) * 1000
+            try:
+                from ..api.health_routes import record_embedding_load_time
+                record_embedding_load_time(load_time_ms)
+            except ImportError:
+                logger.debug("Health routes not available for load time recording")
+
+            # Check if we're running in fallback mode
+            if isinstance(self.embedding_model, FastEmbedClient):
+                logger.warning(
+                    f"Running in FALLBACK mode with FastEmbed. "
+                    f"Model: {settings.embeddings_fallback_model}, "
+                    f"Dimension: {embedding_dim}, "
+                    f"Load time: {load_time_ms:.2f}ms"
+                )
+            else:
+                logger.info(
+                    f"Embedding model loaded successfully. "
+                    f"Provider: {settings.embeddings_provider}, "
+                    f"Model: {settings.embeddings_model_name}, "
+                    f"Dimension: {embedding_dim}, "
+                    f"Load time: {load_time_ms:.2f}ms"
+                )
+
+            # Update dimensions if needed
             if embedding_dim != settings.embeddings_model_dimensions:
                 logger.warning(
-                    f"Embedding dimension mismatch: configured={settings.embeddings_model_dimensions}, "
+                    f"Embedding dimension mismatch: "
+                    f"configured={settings.embeddings_model_dimensions}, "
                     f"actual={embedding_dim}. Using actual dimension."
                 )
                 settings.embeddings_model_dimensions = embedding_dim

@@ -28,6 +28,7 @@ from registry.api.agent_routes import router as agent_router
 from registry.api.management_routes import router as management_router
 from registry.api.federation_routes import router as federation_router
 from registry.health.routes import router as health_router
+from registry.api.health_routes import router as api_health_router
 
 # Import auth dependencies
 from registry.auth.dependencies import (
@@ -306,6 +307,9 @@ app.include_router(search_router, prefix="/api/search", tags=["Semantic Search"]
 app.include_router(federation_router, prefix="/api", tags=["federation"])
 app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring"])
 
+# Register API health router for basic health check with embedding status
+app.include_router(api_health_router, tags=["Health"])
+
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, tags=["Anthropic Registry API"])
 
@@ -379,13 +383,6 @@ async def get_current_user(user_context: Dict[str, Any] = Depends(enhanced_auth)
         "accessible_services": user_context.get("accessible_services", []),
         "accessible_agents": user_context.get("accessible_agents", [])
     }
-
-# Basic health check endpoint
-@app.get("/health")
-async def health_check():
-    """Simple health check for load balancers and monitoring."""
-    return {"status": "healthy", "service": "mcp-gateway-registry"}
-
 
 # Version endpoint for UI
 @app.get("/api/version")
