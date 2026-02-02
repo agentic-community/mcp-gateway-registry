@@ -2404,3 +2404,115 @@ async def oauth2_logout(provider: str, request: Request, redirect_uri: str = Non
             "success_redirect", "/login"
         )
         return RedirectResponse(url=redirect_url, status_code=302)
+
+
+@app.post("/oauth2/exchange-token", tags=["OAuth2"])
+async def exchange_token_for_session(request: Request):
+    """Exchange a verified Entra ID token for a registry session cookie.
+
+    This enables CLI/device code flow authentication:
+    1. Client authenticates with Entra directly (device code flow)
+    2. Client sends the id_token here
+    3. Server validates the token signature and claims
+    4. Returns a session cookie for direct registry API access
+
+    Request body: {"id_token": "eyJ..."}
+    Returns: {"session_cookie": "...", "username": "...", "expires_in": 28800}
+    """
+    try:
+        body = await request.json()
+        id_token = body.get("id_token")
+
+        if not id_token:
+            raise HTTPException(status_code=400, detail="id_token is required")
+
+        # Get Entra provider for token validation
+        if "entra" not in OAUTH2_CONFIG.get("providers", {}):
+            raise HTTPException(status_code=400, detail="Entra provider not configured")
+
+        provider_config = OAUTH2_CONFIG["providers"]["entra"]
+        if not provider_config.get("enabled", False):
+            raise HTTPException(status_code=400, detail="Entra provider is disabled")
+
+        auth_provider = get_auth_provider("entra")
+
+        # Validate ID token signature and claims using Entra's JWKS
+        try:
+            # Get JWKS for signature verification
+            jwks = auth_provider.get_jwks()
+
+            # Get the key ID from token header
+            unverified_header = jwt.get_unverified_header(id_token)
+            kid = unverified_header.get("kid")
+
+            if not kid:
+                raise HTTPException(status_code=400, detail="Token missing key ID")
+
+            # Find the signing key
+            signing_key = None
+            for key in jwks.get("keys", []):
+                if key.get("kid") == kid:
+                    signing_key = PyJWK(key).key
+                    break
+
+            if not signing_key:
+                raise HTTPException(status_code=400, detail="Token signing key not found")
+
+            # Validate and decode token with full verification
+            claims = jwt.decode(
+                id_token,
+                signing_key,
+                algorithms=["RS256"],
+                audience=auth_provider.client_id,  # Must match our app's client_id
+                options={"verify_exp": True, "verify_aud": True}
+            )
+
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token has expired")
+        except jwt.InvalidAudienceError:
+            raise HTTPException(status_code=401, detail="Token audience mismatch")
+        except jwt.InvalidTokenError as e:
+            logger.error(f"Token validation failed: {e}")
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        # Extract user info from validated claims
+        username = (
+            claims.get("preferred_username") or
+            claims.get("email") or
+            claims.get("upn") or
+            claims.get("sub")
+        )
+        email = claims.get("email") or claims.get("preferred_username")
+        groups = claims.get("groups", []) or claims.get("roles", [])
+
+        if not username:
+            raise HTTPException(status_code=400, detail="Could not extract username from token")
+
+        logger.info(f"Token exchange for user: {hash_username(username)}, groups: {groups}")
+
+        # Create session cookie (same format as OAuth2 callback)
+        session_data = {
+            "username": username,
+            "email": email,
+            "groups": groups,
+            "auth_method": "oauth2",
+            "provider": "entra"
+        }
+        session_cookie = signer.dumps(session_data)
+
+        # Map groups to scopes for the response
+        scopes = await map_groups_to_scopes(groups)
+
+        return {
+            "session_cookie": session_cookie,
+            "username": username,
+            "groups": groups,
+            "scopes": scopes,
+            "expires_in": 28800  # 8 hours (session cookie lifetime)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error exchanging token: {e}")
+        raise HTTPException(status_code=500, detail="Token exchange failed")
