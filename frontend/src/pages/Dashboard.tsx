@@ -2,9 +2,11 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, XMarkIcon, ArrowPathIcon, CheckCircleIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline';
 import { useServerStats } from '../hooks/useServerStats';
+import { useSkills, Skill } from '../hooks/useSkills';
 import { useAuth } from '../contexts/AuthContext';
 import ServerCard from '../components/ServerCard';
 import AgentCard from '../components/AgentCard';
+import SkillCard from '../components/SkillCard';
 import SemanticSearchResults from '../components/SemanticSearchResults';
 import { useSemanticSearch } from '../hooks/useSemanticSearch';
 import axios from 'axios';
@@ -105,6 +107,7 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
   const navigate = useNavigate();
   const { servers, agents: agentsFromStats, loading, error, refreshData, setServers, setAgents } = useServerStats();
+  const { skills, setSkills, loading: skillsLoading, error: skillsError, refreshData: refreshSkills } = useSkills();
   const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [committedQuery, setCommittedQuery] = useState('');
@@ -143,7 +146,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
   const [agentApiToken, setAgentApiToken] = useState<string | null>(null);
 
   // View filter state
-  const [viewFilter, setViewFilter] = useState<'all' | 'servers' | 'agents' | 'external'>('all');
+  const [viewFilter, setViewFilter] = useState<'all' | 'servers' | 'agents' | 'skills' | 'external'>('all');
   const [editAgentForm, setEditAgentForm] = useState({
     name: '',
     path: '',
@@ -370,6 +373,29 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
 
     return filtered;
   }, [internalAgents, activeFilter, searchTerm]);
+
+  // Filter skills based on activeFilter and searchTerm
+  const filteredSkills = useMemo(() => {
+    let filtered = skills;
+
+    // Apply filter first
+    if (activeFilter === 'enabled') filtered = filtered.filter(s => s.is_enabled);
+    else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.is_enabled);
+
+    // Then apply search
+    if (searchTerm) {
+      const query = searchTerm.toLowerCase();
+      filtered = filtered.filter(skill =>
+        skill.name.toLowerCase().includes(query) ||
+        (skill.description || '').toLowerCase().includes(query) ||
+        skill.path.toLowerCase().includes(query) ||
+        (skill.tags || []).some(tag => tag.toLowerCase().includes(query)) ||
+        (skill.author || '').toLowerCase().includes(query)
+      );
+    }
+
+    return filtered;
+  }, [skills, activeFilter, searchTerm]);
 
   // Debug logging for filtering
   console.log('Dashboard filtering debug:');
@@ -641,6 +667,46 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     );
   }, [setServers]);
 
+  const handleToggleSkill = useCallback(async (path: string, enabled: boolean) => {
+    // Optimistically update the UI first
+    setSkills(prevSkills =>
+      prevSkills.map(skill =>
+        skill.path === path
+          ? { ...skill, is_enabled: enabled }
+          : skill
+      )
+    );
+
+    try {
+      await axios.post(`/api/skills${path}/toggle?enabled=${enabled}`);
+
+      showToast(`Skill ${enabled ? 'enabled' : 'disabled'} successfully!`, 'success');
+    } catch (error: any) {
+      console.error('Failed to toggle skill:', error);
+
+      // Revert the optimistic update on error
+      setSkills(prevSkills =>
+        prevSkills.map(skill =>
+          skill.path === path
+            ? { ...skill, is_enabled: !enabled }
+            : skill
+        )
+      );
+
+      showToast(error.response?.data?.detail || 'Failed to toggle skill', 'error');
+    }
+  }, [setSkills, showToast]);
+
+  const handleSkillUpdate = useCallback((path: string, updates: Partial<Skill>) => {
+    setSkills(prevSkills =>
+      prevSkills.map(skill =>
+        skill.path === path
+          ? { ...skill, ...updates }
+          : skill
+      )
+    );
+  }, [setSkills]);
+
   const handleRegisterServer = useCallback(() => {
     navigate('/servers/register');
   }, [navigate]);
@@ -855,6 +921,58 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
           </div>
         )}
 
+      {/* Agent Skills Section */}
+      {(viewFilter === 'all' || viewFilter === 'skills') &&
+        (filteredSkills.length > 0 || (!searchTerm && activeFilter === 'all')) && (
+          <div className="mb-8">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
+              Agent Skills
+            </h2>
+
+            {skillsError ? (
+              <div className="text-center py-12 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+                <div className="text-red-500 text-lg mb-2">Failed to load skills</div>
+                <p className="text-red-600 dark:text-red-400 text-sm">{skillsError}</p>
+              </div>
+            ) : skillsLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600"></div>
+              </div>
+            ) : filteredSkills.length === 0 ? (
+              <div className="text-center py-12 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                <div className="text-gray-400 text-lg mb-2">No skills found</div>
+                <p className="text-gray-500 dark:text-gray-300 text-sm">
+                  {searchTerm || activeFilter !== 'all'
+                    ? 'Press Enter in the search bar to search semantically'
+                    : 'No skills are registered yet'}
+                </p>
+              </div>
+            ) : (
+              <div
+                className="grid"
+                style={{
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
+                  gap: 'clamp(1.5rem, 3vw, 2.5rem)'
+                }}
+              >
+                {filteredSkills.map((skill) => (
+                  <SkillCard
+                    key={skill.path}
+                    skill={skill}
+                    onToggle={handleToggleSkill}
+                    canModify={user?.can_modify_servers || false}
+                    canToggle={hasUiPermission('toggle_skill', skill.path)}
+                    onRefreshSuccess={refreshSkills}
+                    onShowToast={showToast}
+                    onSkillUpdate={handleSkillUpdate}
+                    authToken={agentApiToken}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
       {/* External Registries Section */}
       {viewFilter === 'external' && (
         <div className="mb-8">
@@ -940,10 +1058,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
         </div>
       )}
 
-      {/* Empty state when both are filtered out */}
-      {((viewFilter === 'all' && filteredServers.length === 0 && filteredAgents.length === 0) ||
+      {/* Empty state when all are filtered out */}
+      {((viewFilter === 'all' && filteredServers.length === 0 && filteredAgents.length === 0 && filteredSkills.length === 0) ||
         (viewFilter === 'servers' && filteredServers.length === 0) ||
-        (viewFilter === 'agents' && filteredAgents.length === 0)) &&
+        (viewFilter === 'agents' && filteredAgents.length === 0) ||
+        (viewFilter === 'skills' && filteredSkills.length === 0)) &&
         (searchTerm || activeFilter !== 'all') && (
           <div className="text-center py-16">
             <div className="text-gray-400 text-xl mb-4">No items found</div>
@@ -1028,6 +1147,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
               A2A Agents Only
             </button>
             <button
+              onClick={() => handleChangeViewFilter('skills')}
+              className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
+                viewFilter === 'skills'
+                  ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+              }`}
+            >
+              Agent Skills
+            </button>
+            <button
               onClick={() => handleChangeViewFilter('external')}
               className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
                 viewFilter === 'external'
@@ -1092,11 +1221,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
             <p className="text-sm text-gray-500 dark:text-gray-300">
               {semanticSectionVisible ? (
                 <>
-                  Showing {semanticServers.length} servers and {semanticAgents.length} agents
+                  Showing {semanticServers.length} servers, {semanticAgents.length} agents
                 </>
               ) : (
                 <>
-                  Showing {filteredServers.length} servers and {filteredAgents.length} agents
+                  Showing {filteredServers.length} servers, {filteredAgents.length} agents, {filteredSkills.length} skills
                 </>
               )}
               {activeFilter !== 'all' && (
