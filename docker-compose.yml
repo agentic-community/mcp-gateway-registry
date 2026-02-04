@@ -42,8 +42,8 @@ services:
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
-      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-admin}
-      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-}
       - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
     volumes:
       - ./scripts/init-mongodb-ce.py:/app/scripts/init-mongodb-ce.py:ro

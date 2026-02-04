@@ -68,8 +68,15 @@ def _initialize_replica_set(
 
     try:
         # Connect without replica set for initialization
+        # Use auth only if username is provided (MongoDB CE runs without auth by default)
+        if username and password:
+            connection_uri = f"mongodb://{username}:{password}@{host}:{port}/?authMechanism=SCRAM-SHA-256&authSource=admin"
+        else:
+            connection_uri = f"mongodb://{host}:{port}/"
+            logger.info("Connecting without authentication (MongoDB CE no-auth mode)")
+
         client = MongoClient(
-            f"mongodb://{username}:{password}@{host}:{port}/?authMechanism=SCRAM-SHA-256&authSource=admin",
+            connection_uri,
             serverSelectionTimeoutMS=5000,
             directConnection=True,
         )
@@ -239,7 +246,13 @@ async def _initialize_mongodb_ce() -> None:
     _initialize_replica_set(config["host"], config["port"], config["username"], config["password"])
 
     # Connect with motor for async operations
-    connection_string = f"mongodb://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}&authMechanism=SCRAM-SHA-256&authSource=admin"
+    # Use auth only if username is provided (MongoDB CE runs without auth by default)
+    if config['username'] and config['password']:
+        connection_string = f"mongodb://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}&authMechanism=SCRAM-SHA-256&authSource=admin"
+    else:
+        connection_string = f"mongodb://{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}"
+        logger.info("Using no-auth connection for async client")
+
     try:
         client = AsyncIOMotorClient(
             connection_string,
