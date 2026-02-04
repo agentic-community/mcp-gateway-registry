@@ -127,7 +127,6 @@ async def discover_skills(
 
 @router.get(
     "",
-    response_model=List[SkillInfo],
     summary="List all skills"
 )
 async def list_skills(
@@ -140,14 +139,19 @@ async def list_skills(
         None,
         description="Filter by tag"
     ),
-) -> List[SkillInfo]:
+) -> dict:
     """List all registered skills with visibility filtering."""
     service = get_skill_service()
-    return await service.list_skills_for_user(
+    skills = await service.list_skills_for_user(
         user_context=user_context,
         include_disabled=include_disabled,
         tag=tag,
     )
+    logger.info(f"Returning {len(skills)} skills for user {user_context.get('username', 'unknown')}")
+    return {
+        "skills": [skill.model_dump(mode="json") for skill in skills],
+        "total_count": len(skills),
+    }
 
 
 @router.get(
