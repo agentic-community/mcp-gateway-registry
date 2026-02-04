@@ -28,6 +28,7 @@ from registry.api.registry_routes import router as registry_router
 from registry.api.agent_routes import router as agent_router
 from registry.api.management_routes import router as management_router
 from registry.api.federation_routes import router as federation_router
+from registry.api.skill_routes import router as skill_router
 from registry.health.routes import router as health_router
 
 # Import auth dependencies
@@ -286,6 +287,10 @@ app = FastAPI(
         {
             "name": "federation",
             "description": "Federation configuration management API for Anthropic and ASOR integrations"
+        },
+        {
+            "name": "skills",
+            "description": "Agent Skills registration and management. Requires JWT Bearer token authentication."
         }
     ]
 )
@@ -306,6 +311,7 @@ app.include_router(agent_router, prefix="/api", tags=["Agent Management"])
 app.include_router(management_router, prefix="/api")
 app.include_router(search_router, prefix="/api/search", tags=["Semantic Search"])
 app.include_router(federation_router, prefix="/api", tags=["federation"])
+app.include_router(skill_router, prefix="/api", tags=["skills"])
 app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring"])
 
 # Register Anthropic MCP Registry API (public API for MCP servers only)

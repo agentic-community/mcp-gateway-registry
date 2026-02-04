@@ -10,6 +10,12 @@ from typing import Dict, List, Any, Optional
 from ..schemas.agent_models import AgentCard
 from ..schemas.federation_schema import FederationConfig
 
+# Import skill models with try/except to avoid circular import issues
+try:
+    from ..schemas.skill_models import SkillCard
+except ImportError:
+    SkillCard = None
+
 
 class ServerRepositoryBase(ABC):
     """Abstract base class for MCP server data access."""
@@ -661,6 +667,24 @@ class SearchRepositoryBase(ABC):
         """Perform search."""
         pass
 
+    async def index_skill(
+        self,
+        path: str,
+        skill: Any,
+        is_enabled: bool = False,
+    ) -> None:
+        """Index a skill for search.
+
+        Default implementation is a no-op. Override in implementations
+        that support skill indexing.
+
+        Args:
+            path: Skill path (e.g., /skills/pdf-processing)
+            skill: SkillCard object
+            is_enabled: Whether skill is enabled
+        """
+        pass
+
 
 class FederationConfigRepositoryBase(ABC):
     """Abstract base class for federation configuration storage."""
@@ -723,4 +747,96 @@ class FederationConfigRepositoryBase(ABC):
         Returns:
             List of config summaries with id, created_at, updated_at
         """
+        pass
+
+
+class SkillRepositoryBase(ABC):
+    """Abstract base class for skill repository implementations."""
+
+    @abstractmethod
+    async def ensure_indexes(self) -> None:
+        """Create required indexes if not present."""
+        pass
+
+    @abstractmethod
+    async def get(
+        self,
+        path: str,
+    ) -> Optional[SkillCard]:
+        """Get a skill by path."""
+        pass
+
+    @abstractmethod
+    async def list_all(self) -> List[SkillCard]:
+        """List all skills."""
+        pass
+
+    @abstractmethod
+    async def list_filtered(
+        self,
+        include_disabled: bool = False,
+        tag: Optional[str] = None,
+        visibility: Optional[str] = None,
+        registry_name: Optional[str] = None,
+    ) -> List[SkillCard]:
+        """List skills with database-level filtering."""
+        pass
+
+    @abstractmethod
+    async def create(
+        self,
+        skill: SkillCard,
+    ) -> SkillCard:
+        """Create a new skill."""
+        pass
+
+    @abstractmethod
+    async def update(
+        self,
+        path: str,
+        updates: Dict[str, Any],
+    ) -> Optional[SkillCard]:
+        """Update a skill."""
+        pass
+
+    @abstractmethod
+    async def delete(
+        self,
+        path: str,
+    ) -> bool:
+        """Delete a skill."""
+        pass
+
+    @abstractmethod
+    async def get_state(
+        self,
+        path: str,
+    ) -> bool:
+        """Get skill enabled state."""
+        pass
+
+    @abstractmethod
+    async def set_state(
+        self,
+        path: str,
+        enabled: bool,
+    ) -> bool:
+        """Set skill enabled state."""
+        pass
+
+    # Batch operations for federation sync
+    @abstractmethod
+    async def create_many(
+        self,
+        skills: List[SkillCard],
+    ) -> List[SkillCard]:
+        """Create multiple skills in single operation."""
+        pass
+
+    @abstractmethod
+    async def update_many(
+        self,
+        updates: Dict[str, Dict[str, Any]],
+    ) -> int:
+        """Update multiple skills by path, return count."""
         pass

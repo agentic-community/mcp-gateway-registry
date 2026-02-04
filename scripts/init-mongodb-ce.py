@@ -40,6 +40,7 @@ COLLECTION_SCOPES = "mcp_scopes"
 COLLECTION_EMBEDDINGS = "mcp_embeddings_1536"
 COLLECTION_SECURITY_SCANS = "mcp_security_scans"
 COLLECTION_FEDERATION_CONFIG = "mcp_federation_config"
+COLLECTION_SKILLS = "agent_skills"
 
 
 def _get_config_from_env() -> dict:
@@ -156,6 +157,16 @@ async def _create_standard_indexes(
     elif collection_name == COLLECTION_FEDERATION_CONFIG:
         await collection.create_index([("registry_name", ASCENDING)], unique=True)
         await collection.create_index([("enabled", ASCENDING)])
+        logger.info(f"Created indexes for {full_name}")
+
+    elif collection_name == COLLECTION_SKILLS:
+        # Note: path is stored as _id, so no separate path index needed
+        await collection.create_index([("name", ASCENDING)], unique=True)
+        await collection.create_index([("tags", ASCENDING)])
+        await collection.create_index([("visibility", ASCENDING)])
+        await collection.create_index([("is_enabled", ASCENDING)])
+        await collection.create_index([("registry_name", ASCENDING)])
+        await collection.create_index([("owner", ASCENDING)])
         logger.info(f"Created indexes for {full_name}")
 
 
@@ -276,6 +287,7 @@ async def _initialize_mongodb_ce() -> None:
             COLLECTION_EMBEDDINGS,
             COLLECTION_SECURITY_SCANS,
             COLLECTION_FEDERATION_CONFIG,
+            COLLECTION_SKILLS,
         ]
 
         for coll_name in collections:

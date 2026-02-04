@@ -13,6 +13,7 @@ from .interfaces import (
     SecurityScanRepositoryBase,
     SearchRepositoryBase,
     FederationConfigRepositoryBase,
+    SkillRepositoryBase,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ _scope_repo: Optional[ScopeRepositoryBase] = None
 _security_scan_repo: Optional[SecurityScanRepositoryBase] = None
 _search_repo: Optional[SearchRepositoryBase] = None
 _federation_config_repo: Optional[FederationConfigRepositoryBase] = None
+_skill_repo: Optional[SkillRepositoryBase] = None
 
 
 def get_server_repository() -> ServerRepositoryBase:
@@ -146,12 +148,35 @@ def get_federation_config_repository() -> FederationConfigRepositoryBase:
     return _federation_config_repo
 
 
+def get_skill_repository() -> SkillRepositoryBase:
+    """Get skill repository singleton."""
+    global _skill_repo
+
+    if _skill_repo is not None:
+        return _skill_repo
+
+    backend = settings.storage_backend
+    logger.info(f"Creating skill repository with backend: {backend}")
+
+    if backend in ("documentdb", "mongodb-ce"):
+        from .documentdb.skill_repository import DocumentDBSkillRepository
+        _skill_repo = DocumentDBSkillRepository()
+    else:
+        # File-based skill repository not implemented yet
+        # Fall back to DocumentDB repository for now
+        from .documentdb.skill_repository import DocumentDBSkillRepository
+        _skill_repo = DocumentDBSkillRepository()
+
+    return _skill_repo
+
+
 def reset_repositories() -> None:
     """Reset all repository singletons. USE ONLY IN TESTS."""
-    global _server_repo, _agent_repo, _scope_repo, _security_scan_repo, _search_repo, _federation_config_repo
+    global _server_repo, _agent_repo, _scope_repo, _security_scan_repo, _search_repo, _federation_config_repo, _skill_repo
     _server_repo = None
     _agent_repo = None
     _scope_repo = None
     _security_scan_repo = None
     _search_repo = None
     _federation_config_repo = None
+    _skill_repo = None

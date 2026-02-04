@@ -486,6 +486,96 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             logger.error(f"Failed to index agent in search: {e}", exc_info=True)
 
 
+    async def index_skill(
+        self,
+        path: str,
+        skill: Any,
+        is_enabled: bool = False,
+    ) -> None:
+        """Index a skill for semantic search.
+
+        Args:
+            path: Skill path (e.g., /skills/pdf-processing)
+            skill: SkillCard object
+            is_enabled: Whether skill is enabled
+        """
+        collection = await self._get_collection()
+
+        # Compose text for embedding
+        text_parts = [
+            skill.name,
+            skill.description,
+        ]
+
+        if skill.tags:
+            text_parts.append(f"Tags: {', '.join(skill.tags)}")
+
+        if skill.compatibility:
+            text_parts.append(f"Compatibility: {skill.compatibility}")
+
+        if skill.target_agents:
+            text_parts.append(f"For: {', '.join(skill.target_agents)}")
+
+        if skill.metadata and skill.metadata.author:
+            text_parts.append(f"Author: {skill.metadata.author}")
+
+        text_for_embedding = " ".join(filter(None, text_parts))
+
+        # Generate embedding
+        try:
+            model = await self._get_embedding_model()
+            embedding = model.encode([text_for_embedding])[0].tolist()
+        except Exception as e:
+            logger.warning(
+                "Embedding model unavailable, indexing skill '%s' without embeddings: %s",
+                skill.name,
+                e,
+            )
+            embedding = []
+
+        # Handle visibility enum
+        visibility_value = skill.visibility
+        if hasattr(visibility_value, 'value'):
+            visibility_value = visibility_value.value
+
+        # Build search document
+        search_doc = {
+            "_id": path,
+            "entity_type": "skill",
+            "path": path,
+            "name": skill.name,
+            "description": skill.description,
+            "tags": skill.tags or [],
+            "is_enabled": is_enabled,
+            "visibility": visibility_value,
+            "allowed_groups": skill.allowed_groups or [],
+            "owner": skill.owner,
+            "text_for_embedding": text_for_embedding,
+            "embedding": embedding,
+            "embedding_metadata": embedding_config.get_embedding_metadata(),
+            "metadata": {
+                "skill_md_url": str(skill.skill_md_url),
+                "author": skill.metadata.author if skill.metadata else None,
+                "version": skill.metadata.version if skill.metadata else None,
+                "compatibility": skill.compatibility,
+                "target_agents": skill.target_agents or [],
+                "registry_name": skill.registry_name,
+            },
+            "indexed_at": skill.updated_at or skill.created_at,
+        }
+
+        # Upsert to search collection
+        try:
+            await collection.replace_one(
+                {"_id": path},
+                search_doc,
+                upsert=True
+            )
+            logger.info(f"Indexed skill for search: {path}")
+        except Exception as e:
+            logger.error(f"Failed to index skill in search: {e}", exc_info=True)
+
+
     def _calculate_cosine_similarity(
         self,
         vec1: list[float],
