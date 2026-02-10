@@ -1,25 +1,32 @@
 # A2A Agent Management API
 
+API design for A2A Agent management based on MCP Server management API patterns.
+
+## API Route Prefix
+
+```
+/api/v1/agents
+```
 
 ---
 
-## API 接口
+## API Endpoints
 
 ### 1. List Agents
 
-**端点**: `GET /api/v1/agents`
+**Endpoint**: `GET /api/v1/agents`
 
-**查询参数**:
+**Query Parameters**:
 ```typescript
 {
-  query?: string;           // 搜索关键词 (name, description, tags, skills)
-  status?: string;          // 状态过滤: active | inactive | error
-  page?: number;            // 页码 (默认: 1)
-  per_page?: number;        // 每页数量 (默认: 20, 最大: 100)
+  query?: string;           // Search keywords (name, description, tags, skills)
+  status?: string;          // Status filter: active | inactive | error
+  page?: number;            // Page number (default: 1)
+  per_page?: number;        // Items per page (default: 20, max: 100)
 }
 ```
 
-**响应**: `200 OK`
+**Response**: `200 OK`
 ```json
 {
   "agents": [
@@ -54,9 +61,9 @@
 
 ### 2. Get Agent Statistics
 
-**端点**: `GET /api/v1/agents/stats`
+**Endpoint**: `GET /api/v1/agents/stats`
 
-**响应**: `200 OK`
+**Response**: `200 OK`
 ```json
 {
   "totalAgents": 150,
@@ -77,15 +84,15 @@
 }
 ```
 
-**权限**: Admin only
+**Permission**: Admin only
 
 ---
 
 ### 3. Get Agent Detail
 
-**端点**: `GET /api/v1/agents/{agent_id}`
+**Endpoint**: `GET /api/v1/agents/{agent_id}`
 
-**响应**: `200 OK`
+**Response**: `200 OK`
 ```json
 {
   "id": "507f1f77bcf86cd799439011",
@@ -141,15 +148,15 @@
 }
 ```
 
-**错误**: `404` Agent not found, `403` Access denied
+**Error**: `404` Agent not found, `403` Access denied
 
 ---
 
 ### 4. Create Agent
 
-**端点**: `POST /api/v1/agents`
+**Endpoint**: `POST /api/v1/agents`
 
-**请求体**:
+**Request Body**:
 ```json
 {
   "path": "/code-reviewer",
@@ -185,7 +192,7 @@
 }
 ```
 
-**响应**: `201 Created`
+**Response**: `201 Created`
 ```json
 {
   "message": "Agent registered successfully",
@@ -199,17 +206,17 @@
 }
 ```
 
-**错误**: `400` Validation error, `409` Path already exists
+**Error**: `400` Validation error, `409` Path already exists
 
-**注意**: 创建 Agent 时自动为创建者授予 OWNER 权限，ACL 资源类型为 `ResourceType.A2AAGENT`
+**Note**: Automatically grants OWNER permission to creator when creating Agent, ACL resource type is `ResourceType.A2AAGENT`
 
 ---
 
 ### 5. Update Agent
 
-**端点**: `PATCH /api/v1/agents/{agent_id}`
+**Endpoint**: `PATCH /api/v1/agents/{agent_id}`
 
-**请求体** (所有字段可选):
+**Request Body** (all fields optional):
 ```json
 {
   "name": "Updated Agent Name",
@@ -221,7 +228,7 @@
 }
 ```
 
-**响应**: `200 OK`
+**Response**: `200 OK`
 ```json
 {
   "message": "Agent updated successfully",
@@ -234,38 +241,38 @@
 }
 ```
 
-**错误**: `404` Agent not found, `403` Access denied
+**Error**: `404` Agent not found, `403` Access denied
 
-**权限**: 需要 EDIT 权限
+**Permission**: Requires EDIT permission
 
 ---
 
 ### 6. Delete Agent
 
-**端点**: `DELETE /api/v1/agents/{agent_id}`
+**Endpoint**: `DELETE /api/v1/agents/{agent_id}`
 
-**响应**: `204 No Content`
+**Response**: `204 No Content`
 
-**错误**: `404` Agent not found, `403` Access denied
+**Error**: `404` Agent not found, `403` Access denied
 
-**权限**: 需要 DELETE 权限
+**Permission**: Requires DELETE permission
 
-**注意**: 删除 Agent 时同时删除所有关联的 ACL 权限记录
+**Note**: Deletes all associated ACL permission records when deleting Agent
 
 ---
 
 ### 7. Toggle Agent
 
-**端点**: `POST /api/v1/agents/{agent_id}/toggle`
+**Endpoint**: `POST /api/v1/agents/{agent_id}/toggle`
 
-**请求体**:
+**Request Body**:
 ```json
 {
   "enabled": true
 }
 ```
 
-**响应**: `200 OK`
+**Response**: `200 OK`
 ```json
 {
   "message": "Agent enabled successfully",
@@ -277,17 +284,17 @@
 }
 ```
 
-**错误**: `404` Agent not found, `403` Access denied
+**Error**: `404` Agent not found, `403` Access denied
 
-**权限**: 需要 EDIT 权限
+**Permission**: Requires EDIT permission
 
 ---
 
 ### 8. Get Agent Skills
 
-**端点**: `GET /api/v1/agents/{agent_id}/skills`
+**Endpoint**: `GET /api/v1/agents/{agent_id}/skills`
 
-**响应**: `200 OK`
+**Response**: `200 OK`
 ```json
 {
   "agentId": "507f1f77bcf86cd799439011",
@@ -306,17 +313,17 @@
 }
 ```
 
-**错误**: `404` Agent not found, `403` Access denied
+**Error**: `404` Agent not found, `403` Access denied
 
-**权限**: 需要 VIEW 权限
+**Permission**: Requires VIEW permission
 
 ---
 
 ### 9. Sync Well-Known
 
-**端点**: `POST /api/v1/agents/{agent_id}/sync-wellknown`
+**Endpoint**: `POST /api/v1/agents/{agent_id}/sync-wellknown`
 
-**响应**: `200 OK`
+**Response**: `200 OK`
 ```json
 {
   "message": "Well-known configuration synced successfully",
@@ -330,8 +337,8 @@
 }
 ```
 
-**错误**: `400` Well-known sync not enabled, `404` Agent not found or URL unreachable
+**Error**: `400` Well-known sync not enabled, `404` Agent not found or URL unreachable
 
-**权限**: 需要 EDIT 权限
+**Permission**: Requires EDIT permission
 
 ---
