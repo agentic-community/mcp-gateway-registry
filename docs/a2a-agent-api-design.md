@@ -37,15 +37,15 @@ API design for A2A Agent management based on MCP Server management API patterns.
       "description": "AI-powered code review assistant",
       "url": "https://example.com/agents/code-reviewer",
       "version": "1.0.0",
-      "protocolVersion": "1.0",
+      "protocol_version": "1.0",
       "tags": ["code", "review"],
-      "numSkills": 5,
-      "isEnabled": true,
+      "num_skills": 5,
+      "is_enabled": true,
       "status": "active",
-      "aclPermission": 15,
-      "registeredBy": "user123",
-      "registeredAt": "2024-01-15T10:30:00Z",
-      "updatedAt": "2024-01-20T15:45:00Z"
+      "acl_permission": 15,
+      "registered_by": "user123",
+      "registered_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-20T15:45:00Z"
     }
   ],
   "pagination": {
@@ -66,21 +66,21 @@ API design for A2A Agent management based on MCP Server management API patterns.
 **Response**: `200 OK`
 ```json
 {
-  "totalAgents": 150,
-  "enabledAgents": 120,
-  "disabledAgents": 30,
-  "byStatus": {
+  "total_agents": 150,
+  "enabled_agents": 120,
+  "disabled_agents": 30,
+  "by_status": {
     "active": 130,
     "inactive": 15,
     "error": 5
   },
-  "byTransport": {
+  "by_transport": {
     "HTTP+JSON": 100,
     "JSONRPC": 30,
     "GRPC": 20
   },
-  "totalSkills": 450,
-  "averageSkillsPerAgent": 3.0
+  "total_skills": 450,
+  "average_skills_per_agent": 3.0
 }
 ```
 
@@ -101,10 +101,10 @@ API design for A2A Agent management based on MCP Server management API patterns.
   "description": "AI-powered code review assistant",
   "url": "https://example.com/agents/code-reviewer",
   "version": "1.0.0",
-  "protocolVersion": "1.0",
+  "protocol_version": "1.0",
   "capabilities": {
     "streaming": true,
-    "pushNotifications": false
+    "push_notifications": false
   },
   "skills": [
     {
@@ -112,39 +112,39 @@ API design for A2A Agent management based on MCP Server management API patterns.
       "name": "Code Analysis",
       "description": "Analyze code quality",
       "tags": ["analysis"],
-      "inputModes": ["text/plain"],
-      "outputModes": ["application/json"]
+      "input_modes": ["text/plain"],
+      "output_modes": ["application/json"]
     }
   ],
-  "securitySchemes": {
+  "security_schemes": {
     "bearer": {
       "type": "http",
       "scheme": "bearer"
     }
   },
-  "preferredTransport": "HTTP+JSON",
-  "defaultInputModes": ["text/plain"],
-  "defaultOutputModes": ["application/json"],
+  "preferred_transport": "HTTP+JSON",
+  "default_input_modes": ["text/plain"],
+  "default_output_modes": ["application/json"],
   "provider": {
     "organization": "AI Labs",
     "url": "https://ailabs.com"
   },
   "tags": ["code", "review"],
   "status": "active",
-  "isEnabled": true,
-  "aclPermission": 15,
+  "is_enabled": true,
+  "acl_permission": 15,
   "author": "507f1f77bcf86cd799439012",
-  "wellKnown": {
+  "well_known": {
     "enabled": true,
     "url": "https://example.com/.well-known/agent-card.json",
-    "lastSyncAt": "2024-01-20T12:00:00Z",
-    "lastSyncStatus": "success",
-    "lastSyncVersion": "1.0.0"
+    "last_sync_at": "2024-01-20T12:00:00Z",
+    "last_sync_status": "success",
+    "last_sync_version": "1.0.0"
   },
-  "registeredBy": "user123",
-  "registeredAt": "2024-01-15T10:30:00Z",
-  "createdAt": "2024-01-15T10:30:00Z",
-  "updatedAt": "2024-01-20T15:45:00Z"
+  "registered_by": "user123",
+  "registered_at": "2024-01-15T10:30:00Z",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-20T15:45:00Z"
 }
 ```
 
@@ -164,10 +164,10 @@ API design for A2A Agent management based on MCP Server management API patterns.
   "description": "AI-powered code review assistant",
   "url": "https://example.com/agents/code-reviewer",
   "version": "1.0.0",
-  "protocolVersion": "1.0",
+  "protocol_version": "1.0",
   "capabilities": {
     "streaming": true,
-    "pushNotifications": false
+    "push_notifications": false
   },
   "skills": [
     {
@@ -175,20 +175,20 @@ API design for A2A Agent management based on MCP Server management API patterns.
       "name": "Code Analysis",
       "description": "Analyze code quality",
       "tags": ["analysis"],
-      "inputModes": ["text/plain"],
-      "outputModes": ["application/json"]
+      "input_modes": ["text/plain"],
+      "output_modes": ["application/json"]
     }
   ],
-  "securitySchemes": {},
-  "preferredTransport": "HTTP+JSON",
-  "defaultInputModes": ["text/plain"],
-  "defaultOutputModes": ["application/json"],
+  "security_schemes": {},
+  "preferred_transport": "HTTP+JSON",
+  "default_input_modes": ["text/plain"],
+  "default_output_modes": ["application/json"],
   "provider": {
     "organization": "AI Labs",
     "url": "https://ailabs.com"
   },
   "tags": ["code", "review"],
-  "isEnabled": false
+  "is_enabled": false
 }
 ```
 
@@ -201,7 +201,7 @@ API design for A2A Agent management based on MCP Server management API patterns.
     "path": "/code-reviewer",
     "name": "Code Review Agent",
     "url": "https://example.com/agents/code-reviewer",
-    "registeredAt": "2024-01-15T10:30:00Z"
+    "registered_at": "2024-01-15T10:30:00Z"
   }
 }
 ```
@@ -224,7 +224,7 @@ API design for A2A Agent management based on MCP Server management API patterns.
   "version": "1.1.0",
   "skills": [...],
   "tags": ["new", "tags"],
-  "isEnabled": true
+  "is_enabled": true
 }
 ```
 
@@ -236,7 +236,7 @@ API design for A2A Agent management based on MCP Server management API patterns.
     "id": "507f1f77bcf86cd799439011",
     "path": "/code-reviewer",
     "name": "Updated Agent Name",
-    "updatedAt": "2024-01-20T15:45:00Z"
+    "updated_at": "2024-01-20T15:45:00Z"
   }
 }
 ```
@@ -279,7 +279,7 @@ API design for A2A Agent management based on MCP Server management API patterns.
   "agent": {
     "id": "507f1f77bcf86cd799439011",
     "path": "/code-reviewer",
-    "isEnabled": true
+    "is_enabled": true
   }
 }
 ```
@@ -297,19 +297,19 @@ API design for A2A Agent management based on MCP Server management API patterns.
 **Response**: `200 OK`
 ```json
 {
-  "agentId": "507f1f77bcf86cd799439011",
-  "agentName": "Code Review Agent",
+  "agent_id": "507f1f77bcf86cd799439011",
+  "agent_name": "Code Review Agent",
   "skills": [
     {
       "id": "code-analysis",
       "name": "Code Analysis",
       "description": "Analyze code quality",
       "tags": ["analysis", "quality"],
-      "inputModes": ["text/plain"],
-      "outputModes": ["application/json"]
+      "input_modes": ["text/plain"],
+      "output_modes": ["application/json"]
     }
   ],
-  "totalSkills": 1
+  "total_skills": 1
 }
 ```
 
@@ -327,8 +327,8 @@ API design for A2A Agent management based on MCP Server management API patterns.
 ```json
 {
   "message": "Well-known configuration synced successfully",
-  "syncStatus": "success",
-  "syncedAt": "2024-01-20T15:45:00Z",
+  "sync_status": "success",
+  "synced_at": "2024-01-20T15:45:00Z",
   "version": "1.0.0",
   "changes": [
     "Updated version to 1.0.0",
