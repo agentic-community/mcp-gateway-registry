@@ -22,6 +22,11 @@ app:
   sessionCookieDomain: ""  # Auto-inferred from Host header if empty
   sessionCookieSecure: true
 
+  # Admin credentials for reload-scopes endpoint
+  # adminUser: "admin"
+  # adminPassword: REQUIRED - must be set for /internal/reload-scopes endpoint
+  # adminPassword: "your-secure-admin-password"
+
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
   federationStaticToken: # If not provided, a random token is auto-generated

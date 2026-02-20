@@ -159,6 +159,12 @@ registry:
 auth-server:
   app:
     replicas: 2 # set to > 1 replica for high availability
+    # Admin credentials for auth-server reload-scopes endpoint
+    # adminPassword: REQUIRED for /internal/reload-scopes endpoint functionality
+    # adminUser defaults to "admin" if not specified
+    # adminUser: "admin"
+    # Uncomment and set a secure password:
+    # adminPassword: password
 
   keycloak:
     enabled: true
