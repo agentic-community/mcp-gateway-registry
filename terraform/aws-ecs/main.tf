@@ -55,8 +55,9 @@ module "mcp_gateway" {
   # Keycloak configuration
   # Mode 1: CloudFront-only - use CloudFront domain
   # Mode 2 & 3: Custom domain (Route53 enabled) - use custom domain
+  # ALB-direct (both false) - use Keycloak ALB DNS name
   keycloak_domain = var.enable_route53_dns ? local.keycloak_domain : (
-    var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
+    var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : aws_lb.keycloak.dns_name
   )
 
   # CloudFront configuration - allows CloudFront IPs to reach ALB
@@ -111,7 +112,7 @@ module "mcp_gateway" {
   documentdb_namespace              = var.documentdb_namespace
   documentdb_use_tls                = var.documentdb_use_tls
   documentdb_use_iam                = var.documentdb_use_iam
-  documentdb_credentials_secret_arn = var.storage_backend == "documentdb" ? aws_secretsmanager_secret.documentdb_credentials.arn : ""
+  documentdb_credentials_secret_arn = aws_secretsmanager_secret.documentdb_credentials.arn
 
   # Security scanning configuration
   security_scan_enabled         = var.security_scan_enabled
@@ -144,6 +145,10 @@ module "mcp_gateway" {
   # Deployment mode configuration
   deployment_mode = var.deployment_mode
   registry_mode   = var.registry_mode
+
+  # Secrets compliance (SCP)
+  secrets_kms_key_arn        = aws_kms_key.secrets.arn
+  secrets_rotation_lambda_arn = aws_lambda_function.secrets_rotation.arn
 }
 
 # =============================================================================

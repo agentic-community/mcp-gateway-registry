@@ -160,6 +160,13 @@ group_mappings:
   - mcp-servers-unrestricted/read
   - mcp-servers-unrestricted/execute
 
+  # M2M service account group - maps to admin scopes for full API access
+  # The init-keycloak.sh script assigns M2M service accounts to this group
+  mcp-servers-unrestricted:
+  - registry-admins
+  - mcp-servers-unrestricted/read
+  - mcp-servers-unrestricted/execute
+
   registry-users-lob1:
   - registry-users-lob1
 

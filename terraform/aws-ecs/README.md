@@ -482,12 +482,11 @@ Post-deployment setup completed successfully!
 First, extract URLs from your terraform outputs:
 
 ```bash
+# Refresh terraform outputs (required after any terraform apply)
+./scripts/save-terraform-outputs.sh
+
 # Load URLs from terraform outputs
 OUTPUTS_FILE="scripts/terraform-outputs.json"
-if [[ ! -f "$OUTPUTS_FILE" ]]; then
-    echo "Run ./scripts/save-terraform-outputs.sh first"
-    exit 1
-fi
 
 # Extract URLs
 REGISTRY_URL=$(jq -r '.registry_url.value' "$OUTPUTS_FILE")
@@ -537,7 +536,14 @@ OUTPUTS_FILE="terraform/aws-ecs/scripts/terraform-outputs.json"
 export REGISTRY_URL=$(jq -r '.registry_url.value' "$OUTPUTS_FILE")
 export KEYCLOAK_URL=$(jq -r '.keycloak_url.value' "$OUTPUTS_FILE")
 
+# Verify URLs are not null
+if [[ "$REGISTRY_URL" == "null" || -z "$REGISTRY_URL" ]]; then
+    echo "ERROR: REGISTRY_URL is null. Re-run: cd terraform/aws-ecs && ./scripts/save-terraform-outputs.sh"
+    exit 1
+fi
+
 echo "Registry URL: $REGISTRY_URL"
+echo "Keycloak URL: $KEYCLOAK_URL"
 echo "Keycloak URL: $KEYCLOAK_URL"
 
 # Register Cloudflare Docs server

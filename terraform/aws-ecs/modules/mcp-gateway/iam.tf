@@ -24,6 +24,14 @@ resource "aws_iam_policy" "ecs_secrets_access" {
           var.documentdb_credentials_secret_arn != "" ? [var.documentdb_credentials_secret_arn] : [],
           var.entra_enabled ? [aws_secretsmanager_secret.entra_client_secret[0].arn] : []
         )
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = var.secrets_kms_key_arn != "" ? [var.secrets_kms_key_arn] : []
       }
     ]
   })

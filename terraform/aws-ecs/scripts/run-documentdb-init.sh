@@ -212,19 +212,20 @@ echo "  Entra Group ID: ${ENTRA_GROUP_ID:-<not set>}"
 echo ""
 
 # Create simple command to run Python initialization
-# NOTE: init-documentdb-indexes.py now loads the admin scope from registry-admins.json
-# which is sufficient to bootstrap the system. All subsequent groups and users are
-# created via the registry API. The load-scopes.py call is commented out and may be
-# removed in a future version.
+# NOTE: init-documentdb-indexes.py creates indexes and loads the admin scope from registry-admins.json.
+# load-scopes.py then loads all scope definitions (UI-Scopes, group_mappings, MCP server scopes)
+# from scopes.yml into DocumentDB, which the auth server uses at runtime to resolve permissions.
 echo -e "${YELLOW}Preparing initialization command...${NC}"
 
 # Build the init command, adding --entra-group-id if provided
+# After creating indexes, load all scope definitions from scopes.yml into DocumentDB.
+# This ensures group_mappings (including mcp-servers-unrestricted for M2M service accounts)
+# and UI-Scopes are available for the auth server to resolve permissions.
 if [ -n "$ENTRA_GROUP_ID" ]; then
-    INIT_COMMAND="source /app/.venv/bin/activate && cd /app/scripts && python init-documentdb-indexes.py --entra-group-id '$ENTRA_GROUP_ID'"
+    INIT_COMMAND="source /app/.venv/bin/activate && cd /app/scripts && python init-documentdb-indexes.py --entra-group-id '$ENTRA_GROUP_ID' && python load-scopes.py --scopes-file /app/config/scopes.yml --clear-existing"
 else
-    INIT_COMMAND="source /app/.venv/bin/activate && cd /app/scripts && python init-documentdb-indexes.py"
+    INIT_COMMAND="source /app/.venv/bin/activate && cd /app/scripts && python init-documentdb-indexes.py && python load-scopes.py --scopes-file /app/config/scopes.yml --clear-existing"
 fi
-# INIT_COMMAND="source /app/.venv/bin/activate && cd /app/scripts && python init-documentdb-indexes.py && python load-scopes.py --scopes-file /app/config/scopes.yml"
 
 # Check if task definition exists
 TASK_DEF_ARN=$(aws ecs describe-task-definition \

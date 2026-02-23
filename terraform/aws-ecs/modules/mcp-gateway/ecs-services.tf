@@ -91,7 +91,7 @@ module "ecs_service_auth" {
       environment = [
         {
           name  = "REGISTRY_URL"
-          value = "https://${var.domain_name}"
+          value = var.domain_name != "" ? "${local.protocol}://${var.domain_name}" : "http://${module.alb.dns_name}"
         },
         {
           name  = "AUTH_SERVER_URL"
@@ -99,7 +99,7 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
-          value = "https://${var.domain_name}"
+          value = var.domain_name != "" ? "${local.protocol}://${var.domain_name}" : "http://${module.alb.dns_name}"
         },
         {
           name  = "AWS_REGION"
@@ -111,11 +111,11 @@ module "ecs_service_auth" {
         },
         {
           name  = "KEYCLOAK_URL"
-          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+          value = local.keycloak_url
         },
         {
           name  = "KEYCLOAK_EXTERNAL_URL"
-          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+          value = local.keycloak_url
         },
         {
           name  = "KEYCLOAK_REALM"
@@ -436,11 +436,11 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
-          value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${module.alb.dns_name}"
+          value = var.domain_name != "" ? "${local.protocol}://${var.domain_name}" : "http://${module.alb.dns_name}"
         },
         {
           name  = "KEYCLOAK_URL"
-          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+          value = local.keycloak_url
         },
         {
           name  = "KEYCLOAK_ENABLED"

@@ -145,6 +145,7 @@ resource "aws_secretsmanager_secret" "documentdb_credentials" {
   name                    = "${var.name}/documentdb/credentials"
   description             = "DocumentDB Cluster admin credentials"
   recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.arn
 
   tags = merge(
     local.common_tags,

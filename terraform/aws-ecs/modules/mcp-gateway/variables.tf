@@ -573,3 +573,19 @@ variable "registry_mode" {
   type        = string
   default     = "full"
 }
+
+# =============================================================================
+# SECRETS COMPLIANCE (SCP)
+# =============================================================================
+
+variable "secrets_kms_key_arn" {
+  description = "KMS key ARN for encrypting Secrets Manager secrets (required by SCP)"
+  type        = string
+  default     = ""
+}
+
+variable "secrets_rotation_lambda_arn" {
+  description = "Lambda ARN for secret rotation (required by SCP)"
+  type        = string
+  default     = ""
+}

@@ -1,4 +1,5 @@
 # Secrets Manager resources for MCP Gateway Registry
+# All secrets use KMS encryption and rotation to comply with organization SCP.
 
 # Random passwords for application secrets
 
@@ -22,6 +23,7 @@ resource "aws_secretsmanager_secret" "secret_key" {
   name_prefix             = "${local.name_prefix}-secret-key-"
   description             = "Secret key for MCP Gateway Registry"
   recovery_window_in_days = 0
+  kms_key_id              = var.secrets_kms_key_arn
   tags                    = local.common_tags
 }
 
@@ -34,6 +36,7 @@ resource "aws_secretsmanager_secret" "admin_password" {
   name_prefix             = "${local.name_prefix}-admin-password-"
   description             = "Admin password for MCP Gateway Registry"
   recovery_window_in_days = 0
+  kms_key_id              = var.secrets_kms_key_arn
   tags                    = local.common_tags
 }
 
@@ -47,6 +50,7 @@ resource "aws_secretsmanager_secret" "keycloak_client_secret" {
   name                    = "mcp-gateway-keycloak-client-secret"
   description             = "Keycloak web client secret (updated by init-keycloak.sh after deployment)"
   recovery_window_in_days = 0
+  kms_key_id              = var.secrets_kms_key_arn
   tags                    = local.common_tags
 }
 
@@ -65,6 +69,7 @@ resource "aws_secretsmanager_secret" "keycloak_m2m_client_secret" {
   name                    = "mcp-gateway-keycloak-m2m-client-secret"
   description             = "Keycloak M2M client secret (updated by init-keycloak.sh after deployment)"
   recovery_window_in_days = 0
+  kms_key_id              = var.secrets_kms_key_arn
   tags                    = local.common_tags
 }
 
@@ -79,12 +84,12 @@ resource "aws_secretsmanager_secret_version" "keycloak_m2m_client_secret" {
   }
 }
 
-
 # Keycloak admin password secret (for Management API operations)
 resource "aws_secretsmanager_secret" "keycloak_admin_password" {
   name_prefix             = "${local.name_prefix}-keycloak-admin-password-"
   description             = "Keycloak admin password for Management API user/group operations"
   recovery_window_in_days = 0
+  kms_key_id              = var.secrets_kms_key_arn
   tags                    = local.common_tags
 }
 
@@ -93,12 +98,12 @@ resource "aws_secretsmanager_secret_version" "keycloak_admin_password" {
   secret_string = var.keycloak_admin_password
 }
 
-
 # Embeddings API key secret (optional - only needed for LiteLLM provider)
 resource "aws_secretsmanager_secret" "embeddings_api_key" {
   name_prefix             = "${local.name_prefix}-embeddings-api-key-"
   description             = "API key for embeddings provider (OpenAI, Anthropic, etc.)"
   recovery_window_in_days = 0
+  kms_key_id              = var.secrets_kms_key_arn
   tags                    = local.common_tags
 }
 
@@ -111,7 +116,6 @@ resource "aws_secretsmanager_secret_version" "embeddings_api_key" {
   }
 }
 
-
 # Microsoft Entra ID client secret (for OAuth and IAM operations)
 resource "aws_secretsmanager_secret" "entra_client_secret" {
   count = var.entra_enabled ? 1 : 0
@@ -119,6 +123,7 @@ resource "aws_secretsmanager_secret" "entra_client_secret" {
   name_prefix             = "${local.name_prefix}-entra-client-secret-"
   description             = "Microsoft Entra ID client secret for OAuth authentication and IAM operations"
   recovery_window_in_days = 0
+  kms_key_id              = var.secrets_kms_key_arn
   tags                    = local.common_tags
 }
 
@@ -130,5 +135,63 @@ resource "aws_secretsmanager_secret_version" "entra_client_secret" {
 
   lifecycle {
     ignore_changes = [secret_string]
+  }
+}
+
+# =============================================================================
+# Rotation Schedules (SCP compliance)
+# =============================================================================
+
+resource "aws_secretsmanager_secret_rotation" "secret_key" {
+  secret_id           = aws_secretsmanager_secret.secret_key.id
+  rotation_lambda_arn = var.secrets_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 90
+  }
+}
+
+resource "aws_secretsmanager_secret_rotation" "admin_password" {
+  secret_id           = aws_secretsmanager_secret.admin_password.id
+  rotation_lambda_arn = var.secrets_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 90
+  }
+}
+
+resource "aws_secretsmanager_secret_rotation" "keycloak_client_secret" {
+  secret_id           = aws_secretsmanager_secret.keycloak_client_secret.id
+  rotation_lambda_arn = var.secrets_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 90
+  }
+}
+
+resource "aws_secretsmanager_secret_rotation" "keycloak_m2m_client_secret" {
+  secret_id           = aws_secretsmanager_secret.keycloak_m2m_client_secret.id
+  rotation_lambda_arn = var.secrets_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 90
+  }
+}
+
+resource "aws_secretsmanager_secret_rotation" "keycloak_admin_password" {
+  secret_id           = aws_secretsmanager_secret.keycloak_admin_password.id
+  rotation_lambda_arn = var.secrets_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 90
+  }
+}
+
+resource "aws_secretsmanager_secret_rotation" "embeddings_api_key" {
+  secret_id           = aws_secretsmanager_secret.embeddings_api_key.id
+  rotation_lambda_arn = var.secrets_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 90
   }
 }

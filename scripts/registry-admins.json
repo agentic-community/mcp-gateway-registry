@@ -1,7 +1,9 @@
 {
   "_id": "registry-admins",
   "group_mappings": [
-    "registry-admins"
+    "registry-admins",
+    "mcp-registry-admin",
+    "mcp-servers-unrestricted"
   ],
   "server_access": [
     {

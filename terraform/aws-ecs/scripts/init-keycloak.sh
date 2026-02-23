@@ -842,18 +842,37 @@ setup_client_secrets() {
 
     echo -e "${GREEN}Client secrets generated!${NC}"
 
+    # Resolve KMS key ID for Secrets Manager (required by SCP)
+    # Try terraform outputs first, then fall back to well-known alias
+    local kms_key_arg=""
+    local secrets_kms_key_arn=""
+    local terraform_outputs="$SCRIPT_DIR/terraform-outputs.json"
+    if [ -f "$terraform_outputs" ] && command -v jq &> /dev/null; then
+        secrets_kms_key_arn=$(jq -r '.secrets_kms_key_arn.value // empty' "$terraform_outputs" 2>/dev/null)
+    fi
+    if [ -z "$secrets_kms_key_arn" ]; then
+        # Fall back to well-known alias
+        secrets_kms_key_arn=$(aws kms describe-key --key-id alias/mcp-gateway-secrets --region "${AWS_REGION}" --query 'KeyMetadata.Arn' --output text 2>/dev/null || true)
+    fi
+    if [ -n "$secrets_kms_key_arn" ] && [ "$secrets_kms_key_arn" != "None" ]; then
+        kms_key_arg="--kms-key-id ${secrets_kms_key_arn}"
+        echo "Using KMS key for secrets: ${secrets_kms_key_arn}"
+    fi
+
     # Save web client secret to AWS Secrets Manager
     if [ -n "$web_secret" ] && command -v aws &> /dev/null; then
         echo "Saving web client secret to AWS Secrets Manager..."
         if aws secretsmanager update-secret \
             --secret-id mcp-gateway-keycloak-client-secret \
             --secret-string "{\"client_id\": \"mcp-gateway-web\", \"client_secret\": \"${web_secret}\"}" \
+            $kms_key_arg \
             --region "${AWS_REGION}" &>/dev/null; then
             echo -e "${GREEN}Web client secret saved to AWS Secrets Manager!${NC}"
         else
             echo -e "${YELLOW}Warning: Could not save web client secret to Secrets Manager${NC}"
             echo "You can manually update it with:"
             echo "  aws secretsmanager update-secret --secret-id mcp-gateway-keycloak-client-secret \\"
+            echo "    --kms-key-id alias/mcp-gateway-secrets \\"
             echo "    --secret-string '{\"client_id\": \"mcp-gateway-web\", \"client_secret\": \"${web_secret}\"}' \\"
             echo "    --region \${AWS_REGION}"
         fi
@@ -865,12 +884,14 @@ setup_client_secrets() {
         if aws secretsmanager update-secret \
             --secret-id mcp-gateway-keycloak-m2m-client-secret \
             --secret-string "{\"client_id\": \"mcp-gateway-m2m\", \"client_secret\": \"${m2m_secret}\"}" \
+            $kms_key_arg \
             --region "${AWS_REGION}" &>/dev/null; then
             echo -e "${GREEN}M2M client secret saved to AWS Secrets Manager!${NC}"
         else
             echo -e "${YELLOW}Warning: Could not save M2M client secret to Secrets Manager${NC}"
             echo "You can manually update it with:"
             echo "  aws secretsmanager update-secret --secret-id mcp-gateway-keycloak-m2m-client-secret \\"
+            echo "    --kms-key-id alias/mcp-gateway-secrets \\"
             echo "    --secret-string '{\"client_id\": \"mcp-gateway-m2m\", \"client_secret\": \"${m2m_secret}\"}' \\"
             echo "    --region \${AWS_REGION}"
         fi
@@ -1127,6 +1148,63 @@ main() {
     
     # Wait for Keycloak to be ready
     wait_for_keycloak
+
+    # If using HTTP (no Route53/CloudFront), disable SSL requirement on existing realms
+    # via ECS exec. Keycloak persists sslRequired in the DB per-realm, and no env var
+    # or CLI flag can retroactively change it for already-created realms.
+    if [[ "$KEYCLOAK_URL" == http://* ]]; then
+        echo "Detected HTTP mode - disabling SSL requirement on Keycloak realms via ECS exec..."
+        
+        local keycloak_cluster="keycloak"
+        local keycloak_task_arn
+        keycloak_task_arn=$(aws ecs list-tasks \
+            --cluster "$keycloak_cluster" \
+            --service-name "keycloak" \
+            --region "${AWS_REGION}" \
+            --query 'taskArns[0]' \
+            --output text 2>/dev/null)
+        
+        if [[ -n "$keycloak_task_arn" && "$keycloak_task_arn" != "None" ]]; then
+            echo "  Using ECS task: $keycloak_task_arn"
+            
+            # Authenticate kcadm.sh inside the container (talks to localhost, no SSL issue)
+            if aws ecs execute-command \
+                --cluster "$keycloak_cluster" \
+                --task "$keycloak_task_arn" \
+                --container "keycloak" \
+                --interactive \
+                --region "${AWS_REGION}" \
+                --command "/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user ${KEYCLOAK_ADMIN} --password ${KEYCLOAK_ADMIN_PASSWORD}" 2>/dev/null; then
+                
+                # Disable SSL on master realm
+                aws ecs execute-command \
+                    --cluster "$keycloak_cluster" \
+                    --task "$keycloak_task_arn" \
+                    --container "keycloak" \
+                    --interactive \
+                    --region "${AWS_REGION}" \
+                    --command "/opt/keycloak/bin/kcadm.sh update realms/master -s sslRequired=NONE" 2>/dev/null && \
+                echo -e "${GREEN}  SSL requirement disabled on master realm${NC}" || \
+                echo -e "${YELLOW}  Warning: Could not disable SSL on master realm${NC}"
+                
+                # Also disable on mcp-gateway realm if it exists
+                aws ecs execute-command \
+                    --cluster "$keycloak_cluster" \
+                    --task "$keycloak_task_arn" \
+                    --container "keycloak" \
+                    --interactive \
+                    --region "${AWS_REGION}" \
+                    --command "/opt/keycloak/bin/kcadm.sh update realms/mcp-gateway -s sslRequired=NONE" 2>/dev/null && \
+                echo -e "${GREEN}  SSL requirement disabled on mcp-gateway realm${NC}" || true
+            else
+                echo -e "${YELLOW}  Warning: Could not authenticate kcadm.sh via ECS exec${NC}"
+            fi
+        else
+            echo -e "${YELLOW}  Warning: Could not find Keycloak ECS task for SSL disable${NC}"
+        fi
+        
+        sleep 2
+    fi
     
     # Get admin token
     echo "Authenticating with Keycloak..."

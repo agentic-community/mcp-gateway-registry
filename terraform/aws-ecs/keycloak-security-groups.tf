@@ -168,6 +168,20 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_auth_server" {
   source_security_group_id = module.mcp_gateway.ecs_security_group_ids.auth
 }
 
+# Load Balancer Ingress from MCP Gateway Auth Server (HTTP)
+# In ALB-direct mode (no Route53/CloudFront), Keycloak ALB only listens on port 80.
+# ECS tasks in private subnets resolve the ALB's public DNS to its public IPs,
+# and traffic routes through the NAT gateway. This SG rule allows that traffic on port 80.
+resource "aws_security_group_rule" "keycloak_lb_ingress_auth_server_http" {
+  description              = "Ingress from MCP Gateway Auth Server to Keycloak load balancer (HTTP)"
+  type                     = "ingress"
+  from_port                = 80
+  to_port                  = 80
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.keycloak_lb.id
+  source_security_group_id = module.mcp_gateway.ecs_security_group_ids.auth
+}
+
 # Load Balancer Ingress from NAT Gateways (for ECS tasks making HTTPS requests to Keycloak public URL)
 # When ECS tasks in private subnets call Keycloak's public DNS name, traffic goes through NAT gateway.
 # The source IP becomes the NAT gateway's public IP, not the ECS task's security group.
@@ -181,12 +195,36 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_nat_gateway" {
   security_group_id = aws_security_group.keycloak_lb.id
 }
 
+# Load Balancer Ingress from NAT Gateways (HTTP)
+# Same as above but for port 80 - needed in ALB-direct mode where Keycloak ALB has no HTTPS listener.
+resource "aws_security_group_rule" "keycloak_lb_ingress_nat_gateway_http" {
+  description       = "Ingress from NAT gateways to Keycloak load balancer (HTTP)"
+  type              = "ingress"
+  from_port         = 80
+  to_port           = 80
+  protocol          = "tcp"
+  cidr_blocks       = [for ip in module.vpc.nat_public_ips : "${ip}/32"]
+  security_group_id = aws_security_group.keycloak_lb.id
+}
+
 # Load Balancer Ingress from MCP Gateway Registry (HTTPS)
 resource "aws_security_group_rule" "keycloak_lb_ingress_registry" {
   description              = "Ingress from MCP Gateway Registry to Keycloak load balancer (HTTPS)"
   type                     = "ingress"
   from_port                = 443
   to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.keycloak_lb.id
+  source_security_group_id = module.mcp_gateway.ecs_security_group_ids.registry
+}
+
+# Load Balancer Ingress from MCP Gateway Registry (HTTP)
+# Needed in ALB-direct mode where Keycloak ALB only listens on port 80.
+resource "aws_security_group_rule" "keycloak_lb_ingress_registry_http" {
+  description              = "Ingress from MCP Gateway Registry to Keycloak load balancer (HTTP)"
+  type                     = "ingress"
+  from_port                = 80
+  to_port                  = 80
   protocol                 = "tcp"
   security_group_id        = aws_security_group.keycloak_lb.id
   source_security_group_id = module.mcp_gateway.ecs_security_group_ids.registry

@@ -1347,43 +1347,40 @@ async def validate_request(request: Request):
 
             bearer_token = authorization[len("Bearer "):].strip()
             if not hmac.compare_digest(bearer_token, REGISTRY_API_TOKEN):
-                logger.warning("Static token auth: Invalid API token provided")
-                return JSONResponse(
-                    content={"detail": "Invalid API token"},
-                    status_code=403,
-                    headers={"Connection": "close"},
+                # Token doesn't match static API token - fall through to JWT validation
+                # This allows both static tokens AND JWT tokens to work for registry API requests
+                logger.info("Static token auth: Token does not match static API token, falling through to JWT validation")
+            else:
+                logger.info(
+                    f"Network-trusted mode: Bypassing auth validation for registry API "
+                    f"request to {original_url}"
                 )
 
-            logger.info(
-                f"Network-trusted mode: Bypassing auth validation for registry API "
-                f"request to {original_url}"
-            )
+                network_trusted_scopes = [
+                    "mcp-servers-unrestricted/read",
+                    "mcp-servers-unrestricted/execute",
+                ]
+                response_data = {
+                    "valid": True,
+                    "username": "network-user",
+                    "client_id": "network-trusted",
+                    "scopes": network_trusted_scopes,
+                    "method": "network-trusted",
+                    "groups": ["mcp-registry-admin"],
+                    "server_name": None,
+                    "tool_name": None,
+                }
 
-            network_trusted_scopes = [
-                "mcp-servers-unrestricted/read",
-                "mcp-servers-unrestricted/execute",
-            ]
-            response_data = {
-                "valid": True,
-                "username": "network-user",
-                "client_id": "network-trusted",
-                "scopes": network_trusted_scopes,
-                "method": "network-trusted",
-                "groups": ["mcp-registry-admin"],
-                "server_name": None,
-                "tool_name": None,
-            }
+                response = JSONResponse(content=response_data, status_code=200)
+                response.headers["X-User"] = "network-user"
+                response.headers["X-Username"] = "network-user"
+                response.headers["X-Client-Id"] = "network-trusted"
+                response.headers["X-Scopes"] = " ".join(network_trusted_scopes)
+                response.headers["X-Auth-Method"] = "network-trusted"
+                response.headers["X-Server-Name"] = ""
+                response.headers["X-Tool-Name"] = ""
 
-            response = JSONResponse(content=response_data, status_code=200)
-            response.headers["X-User"] = "network-user"
-            response.headers["X-Username"] = "network-user"
-            response.headers["X-Client-Id"] = "network-trusted"
-            response.headers["X-Scopes"] = " ".join(network_trusted_scopes)
-            response.headers["X-Auth-Method"] = "network-trusted"
-            response.headers["X-Server-Name"] = ""
-            response.headers["X-Tool-Name"] = ""
-
-            return response
+                return response
 
         # Initialize validation result
         validation_result = None

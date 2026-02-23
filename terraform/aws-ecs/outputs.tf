@@ -132,8 +132,10 @@ output "keycloak_ecr_repository" {
 #
 
 output "registry_url" {
-  description = "Registry URL with custom domain"
-  value       = var.enable_route53_dns ? "https://registry.${local.root_domain}" : null
+  description = "Registry URL (custom domain, CloudFront, or ALB fallback)"
+  value = var.enable_route53_dns ? "https://registry.${local.root_domain}" : (
+    var.enable_cloudfront ? "https://${aws_cloudfront_distribution.mcp_gateway[0].domain_name}" : module.mcp_gateway.service_urls.registry
+  )
 }
 
 output "registry_certificate_arn" {
@@ -170,6 +172,11 @@ output "deployment_mode" {
   value = var.enable_cloudfront && !var.enable_route53_dns ? "cloudfront" : (
     var.enable_route53_dns ? "custom-domain" : "development"
   )
+}
+
+output "secrets_kms_key_arn" {
+  description = "KMS key ARN used for Secrets Manager encryption"
+  value       = aws_kms_key.secrets.arn
 }
 
 #

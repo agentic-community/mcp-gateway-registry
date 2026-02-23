@@ -176,6 +176,7 @@ resource "aws_secretsmanager_secret" "keycloak_db_secret" {
   name                    = "keycloak/database"
   description             = "Keycloak database credentials"
   recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.arn
 
   tags = local.common_tags
 }

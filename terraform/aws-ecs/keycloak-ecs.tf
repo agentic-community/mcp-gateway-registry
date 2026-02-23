@@ -4,13 +4,13 @@
 
 locals {
   # Determine Keycloak hostname based on deployment mode
-  # CloudFront mode: use CloudFront domain, Custom DNS mode: use keycloak_domain
-  keycloak_hostname = var.enable_cloudfront && !var.enable_route53_dns ? (
-    var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
-  ) : local.keycloak_domain
+  # Route53 mode: use custom domain, CloudFront mode: use CloudFront domain, ALB-direct: use ALB DNS
+  keycloak_hostname = var.enable_route53_dns ? local.keycloak_domain : (
+    var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : aws_lb.keycloak.dns_name
+  )
 
-  # Full HTTPS URL for Keycloak (required for KC_HOSTNAME_URL and KC_HOSTNAME_ADMIN_URL)
-  keycloak_hostname_url = "https://${local.keycloak_hostname}"
+  # Full URL for Keycloak - HTTPS for Route53/CloudFront, HTTP for ALB-direct
+  keycloak_hostname_url = (var.enable_route53_dns || var.enable_cloudfront) ? "https://${local.keycloak_hostname}" : "http://${local.keycloak_hostname}"
 
   keycloak_container_env = [
     {
@@ -41,8 +41,13 @@ locals {
       value = "false"
     },
     {
-      # HTTPS strict mode - Keycloak will require HTTPS for all requests
+      # HTTPS strict mode - only require HTTPS when TLS is available (Route53 or CloudFront)
       name  = "KC_HOSTNAME_STRICT_HTTPS"
+      value = (var.enable_route53_dns || var.enable_cloudfront) ? "true" : "false"
+    },
+    {
+      # HTTP_ENABLED must be true for ALB-direct mode (no TLS termination at ALB)
+      name  = "KC_HTTP_ENABLED"
       value = "true"
     },
     {
@@ -252,6 +257,15 @@ resource "aws_ecs_task_definition" "keycloak" {
       versionConsistency = "disabled"
       essential          = true
 
+      # Override entrypoint to include SSL and HTTP settings for ALB-direct mode
+      # --http-enabled=true is needed when there's no TLS termination at ALB
+      # --spi-realm-default-ssl-required overrides DB-persisted sslRequired on all realms
+      entryPoint = (var.enable_route53_dns || var.enable_cloudfront) ? ["/opt/keycloak/bin/kc.sh", "start", "--optimized"] : [
+        "/opt/keycloak/bin/kc.sh", "start", "--optimized",
+        "--http-enabled=true",
+        "--spi-realm-default-ssl-required=NONE"
+      ]
+
       portMappings = [
         {
           name          = "keycloak"
@@ -302,6 +316,8 @@ resource "aws_ecs_service" "keycloak" {
   task_definition = aws_ecs_task_definition.keycloak.arn
   desired_count   = 1
   launch_type     = "FARGATE"
+
+  enable_execute_command = true
 
   network_configuration {
     subnets          = module.vpc.private_subnets

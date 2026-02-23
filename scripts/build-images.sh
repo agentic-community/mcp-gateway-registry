@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build and push Docker images from build-config.yaml to AWS ECR
 # Usage: ./scripts/build-images.sh [build|push|build-push] [IMAGE=name] [NO_CACHE=true]
 # Example: ./scripts/build-images.sh build IMAGE=registry
@@ -22,6 +22,9 @@ NC='\033[0m' # No Color
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Container runtime: supports 'docker' or 'finch'
+CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
 
 # CRITICAL: Check if AWS_REGION is set
 if [[ -z "${AWS_REGION:-}" ]]; then
@@ -287,10 +290,17 @@ build_image() {
         log_warning "Building without cache (NO_CACHE=true)"
     fi
 
-    # Build the Docker image using buildx (faster, better caching, future-proof)
-    # Tag with :latest only (ECS will pull fresh images with imagePullPolicy: always)
-    docker buildx build \
-        --load \
+    # Build the container image
+    # For Docker: use buildx build --load
+    # For Finch/nerdctl: use build --platform (no buildx subcommand)
+    local build_cmd
+    if [[ "$CONTAINER_RUNTIME" == "finch" ]] || [[ "$CONTAINER_RUNTIME" == "nerdctl" ]]; then
+        build_cmd="$CONTAINER_RUNTIME build --platform linux/amd64"
+    else
+        build_cmd="$CONTAINER_RUNTIME buildx build --load"
+    fi
+
+    $build_cmd \
         -f "$REPO_ROOT/$dockerfile" \
         -t "$repo_name:latest" \
         $cache_flags \
@@ -333,20 +343,20 @@ push_image() {
     # Login to ECR
     log_info "Authenticating with ECR..."
     aws ecr get-login-password --region "$AWS_REGION" | \
-        docker login --username AWS --password-stdin "$ECR_REGISTRY" || {
+        $CONTAINER_RUNTIME login --username AWS --password-stdin "$ECR_REGISTRY" || {
         log_error "Failed to authenticate with ECR"
         return 1
     }
 
     # Tag image for ECR (:latest only)
-    docker tag "$repo_name:latest" "$ecr_uri_latest" || {
+    $CONTAINER_RUNTIME tag "$repo_name:latest" "$ecr_uri_latest" || {
         log_error "Failed to tag image for ECR"
         return 1
     }
 
     # Push to ECR
     log_info "Pushing $ecr_uri_latest..."
-    docker push "$ecr_uri_latest" || {
+    $CONTAINER_RUNTIME push "$ecr_uri_latest" || {
         log_error "Failed to push image to ECR"
         return 1
     }
