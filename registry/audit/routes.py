@@ -149,13 +149,22 @@ def _build_query(
         escaped_username = re.escape(username)
         query["identity.username"] = {"$regex": escaped_username, "$options": "i"}
     
-    # Action filters
-    if operation:
-        query["action.operation"] = operation
-    if resource_type:
-        query["action.resource_type"] = resource_type
-    if resource_id:
-        query["action.resource_id"] = resource_id
+    # Action filters - different fields per stream
+    if stream == "mcp_access":
+        # MCP records use mcp_request.method and mcp_server.name
+        if operation:
+            query["mcp_request.method"] = operation
+        if resource_type:
+            escaped_resource = re.escape(resource_type)
+            query["mcp_server.name"] = {"$regex": escaped_resource, "$options": "i"}
+    else:
+        # Registry API records use action.* fields
+        if operation:
+            query["action.operation"] = operation
+        if resource_type:
+            query["action.resource_type"] = resource_type
+        if resource_id:
+            query["action.resource_id"] = resource_id
     
     # Response status filter
     # For registry_api: use numeric response.status_code
@@ -318,37 +327,51 @@ async def get_audit_events(
 async def get_audit_event(
     request_id: str,
     user_context: Annotated[Dict[str, Any], Depends(require_admin)],
+    log_type: Optional[str] = Query(
+        default=None,
+        description="Filter by log type: registry_api_access or mcp_server_access",
+    ),
 ) -> Dict[str, Any]:
     """
-    Get a single audit event by request_id.
-    
-    Returns the complete audit event record including all fields.
-    
+    Get audit events by request_id.
+
+    Returns all audit event records matching the request_id,
+    optionally filtered by log_type. A single request may have
+    multiple audit events (e.g., MCP server access + registry API access).
+
     Requires admin access.
     """
     logger.info(
-        f"Admin '{user_context.get('username')}' retrieving audit event: {request_id}"
+        f"Admin '{user_context.get('username')}' retrieving audit events: "
+        f"request_id={request_id}, log_type={log_type}"
     )
-    
+
     repository = get_audit_repository()
-    
+
     try:
-        event = await repository.find_one({"request_id": request_id})
-        
-        if not event:
+        query: Dict[str, Any] = {"request_id": request_id}
+        if log_type is not None:
+            query["log_type"] = log_type
+
+        events = await repository.find(query, limit=10)
+
+        if not events:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Event not found",
             )
-        
-        return event
+
+        return {
+            "request_id": request_id,
+            "events": events,
+        }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving audit event: {e}", exc_info=True)
+        logger.error(f"Error retrieving audit events: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve audit event",
+            detail="Failed to retrieve audit events",
         )
 
 

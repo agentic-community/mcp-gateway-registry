@@ -29,6 +29,10 @@ global:
   authProvider:
     # Provider type: "keycloak" or "entra"
     type: keycloak
+    keycloak:
+      adminUsername: &keycloakAdmin "user"
+      realm: &keycloakRealm "mcp-gateway"
+      # Don't set password here - let Keycloak chart generate it
     entra:
       adminGroupId: # UUID of Entra admin group
 
@@ -71,6 +75,10 @@ keycloak:
   global:
     security:
       allowInsecureImages: true
+
+  auth:
+    adminUser: *keycloakAdmin
+    # Don't set adminPassword - let it auto-generate
 
   postgresql:
     image:
@@ -134,8 +142,8 @@ keycloak:
 keycloak-configure:
   enabled: true  # Set to false to skip Keycloak configuration or when using Entra
   keycloak:
-    realm: mcp-gateway
-    adminUser: user
+    realm: *keycloakRealm
+    adminUser: *keycloakAdmin
   # authServer.externalUrl will be templated in the subchart using global.domain
 
 # Keycloak ingress for mcp-gateway-registry
@@ -167,7 +175,7 @@ auth-server:
 
   keycloak:
     enabled: true
-    realm: mcp-gateway
+    realm: *keycloakRealm
     # externalUrl will be templated in the subchart using global.domain
 
   # Entra ID settings (used when global.authProvider.type = "entra")

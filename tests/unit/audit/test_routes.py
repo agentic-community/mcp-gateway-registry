@@ -146,12 +146,16 @@ class TestAuditEventDetailEndpoint:
     async def test_returns_404_when_not_found(self):
         """GET /events/{request_id} returns 404 when event not found."""
         mock_repo = MagicMock()
-        mock_repo.find_one = AsyncMock(return_value=None)
-        
+        mock_repo.find = AsyncMock(return_value=[])
+
         with patch("registry.audit.routes.get_audit_repository", return_value=mock_repo):
             from registry.audit.routes import get_audit_event
-            
+
             with pytest.raises(HTTPException) as exc_info:
-                await get_audit_event(request_id="nonexistent", user_context={"is_admin": True})
-            
+                await get_audit_event(
+                    request_id="nonexistent",
+                    user_context={"is_admin": True},
+                    log_type=None,
+                )
+
             assert exc_info.value.status_code == 404

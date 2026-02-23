@@ -471,7 +471,7 @@ async def _create_audit_events_indexes(
     - Query by username + time range
     - Query by operation + time range
     - Query by resource type + time range
-    - Lookup by request_id
+    - Composite unique lookup by (request_id, log_type)
     - TTL-based automatic expiration (default 7 days)
     """
     # Standard query indexes (compound with timestamp for range queries)
@@ -501,24 +501,47 @@ async def _create_audit_events_indexes(
         except Exception as e:
             logger.error(f"Failed to create index '{index_name}' on {collection_name}: {e}")
 
-    # Unique index on request_id
-    request_id_index = "request_id_idx"
+    # Composite unique index on (request_id, log_type)
+    # Allows both MCPServerAccessRecord and RegistryApiAccessRecord
+    # to coexist for the same request_id while preventing true duplicates
+    composite_index_name = "request_id_log_type_idx"
+    old_index_name = "request_id_idx"
+
+    # Always try to drop the old single-field index (migration from previous versions)
+    try:
+        await collection.drop_index(old_index_name)
+        logger.info(
+            f"Dropped old single-field index '{old_index_name}' from {collection_name}"
+        )
+    except Exception as e:
+        logger.debug(
+            f"No old index '{old_index_name}' to drop: {e}"
+        )
+
     if recreate:
         try:
-            await collection.drop_index(request_id_index)
-            logger.info(f"Dropped existing index '{request_id_index}' from {collection_name}")
+            await collection.drop_index(composite_index_name)
+            logger.info(
+                f"Dropped existing index '{composite_index_name}' from {collection_name}"
+            )
         except Exception as e:
-            logger.debug(f"No existing index '{request_id_index}' to drop: {e}")
+            logger.debug(
+                f"No existing index '{composite_index_name}' to drop: {e}"
+            )
 
     try:
         await collection.create_index(
-            [("request_id", 1)],
-            name=request_id_index,
+            [("request_id", 1), ("log_type", 1)],
+            name=composite_index_name,
             unique=True,
         )
-        logger.info(f"Created unique index '{request_id_index}' on {collection_name}")
+        logger.info(
+            f"Created composite unique index '{composite_index_name}' on {collection_name}"
+        )
     except Exception as e:
-        logger.error(f"Failed to create index '{request_id_index}' on {collection_name}: {e}")
+        logger.error(
+            f"Failed to create index '{composite_index_name}' on {collection_name}: {e}"
+        )
 
     # TTL index for automatic expiration
     # Default 7 days (604800 seconds), configurable via AUDIT_LOG_MONGODB_TTL_DAYS
