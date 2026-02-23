@@ -13,14 +13,12 @@ import os
 import re
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from ..core.config import settings
-from ..schemas.agent_security import AgentSecurityScanResult, AgentSecurityScanConfig
 from ..repositories.factory import get_security_scan_repository
-
+from ..schemas.agent_security import AgentSecurityScanConfig, AgentSecurityScanResult
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +56,9 @@ class AgentScannerService:
         self,
         agent_card: dict,
         agent_path: str,
-        analyzers: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Optional[int] = None,
+        analyzers: str | None = None,
+        api_key: str | None = None,
+        timeout: int | None = None,
     ) -> AgentSecurityScanResult:
         """
         Scan an A2A agent for security vulnerabilities.
@@ -111,7 +109,7 @@ class AgentScannerService:
             result = AgentSecurityScanResult(
                 agent_path=agent_path,
                 agent_url=str(agent_url) if agent_url else None,
-                scan_timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                scan_timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 is_safe=is_safe,
                 critical_issues=critical,
                 high_severity=high,
@@ -147,7 +145,7 @@ class AgentScannerService:
             result = AgentSecurityScanResult(
                 agent_path=agent_path,
                 agent_url=agent_card.get("url"),
-                scan_timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                scan_timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 is_safe=False,  # Treat scanner failures as unsafe
                 critical_issues=0,
                 high_severity=0,
@@ -170,8 +168,8 @@ class AgentScannerService:
         agent_card: dict,
         agent_path: str,
         analyzers: str,
-        api_key: Optional[str] = None,
-        timeout: Optional[int] = None,
+        api_key: str | None = None,
+        timeout: int | None = None,
     ) -> dict:
         """
         Run a2a-scanner command and return raw output.
@@ -182,7 +180,7 @@ class AgentScannerService:
         logger.info(f"Using analyzers: {analyzers}")
 
         # Create temporary file for agent card
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp_file:
             json.dump(agent_card, tmp_file, indent=2, default=str)
             tmp_file_path = tmp_file.name
 
@@ -205,7 +203,7 @@ class AgentScannerService:
 
             # Run scanner with timeout
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603 - args are hardcoded flags and validated config values
                     cmd,
                     capture_output=True,
                     text=True,
@@ -264,7 +262,9 @@ class AgentScannerService:
                             raw_output["analysis_results"][analyzer_name] = {"findings": []}
                         raw_output["analysis_results"][analyzer_name]["findings"].append(finding)
 
-                logger.debug(f"A2A scanner output:\n{json.dumps(raw_output, indent=2, default=str)}")
+                logger.debug(
+                    f"A2A scanner output:\n{json.dumps(raw_output, indent=2, default=str)}"
+                )
                 return raw_output
 
             except subprocess.TimeoutExpired as e:
@@ -314,7 +314,7 @@ class AgentScannerService:
         # Determine if safe: no critical or high severity issues
         is_safe = critical_count == 0 and high_count == 0
 
-        logger.info(f"Agent security analysis results:")
+        logger.info("Agent security analysis results:")
         logger.info(f"  Critical Issues: {critical_count}")
         logger.info(f"  High Severity: {high_count}")
         logger.info(f"  Medium Severity: {medium_count}")
@@ -323,7 +323,7 @@ class AgentScannerService:
 
         return is_safe, critical_count, high_count, medium_count, low_count
 
-    async def get_scan_result(self, agent_path: str) -> Optional[dict]:
+    async def get_scan_result(self, agent_path: str) -> dict | None:
         """
         Get the latest scan result for an agent.
 
@@ -340,7 +340,7 @@ class AgentScannerService:
             if scan_result:
                 logger.info(f"Loaded agent scan results for {agent_path} from repository")
                 # Convert to dict if needed
-                if hasattr(scan_result, 'model_dump'):
+                if hasattr(scan_result, "model_dump"):
                     return scan_result.model_dump()
                 return scan_result
 
@@ -348,9 +348,7 @@ class AgentScannerService:
             return None
 
         except Exception as e:
-            logger.exception(
-                f"Unexpected error loading agent scan results for {agent_path}"
-            )
+            logger.exception(f"Unexpected error loading agent scan results for {agent_path}")
             return None
 
 

@@ -5,11 +5,10 @@ Version can be set via BUILD_VERSION environment variable (for Docker builds)
 or determined from git tags at runtime (for local development).
 """
 
+import logging
 import os
 import subprocess
-import logging
 from pathlib import Path
-
 
 logger = logging.getLogger(__name__)
 
@@ -30,20 +29,20 @@ def _get_git_version() -> str:
         repo_root = Path(__file__).parent.parent
 
         # Run git describe to get version
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 B607 - hardcoded git command with static args
             ["git", "describe", "--tags", "--always"],
             cwd=repo_root,
             capture_output=True,
             text=True,
             timeout=5,
-            check=False
+            check=False,
         )
 
         if result.returncode == 0:
             version_str = result.stdout.strip()
 
             # Remove 'v' prefix if present
-            if version_str.startswith('v'):
+            if version_str.startswith("v"):
                 version_str = version_str[1:]
 
             logger.info(f"Version from git: {version_str}")

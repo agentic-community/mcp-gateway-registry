@@ -226,55 +226,25 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 from registry_client import (
-    RegistryClient,
-    InternalServiceRegistration,
-    ServerListResponse,
-    ToggleResponse,
-    GroupListResponse,
-    AgentRegistration,
     AgentProvider,
-    AgentVisibility,
-    Skill,
-    AgentListResponse,
-    AgentDetail,
-    AgentToggleResponse,
-    AgentDiscoveryResponse,
-    AgentSemanticDiscoveryResponse,
-    RatingResponse,
-    RatingInfoResponse,
-    AgentSecurityScanResponse,
+    AgentRegistration,
     AgentRescanResponse,
+    AgentSecurityScanResponse,
+    AgentVisibility,
     AnthropicServerList,
     AnthropicServerResponse,
-    M2MAccountRequest,
-    HumanUserRequest,
-    UserSummary,
-    UserListResponse,
-    UserDeleteResponse,
-    M2MAccountResponse,
-    GroupCreateRequest,
-    GroupSummary,
-    GroupDeleteResponse,
+    InternalServiceRegistration,
+    RatingInfoResponse,
+    RatingResponse,
+    RegistryClient,
+    Skill,
     SkillRegistrationRequest,
-    SkillCard,
-    SkillListResponse,
-    SkillHealthResponse,
-    SkillContentResponse,
-    SkillSearchResponse,
-    SkillToggleResponse,
-    SkillRatingResponse,
-    SkillSecurityScanResponse,
-    SkillRescanResponse,
     ToolMapping,
     ToolScopeOverride,
     VirtualServerCreateRequest,
-    VirtualServerConfig,
-    VirtualServerListResponse,
-    VirtualServerToggleResponse,
-    VirtualServerDeleteResponse,
 )
 
 # Configure logging
@@ -285,9 +255,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _get_registry_url(
-    cli_value: Optional[str] = None
-) -> str:
+def _get_registry_url(cli_value: str | None = None) -> str:
     """
     Get registry URL from command-line argument or environment variable.
 
@@ -316,7 +284,7 @@ def _get_registry_url(
 
 def _mask_sensitive_fields(
     data: Any,
-    fields_to_mask: Optional[List[str]] = None,
+    fields_to_mask: list[str] | None = None,
 ) -> Any:
     """
     Mask sensitive fields in response data for safe logging/printing.
@@ -376,10 +344,7 @@ def _get_token_script() -> str:
     return script_path
 
 
-def _get_jwt_token(
-    aws_region: Optional[str] = None,
-    keycloak_url: Optional[str] = None
-) -> str:
+def _get_jwt_token(aws_region: str | None = None, keycloak_url: str | None = None) -> str:
     """
     Retrieve JWT token using get-m2m-token.sh script.
 
@@ -408,11 +373,8 @@ def _get_jwt_token(
             cmd.extend(["--keycloak-url", keycloak_url])
         cmd.append(client_name)
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True
+        result = subprocess.run(  # nosec B603 - script path from config, args from env vars
+            cmd, capture_output=True, text=True, check=True
         )
 
         token = result.stdout.strip()
@@ -433,7 +395,7 @@ def _get_jwt_token(
         raise RuntimeError(f"Token retrieval error: {e}") from e
 
 
-def _load_json_config(config_path: str) -> Dict[str, Any]:
+def _load_json_config(config_path: str) -> dict[str, Any]:
     """
     Load JSON configuration file.
 
@@ -452,16 +414,14 @@ def _load_json_config(config_path: str) -> Dict[str, Any]:
     if not config_file.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-    with open(config_file, 'r') as f:
+    with open(config_file) as f:
         config = json.load(f)
 
     logger.debug(f"Loaded configuration from {config_path}")
     return config
 
 
-def _create_client(
-    args: argparse.Namespace
-) -> RegistryClient:
+def _create_client(args: argparse.Namespace) -> RegistryClient:
     """
     Create and return a configured RegistryClient instance.
 
@@ -485,7 +445,7 @@ def _create_client(
         missing_params.append("REGISTRY_URL")
 
     # Check if token file is provided
-    if hasattr(args, 'token_file') and args.token_file:
+    if hasattr(args, "token_file") and args.token_file:
         token_path = Path(args.token_file)
         if not token_path.exists():
             raise FileNotFoundError(f"Token file not found: {args.token_file}")
@@ -494,19 +454,21 @@ def _create_client(
 
         # Try to parse as JSON first (token files from generate-agent-token.sh or UI)
         try:
-            with open(token_path, 'r') as f:
+            with open(token_path) as f:
                 token_data = json.load(f)
             # Extract access_token - handle multiple JSON formats:
             # Format 1: {"access_token": "..."} (from generate-agent-token.sh)
             # Format 2: {"tokens": {"access_token": "..."}, ...} (from UI "Get JWT Token")
             # Format 3: {"token_data": {"access_token": "..."}, ...} (alternative UI format)
-            token = token_data.get('access_token')
-            if not token and 'tokens' in token_data:
-                token = token_data['tokens'].get('access_token')
-            if not token and 'token_data' in token_data:
-                token = token_data['token_data'].get('access_token')
+            token = token_data.get("access_token")
+            if not token and "tokens" in token_data:
+                token = token_data["tokens"].get("access_token")
+            if not token and "token_data" in token_data:
+                token = token_data["token_data"].get("access_token")
             if not token:
-                raise RuntimeError(f"No 'access_token' field found in token file: {args.token_file}")
+                raise RuntimeError(
+                    f"No 'access_token' field found in token file: {args.token_file}"
+                )
         except json.JSONDecodeError:
             # Fall back to plain text token file
             token = token_path.read_text().strip()
@@ -545,10 +507,7 @@ def _create_client(
             error_msg += "Alternatively, use --token-file to provide a pre-generated JWT token."
             raise ValueError(error_msg)
 
-        token = _get_jwt_token(
-            aws_region=aws_region,
-            keycloak_url=keycloak_url
-        )
+        token = _get_jwt_token(aws_region=aws_region, keycloak_url=keycloak_url)
 
     # Final check for registry URL (in case token file path was provided)
     if missing_params and "REGISTRY_URL" in missing_params:
@@ -560,10 +519,7 @@ def _create_client(
             "  --registry-url https://registry.example.com"
         )
 
-    return RegistryClient(
-        registry_url=registry_url,
-        token=token
-    )
+    return RegistryClient(registry_url=registry_url, token=token)
 
 
 def cmd_register(args: argparse.Namespace) -> int:
@@ -632,12 +588,10 @@ def cmd_list(args: argparse.Namespace) -> int:
         client = _create_client(args)
 
         # Print raw JSON if requested - fetch directly from API to get all fields
-        if hasattr(args, 'json') and args.json:
+        if hasattr(args, "json") and args.json:
             import json
-            raw_response = client._make_request(
-                method="GET",
-                endpoint="/api/servers"
-            )
+
+            raw_response = client._make_request(method="GET", endpoint="/api/servers")
             print(json.dumps(raw_response.json(), indent=2, default=str))
             return 0
 
@@ -655,7 +609,7 @@ def cmd_list(args: argparse.Namespace) -> int:
                 "healthy": "🟢",
                 "unhealthy": "🔴",
                 "unknown": "⚪",
-                "disabled": "⚫"
+                "disabled": "⚫",
             }.get(server.health_status.value, "⚪")
 
             print(f"{status_icon} {health_icon} {server.path}")
@@ -762,15 +716,9 @@ def cmd_config(args: argparse.Namespace) -> int:
         client = _create_client(args)
         response = client.get_config()
 
-        logger.info(
-            f"Deployment Mode: {response.get('deployment_mode', 'unknown')}"
-        )
-        logger.info(
-            f"Registry Mode: {response.get('registry_mode', 'unknown')}"
-        )
-        logger.info(
-            f"Nginx Updates Enabled: {response.get('nginx_updates_enabled', 'unknown')}"
-        )
+        logger.info(f"Deployment Mode: {response.get('deployment_mode', 'unknown')}")
+        logger.info(f"Registry Mode: {response.get('registry_mode', 'unknown')}")
+        logger.info(f"Nginx Updates Enabled: {response.get('nginx_updates_enabled', 'unknown')}")
 
         if args.json:
             print(json.dumps(response, indent=2))
@@ -851,9 +799,7 @@ def cmd_create_group(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.create_group(
-            group_name=args.name,
-            description=args.description,
-            create_in_idp=args.idp
+            group_name=args.name, description=args.description, create_in_idp=args.idp
         )
 
         logger.info(f"Group created successfully: {args.name}")
@@ -883,9 +829,7 @@ def cmd_delete_group(args: argparse.Namespace) -> int:
 
         client = _create_client(args)
         response = client.delete_group(
-            group_name=args.name,
-            delete_from_idp=args.idp,
-            force=args.force
+            group_name=args.name, delete_from_idp=args.idp, force=args.force
         )
 
         logger.info(f"Group deleted successfully: {args.name}")
@@ -910,7 +854,7 @@ def cmd_import_group(args: argparse.Namespace) -> int:
 
     try:
         # Read JSON file
-        with open(args.file, 'r') as f:
+        with open(args.file) as f:
             group_definition = json.load(f)
 
         # Validate required field
@@ -951,12 +895,11 @@ def cmd_list_groups(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.list_groups(
-            include_keycloak=not args.no_keycloak,
-            include_scopes=not args.no_scopes
+            include_keycloak=not args.no_keycloak, include_scopes=not args.no_scopes
         )
 
         # If JSON output requested, print raw response and exit
-        if hasattr(args, 'json') and args.json:
+        if hasattr(args, "json") and args.json:
             print(json.dumps(response.model_dump(), indent=2, default=str))
             return 0
 
@@ -968,9 +911,9 @@ def cmd_list_groups(args: argparse.Namespace) -> int:
                 # Show details from scopes if available
                 if group_name in response.scopes_groups:
                     group_info = response.scopes_groups[group_name]
-                    if 'description' in group_info:
+                    if "description" in group_info:
                         print(f"    Description: {group_info['description']}")
-                    if 'server_count' in group_info:
+                    if "server_count" in group_info:
                         print(f"    Servers: {group_info['server_count']}")
 
         # Display Keycloak-only groups
@@ -986,13 +929,13 @@ def cmd_list_groups(args: argparse.Namespace) -> int:
                 print(f"  - {group_name}")
                 if group_name in response.scopes_groups:
                     group_info = response.scopes_groups[group_name]
-                    if 'description' in group_info:
+                    if "description" in group_info:
                         print(f"    Description: {group_info['description']}")
 
         # Summary
         total_keycloak = len(response.keycloak_groups)
         total_scopes = len(response.scopes_groups)
-        print(f"\n=== Summary ===")
+        print("\n=== Summary ===")
         print(f"Total Keycloak groups: {total_keycloak}")
         print(f"Total Scopes groups: {total_scopes}")
         print(f"Synchronized: {len(response.synchronized)}")
@@ -1033,7 +976,7 @@ def cmd_describe_group(args: argparse.Namespace) -> int:
                 raise
 
         # If JSON output requested
-        if hasattr(args, 'json') and args.json:
+        if hasattr(args, "json") and args.json:
             if group_data:
                 print(json.dumps(group_data, indent=2, default=str))
                 return 0
@@ -1053,21 +996,21 @@ def cmd_describe_group(args: argparse.Namespace) -> int:
         print(f"Updated: {group_data.get('updated_at', 'N/A')}")
 
         print("\nServer Access:")
-        server_access = group_data.get('server_access', [])
+        server_access = group_data.get("server_access", [])
         if server_access:
             for idx, access in enumerate(server_access, 1):
                 print(f"  {idx}. Server: {access.get('server', 'N/A')}")
-                if 'methods' in access:
+                if "methods" in access:
                     print(f"     Methods: {', '.join(access['methods'])}")
-                if 'tools' in access:
+                if "tools" in access:
                     print(f"     Tools: {', '.join(access['tools'])}")
-                if 'agents' in access:
+                if "agents" in access:
                     print(f"     Agents: {json.dumps(access['agents'], indent=6)}")
         else:
             print("  None")
 
         print("\nGroup Mappings:")
-        group_mappings = group_data.get('group_mappings', [])
+        group_mappings = group_data.get("group_mappings", [])
         if group_mappings:
             for mapping in group_mappings:
                 print(f"  - {mapping}")
@@ -1075,7 +1018,7 @@ def cmd_describe_group(args: argparse.Namespace) -> int:
             print("  None")
 
         print("\nUI Permissions:")
-        ui_permissions = group_data.get('ui_permissions', {})
+        ui_permissions = group_data.get("ui_permissions", {})
         if ui_permissions:
             print(json.dumps(ui_permissions, indent=2))
         else:
@@ -1100,10 +1043,7 @@ def cmd_server_rate(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response: RatingResponse = client.rate_server(
-            path=args.path,
-            rating=args.rating
-        )
+        response: RatingResponse = client.rate_server(path=args.path, rating=args.rating)
 
         logger.info(f"✓ {response.message}")
         logger.info(f"Average rating: {response.average_rating:.2f} stars")
@@ -1174,12 +1114,12 @@ def cmd_security_scan(args: argparse.Namespace) -> int:
             if response.analysis_results:
                 for analyzer_name, analyzer_data in response.analysis_results.items():
                     logger.info(f"\n  Analyzer: {analyzer_name}")
-                    if isinstance(analyzer_data, dict) and 'findings' in analyzer_data:
-                        findings = analyzer_data['findings']
+                    if isinstance(analyzer_data, dict) and "findings" in analyzer_data:
+                        findings = analyzer_data["findings"]
                         logger.info(f"    Findings: {len(findings)}")
                         for finding in findings[:5]:  # Show first 5
-                            severity = finding.get('severity', 'UNKNOWN')
-                            tool_name = finding.get('tool_name', 'unknown')
+                            severity = finding.get("severity", "UNKNOWN")
+                            tool_name = finding.get("tool_name", "unknown")
                             logger.info(f"      - {tool_name}: {severity}")
                         if len(findings) > 5:
                             logger.info(f"      ... and {len(findings) - 5} more")
@@ -1187,7 +1127,7 @@ def cmd_security_scan(args: argparse.Namespace) -> int:
             # Display tool results summary
             if response.tool_results:
                 logger.info(f"\n  Total tools scanned: {len(response.tool_results)}")
-                safe_count = sum(1 for tool in response.tool_results if tool.get('is_safe', False))
+                safe_count = sum(1 for tool in response.tool_results if tool.get("is_safe", False))
                 unsafe_count = len(response.tool_results) - safe_count
                 logger.info(f"  Safe tools: {safe_count}")
                 if unsafe_count > 0:
@@ -1225,7 +1165,7 @@ def cmd_rescan(args: argparse.Namespace) -> int:
             logger.info(f"  Status: {safety_status}")
             logger.info(f"  Scan timestamp: {response.scan_timestamp}")
             logger.info(f"  Analyzers used: {', '.join(response.analyzers_used)}")
-            logger.info(f"\n  Severity counts:")
+            logger.info("\n  Severity counts:")
             logger.info(f"    Critical: {response.critical_issues}")
             logger.info(f"    High: {response.high_severity}")
             logger.info(f"    Medium: {response.medium_severity}")
@@ -1257,10 +1197,7 @@ def cmd_server_search(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response = client.semantic_search(
-            query=args.query,
-            max_results=args.max_results
-        )
+        response = client.semantic_search(query=args.query, max_results=args.max_results)
 
         if args.json:
             # Output raw JSON
@@ -1268,11 +1205,11 @@ def cmd_server_search(args: argparse.Namespace) -> int:
             return 0
 
         total_results = (
-            len(response.servers) +
-            len(response.tools) +
-            len(response.agents) +
-            len(response.skills) +
-            len(response.virtual_servers)
+            len(response.servers)
+            + len(response.tools)
+            + len(response.agents)
+            + len(response.skills)
+            + len(response.virtual_servers)
         )
 
         if total_results == 0:
@@ -1290,7 +1227,11 @@ def cmd_server_search(args: argparse.Namespace) -> int:
                 if server.tags:
                     print(f"    Tags: {', '.join(server.tags[:5])}")
                 if server.description:
-                    desc = server.description[:100] + "..." if len(server.description) > 100 else server.description
+                    desc = (
+                        server.description[:100] + "..."
+                        if len(server.description) > 100
+                        else server.description
+                    )
                     print(f"    {desc}")
                 print()
 
@@ -1301,7 +1242,11 @@ def cmd_server_search(args: argparse.Namespace) -> int:
                 print(f"  {tool.tool_name} (from {tool.server_path})")
                 print(f"    Relevance: {tool.relevance_score:.2%}")
                 if tool.description:
-                    desc = tool.description[:100] + "..." if len(tool.description) > 100 else tool.description
+                    desc = (
+                        tool.description[:100] + "..."
+                        if len(tool.description) > 100
+                        else tool.description
+                    )
                     print(f"    {desc}")
                 print()
 
@@ -1316,7 +1261,11 @@ def cmd_server_search(args: argparse.Namespace) -> int:
                 if agent.skills:
                     print(f"    Skills: {', '.join(agent.skills[:5])}")
                 if agent.description:
-                    desc = agent.description[:100] + "..." if len(agent.description) > 100 else agent.description
+                    desc = (
+                        agent.description[:100] + "..."
+                        if len(agent.description) > 100
+                        else agent.description
+                    )
                     print(f"    {desc}")
                 print()
 
@@ -1331,7 +1280,11 @@ def cmd_server_search(args: argparse.Namespace) -> int:
                 if skill.tags:
                     print(f"    Tags: {', '.join(skill.tags[:5])}")
                 if skill.description:
-                    desc = skill.description[:100] + "..." if len(skill.description) > 100 else skill.description
+                    desc = (
+                        skill.description[:100] + "..."
+                        if len(skill.description) > 100
+                        else skill.description
+                    )
                     print(f"    {desc}")
                 print()
 
@@ -1347,7 +1300,11 @@ def cmd_server_search(args: argparse.Namespace) -> int:
                 if vs.tags:
                     print(f"    Tags: {', '.join(vs.tags[:5])}")
                 if vs.description:
-                    desc = vs.description[:100] + "..." if len(vs.description) > 100 else vs.description
+                    desc = (
+                        vs.description[:100] + "..."
+                        if len(vs.description) > 100
+                        else vs.description
+                    )
                     print(f"    {desc}")
                 print()
 
@@ -1382,9 +1339,9 @@ def cmd_list_versions(args: argparse.Namespace) -> int:
         logger.info(f"Versions for server {response['path']}:\n")
         logger.info(f"Default version: {response['default_version']}\n")
 
-        for v in response.get('versions', []):
-            default_marker = " (DEFAULT)" if v.get('is_default') else ""
-            status = v.get('status', 'stable')
+        for v in response.get("versions", []):
+            default_marker = " (DEFAULT)" if v.get("is_default") else ""
+            status = v.get("status", "stable")
             print(f"  {v['version']}{default_marker}")
             print(f"    Status: {status}")
             print(f"    URL: {v.get('proxy_pass_url', 'N/A')}")
@@ -1409,10 +1366,7 @@ def cmd_remove_version(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response = client.remove_server_version(
-            path=args.path,
-            version=args.version
-        )
+        response = client.remove_server_version(path=args.path, version=args.version)
 
         if args.json:
             print(json.dumps(response, indent=2, default=str))
@@ -1438,10 +1392,7 @@ def cmd_set_default_version(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response = client.set_default_version(
-            path=args.path,
-            version=args.version
-        )
+        response = client.set_default_version(path=args.path, version=args.version)
 
         if args.json:
             print(json.dumps(response, indent=2, default=str))
@@ -1474,76 +1425,88 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
             logger.error(f"Config file not found: {config_path}")
             return 1
 
-        with open(config_path, 'r') as f:
+        with open(config_path) as f:
             config = json.load(f)
 
         # Convert skills list of dicts to Skill objects
         # Handle both 'input_schema' and 'parameters' field names
         # Also handle 'id' vs 'name' field for skill identifier
         skills = []
-        for skill_data in config.get('skills', []):
+        for skill_data in config.get("skills", []):
             # Get skill identifier - prefer 'id', fall back to 'name'
-            skill_id = skill_data.get('id') or skill_data.get('name', '')
-            skill_name = skill_data.get('name', skill_id)
+            skill_id = skill_data.get("id") or skill_data.get("name", "")
+            skill_name = skill_data.get("name", skill_id)
 
             # Normalize field names
             skill_dict = {
-                'id': skill_id,  # Always include id field
-                'name': skill_name,
-                'description': skill_data.get('description', ''),
-                'tags': skill_data.get('tags', [])  # Include tags field
+                "id": skill_id,  # Always include id field
+                "name": skill_name,
+                "description": skill_data.get("description", ""),
+                "tags": skill_data.get("tags", []),  # Include tags field
             }
             # Use 'input_schema' if present, otherwise use 'parameters'
-            if 'input_schema' in skill_data:
-                skill_dict['input_schema'] = skill_data['input_schema']
-            elif 'parameters' in skill_data:
-                skill_dict['input_schema'] = skill_data['parameters']
+            if "input_schema" in skill_data:
+                skill_dict["input_schema"] = skill_data["input_schema"]
+            elif "parameters" in skill_data:
+                skill_dict["input_schema"] = skill_data["parameters"]
 
             skills.append(Skill(**skill_dict))
-        config['skills'] = skills
+        config["skills"] = skills
 
         # Provider is now a dict object per A2A spec {organization, url}
         # No conversion needed - pass it through as-is
 
         # Convert visibility string to enum if present
-        if 'visibility' in config:
+        if "visibility" in config:
             try:
-                config['visibility'] = AgentVisibility(config['visibility'].lower())
+                config["visibility"] = AgentVisibility(config["visibility"].lower())
             except ValueError:
                 logger.warning(f"Unknown visibility '{config['visibility']}', using 'public'")
-                config['visibility'] = AgentVisibility.PUBLIC
+                config["visibility"] = AgentVisibility.PUBLIC
 
         # Handle security_schemes conversion
         # Normalize common security type variations to A2A spec values
-        if 'security_schemes' in config:
+        if "security_schemes" in config:
             transformed_schemes = {}
-            for scheme_name, scheme_data in config['security_schemes'].items():
-                scheme_type = scheme_data.get('type', '').lower()
+            for scheme_name, scheme_data in config["security_schemes"].items():
+                scheme_type = scheme_data.get("type", "").lower()
                 # Normalize to A2A spec values: apiKey, http, oauth2, openIdConnect
                 # Keep 'http' as is (for bearer auth), not 'bearer'
                 type_map = {
-                    'http': 'http',  # HTTP auth (including bearer)
-                    'bearer': 'http',  # Bearer is a type of HTTP auth
-                    'apikey': 'apiKey',
-                    'api_key': 'apiKey',
-                    'oauth2': 'oauth2',
-                    'openidconnect': 'openIdConnect',
-                    'openid': 'openIdConnect'
+                    "http": "http",  # HTTP auth (including bearer)
+                    "bearer": "http",  # Bearer is a type of HTTP auth
+                    "apikey": "apiKey",
+                    "api_key": "apiKey",
+                    "oauth2": "oauth2",
+                    "openidconnect": "openIdConnect",
+                    "openid": "openIdConnect",
                 }
-                mapped_type = type_map.get(scheme_type, 'http')
+                mapped_type = type_map.get(scheme_type, "http")
 
                 # Preserve all fields from the original scheme data
                 transformed_scheme = dict(scheme_data)
-                transformed_scheme['type'] = mapped_type
+                transformed_scheme["type"] = mapped_type
 
                 transformed_schemes[scheme_name] = transformed_scheme
-            config['security_schemes'] = transformed_schemes
+            config["security_schemes"] = transformed_schemes
 
         # Remove fields that aren't in AgentRegistration model
         valid_fields = {
-            'protocol_version', 'name', 'description', 'path', 'url', 'version',
-            'capabilities', 'default_input_modes', 'default_output_modes',
-            'provider', 'security_schemes', 'skills', 'tags', 'visibility', 'license'
+            "protocol_version",
+            "name",
+            "description",
+            "path",
+            "url",
+            "version",
+            "capabilities",
+            "default_input_modes",
+            "default_output_modes",
+            "provider",
+            "security_schemes",
+            "skills",
+            "tags",
+            "visibility",
+            "license",
         }
         config = {k: v for k, v in config.items() if k in valid_fields}
 
@@ -1551,22 +1514,29 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
         client = _create_client(args)
         response = client.register_agent(agent)
 
-        logger.info(f"Agent registered successfully: {response.agent.name} at {response.agent.path}")
-        print(json.dumps({
-            "message": response.message,
-            "agent": {
-                "name": response.agent.name,
-                "path": response.agent.path,
-                "url": response.agent.url,
-                "num_skills": response.agent.num_skills,
-                "is_enabled": response.agent.is_enabled
-            }
-        }, indent=2))
+        logger.info(
+            f"Agent registered successfully: {response.agent.name} at {response.agent.path}"
+        )
+        print(
+            json.dumps(
+                {
+                    "message": response.message,
+                    "agent": {
+                        "name": response.agent.name,
+                        "path": response.agent.path,
+                        "url": response.agent.url,
+                        "num_skills": response.agent.num_skills,
+                        "is_enabled": response.agent.is_enabled,
+                    },
+                },
+                indent=2,
+            )
+        )
         return 0
 
     except Exception as e:
         logger.error(f"Agent registration failed: {e}")
-        logger.debug(f"Full error details:", exc_info=True)
+        logger.debug("Full error details:", exc_info=True)
         return 1
 
 
@@ -1583,9 +1553,9 @@ def cmd_agent_list(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.list_agents(
-            query=args.query if hasattr(args, 'query') else None,
-            enabled_only=args.enabled_only if hasattr(args, 'enabled_only') else False,
-            visibility=args.visibility if hasattr(args, 'visibility') else None
+            query=args.query if hasattr(args, "query") else None,
+            enabled_only=args.enabled_only if hasattr(args, "enabled_only") else False,
+            visibility=args.visibility if hasattr(args, "visibility") else None,
         )
 
         # Debug mode: print full JSON response
@@ -1627,23 +1597,25 @@ def cmd_agent_get(args: argparse.Namespace) -> int:
         agent = client.get_agent(args.path)
 
         logger.info(f"Retrieved agent: {agent.name}")
-        print(json.dumps({
-            "name": agent.name,
-            "path": agent.path,
-            "description": agent.description,
-            "url": agent.url,
-            "version": agent.version,
-            "provider": agent.provider.model_dump() if agent.provider else None,
-            "is_enabled": agent.is_enabled,
-            "visibility": agent.visibility,
-            "skills": [
+        print(
+            json.dumps(
                 {
-                    "name": skill.name,
-                    "description": skill.description
-                }
-                for skill in agent.skills
-            ]
-        }, indent=2))
+                    "name": agent.name,
+                    "path": agent.path,
+                    "description": agent.description,
+                    "url": agent.url,
+                    "version": agent.version,
+                    "provider": agent.provider.model_dump() if agent.provider else None,
+                    "is_enabled": agent.is_enabled,
+                    "visibility": agent.visibility,
+                    "skills": [
+                        {"name": skill.name, "description": skill.description}
+                        for skill in agent.skills
+                    ],
+                },
+                indent=2,
+            )
+        )
         return 0
 
     except Exception as e:
@@ -1667,71 +1639,80 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
             logger.error(f"Config file not found: {config_path}")
             return 1
 
-        with open(config_path, 'r') as f:
+        with open(config_path) as f:
             config = json.load(f)
 
         # Convert skills list of dicts to Skill objects
         # Handle both 'input_schema' and 'parameters' field names
         skills = []
-        for skill_data in config.get('skills', []):
+        for skill_data in config.get("skills", []):
             skill_dict = {
-                'name': skill_data.get('name', skill_data.get('id', '')),
-                'description': skill_data.get('description', '')
+                "name": skill_data.get("name", skill_data.get("id", "")),
+                "description": skill_data.get("description", ""),
             }
-            if 'input_schema' in skill_data:
-                skill_dict['input_schema'] = skill_data['input_schema']
-            elif 'parameters' in skill_data:
-                skill_dict['input_schema'] = skill_data['parameters']
+            if "input_schema" in skill_data:
+                skill_dict["input_schema"] = skill_data["input_schema"]
+            elif "parameters" in skill_data:
+                skill_dict["input_schema"] = skill_data["parameters"]
             skills.append(Skill(**skill_dict))
-        config['skills'] = skills
+        config["skills"] = skills
 
         # Convert provider string to enum with validation
-        if 'provider' in config:
-            provider_value = config['provider'].lower()
+        if "provider" in config:
+            provider_value = config["provider"].lower()
             provider_map = {
-                'anthropic': AgentProvider.ANTHROPIC,
-                'custom': AgentProvider.CUSTOM,
-                'other': AgentProvider.OTHER,
-                'example corp': AgentProvider.CUSTOM,
-                'example': AgentProvider.CUSTOM
+                "anthropic": AgentProvider.ANTHROPIC,
+                "custom": AgentProvider.CUSTOM,
+                "other": AgentProvider.OTHER,
+                "example corp": AgentProvider.CUSTOM,
+                "example": AgentProvider.CUSTOM,
             }
             if provider_value in provider_map:
-                config['provider'] = provider_map[provider_value]
+                config["provider"] = provider_map[provider_value]
             else:
                 logger.warning(f"Unknown provider '{config['provider']}', using 'custom'")
-                config['provider'] = AgentProvider.CUSTOM
+                config["provider"] = AgentProvider.CUSTOM
 
         # Convert visibility string to enum if present
-        if 'visibility' in config:
+        if "visibility" in config:
             try:
-                config['visibility'] = AgentVisibility(config['visibility'].lower())
+                config["visibility"] = AgentVisibility(config["visibility"].lower())
             except ValueError:
                 logger.warning(f"Unknown visibility '{config['visibility']}', using 'public'")
-                config['visibility'] = AgentVisibility.PUBLIC
+                config["visibility"] = AgentVisibility.PUBLIC
 
         # Handle security_schemes conversion
-        if 'security_schemes' in config:
+        if "security_schemes" in config:
             transformed_schemes = {}
-            for scheme_name, scheme_data in config['security_schemes'].items():
-                scheme_type = scheme_data.get('type', '').lower()
+            for scheme_name, scheme_data in config["security_schemes"].items():
+                scheme_type = scheme_data.get("type", "").lower()
                 type_map = {
-                    'http': 'bearer',
-                    'bearer': 'bearer',
-                    'apikey': 'api_key',
-                    'api_key': 'api_key',
-                    'oauth2': 'oauth2'
+                    "http": "bearer",
+                    "bearer": "bearer",
+                    "apikey": "api_key",
+                    "api_key": "api_key",
+                    "oauth2": "oauth2",
                 }
-                mapped_type = type_map.get(scheme_type, 'bearer')
+                mapped_type = type_map.get(scheme_type, "bearer")
                 transformed_schemes[scheme_name] = {
-                    'type': mapped_type,
-                    'description': scheme_data.get('description', '')
+                    "type": mapped_type,
+                    "description": scheme_data.get("description", ""),
                 }
-            config['security_schemes'] = transformed_schemes
+            config["security_schemes"] = transformed_schemes
 
         # Remove fields that aren't in AgentRegistration model
         valid_fields = {
-            'name', 'description', 'path', 'url', 'version', 'provider',
-            'security_schemes', 'skills', 'tags', 'visibility', 'license'
+            "name",
+            "description",
+            "path",
+            "url",
+            "version",
+            "provider",
+            "security_schemes",
+            "skills",
+            "tags",
+            "visibility",
+            "license",
         }
         config = {k: v for k, v in config.items() if k in valid_fields}
 
@@ -1744,7 +1725,7 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Agent update failed: {e}")
-        logger.debug(f"Full error details:", exc_info=True)
+        logger.debug("Full error details:", exc_info=True)
         return 1
 
 
@@ -1790,7 +1771,9 @@ def cmd_agent_toggle(args: argparse.Namespace) -> int:
         client = _create_client(args)
         response = client.toggle_agent(args.path, args.enabled)
 
-        logger.info(f"Agent {response.path} is now {'enabled' if response.is_enabled else 'disabled'}")
+        logger.info(
+            f"Agent {response.path} is now {'enabled' if response.is_enabled else 'disabled'}"
+        )
         return 0
 
     except Exception as e:
@@ -1809,14 +1792,12 @@ def cmd_agent_discover(args: argparse.Namespace) -> int:
         Exit code (0 for success, 1 for failure)
     """
     try:
-        skills = [s.strip() for s in args.skills.split(',')]
-        tags = [t.strip() for t in args.tags.split(',')] if args.tags else None
+        skills = [s.strip() for s in args.skills.split(",")]
+        tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
 
         client = _create_client(args)
         response = client.discover_agents_by_skills(
-            skills=skills,
-            tags=tags,
-            max_results=args.max_results
+            skills=skills, tags=tags, max_results=args.max_results
         )
 
         if not response.agents:
@@ -1849,10 +1830,7 @@ def cmd_agent_search(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response = client.discover_agents_semantic(
-            query=args.query,
-            max_results=args.max_results
-        )
+        response = client.discover_agents_semantic(query=args.query, max_results=args.max_results)
 
         if not response.agents:
             if args.json:
@@ -1865,7 +1843,7 @@ def cmd_agent_search(args: argparse.Namespace) -> int:
             # Output full JSON response
             output = {
                 "query": args.query,
-                "agents": [agent.model_dump() for agent in response.agents]
+                "agents": [agent.model_dump() for agent in response.agents],
             }
             print(json.dumps(output, indent=2, default=str))
         else:
@@ -1896,10 +1874,7 @@ def cmd_agent_rate(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response: RatingResponse = client.rate_agent(
-            path=args.path,
-            rating=args.rating
-        )
+        response: RatingResponse = client.rate_agent(path=args.path, rating=args.rating)
 
         logger.info(f"✓ {response.message}")
         logger.info(f"Average rating: {response.average_rating:.2f} stars")
@@ -1982,7 +1957,7 @@ def cmd_agent_rescan(args: argparse.Namespace) -> int:
         client = _create_client(args)
         response: AgentRescanResponse = client.rescan_agent(path=args.path)
 
-        if hasattr(args, 'json') and args.json:
+        if hasattr(args, "json") and args.json:
             # Output raw JSON
             print(json.dumps(response.model_dump(), indent=2, default=str))
         else:
@@ -1992,7 +1967,7 @@ def cmd_agent_rescan(args: argparse.Namespace) -> int:
             logger.info(f"  Status: {safety_status}")
             logger.info(f"  Scan timestamp: {response.scan_timestamp}")
             logger.info(f"  Analyzers used: {', '.join(response.analyzers_used)}")
-            logger.info(f"\n  Severity counts:")
+            logger.info("\n  Severity counts:")
             logger.info(f"    Critical: {response.critical_issues}")
             logger.info(f"    High: {response.high_severity}")
             logger.info(f"    Medium: {response.medium_severity}")
@@ -2034,25 +2009,30 @@ def cmd_skill_register(args: argparse.Namespace) -> int:
         request = SkillRegistrationRequest(
             name=args.name,
             skill_md_url=args.url,
-            description=args.description if hasattr(args, 'description') else None,
-            tags=args.tags.split(",") if hasattr(args, 'tags') and args.tags else [],
-            visibility=args.visibility if hasattr(args, 'visibility') else "public",
+            description=args.description if hasattr(args, "description") else None,
+            tags=args.tags.split(",") if hasattr(args, "tags") and args.tags else [],
+            visibility=args.visibility if hasattr(args, "visibility") else "public",
         )
 
         client = _create_client(args)
         skill = client.register_skill(request)
 
         logger.info(f"Skill registered successfully: {skill.name} at {skill.path}")
-        print(json.dumps({
-            "message": "Skill registered successfully",
-            "skill": {
-                "name": skill.name,
-                "path": skill.path,
-                "description": skill.description,
-                "skill_md_url": skill.skill_md_url,
-                "is_enabled": skill.is_enabled,
-            }
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "message": "Skill registered successfully",
+                    "skill": {
+                        "name": skill.name,
+                        "path": skill.path,
+                        "description": skill.description,
+                        "skill_md_url": skill.skill_md_url,
+                        "is_enabled": skill.is_enabled,
+                    },
+                },
+                indent=2,
+            )
+        )
         return 0
 
     except Exception as e:
@@ -2073,8 +2053,8 @@ def cmd_skill_list(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.list_skills(
-            include_disabled=args.include_disabled if hasattr(args, 'include_disabled') else False,
-            tag=args.tag if hasattr(args, 'tag') else None
+            include_disabled=args.include_disabled if hasattr(args, "include_disabled") else False,
+            tag=args.tag if hasattr(args, "tag") else None,
         )
 
         if args.debug:
@@ -2119,23 +2099,29 @@ def cmd_skill_get(args: argparse.Namespace) -> int:
         skill = client.get_skill(args.path)
 
         logger.info(f"Retrieved skill: {skill.name}")
-        print(json.dumps({
-            "name": skill.name,
-            "path": skill.path,
-            "description": skill.description,
-            "skill_md_url": skill.skill_md_url,
-            "skill_md_raw_url": skill.skill_md_raw_url,
-            "version": skill.version,
-            "author": skill.author,
-            "visibility": skill.visibility,
-            "is_enabled": skill.is_enabled,
-            "tags": skill.tags,
-            "owner": skill.owner,
-            "num_stars": skill.num_stars,
-            "health_status": skill.health_status,
-            "created_at": skill.created_at,
-            "updated_at": skill.updated_at,
-        }, indent=2, default=str))
+        print(
+            json.dumps(
+                {
+                    "name": skill.name,
+                    "path": skill.path,
+                    "description": skill.description,
+                    "skill_md_url": skill.skill_md_url,
+                    "skill_md_raw_url": skill.skill_md_raw_url,
+                    "version": skill.version,
+                    "author": skill.author,
+                    "visibility": skill.visibility,
+                    "is_enabled": skill.is_enabled,
+                    "tags": skill.tags,
+                    "owner": skill.owner,
+                    "num_stars": skill.num_stars,
+                    "health_status": skill.health_status,
+                    "created_at": skill.created_at,
+                    "updated_at": skill.updated_at,
+                },
+                indent=2,
+                default=str,
+            )
+        )
         return 0
 
     except Exception as e:
@@ -2206,13 +2192,18 @@ def cmd_skill_health(args: argparse.Namespace) -> int:
 
         status = "HEALTHY" if response.healthy else "UNHEALTHY"
         logger.info(f"Skill health: {status}")
-        print(json.dumps({
-            "path": response.path,
-            "healthy": response.healthy,
-            "status_code": response.status_code,
-            "error": response.error,
-            "response_time_ms": response.response_time_ms,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "path": response.path,
+                    "healthy": response.healthy,
+                    "status_code": response.status_code,
+                    "error": response.error,
+                    "response_time_ms": response.response_time_ms,
+                },
+                indent=2,
+            )
+        )
         return 0 if response.healthy else 1
 
     except Exception as e:
@@ -2234,7 +2225,7 @@ def cmd_skill_content(args: argparse.Namespace) -> int:
         client = _create_client(args)
         response = client.get_skill_content(args.path)
 
-        if hasattr(args, 'raw') and args.raw:
+        if hasattr(args, "raw") and args.raw:
             # Output raw content only
             print(response.content)
         else:
@@ -2263,8 +2254,7 @@ def cmd_skill_search(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.search_skills(
-            query=args.query,
-            tags=args.tags if hasattr(args, 'tags') else None
+            query=args.query, tags=args.tags if hasattr(args, "tags") else None
         )
 
         if args.debug:
@@ -2274,7 +2264,7 @@ def cmd_skill_search(args: argparse.Namespace) -> int:
         logger.info(f"Found {response.total_count} skills matching '{args.query}':\n")
         for skill in response.skills:
             print(f"  {skill.get('name')} ({skill.get('path')})")
-            if skill.get('description'):
+            if skill.get("description"):
                 print(f"      {skill.get('description')[:60]}...")
             print(f"      Score: {skill.get('relevance_score', 0):.2f}")
             print()
@@ -2305,10 +2295,15 @@ def cmd_skill_rate(args: argparse.Namespace) -> int:
         response = client.rate_skill(args.path, args.rating)
 
         logger.info(f"Skill rated: {args.rating} stars")
-        print(json.dumps({
-            "message": response.get("message"),
-            "average_rating": response.get("average_rating"),
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "message": response.get("message"),
+                    "average_rating": response.get("average_rating"),
+                },
+                indent=2,
+            )
+        )
         return 0
 
     except Exception as e:
@@ -2331,10 +2326,16 @@ def cmd_skill_rating(args: argparse.Namespace) -> int:
         response = client.get_skill_rating(args.path)
 
         logger.info(f"Skill rating: {response.num_stars} stars")
-        print(json.dumps({
-            "num_stars": response.num_stars,
-            "rating_details": response.rating_details,
-        }, indent=2, default=str))
+        print(
+            json.dumps(
+                {
+                    "num_stars": response.num_stars,
+                    "rating_details": response.rating_details,
+                },
+                indent=2,
+                default=str,
+            )
+        )
         return 0
 
     except Exception as e:
@@ -2512,7 +2513,7 @@ def cmd_anthropic_get_server(args: argparse.Namespace) -> int:
         print(f"Website: {server.websiteUrl or 'N/A'}")
 
         if server.repository:
-            print(f"\nRepository:")
+            print("\nRepository:")
             print(f"  URL: {server.repository.url}")
             print(f"  Source: {server.repository.source}")
             if server.repository.id:
@@ -2529,11 +2530,11 @@ def cmd_anthropic_get_server(args: argparse.Namespace) -> int:
                     print(f"     Runtime: {package.runtimeHint}")
 
         if server.meta:
-            print(f"\nMetadata:")
+            print("\nMetadata:")
             print(json.dumps(server.meta, indent=2))
 
         if result.meta:
-            print(f"\nRegistry Metadata:")
+            print("\nRegistry Metadata:")
             print(json.dumps(result.meta, indent=2))
 
         return 0
@@ -2559,8 +2560,8 @@ def cmd_user_list(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.list_users(
-            search=args.search if hasattr(args, 'search') and args.search else None,
-            limit=args.limit if hasattr(args, 'limit') else 500
+            search=args.search if hasattr(args, "search") and args.search else None,
+            limit=args.limit if hasattr(args, "limit") else 500,
         )
 
         if not response.users:
@@ -2603,10 +2604,12 @@ def cmd_user_create_m2m(args: argparse.Namespace) -> int:
         result = client.create_m2m_account(
             name=args.name,
             groups=groups,
-            description=args.description if hasattr(args, 'description') and args.description else None
+            description=args.description
+            if hasattr(args, "description") and args.description
+            else None,
         )
 
-        logger.info(f"M2M account created successfully\n")
+        logger.info("M2M account created successfully\n")
         print(f"Client ID: {result.client_id}")
         print(f"Client Secret: {result.client_secret}")
         print(f"Groups: {', '.join(result.groups)}")
@@ -2641,10 +2644,10 @@ def cmd_user_create_human(args: argparse.Namespace) -> int:
             first_name=args.first_name,
             last_name=args.last_name,
             groups=groups,
-            password=args.password if hasattr(args, 'password') and args.password else None
+            password=args.password if hasattr(args, "password") and args.password else None,
         )
 
-        logger.info(f"User created successfully\n")
+        logger.info("User created successfully\n")
         print(f"Username: {result.username}")
         print(f"User ID: {result.id}")
         print(f"Email: {result.email or 'N/A'}")
@@ -2701,10 +2704,7 @@ def cmd_group_create(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        result = client.create_keycloak_group(
-            name=args.name,
-            description=args.description
-        )
+        result = client.create_keycloak_group(name=args.name, description=args.description)
 
         logger.info(f"IAM group created successfully: {result.name}")
         print(f"\nGroup: {result.name}")
@@ -2772,7 +2772,7 @@ def cmd_group_list(args: argparse.Namespace) -> int:
             print(f"Group: {group['name']}")
             print(f"  ID: {group['id']}")
             print(f"  Path: {group['path']}")
-            if group.get('attributes'):
+            if group.get("attributes"):
                 print(f"  Attributes: {json.dumps(group['attributes'], indent=4)}")
             print()
 
@@ -2819,13 +2819,10 @@ def cmd_federation_save(args: argparse.Namespace) -> int:
         client = _create_client(args)
 
         # Load config from file
-        with open(args.config, 'r') as f:
+        with open(args.config) as f:
             config_data = json.load(f)
 
-        response = client.save_federation_config(
-            config=config_data,
-            config_id=args.config_id
-        )
+        response = client.save_federation_config(config=config_data, config_id=args.config_id)
 
         logger.info(f"Federation config saved successfully: {args.config_id}")
         print(json.dumps(response, indent=2, default=str))
@@ -2854,7 +2851,7 @@ def cmd_federation_delete(args: argparse.Namespace) -> int:
 
         if not args.force:
             confirm = input(f"Delete federation config '{args.config_id}'? (y/N): ")
-            if confirm.lower() != 'y':
+            if confirm.lower() != "y":
                 logger.info("Cancelled")
                 return 0
 
@@ -2888,13 +2885,13 @@ def cmd_federation_list(args: argparse.Namespace) -> int:
             print(json.dumps(response, indent=2, default=str))
             return 0
 
-        if not response.get('configs'):
+        if not response.get("configs"):
             logger.info("No federation configs found")
             return 0
 
         logger.info(f"Found {response.get('total', 0)} federation configs:\n")
 
-        for config in response['configs']:
+        for config in response["configs"]:
             print(f"Config ID: {config.get('id')}")
             print(f"  Created: {config.get('created_at')}")
             print(f"  Updated: {config.get('updated_at')}")
@@ -2920,8 +2917,7 @@ def cmd_federation_add_anthropic_server(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.add_anthropic_server(
-            server_name=args.server_name,
-            config_id=args.config_id
+            server_name=args.server_name, config_id=args.config_id
         )
 
         logger.info(f"Anthropic server added: {args.server_name}")
@@ -2946,8 +2942,7 @@ def cmd_federation_remove_anthropic_server(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.remove_anthropic_server(
-            server_name=args.server_name,
-            config_id=args.config_id
+            server_name=args.server_name, config_id=args.config_id
         )
 
         logger.info(f"Anthropic server removed: {args.server_name}")
@@ -2971,10 +2966,7 @@ def cmd_federation_add_asor_agent(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response = client.add_asor_agent(
-            agent_id=args.agent_id,
-            config_id=args.config_id
-        )
+        response = client.add_asor_agent(agent_id=args.agent_id, config_id=args.config_id)
 
         logger.info(f"ASOR agent added: {args.agent_id}")
         print(json.dumps(response, indent=2, default=str))
@@ -2997,10 +2989,7 @@ def cmd_federation_remove_asor_agent(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response = client.remove_asor_agent(
-            agent_id=args.agent_id,
-            config_id=args.config_id
-        )
+        response = client.remove_asor_agent(agent_id=args.agent_id, config_id=args.config_id)
 
         logger.info(f"ASOR agent removed: {args.agent_id}")
         print(json.dumps(response, indent=2, default=str))
@@ -3023,10 +3012,7 @@ def cmd_federation_sync(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response = client.sync_federation(
-            config_id=args.config_id,
-            source=args.source
-        )
+        response = client.sync_federation(config_id=args.config_id, source=args.source)
 
         if args.json:
             # Output raw JSON
@@ -3034,19 +3020,19 @@ def cmd_federation_sync(args: argparse.Namespace) -> int:
         else:
             # Formatted output
             logger.info(f"Federation sync completed: {response.get('message')}")
-            print(f"\nSync Results:")
+            print("\nSync Results:")
             print(f"  Config ID: {response.get('config_id')}")
             print(f"  Total Synced: {response.get('total_synced', 0)}")
 
-            results = response.get('results', {})
-            if results.get('anthropic', {}).get('count', 0) > 0:
+            results = response.get("results", {})
+            if results.get("anthropic", {}).get("count", 0) > 0:
                 print(f"\n  Anthropic Servers ({results['anthropic']['count']}):")
-                for server in results['anthropic'].get('servers', []):
+                for server in results["anthropic"].get("servers", []):
                     print(f"    - {server}")
 
-            if results.get('asor', {}).get('count', 0) > 0:
+            if results.get("asor", {}).get("count", 0) > 0:
                 print(f"\n  ASOR Agents ({results['asor']['count']}):")
-                for agent in results['asor'].get('agents', []):
+                for agent in results["asor"].get("agents", []):
                     print(f"    - {agent}")
 
         return 0
@@ -3070,7 +3056,7 @@ def cmd_peer_list(args: argparse.Namespace) -> int:
         client = _create_client(args)
 
         enabled_filter = None
-        if hasattr(args, 'enabled_only') and args.enabled_only:
+        if hasattr(args, "enabled_only") and args.enabled_only:
             enabled_filter = True
 
         response = client.list_peers(enabled=enabled_filter)
@@ -3080,7 +3066,7 @@ def cmd_peer_list(args: argparse.Namespace) -> int:
             print(json.dumps(masked_response, indent=2, default=str))
             return 0
 
-        peers = response if isinstance(response, list) else response.get('peers', [])
+        peers = response if isinstance(response, list) else response.get("peers", [])
 
         if not peers:
             logger.info("No peer registries configured")
@@ -3089,7 +3075,7 @@ def cmd_peer_list(args: argparse.Namespace) -> int:
         logger.info(f"Found {len(peers)} peer registries:\n")
 
         for peer in peers:
-            status = "enabled" if peer.get('enabled') else "disabled"
+            status = "enabled" if peer.get("enabled") else "disabled"
             print(f"  Peer ID:   {peer.get('peer_id')}")
             print(f"  Name:      {peer.get('name')}")
             print(f"  Endpoint:  {peer.get('endpoint')}")
@@ -3117,11 +3103,11 @@ def cmd_peer_add(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
 
-        with open(args.config, 'r') as f:
+        with open(args.config) as f:
             config_data = json.load(f)
 
         # Override federation_token from CLI arg if provided
-        if hasattr(args, 'federation_token') and args.federation_token:
+        if hasattr(args, "federation_token") and args.federation_token:
             config_data["federation_token"] = args.federation_token
 
         response = client.add_peer(config=config_data)
@@ -3167,16 +3153,16 @@ def cmd_peer_get(args: argparse.Namespace) -> int:
         print(f"Updated:      {response.get('updated_at')}")
 
         # Mask federation token in non-JSON output
-        fed_token = response.get('federation_token')
+        fed_token = response.get("federation_token")
         if fed_token:
             masked_token = f"{fed_token[:3]}..." if len(fed_token) > 3 else "***"
             print(f"Fed Token:    {masked_token}")
 
-        whitelist_servers = response.get('whitelist_servers', [])
+        whitelist_servers = response.get("whitelist_servers", [])
         if whitelist_servers:
             print(f"Whitelist:    {', '.join(whitelist_servers)}")
 
-        tag_filter = response.get('tag_filter', [])
+        tag_filter = response.get("tag_filter", [])
         if tag_filter:
             print(f"Tag Filter:   {', '.join(tag_filter)}")
 
@@ -3200,17 +3186,14 @@ def cmd_peer_update(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
 
-        with open(args.config, 'r') as f:
+        with open(args.config) as f:
             config_data = json.load(f)
 
         # Override federation_token from CLI arg if provided
-        if hasattr(args, 'federation_token') and args.federation_token:
+        if hasattr(args, "federation_token") and args.federation_token:
             config_data["federation_token"] = args.federation_token
 
-        response = client.update_peer(
-            peer_id=args.peer_id,
-            config=config_data
-        )
+        response = client.update_peer(peer_id=args.peer_id, config=config_data)
 
         logger.info(f"Peer registry updated successfully: {args.peer_id}")
         masked_response = _mask_sensitive_fields(response)
@@ -3238,7 +3221,7 @@ def cmd_peer_remove(args: argparse.Namespace) -> int:
     try:
         if not args.force:
             confirm = input(f"Remove peer registry '{args.peer_id}'? (y/N): ")
-            if confirm.lower() != 'y':
+            if confirm.lower() != "y":
                 logger.info("Cancelled")
                 return 0
 
@@ -3280,7 +3263,7 @@ def cmd_peer_sync(args: argparse.Namespace) -> int:
         print(f"  Servers Orphaned: {response.get('servers_orphaned', 0)}")
         print(f"  Agents Orphaned:  {response.get('agents_orphaned', 0)}")
 
-        errors = response.get('errors', [])
+        errors = response.get("errors", [])
         if errors:
             print(f"\n  Errors ({len(errors)}):")
             for error in errors:
@@ -3311,13 +3294,13 @@ def cmd_peer_sync_all(args: argparse.Namespace) -> int:
             print(json.dumps(response, indent=2, default=str))
             return 0
 
-        results = response if isinstance(response, list) else response.get('results', [])
-        print(f"\nSync All Peers Results:")
+        results = response if isinstance(response, list) else response.get("results", [])
+        print("\nSync All Peers Results:")
         print(f"  Total peers synced: {len(results)}")
 
         for result in results:
-            peer_id = result.get('peer_id', 'unknown')
-            status = result.get('status', 'unknown')
+            peer_id = result.get("peer_id", "unknown")
+            status = result.get("status", "unknown")
             print(f"\n  {peer_id}: {status}")
             print(f"    Servers: {result.get('servers_synced', 0)}")
             print(f"    Agents:  {result.get('agents_synced', 0)}")
@@ -3350,14 +3333,14 @@ def cmd_peer_status(args: argparse.Namespace) -> int:
         print(f"\nSync Status for peer '{args.peer_id}':")
 
         # Determine last sync status from history or health
-        history = response.get('sync_history', [])
+        history = response.get("sync_history", [])
         if history:
             last_entry = history[0]
-            last_status = "success" if last_entry.get('success') else "failed"
-            last_time = last_entry.get('completed_at') or last_entry.get('started_at')
+            last_status = "success" if last_entry.get("success") else "failed"
+            last_time = last_entry.get("completed_at") or last_entry.get("started_at")
         else:
             last_status = "never"
-            last_time = response.get('last_successful_sync') or response.get('last_sync_attempt')
+            last_time = response.get("last_successful_sync") or response.get("last_sync_attempt")
 
         print(f"  Last Sync Status:  {last_status}")
         print(f"  Last Sync Time:    {last_time or 'never'}")
@@ -3369,11 +3352,13 @@ def cmd_peer_status(args: argparse.Namespace) -> int:
         if history:
             print(f"\n  Recent Sync History ({len(history)} entries):")
             for entry in history[:5]:
-                entry_status = "success" if entry.get('success') else "failed"
-                entry_time = entry.get('completed_at') or entry.get('started_at')
+                entry_status = "success" if entry.get("success") else "failed"
+                entry_time = entry.get("completed_at") or entry.get("started_at")
                 print(f"    {entry_time} - {entry_status}")
-                print(f"      Servers: {entry.get('servers_synced', 0)}, "
-                      f"Agents: {entry.get('agents_synced', 0)}")
+                print(
+                    f"      Servers: {entry.get('servers_synced', 0)}, "
+                    f"Agents: {entry.get('agents_synced', 0)}"
+                )
 
         return 0
 
@@ -3448,7 +3433,7 @@ def cmd_peer_connections(args: argparse.Namespace) -> int:
             print(json.dumps(response, indent=2, default=str))
             return 0
 
-        connections = response if isinstance(response, list) else response.get('connections', [])
+        connections = response if isinstance(response, list) else response.get("connections", [])
 
         if not connections:
             logger.info("No federation connections found")
@@ -3514,27 +3499,31 @@ def cmd_vs_create(args: argparse.Namespace) -> int:
         client = _create_client(args)
 
         # Load config from file
-        with open(args.config, 'r') as f:
+        with open(args.config) as f:
             config_data = json.load(f)
 
         # Build tool mappings
         tool_mappings = []
         for mapping in config_data.get("tool_mappings", []):
-            tool_mappings.append(ToolMapping(
-                tool_name=mapping["tool_name"],
-                alias=mapping.get("alias"),
-                backend_server_path=mapping["backend_server_path"],
-                backend_version=mapping.get("backend_version"),
-                description_override=mapping.get("description_override"),
-            ))
+            tool_mappings.append(
+                ToolMapping(
+                    tool_name=mapping["tool_name"],
+                    alias=mapping.get("alias"),
+                    backend_server_path=mapping["backend_server_path"],
+                    backend_version=mapping.get("backend_version"),
+                    description_override=mapping.get("description_override"),
+                )
+            )
 
         # Build tool scope overrides
         tool_scope_overrides = []
         for override in config_data.get("tool_scope_overrides", []):
-            tool_scope_overrides.append(ToolScopeOverride(
-                tool_alias=override["tool_alias"],
-                required_scopes=override.get("required_scopes", []),
-            ))
+            tool_scope_overrides.append(
+                ToolScopeOverride(
+                    tool_alias=override["tool_alias"],
+                    required_scopes=override.get("required_scopes", []),
+                )
+            )
 
         request = VirtualServerCreateRequest(
             path=config_data["path"],
@@ -3544,26 +3533,28 @@ def cmd_vs_create(args: argparse.Namespace) -> int:
             required_scopes=config_data.get("required_scopes", []),
             tool_scope_overrides=tool_scope_overrides,
             tags=config_data.get("tags", []),
-            supported_transports=config_data.get(
-                "supported_transports",
-                ["streamable-http"]
-            ),
+            supported_transports=config_data.get("supported_transports", ["streamable-http"]),
             is_enabled=config_data.get("is_enabled", True),
         )
 
         result = client.create_virtual_server(request)
 
         logger.info(f"Virtual server created: {result.path}")
-        print(json.dumps({
-            "message": "Virtual server created successfully",
-            "virtual_server": {
-                "path": result.path,
-                "server_name": result.server_name,
-                "description": result.description,
-                "is_enabled": result.is_enabled,
-                "tool_count": len(result.tool_mappings),
-            }
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "message": "Virtual server created successfully",
+                    "virtual_server": {
+                        "path": result.path,
+                        "server_name": result.server_name,
+                        "description": result.description,
+                        "is_enabled": result.is_enabled,
+                        "tool_count": len(result.tool_mappings),
+                    },
+                },
+                indent=2,
+            )
+        )
         return 0
 
     except FileNotFoundError:
@@ -3590,8 +3581,8 @@ def cmd_vs_list(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
         response = client.list_virtual_servers(
-            enabled_only=args.enabled_only if hasattr(args, 'enabled_only') else False,
-            tag=args.tag if hasattr(args, 'tag') else None,
+            enabled_only=args.enabled_only if hasattr(args, "enabled_only") else False,
+            tag=args.tag if hasattr(args, "tag") else None,
         )
 
         if args.json:
@@ -3647,7 +3638,9 @@ def cmd_vs_get(args: argparse.Namespace) -> int:
         print(f"  Rating: {result.num_stars} stars")
         print(f"  Tags: {', '.join(result.tags) if result.tags else 'None'}")
         print(f"  Transports: {', '.join(result.supported_transports)}")
-        print(f"  Required Scopes: {', '.join(result.required_scopes) if result.required_scopes else 'None'}")
+        print(
+            f"  Required Scopes: {', '.join(result.required_scopes) if result.required_scopes else 'None'}"
+        )
 
         print(f"\n  Tool Mappings ({len(result.tool_mappings)}):")
         for mapping in result.tool_mappings:
@@ -3657,7 +3650,7 @@ def cmd_vs_get(args: argparse.Namespace) -> int:
             print(f"      Backend: {mapping.backend_server_path}{version_info}")
 
         if result.tool_scope_overrides:
-            print(f"\n  Tool Scope Overrides:")
+            print("\n  Tool Scope Overrides:")
             for override in result.tool_scope_overrides:
                 print(f"    - {override.tool_alias}: {', '.join(override.required_scopes)}")
 
@@ -3686,27 +3679,31 @@ def cmd_vs_update(args: argparse.Namespace) -> int:
         client = _create_client(args)
 
         # Load config from file
-        with open(args.config, 'r') as f:
+        with open(args.config) as f:
             config_data = json.load(f)
 
         # Build tool mappings
         tool_mappings = []
         for mapping in config_data.get("tool_mappings", []):
-            tool_mappings.append(ToolMapping(
-                tool_name=mapping["tool_name"],
-                alias=mapping.get("alias"),
-                backend_server_path=mapping["backend_server_path"],
-                backend_version=mapping.get("backend_version"),
-                description_override=mapping.get("description_override"),
-            ))
+            tool_mappings.append(
+                ToolMapping(
+                    tool_name=mapping["tool_name"],
+                    alias=mapping.get("alias"),
+                    backend_server_path=mapping["backend_server_path"],
+                    backend_version=mapping.get("backend_version"),
+                    description_override=mapping.get("description_override"),
+                )
+            )
 
         # Build tool scope overrides
         tool_scope_overrides = []
         for override in config_data.get("tool_scope_overrides", []):
-            tool_scope_overrides.append(ToolScopeOverride(
-                tool_alias=override["tool_alias"],
-                required_scopes=override.get("required_scopes", []),
-            ))
+            tool_scope_overrides.append(
+                ToolScopeOverride(
+                    tool_alias=override["tool_alias"],
+                    required_scopes=override.get("required_scopes", []),
+                )
+            )
 
         request = VirtualServerCreateRequest(
             path=config_data["path"],
@@ -3716,24 +3713,26 @@ def cmd_vs_update(args: argparse.Namespace) -> int:
             required_scopes=config_data.get("required_scopes", []),
             tool_scope_overrides=tool_scope_overrides,
             tags=config_data.get("tags", []),
-            supported_transports=config_data.get(
-                "supported_transports",
-                ["streamable-http"]
-            ),
+            supported_transports=config_data.get("supported_transports", ["streamable-http"]),
             is_enabled=config_data.get("is_enabled", True),
         )
 
         result = client.update_virtual_server(args.path, request)
 
         logger.info(f"Virtual server updated: {result.path}")
-        print(json.dumps({
-            "message": "Virtual server updated successfully",
-            "virtual_server": {
-                "path": result.path,
-                "server_name": result.server_name,
-                "is_enabled": result.is_enabled,
-            }
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "message": "Virtual server updated successfully",
+                    "virtual_server": {
+                        "path": result.path,
+                        "server_name": result.server_name,
+                        "is_enabled": result.is_enabled,
+                    },
+                },
+                indent=2,
+            )
+        )
         return 0
 
     except FileNotFoundError:
@@ -3757,7 +3756,7 @@ def cmd_vs_delete(args: argparse.Namespace) -> int:
     try:
         if not args.force:
             confirm = input(f"Delete virtual server '{args.path}'? [y/N]: ")
-            if confirm.lower() != 'y':
+            if confirm.lower() != "y":
                 print("Cancelled")
                 return 0
 
@@ -3765,10 +3764,15 @@ def cmd_vs_delete(args: argparse.Namespace) -> int:
         result = client.delete_virtual_server(args.path)
 
         logger.info(f"Virtual server deleted: {args.path}")
-        print(json.dumps({
-            "message": result.message,
-            "path": result.path,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "message": result.message,
+                    "path": result.path,
+                },
+                indent=2,
+            )
+        )
         return 0
 
     except Exception as e:
@@ -3788,16 +3792,21 @@ def cmd_vs_toggle(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        enable = args.enabled.lower() == 'true'
+        enable = args.enabled.lower() == "true"
         result = client.toggle_virtual_server(args.path, enable)
 
         action = "enabled" if result.is_enabled else "disabled"
         logger.info(f"Virtual server {action}: {args.path}")
-        print(json.dumps({
-            "message": result.message,
-            "path": result.path,
-            "is_enabled": result.is_enabled,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "message": result.message,
+                    "path": result.path,
+                    "is_enabled": result.is_enabled,
+                },
+                indent=2,
+            )
+        )
         return 0
 
     except Exception as e:
@@ -3900,485 +3909,304 @@ Examples:
 
   # Add server to groups
   uv run python registry_management.py add-to-groups --server my-server --groups finance,analytics
-        """
+        """,
     )
 
-    parser.add_argument(
-        "--registry-url",
-        help="Registry base URL (overrides REGISTRY_URL env var)"
-    )
+    parser.add_argument("--registry-url", help="Registry base URL (overrides REGISTRY_URL env var)")
+
+    parser.add_argument("--aws-region", help="AWS region (overrides AWS_REGION env var)")
+
+    parser.add_argument("--keycloak-url", help="Keycloak base URL (overrides KEYCLOAK_URL env var)")
 
     parser.add_argument(
-        "--aws-region",
-        help="AWS region (overrides AWS_REGION env var)"
+        "--token-file", help="Path to file containing JWT token (bypasses token script)"
     )
 
-    parser.add_argument(
-        "--keycloak-url",
-        help="Keycloak base URL (overrides KEYCLOAK_URL env var)"
-    )
-
-    parser.add_argument(
-        "--token-file",
-        help="Path to file containing JWT token (bypasses token script)"
-    )
-
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging"
-    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
 
     # Register command
     register_parser = subparsers.add_parser("register", help="Register a new server")
     register_parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to server configuration JSON file"
+        "--config", required=True, help="Path to server configuration JSON file"
     )
     register_parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite if server already exists"
+        "--overwrite", action="store_true", help="Overwrite if server already exists"
     )
 
     # List command
     list_parser = subparsers.add_parser("list", help="List all servers")
-    list_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Print raw JSON response"
-    )
+    list_parser.add_argument("--json", action="store_true", help="Print raw JSON response")
 
     # Toggle command
     toggle_parser = subparsers.add_parser("toggle", help="Toggle server status")
-    toggle_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path to toggle"
-    )
+    toggle_parser.add_argument("--path", required=True, help="Server path to toggle")
 
     # Remove command
     remove_parser = subparsers.add_parser("remove", help="Remove a server")
-    remove_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path to remove"
-    )
-    remove_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Skip confirmation prompt"
-    )
+    remove_parser.add_argument("--path", required=True, help="Server path to remove")
+    remove_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
     # Healthcheck command
     healthcheck_parser = subparsers.add_parser("healthcheck", help="Health check all servers")
 
     # Config command
     config_parser = subparsers.add_parser(
-        "config",
-        help="Get registry configuration (deployment mode, features)"
+        "config", help="Get registry configuration (deployment mode, features)"
     )
     config_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Add to groups command
     add_groups_parser = subparsers.add_parser("add-to-groups", help="Add server to groups")
-    add_groups_parser.add_argument(
-        "--server",
-        required=True,
-        help="Server name"
-    )
-    add_groups_parser.add_argument(
-        "--groups",
-        required=True,
-        help="Comma-separated group names"
-    )
+    add_groups_parser.add_argument("--server", required=True, help="Server name")
+    add_groups_parser.add_argument("--groups", required=True, help="Comma-separated group names")
 
     # Remove from groups command
-    remove_groups_parser = subparsers.add_parser("remove-from-groups", help="Remove server from groups")
-    remove_groups_parser.add_argument(
-        "--server",
-        required=True,
-        help="Server name"
+    remove_groups_parser = subparsers.add_parser(
+        "remove-from-groups", help="Remove server from groups"
     )
-    remove_groups_parser.add_argument(
-        "--groups",
-        required=True,
-        help="Comma-separated group names"
-    )
+    remove_groups_parser.add_argument("--server", required=True, help="Server name")
+    remove_groups_parser.add_argument("--groups", required=True, help="Comma-separated group names")
 
     # Create group command
     create_group_parser = subparsers.add_parser("create-group", help="Create a new group")
+    create_group_parser.add_argument("--name", required=True, help="Group name")
+    create_group_parser.add_argument("--description", help="Group description")
     create_group_parser.add_argument(
-        "--name",
-        required=True,
-        help="Group name"
-    )
-    create_group_parser.add_argument(
-        "--description",
-        help="Group description"
-    )
-    create_group_parser.add_argument(
-        "--idp",
-        action="store_true",
-        help="Also create in IdP (Keycloak/Entra)"
+        "--idp", action="store_true", help="Also create in IdP (Keycloak/Entra)"
     )
 
     # Delete group command
     delete_group_parser = subparsers.add_parser("delete-group", help="Delete a group")
+    delete_group_parser.add_argument("--name", required=True, help="Group name")
     delete_group_parser.add_argument(
-        "--name",
-        required=True,
-        help="Group name"
+        "--idp", action="store_true", help="Also delete from IdP (Keycloak/Entra)"
     )
     delete_group_parser.add_argument(
-        "--idp",
-        action="store_true",
-        help="Also delete from IdP (Keycloak/Entra)"
-    )
-    delete_group_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Force deletion of system groups and skip confirmation"
+        "--force", action="store_true", help="Force deletion of system groups and skip confirmation"
     )
 
     # Import group command
     import_group_parser = subparsers.add_parser(
-        "import-group",
-        help="Import a complete group definition from JSON file"
+        "import-group", help="Import a complete group definition from JSON file"
     )
     import_group_parser.add_argument(
-        "--file",
-        required=True,
-        help="Path to JSON file containing group definition"
+        "--file", required=True, help="Path to JSON file containing group definition"
     )
 
     # List groups command
     list_groups_parser = subparsers.add_parser("list-groups", help="List all groups")
     list_groups_parser.add_argument(
-        "--no-keycloak",
-        action="store_true",
-        help="Exclude Keycloak information"
+        "--no-keycloak", action="store_true", help="Exclude Keycloak information"
     )
     list_groups_parser.add_argument(
-        "--no-scopes",
-        action="store_true",
-        help="Exclude scope information"
+        "--no-scopes", action="store_true", help="Exclude scope information"
     )
-    list_groups_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON response"
-    )
+    list_groups_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 
     # Describe group command
     describe_group_parser = subparsers.add_parser(
-        "describe-group",
-        help="Show detailed information about a specific group"
+        "describe-group", help="Show detailed information about a specific group"
     )
+    describe_group_parser.add_argument("--name", required=True, help="Group name to describe")
     describe_group_parser.add_argument(
-        "--name",
-        required=True,
-        help="Group name to describe"
-    )
-    describe_group_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON response"
+        "--json", action="store_true", help="Output raw JSON response"
     )
 
     # Server rate command
     server_rate_parser = subparsers.add_parser("server-rate", help="Rate a server (1-5 stars)")
     server_rate_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path (e.g., /cloudflare-docs)"
+        "--path", required=True, help="Server path (e.g., /cloudflare-docs)"
     )
     server_rate_parser.add_argument(
         "--rating",
         required=True,
         type=int,
         choices=[1, 2, 3, 4, 5],
-        help="Rating value (1-5 stars)"
+        help="Rating value (1-5 stars)",
     )
 
     # Server rating command
-    server_rating_parser = subparsers.add_parser("server-rating", help="Get rating information for a server")
+    server_rating_parser = subparsers.add_parser(
+        "server-rating", help="Get rating information for a server"
+    )
     server_rating_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path (e.g., /cloudflare-docs)"
+        "--path", required=True, help="Server path (e.g., /cloudflare-docs)"
     )
 
     # Server security scan command
-    security_scan_parser = subparsers.add_parser("security-scan", help="Get security scan results for a server")
-    security_scan_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path (e.g., /cloudflare-docs)"
+    security_scan_parser = subparsers.add_parser(
+        "security-scan", help="Get security scan results for a server"
     )
     security_scan_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON"
+        "--path", required=True, help="Server path (e.g., /cloudflare-docs)"
     )
+    security_scan_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Server rescan command
-    rescan_parser = subparsers.add_parser("rescan", help="Trigger manual security scan for a server (admin only)")
-    rescan_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path (e.g., /cloudflare-docs)"
+    rescan_parser = subparsers.add_parser(
+        "rescan", help="Trigger manual security scan for a server (admin only)"
     )
-    rescan_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON"
-    )
+    rescan_parser.add_argument("--path", required=True, help="Server path (e.g., /cloudflare-docs)")
+    rescan_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Server search command
     server_search_parser = subparsers.add_parser(
         "server-search",
-        help="Semantic search across all entity types (servers, tools, agents, skills, virtual servers)"
+        help="Semantic search across all entity types (servers, tools, agents, skills, virtual servers)",
     )
     server_search_parser.add_argument(
-        "--query",
-        required=True,
-        help="Natural language search query (e.g., 'coding assistants')"
+        "--query", required=True, help="Natural language search query (e.g., 'coding assistants')"
     )
     server_search_parser.add_argument(
         "--max-results",
         type=int,
         default=10,
-        help="Maximum number of results per entity type (default: 10)"
+        help="Maximum number of results per entity type (default: 10)",
     )
     server_search_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON with all entity types"
+        "--json", action="store_true", help="Output raw JSON with all entity types"
     )
 
     # Server Version Management Commands
 
     # List versions command
     list_versions_parser = subparsers.add_parser(
-        "list-versions",
-        help="List all versions for a server"
+        "list-versions", help="List all versions for a server"
     )
-    list_versions_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path (e.g., /context7)"
-    )
-    list_versions_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON"
-    )
+    list_versions_parser.add_argument("--path", required=True, help="Server path (e.g., /context7)")
+    list_versions_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Remove version command
     remove_version_parser = subparsers.add_parser(
-        "remove-version",
-        help="Remove a version from a server"
+        "remove-version", help="Remove a version from a server"
     )
     remove_version_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path (e.g., /context7)"
+        "--path", required=True, help="Server path (e.g., /context7)"
     )
-    remove_version_parser.add_argument(
-        "--version",
-        required=True,
-        help="Version to remove"
-    )
-    remove_version_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON"
-    )
+    remove_version_parser.add_argument("--version", required=True, help="Version to remove")
+    remove_version_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Set default version command
     set_default_version_parser = subparsers.add_parser(
-        "set-default-version",
-        help="Set the default version for a server"
+        "set-default-version", help="Set the default version for a server"
     )
     set_default_version_parser.add_argument(
-        "--path",
-        required=True,
-        help="Server path (e.g., /context7)"
+        "--path", required=True, help="Server path (e.g., /context7)"
     )
     set_default_version_parser.add_argument(
-        "--version",
-        required=True,
-        help="Version to set as default"
+        "--version", required=True, help="Version to set as default"
     )
-    set_default_version_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON"
-    )
+    set_default_version_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Agent Management Commands
 
     # Agent register command
     agent_register_parser = subparsers.add_parser("agent-register", help="Register a new A2A agent")
     agent_register_parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to agent configuration JSON file"
+        "--config", required=True, help="Path to agent configuration JSON file"
     )
 
     # Agent list command
     agent_list_parser = subparsers.add_parser("agent-list", help="List all A2A agents")
+    agent_list_parser.add_argument("--query", help="Search query string")
     agent_list_parser.add_argument(
-        "--query",
-        help="Search query string"
+        "--enabled-only", action="store_true", help="Show only enabled agents"
     )
     agent_list_parser.add_argument(
-        "--enabled-only",
-        action="store_true",
-        help="Show only enabled agents"
-    )
-    agent_list_parser.add_argument(
-        "--visibility",
-        choices=["public", "private", "internal"],
-        help="Filter by visibility level"
+        "--visibility", choices=["public", "private", "internal"], help="Filter by visibility level"
     )
 
     # Agent get command
     agent_get_parser = subparsers.add_parser("agent-get", help="Get agent details")
-    agent_get_parser.add_argument(
-        "--path",
-        required=True,
-        help="Agent path (e.g., /code-reviewer)"
-    )
+    agent_get_parser.add_argument("--path", required=True, help="Agent path (e.g., /code-reviewer)")
 
     # Agent update command
     agent_update_parser = subparsers.add_parser("agent-update", help="Update an existing agent")
+    agent_update_parser.add_argument("--path", required=True, help="Agent path")
     agent_update_parser.add_argument(
-        "--path",
-        required=True,
-        help="Agent path"
-    )
-    agent_update_parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to updated agent configuration JSON file"
+        "--config", required=True, help="Path to updated agent configuration JSON file"
     )
 
     # Agent delete command
     agent_delete_parser = subparsers.add_parser("agent-delete", help="Delete an agent")
+    agent_delete_parser.add_argument("--path", required=True, help="Agent path")
     agent_delete_parser.add_argument(
-        "--path",
-        required=True,
-        help="Agent path"
-    )
-    agent_delete_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Skip confirmation prompt"
+        "--force", action="store_true", help="Skip confirmation prompt"
     )
 
     # Agent toggle command
-    agent_toggle_parser = subparsers.add_parser("agent-toggle", help="Toggle agent enabled/disabled status")
-    agent_toggle_parser.add_argument(
-        "--path",
-        required=True,
-        help="Agent path"
+    agent_toggle_parser = subparsers.add_parser(
+        "agent-toggle", help="Toggle agent enabled/disabled status"
     )
+    agent_toggle_parser.add_argument("--path", required=True, help="Agent path")
     agent_toggle_parser.add_argument(
         "--enabled",
         required=True,
-        type=lambda x: x.lower() == 'true',
-        help="True to enable, false to disable"
+        type=lambda x: x.lower() == "true",
+        help="True to enable, false to disable",
     )
 
     # Agent discover command
-    agent_discover_parser = subparsers.add_parser("agent-discover", help="Discover agents by skills")
-    agent_discover_parser.add_argument(
-        "--skills",
-        required=True,
-        help="Comma-separated list of required skills"
+    agent_discover_parser = subparsers.add_parser(
+        "agent-discover", help="Discover agents by skills"
     )
     agent_discover_parser.add_argument(
-        "--tags",
-        help="Comma-separated list of tag filters"
+        "--skills", required=True, help="Comma-separated list of required skills"
     )
+    agent_discover_parser.add_argument("--tags", help="Comma-separated list of tag filters")
     agent_discover_parser.add_argument(
-        "--max-results",
-        type=int,
-        default=10,
-        help="Maximum number of results (default: 10)"
+        "--max-results", type=int, default=10, help="Maximum number of results (default: 10)"
     )
 
     # Agent search command
     agent_search_parser = subparsers.add_parser("agent-search", help="Semantic search for agents")
+    agent_search_parser.add_argument("--query", required=True, help="Natural language search query")
     agent_search_parser.add_argument(
-        "--query",
-        required=True,
-        help="Natural language search query"
+        "--max-results", type=int, default=10, help="Maximum number of results (default: 10)"
     )
-    agent_search_parser.add_argument(
-        "--max-results",
-        type=int,
-        default=10,
-        help="Maximum number of results (default: 10)"
-    )
-    agent_search_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output results as JSON"
-    )
+    agent_search_parser.add_argument("--json", action="store_true", help="Output results as JSON")
 
     # Agent rate command
     agent_rate_parser = subparsers.add_parser("agent-rate", help="Rate an agent (1-5 stars)")
     agent_rate_parser.add_argument(
-        "--path",
-        required=True,
-        help="Agent path (e.g., /code-reviewer)"
+        "--path", required=True, help="Agent path (e.g., /code-reviewer)"
     )
     agent_rate_parser.add_argument(
         "--rating",
         required=True,
         type=int,
         choices=[1, 2, 3, 4, 5],
-        help="Rating value (1-5 stars)"
+        help="Rating value (1-5 stars)",
     )
 
     # Agent rating command
-    agent_rating_parser = subparsers.add_parser("agent-rating", help="Get rating information for an agent")
+    agent_rating_parser = subparsers.add_parser(
+        "agent-rating", help="Get rating information for an agent"
+    )
     agent_rating_parser.add_argument(
-        "--path",
-        required=True,
-        help="Agent path (e.g., /code-reviewer)"
+        "--path", required=True, help="Agent path (e.g., /code-reviewer)"
     )
 
     # Agent security scan command
-    agent_security_scan_parser = subparsers.add_parser("agent-security-scan", help="Get security scan results for an agent")
+    agent_security_scan_parser = subparsers.add_parser(
+        "agent-security-scan", help="Get security scan results for an agent"
+    )
     agent_security_scan_parser.add_argument(
-        "--path",
-        required=True,
-        help="Agent path (e.g., /code-reviewer)"
+        "--path", required=True, help="Agent path (e.g., /code-reviewer)"
     )
 
     # Agent rescan command
-    agent_rescan_parser = subparsers.add_parser("agent-rescan", help="Trigger manual security scan for an agent (admin only)")
-    agent_rescan_parser.add_argument(
-        "--path",
-        required=True,
-        help="Agent path (e.g., /code-reviewer)"
+    agent_rescan_parser = subparsers.add_parser(
+        "agent-rescan", help="Trigger manual security scan for an agent (admin only)"
     )
     agent_rescan_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON"
+        "--path", required=True, help="Agent path (e.g., /code-reviewer)"
     )
+    agent_rescan_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # ==========================================
     # Agent Skills Commands
@@ -4386,348 +4214,175 @@ Examples:
 
     # Skill register command
     skill_register_parser = subparsers.add_parser(
-        "skill-register",
-        help="Register a new Agent Skill"
+        "skill-register", help="Register a new Agent Skill"
     )
     skill_register_parser.add_argument(
-        "--name",
-        required=True,
-        help="Skill name (lowercase alphanumeric with hyphens)"
+        "--name", required=True, help="Skill name (lowercase alphanumeric with hyphens)"
     )
-    skill_register_parser.add_argument(
-        "--url",
-        required=True,
-        help="URL to SKILL.md file"
-    )
-    skill_register_parser.add_argument(
-        "--description",
-        help="Skill description"
-    )
-    skill_register_parser.add_argument(
-        "--tags",
-        help="Comma-separated tags"
-    )
+    skill_register_parser.add_argument("--url", required=True, help="URL to SKILL.md file")
+    skill_register_parser.add_argument("--description", help="Skill description")
+    skill_register_parser.add_argument("--tags", help="Comma-separated tags")
     skill_register_parser.add_argument(
         "--visibility",
         choices=["public", "private", "group"],
         default="public",
-        help="Visibility level (default: public)"
+        help="Visibility level (default: public)",
     )
 
     # Skill list command
-    skill_list_parser = subparsers.add_parser(
-        "skill-list",
-        help="List all Agent Skills"
-    )
+    skill_list_parser = subparsers.add_parser("skill-list", help="List all Agent Skills")
     skill_list_parser.add_argument(
-        "--include-disabled",
-        action="store_true",
-        help="Include disabled skills"
+        "--include-disabled", action="store_true", help="Include disabled skills"
     )
-    skill_list_parser.add_argument(
-        "--tag",
-        help="Filter by tag"
-    )
+    skill_list_parser.add_argument("--tag", help="Filter by tag")
 
     # Skill get command
-    skill_get_parser = subparsers.add_parser(
-        "skill-get",
-        help="Get skill details"
-    )
+    skill_get_parser = subparsers.add_parser("skill-get", help="Get skill details")
     skill_get_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name (e.g., pdf-processing)"
+        "--path", required=True, help="Skill path or name (e.g., pdf-processing)"
     )
 
     # Skill delete command
-    skill_delete_parser = subparsers.add_parser(
-        "skill-delete",
-        help="Delete a skill"
-    )
-    skill_delete_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name"
-    )
+    skill_delete_parser = subparsers.add_parser("skill-delete", help="Delete a skill")
+    skill_delete_parser.add_argument("--path", required=True, help="Skill path or name")
 
     # Skill toggle command
     skill_toggle_parser = subparsers.add_parser(
-        "skill-toggle",
-        help="Toggle skill enabled/disabled state"
+        "skill-toggle", help="Toggle skill enabled/disabled state"
     )
-    skill_toggle_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name"
-    )
+    skill_toggle_parser.add_argument("--path", required=True, help="Skill path or name")
     skill_toggle_parser.add_argument(
         "--enable",
-        type=lambda x: x.lower() == 'true',
+        type=lambda x: x.lower() == "true",
         required=True,
-        help="Enable (true) or disable (false)"
+        help="Enable (true) or disable (false)",
     )
 
     # Skill health command
     skill_health_parser = subparsers.add_parser(
-        "skill-health",
-        help="Check skill health (SKILL.md accessibility)"
+        "skill-health", help="Check skill health (SKILL.md accessibility)"
     )
-    skill_health_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name"
-    )
+    skill_health_parser.add_argument("--path", required=True, help="Skill path or name")
 
     # Skill content command
     skill_content_parser = subparsers.add_parser(
-        "skill-content",
-        help="Get SKILL.md content for a skill"
+        "skill-content", help="Get SKILL.md content for a skill"
     )
-    skill_content_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name"
-    )
-    skill_content_parser.add_argument(
-        "--raw",
-        action="store_true",
-        help="Output raw content only"
-    )
+    skill_content_parser.add_argument("--path", required=True, help="Skill path or name")
+    skill_content_parser.add_argument("--raw", action="store_true", help="Output raw content only")
 
     # Skill search command
-    skill_search_parser = subparsers.add_parser(
-        "skill-search",
-        help="Search for skills"
-    )
-    skill_search_parser.add_argument(
-        "--query",
-        required=True,
-        help="Search query"
-    )
-    skill_search_parser.add_argument(
-        "--tags",
-        help="Comma-separated tags filter"
-    )
+    skill_search_parser = subparsers.add_parser("skill-search", help="Search for skills")
+    skill_search_parser.add_argument("--query", required=True, help="Search query")
+    skill_search_parser.add_argument("--tags", help="Comma-separated tags filter")
 
     # Skill rate command
-    skill_rate_parser = subparsers.add_parser(
-        "skill-rate",
-        help="Rate a skill (1-5 stars)"
-    )
+    skill_rate_parser = subparsers.add_parser("skill-rate", help="Rate a skill (1-5 stars)")
+    skill_rate_parser.add_argument("--path", required=True, help="Skill path or name")
     skill_rate_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name"
-    )
-    skill_rate_parser.add_argument(
-        "--rating",
-        type=int,
-        required=True,
-        choices=[1, 2, 3, 4, 5],
-        help="Rating (1-5 stars)"
+        "--rating", type=int, required=True, choices=[1, 2, 3, 4, 5], help="Rating (1-5 stars)"
     )
 
     # Skill rating command
     skill_rating_parser = subparsers.add_parser(
-        "skill-rating",
-        help="Get rating information for a skill"
+        "skill-rating", help="Get rating information for a skill"
     )
-    skill_rating_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name"
-    )
+    skill_rating_parser.add_argument("--path", required=True, help="Skill path or name")
 
     # Skill security scan command
     skill_security_scan_parser = subparsers.add_parser(
-        "skill-security-scan",
-        help="Get security scan results for a skill"
+        "skill-security-scan", help="Get security scan results for a skill"
     )
-    skill_security_scan_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name"
-    )
+    skill_security_scan_parser.add_argument("--path", required=True, help="Skill path or name")
 
     # Skill rescan command
     skill_rescan_parser = subparsers.add_parser(
-        "skill-rescan",
-        help="Trigger manual security scan for a skill (admin only)"
+        "skill-rescan", help="Trigger manual security scan for a skill (admin only)"
     )
+    skill_rescan_parser.add_argument("--path", required=True, help="Skill path or name")
     skill_rescan_parser.add_argument(
-        "--path",
-        required=True,
-        help="Skill path or name"
-    )
-    skill_rescan_parser.add_argument(
-        "--json",
-        dest="json_output",
-        action="store_true",
-        help="Output raw JSON only"
+        "--json", dest="json_output", action="store_true", help="Output raw JSON only"
     )
 
     # Anthropic Registry API Commands
 
     # Anthropic list servers command
     anthropic_list_parser = subparsers.add_parser(
-        "anthropic-list",
-        help="List all servers (Anthropic Registry API v0.1)"
+        "anthropic-list", help="List all servers (Anthropic Registry API v0.1)"
     )
+    anthropic_list_parser.add_argument("--limit", type=int, help="Maximum results per page")
     anthropic_list_parser.add_argument(
-        "--limit",
-        type=int,
-        help="Maximum results per page"
-    )
-    anthropic_list_parser.add_argument(
-        "--raw",
-        action="store_true",
-        help="Output raw JSON response"
+        "--raw", action="store_true", help="Output raw JSON response"
     )
 
     # Anthropic list versions command
     anthropic_versions_parser = subparsers.add_parser(
-        "anthropic-versions",
-        help="List versions for a server (Anthropic Registry API v0.1)"
+        "anthropic-versions", help="List versions for a server (Anthropic Registry API v0.1)"
     )
     anthropic_versions_parser.add_argument(
         "--server-name",
         required=True,
-        help="Server name in reverse-DNS format (e.g., 'io.mcpgateway/example-server')"
+        help="Server name in reverse-DNS format (e.g., 'io.mcpgateway/example-server')",
     )
     anthropic_versions_parser.add_argument(
-        "--raw",
-        action="store_true",
-        help="Output raw JSON response"
+        "--raw", action="store_true", help="Output raw JSON response"
     )
 
     # Anthropic get server command
     anthropic_get_parser = subparsers.add_parser(
-        "anthropic-get",
-        help="Get server details (Anthropic Registry API v0.1)"
+        "anthropic-get", help="Get server details (Anthropic Registry API v0.1)"
     )
     anthropic_get_parser.add_argument(
-        "--server-name",
-        required=True,
-        help="Server name in reverse-DNS format"
+        "--server-name", required=True, help="Server name in reverse-DNS format"
     )
     anthropic_get_parser.add_argument(
-        "--version",
-        default="latest",
-        help="Server version (default: latest)"
+        "--version", default="latest", help="Server version (default: latest)"
     )
-    anthropic_get_parser.add_argument(
-        "--raw",
-        action="store_true",
-        help="Output raw JSON response"
-    )
+    anthropic_get_parser.add_argument("--raw", action="store_true", help="Output raw JSON response")
 
     # User Management Commands (Management API)
 
     # List users command
     user_list_parser = subparsers.add_parser("user-list", help="List Keycloak users")
+    user_list_parser.add_argument("--search", help="Search string to filter users")
     user_list_parser.add_argument(
-        "--search",
-        help="Search string to filter users"
-    )
-    user_list_parser.add_argument(
-        "--limit",
-        type=int,
-        default=500,
-        help="Maximum number of results (default: 500)"
+        "--limit", type=int, default=500, help="Maximum number of results (default: 500)"
     )
 
     # Create M2M account command
     user_m2m_parser = subparsers.add_parser("user-create-m2m", help="Create M2M service account")
+    user_m2m_parser.add_argument("--name", required=True, help="Service account name/client ID")
     user_m2m_parser.add_argument(
-        "--name",
-        required=True,
-        help="Service account name/client ID"
+        "--groups", required=True, help="Comma-separated list of group names"
     )
-    user_m2m_parser.add_argument(
-        "--groups",
-        required=True,
-        help="Comma-separated list of group names"
-    )
-    user_m2m_parser.add_argument(
-        "--description",
-        help="Account description"
-    )
+    user_m2m_parser.add_argument("--description", help="Account description")
 
     # Create human user command
     user_human_parser = subparsers.add_parser("user-create-human", help="Create human user account")
+    user_human_parser.add_argument("--username", required=True, help="Username")
+    user_human_parser.add_argument("--email", required=True, help="Email address")
+    user_human_parser.add_argument("--first-name", required=True, help="First name")
+    user_human_parser.add_argument("--last-name", required=True, help="Last name")
     user_human_parser.add_argument(
-        "--username",
-        required=True,
-        help="Username"
+        "--groups", required=True, help="Comma-separated list of group names"
     )
-    user_human_parser.add_argument(
-        "--email",
-        required=True,
-        help="Email address"
-    )
-    user_human_parser.add_argument(
-        "--first-name",
-        required=True,
-        help="First name"
-    )
-    user_human_parser.add_argument(
-        "--last-name",
-        required=True,
-        help="Last name"
-    )
-    user_human_parser.add_argument(
-        "--groups",
-        required=True,
-        help="Comma-separated list of group names"
-    )
-    user_human_parser.add_argument(
-        "--password",
-        help="Initial password (optional)"
-    )
+    user_human_parser.add_argument("--password", help="Initial password (optional)")
 
     # Delete user command
     user_delete_parser = subparsers.add_parser("user-delete", help="Delete a user")
-    user_delete_parser.add_argument(
-        "--username",
-        required=True,
-        help="Username to delete"
-    )
-    user_delete_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Skip confirmation prompt"
-    )
+    user_delete_parser.add_argument("--username", required=True, help="Username to delete")
+    user_delete_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
     # Create IAM group command
-    group_create_parser = subparsers.add_parser(
-        "group-create",
-        help="Create a new IAM group"
-    )
-    group_create_parser.add_argument(
-        "--name",
-        required=True,
-        help="Group name"
-    )
-    group_create_parser.add_argument(
-        "--description",
-        help="Group description"
-    )
+    group_create_parser = subparsers.add_parser("group-create", help="Create a new IAM group")
+    group_create_parser.add_argument("--name", required=True, help="Group name")
+    group_create_parser.add_argument("--description", help="Group description")
 
     # Delete IAM group command
-    group_delete_parser = subparsers.add_parser(
-        "group-delete",
-        help="Delete an IAM group"
-    )
+    group_delete_parser = subparsers.add_parser("group-delete", help="Delete an IAM group")
+    group_delete_parser.add_argument("--name", required=True, help="Group name to delete")
     group_delete_parser.add_argument(
-        "--name",
-        required=True,
-        help="Group name to delete"
-    )
-    group_delete_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Skip confirmation prompt"
+        "--force", action="store_true", help="Skip confirmation prompt"
     )
 
     # List IAM groups command
@@ -4737,146 +4392,105 @@ Examples:
 
     # Get federation config command
     federation_get_parser = subparsers.add_parser(
-        "federation-get",
-        help="Get federation configuration"
+        "federation-get", help="Get federation configuration"
     )
     federation_get_parser.add_argument(
-        "--config-id",
-        default="default",
-        help="Configuration ID (default: default)"
+        "--config-id", default="default", help="Configuration ID (default: default)"
     )
     federation_get_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Save federation config command
     federation_save_parser = subparsers.add_parser(
-        "federation-save",
-        help="Save federation configuration from JSON file"
+        "federation-save", help="Save federation configuration from JSON file"
     )
     federation_save_parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to federation config JSON file"
+        "--config", required=True, help="Path to federation config JSON file"
     )
     federation_save_parser.add_argument(
-        "--config-id",
-        default="default",
-        help="Configuration ID (default: default)"
+        "--config-id", default="default", help="Configuration ID (default: default)"
     )
 
     # Delete federation config command
     federation_delete_parser = subparsers.add_parser(
-        "federation-delete",
-        help="Delete federation configuration"
+        "federation-delete", help="Delete federation configuration"
     )
     federation_delete_parser.add_argument(
-        "--config-id",
-        default="default",
-        help="Configuration ID to delete (default: default)"
+        "--config-id", default="default", help="Configuration ID to delete (default: default)"
     )
     federation_delete_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Skip confirmation prompt"
+        "--force", action="store_true", help="Skip confirmation prompt"
     )
 
     # List federation configs command
     federation_list_parser = subparsers.add_parser(
-        "federation-list",
-        help="List all federation configurations"
+        "federation-list", help="List all federation configurations"
     )
     federation_list_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Add Anthropic server command
     federation_add_anthropic_parser = subparsers.add_parser(
-        "federation-add-anthropic-server",
-        help="Add Anthropic server to federation config"
+        "federation-add-anthropic-server", help="Add Anthropic server to federation config"
     )
     federation_add_anthropic_parser.add_argument(
         "--server-name",
         required=True,
-        help="Anthropic server name (e.g., io.github.jgador/websharp)"
+        help="Anthropic server name (e.g., io.github.jgador/websharp)",
     )
     federation_add_anthropic_parser.add_argument(
-        "--config-id",
-        default="default",
-        help="Configuration ID (default: default)"
+        "--config-id", default="default", help="Configuration ID (default: default)"
     )
 
     # Remove Anthropic server command
     federation_remove_anthropic_parser = subparsers.add_parser(
-        "federation-remove-anthropic-server",
-        help="Remove Anthropic server from federation config"
+        "federation-remove-anthropic-server", help="Remove Anthropic server from federation config"
     )
     federation_remove_anthropic_parser.add_argument(
-        "--server-name",
-        required=True,
-        help="Anthropic server name to remove"
+        "--server-name", required=True, help="Anthropic server name to remove"
     )
     federation_remove_anthropic_parser.add_argument(
-        "--config-id",
-        default="default",
-        help="Configuration ID (default: default)"
+        "--config-id", default="default", help="Configuration ID (default: default)"
     )
 
     # Add ASOR agent command
     federation_add_asor_parser = subparsers.add_parser(
-        "federation-add-asor-agent",
-        help="Add ASOR agent to federation config"
+        "federation-add-asor-agent", help="Add ASOR agent to federation config"
     )
     federation_add_asor_parser.add_argument(
-        "--agent-id",
-        required=True,
-        help="ASOR agent ID (e.g., aws_assistant)"
+        "--agent-id", required=True, help="ASOR agent ID (e.g., aws_assistant)"
     )
     federation_add_asor_parser.add_argument(
-        "--config-id",
-        default="default",
-        help="Configuration ID (default: default)"
+        "--config-id", default="default", help="Configuration ID (default: default)"
     )
 
     # Remove ASOR agent command
     federation_remove_asor_parser = subparsers.add_parser(
-        "federation-remove-asor-agent",
-        help="Remove ASOR agent from federation config"
+        "federation-remove-asor-agent", help="Remove ASOR agent from federation config"
     )
     federation_remove_asor_parser.add_argument(
-        "--agent-id",
-        required=True,
-        help="ASOR agent ID to remove"
+        "--agent-id", required=True, help="ASOR agent ID to remove"
     )
     federation_remove_asor_parser.add_argument(
-        "--config-id",
-        default="default",
-        help="Configuration ID (default: default)"
+        "--config-id", default="default", help="Configuration ID (default: default)"
     )
 
     # Federation sync command
     federation_sync_parser = subparsers.add_parser(
-        "federation-sync",
-        help="Trigger manual federation sync to import servers/agents"
+        "federation-sync", help="Trigger manual federation sync to import servers/agents"
     )
     federation_sync_parser.add_argument(
-        "--config-id",
-        default="default",
-        help="Configuration ID (default: default)"
+        "--config-id", default="default", help="Configuration ID (default: default)"
     )
     federation_sync_parser.add_argument(
         "--source",
         choices=["anthropic", "asor"],
-        help="Optional source filter (anthropic or asor). Syncs all enabled sources if not specified."
+        help="Optional source filter (anthropic or asor). Syncs all enabled sources if not specified.",
     )
     federation_sync_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # ==========================================
@@ -4885,176 +4499,108 @@ Examples:
 
     # List peers command
     peer_list_parser = subparsers.add_parser(
-        "peer-list",
-        help="List all configured peer registries"
+        "peer-list", help="List all configured peer registries"
     )
     peer_list_parser.add_argument(
-        "--enabled-only",
-        action="store_true",
-        help="Show only enabled peers"
+        "--enabled-only", action="store_true", help="Show only enabled peers"
     )
     peer_list_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Add peer command
     peer_add_parser = subparsers.add_parser(
-        "peer-add",
-        help="Add a new peer registry from JSON config"
+        "peer-add", help="Add a new peer registry from JSON config"
     )
     peer_add_parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to peer configuration JSON file"
+        "--config", required=True, help="Path to peer configuration JSON file"
     )
     peer_add_parser.add_argument(
         "--federation-token",
         required=False,
         help="Federation static token from the remote peer registry. "
-        "Overrides federation_token in the JSON config file if both are provided."
+        "Overrides federation_token in the JSON config file if both are provided.",
     )
 
     # Get peer command
     peer_get_parser = subparsers.add_parser(
-        "peer-get",
-        help="Get details of a specific peer registry"
+        "peer-get", help="Get details of a specific peer registry"
     )
+    peer_get_parser.add_argument("--peer-id", required=True, help="Peer registry identifier")
     peer_get_parser.add_argument(
-        "--peer-id",
-        required=True,
-        help="Peer registry identifier"
-    )
-    peer_get_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Update peer command
     peer_update_parser = subparsers.add_parser(
-        "peer-update",
-        help="Update an existing peer registry"
+        "peer-update", help="Update an existing peer registry"
     )
+    peer_update_parser.add_argument("--peer-id", required=True, help="Peer registry identifier")
     peer_update_parser.add_argument(
-        "--peer-id",
-        required=True,
-        help="Peer registry identifier"
-    )
-    peer_update_parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to updated peer configuration JSON file"
+        "--config", required=True, help="Path to updated peer configuration JSON file"
     )
     peer_update_parser.add_argument(
         "--federation-token",
         required=False,
         help="Federation static token from the remote peer registry. "
-        "Overrides federation_token in the JSON config file if both are provided."
+        "Overrides federation_token in the JSON config file if both are provided.",
     )
 
     # Remove peer command
-    peer_remove_parser = subparsers.add_parser(
-        "peer-remove",
-        help="Remove a peer registry"
-    )
-    peer_remove_parser.add_argument(
-        "--peer-id",
-        required=True,
-        help="Peer registry identifier"
-    )
-    peer_remove_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Skip confirmation prompt"
-    )
+    peer_remove_parser = subparsers.add_parser("peer-remove", help="Remove a peer registry")
+    peer_remove_parser.add_argument("--peer-id", required=True, help="Peer registry identifier")
+    peer_remove_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
     # Sync from specific peer command
     peer_sync_parser = subparsers.add_parser(
-        "peer-sync",
-        help="Trigger sync from a specific peer registry"
+        "peer-sync", help="Trigger sync from a specific peer registry"
     )
     peer_sync_parser.add_argument(
-        "--peer-id",
-        required=True,
-        help="Peer registry identifier to sync from"
+        "--peer-id", required=True, help="Peer registry identifier to sync from"
     )
     peer_sync_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Sync from all peers command
     peer_sync_all_parser = subparsers.add_parser(
-        "peer-sync-all",
-        help="Trigger sync from all enabled peer registries"
+        "peer-sync-all", help="Trigger sync from all enabled peer registries"
     )
     peer_sync_all_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Get peer sync status command
     peer_status_parser = subparsers.add_parser(
-        "peer-status",
-        help="Get sync status for a specific peer registry"
+        "peer-status", help="Get sync status for a specific peer registry"
     )
+    peer_status_parser.add_argument("--peer-id", required=True, help="Peer registry identifier")
     peer_status_parser.add_argument(
-        "--peer-id",
-        required=True,
-        help="Peer registry identifier"
-    )
-    peer_status_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Enable peer command
-    peer_enable_parser = subparsers.add_parser(
-        "peer-enable",
-        help="Enable a peer registry"
-    )
-    peer_enable_parser.add_argument(
-        "--peer-id",
-        required=True,
-        help="Peer registry identifier"
-    )
+    peer_enable_parser = subparsers.add_parser("peer-enable", help="Enable a peer registry")
+    peer_enable_parser.add_argument("--peer-id", required=True, help="Peer registry identifier")
 
     # Disable peer command
-    peer_disable_parser = subparsers.add_parser(
-        "peer-disable",
-        help="Disable a peer registry"
-    )
-    peer_disable_parser.add_argument(
-        "--peer-id",
-        required=True,
-        help="Peer registry identifier"
-    )
+    peer_disable_parser = subparsers.add_parser("peer-disable", help="Disable a peer registry")
+    peer_disable_parser.add_argument("--peer-id", required=True, help="Peer registry identifier")
 
     # Get peer connections command
     peer_connections_parser = subparsers.add_parser(
-        "peer-connections",
-        help="Get all federation connections across all peers"
+        "peer-connections", help="Get all federation connections across all peers"
     )
     peer_connections_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Get shared resources command
     peer_shared_resources_parser = subparsers.add_parser(
-        "peer-shared-resources",
-        help="Get resource sharing summary across all peers"
+        "peer-shared-resources", help="Get resource sharing summary across all peers"
     )
     peer_shared_resources_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # ==========================================
@@ -5063,128 +4609,69 @@ Examples:
 
     # Create virtual server command
     vs_create_parser = subparsers.add_parser(
-        "vs-create",
-        help="Create a virtual MCP server from JSON config"
+        "vs-create", help="Create a virtual MCP server from JSON config"
     )
     vs_create_parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to virtual server configuration JSON file"
+        "--config", required=True, help="Path to virtual server configuration JSON file"
     )
 
     # List virtual servers command
-    vs_list_parser = subparsers.add_parser(
-        "vs-list",
-        help="List all virtual MCP servers"
-    )
+    vs_list_parser = subparsers.add_parser("vs-list", help="List all virtual MCP servers")
     vs_list_parser.add_argument(
-        "--enabled-only",
-        action="store_true",
-        help="Show only enabled virtual servers"
+        "--enabled-only", action="store_true", help="Show only enabled virtual servers"
     )
+    vs_list_parser.add_argument("--tag", help="Filter by tag")
     vs_list_parser.add_argument(
-        "--tag",
-        help="Filter by tag"
-    )
-    vs_list_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Get virtual server command
-    vs_get_parser = subparsers.add_parser(
-        "vs-get",
-        help="Get virtual MCP server details"
+    vs_get_parser = subparsers.add_parser("vs-get", help="Get virtual MCP server details")
+    vs_get_parser.add_argument(
+        "--path", required=True, help="Virtual server path (e.g., /virtual/dev-tools)"
     )
     vs_get_parser.add_argument(
-        "--path",
-        required=True,
-        help="Virtual server path (e.g., /virtual/dev-tools)"
-    )
-    vs_get_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output raw JSON instead of formatted text"
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
     )
 
     # Update virtual server command
     vs_update_parser = subparsers.add_parser(
-        "vs-update",
-        help="Update a virtual MCP server from JSON config"
+        "vs-update", help="Update a virtual MCP server from JSON config"
     )
+    vs_update_parser.add_argument("--path", required=True, help="Virtual server path to update")
     vs_update_parser.add_argument(
-        "--path",
-        required=True,
-        help="Virtual server path to update"
-    )
-    vs_update_parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to updated configuration JSON file"
+        "--config", required=True, help="Path to updated configuration JSON file"
     )
 
     # Delete virtual server command
-    vs_delete_parser = subparsers.add_parser(
-        "vs-delete",
-        help="Delete a virtual MCP server"
-    )
-    vs_delete_parser.add_argument(
-        "--path",
-        required=True,
-        help="Virtual server path to delete"
-    )
-    vs_delete_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Skip confirmation prompt"
-    )
+    vs_delete_parser = subparsers.add_parser("vs-delete", help="Delete a virtual MCP server")
+    vs_delete_parser.add_argument("--path", required=True, help="Virtual server path to delete")
+    vs_delete_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
     # Toggle virtual server command
     vs_toggle_parser = subparsers.add_parser(
-        "vs-toggle",
-        help="Enable or disable a virtual MCP server"
+        "vs-toggle", help="Enable or disable a virtual MCP server"
     )
-    vs_toggle_parser.add_argument(
-        "--path",
-        required=True,
-        help="Virtual server path"
-    )
+    vs_toggle_parser.add_argument("--path", required=True, help="Virtual server path")
     vs_toggle_parser.add_argument(
         "--enabled",
         required=True,
         choices=["true", "false"],
-        help="Enable (true) or disable (false)"
+        help="Enable (true) or disable (false)",
     )
 
     # Rate virtual server command
-    vs_rate_parser = subparsers.add_parser(
-        "vs-rate",
-        help="Rate a virtual MCP server (1-5 stars)"
-    )
+    vs_rate_parser = subparsers.add_parser("vs-rate", help="Rate a virtual MCP server (1-5 stars)")
+    vs_rate_parser.add_argument("--path", required=True, help="Virtual server path")
     vs_rate_parser.add_argument(
-        "--path",
-        required=True,
-        help="Virtual server path"
-    )
-    vs_rate_parser.add_argument(
-        "--rating",
-        required=True,
-        type=int,
-        choices=[1, 2, 3, 4, 5],
-        help="Rating (1-5 stars)"
+        "--rating", required=True, type=int, choices=[1, 2, 3, 4, 5], help="Rating (1-5 stars)"
     )
 
     # Get virtual server rating command
     vs_rating_parser = subparsers.add_parser(
-        "vs-rating",
-        help="Get rating information for a virtual MCP server"
+        "vs-rating", help="Get rating information for a virtual MCP server"
     )
-    vs_rating_parser.add_argument(
-        "--path",
-        required=True,
-        help="Virtual server path"
-    )
+    vs_rating_parser.add_argument("--path", required=True, help="Virtual server path")
 
     args = parser.parse_args()
 

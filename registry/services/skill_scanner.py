@@ -210,7 +210,7 @@ class SkillScannerService:
             if config.ai_defense_api_key:
                 env["AI_DEFENSE_API_KEY"] = config.ai_defense_api_key
 
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - args are hardcoded flags and validated config values
                 cmd,
                 capture_output=True,
                 text=True,

@@ -19,9 +19,9 @@ import json
 import logging
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 # Add project root to path to import registry client
 SCRIPT_DIR = Path(__file__).parent
@@ -29,7 +29,6 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "api"))
 
 from registry_client import RegistryClient
-
 
 # Configure logging
 logging.basicConfig(
@@ -46,11 +45,8 @@ DEFAULT_ANALYZERS = "yara"
 
 
 def _run_security_scan(
-    server_url: str,
-    analyzers: str,
-    api_key: Optional[str] = None,
-    access_token: Optional[str] = None
-) -> Dict[str, Any]:
+    server_url: str, analyzers: str, api_key: str | None = None, access_token: str | None = None
+) -> dict[str, Any]:
     """Run security scan on a server using mcp_security_scanner.py directly.
 
     Args:
@@ -81,14 +77,18 @@ def _run_security_scan(
             "medium_severity": 0,
             "low_severity": 0,
             "is_safe": False,
-            "error_message": "Scanner script not found"
+            "error_message": "Scanner script not found",
         }
 
     cmd = [
-        "uv", "run", "python",
+        "uv",
+        "run",
+        "python",
         str(scanner_script),
-        "--server-url", server_url,
-        "--analyzers", analyzers
+        "--server-url",
+        server_url,
+        "--analyzers",
+        analyzers,
     ]
 
     if api_key:
@@ -103,17 +103,15 @@ def _run_security_scan(
     cmd_for_log = cmd.copy()
     if access_token and "--headers" in cmd_for_log:
         header_idx = cmd_for_log.index("--headers") + 1
-        headers_masked = json.dumps({"X-Authorization": f"Bearer {access_token[:20]}...{access_token[-10:]}"})
+        headers_masked = json.dumps(
+            {"X-Authorization": f"Bearer {access_token[:20]}...{access_token[-10:]}"}
+        )
         cmd_for_log[header_idx] = headers_masked
     logger.info(f"Running: {' '.join(cmd_for_log)}")
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd=str(PROJECT_ROOT)
+        result = subprocess.run(  # nosec B603 - internal script invoked via uv run with validated args
+            cmd, capture_output=True, text=True, check=False, cwd=str(PROJECT_ROOT)
         )
 
         # Log output
@@ -131,22 +129,23 @@ def _run_security_scan(
             "medium_severity": 0,
             "low_severity": 0,
             "is_safe": result.returncode == 0,
-            "error_message": None
+            "error_message": None,
         }
 
         # Try to find and parse the scan output file
         try:
             # Extract server name from URL for finding scan file
             from urllib.parse import urlparse
+
             parsed = urlparse(server_url)
-            path_parts = [p for p in parsed.path.split('/') if p and p != 'mcp']
+            path_parts = [p for p in parsed.path.split("/") if p and p != "mcp"]
             if path_parts:
                 server_name = path_parts[0]
                 scan_file = PROJECT_ROOT / "security_scans" / f"{server_name}_mcp.json"
 
                 if scan_file.exists():
                     scan_result["scan_output_file"] = str(scan_file)
-                    with open(scan_file, 'r') as f:
+                    with open(scan_file) as f:
                         scan_data = json.load(f)
 
                     # Extract severity counts from analysis_results
@@ -166,8 +165,9 @@ def _run_security_scan(
                                     scan_result["low_severity"] += 1
 
                     # Determine if safe based on scan data
-                    scan_result["is_safe"] = (scan_result["critical_issues"] == 0 and
-                                             scan_result["high_severity"] == 0)
+                    scan_result["is_safe"] = (
+                        scan_result["critical_issues"] == 0 and scan_result["high_severity"] == 0
+                    )
         except Exception as e:
             logger.warning(f"Could not parse scan results: {e}")
 
@@ -190,15 +190,12 @@ def _run_security_scan(
             "medium_severity": 0,
             "low_severity": 0,
             "is_safe": False,
-            "error_message": str(e)
+            "error_message": str(e),
         }
 
 
 def _generate_markdown_report(
-    scan_results: List[Dict[str, Any]],
-    stats: Dict[str, int],
-    analyzers: str,
-    scan_timestamp: str
+    scan_results: list[dict[str, Any]], stats: dict[str, int], analyzers: str, scan_timestamp: str
 ) -> str:
     """Generate markdown report from scan results.
 
@@ -223,9 +220,9 @@ def _generate_markdown_report(
     # Executive Summary
     lines.append("## Executive Summary")
     lines.append("")
-    total = stats['total']
-    passed = stats['passed']
-    failed = stats['failed']
+    total = stats["total"]
+    passed = stats["passed"]
+    failed = stats["failed"]
     pass_rate = (passed / total * 100) if total > 0 else 0
 
     lines.append(f"- **Total Servers Scanned:** {total}")
@@ -234,10 +231,10 @@ def _generate_markdown_report(
     lines.append("")
 
     # Aggregate Vulnerability Statistics
-    total_critical = sum(r.get('critical_issues', 0) for r in scan_results)
-    total_high = sum(r.get('high_severity', 0) for r in scan_results)
-    total_medium = sum(r.get('medium_severity', 0) for r in scan_results)
-    total_low = sum(r.get('low_severity', 0) for r in scan_results)
+    total_critical = sum(r.get("critical_issues", 0) for r in scan_results)
+    total_high = sum(r.get("high_severity", 0) for r in scan_results)
+    total_medium = sum(r.get("medium_severity", 0) for r in scan_results)
+    total_low = sum(r.get("low_severity", 0) for r in scan_results)
 
     lines.append("### Aggregate Vulnerability Statistics")
     lines.append("")
@@ -254,9 +251,9 @@ def _generate_markdown_report(
     lines.append("")
 
     for result in scan_results:
-        server_name = result.get('server_name', 'Unknown')
-        server_url = result.get('server_url', 'Unknown')
-        is_safe = result.get('is_safe', False)
+        server_name = result.get("server_name", "Unknown")
+        server_url = result.get("server_url", "Unknown")
+        is_safe = result.get("is_safe", False)
         status = "✅ SAFE" if is_safe else "❌ UNSAFE"
 
         lines.append(f"### {server_name}")
@@ -275,18 +272,19 @@ def _generate_markdown_report(
         lines.append("")
 
         # Show detailed findings for tools with issues
-        scan_file = result.get('scan_output_file')
+        scan_file = result.get("scan_output_file")
         if scan_file and Path(scan_file).exists():
             try:
-                with open(scan_file, 'r') as f:
+                with open(scan_file) as f:
                     scan_data = json.load(f)
 
-                tool_results = scan_data.get('tool_results', [])
+                tool_results = scan_data.get("tool_results", [])
                 tools_with_findings = [
-                    tool for tool in tool_results
+                    tool
+                    for tool in tool_results
                     if any(
-                        finding.get('total_findings', 0) > 0
-                        for finding in tool.get('findings', {}).values()
+                        finding.get("total_findings", 0) > 0
+                        for finding in tool.get("findings", {}).values()
                     )
                 ]
 
@@ -295,26 +293,28 @@ def _generate_markdown_report(
                     lines.append("")
 
                     for tool in tools_with_findings:
-                        tool_name = tool.get('tool_name', 'Unknown')
+                        tool_name = tool.get("tool_name", "Unknown")
                         lines.append(f"**Tool: `{tool_name}`**")
                         lines.append("")
 
                         # Show findings for each analyzer
-                        findings = tool.get('findings', {})
+                        findings = tool.get("findings", {})
                         for analyzer_name, analyzer_findings in findings.items():
-                            total_findings = analyzer_findings.get('total_findings', 0)
+                            total_findings = analyzer_findings.get("total_findings", 0)
                             if total_findings > 0:
-                                severity = analyzer_findings.get('severity', 'UNKNOWN')
-                                threat_names = analyzer_findings.get('threat_names', [])
-                                threat_summary = analyzer_findings.get('threat_summary', '')
+                                severity = analyzer_findings.get("severity", "UNKNOWN")
+                                threat_names = analyzer_findings.get("threat_names", [])
+                                threat_summary = analyzer_findings.get("threat_summary", "")
 
                                 lines.append(f"- **Analyzer:** {analyzer_name}")
                                 lines.append(f"- **Severity:** {severity}")
-                                lines.append(f"- **Threats:** {', '.join(threat_names) if threat_names else 'None'}")
+                                lines.append(
+                                    f"- **Threats:** {', '.join(threat_names) if threat_names else 'None'}"
+                                )
                                 lines.append(f"- **Summary:** {threat_summary}")
 
                                 # Include taxonomy if available
-                                taxonomy = analyzer_findings.get('mcp_taxonomy', {})
+                                taxonomy = analyzer_findings.get("mcp_taxonomy", {})
                                 if taxonomy:
                                     lines.append("")
                                     lines.append("**Taxonomy:**")
@@ -325,10 +325,10 @@ def _generate_markdown_report(
                                 lines.append("")
 
                         # Show tool description if available
-                        tool_desc = tool.get('tool_description', '')
+                        tool_desc = tool.get("tool_description", "")
                         if tool_desc:
                             lines.append("<details>")
-                            lines.append(f"<summary>Tool Description</summary>")
+                            lines.append("<summary>Tool Description</summary>")
                             lines.append("")
                             lines.append("```")
                             lines.append(tool_desc)
@@ -345,7 +345,7 @@ def _generate_markdown_report(
                 lines.append(f"**Detailed Report:** [{Path(scan_file).name}]({scan_file})")
                 lines.append("")
 
-        if result.get('error_message'):
+        if result.get("error_message"):
             lines.append(f"**Error:** {result['error_message']}")
             lines.append("")
 
@@ -359,11 +359,8 @@ def _generate_markdown_report(
 
 
 def _scan_all_servers(
-    base_url: str,
-    token_file: Path,
-    analyzers: str = DEFAULT_ANALYZERS,
-    api_key: Optional[str] = None
-) -> Dict[str, Any]:
+    base_url: str, token_file: Path, analyzers: str = DEFAULT_ANALYZERS, api_key: str | None = None
+) -> dict[str, Any]:
     """Scan all enabled servers.
 
     Args:
@@ -381,7 +378,7 @@ def _scan_all_servers(
 
     # Load access token from file
     try:
-        with open(token_file, 'r') as f:
+        with open(token_file) as f:
             token_data = json.load(f)
             access_token = token_data.get("access_token")
             if not access_token:
@@ -393,10 +390,7 @@ def _scan_all_servers(
 
     # Create registry client
     try:
-        client = RegistryClient(
-            registry_url=base_url,
-            token=access_token
-        )
+        client = RegistryClient(registry_url=base_url, token=access_token)
         logger.info(f"Connected to registry at: {base_url}")
     except Exception as e:
         logger.error(f"Failed to create registry client: {e}")
@@ -405,7 +399,7 @@ def _scan_all_servers(
     # Get server list using the Anthropic Registry API (v0.1)
     try:
         servers_response = client.anthropic_list_servers(limit=1000)
-        servers = servers_response.servers if hasattr(servers_response, 'servers') else []
+        servers = servers_response.servers if hasattr(servers_response, "servers") else []
         logger.info(f"Retrieved {len(servers)} servers from registry using Anthropic API v0.1")
     except Exception as e:
         logger.error(f"Failed to get server list: {e}")
@@ -430,17 +424,18 @@ def _scan_all_servers(
 
     if not enabled_servers:
         logger.warning("No enabled servers found to scan")
-        return {"stats": {"total": 0, "passed": 0, "failed": 0}, "scan_results": [], "scan_timestamp": "", "analyzers": analyzers}
+        return {
+            "stats": {"total": 0, "passed": 0, "failed": 0},
+            "scan_results": [],
+            "scan_timestamp": "",
+            "analyzers": analyzers,
+        }
 
     # Scan each server
-    stats = {
-        "total": len(enabled_servers),
-        "passed": 0,
-        "failed": 0
-    }
+    stats = {"total": len(enabled_servers), "passed": 0, "failed": 0}
 
     scan_results = []
-    scan_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    scan_timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     logger.info("")
     logger.info("=" * 80)
@@ -461,24 +456,28 @@ def _scan_all_servers(
             server_path = internal_meta.get("path")
 
         if not server_path:
-            logger.warning(f"[{idx}/{stats['total']}] {server_name}: No path found in metadata, skipping")
+            logger.warning(
+                f"[{idx}/{stats['total']}] {server_name}: No path found in metadata, skipping"
+            )
             stats["failed"] += 1
-            scan_results.append({
-                "server_name": server_name,
-                "server_url": "N/A",
-                "success": False,
-                "is_safe": False,
-                "critical_issues": 0,
-                "high_severity": 0,
-                "medium_severity": 0,
-                "low_severity": 0,
-                "error_message": "No path found in metadata"
-            })
+            scan_results.append(
+                {
+                    "server_name": server_name,
+                    "server_url": "N/A",
+                    "success": False,
+                    "is_safe": False,
+                    "critical_issues": 0,
+                    "high_severity": 0,
+                    "medium_severity": 0,
+                    "low_severity": 0,
+                    "error_message": "No path found in metadata",
+                }
+            )
             continue
 
         # Construct the gateway proxy URL using the path and base_url
-        if not server_path.endswith('/'):
-            server_path = server_path + '/'
+        if not server_path.endswith("/"):
+            server_path = server_path + "/"
         server_url = f"{base_url}{server_path}mcp"
 
         logger.info("-" * 80)
@@ -503,7 +502,7 @@ def _scan_all_servers(
         "stats": stats,
         "scan_results": scan_results,
         "scan_timestamp": scan_timestamp,
-        "analyzers": analyzers
+        "analyzers": analyzers,
     }
 
 
@@ -531,34 +530,29 @@ Examples:
         --base-url https://registry.us-east-1.example.com \\
         --token-file api/.token \\
         --analyzers yara,llm
-"""
+""",
     )
 
     parser.add_argument(
         "--base-url",
         default=DEFAULT_BASE_URL,
-        help=f"Registry base URL (default: {DEFAULT_BASE_URL})"
+        help=f"Registry base URL (default: {DEFAULT_BASE_URL})",
     )
     parser.add_argument(
         "--token-file",
         type=Path,
         default=DEFAULT_TOKEN_FILE,
-        help=f"Path to token file (default: {DEFAULT_TOKEN_FILE})"
+        help=f"Path to token file (default: {DEFAULT_TOKEN_FILE})",
     )
     parser.add_argument(
         "--analyzers",
         default=DEFAULT_ANALYZERS,
-        help=f"Comma-separated list of analyzers: yara, llm, or yara,llm (default: {DEFAULT_ANALYZERS})"
+        help=f"Comma-separated list of analyzers: yara, llm, or yara,llm (default: {DEFAULT_ANALYZERS})",
     )
     parser.add_argument(
-        "--api-key",
-        help="LLM API key (optional, can also use MCP_SCANNER_LLM_API_KEY env var)"
+        "--api-key", help="LLM API key (optional, can also use MCP_SCANNER_LLM_API_KEY env var)"
     )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging"
-    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
 
@@ -571,7 +565,7 @@ Examples:
         base_url=args.base_url,
         token_file=args.token_file,
         analyzers=args.analyzers,
-        api_key=args.api_key
+        api_key=args.api_key,
     )
 
     stats = results["stats"]
@@ -586,10 +580,7 @@ Examples:
     logger.info("=" * 80)
 
     markdown_report = _generate_markdown_report(
-        scan_results=scan_results,
-        stats=stats,
-        analyzers=analyzers,
-        scan_timestamp=scan_timestamp
+        scan_results=scan_results, stats=stats, analyzers=analyzers, scan_timestamp=scan_timestamp
     )
 
     # Save markdown report
@@ -601,15 +592,15 @@ Examples:
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     # Save timestamped report in reports/ subdirectory
-    timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp_str = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     timestamped_report = reports_dir / f"scan_report_{timestamp_str}.md"
 
-    with open(timestamped_report, 'w') as f:
+    with open(timestamped_report, "w") as f:
         f.write(markdown_report)
 
     # Save latest report directly in security_scans/
     latest_report = report_base_dir / "scan_report.md"
-    with open(latest_report, 'w') as f:
+    with open(latest_report, "w") as f:
         f.write(markdown_report)
 
     logger.info(f"Markdown report saved to: {timestamped_report}")
