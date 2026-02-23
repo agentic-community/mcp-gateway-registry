@@ -627,36 +627,43 @@ except Exception as e:
         echo ""
         echo "====Disabling the server===="
 
-        # Get admin credentials from environment
-        local admin_user="${ADMIN_USER:-admin}"
-        local admin_password="${ADMIN_PASSWORD}"
-
-        if [ -z "$admin_password" ]; then
-            print_error "ADMIN_PASSWORD not set in environment - cannot disable server"
+        # Generate JWT token for internal auth using shared SECRET_KEY
+        if [ -z "$SECRET_KEY" ]; then
+            print_error "SECRET_KEY not set in environment - cannot disable server"
         else
-            # Call the internal toggle endpoint to set service to disabled (false)
-            # Since the server was just auto-enabled during registration, we need to toggle it OFF
-            print_info "Calling toggle endpoint with: ${GATEWAY_URL}/api/internal/toggle"
-            print_info "Service path: $service_path"
+            local auth_token
+            auth_token=$(python3 -c "
+from registry.auth.internal import generate_internal_token
+print(generate_internal_token(subject='cli-service-mgmt', purpose='toggle-service'))
+" 2>/dev/null)
 
-            output=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${GATEWAY_URL}/api/internal/toggle" \
-                --user "$admin_user:$admin_password" \
-                --data-urlencode "service_path=$service_path" 2>&1)
-
-            # Extract HTTP status code from response
-            http_status=$(echo "$output" | grep "HTTP_STATUS:" | cut -d':' -f2)
-            response_body=$(echo "$output" | sed '/HTTP_STATUS:/d')
-
-            print_info "Toggle API HTTP Status: $http_status"
-            print_info "Toggle API Response: $response_body"
-
-            if [ "$http_status" = "200" ]; then
-                print_success "Server disabled due to failed security scan"
+            if [ -z "$auth_token" ]; then
+                print_error "Failed to generate auth token - cannot disable server"
             else
-                print_error "Failed to disable server - HTTP Status: $http_status"
-                print_error "Response: $response_body"
+                # Call the internal toggle endpoint to set service to disabled (false)
+                # Since the server was just auto-enabled during registration, we need to toggle it OFF
+                print_info "Calling toggle endpoint with: ${GATEWAY_URL}/api/internal/toggle"
+                print_info "Service path: $service_path"
+
+                output=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${GATEWAY_URL}/api/internal/toggle" \
+                    -H "Authorization: Bearer $auth_token" \
+                    --data-urlencode "service_path=$service_path" 2>&1)
+
+                # Extract HTTP status code from response
+                http_status=$(echo "$output" | grep "HTTP_STATUS:" | cut -d':' -f2)
+                response_body=$(echo "$output" | sed '/HTTP_STATUS:/d')
+
+                print_info "Toggle API HTTP Status: $http_status"
+                print_info "Toggle API Response: $response_body"
+
+                if [ "$http_status" = "200" ]; then
+                    print_success "Server disabled due to failed security scan"
+                else
+                    print_error "Failed to disable server - HTTP Status: $http_status"
+                    print_error "Response: $response_body"
+                fi
+                print_info "Review the security scan report before enabling this server"
             fi
-            print_info "Review the security scan report before enabling this server"
         fi
     fi
 

@@ -5,14 +5,15 @@ This service wraps the scope repository and implements high-level business
 logic for managing server scopes, groups, and authorization rules.
 """
 
-import base64
 import logging
 import os
+import time
 from typing import (
     Any,
 )
 
 import httpx
+import jwt as pyjwt
 
 from ..repositories.factory import get_scope_repository
 from .server_service import server_service
@@ -36,30 +37,47 @@ STANDARD_METHODS: list[str] = [
     "resources/templates/list",
 ]
 
+# JWT constants for internal service-to-service auth (must match auth_server/server.py)
+_RELOAD_JWT_ISSUER: str = "mcp-auth-server"
+_RELOAD_JWT_AUDIENCE: str = "mcp-registry"
+_RELOAD_JWT_TTL_SECONDS: int = 30
+
 
 async def _trigger_auth_server_reload() -> bool:
     """
     Trigger the auth server to reload its scopes configuration.
 
+    Uses a self-signed JWT (signed with the shared SECRET_KEY) for
+    internal service-to-service authentication instead of a local
+    admin account.
+
     Returns:
         True if successful, False otherwise
     """
     try:
-        admin_user = os.environ.get("ADMIN_USER", "admin")
-        admin_password = os.environ.get("ADMIN_PASSWORD")
+        secret_key = os.environ.get("SECRET_KEY")
 
-        if not admin_password:
-            logger.error("ADMIN_PASSWORD not set, cannot reload auth server")
+        if not secret_key:
+            logger.error("SECRET_KEY not set, cannot reload auth server")
             return False
 
-        # Create Basic Auth header
-        credentials = f"{admin_user}:{admin_password}"
-        encoded_credentials = base64.b64encode(credentials.encode()).decode()
+        # Generate a short-lived self-signed JWT for internal auth
+        now = int(time.time())
+        claims = {
+            "iss": _RELOAD_JWT_ISSUER,
+            "aud": _RELOAD_JWT_AUDIENCE,
+            "sub": "registry-service",
+            "purpose": "reload-scopes",
+            "token_use": "access",
+            "iat": now,
+            "exp": now + _RELOAD_JWT_TTL_SECONDS,
+        }
+        token = pyjwt.encode(claims, secret_key, algorithm="HS256")
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "http://auth-server:8888/internal/reload-scopes",
-                headers={"Authorization": f"Basic {encoded_credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
                 timeout=10.0,
             )
 
