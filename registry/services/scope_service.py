@@ -6,15 +6,14 @@ logic for managing server scopes, groups, and authorization rules.
 """
 
 import logging
-import os
-import time
 from typing import (
     Any,
 )
 
 import httpx
-import jwt as pyjwt
 
+from ..auth.internal import generate_internal_token
+from ..core.config import settings
 from ..repositories.factory import get_scope_repository
 from .server_service import server_service
 
@@ -37,46 +36,25 @@ STANDARD_METHODS: list[str] = [
     "resources/templates/list",
 ]
 
-# JWT constants for internal service-to-service auth (must match auth_server/server.py)
-_RELOAD_JWT_ISSUER: str = "mcp-auth-server"
-_RELOAD_JWT_AUDIENCE: str = "mcp-registry"
-_RELOAD_JWT_TTL_SECONDS: int = 30
-
-
 async def _trigger_auth_server_reload() -> bool:
     """
     Trigger the auth server to reload its scopes configuration.
 
     Uses a self-signed JWT (signed with the shared SECRET_KEY) for
-    internal service-to-service authentication instead of a local
-    admin account.
+    internal service-to-service authentication.
 
     Returns:
         True if successful, False otherwise
     """
     try:
-        secret_key = os.environ.get("SECRET_KEY")
-
-        if not secret_key:
-            logger.error("SECRET_KEY not set, cannot reload auth server")
-            return False
-
-        # Generate a short-lived self-signed JWT for internal auth
-        now = int(time.time())
-        claims = {
-            "iss": _RELOAD_JWT_ISSUER,
-            "aud": _RELOAD_JWT_AUDIENCE,
-            "sub": "registry-service",
-            "purpose": "reload-scopes",
-            "token_use": "access",
-            "iat": now,
-            "exp": now + _RELOAD_JWT_TTL_SECONDS,
-        }
-        token = pyjwt.encode(claims, secret_key, algorithm="HS256")
+        token = generate_internal_token(
+            subject="registry-service",
+            purpose="reload-scopes",
+        )
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "http://auth-server:8888/internal/reload-scopes",
+                f"{settings.auth_server_url}/internal/reload-scopes",
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=10.0,
             )

@@ -59,9 +59,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration for token generation
-JWT_ISSUER = "mcp-auth-server"
-JWT_AUDIENCE = "mcp-registry"
+# Import JWT constants from shared internal auth module
+from registry.auth.internal import (
+    _INTERNAL_JWT_ISSUER as JWT_ISSUER,
+    _INTERNAL_JWT_AUDIENCE as JWT_AUDIENCE,
+)
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
 
