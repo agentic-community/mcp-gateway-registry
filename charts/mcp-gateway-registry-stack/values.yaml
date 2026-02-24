@@ -17,6 +17,10 @@ global:
   # Both auth-server and registry will use this secret for SECRET_KEY and federation (if enabled)
   sharedSecretName: "shared-secret"
 
+  # OAuth provider shared secret - contains auth provider type and IdP credentials
+  # Both auth-server and registry reference this secret for Keycloak/Entra configuration
+  oauthProviderSecretName: "oauth-provider-secret"
+
   # Federation configuration - shared between registry and auth-server
   federation:
     staticTokenAuthEnabled: false # If not provided, defaults to false

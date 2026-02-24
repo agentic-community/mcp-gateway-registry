@@ -66,6 +66,10 @@ spec:
             - secretRef:
                 name: {{ .Values.global.sharedSecretName }}
             {{- end }}
+            {{- if .Values.global.oauthProviderSecretName }}
+            - secretRef:
+                name: {{ .Values.global.oauthProviderSecretName }}
+            {{- end }}
           env:
             - name: DEPLOYMENT_MODE
               value: {{ .Values.app.deploymentMode | default "with-gateway" | quote }}

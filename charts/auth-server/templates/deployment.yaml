@@ -67,6 +67,10 @@ spec:
             - secretRef:
                 name: {{ .Values.global.sharedSecretName }}
             {{- end }}
+            {{- if .Values.global.oauthProviderSecretName }}
+            - secretRef:
+                name: {{ .Values.global.oauthProviderSecretName }}
+            {{- end }}
       volumes:
         - name: script
           configMap:

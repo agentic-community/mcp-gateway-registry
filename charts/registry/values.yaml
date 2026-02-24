@@ -36,6 +36,12 @@ app:
   # Registry mode: full, skills-only, mcp-servers-only, agents-only
   registryMode: full
 
+# Entra ID integration (used when authProvider.type = "entra" in standalone deployment)
+entra:
+  clientId: ""
+  clientSecret: ""
+  tenantId: ""
+
 # Service configuration
 service:
   type: ClusterIP
