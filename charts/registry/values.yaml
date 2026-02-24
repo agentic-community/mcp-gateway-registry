@@ -26,6 +26,10 @@ app:
   federationEncryptionKey: # If not provided, a Fernet key is auto-generated
   registryId: # Unique identifier for this registry instance (optional)
 
+  # Skill security scanning configuration
+  skillSecurityScanEnabled: true  # Enable/disable skill security scanning
+  skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
+
   # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
   deploymentMode: with-gateway
 

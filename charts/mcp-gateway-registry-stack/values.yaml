@@ -167,6 +167,10 @@ registry:
 
     # Registry mode: full, skills-only, mcp-servers-only, agents-only
     registryMode: full
+
+    # Skill security scanning configuration
+    skillSecurityScanEnabled: true  # Enable/disable skill security scanning
+    skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
   ingress:
     enabled: true
     ingressClassName: alb
@@ -177,6 +181,7 @@ registry:
 auth-server:
   app:
     replicas: 2 # set to > 1 replica for high availability
+    oauthStoreTokensInSession: false  # Store OAuth tokens in session (default: false)
 
   keycloak:
     enabled: true

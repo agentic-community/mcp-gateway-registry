@@ -21,6 +21,7 @@ app:
   # secretKey: "your-secure-key-here"
   sessionCookieDomain: ""  # Auto-inferred from Host header if empty
   sessionCookieSecure: true
+  oauthStoreTokensInSession: false  # Store OAuth tokens in session (default: false)
 
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
