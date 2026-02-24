@@ -136,7 +136,9 @@ async def management_list_users(
 
     try:
         raw_users = await iam.list_users(search=search, max_results=limit)
+        logger.debug(f"[LIST_USERS] Retrieved {len(raw_users)} users from IAM")
     except Exception as exc:
+        logger.error(f"[LIST_USERS] Exception calling list_users: {type(exc).__name__}: {exc}")
         raise _translate_iam_error(exc) from exc
 
     summaries = [

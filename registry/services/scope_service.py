@@ -5,15 +5,15 @@ This service wraps the scope repository and implements high-level business
 logic for managing server scopes, groups, and authorization rules.
 """
 
-import base64
 import logging
-import os
 from typing import (
     Any,
 )
 
 import httpx
 
+from ..auth.internal import generate_internal_token
+from ..core.config import settings
 from ..repositories.factory import get_scope_repository
 from .server_service import server_service
 
@@ -36,30 +36,26 @@ STANDARD_METHODS: list[str] = [
     "resources/templates/list",
 ]
 
-
 async def _trigger_auth_server_reload() -> bool:
     """
     Trigger the auth server to reload its scopes configuration.
+
+    Uses a self-signed JWT (signed with the shared SECRET_KEY) for
+    internal service-to-service authentication.
 
     Returns:
         True if successful, False otherwise
     """
     try:
-        admin_user = os.environ.get("ADMIN_USER", "admin")
-        admin_password = os.environ.get("ADMIN_PASSWORD")
-
-        if not admin_password:
-            logger.error("ADMIN_PASSWORD not set, cannot reload auth server")
-            return False
-
-        # Create Basic Auth header
-        credentials = f"{admin_user}:{admin_password}"
-        encoded_credentials = base64.b64encode(credentials.encode()).decode()
+        token = generate_internal_token(
+            subject="registry-service",
+            purpose="reload-scopes",
+        )
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "http://auth-server:8888/internal/reload-scopes",
-                headers={"Authorization": f"Basic {encoded_credentials}"},
+                f"{settings.auth_server_url}/internal/reload-scopes",
+                headers={"Authorization": f"Bearer {token}"},
                 timeout=10.0,
             )
 

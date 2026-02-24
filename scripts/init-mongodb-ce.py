@@ -166,7 +166,24 @@ async def _create_standard_indexes(
         await collection.create_index([("identity.username", ASCENDING), ("timestamp", ASCENDING)])
         await collection.create_index([("action.operation", ASCENDING), ("timestamp", ASCENDING)])
         await collection.create_index([("action.resource_type", ASCENDING), ("timestamp", ASCENDING)])
-        await collection.create_index([("request_id", ASCENDING)], unique=True)
+
+        # Migration: drop old single-field request_id index if it exists
+        # Try both auto-generated name and explicit name variants
+        for old_index_name in ("request_id_1", "request_id_idx"):
+            try:
+                await collection.drop_index(old_index_name)
+                logger.info(f"Dropped old single-field index '{old_index_name}' from {full_name}")
+            except Exception:
+                logger.debug(f"No old index '{old_index_name}' to drop from {full_name}")
+
+        # Composite unique index on (request_id, log_type)
+        # Allows both MCPServerAccessRecord and RegistryApiAccessRecord
+        # to coexist for the same request_id while preventing true duplicates
+        await collection.create_index(
+            [("request_id", ASCENDING), ("log_type", ASCENDING)],
+            name="request_id_log_type_idx",
+            unique=True,
+        )
 
         # TTL index for automatic expiration (Requirements 6.3)
         # This also serves as the timestamp index for sorting

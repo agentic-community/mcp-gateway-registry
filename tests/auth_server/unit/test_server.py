@@ -865,8 +865,89 @@ class TestReloadScopesEndpoint:
 
     @patch("registry.common.scopes_loader.reload_scopes_config")
     @patch("auth_server.server.get_auth_provider")
-    def test_reload_scopes_success(self, mock_get_provider, mock_reload_scopes, auth_env_vars):
-        """Test successful scopes reload."""
+    def test_reload_scopes_success_with_jwt(
+        self, mock_get_provider, mock_reload_scopes, auth_env_vars
+    ):
+        """Test successful scopes reload using self-signed JWT."""
+        # Arrange
+        mock_reload_scopes.return_value = {"group_mappings": {}}
+
+        import jwt
+
+        import auth_server.server as server_module
+
+        # Patch module-level SECRET_KEY to match the test env var
+        # (it may already be set to a different value from earlier test imports)
+        secret_key = auth_env_vars["SECRET_KEY"]
+        original_secret_key = server_module.SECRET_KEY
+        server_module.SECRET_KEY = secret_key
+
+        try:
+            client = TestClient(server_module.app)
+
+            now = int(time.time())
+            token = jwt.encode(
+                {
+                    "iss": "mcp-auth-server",
+                    "aud": "mcp-registry",
+                    "sub": "registry-service",
+                    "purpose": "reload-scopes",
+                    "token_use": "access",
+                    "iat": now,
+                    "exp": now + 30,
+                },
+                secret_key,
+                algorithm="HS256",
+            )
+
+            # Act
+            response = client.post(
+                "/internal/reload-scopes", headers={"Authorization": f"Bearer {token}"}
+            )
+
+            # Assert
+            assert response.status_code == 200
+            data = response.json()
+            assert "successfully" in data["message"]
+        finally:
+            server_module.SECRET_KEY = original_secret_key
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_reload_scopes_no_auth(self, mock_get_provider):
+        """Test scopes reload without authentication."""
+        # Arrange
+        import auth_server.server as server_module
+
+        client = TestClient(server_module.app)
+
+        # Act
+        response = client.post("/internal/reload-scopes")
+
+        # Assert
+        assert response.status_code == 401
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_reload_scopes_invalid_jwt(self, mock_get_provider, auth_env_vars):
+        """Test scopes reload with an invalid JWT token."""
+        # Arrange
+        import auth_server.server as server_module
+
+        client = TestClient(server_module.app)
+
+        # Act
+        response = client.post(
+            "/internal/reload-scopes", headers={"Authorization": "Bearer invalid-token"}
+        )
+
+        # Assert
+        assert response.status_code == 401
+
+    @patch("registry.common.scopes_loader.reload_scopes_config")
+    @patch("auth_server.server.get_auth_provider")
+    def test_reload_scopes_basic_auth_backward_compat(
+        self, mock_get_provider, mock_reload_scopes, auth_env_vars
+    ):
+        """Test that deprecated Basic Auth still works for backward compatibility."""
         # Arrange
         mock_reload_scopes.return_value = {"group_mappings": {}}
 
@@ -889,22 +970,8 @@ class TestReloadScopesEndpoint:
         assert "successfully" in data["message"]
 
     @patch("auth_server.server.get_auth_provider")
-    def test_reload_scopes_no_auth(self, mock_get_provider):
-        """Test scopes reload without authentication."""
-        # Arrange
-        import auth_server.server as server_module
-
-        client = TestClient(server_module.app)
-
-        # Act
-        response = client.post("/internal/reload-scopes")
-
-        # Assert
-        assert response.status_code == 401
-
-    @patch("auth_server.server.get_auth_provider")
-    def test_reload_scopes_invalid_credentials(self, mock_get_provider, auth_env_vars):
-        """Test scopes reload with invalid credentials."""
+    def test_reload_scopes_invalid_basic_auth(self, mock_get_provider, auth_env_vars):
+        """Test scopes reload with invalid Basic Auth credentials."""
         # Arrange
         import base64
 
@@ -1231,9 +1298,7 @@ class TestOAuthTokenStorageConfiguration:
         # Act - test the parsing logic (module is already imported at test collection)
         import os
 
-        result = os.environ.get(
-            "OAUTH_STORE_TOKENS_IN_SESSION", "true"
-        ).lower() == "true"
+        result = os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "true").lower() == "true"
 
         # Assert
         assert result is True
@@ -1246,9 +1311,7 @@ class TestOAuthTokenStorageConfiguration:
         monkeypatch.setenv("OAUTH_STORE_TOKENS_IN_SESSION", "true")
 
         # Act
-        result = os.environ.get(
-            "OAUTH_STORE_TOKENS_IN_SESSION", "true"
-        ).lower() == "true"
+        result = os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "true").lower() == "true"
 
         # Assert
         assert result is True
@@ -1261,9 +1324,7 @@ class TestOAuthTokenStorageConfiguration:
         monkeypatch.setenv("OAUTH_STORE_TOKENS_IN_SESSION", "false")
 
         # Act
-        result = os.environ.get(
-            "OAUTH_STORE_TOKENS_IN_SESSION", "true"
-        ).lower() == "true"
+        result = os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "true").lower() == "true"
 
         # Assert
         assert result is False
@@ -1276,9 +1337,7 @@ class TestOAuthTokenStorageConfiguration:
         monkeypatch.setenv("OAUTH_STORE_TOKENS_IN_SESSION", "FALSE")
 
         # Act
-        result = os.environ.get(
-            "OAUTH_STORE_TOKENS_IN_SESSION", "true"
-        ).lower() == "true"
+        result = os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "true").lower() == "true"
 
         # Assert
         assert result is False
@@ -1312,12 +1371,14 @@ class TestOAuthTokenStorageConfiguration:
         # Simulate OAUTH_STORE_TOKENS_IN_SESSION=true
         oauth_store_tokens = True
         if oauth_store_tokens:
-            session_data.update({
-                "access_token": token_data.get("access_token"),
-                "refresh_token": token_data.get("refresh_token"),
-                "token_expires_in": token_data.get("expires_in"),
-                "token_obtained_at": 1234567890,
-            })
+            session_data.update(
+                {
+                    "access_token": token_data.get("access_token"),
+                    "refresh_token": token_data.get("refresh_token"),
+                    "token_expires_in": token_data.get("expires_in"),
+                    "token_obtained_at": 1234567890,
+                }
+            )
 
         # Assert
         assert "access_token" in session_data
@@ -1355,12 +1416,14 @@ class TestOAuthTokenStorageConfiguration:
         # Simulate OAUTH_STORE_TOKENS_IN_SESSION=false
         oauth_store_tokens = False
         if oauth_store_tokens:
-            session_data.update({
-                "access_token": token_data.get("access_token"),
-                "refresh_token": token_data.get("refresh_token"),
-                "token_expires_in": token_data.get("expires_in"),
-                "token_obtained_at": 1234567890,
-            })
+            session_data.update(
+                {
+                    "access_token": token_data.get("access_token"),
+                    "refresh_token": token_data.get("refresh_token"),
+                    "token_expires_in": token_data.get("expires_in"),
+                    "token_obtained_at": 1234567890,
+                }
+            )
 
         # Assert - tokens should NOT be in session_data
         assert "access_token" not in session_data

@@ -23,6 +23,10 @@ spec:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
     spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       initContainers:
         - name: wait-for-mongodb
           image: public.ecr.aws/docker/library/python:3.13-slim
@@ -62,6 +66,10 @@ spec:
             {{- if .Values.global.sharedSecretName }}
             - secretRef:
                 name: {{ .Values.global.sharedSecretName }}
+            {{- end }}
+            {{- if .Values.global.oauthProviderSecretName }}
+            - secretRef:
+                name: {{ .Values.global.oauthProviderSecretName }}
             {{- end }}
       volumes:
         - name: script

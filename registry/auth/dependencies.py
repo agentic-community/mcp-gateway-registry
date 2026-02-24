@@ -630,7 +630,7 @@ async def nginx_proxied_auth(
         # Set user context on request state for audit logging middleware
         request.state.user_context = user_context
 
-        logger.debug(f"nginx-proxied auth context for {username}: {user_context}")
+        logger.debug(f"nginx-proxied auth context for {username} (is_admin={is_admin}): {user_context}")
         return user_context
 
     # Fallback to session cookie authentication

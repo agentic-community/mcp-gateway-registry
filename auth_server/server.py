@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from string import Template
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import boto3
@@ -42,14 +42,13 @@ from providers.factory import get_auth_provider
 from pydantic import BaseModel
 
 sys.path.insert(0, "/app")
-from registry.common.scopes_loader import reload_scopes_config
-from registry.repositories.factory import get_scope_repository
-
 # Import MCP audit logging components
 from registry.audit.mcp_logger import MCPLogger
-from registry.audit.service import AuditLogger
 from registry.audit.models import Identity, MCPServer
+from registry.audit.service import AuditLogger
+from registry.common.scopes_loader import reload_scopes_config
 from registry.core.config import settings
+from registry.repositories.factory import get_scope_repository
 from registry.utils.request_utils import get_client_ip
 
 # Configure logging
@@ -60,9 +59,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration for token generation
-JWT_ISSUER = "mcp-auth-server"
-JWT_AUDIENCE = "mcp-registry"
+# Import JWT constants from shared internal auth module
+from registry.auth.internal import (
+    _INTERNAL_JWT_ISSUER as JWT_ISSUER,
+    _INTERNAL_JWT_AUDIENCE as JWT_AUDIENCE,
+)
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
 
@@ -87,9 +88,7 @@ OAUTH_STORE_TOKENS_IN_SESSION: bool = (
     os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "false").lower() == "true"
 )
 
-logging.info(
-    f"OAUTH_STORE_TOKENS_IN_SESSION={OAUTH_STORE_TOKENS_IN_SESSION}"
-)
+logging.info(f"OAUTH_STORE_TOKENS_IN_SESSION={OAUTH_STORE_TOKENS_IN_SESSION}")
 
 # Validate configuration: static token auth requires REGISTRY_API_TOKEN to be set
 if _registry_static_token_requested and not REGISTRY_API_TOKEN:
@@ -136,11 +135,14 @@ else:
 
 # Warn if token is too short (weak entropy)
 MIN_FEDERATION_TOKEN_LENGTH: int = 32
-if FEDERATION_STATIC_TOKEN_AUTH_ENABLED and len(FEDERATION_STATIC_TOKEN) < MIN_FEDERATION_TOKEN_LENGTH:
+if (
+    FEDERATION_STATIC_TOKEN_AUTH_ENABLED
+    and len(FEDERATION_STATIC_TOKEN) < MIN_FEDERATION_TOKEN_LENGTH
+):
     logging.warning(
         f"FEDERATION_STATIC_TOKEN is only {len(FEDERATION_STATIC_TOKEN)} characters. "
         f"Recommended minimum is {MIN_FEDERATION_TOKEN_LENGTH} characters. "
-        "Generate a stronger token with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        'Generate a stronger token with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"'
     )
 
 # Federation endpoint path patterns (scoped access for federation static token)
@@ -225,7 +227,7 @@ def mask_token(token: str) -> str:
 
 def _mask_sensitive_dict(
     data: dict,
-    sensitive_keys: tuple = ("access_token", "refresh_token", "token", "secret", "password")
+    sensitive_keys: tuple = ("access_token", "refresh_token", "token", "secret", "password"),
 ) -> dict:
     """
     Recursively mask sensitive fields in a dictionary for safe logging.
@@ -657,6 +659,7 @@ async def lifespan(app: FastAPI):
     # Shutdown: Add cleanup code here if needed in the future
     logger.info("Shutting down auth server")
 
+
 # Create FastAPI app
 app = FastAPI(
     title="Simplified Auth Server",
@@ -847,9 +850,7 @@ class SimplifiedCognitoValidator:
             # For M2M tokens, check client_id
             token_client_id = claims.get("client_id")
             if token_client_id and token_client_id != client_id:
-                logger.warning(
-                    "Token issued for different client than expected"
-                )
+                logger.warning("Token issued for different client than expected")
                 # Don't fail immediately - could be user token with different structure
 
             logger.info("Successfully validated JWT token for client/user")
@@ -1157,13 +1158,13 @@ async def validate_request(request: Request):
         HTTPException: If the token is missing, invalid, or configuration is incomplete
     """
 
-    
     # Capture start time for MCP audit logging
     import uuid
+
     start_time = time.perf_counter()
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     mcp_session_id = request.headers.get("Mcp-Session-Id")
-    
+
     try:
         # Extract headers
         # Check for X-Authorization first (custom header used by this gateway)
@@ -1190,7 +1191,7 @@ async def validate_request(request: Request):
                 # works correctly when the registry is hosted on a sub-path (e.g. /registry)
                 registry_prefix = REGISTRY_ROOT_PATH.strip("/")
                 if registry_prefix and path.startswith(registry_prefix):
-                    path = path[len(registry_prefix):].lstrip("/")
+                    path = path[len(registry_prefix) :].lstrip("/")
 
                 path_parts = path.split("/") if path else []
 
@@ -1290,13 +1291,11 @@ async def validate_request(request: Request):
                     headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
                 )
 
-            bearer_token = authorization[len("Bearer "):].strip()
+            bearer_token = authorization[len("Bearer ") :].strip()
 
             # Check federation token first, then fall through to admin token check
             if hmac.compare_digest(bearer_token, FEDERATION_STATIC_TOKEN):
-                logger.info(
-                    f"Federation static token: Authenticated for {original_url}"
-                )
+                logger.info(f"Federation static token: Authenticated for {original_url}")
 
                 federation_scopes = [
                     "federation/read",
@@ -1348,16 +1347,14 @@ async def validate_request(request: Request):
 
             # Validate static API key (REGISTRY_API_TOKEN is guaranteed to be set here)
             if not authorization.startswith("Bearer "):
-                logger.warning(
-                    "Static token auth: Authorization header must use Bearer scheme"
-                )
+                logger.warning("Static token auth: Authorization header must use Bearer scheme")
                 return JSONResponse(
                     content={"detail": "Authorization header must use Bearer scheme"},
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
                 )
 
-            bearer_token = authorization[len("Bearer "):].strip()
+            bearer_token = authorization[len("Bearer ") :].strip()
             if not hmac.compare_digest(bearer_token, REGISTRY_API_TOKEN):
                 logger.warning("Static token auth: Invalid API token provided")
                 return JSONResponse(
@@ -1597,9 +1594,11 @@ async def validate_request(request: Request):
             "server_name": server_name,
             "tool_name": tool_name,
         }
-        logger.info(f"Full validation result: {json.dumps(_mask_sensitive_dict(validation_result), indent=2)}")
+        logger.info(
+            f"Full validation result: {json.dumps(_mask_sensitive_dict(validation_result), indent=2)}"
+        )
         logger.info(f"Response data being sent: {json.dumps(response_data, indent=2)}")
-        
+
         # Log MCP server access event if this is an MCP request (has server_name)
         if server_name:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -1608,32 +1607,32 @@ async def validate_request(request: Request):
                 try:
                     # Build identity from validation result
                     identity = Identity(
-                        username=validation_result.get('username') or 'anonymous',
-                        auth_method=validation_result.get('method') or 'unknown',
-                        provider=validation_result.get('provider'),
-                        groups=validation_result.get('groups', []),
+                        username=validation_result.get("username") or "anonymous",
+                        auth_method=validation_result.get("method") or "unknown",
+                        provider=validation_result.get("provider"),
+                        groups=validation_result.get("groups", []),
                         scopes=user_scopes,
-                        is_admin=validation_result.get('is_admin', False),
-                        credential_type='bearer_token' if authorization else 'session_cookie',
+                        is_admin=validation_result.get("is_admin", False),
+                        credential_type="bearer_token" if authorization else "session_cookie",
                     )
-                    
+
                     # Build MCP server info
                     mcp_server = MCPServer(
                         name=server_name,
                         path=f"/{server_name}" if server_name else "/",
                         proxy_target=original_url or "",
                     )
-                    
+
                     # Log the MCP access event
                     await mcp_logger.log_mcp_access(
                         request_id=request_id,
                         identity=identity,
                         mcp_server=mcp_server,
-                        request_body=body.encode('utf-8') if body else b'',
-                        response_status='success',
+                        request_body=body.encode("utf-8") if body else b"",
+                        response_status="success",
                         duration_ms=duration_ms,
                         mcp_session_id=mcp_session_id,
-                        transport='streamable-http',  # Default, could be extracted from request
+                        transport="streamable-http",  # Default, could be extracted from request
                         client_ip=get_client_ip(request),
                         forwarded_for=request.headers.get("X-Forwarded-For"),
                         user_agent=request.headers.get("User-Agent"),
@@ -1642,7 +1641,7 @@ async def validate_request(request: Request):
                 except Exception as e:
                     # Don't fail the request if logging fails
                     logger.warning(f"Failed to log MCP access event: {e}")
-        
+
         # Create JSON response with headers that nginx can use
         response = JSONResponse(content=response_data, status_code=200)
 
@@ -1666,9 +1665,9 @@ async def validate_request(request: Request):
             if mcp_logger:
                 try:
                     identity = Identity(
-                        username='anonymous',
-                        auth_method='unknown',
-                        credential_type='none',
+                        username="anonymous",
+                        auth_method="unknown",
+                        credential_type="none",
                     )
                     mcp_server = MCPServer(
                         name=server_name_from_url,
@@ -1679,8 +1678,8 @@ async def validate_request(request: Request):
                         request_id=request_id,
                         identity=identity,
                         mcp_server=mcp_server,
-                        request_body=body.encode('utf-8') if body else b'',
-                        response_status='error',
+                        request_body=body.encode("utf-8") if body else b"",
+                        response_status="error",
                         duration_ms=duration_ms,
                         mcp_session_id=mcp_session_id,
                         error_code=401,
@@ -1770,7 +1769,7 @@ async def manage_federation_token(request: Request):
             status_code=401,
         )
 
-    bearer_token = authorization[len("Bearer "):].strip()
+    bearer_token = authorization[len("Bearer ") :].strip()
     if not REGISTRY_API_TOKEN or not hmac.compare_digest(bearer_token, REGISTRY_API_TOKEN):
         return JSONResponse(
             content={"detail": "Admin token required"},
@@ -1786,7 +1785,7 @@ async def manage_federation_token(request: Request):
             content={
                 "detail": (
                     f"Token must be at least {MIN_FEDERATION_TOKEN_LENGTH} characters. "
-                    "Generate with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\""
+                    'Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"'
                 )
             },
             status_code=400,
@@ -2002,52 +2001,96 @@ async def generate_user_token(request: GenerateTokenRequest):
 @app.post("/internal/reload-scopes")
 async def reload_scopes(request: Request, authorization: str | None = Header(None)):
     """
-    Reload the scopes.yml configuration file.
-    Requires admin authentication via Basic Auth with ADMIN_USER/ADMIN_PASSWORD.
+    Reload the scopes configuration.
+
+    Accepts internal service authentication via self-signed JWT (Bearer token)
+    signed with the shared SECRET_KEY. Also accepts Basic Auth with
+    ADMIN_USER/ADMIN_PASSWORD as a deprecated fallback.
     """
-    import base64
-
-    # Check for HTTP Basic Authentication
-    if not authorization or not authorization.startswith("Basic "):
-        logger.warning("No Basic Auth header found for reload-scopes request")
-        raise HTTPException(
-            status_code=401, detail="Authentication required", headers={"WWW-Authenticate": "Basic"}
-        )
-
-    try:
-        # Decode Basic Auth credentials
-        encoded_credentials = authorization.split(" ")[1]
-        decoded_credentials = base64.b64decode(encoded_credentials).decode("utf-8")
-        username, password = decoded_credentials.split(":", 1)
-    except (IndexError, ValueError, Exception) as e:
-        logger.warning(f"Failed to decode Basic Auth credentials: {e}")
+    if not authorization:
+        logger.warning("No Authorization header found for reload-scopes request")
         raise HTTPException(
             status_code=401,
-            detail="Invalid authentication format",
-            headers={"WWW-Authenticate": "Basic"},
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Verify admin credentials from environment
-    admin_user = os.environ.get("ADMIN_USER", "admin")
-    admin_password = os.environ.get("ADMIN_PASSWORD")
+    caller_identity = "unknown"
 
-    if not admin_password:
-        logger.error("ADMIN_PASSWORD environment variable not set")
-        raise HTTPException(status_code=500, detail="Server configuration error")
+    if authorization.startswith("Bearer "):
+        # Validate self-signed JWT using shared SECRET_KEY
+        token = authorization.split(" ", 1)[1]
+        try:
+            claims = jwt.decode(
+                token,
+                SECRET_KEY,
+                algorithms=["HS256"],
+                issuer=JWT_ISSUER,
+                audience=JWT_AUDIENCE,
+                options={
+                    "verify_exp": True,
+                    "verify_iat": True,
+                    "verify_iss": True,
+                    "verify_aud": True,
+                },
+                leeway=30,
+            )
+            token_use = claims.get("token_use")
+            if token_use != "access":
+                raise ValueError(f"Invalid token_use: {token_use}")
+            caller_identity = claims.get("sub", "service")
+            logger.info(f"Reload-scopes authorized via JWT for: {caller_identity}")
+        except jwt.ExpiredSignatureError:
+            logger.warning("Expired JWT token for reload-scopes request")
+            raise HTTPException(status_code=401, detail="Token has expired")
+        except (jwt.InvalidTokenError, ValueError) as e:
+            logger.warning(f"JWT validation failed for reload-scopes: {e}")
+            raise HTTPException(status_code=401, detail="Invalid token")
 
-    if username != admin_user or password != admin_password:
-        logger.warning(f"Failed admin authentication attempt for reload-scopes from {username}")
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid admin credentials",
-            headers={"WWW-Authenticate": "Basic"},
+    elif authorization.startswith("Basic "):
+        # Deprecated: Basic Auth with ADMIN_USER/ADMIN_PASSWORD
+        import base64
+
+        try:
+            encoded_credentials = authorization.split(" ")[1]
+            decoded_credentials = base64.b64decode(encoded_credentials).decode("utf-8")
+            username, password = decoded_credentials.split(":", 1)
+        except (IndexError, ValueError, Exception) as e:
+            logger.warning(f"Failed to decode Basic Auth credentials: {e}")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid authentication format",
+                headers={"WWW-Authenticate": "Basic"},
+            )
+
+        admin_user = os.environ.get("ADMIN_USER", "admin")
+        admin_password = os.environ.get("ADMIN_PASSWORD")
+
+        if not admin_password:
+            logger.error("ADMIN_PASSWORD not set and Basic Auth attempted on reload-scopes")
+            raise HTTPException(status_code=500, detail="Server configuration error")
+
+        if username != admin_user or password != admin_password:
+            logger.warning(f"Failed admin authentication attempt for reload-scopes from {username}")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid admin credentials",
+                headers={"WWW-Authenticate": "Basic"},
+            )
+
+        caller_identity = username
+        logger.warning(
+            "reload-scopes called with deprecated Basic Auth. "
+            "Migrate to Bearer token using shared SECRET_KEY."
         )
+    else:
+        raise HTTPException(status_code=401, detail="Unsupported authentication scheme")
 
     # Reload the scopes configuration
     global SCOPES_CONFIG
     try:
         SCOPES_CONFIG = await reload_scopes_config()
-        logger.info(f"Successfully reloaded scopes configuration by admin '{username}'")
+        logger.info(f"Successfully reloaded scopes configuration by '{caller_identity}'")
 
         return JSONResponse(
             status_code=200,
@@ -2197,27 +2240,29 @@ _mcp_audit_logger = None
 _mcp_logger = None
 _mcp_audit_repository = None
 
-def get_mcp_logger() -> Optional[MCPLogger]:
+
+def get_mcp_logger() -> MCPLogger | None:
     """Get or initialize the MCP logger instance."""
     global _mcp_audit_logger, _mcp_logger, _mcp_audit_repository
-    
+
     if _mcp_logger is None:
         try:
             # Check if MCP audit logging is enabled via settings
             if settings.audit_log_enabled:
                 # Initialize MongoDB repository if MongoDB is enabled
                 audit_repository = None
-                mongodb_enabled = getattr(settings, 'audit_log_mongodb_enabled', False)
+                mongodb_enabled = getattr(settings, "audit_log_mongodb_enabled", False)
                 if mongodb_enabled:
                     try:
                         from registry.repositories.audit_repository import DocumentDBAuditRepository
+
                         _mcp_audit_repository = DocumentDBAuditRepository()
                         audit_repository = _mcp_audit_repository
                         logger.info("MCP audit MongoDB repository initialized")
                     except Exception as e:
                         logger.warning(f"Failed to initialize MCP audit MongoDB repository: {e}")
                         mongodb_enabled = False
-                
+
                 _mcp_audit_logger = AuditLogger(
                     log_dir=settings.audit_log_dir,
                     rotation_hours=settings.audit_log_rotation_hours,
@@ -2228,14 +2273,17 @@ def get_mcp_logger() -> Optional[MCPLogger]:
                     audit_repository=audit_repository,
                 )
                 _mcp_logger = MCPLogger(_mcp_audit_logger)
-                logger.info(f"MCP audit logger initialized successfully (MongoDB: {mongodb_enabled})")
+                logger.info(
+                    f"MCP audit logger initialized successfully (MongoDB: {mongodb_enabled})"
+                )
             else:
                 logger.info("MCP audit logging is disabled")
         except Exception as e:
             logger.warning(f"Failed to initialize MCP audit logger: {e}")
             _mcp_logger = None
-    
+
     return _mcp_logger
+
 
 def get_enabled_providers():
     """Get list of enabled OAuth2 providers, filtered by AUTH_PROVIDER env var if set"""
@@ -2607,12 +2655,14 @@ async def oauth2_callback(
         }
 
         if OAUTH_STORE_TOKENS_IN_SESSION:
-            session_data.update({
-                "access_token": token_data.get("access_token"),
-                "refresh_token": token_data.get("refresh_token"),
-                "token_expires_in": token_data.get("expires_in"),
-                "token_obtained_at": int(time.time()),
-            })
+            session_data.update(
+                {
+                    "access_token": token_data.get("access_token"),
+                    "refresh_token": token_data.get("refresh_token"),
+                    "token_expires_in": token_data.get("expires_in"),
+                    "token_obtained_at": int(time.time()),
+                }
+            )
 
         registry_session = signer.dumps(session_data)
 
