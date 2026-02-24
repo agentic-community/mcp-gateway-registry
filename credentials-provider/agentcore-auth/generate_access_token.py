@@ -124,7 +124,7 @@ def _get_cognito_token(
             "scope": "invoke:gateway",
         }
         # Send as JSON for Auth0
-        response_method = lambda: requests.post(url, headers=headers, json=data)
+        response_method = lambda: requests.post(url, headers=headers, json=data, timeout=30)
     else:
         # Cognito format
         url = f"{cognito_domain_url.rstrip('/')}/oauth2/token"
@@ -135,7 +135,7 @@ def _get_cognito_token(
             "client_secret": client_secret,
         }
         # Send as form data for Cognito
-        response_method = lambda: requests.post(url, headers=headers, data=data)
+        response_method = lambda: requests.post(url, headers=headers, data=data, timeout=30)
 
     try:
         # Make the request
@@ -332,7 +332,8 @@ def generate_access_token(
             logger.info(f"Token generation completed successfully! Egress token saved to {saved_path}")
 
         except Exception as e:
-            logger.error(f"Failed to generate token for {server_name or f'config_{config['index']}'}: {e}")
+            config_label = server_name or f"config_{config['index']}"
+            logger.error(f"Failed to generate token for {config_label}: {e}")
             if not generate_all:
                 raise
 

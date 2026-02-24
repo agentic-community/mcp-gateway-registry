@@ -206,7 +206,7 @@ def main():
     
     # Example: Check server health
     try:
-        health_response = requests.get(f"{args.server_url}/health")
+        health_response = requests.get(f"{args.server_url}/health", timeout=30)
         health_response.raise_for_status()
         logger.info(f"Server health: {health_response.json()}")
     except Exception as e:
@@ -270,7 +270,7 @@ def main():
     
     try:
         # Call the validate endpoint
-        validate_response = requests.post(f"{args.server_url}/validate", headers=headers)
+        validate_response = requests.post(f"{args.server_url}/validate", headers=headers, timeout=30)
         validate_response.raise_for_status()
         result = validate_response.json()
         
@@ -292,7 +292,7 @@ def main():
     
     # Example: Get auth configuration
     try:
-        config_response = requests.get(f"{args.server_url}/config")
+        config_response = requests.get(f"{args.server_url}/config", timeout=30)
         config_response.raise_for_status()
         auth_config = config_response.json()
         

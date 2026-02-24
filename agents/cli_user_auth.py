@@ -176,7 +176,7 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
                 'code_verifier': pkce_verifier
             }
             
-            response = requests.post(TOKEN_URL, headers=headers, data=data)
+            response = requests.post(TOKEN_URL, headers=headers, data=data, timeout=30)
             response.raise_for_status()
             
             token_data = response.json()

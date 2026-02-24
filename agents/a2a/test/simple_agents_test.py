@@ -92,7 +92,7 @@ class AgentTester:
             logger.debug(f"[REQUEST] Payload:\n{json.dumps(payload, indent=2)}")
 
             start_time = time.time()
-            response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json"})
+            response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
             response_time = time.time() - start_time
 
             response_json = response.json()
@@ -204,9 +204,9 @@ class AgentTester:
 
         start_time = time.time()
         if method.upper() == "GET":
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=60)
         else:
-            response = requests.post(url, params=params)
+            response = requests.post(url, params=params, timeout=60)
         response_time = time.time() - start_time
 
         response_json = response.json()

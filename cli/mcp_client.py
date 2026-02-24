@@ -162,7 +162,7 @@ def _load_m2m_credentials() -> Optional[str]:
     }
 
     try:
-        response = requests.post(token_url, data=data)
+        response = requests.post(token_url, data=data, timeout=30)
         response.raise_for_status()
         token_data = response.json()
         return token_data.get('access_token')

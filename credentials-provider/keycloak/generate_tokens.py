@@ -100,7 +100,7 @@ class TokenGenerator:
         }
 
         try:
-            response = requests.post(token_url, data=data, headers=headers)
+            response = requests.post(token_url, data=data, headers=headers, timeout=30)
             response.raise_for_status()
 
             token_data = response.json()

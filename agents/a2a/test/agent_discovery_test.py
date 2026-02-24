@@ -49,7 +49,7 @@ class AgentTester:
             },
         }
 
-        response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json"})
+        response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
         return response.json()
 
     def extract_response_text(self, response):
