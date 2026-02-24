@@ -87,9 +87,33 @@ To get user email and group information, you need to configure API permissions:
    - `profile` - Read user's basic profile
    - `GroupMember.Read.All` - Read groups user belongs to
 6. Click **Add permissions**
-7. **CRITICAL**: Click **Grant admin consent for [Your Tenant]**
-   - This step is required for the permissions to work
+
+#### Application Permissions (Required for IAM Management)
+
+If you plan to use the IAM management UI (Settings -> Users/Groups) or the IAM API to manage users, groups, and M2M accounts, you must also add **Application permissions**. These are used by the server-side client credentials flow to call the Microsoft Graph API.
+
+1. Click **Add a permission**
+2. Select **Microsoft Graph**
+3. Select **Application permissions**
+4. Search for and add the following permissions:
+
+   **Read-only access (minimum for IAM UI to list users and groups):**
+   - `User.Read.All` - Read all users' full profiles
+   - `Group.Read.All` - Read all groups
+   - `GroupMember.Read.All` - Read all group memberships
+
+   **Read-write access (required to create/delete users, groups, and M2M accounts):**
+   - `User.ReadWrite.All` - Create, update, and delete users
+   - `Group.ReadWrite.All` - Create, update, and delete groups
+   - `GroupMember.ReadWrite.All` - Manage group memberships
+   - `Application.ReadWrite.All` - Create and manage M2M service principal accounts
+
+5. Click **Add permissions**
+
+**CRITICAL**: Click **Grant admin consent for [Your Tenant]**
+   - This step is required for **both** Delegated and Application permissions to work
    - You need admin privileges to grant consent
+   - Without admin consent for Application permissions, the IAM management features will return `403 Forbidden` errors
 
 ### Step 6: Configure Optional Claims
 
@@ -384,6 +408,24 @@ If you configured API access for M2M authentication:
 ---
 
 ## Troubleshooting
+
+### Issue: 403 Forbidden when using IAM management UI
+
+**Symptoms:**
+```
+Client error '403 Forbidden' for url 'https://graph.microsoft.com/v1.0/users?...'
+```
+
+**Cause:**
+The IAM management features (listing users, creating users/groups, managing M2M accounts) use the OAuth2 client credentials flow to call the Microsoft Graph API. This flow requires **Application permissions**, not Delegated permissions. If only Delegated permissions are configured, the Graph API will return 403 Forbidden.
+
+**Solution:**
+1. Go to Azure Portal -> App registrations -> Your app -> **API permissions**
+2. Click **Add a permission** -> **Microsoft Graph** -> **Application permissions**
+3. Add the required Application permissions (see [Step 5: Application Permissions](#application-permissions-required-for-iam-management))
+4. Click **Grant admin consent for [Your Tenant]**
+5. Wait 5-10 minutes for Azure AD to propagate changes
+6. Restart the registry service
 
 ### Issue: Missing email and groups claims
 
