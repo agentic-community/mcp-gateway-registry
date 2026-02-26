@@ -330,7 +330,7 @@ resource "aws_codebuild_project" "upstream" {
 
   source {
     type            = "GITHUB"
-    location        = "https://github.com/WPrintz/mcp-gateway-registry.git"
+    location        = "https://github.com/agentic-community/mcp-gateway-registry.git"
     buildspec       = aws_s3_object.upstream_buildspec[0].content
     git_clone_depth = 1
 
@@ -339,9 +339,7 @@ resource "aws_codebuild_project" "upstream" {
     }
   }
 
-  # Build from the PR 3 branch (observability pipeline).
-  # Update to "main" after the PR is merged upstream.
-  source_version = "feat/v1.0.13-metrics-service"
+  source_version = "main"
 
   cache {
     type  = "LOCAL"
