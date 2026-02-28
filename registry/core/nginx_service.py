@@ -97,7 +97,7 @@ class NginxConfigService:
         6. Backward compatibility with EC2_PUBLIC_DNS env var
         """
         import os
-        import subprocess
+        import subprocess  # nosec B404
 
         # Priority 1: Check GATEWAY_ADDITIONAL_SERVER_NAMES env var (user-provided)
         gateway_names = os.environ.get("GATEWAY_ADDITIONAL_SERVER_NAMES", "")
@@ -534,7 +534,7 @@ class NginxConfigService:
             return True
 
         try:
-            import subprocess
+            import subprocess  # nosec B404
 
             # Test the configuration first before reloading
             test_result = subprocess.run(["nginx", "-t"], capture_output=True, text=True)

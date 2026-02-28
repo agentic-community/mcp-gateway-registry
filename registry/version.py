@@ -6,7 +6,7 @@ or determined from git tags at runtime (for local development).
 """
 
 import os
-import subprocess
+import subprocess  # nosec B404
 import logging
 from pathlib import Path
 

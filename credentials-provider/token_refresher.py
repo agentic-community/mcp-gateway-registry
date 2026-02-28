@@ -21,7 +21,7 @@ import logging
 import os
 import psutil
 import signal
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import time

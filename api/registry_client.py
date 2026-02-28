@@ -13,7 +13,7 @@ the get-m2m-token.sh script.
 
 import json
 import logging
-import subprocess
+import subprocess  # nosec B404
 from typing import Optional, List, Dict, Any, Union
 from enum import Enum
 from datetime import datetime

@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import re
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path

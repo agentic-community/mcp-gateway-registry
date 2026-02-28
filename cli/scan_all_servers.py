@@ -17,7 +17,7 @@ Usage:
 import argparse
 import json
 import logging
-import subprocess
+import subprocess  # nosec B404
 import sys
 from datetime import datetime, timezone
 from pathlib import Path

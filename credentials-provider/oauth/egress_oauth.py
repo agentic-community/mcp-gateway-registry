@@ -107,7 +107,7 @@ def _run_generic_oauth_flow_for_config(
     config_num: int, provider: str, force_new: bool = False, verbose: bool = False
 ) -> Dict[str, Any]:
     """Run the generic OAuth flow using a specific configuration set."""
-    import subprocess
+    import subprocess  # nosec B404
 
     # Get configuration-specific environment variables
     client_id = os.getenv(f"EGRESS_OAUTH_CLIENT_ID_{config_num}")
@@ -193,7 +193,7 @@ def _run_generic_oauth_flow(
     provider: str, force_new: bool = False, verbose: bool = False
 ) -> Dict[str, Any]:
     """Run the generic OAuth flow using the existing script."""
-    import subprocess
+    import subprocess  # nosec B404
 
     # Build command
     cmd = ["python", str(Path(__file__).parent / "generic_oauth_flow.py"), "--provider", provider]

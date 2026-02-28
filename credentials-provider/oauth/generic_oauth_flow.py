@@ -980,7 +980,7 @@ def interactive_configuration() -> Dict[str, Any]:
 
         # Try to get public IP for better remote access
         try:
-            import subprocess
+            import subprocess  # nosec B404
 
             public_ip = (
                 subprocess.check_output(["curl", "-s", "http://checkip.amazonaws.com/"])
