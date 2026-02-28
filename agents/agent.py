@@ -69,6 +69,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Union,
 )
 from urllib.parse import (
     urlparse,
@@ -416,6 +417,15 @@ def _safe_eval_arithmetic(expression: str) -> Union[int, float]:
             op_func = _SAFE_OPERATORS.get(type(node.op))
             if op_func is None:
                 raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+
+            # Special handling for exponentiation to prevent DoS
+            if isinstance(node.op, ast.Pow):
+                left_val = _eval_node(node.left)
+                right_val = _eval_node(node.right)
+                if abs(right_val) > 100:
+                    raise ValueError("Exponent too large (max 100)")
+                return op_func(left_val, right_val)
+
             return op_func(_eval_node(node.left), _eval_node(node.right))
         if isinstance(node, ast.UnaryOp):
             op_func = _SAFE_UNARY_OPERATORS.get(type(node.op))
