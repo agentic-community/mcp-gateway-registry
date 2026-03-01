@@ -35,9 +35,10 @@ class FileAgentRepository(AgentRepositoryBase):
     async def get_all(self) -> Dict[str, AgentCard]:
         """Load all agents from disk."""
         agents = {}
-        agent_files = [f for f in self.agents_dir.glob("**/*_agent.json") 
-                      if f.name != self.state_file.name]
-        
+        agent_files = [
+            f for f in self.agents_dir.glob("**/*_agent.json") if f.name != self.state_file.name
+        ]
+
         for file in agent_files:
             try:
                 with open(file, "r") as f:
@@ -47,7 +48,7 @@ class FileAgentRepository(AgentRepositoryBase):
                     agents[agent.path] = agent
             except Exception as e:
                 logger.error(f"Failed to load agent from {file}: {e}")
-        
+
         return agents
 
     async def get(self, path: str) -> Optional[AgentCard]:
@@ -60,20 +61,20 @@ class FileAgentRepository(AgentRepositoryBase):
         if not agent.registered_at:
             agent.registered_at = datetime.now(timezone.utc)
         agent.updated_at = datetime.now(timezone.utc)
-        
+
         filename = _path_to_filename(agent.path)
         file_path = self.agents_dir / filename
-        
+
         with open(file_path, "w") as f:
             json.dump(agent.model_dump(mode="json"), f, indent=2)
-        
+
         return agent
 
     async def delete(self, path: str) -> bool:
         """Delete agent from disk."""
         filename = _path_to_filename(path)
         file_path = self.agents_dir / filename
-        
+
         if file_path.exists():
             file_path.unlink()
             return True
@@ -88,11 +89,11 @@ class FileAgentRepository(AgentRepositoryBase):
                 if isinstance(state, dict):
                     return {
                         "enabled": state.get("enabled", []),
-                        "disabled": state.get("disabled", [])
+                        "disabled": state.get("disabled", []),
                     }
             except Exception as e:
                 logger.error(f"Failed to load state: {e}")
-        
+
         return {"enabled": [], "disabled": []}
 
     async def save_state(self, state: Dict[str, List[str]]) -> None:
@@ -108,7 +109,7 @@ class FileAgentRepository(AgentRepositoryBase):
     async def set_enabled(self, path: str, enabled: bool) -> None:
         """Set agent enabled state."""
         state = await self.get_state()
-        
+
         if enabled:
             if path in state["disabled"]:
                 state["disabled"].remove(path)
@@ -119,7 +120,7 @@ class FileAgentRepository(AgentRepositoryBase):
                 state["enabled"].remove(path)
             if path not in state["disabled"]:
                 state["disabled"].append(path)
-        
+
         await self.save_state(state)
 
     async def create(self, agent: AgentCard) -> AgentCard:

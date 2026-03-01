@@ -98,9 +98,7 @@ async def get_documentdb_client() -> AsyncIOMotorDatabase:
 
     # Verify connection
     server_info = await _client.server_info()
-    logger.info(
-        f"Connected to DocumentDB/MongoDB {server_info.get('version', 'unknown')}"
-    )
+    logger.info(f"Connected to DocumentDB/MongoDB {server_info.get('version', 'unknown')}")
 
     return _database
 

@@ -226,25 +226,55 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Optional, List, Dict, Any
 
 from registry_client import (
-    AgentProvider,
+    RegistryClient,
+    InternalServiceRegistration,
+    ServerListResponse,
+    ToggleResponse,
+    GroupListResponse,
     AgentRegistration,
-    AgentRescanResponse,
-    AgentSecurityScanResponse,
+    AgentProvider,
     AgentVisibility,
+    Skill,
+    AgentListResponse,
+    AgentDetail,
+    AgentToggleResponse,
+    AgentDiscoveryResponse,
+    AgentSemanticDiscoveryResponse,
+    RatingResponse,
+    RatingInfoResponse,
+    AgentSecurityScanResponse,
+    AgentRescanResponse,
     AnthropicServerList,
     AnthropicServerResponse,
-    InternalServiceRegistration,
-    RatingInfoResponse,
-    RatingResponse,
-    RegistryClient,
-    Skill,
+    M2MAccountRequest,
+    HumanUserRequest,
+    UserSummary,
+    UserListResponse,
+    UserDeleteResponse,
+    M2MAccountResponse,
+    GroupCreateRequest,
+    GroupSummary,
+    GroupDeleteResponse,
     SkillRegistrationRequest,
+    SkillCard,
+    SkillListResponse,
+    SkillHealthResponse,
+    SkillContentResponse,
+    SkillSearchResponse,
+    SkillToggleResponse,
+    SkillRatingResponse,
+    SkillSecurityScanResponse,
+    SkillRescanResponse,
     ToolMapping,
     ToolScopeOverride,
     VirtualServerCreateRequest,
+    VirtualServerConfig,
+    VirtualServerListResponse,
+    VirtualServerToggleResponse,
+    VirtualServerDeleteResponse,
 )
 
 # Configure logging
@@ -255,7 +285,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _get_registry_url(cli_value: str | None = None) -> str:
+def _get_registry_url(cli_value: Optional[str] = None) -> str:
     """
     Get registry URL from command-line argument or environment variable.
 
@@ -284,7 +314,7 @@ def _get_registry_url(cli_value: str | None = None) -> str:
 
 def _mask_sensitive_fields(
     data: Any,
-    fields_to_mask: list[str] | None = None,
+    fields_to_mask: Optional[List[str]] = None,
 ) -> Any:
     """
     Mask sensitive fields in response data for safe logging/printing.
@@ -344,7 +374,7 @@ def _get_token_script() -> str:
     return script_path
 
 
-def _get_jwt_token(aws_region: str | None = None, keycloak_url: str | None = None) -> str:
+def _get_jwt_token(aws_region: Optional[str] = None, keycloak_url: Optional[str] = None) -> str:
     """
     Retrieve JWT token using get-m2m-token.sh script.
 
@@ -373,9 +403,7 @@ def _get_jwt_token(aws_region: str | None = None, keycloak_url: str | None = Non
             cmd.extend(["--keycloak-url", keycloak_url])
         cmd.append(client_name)
 
-        result = subprocess.run(  # nosec B603 - script path from config, args from env vars
-            cmd, capture_output=True, text=True, check=True
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
         token = result.stdout.strip()
 
@@ -395,7 +423,7 @@ def _get_jwt_token(aws_region: str | None = None, keycloak_url: str | None = Non
         raise RuntimeError(f"Token retrieval error: {e}") from e
 
 
-def _load_json_config(config_path: str) -> dict[str, Any]:
+def _load_json_config(config_path: str) -> Dict[str, Any]:
     """
     Load JSON configuration file.
 
@@ -414,7 +442,7 @@ def _load_json_config(config_path: str) -> dict[str, Any]:
     if not config_file.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-    with open(config_file) as f:
+    with open(config_file, "r") as f:
         config = json.load(f)
 
     logger.debug(f"Loaded configuration from {config_path}")
@@ -454,7 +482,7 @@ def _create_client(args: argparse.Namespace) -> RegistryClient:
 
         # Try to parse as JSON first (token files from generate-agent-token.sh or UI)
         try:
-            with open(token_path) as f:
+            with open(token_path, "r") as f:
                 token_data = json.load(f)
             # Extract access_token - handle multiple JSON formats:
             # Format 1: {"access_token": "..."} (from generate-agent-token.sh)
@@ -545,7 +573,7 @@ def cmd_register(args: argparse.Namespace) -> int:
             version=config.get("version"),
             status=config.get("status"),
             auth_provider=config.get("auth_provider"),
-            auth_type=config.get("auth_type"),
+            auth_scheme=config.get("auth_scheme", config.get("auth_type")),
             supported_transports=config.get("supported_transports"),
             headers=config.get("headers"),
             tool_list_json=config.get("tool_list_json"),
@@ -854,7 +882,7 @@ def cmd_import_group(args: argparse.Namespace) -> int:
 
     try:
         # Read JSON file
-        with open(args.file) as f:
+        with open(args.file, "r") as f:
             group_definition = json.load(f)
 
         # Validate required field
@@ -935,7 +963,7 @@ def cmd_list_groups(args: argparse.Namespace) -> int:
         # Summary
         total_keycloak = len(response.keycloak_groups)
         total_scopes = len(response.scopes_groups)
-        print("\n=== Summary ===")
+        print(f"\n=== Summary ===")
         print(f"Total Keycloak groups: {total_keycloak}")
         print(f"Total Scopes groups: {total_scopes}")
         print(f"Synchronized: {len(response.synchronized)}")
@@ -1165,7 +1193,7 @@ def cmd_rescan(args: argparse.Namespace) -> int:
             logger.info(f"  Status: {safety_status}")
             logger.info(f"  Scan timestamp: {response.scan_timestamp}")
             logger.info(f"  Analyzers used: {', '.join(response.analyzers_used)}")
-            logger.info("\n  Severity counts:")
+            logger.info(f"\n  Severity counts:")
             logger.info(f"    Critical: {response.critical_issues}")
             logger.info(f"    High: {response.high_severity}")
             logger.info(f"    Medium: {response.medium_severity}")
@@ -1182,6 +1210,48 @@ def cmd_rescan(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Failed to trigger security scan: {e}")
+        return 1
+
+
+def cmd_server_update_credential(args: argparse.Namespace) -> int:
+    """
+    Update authentication credentials for a server.
+
+    Args:
+        args: Command arguments with path, auth-scheme, credential, etc.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        # Validate that credential is provided when auth_scheme is not 'none'
+        if args.auth_scheme != "none" and not args.credential:
+            logger.error("--credential is required when --auth-scheme is not 'none'")
+            return 1
+
+        client = _create_client(args)
+        response = client.update_server_credential(
+            service_path=args.path,
+            auth_scheme=args.auth_scheme,
+            auth_credential=args.credential,
+            auth_header_name=args.auth_header_name,
+        )
+
+        if args.json:
+            # Output raw JSON
+            print(json.dumps(response, indent=2, default=str))
+        else:
+            # Pretty print results
+            logger.info(f"\nAuth credential updated successfully for '{args.path}':")
+            logger.info(f"  Auth scheme: {response.get('auth_scheme')}")
+            if response.get("auth_header_name"):
+                logger.info(f"  Header name: {response.get('auth_header_name')}")
+            logger.info(f"  Message: {response.get('message')}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to update server credential: {e}")
         return 1
 
 
@@ -1254,18 +1324,19 @@ def cmd_server_search(args: argparse.Namespace) -> int:
         if response.agents:
             print(f"\n--- A2A Agents ({len(response.agents)}) ---")
             for agent in response.agents:
-                print(f"  {agent.agent_name} ({agent.path})")
+                agent_name = agent.agent_card.get("name", "Unknown")
+                agent_desc = agent.agent_card.get("description", "")
+                agent_skills = agent.agent_card.get("skills", [])
+                print(f"  {agent_name} ({agent.path})")
                 print(f"    Relevance: {agent.relevance_score:.2%}")
-                if agent.tags:
-                    print(f"    Tags: {', '.join(agent.tags[:5])}")
-                if agent.skills:
-                    print(f"    Skills: {', '.join(agent.skills[:5])}")
-                if agent.description:
-                    desc = (
-                        agent.description[:100] + "..."
-                        if len(agent.description) > 100
-                        else agent.description
-                    )
+                if agent_skills:
+                    skill_names = [
+                        s.get("name", "") if isinstance(s, dict) else str(s)
+                        for s in agent_skills[:5]
+                    ]
+                    print(f"    Skills: {', '.join(skill_names)}")
+                if agent_desc:
+                    desc = agent_desc[:100] + "..." if len(agent_desc) > 100 else agent_desc
                     print(f"    {desc}")
                 print()
 
@@ -1425,7 +1496,7 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
             logger.error(f"Config file not found: {config_path}")
             return 1
 
-        with open(config_path) as f:
+        with open(config_path, "r") as f:
             config = json.load(f)
 
         # Convert skills list of dicts to Skill objects
@@ -1536,7 +1607,7 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Agent registration failed: {e}")
-        logger.debug("Full error details:", exc_info=True)
+        logger.debug(f"Full error details:", exc_info=True)
         return 1
 
 
@@ -1639,7 +1710,7 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
             logger.error(f"Config file not found: {config_path}")
             return 1
 
-        with open(config_path) as f:
+        with open(config_path, "r") as f:
             config = json.load(f)
 
         # Convert skills list of dicts to Skill objects
@@ -1725,7 +1796,7 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Agent update failed: {e}")
-        logger.debug("Full error details:", exc_info=True)
+        logger.debug(f"Full error details:", exc_info=True)
         return 1
 
 
@@ -1967,7 +2038,7 @@ def cmd_agent_rescan(args: argparse.Namespace) -> int:
             logger.info(f"  Status: {safety_status}")
             logger.info(f"  Scan timestamp: {response.scan_timestamp}")
             logger.info(f"  Analyzers used: {', '.join(response.analyzers_used)}")
-            logger.info("\n  Severity counts:")
+            logger.info(f"\n  Severity counts:")
             logger.info(f"    Critical: {response.critical_issues}")
             logger.info(f"    High: {response.high_severity}")
             logger.info(f"    Medium: {response.medium_severity}")
@@ -2513,7 +2584,7 @@ def cmd_anthropic_get_server(args: argparse.Namespace) -> int:
         print(f"Website: {server.websiteUrl or 'N/A'}")
 
         if server.repository:
-            print("\nRepository:")
+            print(f"\nRepository:")
             print(f"  URL: {server.repository.url}")
             print(f"  Source: {server.repository.source}")
             if server.repository.id:
@@ -2530,11 +2601,11 @@ def cmd_anthropic_get_server(args: argparse.Namespace) -> int:
                     print(f"     Runtime: {package.runtimeHint}")
 
         if server.meta:
-            print("\nMetadata:")
+            print(f"\nMetadata:")
             print(json.dumps(server.meta, indent=2))
 
         if result.meta:
-            print("\nRegistry Metadata:")
+            print(f"\nRegistry Metadata:")
             print(json.dumps(result.meta, indent=2))
 
         return 0
@@ -2609,7 +2680,7 @@ def cmd_user_create_m2m(args: argparse.Namespace) -> int:
             else None,
         )
 
-        logger.info("M2M account created successfully\n")
+        logger.info(f"M2M account created successfully\n")
         print(f"Client ID: {result.client_id}")
         print(f"Client Secret: {result.client_secret}")
         print(f"Groups: {', '.join(result.groups)}")
@@ -2647,7 +2718,7 @@ def cmd_user_create_human(args: argparse.Namespace) -> int:
             password=args.password if hasattr(args, "password") and args.password else None,
         )
 
-        logger.info("User created successfully\n")
+        logger.info(f"User created successfully\n")
         print(f"Username: {result.username}")
         print(f"User ID: {result.id}")
         print(f"Email: {result.email or 'N/A'}")
@@ -2819,7 +2890,7 @@ def cmd_federation_save(args: argparse.Namespace) -> int:
         client = _create_client(args)
 
         # Load config from file
-        with open(args.config) as f:
+        with open(args.config, "r") as f:
             config_data = json.load(f)
 
         response = client.save_federation_config(config=config_data, config_id=args.config_id)
@@ -3020,7 +3091,7 @@ def cmd_federation_sync(args: argparse.Namespace) -> int:
         else:
             # Formatted output
             logger.info(f"Federation sync completed: {response.get('message')}")
-            print("\nSync Results:")
+            print(f"\nSync Results:")
             print(f"  Config ID: {response.get('config_id')}")
             print(f"  Total Synced: {response.get('total_synced', 0)}")
 
@@ -3103,7 +3174,7 @@ def cmd_peer_add(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
 
-        with open(args.config) as f:
+        with open(args.config, "r") as f:
             config_data = json.load(f)
 
         # Override federation_token from CLI arg if provided
@@ -3186,7 +3257,7 @@ def cmd_peer_update(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
 
-        with open(args.config) as f:
+        with open(args.config, "r") as f:
             config_data = json.load(f)
 
         # Override federation_token from CLI arg if provided
@@ -3205,6 +3276,37 @@ def cmd_peer_update(args: argparse.Namespace) -> int:
         return 1
     except Exception as e:
         logger.error(f"Update peer failed: {e}")
+        return 1
+
+
+def cmd_peer_update_token(args: argparse.Namespace) -> int:
+    """
+    Update only the federation token for a peer registry.
+
+    This command is useful for:
+    - Recovering from token loss (issue #561)
+    - Rotating federation tokens without modifying other peer config
+    - Fixing authentication issues after peer updates
+
+    Args:
+        args: Command arguments with peer_id and federation_token
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+
+        response = client.update_peer_token(
+            peer_id=args.peer_id, federation_token=args.federation_token
+        )
+
+        logger.info(f"Federation token updated successfully for peer: {args.peer_id}")
+        print(json.dumps(response, indent=2, default=str))
+        return 0
+
+    except Exception as e:
+        logger.error(f"Update peer token failed: {e}")
         return 1
 
 
@@ -3256,20 +3358,24 @@ def cmd_peer_sync(args: argparse.Namespace) -> int:
             print(json.dumps(response, indent=2, default=str))
             return 0
 
+        # Check success field from SyncResult model
+        success = response.get("success", False)
+        status_text = "SUCCESS" if success else "FAILED"
+
         print(f"\nSync Results for peer '{args.peer_id}':")
-        print(f"  Status:          {response.get('status', 'unknown')}")
-        print(f"  Servers Synced:  {response.get('servers_synced', 0)}")
-        print(f"  Agents Synced:   {response.get('agents_synced', 0)}")
+        print(f"  Status:           {status_text}")
+        print(f"  Servers Synced:   {response.get('servers_synced', 0)}")
+        print(f"  Agents Synced:    {response.get('agents_synced', 0)}")
         print(f"  Servers Orphaned: {response.get('servers_orphaned', 0)}")
         print(f"  Agents Orphaned:  {response.get('agents_orphaned', 0)}")
 
-        errors = response.get("errors", [])
-        if errors:
-            print(f"\n  Errors ({len(errors)}):")
-            for error in errors:
-                print(f"    - {error}")
+        # SyncResult has 'error_message' (singular), not 'errors' (plural)
+        error_msg = response.get("error_message")
+        if error_msg:
+            print(f"\n  Error:")
+            print(f"    {error_msg}")
 
-        return 0
+        return 0 if success else 1
 
     except Exception as e:
         logger.error(f"Peer sync failed: {e}")
@@ -3295,7 +3401,7 @@ def cmd_peer_sync_all(args: argparse.Namespace) -> int:
             return 0
 
         results = response if isinstance(response, list) else response.get("results", [])
-        print("\nSync All Peers Results:")
+        print(f"\nSync All Peers Results:")
         print(f"  Total peers synced: {len(results)}")
 
         for result in results:
@@ -3499,7 +3605,7 @@ def cmd_vs_create(args: argparse.Namespace) -> int:
         client = _create_client(args)
 
         # Load config from file
-        with open(args.config) as f:
+        with open(args.config, "r") as f:
             config_data = json.load(f)
 
         # Build tool mappings
@@ -3650,7 +3756,7 @@ def cmd_vs_get(args: argparse.Namespace) -> int:
             print(f"      Backend: {mapping.backend_server_path}{version_info}")
 
         if result.tool_scope_overrides:
-            print("\n  Tool Scope Overrides:")
+            print(f"\n  Tool Scope Overrides:")
             for override in result.tool_scope_overrides:
                 print(f"    - {override.tool_alias}: {', '.join(override.required_scopes)}")
 
@@ -3679,7 +3785,7 @@ def cmd_vs_update(args: argparse.Namespace) -> int:
         client = _create_client(args)
 
         # Load config from file
-        with open(args.config) as f:
+        with open(args.config, "r") as f:
             config_data = json.load(f)
 
         # Build tool mappings
@@ -4052,6 +4158,27 @@ Examples:
     )
     rescan_parser.add_argument("--path", required=True, help="Server path (e.g., /cloudflare-docs)")
     rescan_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # Server credential update command
+    server_update_cred_parser = subparsers.add_parser(
+        "server-update-credential", help="Update authentication credentials for a server"
+    )
+    server_update_cred_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /cloudflare-api)"
+    )
+    server_update_cred_parser.add_argument(
+        "--auth-scheme",
+        required=True,
+        choices=["none", "bearer", "api_key"],
+        help="Authentication scheme",
+    )
+    server_update_cred_parser.add_argument(
+        "--credential", help="New credential value (required if auth-scheme is not 'none')"
+    )
+    server_update_cred_parser.add_argument(
+        "--auth-header-name", help="Custom header name (optional, for api_key scheme)"
+    )
+    server_update_cred_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Server search command
     server_search_parser = subparsers.add_parser(
@@ -4546,6 +4673,20 @@ Examples:
         "Overrides federation_token in the JSON config file if both are provided.",
     )
 
+    # Update peer token command
+    peer_update_token_parser = subparsers.add_parser(
+        "peer-update-token", help="Update only the federation token for a peer registry"
+    )
+    peer_update_token_parser.add_argument(
+        "--peer-id", required=True, help="Peer registry identifier"
+    )
+    peer_update_token_parser.add_argument(
+        "--federation-token",
+        required=True,
+        help="New federation static token from the remote peer registry. "
+        "Use this to recover from token loss (issue #561) or rotate tokens.",
+    )
+
     # Remove peer command
     peer_remove_parser = subparsers.add_parser("peer-remove", help="Remove a peer registry")
     peer_remove_parser.add_argument("--peer-id", required=True, help="Peer registry identifier")
@@ -4702,6 +4843,7 @@ Examples:
         "server-rating": cmd_server_rating,
         "security-scan": cmd_security_scan,
         "rescan": cmd_rescan,
+        "server-update-credential": cmd_server_update_credential,
         "server-search": cmd_server_search,
         "list-versions": cmd_list_versions,
         "remove-version": cmd_remove_version,
@@ -4754,6 +4896,7 @@ Examples:
         "peer-add": cmd_peer_add,
         "peer-get": cmd_peer_get,
         "peer-update": cmd_peer_update,
+        "peer-update-token": cmd_peer_update_token,
         "peer-remove": cmd_peer_remove,
         "peer-sync": cmd_peer_sync,
         "peer-sync-all": cmd_peer_sync_all,

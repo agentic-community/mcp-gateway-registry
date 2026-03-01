@@ -108,14 +108,6 @@
                 <input type="number" id="num_tools" name="num_tools" value="{{ server.num_tools | default(0) }}" min="0">
             </div>
             <div class="form-group">
-                <label for="num_stars">Stars</label>
-                <input type="number" id="num_stars" name="num_stars" value="{{ server.num_stars | default(0) }}" min="0">
-            </div>
-            <div class="form-group">
-                <label for="is_python">Is Python Server?</label>
-                <input type="checkbox" id="is_python" name="is_python" value="true" {% if server.is_python %}checked{% endif %}>
-            </div>
-            <div class="form-group">
                 <label for="license">License</label>
                 <input type="text" id="license" name="license" value="{{ server.license | default('N/A') }}">
             </div>
@@ -138,7 +130,51 @@
                     var container = document.getElementById('allowed-groups-container');
                     container.style.display = visibility === 'group-restricted' ? 'block' : 'none';
                 }
+                function toggleEditAuthFields() {
+                    var scheme = document.getElementById('auth_scheme').value;
+                    var credContainer = document.getElementById('auth-credential-container');
+                    var headerContainer = document.getElementById('auth-header-container');
+                    var credLabel = document.getElementById('auth-credential-label');
+                    var credInput = document.getElementById('auth_credential');
+
+                    if (scheme === 'none') {
+                        credContainer.style.display = 'none';
+                        headerContainer.style.display = 'none';
+                        credInput.value = '';
+                    } else if (scheme === 'bearer') {
+                        credContainer.style.display = 'block';
+                        headerContainer.style.display = 'none';
+                        credLabel.textContent = 'Bearer Token';
+                        credInput.placeholder = 'Enter new bearer token (leave blank to keep existing)';
+                    } else if (scheme === 'api_key') {
+                        credContainer.style.display = 'block';
+                        headerContainer.style.display = 'block';
+                        credLabel.textContent = 'API Key';
+                        credInput.placeholder = 'Enter new API key (leave blank to keep existing)';
+                    }
+                }
             </script>
+            <hr style="margin: 16px 0;">
+            <h3 style="margin-bottom: 8px;">Backend Authentication</h3>
+            <small style="color: #666; display: block; margin-bottom: 12px;">Configure credentials the gateway uses when proxying requests to this backend server.</small>
+            <div class="form-group">
+                <label for="auth_scheme">Authentication Scheme</label>
+                <select id="auth_scheme" name="auth_scheme" onchange="toggleEditAuthFields()">
+                    <option value="none" {% if not server.auth_scheme or server.auth_scheme == 'none' %}selected{% endif %}>None</option>
+                    <option value="bearer" {% if server.auth_scheme == 'bearer' %}selected{% endif %}>Bearer Token</option>
+                    <option value="api_key" {% if server.auth_scheme == 'api_key' %}selected{% endif %}>API Key</option>
+                </select>
+            </div>
+            <div class="form-group" id="auth-credential-container" style="{% if not server.auth_scheme or server.auth_scheme == 'none' %}display: none;{% endif %}">
+                <label for="auth_credential" id="auth-credential-label">{% if server.auth_scheme == 'bearer' %}Bearer Token{% elif server.auth_scheme == 'api_key' %}API Key{% else %}Credential{% endif %}</label>
+                <input type="password" id="auth_credential" name="auth_credential" placeholder="Leave blank to keep existing credential">
+                <small style="color: #666;">Only fill in to update the credential. Leave blank to keep the current one.</small>
+            </div>
+            <div class="form-group" id="auth-header-container" style="{% if server.auth_scheme != 'api_key' %}display: none;{% endif %}">
+                <label for="auth_header_name">Header Name</label>
+                <input type="text" id="auth_header_name" name="auth_header_name" value="{{ server.auth_header_name | default('X-API-Key') }}" placeholder="X-API-Key">
+                <small style="color: #666;">The HTTP header name used to send the API key (default: X-API-Key)</small>
+            </div>
             <div class="form-actions">
                 <a href="{{ url_for('read_root') }}">Cancel</a>
                 <button type="submit">Save Changes</button>

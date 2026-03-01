@@ -51,7 +51,6 @@ export interface Server {
   tags?: string[];
   last_checked_time?: string;
   usersCount?: number;
-  num_stars?: number;  // Average rating from backend
   rating_details?: Array<{ user: string; rating: number }>;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   num_tools?: number;
@@ -67,6 +66,9 @@ export interface Server {
   mcp_server_version_updated_at?: string;
   // Federation sync metadata
   sync_metadata?: SyncMetadata;
+  // Backend authentication
+  auth_scheme?: string;
+  auth_header_name?: string;
 }
 
 interface ServerCardProps {
@@ -141,6 +143,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   const [loadingSecurityScan, setLoadingSecurityScan] = useState(false);
   const [showVersionSelector, setShowVersionSelector] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Set<number>>(new Set());
 
   // Fetch security scan status on mount to show correct icon color
   useEffect(() => {
@@ -297,7 +300,6 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   serverData.health_status === 'unhealthy' ? 'unhealthy' : 'unknown',
           last_checked_time: serverData.last_checked_iso,
           num_tools: serverData.num_tools,
-          num_stars: serverData.num_stars,
           proxy_pass_url: serverData.proxy_pass_url,
           mcp_endpoint: serverData.mcp_endpoint,
           version: serverData.version,
@@ -411,6 +413,17 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                     ORPHANED
                   </span>
                 )}
+                {/* Backend auth scheme badge */}
+                {server.auth_scheme && server.auth_scheme !== 'none' && server.auth_scheme === 'bearer' && (
+                  <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700 dark:from-blue-900/30 dark:to-indigo-900/30 dark:text-blue-300 rounded-full flex-shrink-0 border border-blue-200 dark:border-blue-600" title="Backend uses Bearer token authentication">
+                    BEARER AUTH
+                  </span>
+                )}
+                {server.auth_scheme && server.auth_scheme === 'api_key' && (
+                  <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-700 dark:from-yellow-900/30 dark:to-amber-900/30 dark:text-yellow-300 rounded-full flex-shrink-0 border border-yellow-200 dark:border-yellow-600" title={`Backend uses API Key authentication (header: ${server.auth_header_name || 'X-API-Key'})`}>
+                    API KEY AUTH
+                  </span>
+                )}
               </div>
               
               <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
@@ -493,16 +506,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             <StarRatingWidget
               resourceType="servers"
               path={server.path}
-              initialRating={server.num_stars || 0}
+              initialRating={0}
               initialCount={server.rating_details?.length || 0}
               authToken={authToken}
               onShowToast={onShowToast}
-              onRatingUpdate={(newRating) => {
-                // Update local server rating when user submits rating
-                if (onServerUpdate) {
-                  onServerUpdate(server.path, { num_stars: newRating });
-                }
-              }}
             />
             <div className="flex items-center gap-2">
               {(server.num_tools || 0) > 0 ? (
@@ -654,14 +661,26 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
 
       {/* Tools Modal */}
       {showTools && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto">
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={() => {
+            setShowTools(false);
+            setExpandedDescriptions(new Set());
+          }}
+        >
+          <div
+            className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                 Tools for {server.name}
               </h3>
               <button
-                onClick={() => setShowTools(false)}
+                onClick={() => {
+                  setShowTools(false);
+                  setExpandedDescriptions(new Set());
+                }}
                 className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
               >
                 ✕
@@ -670,28 +689,51 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             
             <div className="space-y-4">
               {tools.length > 0 ? (
-                tools.map((tool, index) => (
-                  <div key={index} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                    <h4 className="font-medium text-gray-900 dark:text-white mb-2">
-                      {tool.name}
-                    </h4>
-                    {tool.description && (
-                      <p className="text-sm text-gray-600 dark:text-gray-300 mb-2">
-                        {tool.description}
-                      </p>
-                    )}
-                    {tool.schema && (
-                      <details className="text-xs">
-                        <summary className="cursor-pointer text-gray-500 dark:text-gray-300">
-                          View Schema
-                        </summary>
-                        <pre className="mt-2 p-3 bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded overflow-x-auto text-gray-900 dark:text-gray-100">
-                          {JSON.stringify(tool.schema, null, 2)}
-                        </pre>
-                      </details>
-                    )}
-                  </div>
-                ))
+                tools.map((tool, index) => {
+                  const isExpanded = expandedDescriptions.has(index);
+                  const toggleExpand = () => {
+                    const newExpanded = new Set(expandedDescriptions);
+                    if (isExpanded) {
+                      newExpanded.delete(index);
+                    } else {
+                      newExpanded.add(index);
+                    }
+                    setExpandedDescriptions(newExpanded);
+                  };
+
+                  return (
+                    <div key={index} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 dark:text-white mb-2">
+                        {tool.name}
+                      </h4>
+                      {tool.description && (
+                        <div className="mb-2">
+                          <p className={`text-sm text-gray-600 dark:text-gray-300 ${!isExpanded ? 'line-clamp-2' : ''}`}>
+                            {tool.description}
+                          </p>
+                          {tool.description.length > 150 && (
+                            <button
+                              onClick={toggleExpand}
+                              className="text-xs text-blue-600 dark:text-blue-400 hover:underline mt-1"
+                            >
+                              {isExpanded ? 'Show less' : 'Show more'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {tool.schema && (
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-gray-500 dark:text-gray-300">
+                            View Schema
+                          </summary>
+                          <pre className="mt-2 p-3 bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded overflow-x-auto text-gray-900 dark:text-gray-100">
+                            {JSON.stringify(tool.schema, null, 2)}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  );
+                })
               ) : (
                 <p className="text-gray-500 dark:text-gray-300">No tools available for this server.</p>
               )}

@@ -112,10 +112,58 @@ def _insert_seed_data(
     cursor = conn.execute("SELECT COUNT(*) FROM flights")
     if cursor.fetchone()[0] == 0:
         flight_data = [
-            (1, "UA101", "United", "SF", "NY", "2025-11-15 08:00", "2025-11-15 16:30", 330, 250.00, 85, "B737"),
-            (2, "AA202", "American", "SF", "NY", "2025-11-15 10:15", "2025-11-15 18:45", 330, 280.00, 45, "A320"),
-            (3, "DL303", "Delta", "SF", "NY", "2025-11-15 14:30", "2025-11-15 23:00", 330, 220.00, 120, "B757"),
-            (4, "UA104", "United", "SF", "LA", "2025-11-16 07:00", "2025-11-16 08:30", 90, 120.00, 95, "B737"),
+            (
+                1,
+                "UA101",
+                "United",
+                "SF",
+                "NY",
+                "2025-11-15 08:00",
+                "2025-11-15 16:30",
+                330,
+                250.00,
+                85,
+                "B737",
+            ),
+            (
+                2,
+                "AA202",
+                "American",
+                "SF",
+                "NY",
+                "2025-11-15 10:15",
+                "2025-11-15 18:45",
+                330,
+                280.00,
+                45,
+                "A320",
+            ),
+            (
+                3,
+                "DL303",
+                "Delta",
+                "SF",
+                "NY",
+                "2025-11-15 14:30",
+                "2025-11-15 23:00",
+                330,
+                220.00,
+                120,
+                "B757",
+            ),
+            (
+                4,
+                "UA104",
+                "United",
+                "SF",
+                "LA",
+                "2025-11-16 07:00",
+                "2025-11-16 08:30",
+                90,
+                120.00,
+                95,
+                "B737",
+            ),
         ]
 
         conn.executemany(
@@ -213,7 +261,6 @@ class BookingDatabaseManager:
         logger.info(f"Initializing BookingDatabaseManager with db_path: {db_path}")
         self.init_database()
 
-
     def init_database(self) -> None:
         """Initialize the database with tables and seed data."""
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -222,11 +269,9 @@ class BookingDatabaseManager:
             _create_tables(conn)
             _insert_seed_data(conn)
 
-
     def get_connection(self) -> sqlite3.Connection:
         """Get a database connection."""
         return sqlite3.connect(self.db_path)
-
 
     def get_flight_availability(
         self,
@@ -263,7 +308,6 @@ class BookingDatabaseManager:
                 "availability_status": "Available" if row[5] > 0 else "Sold Out",
             }
 
-
     def create_reservation(
         self,
         flight_id: int,
@@ -271,9 +315,13 @@ class BookingDatabaseManager:
         requested_seats: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Create a new flight reservation."""
-        logger.info(f"Creating reservation for flight_id: {flight_id}, passengers: {len(passengers)}")
+        logger.info(
+            f"Creating reservation for flight_id: {flight_id}, passengers: {len(passengers)}"
+        )
         with self.get_connection() as conn:
-            cursor = conn.execute("SELECT price, available_seats FROM flights WHERE id = ?", (flight_id,))
+            cursor = conn.execute(
+                "SELECT price, available_seats FROM flights WHERE id = ?", (flight_id,)
+            )
             flight_row = cursor.fetchone()
 
             if not flight_row:
@@ -284,8 +332,12 @@ class BookingDatabaseManager:
             num_passengers = len(passengers)
 
             if available_seats < num_passengers:
-                logger.warning(f"Insufficient seats: requested={num_passengers}, available={available_seats}")
-                raise ValueError(f"Not enough seats available. Requested: {num_passengers}, Available: {available_seats}")
+                logger.warning(
+                    f"Insufficient seats: requested={num_passengers}, available={available_seats}"
+                )
+                raise ValueError(
+                    f"Not enough seats available. Requested: {num_passengers}, Available: {available_seats}"
+                )
 
             booking_number = f"BK{uuid.uuid4().hex[:6].upper()}"
             total_price = float(price_per_seat) * num_passengers
@@ -303,7 +355,11 @@ class BookingDatabaseManager:
 
             assigned_seats = []
             for i, passenger in enumerate(passengers):
-                seat_number = requested_seats[i] if requested_seats and i < len(requested_seats) else f"AUTO{i+1}"
+                seat_number = (
+                    requested_seats[i]
+                    if requested_seats and i < len(requested_seats)
+                    else f"AUTO{i + 1}"
+                )
 
                 conn.execute(
                     """
@@ -325,7 +381,9 @@ class BookingDatabaseManager:
             )
 
             conn.commit()
-            logger.info(f"Reservation created successfully: booking_number={booking_number}, booking_id={booking_id}")
+            logger.info(
+                f"Reservation created successfully: booking_number={booking_number}, booking_id={booking_id}"
+            )
 
             return {
                 "booking_number": booking_number,
@@ -338,7 +396,6 @@ class BookingDatabaseManager:
                 "reservation_expires": "24 hours from creation",
                 "next_steps": ["Confirm booking", "Process payment"],
             }
-
 
     def confirm_booking(
         self,
@@ -366,7 +423,9 @@ class BookingDatabaseManager:
 
             if current_status != "pending":
                 logger.warning(f"Cannot confirm booking {booking_number}, status: {current_status}")
-                raise ValueError(f"Booking {booking_number} cannot be confirmed. Current status: {current_status}")
+                raise ValueError(
+                    f"Booking {booking_number} cannot be confirmed. Current status: {current_status}"
+                )
 
             # Update booking status
             confirmation_time = datetime.now().isoformat()
@@ -383,7 +442,9 @@ class BookingDatabaseManager:
 
             # Generate confirmation code
             confirmation_code = f"CONF{uuid.uuid4().hex[:8].upper()}"
-            logger.info(f"Booking confirmed: {booking_number}, confirmation_code: {confirmation_code}")
+            logger.info(
+                f"Booking confirmed: {booking_number}, confirmation_code: {confirmation_code}"
+            )
 
             return {
                 "booking_number": booking_number,
@@ -393,7 +454,6 @@ class BookingDatabaseManager:
                 "total_price": float(total_price),
                 "next_steps": ["Process payment to complete booking"],
             }
-
 
     def process_payment(
         self,
@@ -447,7 +507,9 @@ class BookingDatabaseManager:
             )
 
             conn.commit()
-            logger.info(f"Payment completed: booking={booking_number}, transaction={transaction_id}")
+            logger.info(
+                f"Payment completed: booking={booking_number}, transaction={transaction_id}"
+            )
 
             return {
                 "booking_number": booking_number,
@@ -459,7 +521,6 @@ class BookingDatabaseManager:
                 "booking_status": "paid",
                 "message": "Payment processed successfully. Booking is now complete.",
             }
-
 
     def get_booking_details(
         self,
@@ -514,7 +575,6 @@ class BookingDatabaseManager:
                 },
                 "passengers": passengers,
             }
-
 
     def cancel_booking(
         self,
@@ -587,7 +647,9 @@ class BookingDatabaseManager:
             )
 
             conn.commit()
-            logger.info(f"Booking cancelled: {booking_number}, refund_amount: {refund_amount}, seats_freed: {num_seats}")
+            logger.info(
+                f"Booking cancelled: {booking_number}, refund_amount: {refund_amount}, seats_freed: {num_seats}"
+            )
 
             return {
                 "booking_number": booking_number,

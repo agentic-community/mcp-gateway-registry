@@ -132,3 +132,27 @@ resource "aws_secretsmanager_secret_version" "entra_client_secret" {
     ignore_changes = [secret_string]
   }
 }
+
+
+# Metrics API key (for metrics-service authentication)
+resource "random_password" "metrics_api_key" {
+  count   = var.enable_observability ? 1 : 0
+  length  = 48
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "metrics_api_key" {
+  count = var.enable_observability ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-metrics-api-key-"
+  description             = "API key for metrics-service (shared by auth-server and registry)"
+  recovery_window_in_days = 0
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "metrics_api_key" {
+  count = var.enable_observability ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.metrics_api_key[0].id
+  secret_string = random_password.metrics_api_key[0].result
+}

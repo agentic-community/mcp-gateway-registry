@@ -352,7 +352,14 @@ terraform/.admin_password
 image-manifest.json
 agent_security_scans/
 
+# Helm dependency charts (fetched via helm dependency build)
+charts/*/charts/
+
+# Shell config artifacts
+.ash/
+
 # Claude
 .claude/*
 !.claude/skills/
+.claude/skills/search-registry/
 .token?

@@ -37,7 +37,7 @@ class FileSecurityScanRepository(SecurityScanRepositoryBase):
 
             for scan_file in scan_files:
                 try:
-                    with open(scan_file, 'r') as f:
+                    with open(scan_file, "r") as f:
                         scan_data = json.load(f)
 
                     if isinstance(scan_data, dict) and "server_path" in scan_data:
@@ -81,10 +81,10 @@ class FileSecurityScanRepository(SecurityScanRepositoryBase):
 
             self._scans_dir.mkdir(parents=True, exist_ok=True)
 
-            sanitized_path = server_path.lstrip('/').replace('/', '_')
+            sanitized_path = server_path.lstrip("/").replace("/", "_")
             scan_file = self._scans_dir / f"{sanitized_path}_scan.json"
 
-            with open(scan_file, 'w') as f:
+            with open(scan_file, "w") as f:
                 json.dump(scan_result, f, indent=2)
 
             logger.info(f"Saved security scan for {server_path} to {scan_file}")
@@ -106,7 +106,4 @@ class FileSecurityScanRepository(SecurityScanRepositoryBase):
         status: str,
     ) -> List[Dict[str, Any]]:
         """Query scan results by status."""
-        return [
-            scan for scan in self._scans.values()
-            if scan.get("scan_status") == status
-        ]
+        return [scan for scan in self._scans.values() if scan.get("scan_status") == status]

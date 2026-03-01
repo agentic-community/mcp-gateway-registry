@@ -16,8 +16,6 @@
       "auth_type": {"type": "keyword"},
       "tags": {"type": "keyword"},
       "num_tools": {"type": "integer"},
-      "num_stars": {"type": "integer"},
-      "is_python": {"type": "boolean"},
       "license": {"type": "keyword"},
       "tool_list": {
         "type": "nested",

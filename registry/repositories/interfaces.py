@@ -340,7 +340,6 @@ class ScopeRepositoryBase(ABC):
         """
         pass
 
-
     async def list_groups(self) -> Dict[str, Any]:
         """
         List all groups with server counts.
@@ -877,10 +876,7 @@ class FederationConfigRepositoryBase(ABC):
     """Abstract base class for federation configuration storage."""
 
     @abstractmethod
-    async def get_config(
-        self,
-        config_id: str = "default"
-    ) -> Optional[FederationConfig]:
+    async def get_config(self, config_id: str = "default") -> Optional[FederationConfig]:
         """
         Get federation configuration by ID.
 
@@ -894,9 +890,7 @@ class FederationConfigRepositoryBase(ABC):
 
     @abstractmethod
     async def save_config(
-        self,
-        config: FederationConfig,
-        config_id: str = "default"
+        self, config: FederationConfig, config_id: str = "default"
     ) -> FederationConfig:
         """
         Save or update federation configuration.
@@ -911,10 +905,7 @@ class FederationConfigRepositoryBase(ABC):
         pass
 
     @abstractmethod
-    async def delete_config(
-        self,
-        config_id: str = "default"
-    ) -> bool:
+    async def delete_config(self, config_id: str = "default") -> bool:
         """
         Delete federation configuration.
 

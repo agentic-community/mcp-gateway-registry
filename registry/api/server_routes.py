@@ -5,7 +5,7 @@ import os
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Body, Cookie, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -13,9 +13,12 @@ from pydantic import BaseModel
 from ..audit import set_audit_action
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
+from ..constants import VALID_AUTH_SCHEMES
+from ..core.schemas import AuthCredentialUpdateRequest
 from ..core.config import settings
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
+from ..utils.credential_encryption import encrypt_credential_in_server_dict
 
 logger = logging.getLogger(__name__)
 
@@ -232,8 +235,6 @@ async def read_root(
                     "is_enabled": await server_service.is_service_enabled(path),
                     "tags": server_info.get("tags", []),
                     "num_tools": server_info.get("num_tools", 0),
-                    "num_stars": server_info.get("num_stars", 0),
-                    "is_python": server_info.get("is_python", False),
                     "license": server_info.get("license", "N/A"),
                     "health_status": normalized_status,
                     "last_checked_iso": health_data["last_checked_iso"],
@@ -368,8 +369,6 @@ async def get_servers_json(
                     "is_enabled": await server_service.is_service_enabled(path),
                     "tags": server_info.get("tags", []),
                     "num_tools": server_info.get("num_tools", 0),
-                    "num_stars": server_info.get("num_stars", 0),
-                    "is_python": server_info.get("is_python", False),
                     "license": server_info.get("license", "N/A"),
                     "health_status": normalized_status,
                     "last_checked_iso": health_data["last_checked_iso"],
@@ -384,6 +383,8 @@ async def get_servers_json(
                         "mcp_server_version_updated_at"
                     ),
                     "sync_metadata": server_info.get("sync_metadata"),
+                    "auth_scheme": server_info.get("auth_scheme", "none"),
+                    "auth_header_name": server_info.get("auth_header_name"),
                 }
             )
 
@@ -505,14 +506,15 @@ async def register_service(
     proxy_pass_url: Annotated[str, Form()],
     tags: Annotated[str, Form()] = "",
     num_tools: Annotated[int, Form()] = 0,
-    num_stars: Annotated[int, Form()] = 0,
-    is_python: Annotated[bool, Form()] = False,
     license_str: Annotated[str, Form(alias="license")] = "N/A",
     mcp_endpoint: Annotated[str | None, Form()] = None,
     sse_endpoint: Annotated[str | None, Form()] = None,
     metadata: Annotated[str | None, Form()] = None,
     visibility: Annotated[str, Form()] = "public",
     allowed_groups: Annotated[str | None, Form()] = None,
+    auth_scheme: Annotated[str, Form()] = "none",
+    auth_credential: Annotated[str | None, Form()] = None,
+    auth_header_name: Annotated[str | None, Form()] = None,
     user_context: Annotated[dict, Depends(enhanced_auth)] = None,
 ):
     """Register a new service (requires register_service UI permission)."""
@@ -571,8 +573,6 @@ async def register_service(
         "proxy_pass_url": proxy_pass_url,
         "tags": tag_list,
         "num_tools": num_tools,
-        "num_stars": num_stars,
-        "is_python": is_python,
         "license": license_str,
         "tool_list": [],
         "visibility": visibility,
@@ -595,6 +595,22 @@ async def register_service(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
+            )
+
+    # Add auth fields
+    if auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
+        server_entry["auth_scheme"] = auth_scheme
+    if auth_header_name:
+        server_entry["auth_header_name"] = auth_header_name
+    if auth_credential and auth_scheme != "none":
+        server_entry["auth_credential"] = auth_credential
+        try:
+            encrypt_credential_in_server_dict(server_entry)
+        except Exception as e:
+            logger.error(f"Failed to encrypt credential: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to encrypt credential",
             )
 
     # Register the server (or new version if path exists with different version)
@@ -671,12 +687,12 @@ async def internal_register_service(
     proxy_pass_url: Annotated[str, Form()],
     tags: Annotated[str, Form()] = "",
     num_tools: Annotated[int, Form()] = 0,
-    num_stars: Annotated[int, Form()] = 0,
-    is_python: Annotated[bool, Form()] = False,
     license_str: Annotated[str, Form(alias="license")] = "N/A",
     overwrite: Annotated[bool, Form()] = True,
     auth_provider: Annotated[str | None, Form()] = None,
-    auth_type: Annotated[str | None, Form()] = None,
+    auth_scheme: Annotated[str, Form()] = "none",
+    auth_credential: Annotated[str | None, Form()] = None,
+    auth_header_name: Annotated[str | None, Form()] = None,
     supported_transports: Annotated[str | None, Form()] = None,
     headers: Annotated[str | None, Form()] = None,
     tool_list_json: Annotated[str | None, Form()] = None,
@@ -751,6 +767,16 @@ async def internal_register_service(
     if visibility not in valid_visibility:
         visibility = "public"  # Default to public for internal registration
 
+    # Validate auth_scheme
+    if auth_scheme not in VALID_AUTH_SCHEMES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Invalid auth_scheme",
+                "reason": f"auth_scheme must be one of: {VALID_AUTH_SCHEMES}",
+            },
+        )
+
     # Create server entry
     server_entry = {
         "server_name": name,
@@ -758,11 +784,9 @@ async def internal_register_service(
         "path": path,
         "proxy_pass_url": proxy_pass_url,
         "supported_transports": transports_list,
-        "auth_type": auth_type if auth_type else "none",
+        "auth_scheme": auth_scheme,
         "tags": tag_list,
         "num_tools": num_tools,
-        "num_stars": num_stars,
-        "is_python": is_python,
         "license": license_str,
         "tool_list": tool_list,
         "visibility": visibility,
@@ -774,9 +798,25 @@ async def internal_register_service(
         server_entry["auth_provider"] = auth_provider
     if headers_list:
         server_entry["headers"] = headers_list
+    if auth_header_name:
+        server_entry["auth_header_name"] = auth_header_name
+
+    # Encrypt credential before storage (if provided)
+    if auth_credential and auth_scheme != "none":
+        server_entry["auth_credential"] = auth_credential
+        try:
+            encrypt_credential_in_server_dict(server_entry)
+        except ValueError as e:
+            logger.error(f"Credential encryption failed for server {path}: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "Credential encryption failed. Please ensure SECRET_KEY is configured.",
+                },
+            )
 
     logger.warning(
-        f"INTERNAL REGISTER: Created server entry: {server_entry}"
+        f"INTERNAL REGISTER: Created server entry for path: {path}"
     )  # TODO: replace with debug
     logger.warning(
         f"INTERNAL REGISTER: Overwrite parameter: {overwrite}"
@@ -1222,13 +1262,14 @@ async def edit_server_submit(
     description: Annotated[str, Form()] = "",
     tags: Annotated[str, Form()] = "",
     num_tools: Annotated[int, Form()] = 0,
-    num_stars: Annotated[int, Form()] = 0,
-    is_python: Annotated[bool | None, Form()] = False,
     license_str: Annotated[str, Form(alias="license")] = "N/A",
     mcp_endpoint: Annotated[str | None, Form()] = None,
     metadata: Annotated[str | None, Form()] = None,
     visibility: Annotated[str, Form()] = "public",
     allowed_groups: Annotated[str | None, Form()] = None,
+    auth_scheme: Annotated[str, Form()] = "none",
+    auth_credential: Annotated[str | None, Form()] = None,
+    auth_header_name: Annotated[str | None, Form()] = None,
 ):
     """Handle server edit form submission (requires modify_service UI permission)."""
     from ..auth.dependencies import user_has_ui_permission_for_service
@@ -1301,8 +1342,6 @@ async def edit_server_submit(
         "proxy_pass_url": proxy_pass_url,
         "tags": tag_list,
         "num_tools": num_tools,
-        "num_stars": num_stars,
-        "is_python": bool(is_python),
         "license": license_str,
         "tool_list": [],  # Keep existing or initialize
         "visibility": visibility,
@@ -1324,6 +1363,27 @@ async def edit_server_submit(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
             )
+
+    # Handle auth fields for edit
+    if auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
+        updated_server_entry["auth_scheme"] = auth_scheme
+    if auth_header_name:
+        updated_server_entry["auth_header_name"] = auth_header_name
+    if auth_credential and auth_scheme != "none":
+        updated_server_entry["auth_credential"] = auth_credential
+        try:
+            encrypt_credential_in_server_dict(updated_server_entry)
+        except Exception as e:
+            logger.error(f"Failed to encrypt credential: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to encrypt credential",
+            )
+    elif auth_scheme == "none":
+        # Clear credentials when switching to no auth
+        updated_server_entry["auth_scheme"] = "none"
+        updated_server_entry.pop("auth_credential_encrypted", None)
+        updated_server_entry.pop("auth_header_name", None)
 
     # Update server
     success = await server_service.update_server(service_path, updated_server_entry)
@@ -1845,8 +1905,6 @@ async def internal_list_services(
             "is_enabled": await server_service.is_service_enabled(service_path),
             "tags": server_info.get("tags", []),
             "num_tools": server_info.get("num_tools", 0),
-            "num_stars": server_info.get("num_stars", 0),
-            "is_python": server_info.get("is_python", False),
             "license": server_info.get("license", "N/A"),
             "health_status": health_data["status"],
             "last_checked_iso": health_data["last_checked_iso"],
@@ -2148,12 +2206,12 @@ async def register_service_api(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     tags: Annotated[str, Form()] = "",
     num_tools: Annotated[int, Form()] = 0,
-    num_stars: Annotated[int, Form()] = 0,
-    is_python: Annotated[bool, Form()] = False,
     license_str: Annotated[str, Form(alias="license")] = "N/A",
     overwrite: Annotated[bool, Form()] = True,
     auth_provider: Annotated[str | None, Form()] = None,
-    auth_type: Annotated[str | None, Form()] = None,
+    auth_scheme: Annotated[str, Form()] = "none",
+    auth_credential: Annotated[str | None, Form()] = None,
+    auth_header_name: Annotated[str | None, Form()] = None,
     supported_transports: Annotated[str | None, Form()] = None,
     headers: Annotated[str | None, Form()] = None,
     tool_list_json: Annotated[str | None, Form()] = None,
@@ -2180,12 +2238,12 @@ async def register_service_api(
     - `proxy_pass_url` (required): Proxy URL (e.g., http://localhost:8000)
     - `tags` (optional): Comma-separated tags
     - `num_tools` (optional): Number of tools
-    - `num_stars` (optional): Star rating
-    - `is_python` (optional): Is Python server (boolean)
     - `license` (optional): License name
     - `overwrite` (optional): Overwrite if exists (boolean, default true)
     - `auth_provider` (optional): Auth provider name
-    - `auth_type` (optional): Auth type (e.g., oauth, basic)
+    - `auth_scheme` (optional): Auth scheme (none, bearer, api_key)
+    - `auth_credential` (optional): Plaintext credential (encrypted before storage)
+    - `auth_header_name` (optional): Custom header name for API key auth
     - `supported_transports` (optional): JSON array of transports
     - `headers` (optional): JSON object of headers
     - `tool_list_json` (optional): JSON array of tool definitions
@@ -2267,6 +2325,16 @@ async def register_service_api(
         except Exception as e:
             logger.warning(f"SERVERS REGISTER: Failed to parse tool_list_json: {e}")
 
+    # Validate auth_scheme
+    if auth_scheme not in VALID_AUTH_SCHEMES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Invalid auth_scheme",
+                "reason": f"auth_scheme must be one of: {VALID_AUTH_SCHEMES}",
+            },
+        )
+
     # Create server entry
     server_entry = {
         "server_name": name,
@@ -2274,11 +2342,9 @@ async def register_service_api(
         "path": path,
         "proxy_pass_url": proxy_pass_url,
         "supported_transports": transports_list,
-        "auth_type": auth_type if auth_type else "none",
+        "auth_scheme": auth_scheme,
         "tags": tag_list,
         "num_tools": num_tools,
-        "num_stars": num_stars,
-        "is_python": is_python,
         "license": license_str,
         "tool_list": tool_list,
     }
@@ -2288,6 +2354,8 @@ async def register_service_api(
         server_entry["auth_provider"] = auth_provider
     if headers_list:
         server_entry["headers"] = headers_list
+    if auth_header_name:
+        server_entry["auth_header_name"] = auth_header_name
     if mcp_endpoint:
         server_entry["mcp_endpoint"] = mcp_endpoint
     if sse_endpoint:
@@ -2296,6 +2364,21 @@ async def register_service_api(
         server_entry["version"] = version
     if status:
         server_entry["status"] = status
+
+    # Encrypt credential before storage (if provided)
+    if auth_credential and auth_scheme != "none":
+        server_entry["auth_credential"] = auth_credential
+        try:
+            encrypt_credential_in_server_dict(server_entry)
+        except ValueError as e:
+            logger.error(f"Credential encryption failed for server {path}: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "Credential encryption failed. Please ensure SECRET_KEY is configured.",
+                },
+            )
+
     if metadata:
         try:
             server_entry["metadata"] = (
@@ -2386,6 +2469,129 @@ async def register_service_api(
     except Exception as e:
         logger.error(f"Service registration failed for {path}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Service registration failed: {str(e)}")
+
+
+@router.patch("/servers/{server_path:path}/auth-credential")
+async def update_server_auth_credential(
+    request: Request,
+    server_path: str,
+    body: AuthCredentialUpdateRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """
+    Update the authentication credential for a registered server.
+
+    Allows updating the auth scheme, credential, and custom header name
+    for a backend MCP server without re-registering the entire server.
+
+    **Authentication:** JWT Bearer token (via nginx X-User header)
+
+    **Path parameter:**
+    - `server_path`: Server path (e.g., /my-server)
+
+    **Request body (JSON):**
+    - `auth_scheme` (required): Authentication scheme (none, bearer, api_key)
+    - `auth_credential` (optional): New credential. Required if auth_scheme is not 'none'.
+    - `auth_header_name` (optional): Custom header name. Default: X-API-Key for api_key.
+    """
+    set_audit_action(
+        request,
+        "update",
+        "server_credential",
+        resource_id=server_path,
+        description=f"Update auth credential for server {server_path}",
+    )
+
+    username = user_context.get("username", "unknown")
+    logger.info(f"Auth credential update request for '{server_path}' by user '{username}'")
+
+    # Normalize path
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+
+    # Validate auth_scheme
+    if body.auth_scheme not in VALID_AUTH_SCHEMES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Invalid auth_scheme",
+                "reason": f"auth_scheme must be one of: {VALID_AUTH_SCHEMES}",
+            },
+        )
+
+    # Require credential when scheme is not 'none'
+    if body.auth_scheme != "none" and not body.auth_credential:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Missing credential",
+                "reason": "auth_credential is required when auth_scheme is not 'none'",
+            },
+        )
+
+    # Look up existing server (with credentials so we can update properly)
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not existing_server:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "Server not found",
+                "reason": f"No server registered at path '{server_path}'",
+            },
+        )
+
+    # Build update dict
+    existing_server["auth_scheme"] = body.auth_scheme
+
+    if body.auth_scheme == "none":
+        # Clear credential fields when switching to none
+        existing_server.pop("auth_credential_encrypted", None)
+        existing_server.pop("auth_header_name", None)
+        existing_server.pop("credential_updated_at", None)
+    else:
+        # Set credential for encryption
+        existing_server["auth_credential"] = body.auth_credential
+        if body.auth_header_name:
+            existing_server["auth_header_name"] = body.auth_header_name
+        elif body.auth_scheme == "api_key":
+            existing_server["auth_header_name"] = "X-API-Key"
+
+        try:
+            encrypt_credential_in_server_dict(existing_server)
+        except ValueError as e:
+            logger.error(f"Credential encryption failed for server {server_path}: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "Credential encryption failed. Please ensure SECRET_KEY is configured.",
+                },
+            )
+
+    # Save updated server
+    success = await server_service.update_server(server_path, existing_server)
+    if not success:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Update failed",
+                "reason": "Failed to save updated server credentials",
+            },
+        )
+
+    logger.info(
+        f"Auth credential updated for '{server_path}' "
+        f"(scheme={body.auth_scheme}) by user '{username}'"
+    )
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "message": "Auth credentials updated successfully",
+            "path": server_path,
+            "auth_scheme": body.auth_scheme,
+            "auth_header_name": existing_server.get("auth_header_name"),
+        },
+    )
 
 
 @router.post("/servers/toggle")
@@ -3361,7 +3567,6 @@ async def get_server_rating(
             )
 
     return {
-        "num_stars": server_info.get("num_stars", 0.0),
         "rating_details": server_info.get("rating_details", []),
     }
 

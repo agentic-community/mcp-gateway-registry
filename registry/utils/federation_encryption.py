@@ -42,7 +42,7 @@ def _get_fernet() -> Optional[Fernet]:
         logger.error(
             f"Invalid {FEDERATION_ENCRYPTION_KEY_ENV}: {e}. "
             "Generate a valid key with: python3 -c "
-            "\"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            '"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
         )
         return None
 
@@ -67,7 +67,7 @@ def encrypt_federation_token(
             f"{FEDERATION_ENCRYPTION_KEY_ENV} environment variable is not set or invalid. "
             "Cannot encrypt federation token for storage. "
             "Generate a key with: python3 -c "
-            "\"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            '"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
         )
 
     encrypted = fernet.encrypt(token.encode())
@@ -168,8 +168,7 @@ def decrypt_token_in_peer_dict(
         peer_dict[PLAINTEXT_FIELD] = decrypted
     else:
         logger.warning(
-            "Could not decrypt federation token. "
-            "Peer sync will fall back to global OAuth2 auth."
+            "Could not decrypt federation token. Peer sync will fall back to global OAuth2 auth."
         )
 
     # Remove encrypted field from the dict before constructing PeerRegistryConfig

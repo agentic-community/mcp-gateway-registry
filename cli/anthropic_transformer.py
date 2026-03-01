@@ -5,6 +5,7 @@ This module provides utilities to convert server definitions from the
 Anthropic MCP Registry API format into the format expected by the
 MCP Gateway Registry.
 """
+
 import json
 import logging
 from typing import (
@@ -30,33 +31,10 @@ DEFAULT_TRANSPORT: str = "stdio"
 DEFAULT_DESCRIPTION: str = "MCP server imported from Anthropic Registry"
 DEFAULT_LICENSE: str = "MIT"
 DEFAULT_AUTH_PROVIDER: str = "keycloak"
-DEFAULT_AUTH_TYPE: str = "oauth"
+DEFAULT_AUTH_SCHEME: str = "bearer"
 
 
-def _extract_package_info(
-    packages: Any
-) -> bool:
-    """Extract Python detection from packages field.
-
-    Args:
-        packages: Package information (dict or list)
-
-    Returns:
-        True if this is a Python package, False otherwise
-    """
-    is_python = False
-
-    if isinstance(packages, dict):
-        is_python = "pypi" in packages or "python" in packages
-    elif isinstance(packages, list):
-        is_python = any(pkg.get("registryType") == "pypi" for pkg in packages)
-
-    return is_python
-
-
-def _substitute_env_vars_in_headers(
-    headers: List[Dict[str, str]]
-) -> List[Dict[str, str]]:
+def _substitute_env_vars_in_headers(headers: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Substitute environment variables in header values.
 
     Replaces ${VAR_NAME} or $VAR_NAME with actual environment variable values.
@@ -84,13 +62,15 @@ def _substitute_env_vars_in_headers(
                     logger.info(f"Substituted {var_name} in header {header_name}")
                     return env_value
                 else:
-                    logger.warning(f"Environment variable {var_name} not found, keeping placeholder")
+                    logger.warning(
+                        f"Environment variable {var_name} not found, keeping placeholder"
+                    )
                     return match.group(0)  # Keep original placeholder
 
             # Replace ${VAR} pattern first
-            substituted_value = re.sub(r'\$\{([^}]+)\}', replace_env_var, header_value)
+            substituted_value = re.sub(r"\$\{([^}]+)\}", replace_env_var, header_value)
             # Then replace $VAR pattern (only for uppercase variables)
-            substituted_value = re.sub(r'\$([A-Z_][A-Z0-9_]*)', replace_env_var, substituted_value)
+            substituted_value = re.sub(r"\$([A-Z_][A-Z0-9_]*)", replace_env_var, substituted_value)
 
             substituted_header[header_name] = substituted_value
 
@@ -100,21 +80,21 @@ def _substitute_env_vars_in_headers(
 
 
 def _extract_remote_info(
-    remotes: List[Dict[str, Any]]
+    remotes: List[Dict[str, Any]],
 ) -> tuple[Optional[str], str, str, List[Dict[str, str]]]:
-    """Extract remote URL, transport type, auth type, and headers from remotes field.
+    """Extract remote URL, transport type, auth scheme, and headers from remotes field.
 
     Args:
         remotes: List of remote server configurations
 
     Returns:
-        Tuple of (remote_url, transport_type, auth_type, headers)
+        Tuple of (remote_url, transport_type, auth_scheme, headers)
     """
     import re
 
     remote_url = None
     transport_type = DEFAULT_TRANSPORT
-    auth_type = "none"
+    auth_scheme = "none"
     output_headers = []
 
     if remotes:
@@ -132,36 +112,28 @@ def _extract_remote_info(
                 # Check for auth-related headers
                 if header_name.lower() in ["authorization", "x-api-key", "api-key"]:
                     # Extract variable name from the placeholder (e.g., {smithery_api_key})
-                    match = re.search(r'\{([^}]+)\}', header_value)
+                    match = re.search(r"\{([^}]+)\}", header_value)
                     if match:
                         var_name = match.group(1)
                         # Convert to uppercase with underscores (e.g., smithery_api_key -> SMITHERY_API_KEY)
                         env_var_name = var_name.upper()
 
-                        # Determine auth type and create header value
+                        # Determine auth scheme and create header value
                         if "bearer" in header_value.lower():
-                            auth_type = "oauth"
-                            output_headers.append({
-                                header_name: f"Bearer ${{{env_var_name}}}"
-                            })
+                            auth_scheme = "bearer"
+                            output_headers.append({header_name: f"Bearer ${{{env_var_name}}}"})
                         elif "api" in header_value.lower() or "key" in header_value.lower():
-                            auth_type = "api-key"
-                            output_headers.append({
-                                header_name: f"${{{env_var_name}}}"
-                            })
+                            auth_scheme = "api_key"
+                            output_headers.append({header_name: f"${{{env_var_name}}}"})
                         else:
-                            auth_type = "custom"
-                            output_headers.append({
-                                header_name: f"${{{env_var_name}}}"
-                            })
+                            auth_scheme = "bearer"
+                            output_headers.append({header_name: f"${{{env_var_name}}}"})
                     break
 
-    return remote_url, transport_type, auth_type, output_headers
+    return remote_url, transport_type, auth_scheme, output_headers
 
 
-def _generate_tags(
-    name: str
-) -> List[str]:
+def _generate_tags(name: str) -> List[str]:
     """Generate tags from server name.
 
     Args:
@@ -176,8 +148,7 @@ def _generate_tags(
 
 
 def transform_anthropic_to_gateway(
-    anthropic_response: Dict[str, Any],
-    base_port: int = DEFAULT_BASE_PORT
+    anthropic_response: Dict[str, Any], base_port: int = DEFAULT_BASE_PORT
 ) -> Dict[str, Any]:
     """Transform Anthropic ServerResponse to Gateway Registry Config format.
 
@@ -199,11 +170,8 @@ def transform_anthropic_to_gateway(
 
     tags = _generate_tags(name)
 
-    packages = server.get("packages", {})
-    is_python = _extract_package_info(packages)
-
     remotes = server.get("remotes", [])
-    remote_url, transport_type, auth_type, auth_headers = _extract_remote_info(remotes)
+    remote_url, transport_type, auth_scheme, auth_headers = _extract_remote_info(remotes)
 
     # Substitute environment variables in headers
     if auth_headers:
@@ -218,17 +186,15 @@ def transform_anthropic_to_gateway(
         "description": server.get("description", DEFAULT_DESCRIPTION),
         "path": f"/{safe_path}",
         "proxy_pass_url": proxy_url,
-        "auth_provider": DEFAULT_AUTH_PROVIDER if auth_type != "none" else None,
-        "auth_type": auth_type,
+        "auth_provider": DEFAULT_AUTH_PROVIDER if auth_scheme != "none" else None,
+        "auth_scheme": auth_scheme,
         "supported_transports": [transport_type],
         "tags": tags,
         "headers": auth_headers if auth_headers else [],
         "num_tools": 0,
-        "num_stars": 0,
-        "is_python": is_python,
         "license": DEFAULT_LICENSE,
         "remote_url": remote_url,
-        "tool_list": []
+        "tool_list": [],
     }
 
 
@@ -240,12 +206,10 @@ def _run_example() -> None:
         "version": "0.1.0",
         "repository": {
             "type": "github",
-            "url": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search"
+            "url": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
         },
         "websiteUrl": "https://brave.com/search/api/",
-        "packages": {
-            "npm": "@modelcontextprotocol/server-brave-search"
-        }
+        "packages": {"npm": "@modelcontextprotocol/server-brave-search"},
     }
 
     result = transform_anthropic_to_gateway(example_input)

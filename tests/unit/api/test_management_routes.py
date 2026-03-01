@@ -397,12 +397,13 @@ class TestManagementCreateGroup:
             "attributes": None,
         }
 
-        with patch(
-            "registry.api.management_routes.scope_service.import_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_import_group, patch(
-            "registry.api.management_routes.AUTH_PROVIDER", "keycloak"
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import_group,
+            patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
         ):
             # Act
             response = client.post(
@@ -442,12 +443,13 @@ class TestManagementCreateGroup:
             "attributes": None,
         }
 
-        with patch(
-            "registry.api.management_routes.scope_service.import_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_import_group, patch(
-            "registry.api.management_routes.AUTH_PROVIDER", "entra"
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import_group,
+            patch("registry.api.management_routes.AUTH_PROVIDER", "entra"),
         ):
             # Act
             response = client.post(
@@ -533,12 +535,13 @@ class TestManagementCreateGroup:
             "attributes": None,
         }
 
-        with patch(
-            "registry.api.management_routes.scope_service.import_group",
-            new_callable=AsyncMock,
-            return_value=False,
-        ), patch(
-            "registry.api.management_routes.AUTH_PROVIDER", "keycloak"
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
         ):
             # Act
             response = client.post(
@@ -562,12 +565,13 @@ class TestManagementCreateGroup:
             "attributes": None,
         }
 
-        with patch(
-            "registry.api.management_routes.scope_service.import_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_import_group, patch(
-            "registry.api.management_routes.AUTH_PROVIDER", "keycloak"
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import_group,
+            patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
         ):
             # Act
             response = client.post(

@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from threading import Lock as ThreadingLock
 from typing import Any, Literal, Optional
 
+from ..core.metrics import PEER_SYNC_DURATION_SECONDS, PEER_SYNC_FAILURES
 from ..repositories.factory import (
     get_peer_federation_repository,
     get_search_repository,
@@ -205,11 +206,32 @@ class PeerFederationService:
         async with self._operation_lock:
             repo = self._get_repo()
 
+            # Check if token is being updated for audit logging
+            is_token_update = "federation_token" in updates
+            had_token_before = False
+
+            if is_token_update:
+                # Get existing peer to check if it had a token
+                try:
+                    existing_peer = await repo.get_peer(peer_id)
+                    had_token_before = existing_peer and existing_peer.federation_token is not None
+                except Exception:
+                    pass  # Continue with update even if we can't check existing state
+
             # Update via repository (handles validation)
             updated_peer = await repo.update_peer(peer_id, updates)
 
             # Update cache
             self.registered_peers[peer_id] = updated_peer
+
+            # Audit logging for token updates
+            if is_token_update:
+                logger.info(
+                    f"AUDIT: Federation token updated for peer '{peer_id}' "
+                    f"(name='{updated_peer.name}'). "
+                    f"Previous token existed: {had_token_before}, "
+                    f"New token provided: {updated_peer.federation_token is not None}"
+                )
 
             logger.info(f"Peer '{updated_peer.name}' ({peer_id}) updated")
             return updated_peer
@@ -496,18 +518,35 @@ class PeerFederationService:
 
             # Fetch servers using client
             servers = client.fetch_servers(since_generation=since_generation)
-            if servers is None:
-                servers = []
 
             # Fetch agents using client
             agents = client.fetch_agents(since_generation=since_generation)
-            if agents is None:
-                agents = []
 
             # Fetch security scans using client
             security_scans = client.fetch_security_scans()
+
+            # Check for fetch failures (None indicates error, not empty result)
+            # Fixes issue #561: None was silently converted to [] making auth
+            # failures appear as successful syncs with 0 items.
+            fetch_errors = []
+            if servers is None:
+                fetch_errors.append("servers")
+                servers = []
+            if agents is None:
+                fetch_errors.append("agents")
+                agents = []
             if security_scans is None:
+                fetch_errors.append("security_scans")
                 security_scans = []
+
+            # If any fetch failed, raise error to mark sync as failed
+            if fetch_errors:
+                error_types = ", ".join(fetch_errors)
+                raise ValueError(
+                    f"Failed to fetch {error_types} from peer '{peer_config.peer_id}'. "
+                    f"This typically indicates authentication or network errors. "
+                    f"Check peer configuration and logs for details."
+                )
 
             logger.info(
                 f"Fetched {len(servers)} servers, {len(agents)} agents, and "
@@ -585,6 +624,9 @@ class PeerFederationService:
                 f"in {duration_seconds:.2f} seconds"
             )
 
+            # Record success metrics
+            PEER_SYNC_DURATION_SECONDS.labels(peer_id=peer_id, success="true").set(duration_seconds)
+
             return SyncResult(
                 success=True,
                 peer_id=peer_id,
@@ -626,6 +668,21 @@ class PeerFederationService:
 
             # Persist updated status
             await self.update_sync_status(peer_id, sync_status)
+
+            # Record failure metrics
+            # Determine failure type from error message
+            failure_type = "unknown"
+            if "authentication" in error_msg.lower() or "token" in error_msg.lower():
+                failure_type = "auth_error"
+            elif "network" in error_msg.lower() or "timeout" in error_msg.lower():
+                failure_type = "network_error"
+            elif "failed to fetch" in error_msg.lower():
+                failure_type = "fetch_error"
+
+            PEER_SYNC_FAILURES.labels(peer_id=peer_id, failure_type=failure_type).inc()
+            PEER_SYNC_DURATION_SECONDS.labels(peer_id=peer_id, success="false").set(
+                duration_seconds
+            )
 
             logger.error(f"Failed to sync peer '{peer_id}': {error_msg}", exc_info=True)
 

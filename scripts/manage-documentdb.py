@@ -107,17 +107,12 @@ async def _get_documentdb_connection_string(
                 f"{storage_backend} (host: {host})"
             )
         else:
-            connection_string = (
-                f"mongodb://{host}:{port}/{database}?"
-                f"tls={str(use_tls).lower()}"
-            )
+            connection_string = f"mongodb://{host}:{port}/{database}?tls={str(use_tls).lower()}"
 
             if use_tls and tls_ca_file:
                 connection_string += f"&tlsCAFile={tls_ca_file}"
 
-            logger.info(
-                f"Using no authentication for DocumentDB (host: {host})"
-            )
+            logger.info(f"Using no authentication for DocumentDB (host: {host})")
 
     return connection_string
 
@@ -174,9 +169,7 @@ async def list_collections(
 
         # Verify connection
         server_info = await client.server_info()
-        logger.info(
-            f"Connected to DocumentDB/MongoDB {server_info.get('version', 'unknown')}"
-        )
+        logger.info(f"Connected to DocumentDB/MongoDB {server_info.get('version', 'unknown')}")
 
         # Get all collection names
         collection_names = await db.list_collection_names()
@@ -207,8 +200,8 @@ async def list_collections(
                 size_bytes = stats.get("size", 0)
                 size_mb = size_bytes / (1024 * 1024)
                 print(f"  Size: {size_mb:.2f} MB")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not retrieve collection stats for {coll_name}: {e}")
 
         print("\n" + "=" * 100)
 
@@ -274,7 +267,7 @@ async def inspect_collection(
             for idx in indexes:
                 print(f"\nIndex: {idx.get('name', 'unknown')}")
                 print(f"  Keys: {json.dumps(idx.get('key', {}), indent=4)}")
-                if idx.get('unique'):
+                if idx.get("unique"):
                     print(f"  Unique: True")
         except Exception as e:
             logger.warning(f"Could not get indexes: {e}")
@@ -531,10 +524,7 @@ async def drop_collection(
         return 1
 
 
-def _get_schema(
-    doc: Dict[str, Any],
-    prefix: str = ""
-) -> Dict[str, str]:
+def _get_schema(doc: Dict[str, Any], prefix: str = "") -> Dict[str, str]:
     """Infer schema from a document."""
     schema = {}
 
@@ -597,7 +587,9 @@ Examples:
     # Search command
     search_parser = subparsers.add_parser("search", help="Search documents")
     search_parser.add_argument("--collection", required=True, help="Collection name")
-    search_parser.add_argument("--limit", type=int, default=10, help="Number of documents to return")
+    search_parser.add_argument(
+        "--limit", type=int, default=10, help="Number of documents to return"
+    )
 
     # Sample command
     sample_parser = subparsers.add_parser("sample", help="Show sample document")

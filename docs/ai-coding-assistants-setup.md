@@ -368,10 +368,145 @@ openssl s_client -connect your-gateway.com:443
 - **Tool Usage**: Analyze tool usage patterns for optimization
 - **License Management**: Track per-developer tool usage
 
+## Backend Server Authentication
+
+When MCP servers require their own authentication (API keys, bearer tokens, etc.), the MCP Gateway Registry provides automatic configuration generation that includes both:
+
+1. **Gateway Authentication** - The `X-Authorization` header for authenticating with the MCP Gateway
+2. **Backend Server Authentication** - The server's own auth header (`Authorization`, custom API key headers, etc.)
+
+### Supported Authentication Schemes
+
+The registry supports three backend authentication schemes:
+
+| Scheme | Description | Example Header |
+|--------|-------------|----------------|
+| `none` | No backend authentication required | N/A |
+| `bearer` | Bearer token authentication | `Authorization: Bearer <token>` |
+| `api_key` | API key with custom header | `CONTEXT7_API_KEY: <key>` or `X-API-Key: <key>` |
+
+### Example Configurations
+
+#### Example 1: API Key Authentication (Context7)
+
+**Server Details:**
+- **Display Name**: Context7
+- **Auth Scheme**: `api_key`
+- **Auth Header**: `CONTEXT7_API_KEY`
+- **Credential**: API key provided during registration
+
+**Generated MCP Configuration (VS Code):**
+```json
+{
+  "servers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcpgateway.ddns.net/context7/mcp",
+      "headers": {
+        "X-Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "CONTEXT7_API_KEY": "[YOUR_API_KEY]"
+      }
+    }
+  }
+}
+```
+
+**Generated MCP Configuration (Roo Code/Cline):**
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "type": "streamable-http",
+      "url": "https://mcpgateway.ddns.net/context7/mcp",
+      "disabled": false,
+      "headers": {
+        "X-Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "CONTEXT7_API_KEY": "[YOUR_API_KEY]"
+      }
+    }
+  }
+}
+```
+
+#### Example 2: Bearer Token Authentication (Cloudflare)
+
+**Server Details:**
+- **Display Name**: Cloudflare API
+- **Auth Scheme**: `bearer`
+- **Auth Header**: `Authorization`
+- **Credential**: Bearer token provided during registration
+
+**Generated MCP Configuration (VS Code):**
+```json
+{
+  "servers": {
+    "cloudflare-api": {
+      "type": "http",
+      "url": "https://mcpgateway.ddns.net/cloudflare-api/mcp",
+      "headers": {
+        "X-Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "Authorization": "Bearer [YOUR_SERVER_AUTH_TOKEN]"
+      }
+    }
+  }
+}
+```
+
+### How It Works
+
+1. **Gateway Authentication Header** (`X-Authorization`):
+   - Authenticates the AI coding assistant with the MCP Gateway
+   - Automatically generated when you open the MCP Configuration modal
+   - Validates user identity and permissions
+
+2. **Backend Server Authentication Header** (e.g., `Authorization`, `CONTEXT7_API_KEY`):
+   - Authenticates the MCP Gateway with the backend MCP server
+   - The credential is encrypted and stored in the registry during server registration
+   - Automatically decrypted and included in health checks and tool fetching
+
+3. **Automatic Configuration Generation**:
+   - The Registry UI automatically detects the server's auth scheme
+   - Both headers are included in the generated configuration
+   - Works with all supported AI coding assistants (VS Code, Cursor, Cline, Roo Code, Claude Code)
+
+### UI Workflow
+
+1. **Open Server Card** in the Registry dashboard
+2. **Click "Get MCP Config"** button
+3. **Select Your IDE** (VS Code, Cursor, Cline, Roo Code, or Claude Code)
+4. **Copy Configuration** - The generated config includes both gateway and backend auth headers
+5. **Paste into your IDE's MCP settings file**
+
+**Screenshot Example:**
+
+![MCP Configuration Modal showing dual authentication headers](img/mcp-config-dual-auth.png)
+
+### Registry-Only Mode
+
+In registry-only deployment mode (catalog mode), only the backend server authentication is included:
+
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "type": "streamable-http",
+      "url": "https://context7-direct-endpoint.com/mcp",
+      "disabled": false,
+      "headers": {
+        "CONTEXT7_API_KEY": "[YOUR_API_KEY]"
+      }
+    }
+  }
+}
+```
+
+See [Registry Deployment Modes](registry-deployment-modes.md) for more details on deployment configurations.
+
 ## Support & Resources
 
 - [Configuration Reference](configuration.md) - Complete configuration options
-- [Authentication Guide](auth.md) - Identity provider setup
+- [Authentication Guide](auth.md) - Identity provider setup and server credential management
+- [Server Registration](auth.md#server-authentication-credentials) - How to register servers with auth credentials
 - [Troubleshooting Guide](troubleshooting.md) - Common issues and solutions
 - [API Reference](registry_api.md) - Programmatic management
 - [GitHub Discussions](https://github.com/agentic-community/mcp-gateway-registry/discussions) - Community support

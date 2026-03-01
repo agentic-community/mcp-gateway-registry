@@ -4,7 +4,7 @@ import axios from 'axios';
 import type { Server } from './ServerCard';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 
-type IDE = 'vscode' | 'cursor' | 'cline' | 'roo-code' | 'claude-code';
+type IDE = 'cursor' | 'roo-code' | 'claude-code' | 'kiro';
 
 interface ServerConfigModalProps {
   server: Server;
@@ -19,7 +19,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   onClose,
   onShowToast,
 }) => {
-  const [selectedIDE, setSelectedIDE] = useState<IDE>('vscode');
+  const [selectedIDE, setSelectedIDE] = useState<IDE>('cursor');
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   const [tokenLoading, setTokenLoading] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
@@ -106,56 +106,36 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     const includeAuthHeaders = !isRegistryOnly;
 
     // Use actual JWT token if available, otherwise show placeholder
-    const authToken = jwtToken || '[YOUR_AUTH_TOKEN]';
+    const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
+
+    // Build headers object with both gateway auth and server auth (if applicable)
+    const buildHeaders = () => {
+      const headers: Record<string, string> = {};
+
+      // Add gateway authentication header
+      headers['X-Authorization'] = `Bearer ${authToken}`;
+
+      // Add server authentication headers if server requires auth
+      if (server.auth_scheme && server.auth_scheme !== 'none') {
+        if (server.auth_scheme === 'bearer') {
+          headers['Authorization'] = 'Bearer [YOUR_SERVER_AUTH_TOKEN]';
+        } else if (server.auth_scheme === 'api_key') {
+          const headerName = server.auth_header_name || 'X-API-Key';
+          headers[headerName] = '[YOUR_API_KEY]';
+        }
+      }
+
+      return headers;
+    };
 
     switch (selectedIDE) {
-      case 'vscode':
-        return {
-          servers: {
-            [serverName]: {
-              type: 'http',
-              url,
-              ...(includeAuthHeaders && {
-                headers: {
-                  Authorization: `Bearer ${authToken}`,
-                },
-              }),
-            },
-          },
-          ...(includeAuthHeaders && !jwtToken && {
-            inputs: [
-              {
-                type: 'promptString',
-                id: 'auth-token',
-                description: 'Gateway Authentication Token',
-              },
-            ],
-          }),
-        };
       case 'cursor':
         return {
           mcpServers: {
             [serverName]: {
               url,
               ...(includeAuthHeaders && {
-                headers: {
-                  Authorization: `Bearer ${authToken}`,
-                },
-              }),
-            },
-          },
-        };
-      case 'cline':
-        return {
-          mcpServers: {
-            [serverName]: {
-              type: 'streamableHttp',
-              url,
-              disabled: false,
-              ...(includeAuthHeaders && {
-                headers: {
-                  Authorization: `Bearer ${authToken}`,
-                },
+                headers: buildHeaders(),
               }),
             },
           },
@@ -168,9 +148,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               url,
               disabled: false,
               ...(includeAuthHeaders && {
-                headers: {
-                  Authorization: `Bearer ${authToken}`,
-                },
+                headers: buildHeaders(),
               }),
             },
           },
@@ -182,10 +160,21 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               type: 'http',
               url,
               ...(includeAuthHeaders && {
-                headers: {
-                  Authorization: `Bearer ${authToken}`,
-                },
+                headers: buildHeaders(),
               }),
+            },
+          },
+        };
+      case 'kiro':
+        return {
+          mcpServers: {
+            [serverName]: {
+              url,
+              ...(includeAuthHeaders && {
+                headers: buildHeaders(),
+              }),
+              disabled: false,
+              autoApprove: [],
             },
           },
         };
@@ -193,18 +182,56 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         return {
           mcpServers: {
             [serverName]: {
-              type: 'http',
               url,
               ...(includeAuthHeaders && {
-                headers: {
-                  Authorization: `Bearer ${authToken}`,
-                },
+                headers: buildHeaders(),
               }),
             },
           },
         };
     }
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, selectedIDE, isRegistryOnly, jwtToken]);
+  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, jwtToken]);
+
+  const generateClaudeCodeCommand = useCallback(() => {
+    const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    // URL determination (same logic as generateMCPConfig)
+    let url: string;
+    if (server.mcp_endpoint) {
+      url = server.mcp_endpoint;
+    } else if (isRegistryOnly && server.proxy_pass_url) {
+      url = server.proxy_pass_url;
+    } else {
+      const currentUrl = new URL(window.location.origin);
+      const baseUrl = `${currentUrl.protocol}//${currentUrl.hostname}`;
+      const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
+      url = `${baseUrl}${cleanPath}/mcp`;
+    }
+
+    const includeAuthHeaders = !isRegistryOnly;
+    const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
+
+    // Build command with headers
+    let command = `claude mcp add --transport http ${serverName} ${url}`;
+
+    if (includeAuthHeaders) {
+      // Add gateway auth header
+      command += ` \\\n  --header "X-Authorization: Bearer ${authToken}"`;
+
+      // Add server auth header if applicable
+      if (server.auth_scheme && server.auth_scheme !== 'none') {
+        if (server.auth_scheme === 'bearer') {
+          command += ` \\\n  --header "Authorization: Bearer [YOUR_SERVER_AUTH_TOKEN]"`;
+        } else if (server.auth_scheme === 'api_key') {
+          const headerName = server.auth_header_name || 'X-API-Key';
+          command += ` \\\n  --header "${headerName}: [YOUR_API_KEY]"`;
+        }
+      }
+    }
+
+    return command;
+  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, isRegistryOnly, jwtToken]);
+
 
   const copyConfigToClipboard = useCallback(async () => {
     try {
@@ -222,6 +249,22 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       onShowToast?.('Failed to copy configuration', 'error');
     }
   }, [generateMCPConfig, onShowToast]);
+
+  const copyCommandToClipboard = useCallback(async () => {
+    try {
+      const command = generateClaudeCodeCommand();
+      await navigator.clipboard.writeText(command);
+
+      // Show visual feedback
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+
+      onShowToast?.('Command copied to clipboard!', 'success');
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      onShowToast?.('Failed to copy command', 'error');
+    }
+  }, [generateClaudeCodeCommand, onShowToast]);
 
   if (!isOpen) {
     return null;
@@ -343,7 +386,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 dark:text-white mb-3">Select your IDE/Tool:</h4>
             <div className="flex flex-wrap gap-2">
-              {(['vscode', 'cursor', 'cline', 'roo-code', 'claude-code'] as IDE[]).map((ide) => (
+              {(['cursor', 'roo-code', 'claude-code', 'kiro'] as IDE[]).map((ide) => (
                 <button
                   key={ide}
                   onClick={() => setSelectedIDE(ide)}
@@ -353,52 +396,100 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                       : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
                   }`}
                 >
-                  {ide === 'vscode'
-                    ? 'VS Code'
-                    : ide === 'cursor'
+                  {ide === 'cursor'
                     ? 'Cursor'
-                    : ide === 'cline'
-                    ? 'Cline'
                     : ide === 'roo-code'
                     ? 'Roo Code'
-                    : 'Claude Code'}
+                    : ide === 'claude-code'
+                    ? 'Claude Code'
+                    : 'Kiro'}
                 </button>
               ))}
             </div>
             <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
               Configuration format optimized for{' '}
-              {selectedIDE === 'vscode'
-                ? 'VS Code'
-                : selectedIDE === 'cursor'
+              {selectedIDE === 'cursor'
                 ? 'Cursor'
-                : selectedIDE === 'cline'
-                ? 'Cline'
                 : selectedIDE === 'roo-code'
                 ? 'Roo Code'
-                : 'Claude Code'}{' '}
+                : selectedIDE === 'claude-code'
+                ? 'Claude Code'
+                : 'Kiro'}{' '}
               integration
             </p>
           </div>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h4 className="font-medium text-gray-900 dark:text-white">Configuration JSON:</h4>
-              <button
-                onClick={copyConfigToClipboard}
-                className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                  copied
-                    ? 'bg-green-700'
-                    : 'bg-green-600 hover:bg-green-700'
-                }`}
-              >
-                <ClipboardDocumentIcon className="h-4 w-4" />
-                {copied ? 'Copied!' : 'Copy to Clipboard'}
-              </button>
+          {selectedIDE === 'claude-code' ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium text-gray-900 dark:text-white">CLI Command:</h4>
+                <button
+                  onClick={copyCommandToClipboard}
+                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
+                    copied
+                      ? 'bg-green-700'
+                      : 'bg-green-600 hover:bg-green-700'
+                  }`}
+                >
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                  {copied ? 'Copied!' : 'Copy Command'}
+                </button>
+              </div>
+              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap break-all">
+                {generateClaudeCodeCommand()}
+              </pre>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                Run this command in your terminal to add the MCP server to Claude Code.
+              </p>
             </div>
-            <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto">
-              {JSON.stringify(generateMCPConfig(), null, 2)}
-            </pre>
-          </div>
+          ) : selectedIDE === 'kiro' ? (
+            <div className="space-y-2">
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-3">
+                <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Kiro Configuration:</h4>
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  Copy the JSON below and paste it into{' '}
+                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">~/.kiro/settings/mcp.json</code>
+                </p>
+              </div>
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium text-gray-900 dark:text-white">Configuration JSON:</h4>
+                <button
+                  onClick={copyConfigToClipboard}
+                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
+                    copied
+                      ? 'bg-green-700'
+                      : 'bg-green-600 hover:bg-green-700'
+                  }`}
+                >
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                  {copied ? 'Copied!' : 'Copy to Clipboard'}
+                </button>
+              </div>
+              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto">
+                {JSON.stringify(generateMCPConfig(), null, 2)}
+              </pre>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium text-gray-900 dark:text-white">Configuration JSON:</h4>
+                <button
+                  onClick={copyConfigToClipboard}
+                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
+                    copied
+                      ? 'bg-green-700'
+                      : 'bg-green-600 hover:bg-green-700'
+                  }`}
+                >
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                  {copied ? 'Copied!' : 'Copy to Clipboard'}
+                </button>
+              </div>
+              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto">
+                {JSON.stringify(generateMCPConfig(), null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
       </div>
     </div>

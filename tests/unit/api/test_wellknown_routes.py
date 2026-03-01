@@ -70,25 +70,17 @@ class TestGetNormalizedHealthStatus:
         """Test that 'healthy' status is returned as 'healthy'."""
         mock_health_service.server_health_status = {"test-server": "healthy"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _get_normalized_health_status
 
             result = _get_normalized_health_status("test-server")
             assert result == "healthy"
 
-    def test_healthy_auth_expired_normalized_to_healthy(
-        self, mock_health_service, mock_settings
-    ):
+    def test_healthy_auth_expired_normalized_to_healthy(self, mock_health_service, mock_settings):
         """Test that 'healthy-auth-expired' is normalized to 'healthy'."""
-        mock_health_service.server_health_status = {
-            "test-server": "healthy-auth-expired"
-        }
+        mock_health_service.server_health_status = {"test-server": "healthy-auth-expired"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _get_normalized_health_status
 
             result = _get_normalized_health_status("test-server")
@@ -96,45 +88,29 @@ class TestGetNormalizedHealthStatus:
 
     def test_unhealthy_timeout_normalized(self, mock_health_service, mock_settings):
         """Test that 'unhealthy: timeout' is normalized to 'unhealthy'."""
-        mock_health_service.server_health_status = {
-            "test-server": "unhealthy: timeout"
-        }
+        mock_health_service.server_health_status = {"test-server": "unhealthy: timeout"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _get_normalized_health_status
 
             result = _get_normalized_health_status("test-server")
             assert result == "unhealthy"
 
-    def test_unhealthy_connection_error_normalized(
-        self, mock_health_service, mock_settings
-    ):
+    def test_unhealthy_connection_error_normalized(self, mock_health_service, mock_settings):
         """Test that 'unhealthy: connection error' is normalized to 'unhealthy'."""
-        mock_health_service.server_health_status = {
-            "test-server": "unhealthy: connection error"
-        }
+        mock_health_service.server_health_status = {"test-server": "unhealthy: connection error"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _get_normalized_health_status
 
             result = _get_normalized_health_status("test-server")
             assert result == "unhealthy"
 
-    def test_error_status_normalized_to_unhealthy(
-        self, mock_health_service, mock_settings
-    ):
+    def test_error_status_normalized_to_unhealthy(self, mock_health_service, mock_settings):
         """Test that error statuses are normalized to 'unhealthy'."""
-        mock_health_service.server_health_status = {
-            "test-server": "error: ConnectionError"
-        }
+        mock_health_service.server_health_status = {"test-server": "error: ConnectionError"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _get_normalized_health_status
 
             result = _get_normalized_health_status("test-server")
@@ -144,23 +120,17 @@ class TestGetNormalizedHealthStatus:
         """Test that 'disabled' status is returned as 'disabled'."""
         mock_health_service.server_health_status = {"test-server": "disabled"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _get_normalized_health_status
 
             result = _get_normalized_health_status("test-server")
             assert result == "disabled"
 
-    def test_checking_status_normalized_to_unknown(
-        self, mock_health_service, mock_settings
-    ):
+    def test_checking_status_normalized_to_unknown(self, mock_health_service, mock_settings):
         """Test that 'checking' status is normalized to 'unknown'."""
         mock_health_service.server_health_status = {"test-server": "checking"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _get_normalized_health_status
 
             result = _get_normalized_health_status("test-server")
@@ -170,9 +140,7 @@ class TestGetNormalizedHealthStatus:
         """Test that unknown servers return 'unknown' status."""
         mock_health_service.server_health_status = {}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _get_normalized_health_status
 
             result = _get_normalized_health_status("nonexistent-server")
@@ -193,9 +161,7 @@ class TestFormatServerDiscovery:
         """Test that formatted server includes actual health status."""
         mock_health_service.server_health_status = {"test-server": "healthy"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _format_server_discovery
 
             # Create a mock request
@@ -213,13 +179,9 @@ class TestFormatServerDiscovery:
         self, mock_health_service, mock_settings, sample_server_info
     ):
         """Test that formatted server uses unhealthy status from health service."""
-        mock_health_service.server_health_status = {
-            "test-server": "unhealthy: timeout"
-        }
+        mock_health_service.server_health_status = {"test-server": "unhealthy: timeout"}
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _format_server_discovery
 
             mock_request = MagicMock()
@@ -231,9 +193,7 @@ class TestFormatServerDiscovery:
             # Should be normalized to 'unhealthy'
             assert result["health_status"] == "unhealthy"
 
-    def test_format_unknown_server_has_unknown_status(
-        self, mock_health_service, mock_settings
-    ):
+    def test_format_unknown_server_has_unknown_status(self, mock_health_service, mock_settings):
         """Test that servers not in health service have 'unknown' status."""
         mock_health_service.server_health_status = {}
 
@@ -243,9 +203,7 @@ class TestFormatServerDiscovery:
             "description": "A new server",
         }
 
-        with patch(
-            "registry.api.wellknown_routes.health_service", mock_health_service
-        ):
+        with patch("registry.api.wellknown_routes.health_service", mock_health_service):
             from registry.api.wellknown_routes import _format_server_discovery
 
             mock_request = MagicMock()
@@ -278,21 +236,15 @@ class TestWellKnownMcpServersEndpoint:
             return_value={"test-server": sample_server_info}
         )
         mock_server_service.is_service_enabled = AsyncMock(return_value=True)
-        mock_health_service.server_health_status = {
-            "test-server": "unhealthy: connection error"
-        }
+        mock_health_service.server_health_status = {"test-server": "unhealthy: connection error"}
 
         # Patch settings to enable discovery
         mock_settings.enable_wellknown_discovery = True
         mock_settings.wellknown_cache_ttl = 300
 
         with (
-            patch(
-                "registry.api.wellknown_routes.server_service", mock_server_service
-            ),
-            patch(
-                "registry.api.wellknown_routes.health_service", mock_health_service
-            ),
+            patch("registry.api.wellknown_routes.server_service", mock_server_service),
+            patch("registry.api.wellknown_routes.health_service", mock_health_service),
             patch("registry.api.wellknown_routes.settings", mock_settings),
         ):
             from registry.api.wellknown_routes import router
@@ -328,12 +280,8 @@ class TestWellKnownMcpServersEndpoint:
         mock_settings.wellknown_cache_ttl = 300
 
         with (
-            patch(
-                "registry.api.wellknown_routes.server_service", mock_server_service
-            ),
-            patch(
-                "registry.api.wellknown_routes.health_service", mock_health_service
-            ),
+            patch("registry.api.wellknown_routes.server_service", mock_server_service),
+            patch("registry.api.wellknown_routes.health_service", mock_health_service),
             patch("registry.api.wellknown_routes.settings", mock_settings),
         ):
             from registry.api.wellknown_routes import router
@@ -368,12 +316,8 @@ class TestWellKnownMcpServersEndpoint:
         mock_settings.wellknown_cache_ttl = 300
 
         with (
-            patch(
-                "registry.api.wellknown_routes.server_service", mock_server_service
-            ),
-            patch(
-                "registry.api.wellknown_routes.health_service", mock_health_service
-            ),
+            patch("registry.api.wellknown_routes.server_service", mock_server_service),
+            patch("registry.api.wellknown_routes.health_service", mock_health_service),
             patch("registry.api.wellknown_routes.settings", mock_settings),
         ):
             from registry.api.wellknown_routes import router
@@ -426,12 +370,8 @@ class TestWellKnownMcpServersEndpoint:
         mock_settings.wellknown_cache_ttl = 300
 
         with (
-            patch(
-                "registry.api.wellknown_routes.server_service", mock_server_service
-            ),
-            patch(
-                "registry.api.wellknown_routes.health_service", mock_health_service
-            ),
+            patch("registry.api.wellknown_routes.server_service", mock_server_service),
+            patch("registry.api.wellknown_routes.health_service", mock_health_service),
             patch("registry.api.wellknown_routes.settings", mock_settings),
         ):
             from registry.api.wellknown_routes import router
@@ -448,9 +388,7 @@ class TestWellKnownMcpServersEndpoint:
             assert len(data["servers"]) == 3
 
             # Create a dict for easier verification
-            server_statuses = {
-                s["name"]: s["health_status"] for s in data["servers"]
-            }
+            server_statuses = {s["name"]: s["health_status"] for s in data["servers"]}
 
             assert server_statuses["Healthy Server"] == "healthy"
             assert server_statuses["Unhealthy Server"] == "unhealthy"

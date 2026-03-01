@@ -1191,15 +1191,13 @@ async def register_service(
     description: str | None = Field("", description="Description of the server."),
     tags: list[str] | None = Field(None, description="Optional list of tags for categorization."),
     num_tools: int | None = Field(0, description="Number of tools provided by the server."),
-    num_stars: int | None = Field(0, description="Number of stars/rating for the server."),
-    is_python: bool | None = Field(
-        False, description="Whether the server is implemented in Python."
-    ),
     license: str | None = Field("N/A", description="License information for the server."),
     auth_provider: str | None = Field(
         None, description="Authentication provider (e.g., 'bedrock-agentcore', 'oauth')."
     ),
-    auth_type: str | None = Field(None, description="Authentication type (e.g., 'oauth', 'none')."),
+    auth_scheme: str | None = Field(
+        None, description="Authentication scheme (e.g., 'bearer', 'api_key', 'none')."
+    ),
     supported_transports: list[str] | None = Field(
         None, description="List of supported transports (e.g., ['streamable-http'])."
     ),
@@ -1221,8 +1219,6 @@ async def register_service(
         description: Description of the server.
         tags: Optional list of tags for categorization.
         num_tools: Number of tools provided by the server.
-        num_stars: Number of stars/rating for the server.
-        is_python: Whether the server is implemented in Python.
         license: License information for the server.
 
     Returns:
@@ -1244,16 +1240,14 @@ async def register_service(
         "description": description if description is not None else "",
         "tags": tags_str if tags_str is not None else "",
         "num_tools": num_tools,
-        "num_stars": num_stars,
-        "is_python": is_python,
         "license_str": license,  # The registry API uses license_str field name
     }
 
     # Add optional fields if provided
     if auth_provider is not None:
         form_data["auth_provider"] = auth_provider
-    if auth_type is not None:
-        form_data["auth_type"] = auth_type
+    if auth_scheme is not None:
+        form_data["auth_scheme"] = auth_scheme
     if supported_transports is not None:
         # Convert list to JSON string for form data
         form_data["supported_transports"] = (
@@ -2082,7 +2076,7 @@ def main():
     logger.info(f"Server will be available at: http://localhost:{args.port}{endpoint}")
 
     # Run the server with the specified transport from command line args
-    mcp.run(transport=args.transport, host="0.0.0.0", port=int(args.port))
+    mcp.run(transport=args.transport, host="0.0.0.0", port=int(args.port))  # nosec B104
 
 
 if __name__ == "__main__":

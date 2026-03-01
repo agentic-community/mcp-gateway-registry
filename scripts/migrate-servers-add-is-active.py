@@ -68,13 +68,11 @@ Examples:
 
     # Using file-based storage
     uv run python scripts/migrate-servers-add-is-active.py --storage file --servers-dir ./data/servers
-"""
+""",
     )
 
     parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Actually apply changes (default is dry run)"
+        "--apply", action="store_true", help="Actually apply changes (default is dry run)"
     )
 
     parser.add_argument(
@@ -82,57 +80,49 @@ Examples:
         type=str,
         choices=["documentdb", "mongodb-ce", "file"],
         default=os.getenv("MCP_STORAGE_BACKEND", "documentdb"),
-        help="Storage backend type (default: from MCP_STORAGE_BACKEND env or documentdb)"
+        help="Storage backend type (default: from MCP_STORAGE_BACKEND env or documentdb)",
     )
 
     parser.add_argument(
-        "--host",
-        type=str,
-        default=os.getenv("DOCUMENTDB_HOST"),
-        help="DocumentDB/MongoDB host"
+        "--host", type=str, default=os.getenv("DOCUMENTDB_HOST"), help="DocumentDB/MongoDB host"
     )
 
     parser.add_argument(
         "--port",
         type=int,
         default=int(os.getenv("DOCUMENTDB_PORT", "27017")),
-        help="DocumentDB/MongoDB port (default: 27017)"
+        help="DocumentDB/MongoDB port (default: 27017)",
     )
 
     parser.add_argument(
         "--database",
         type=str,
         default=os.getenv("DOCUMENTDB_DATABASE", "mcp_registry"),
-        help="Database name (default: mcp_registry)"
+        help="Database name (default: mcp_registry)",
     )
 
     parser.add_argument(
         "--namespace",
         type=str,
         default=os.getenv("DOCUMENTDB_NAMESPACE"),
-        help="Namespace prefix for collections"
+        help="Namespace prefix for collections",
     )
 
     parser.add_argument(
         "--servers-dir",
         type=str,
         default=os.getenv("MCP_SERVERS_DIR"),
-        help="Directory for server JSON files (file storage)"
+        help="Directory for server JSON files (file storage)",
     )
 
     parser.add_argument(
-        "--use-iam",
-        action="store_true",
-        help="Use IAM authentication for DocumentDB"
+        "--use-iam", action="store_true", help="Use IAM authentication for DocumentDB"
     )
 
     return parser.parse_args()
 
 
-async def _migrate_documentdb(
-    args: argparse.Namespace,
-    dry_run: bool
-) -> Dict[str, Any]:
+async def _migrate_documentdb(args: argparse.Namespace, dry_run: bool) -> Dict[str, Any]:
     """
     Migrate servers in DocumentDB to add is_active field.
 
@@ -162,13 +152,11 @@ async def _migrate_documentdb(
     if args.use_iam:
         try:
             import boto3
+
             session = boto3.Session()
             credentials = session.get_credentials()
-            token = session.client('rds').generate_db_auth_token(
-                DBHostname=host,
-                Port=port,
-                DBUsername="admin",
-                Region=session.region_name
+            token = session.client("rds").generate_db_auth_token(
+                DBHostname=host, Port=port, DBUsername="admin", Region=session.region_name
             )
             connection_string = f"mongodb://admin:{token}@{host}:{port}/?authMechanism=MONGODB-AWS&authSource=$external&tls=true&tlsCAFile=global-bundle.pem"
         except Exception as e:
@@ -203,10 +191,9 @@ async def _migrate_documentdb(
     servers_to_update: List[Dict[str, Any]] = []
 
     async for server in collection.find(query):
-        servers_to_update.append({
-            "_id": server["_id"],
-            "server_name": server.get("server_name", "unknown")
-        })
+        servers_to_update.append(
+            {"_id": server["_id"], "server_name": server.get("server_name", "unknown")}
+        )
 
     logger.info(f"Found {len(servers_to_update)} servers without is_active field")
 
@@ -216,10 +203,7 @@ async def _migrate_documentdb(
             logger.info(f"  Would update: {server['_id']} ({server['server_name']})")
     else:
         if servers_to_update:
-            result = await collection.update_many(
-                query,
-                {"$set": {"is_active": True}}
-            )
+            result = await collection.update_many(query, {"$set": {"is_active": True}})
             logger.info(f"Updated {result.modified_count} servers with is_active=True")
         else:
             logger.info("No servers need updating")
@@ -230,14 +214,11 @@ async def _migrate_documentdb(
         "storage": args.storage,
         "servers_found": len(servers_to_update),
         "servers_updated": 0 if dry_run else len(servers_to_update),
-        "dry_run": dry_run
+        "dry_run": dry_run,
     }
 
 
-async def _migrate_file_storage(
-    args: argparse.Namespace,
-    dry_run: bool
-) -> Dict[str, Any]:
+async def _migrate_file_storage(args: argparse.Namespace, dry_run: bool) -> Dict[str, Any]:
     """
     Migrate servers in file storage to add is_active field.
 
@@ -272,11 +253,13 @@ async def _migrate_file_storage(
 
             # Check if is_active field is missing
             if "is_active" not in server_data:
-                servers_to_update.append({
-                    "file": str(json_file),
-                    "server_name": server_data.get("server_name", "unknown"),
-                    "path": server_data.get("path", "unknown")
-                })
+                servers_to_update.append(
+                    {
+                        "file": str(json_file),
+                        "server_name": server_data.get("server_name", "unknown"),
+                        "path": server_data.get("path", "unknown"),
+                    }
+                )
 
                 if not dry_run:
                     server_data["is_active"] = True
@@ -302,7 +285,7 @@ async def _migrate_file_storage(
         "storage": "file",
         "servers_found": len(servers_to_update),
         "servers_updated": updated_count,
-        "dry_run": dry_run
+        "dry_run": dry_run,
     }
 
 

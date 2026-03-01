@@ -60,9 +60,7 @@ class TestInfrastructure:
         validator = MockJWTValidator()
 
         token = validator.create_token(
-            username="testuser",
-            groups=["users"],
-            scopes=["read:servers"]
+            username="testuser", groups=["users"], scopes=["read:servers"]
         )
 
         assert isinstance(token, str)
@@ -75,10 +73,7 @@ class TestInfrastructure:
 
     def test_mock_http_response(self):
         """Test MockResponse."""
-        response = MockResponse(
-            status_code=200,
-            json_data={"message": "success"}
-        )
+        response = MockResponse(status_code=200, json_data={"message": "success"})
 
         assert response.status_code == 200
         assert response.json() == {"message": "success"}
@@ -109,10 +104,7 @@ class TestInfrastructure:
 
     def test_helpers_minimal_agent(self):
         """Test helper function for creating minimal agent."""
-        agent_dict = create_minimal_agent_dict(
-            name="test-agent",
-            url="http://localhost:9000"
-        )
+        agent_dict = create_minimal_agent_dict(name="test-agent", url="http://localhost:9000")
 
         assert agent_dict["name"] == "test-agent"
         assert agent_dict["url"] == "http://localhost:9000"

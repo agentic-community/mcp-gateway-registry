@@ -23,10 +23,7 @@ def create_temp_directory() -> Path:
     return Path(temp_dir)
 
 
-def write_json_file(
-    file_path: Path,
-    data: dict[str, Any]
-) -> None:
+def write_json_file(file_path: Path, data: dict[str, Any]) -> None:
     """
     Write data to a JSON file.
 
@@ -38,9 +35,7 @@ def write_json_file(
         json.dump(data, f, indent=2, default=str)
 
 
-def read_json_file(
-    file_path: Path
-) -> dict[str, Any]:
+def read_json_file(file_path: Path) -> dict[str, Any]:
     """
     Read data from a JSON file.
 
@@ -55,9 +50,7 @@ def read_json_file(
 
 
 def create_test_server_file(
-    servers_dir: Path,
-    server_name: str,
-    server_data: dict[str, Any]
+    servers_dir: Path, server_name: str, server_data: dict[str, Any]
 ) -> Path:
     """
     Create a server JSON file in the test servers directory.
@@ -76,11 +69,7 @@ def create_test_server_file(
     return server_file
 
 
-def create_test_agent_file(
-    agents_dir: Path,
-    agent_name: str,
-    agent_data: dict[str, Any]
-) -> Path:
+def create_test_agent_file(agents_dir: Path, agent_name: str, agent_data: dict[str, Any]) -> Path:
     """
     Create an agent JSON file in the test agents directory.
 
@@ -99,9 +88,7 @@ def create_test_agent_file(
 
 
 def assert_server_equals(
-    actual: ServerDetail,
-    expected: ServerDetail,
-    check_meta: bool = False
+    actual: ServerDetail, expected: ServerDetail, check_meta: bool = False
 ) -> None:
     """
     Assert that two ServerDetail objects are equal.
@@ -121,9 +108,7 @@ def assert_server_equals(
 
 
 def assert_agent_equals(
-    actual: AgentCard,
-    expected: AgentCard,
-    check_timestamps: bool = False
+    actual: AgentCard, expected: AgentCard, check_timestamps: bool = False
 ) -> None:
     """
     Assert that two AgentCard objects are equal.
@@ -148,7 +133,7 @@ def create_mock_jwt_payload(
     username: str,
     groups: list[str] | None = None,
     scopes: list[str] | None = None,
-    extra_claims: dict[str, Any] | None = None
+    extra_claims: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Create a mock JWT payload for testing.
@@ -184,8 +169,7 @@ def create_mock_jwt_payload(
 
 
 def create_test_state_file(
-    state_path: Path,
-    server_states: dict[str, dict[str, Any]] | None = None
+    state_path: Path, server_states: dict[str, dict[str, Any]] | None = None
 ) -> None:
     """
     Create a server state JSON file for testing.
@@ -201,8 +185,7 @@ def create_test_state_file(
 
 
 def create_test_agent_state_file(
-    state_path: Path,
-    agent_states: dict[str, bool] | None = None
+    state_path: Path, agent_states: dict[str, bool] | None = None
 ) -> None:
     """
     Create an agent state JSON file for testing.
@@ -217,9 +200,7 @@ def create_test_agent_state_file(
     write_json_file(state_path, agent_states)
 
 
-def normalize_text_for_comparison(
-    text: str
-) -> str:
+def normalize_text_for_comparison(text: str) -> str:
     """
     Normalize text for comparison in tests.
 
@@ -234,9 +215,7 @@ def normalize_text_for_comparison(
     return " ".join(text.lower().split())
 
 
-def extract_error_message(
-    response_data: dict[str, Any]
-) -> str:
+def extract_error_message(response_data: dict[str, Any]) -> str:
     """
     Extract error message from API response.
 
@@ -252,9 +231,7 @@ def extract_error_message(
 
 
 def create_minimal_server_dict(
-    name: str,
-    description: str = "Test server",
-    version: str = "1.0.0"
+    name: str, description: str = "Test server", version: str = "1.0.0"
 ) -> dict[str, Any]:
     """
     Create a minimal server dictionary for testing.
@@ -267,18 +244,11 @@ def create_minimal_server_dict(
     Returns:
         Minimal server dictionary
     """
-    return {
-        "name": name,
-        "description": description,
-        "version": version
-    }
+    return {"name": name, "description": description, "version": version}
 
 
 def create_minimal_agent_dict(
-    name: str,
-    url: str,
-    description: str = "Test agent",
-    version: str = "1.0"
+    name: str, url: str, description: str = "Test agent", version: str = "1.0"
 ) -> dict[str, Any]:
     """
     Create a minimal agent dictionary for testing.
@@ -301,5 +271,5 @@ def create_minimal_agent_dict(
         "capabilities": {},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
-        "skills": []
+        "skills": [],
     }

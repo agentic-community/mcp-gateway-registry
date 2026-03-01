@@ -4,7 +4,6 @@ Test constants for MCP Gateway Registry tests.
 This module defines constants used across test modules to ensure consistency.
 """
 
-
 # Test Server Names
 TEST_SERVER_NAME_1: str = "com.example.test-server-1"
 TEST_SERVER_NAME_2: str = "com.example.test-server-2"
@@ -118,11 +117,7 @@ SECURITY_TYPE_API_KEY: str = "apiKey"
 SECURITY_SCHEME_BEARER: str = "bearer"
 
 # Test Capabilities
-DEFAULT_CAPABILITIES: dict[str, bool] = {
-    "streaming": False,
-    "tools": True,
-    "prompts": False
-}
+DEFAULT_CAPABILITIES: dict[str, bool] = {"streaming": False, "tools": True, "prompts": False}
 
 # Test MIME Types
 MIME_TEXT_PLAIN: str = "text/plain"

@@ -19,8 +19,8 @@ from mcp.client.sse import sse_client
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s.%(msecs)03d - PID:%(process)d - %(filename)s:%(lineno)d - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s.%(msecs)03d - PID:%(process)d - %(filename)s:%(lineno)d - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
@@ -28,11 +28,9 @@ logger = logging.getLogger(__name__)
 async def run(server_url, args):
     logger.info(f"Connecting to MCP server at: {server_url}")
     logger.info(f"Using client ID: {args.client_id}")
-    
+
     # Set up headers including x-client-id
-    headers = {
-        "x-client-id": args.client_id
-    }
+    headers = {"x-client-id": args.client_id}
 
     async with sse_client(server_url, headers=headers) as (read, write):
         async with ClientSession(read, write, sampling_callback=None) as session:
@@ -79,10 +77,8 @@ async def run(server_url, args):
 
             # Get daily data for Apple stock
             logger.info(f"\nCalling print_stock_data tool with params={params}")
-            
-            result = await session.call_tool(
-                "print_stock_data", arguments=params
-            )
+
+            result = await session.call_tool("print_stock_data", arguments=params)
 
             # Display the results
             logger.info("=" * 50)
@@ -95,12 +91,8 @@ async def run(server_url, args):
 
 if __name__ == "__main__":
     # Set up command-line argument parsing
-    parser = argparse.ArgumentParser(
-        description="MCP Client for Bedrock Usage Statistics"
-    )
-    parser.add_argument(
-        "--host", type=str, default="localhost", help="Hostname of the MCP server"
-    )
+    parser = argparse.ArgumentParser(description="MCP Client for Bedrock Usage Statistics")
+    parser.add_argument("--host", type=str, default="localhost", help="Hostname of the MCP server")
     parser.add_argument("--port", type=int, default=8000, help="Port of the MCP server")
     parser.add_argument(
         "--server-name",

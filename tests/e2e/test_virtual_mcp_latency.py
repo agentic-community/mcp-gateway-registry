@@ -32,9 +32,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 VIRTUAL_SERVER_URL = "http://localhost/virtual/e2e-multi-backend/mcp"
 DIRECT_CURRENTTIME_URL = "http://localhost:8000/mcp"
@@ -49,9 +47,7 @@ REQUEST_TIMEOUT_SECONDS = 30
 def _refresh_token() -> str:
     """Refresh the admin-bot M2M token and return the access token."""
     script_path = os.path.join(PROJECT_ROOT, "scripts", "refresh_m2m_token.sh")
-    token_path = os.path.join(
-        PROJECT_ROOT, ".oauth-tokens", "admin-bot-token.json"
-    )
+    token_path = os.path.join(PROJECT_ROOT, ".oauth-tokens", "admin-bot-token.json")
 
     logger.info("Refreshing admin-bot token...")
     result = subprocess.run(
@@ -102,7 +98,7 @@ def _parse_sse_response(
     for line in raw_body.splitlines():
         stripped = line.strip()
         if stripped.startswith("data:"):
-            last_data_line = stripped[len("data:"):].strip()
+            last_data_line = stripped[len("data:") :].strip()
 
     if last_data_line:
         try:
@@ -156,9 +152,7 @@ def _send_mcp_request(
             return parsed, resp_session
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        logger.error(
-            "HTTP %d from %s: %s", e.code, url, error_body[:300]
-        )
+        logger.error("HTTP %d from %s: %s", e.code, url, error_body[:300])
         return None, session_id
     except urllib.error.URLError as e:
         logger.error("URL error for %s: %s", url, e.reason)
@@ -267,9 +261,7 @@ def _run_benchmark(
         return None
 
     if failures > 0:
-        logger.warning(
-            "  %d/%d iterations failed for [%s]", failures, iterations, label
-        )
+        logger.warning("  %d/%d iterations failed for [%s]", failures, iterations, label)
 
     latencies.sort()
     p95_idx = max(0, int(len(latencies) * 0.95) - 1)
@@ -318,8 +310,7 @@ def _print_table(
         f"{'Mean(ms)':>9} | {'Median(ms)':>11} | {'P95(ms)':>8} | {'P99(ms)':>8}"
     )
     separator = (
-        f"{'-' * 34}-+-{'-' * 8}-+-{'-' * 8}-+-"
-        f"{'-' * 9}-+-{'-' * 11}-+-{'-' * 8}-+-{'-' * 8}"
+        f"{'-' * 34}-+-{'-' * 8}-+-{'-' * 8}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 8}-+-{'-' * 8}"
     )
 
     print()
@@ -555,8 +546,7 @@ def _print_results_table(
         f"{'Mean(ms)':>9} | {'Median(ms)':>11} | {'P95(ms)':>8} | {'P99(ms)':>8}"
     )
     separator = (
-        f"{'-' * 34}-+-{'-' * 8}-+-{'-' * 8}-+-"
-        f"{'-' * 9}-+-{'-' * 11}-+-{'-' * 8}-+-{'-' * 8}"
+        f"{'-' * 34}-+-{'-' * 8}-+-{'-' * 8}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 8}-+-{'-' * 8}"
     )
 
     print()
@@ -575,10 +565,7 @@ def _print_results_table(
             continue
 
         if stats is None:
-            print(
-                f"{label:<34} | {'FAILED':>8} | {'':>8} | "
-                f"{'':>9} | {'':>11} | {'':>8} | {'':>8}"
-            )
+            print(f"{label:<34} | {'FAILED':>8} | {'':>8} | {'':>9} | {'':>11} | {'':>8} | {'':>8}")
         else:
             print(
                 f"{label:<34} | {stats['min']:>8.1f} | {stats['max']:>8.1f} | "

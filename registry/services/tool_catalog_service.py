@@ -82,9 +82,7 @@ class ToolCatalogService:
                 if server_required_scopes and not all(
                     s in user_scope_set for s in server_required_scopes
                 ):
-                    logger.debug(
-                        f"Filtering out server {path}: user lacks required scopes"
-                    )
+                    logger.debug(f"Filtering out server {path}: user lacks required scopes")
                     continue
 
             server_name = server_info.get("server_name", path)

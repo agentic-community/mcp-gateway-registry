@@ -21,11 +21,7 @@ class MockJWTValidator:
     require actual authentication providers.
     """
 
-    def __init__(
-        self,
-        secret_key: str = "test-secret-key",
-        algorithm: str = "HS256"
-    ):
+    def __init__(self, secret_key: str = "test-secret-key", algorithm: str = "HS256"):
         """
         Initialize mock JWT validator.
 
@@ -42,7 +38,7 @@ class MockJWTValidator:
         groups: list[str] | None = None,
         scopes: list[str] | None = None,
         expires_in: int = 3600,
-        extra_claims: dict[str, Any] | None = None
+        extra_claims: dict[str, Any] | None = None,
     ) -> str:
         """
         Create a test JWT token.
@@ -64,7 +60,7 @@ class MockJWTValidator:
             "username": username,
             "iat": now,
             "exp": now + expires_in,
-            "token_use": "access"
+            "token_use": "access",
         }
 
         if groups:
@@ -81,10 +77,7 @@ class MockJWTValidator:
         logger.debug(f"Created mock JWT token for {username}")
         return token
 
-    def validate_token(
-        self,
-        token: str
-    ) -> dict[str, Any]:
+    def validate_token(self, token: str) -> dict[str, Any]:
         """
         Validate a JWT token.
 
@@ -97,11 +90,7 @@ class MockJWTValidator:
         Raises:
             jwt.InvalidTokenError: If token is invalid
         """
-        payload = jwt.decode(
-            token,
-            self.secret_key,
-            algorithms=[self.algorithm]
-        )
+        payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
         logger.debug(f"Validated mock JWT token for {payload.get('username')}")
         return payload
 
@@ -111,10 +100,7 @@ class MockSessionValidator:
     Mock session validator for testing cookie-based sessions.
     """
 
-    def __init__(
-        self,
-        secret_key: str = "test-secret-key"
-    ):
+    def __init__(self, secret_key: str = "test-secret-key"):
         """
         Initialize mock session validator.
 
@@ -124,10 +110,7 @@ class MockSessionValidator:
         self.secret_key = secret_key
 
     def create_session(
-        self,
-        username: str,
-        groups: list[str] | None = None,
-        **extra_data: Any
+        self, username: str, groups: list[str] | None = None, **extra_data: Any
     ) -> str:
         """
         Create a test session cookie value.
@@ -144,21 +127,14 @@ class MockSessionValidator:
 
         serializer = URLSafeTimedSerializer(self.secret_key)
 
-        data = {
-            "username": username,
-            "groups": groups or []
-        }
+        data = {"username": username, "groups": groups or []}
         data.update(extra_data)
 
         session_value = serializer.dumps(data)
         logger.debug(f"Created mock session for {username}")
         return session_value
 
-    def validate_session(
-        self,
-        session_value: str,
-        max_age: int = 28800
-    ) -> dict[str, Any]:
+    def validate_session(self, session_value: str, max_age: int = 28800) -> dict[str, Any]:
         """
         Validate a session cookie.
 
@@ -182,9 +158,7 @@ class MockSessionValidator:
 
 
 def create_mock_auth_headers(
-    token: str | None = None,
-    username: str | None = None,
-    scopes: list[str] | None = None
+    token: str | None = None, username: str | None = None, scopes: list[str] | None = None
 ) -> dict[str, str]:
     """
     Create mock authentication headers for testing.
@@ -211,9 +185,7 @@ def create_mock_auth_headers(
 
 
 def create_mock_cognito_user_attributes(
-    username: str,
-    email: str | None = None,
-    groups: list[str] | None = None
+    username: str, email: str | None = None, groups: list[str] | None = None
 ) -> list[dict[str, str]]:
     """
     Create mock Cognito user attributes.
@@ -229,13 +201,10 @@ def create_mock_cognito_user_attributes(
     attributes = [
         {"Name": "sub", "Value": username},
         {"Name": "email", "Value": email or f"{username}@example.com"},
-        {"Name": "email_verified", "Value": "true"}
+        {"Name": "email_verified", "Value": "true"},
     ]
 
     if groups:
-        attributes.append({
-            "Name": "cognito:groups",
-            "Value": ",".join(groups)
-        })
+        attributes.append({"Name": "cognito:groups", "Value": ",".join(groups)})
 
     return attributes

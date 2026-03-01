@@ -149,10 +149,7 @@ async def list_virtual_servers(
         # Filter to only virtual servers the user has explicit permission for
         # Permission values are virtual server paths like "/virtual/my-server"
         normalized_perms = [p.strip("/") for p in list_virtual_perms]
-        filtered_servers = [
-            s for s in all_servers
-            if s.path.strip("/") in normalized_perms
-        ]
+        filtered_servers = [s for s in all_servers if s.path.strip("/") in normalized_perms]
 
     logger.info(
         f"Returning {len(filtered_servers)} virtual servers for user "

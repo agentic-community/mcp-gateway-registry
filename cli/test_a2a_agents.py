@@ -63,9 +63,7 @@ class TestResult:
         self.message = ""
 
 
-def _check_token_expiration(
-    access_token: str
-) -> None:
+def _check_token_expiration(access_token: str) -> None:
     """
     Check if JWT token is expired and warn if expiring soon.
 
@@ -73,7 +71,7 @@ def _check_token_expiration(
         access_token: JWT access token to check
     """
     try:
-        parts = access_token.split('.')
+        parts = access_token.split(".")
         if len(parts) != 3:
             logger.warning("Invalid JWT format, cannot check expiration")
             return
@@ -81,12 +79,12 @@ def _check_token_expiration(
         payload = parts[1]
         padding = len(payload) % 4
         if padding:
-            payload += '=' * (4 - padding)
+            payload += "=" * (4 - padding)
 
         decoded = base64.urlsafe_b64decode(payload)
         token_data = json.loads(decoded)
 
-        exp = token_data.get('exp')
+        exp = token_data.get("exp")
         if not exp:
             logger.warning("Token does not have expiration field")
             return
@@ -109,18 +107,20 @@ def _check_token_expiration(
             sys.exit(1)
         elif time_until_expiry.total_seconds() < 120:
             seconds = int(time_until_expiry.total_seconds())
-            logger.warning(f"WARNING: Token will expire in {seconds} seconds at {exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            logger.warning(
+                f"WARNING: Token will expire in {seconds} seconds at {exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+            )
         else:
             remaining_seconds = int(time_until_expiry.total_seconds())
-            logger.info(f"Token is valid until {exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')} ({remaining_seconds} seconds remaining)")
+            logger.info(
+                f"Token is valid until {exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')} ({remaining_seconds} seconds remaining)"
+            )
 
     except Exception as e:
         logger.warning(f"Could not check token expiration: {e}")
 
 
-def _load_token_file(
-    token_file_path: Path
-) -> Dict[str, Any]:
+def _load_token_file(token_file_path: Path) -> Dict[str, Any]:
     """
     Load token data from JSON file.
 
@@ -131,7 +131,7 @@ def _load_token_file(
         Token data dictionary
     """
     try:
-        with open(token_file_path, 'r') as f:
+        with open(token_file_path, "r") as f:
             token_data = json.load(f)
         logger.info(f"Loaded token file: {token_file_path}")
         return token_data
@@ -145,7 +145,7 @@ def _make_api_request(
     access_token: str,
     base_url: str,
     method: str = "GET",
-    params: Optional[Dict[str, Any]] = None
+    params: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Make an API request to the A2A Agents API.
@@ -161,19 +161,12 @@ def _make_api_request(
         Response JSON or None if request fails
     """
     url = f"{base_url}{endpoint}"
-    headers = {
-        "X-Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
+    headers = {"X-Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
 
     try:
         logger.debug(f"Making {method} request to: {url}")
         response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            params=params,
-            timeout=10
+            method=method, url=url, headers=headers, params=params, timeout=10
         )
 
         if response.status_code == 401:
@@ -185,16 +178,13 @@ def _make_api_request(
 
     except requests.exceptions.RequestException as e:
         logger.debug(f"API request failed: {e}")
-        if hasattr(e, 'response') and e.response is not None:
+        if hasattr(e, "response") and e.response is not None:
             logger.debug(f"Response status: {e.response.status_code}")
             logger.debug(f"Response body: {e.response.text}")
         return None
 
 
-def _format_json_output(
-    data: Any,
-    verbose: bool = False
-) -> str:
+def _format_json_output(data: Any, verbose: bool = False) -> str:
     """
     Format JSON output for display.
 
@@ -210,10 +200,7 @@ def _format_json_output(
     return json.dumps(data, indent=2)[:200] + ("..." if len(json.dumps(data)) > 200 else "")
 
 
-def _print_test_result(
-    result: TestResult,
-    verbose: bool = False
-) -> None:
+def _print_test_result(result: TestResult, verbose: bool = False) -> None:
     """
     Print formatted test result.
 
@@ -236,11 +223,7 @@ def _print_test_result(
     print()
 
 
-def _test_list_agents(
-    access_token: str,
-    base_url: str,
-    limit: int = 10
-) -> TestResult:
+def _test_list_agents(access_token: str, base_url: str, limit: int = 10) -> TestResult:
     """
     Test listing agents endpoint.
 
@@ -257,10 +240,7 @@ def _test_list_agents(
 
     endpoint = f"/{AGENTS_API_VERSION}/agents"
     response = _make_api_request(
-        endpoint=endpoint,
-        access_token=access_token,
-        base_url=base_url,
-        params={"limit": limit}
+        endpoint=endpoint, access_token=access_token, base_url=base_url, params={"limit": limit}
     )
 
     result.duration_ms = int((time.time() - start_time) * 1000)
@@ -279,11 +259,7 @@ def _test_list_agents(
     return result
 
 
-def _test_list_agents_paginated(
-    access_token: str,
-    base_url: str,
-    limit: int = 3
-) -> TestResult:
+def _test_list_agents_paginated(access_token: str, base_url: str, limit: int = 3) -> TestResult:
     """
     Test pagination endpoint.
 
@@ -300,10 +276,7 @@ def _test_list_agents_paginated(
 
     endpoint = f"/{AGENTS_API_VERSION}/agents"
     response = _make_api_request(
-        endpoint=endpoint,
-        access_token=access_token,
-        base_url=base_url,
-        params={"limit": limit}
+        endpoint=endpoint, access_token=access_token, base_url=base_url, params={"limit": limit}
     )
 
     result.duration_ms = int((time.time() - start_time) * 1000)
@@ -322,11 +295,7 @@ def _test_list_agents_paginated(
     return result
 
 
-def _test_get_agent(
-    access_token: str,
-    base_url: str,
-    agent_name: str
-) -> TestResult:
+def _test_get_agent(access_token: str, base_url: str, agent_name: str) -> TestResult:
     """
     Test getting specific agent endpoint.
 
@@ -341,13 +310,9 @@ def _test_get_agent(
     result = TestResult(f"get-agent ({agent_name})")
     start_time = time.time()
 
-    encoded_name = quote(agent_name, safe='')
+    encoded_name = quote(agent_name, safe="")
     endpoint = f"/{AGENTS_API_VERSION}/agents/{encoded_name}"
-    response = _make_api_request(
-        endpoint=endpoint,
-        access_token=access_token,
-        base_url=base_url
-    )
+    response = _make_api_request(endpoint=endpoint, access_token=access_token, base_url=base_url)
 
     result.duration_ms = int((time.time() - start_time) * 1000)
 
@@ -366,11 +331,7 @@ def _test_get_agent(
     return result
 
 
-def _test_get_agent_versions(
-    access_token: str,
-    base_url: str,
-    agent_name: str
-) -> TestResult:
+def _test_get_agent_versions(access_token: str, base_url: str, agent_name: str) -> TestResult:
     """
     Test getting agent versions endpoint.
 
@@ -385,13 +346,9 @@ def _test_get_agent_versions(
     result = TestResult(f"get-agent-versions ({agent_name})")
     start_time = time.time()
 
-    encoded_name = quote(agent_name, safe='')
+    encoded_name = quote(agent_name, safe="")
     endpoint = f"/{AGENTS_API_VERSION}/agents/{encoded_name}/versions"
-    response = _make_api_request(
-        endpoint=endpoint,
-        access_token=access_token,
-        base_url=base_url
-    )
+    response = _make_api_request(endpoint=endpoint, access_token=access_token, base_url=base_url)
 
     result.duration_ms = int((time.time() - start_time) * 1000)
 
@@ -406,10 +363,7 @@ def _test_get_agent_versions(
     return result
 
 
-def _test_pagination_flow(
-    access_token: str,
-    base_url: str
-) -> TestResult:
+def _test_pagination_flow(access_token: str, base_url: str) -> TestResult:
     """
     Test full pagination flow through pages.
 
@@ -436,10 +390,7 @@ def _test_pagination_flow(
                 params["cursor"] = cursor
 
             response = _make_api_request(
-                endpoint=endpoint,
-                access_token=access_token,
-                base_url=base_url,
-                params=params
+                endpoint=endpoint, access_token=access_token, base_url=base_url, params=params
             )
 
             if not response:
@@ -469,9 +420,7 @@ def _test_pagination_flow(
     return result
 
 
-def _test_error_invalid_token(
-    base_url: str
-) -> TestResult:
+def _test_error_invalid_token(base_url: str) -> TestResult:
     """
     Test error handling with invalid token.
 
@@ -486,10 +435,7 @@ def _test_error_invalid_token(
 
     endpoint = f"/{AGENTS_API_VERSION}/agents"
     url = f"{base_url}{endpoint}"
-    headers = {
-        "X-Authorization": "Bearer invalid_token_here",
-        "Content-Type": "application/json"
-    }
+    headers = {"X-Authorization": "Bearer invalid_token_here", "Content-Type": "application/json"}
 
     try:
         response = requests.get(url, headers=headers, timeout=10)
@@ -508,10 +454,7 @@ def _test_error_invalid_token(
     return result
 
 
-def _test_error_missing_agent(
-    access_token: str,
-    base_url: str
-) -> TestResult:
+def _test_error_missing_agent(access_token: str, base_url: str) -> TestResult:
     """
     Test error handling with non-existent agent.
 
@@ -527,10 +470,7 @@ def _test_error_missing_agent(
 
     endpoint = f"/{AGENTS_API_VERSION}/agents/non-existent-agent-xyz-123"
     url = f"{base_url}{endpoint}"
-    headers = {
-        "X-Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
+    headers = {"X-Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
 
     try:
         response = requests.get(url, headers=headers, timeout=10)
@@ -550,10 +490,7 @@ def _test_error_missing_agent(
 
 
 def _run_all_tests(
-    access_token: str,
-    base_url: str,
-    agent_name: Optional[str] = None,
-    verbose: bool = False
+    access_token: str, base_url: str, agent_name: Optional[str] = None, verbose: bool = False
 ) -> List[TestResult]:
     """
     Run all API tests.
@@ -607,9 +544,7 @@ def _run_all_tests(
     return results
 
 
-def _print_summary(
-    results: List[TestResult]
-) -> None:
+def _print_summary(results: List[TestResult]) -> None:
     """
     Print test summary report.
 
@@ -648,21 +583,21 @@ Examples:
 
 Note: If your token expires, generate a new one from the UI. Administrators can increase
 token lifetime in Keycloak: Realm Settings → Tokens → Access Token Lifespan
-"""
+""",
     )
 
     parser.add_argument(
         "--token-file",
         type=str,
         required=True,
-        help="Path to token JSON file (e.g., .oauth-tokens/ingress.json)"
+        help="Path to token JSON file (e.g., .oauth-tokens/ingress.json)",
     )
 
     parser.add_argument(
         "--base-url",
         type=str,
         default=DEFAULT_BASE_URL,
-        help=f"Base URL for API (default: {DEFAULT_BASE_URL})"
+        help=f"Base URL for API (default: {DEFAULT_BASE_URL})",
     )
 
     parser.add_argument(
@@ -676,39 +611,27 @@ token lifetime in Keycloak: Realm Settings → Tokens → Access Token Lifespan
             "get-agent-versions",
             "pagination-flow",
             "error-invalid-token",
-            "error-missing-agent"
+            "error-missing-agent",
         ],
         default="all",
-        help="Which test to run (default: all)"
+        help="Which test to run (default: all)",
     )
 
     parser.add_argument(
-        "--agent-name",
-        type=str,
-        help="Agent name for get-agent or get-agent-versions tests"
+        "--agent-name", type=str, help="Agent name for get-agent or get-agent-versions tests"
     )
 
     parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Show detailed output including full responses"
+        "--verbose", action="store_true", help="Show detailed output including full responses"
     )
 
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging"
-    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     return parser.parse_args()
 
 
 def _execute_test(
-    test_name: str,
-    access_token: str,
-    base_url: str,
-    agent_name: Optional[str],
-    verbose: bool
+    test_name: str, access_token: str, base_url: str, agent_name: Optional[str], verbose: bool
 ) -> List[TestResult]:
     """
     Execute a single test based on test name.
@@ -798,13 +721,7 @@ def main():
 
     _check_token_expiration(access_token)
 
-    results = _execute_test(
-        args.test,
-        access_token,
-        args.base_url,
-        args.agent_name,
-        args.verbose
-    )
+    results = _execute_test(args.test, access_token, args.base_url, args.agent_name, args.verbose)
 
     if results:
         _print_summary(results)

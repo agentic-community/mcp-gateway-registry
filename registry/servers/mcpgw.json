@@ -4,11 +4,9 @@
   "path": "/mcpgw/",
   "proxy_pass_url": "http://mcpgw-server:8003/",
   "supported_transports": ["streamable-http"],
-  "auth_type": "none",
+  "auth_scheme": "none",
   "tags": ["registry", "management"],
   "num_tools": 11,
-  "num_stars": 0,
-  "is_python": true,
   "license": "N/A",
   "tool_list": [
     {
@@ -61,7 +59,7 @@
       "name": "register_service",
       "parsed_description": {
         "main": "Registers a new MCP server with the gateway.",
-        "args": "server_name, path, proxy_pass_url, and optional: description, tags, num_tools, num_stars, is_python, license",
+        "args": "server_name, path, proxy_pass_url, and optional: description, tags, num_tools, license",
         "returns": "Dict[str, Any]: Response from the registry API, likely including the registered server details.",
         "raises": "Exception: If the API call fails."
       },
@@ -111,24 +109,6 @@
             "default": 0,
             "description": "Number of tools provided by the server.",
             "title": "Num Tools"
-          },
-          "num_stars": {
-            "anyOf": [
-              {"type": "integer"},
-              {"type": "null"}
-            ],
-            "default": 0,
-            "description": "Number of stars/rating for the server.",
-            "title": "Num Stars"
-          },
-          "is_python": {
-            "anyOf": [
-              {"type": "boolean"},
-              {"type": "null"}
-            ],
-            "default": false,
-            "description": "Whether the server is implemented in Python.",
-            "title": "Is Python"
           },
           "license": {
             "anyOf": [

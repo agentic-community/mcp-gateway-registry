@@ -75,9 +75,7 @@ async def _get_mongodb_client(
             f"authMechanism=SCRAM-SHA-256&authSource=admin"
         )
     else:
-        connection_string = (
-            f"mongodb://{config['host']}:{config['port']}/{config['database']}"
-        )
+        connection_string = f"mongodb://{config['host']}:{config['port']}/{config['database']}"
         logger.info("Using no-auth connection for MongoDB")
 
     # Add directConnection for single-node replica set
@@ -179,7 +177,9 @@ def _load_agent_json(filepath: Path) -> Optional[Dict[str, Any]]:
             path = f"/{path}"
         agent_data["path"] = path
 
-        logger.info(f"Loaded agent: {agent_data.get('card', {}).get('name', 'unknown')} at {agent_data['path']}")
+        logger.info(
+            f"Loaded agent: {agent_data.get('card', {}).get('name', 'unknown')} at {agent_data['path']}"
+        )
         return agent_data
 
     except json.JSONDecodeError as e:
@@ -203,7 +203,8 @@ async def _migrate_servers(
     # Find all JSON files (exclude non-server files)
     exclude_files = {"server_state.json", "service_index_metadata.json"}
     json_files = [
-        f for f in servers_dir.glob("*.json")
+        f
+        for f in servers_dir.glob("*.json")
         if f.name not in exclude_files and not f.name.endswith(".faiss")
     ]
 
@@ -225,7 +226,9 @@ async def _migrate_servers(
         path = server_data["path"]
 
         if dry_run:
-            logger.info(f"[DRY RUN] Would import server: {server_data.get('server_name')} at {path}")
+            logger.info(
+                f"[DRY RUN] Would import server: {server_data.get('server_name')} at {path}"
+            )
             imported += 1
             continue
 

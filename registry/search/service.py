@@ -4,13 +4,7 @@ import logging
 from datetime import datetime
 import re
 from pathlib import Path
-from typing import (
-    Dict,
-    Any,
-    Optional,
-    List,
-    Tuple
-)
+from typing import Dict, Any, Optional, List, Tuple
 
 import faiss
 import numpy as np
@@ -50,17 +44,15 @@ class FaissService:
         self.faiss_index: Optional[faiss.IndexIDMap] = None
         self.metadata_store: Dict[str, Dict[str, Any]] = {}
         self.next_id_counter: int = 0
-        
+
     async def initialize(self):
         """Initialize the FAISS service - load model and index."""
         await self._load_embedding_model()
         await self._load_faiss_data()
-        
+
     async def _load_embedding_model(self):
         """Load the embeddings model using the configured provider."""
-        logger.info(
-            f"Loading embedding model with provider: {settings.embeddings_provider}"
-        )
+        logger.info(f"Loading embedding model with provider: {settings.embeddings_provider}")
 
         # Ensure servers directory exists
         settings.servers_dir.mkdir(parents=True, exist_ok=True)
@@ -110,34 +102,38 @@ class FaissService:
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}", exc_info=True)
             self.embedding_model = None
-            
+
     async def _load_faiss_data(self):
         """Load existing FAISS index and metadata or create new ones."""
         if settings.faiss_index_path.exists() and settings.faiss_metadata_path.exists():
             try:
                 logger.info(f"Loading FAISS index from {settings.faiss_index_path}")
                 self.faiss_index = faiss.read_index(str(settings.faiss_index_path))
-                
+
                 logger.info(f"Loading FAISS metadata from {settings.faiss_metadata_path}")
                 with open(settings.faiss_metadata_path, "r") as f:
                     loaded_metadata = json.load(f)
                     self.metadata_store = loaded_metadata.get("metadata", {})
                     self.next_id_counter = loaded_metadata.get("next_id", 0)
-                    
-                logger.info(f"FAISS data loaded. Index size: {self.faiss_index.ntotal if self.faiss_index else 0}. Next ID: {self.next_id_counter}")
-                
+
+                logger.info(
+                    f"FAISS data loaded. Index size: {self.faiss_index.ntotal if self.faiss_index else 0}. Next ID: {self.next_id_counter}"
+                )
+
                 # Check dimension compatibility
                 if self.faiss_index and self.faiss_index.d != settings.embeddings_model_dimensions:
-                    logger.warning(f"Loaded FAISS index dimension ({self.faiss_index.d}) differs from expected ({settings.embeddings_model_dimensions}). Re-initializing.")
+                    logger.warning(
+                        f"Loaded FAISS index dimension ({self.faiss_index.d}) differs from expected ({settings.embeddings_model_dimensions}). Re-initializing."
+                    )
                     self._initialize_new_index()
-                    
+
             except Exception as e:
                 logger.error(f"Error loading FAISS data: {e}. Re-initializing.", exc_info=True)
                 self._initialize_new_index()
         else:
             logger.info("FAISS index or metadata not found. Initializing new.")
             self._initialize_new_index()
-            
+
     def _initialize_new_index(self):
         """Initialize a new FAISS index with Inner Product (IP) for cosine similarity.
 
@@ -147,32 +143,38 @@ class FaissService:
         self.faiss_index = faiss.IndexIDMap(faiss.IndexFlatIP(settings.embeddings_model_dimensions))
         self.metadata_store = {}
         self.next_id_counter = 0
-        logger.info(f"Initialized FAISS IndexFlatIP with {settings.embeddings_model_dimensions} dimensions for cosine similarity")
-        
+        logger.info(
+            f"Initialized FAISS IndexFlatIP with {settings.embeddings_model_dimensions} dimensions for cosine similarity"
+        )
+
     async def save_data(self):
         """Save FAISS index and metadata to disk."""
         if self.faiss_index is None:
             logger.error("FAISS index is not initialized. Cannot save.")
             return
-            
+
         try:
             # Ensure directory exists
             settings.servers_dir.mkdir(parents=True, exist_ok=True)
-            
-            logger.info(f"Saving FAISS index to {settings.faiss_index_path} (Size: {self.faiss_index.ntotal})")
+
+            logger.info(
+                f"Saving FAISS index to {settings.faiss_index_path} (Size: {self.faiss_index.ntotal})"
+            )
             faiss.write_index(self.faiss_index, str(settings.faiss_index_path))
-            
+
             logger.info(f"Saving FAISS metadata to {settings.faiss_metadata_path}")
             with open(settings.faiss_metadata_path, "w") as f:
-                json.dump({
-                    "metadata": self.metadata_store,
-                    "next_id": self.next_id_counter
-                }, f, indent=2, cls=_PydanticAwareJSONEncoder)
-                
+                json.dump(
+                    {"metadata": self.metadata_store, "next_id": self.next_id_counter},
+                    f,
+                    indent=2,
+                    cls=_PydanticAwareJSONEncoder,
+                )
+
             logger.info("FAISS data saved successfully.")
         except Exception as e:
             logger.error(f"Error saving FAISS data: {e}", exc_info=True)
-            
+
     def _get_text_for_embedding(self, server_info: Dict[str, Any]) -> str:
         """Prepare text string from server info (including tools and metadata) for embedding."""
         name = server_info.get("server_name", "")
@@ -224,8 +226,7 @@ class FaissService:
         if agent_card.skills:
             skill_names = [skill.name for skill in agent_card.skills]
             skill_descriptions = [
-                f"{skill.name}: {skill.description}"
-                for skill in agent_card.skills
+                f"{skill.name}: {skill.description}" for skill in agent_card.skills
             ]
             skills_text = "Skills: " + ", ".join(skill_names)
             skills_text += "\nSkill Details: " + " | ".join(skill_descriptions)
@@ -259,35 +260,44 @@ class FaissService:
 
         return "\n".join(text_parts)
 
-        
-    async def add_or_update_service(self, service_path: str, server_info: Dict[str, Any], is_enabled: bool = False):
+    async def add_or_update_service(
+        self, service_path: str, server_info: Dict[str, Any], is_enabled: bool = False
+    ):
         """Add or update a service in the FAISS index."""
         if self.embedding_model is None or self.faiss_index is None:
-            logger.error("Embedding model or FAISS index not initialized. Cannot add/update service in FAISS.")
+            logger.error(
+                "Embedding model or FAISS index not initialized. Cannot add/update service in FAISS."
+            )
             return
-            
+
         logger.info(f"Attempting to add/update service '{service_path}' in FAISS.")
         text_to_embed = self._get_text_for_embedding(server_info)
-        
+
         current_faiss_id = -1
         needs_new_embedding = True
-        
+
         existing_entry = self.metadata_store.get(service_path)
-        
+
         if existing_entry:
             current_faiss_id = existing_entry["id"]
             if existing_entry.get("text_for_embedding") == text_to_embed:
                 needs_new_embedding = False
-                logger.info(f"Text for embedding for '{service_path}' has not changed. Will update metadata store only if server_info differs.")
+                logger.info(
+                    f"Text for embedding for '{service_path}' has not changed. Will update metadata store only if server_info differs."
+                )
             else:
-                logger.info(f"Text for embedding for '{service_path}' has changed. Re-embedding required.")
+                logger.info(
+                    f"Text for embedding for '{service_path}' has changed. Re-embedding required."
+                )
         else:
             # New service
             current_faiss_id = self.next_id_counter
             self.next_id_counter += 1
-            logger.info(f"New service '{service_path}'. Assigning new FAISS ID: {current_faiss_id}.")
+            logger.info(
+                f"New service '{service_path}'. Assigning new FAISS ID: {current_faiss_id}."
+            )
             needs_new_embedding = True
-            
+
         if needs_new_embedding:
             try:
                 # Run model encoding in a separate thread
@@ -297,25 +307,37 @@ class FaissService:
                 # Normalize embedding for cosine similarity (IndexFlatIP)
                 normalized_embedding = self._normalize_embedding(embedding_np[0])
                 embedding_np = np.array([normalized_embedding], dtype=np.float32)
-                logger.debug(f"Normalized embedding for '{service_path}' (norm check: {np.linalg.norm(normalized_embedding):.4f})")
+                logger.debug(
+                    f"Normalized embedding for '{service_path}' (norm check: {np.linalg.norm(normalized_embedding):.4f})"
+                )
 
                 ids_to_remove = np.array([current_faiss_id])
                 if existing_entry:
                     try:
                         num_removed = self.faiss_index.remove_ids(ids_to_remove)
                         if num_removed > 0:
-                            logger.info(f"Removed {num_removed} old vector(s) for FAISS ID {current_faiss_id} ({service_path}).")
+                            logger.info(
+                                f"Removed {num_removed} old vector(s) for FAISS ID {current_faiss_id} ({service_path})."
+                            )
                         else:
-                            logger.info(f"No old vector found for FAISS ID {current_faiss_id} ({service_path}) during update, or ID not in index.")
+                            logger.info(
+                                f"No old vector found for FAISS ID {current_faiss_id} ({service_path}) during update, or ID not in index."
+                            )
                     except Exception as e_remove:
-                        logger.warning(f"Issue removing FAISS ID {current_faiss_id} for {service_path}: {e_remove}. Proceeding to add.")
-                
+                        logger.warning(
+                            f"Issue removing FAISS ID {current_faiss_id} for {service_path}: {e_remove}. Proceeding to add."
+                        )
+
                 self.faiss_index.add_with_ids(embedding_np, np.array([current_faiss_id]))
-                logger.info(f"Added/Updated vector for '{service_path}' with FAISS ID {current_faiss_id}.")
+                logger.info(
+                    f"Added/Updated vector for '{service_path}' with FAISS ID {current_faiss_id}."
+                )
             except Exception as e:
-                logger.error(f"Error encoding or adding embedding for '{service_path}': {e}", exc_info=True)
+                logger.error(
+                    f"Error encoding or adding embedding for '{service_path}': {e}", exc_info=True
+                )
                 return
-                
+
         # Update metadata store
         enriched_server_info = server_info.copy()
         enriched_server_info["is_enabled"] = is_enabled
@@ -325,12 +347,11 @@ class FaissService:
             or needs_new_embedding
             or existing_entry.get("full_server_info") != enriched_server_info
         ):
-
             self.metadata_store[service_path] = {
                 "id": current_faiss_id,
                 "text_for_embedding": text_to_embed,
                 "full_server_info": enriched_server_info,
-                "entity_type": server_info.get("entity_type", "mcp_server")
+                "entity_type": server_info.get("entity_type", "mcp_server"),
             }
             logger.debug(f"Updated faiss_metadata_store for '{service_path}'.")
             await self.save_data()
@@ -338,7 +359,6 @@ class FaissService:
             logger.debug(
                 f"No changes to FAISS vector or enriched full_server_info for '{service_path}'. Skipping save."
             )
-
 
     async def remove_service(self, service_path: str):
         """Remove a service from the FAISS index and metadata store."""
@@ -407,9 +427,7 @@ class FaissService:
             # New agent
             current_faiss_id = self.next_id_counter
             self.next_id_counter += 1
-            logger.info(
-                f"New agent '{agent_path}'. Assigning new FAISS ID: {current_faiss_id}."
-            )
+            logger.info(f"New agent '{agent_path}'. Assigning new FAISS ID: {current_faiss_id}.")
             needs_new_embedding = True
 
         if needs_new_embedding:
@@ -424,7 +442,9 @@ class FaissService:
                 # Normalize embedding for cosine similarity (IndexFlatIP)
                 normalized_embedding = self._normalize_embedding(embedding_np[0])
                 embedding_np = np.array([normalized_embedding], dtype=np.float32)
-                logger.debug(f"Normalized embedding for '{agent_path}' (norm check: {np.linalg.norm(normalized_embedding):.4f})")
+                logger.debug(
+                    f"Normalized embedding for '{agent_path}' (norm check: {np.linalg.norm(normalized_embedding):.4f})"
+                )
 
                 ids_to_remove = np.array([current_faiss_id])
                 if existing_entry:
@@ -465,7 +485,6 @@ class FaissService:
             or needs_new_embedding
             or existing_entry.get("full_agent_card") != agent_card_dict
         ):
-
             self.metadata_store[agent_path] = {
                 "id": current_faiss_id,
                 "entity_type": "a2a_agent",
@@ -484,17 +503,13 @@ class FaissService:
         try:
             # Check if agent exists in metadata
             if agent_path not in self.metadata_store:
-                logger.warning(
-                    f"Agent '{agent_path}' not found in FAISS metadata store"
-                )
+                logger.warning(f"Agent '{agent_path}' not found in FAISS metadata store")
                 return
 
             # Get the FAISS ID for this agent
             agent_id = self.metadata_store[agent_path].get("id")
             if agent_id is not None and self.faiss_index:
-                logger.info(
-                    f"Removing agent '{agent_path}' with FAISS ID {agent_id} from index"
-                )
+                logger.info(f"Removing agent '{agent_path}' with FAISS ID {agent_id} from index")
 
             # Remove from metadata store
             del self.metadata_store[agent_path]
@@ -522,7 +537,6 @@ class FaissService:
         )
         return results.get("agents", [])
 
-
     async def add_or_update_entity(
         self,
         entity_path: str,
@@ -541,7 +555,6 @@ class FaissService:
         elif entity_type == "mcp_server":
             await self.add_or_update_service(entity_path, entity_info, is_enabled)
 
-
     async def remove_entity(
         self,
         entity_path: str,
@@ -558,7 +571,6 @@ class FaissService:
                 await self.remove_service(entity_path)
             except Exception as e:
                 logger.warning(f"Could not remove entity {entity_path}: {e}")
-
 
     async def search_entities(
         self,
@@ -600,7 +612,6 @@ class FaissService:
             combined.extend(results["tools"])
 
         return combined[:max_results]
-
 
     def _distance_to_relevance(self, distance: float) -> float:
         """Convert FAISS Inner Product distance to cosine similarity score (0-1).
@@ -647,18 +658,16 @@ class FaissService:
             logger.info(
                 f"IP-to-similarity conversion: "
                 f"faiss_distance={distance:.4f}, similarity={similarity:.4f}, "
-                f"clamped={clamped_similarity:.4f}, percentage={clamped_similarity*100:.1f}%"
+                f"clamped={clamped_similarity:.4f}, percentage={clamped_similarity * 100:.1f}%"
             )
 
             return clamped_similarity
         except Exception as e:
             logger.error(
-                f"Error in _distance_to_relevance: faiss_distance={distance}, "
-                f"exception={str(e)}",
-                exc_info=True
+                f"Error in _distance_to_relevance: faiss_distance={distance}, exception={str(e)}",
+                exc_info=True,
             )
             return 0.0
-
 
     def _normalize_embedding(
         self,
@@ -680,7 +689,6 @@ class FaissService:
             logger.warning("Zero-norm embedding detected, returning as-is")
             return embedding
         return embedding / norm
-
 
     def _calculate_keyword_boost(
         self,
@@ -704,16 +712,58 @@ class FaissService:
         """
         # Filter out stopwords to prevent false matches
         stopwords = {
-            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "can", "to", "of", "in", "on", "at", "by",
-            "for", "with", "about", "as", "into", "through", "from", "what", "when",
-            "where", "who", "which", "how", "why", "get", "set", "put"
+            "a",
+            "an",
+            "the",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "to",
+            "of",
+            "in",
+            "on",
+            "at",
+            "by",
+            "for",
+            "with",
+            "about",
+            "as",
+            "into",
+            "through",
+            "from",
+            "what",
+            "when",
+            "where",
+            "who",
+            "which",
+            "how",
+            "why",
+            "get",
+            "set",
+            "put",
         }
 
         query_lower = query.lower()
         query_tokens = set(
-            token for token in re.split(r"\W+", query_lower)
+            token
+            for token in re.split(r"\W+", query_lower)
             if token and len(token) > 2 and token not in stopwords
         )
 
@@ -769,7 +819,6 @@ class FaissService:
         # Cap total boost at 2.0 (100% increase)
         return min(2.0, boost)
 
-
     def _extract_matching_tools(
         self,
         query: str,
@@ -795,15 +844,57 @@ class FaissService:
 
         # Filter out stopwords and short tokens to improve matching quality
         stopwords = {
-            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "can", "to", "of", "in", "on", "at", "by",
-            "for", "with", "about", "as", "into", "through", "from", "what", "when",
-            "where", "who", "which", "how", "why", "get", "set", "put"
+            "a",
+            "an",
+            "the",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "to",
+            "of",
+            "in",
+            "on",
+            "at",
+            "by",
+            "for",
+            "with",
+            "about",
+            "as",
+            "into",
+            "through",
+            "from",
+            "what",
+            "when",
+            "where",
+            "who",
+            "which",
+            "how",
+            "why",
+            "get",
+            "set",
+            "put",
         }
 
         tokens = [
-            token for token in re.split(r"\W+", query.lower())
+            token
+            for token in re.split(r"\W+", query.lower())
             if token and len(token) > 2 and token not in stopwords
         ]
         if not tokens:
@@ -811,10 +902,7 @@ class FaissService:
 
         # Check if query contains server name - if so, include all tools
         server_name = server_info.get("server_name", "").lower()
-        server_name_tokens = [
-            t for t in re.split(r"\W+", server_name)
-            if t and len(t) > 2
-        ]
+        server_name_tokens = [t for t in re.split(r"\W+", server_name) if t and len(t) > 2]
         server_name_match = any(
             token in server_name or any(snt in token or token in snt for snt in server_name_tokens)
             for token in tokens
@@ -845,8 +933,7 @@ class FaissService:
             tool_name_lower = tool_name.lower()
             name_matches = sum(1 for token in tokens if token in tool_name_lower)
             desc_matches = sum(
-                1 for token in tokens
-                if token in tool_desc.lower() or token in tool_args.lower()
+                1 for token in tokens if token in tool_desc.lower() or token in tool_args.lower()
             )
 
             # Weight tool name matches more heavily (2x)
@@ -927,23 +1014,21 @@ class FaissService:
             return {"servers": [], "tools": [], "agents": []}
 
         top_k = min(max_results, total_vectors)
-        query_embedding = await asyncio.to_thread(
-            self.embedding_model.encode, [query.strip()]
-        )
+        query_embedding = await asyncio.to_thread(self.embedding_model.encode, [query.strip()])
         query_np = np.array([query_embedding[0]], dtype=np.float32)
 
         # Normalize query embedding for cosine similarity (IndexFlatIP)
         normalized_query = self._normalize_embedding(query_np[0])
         query_np = np.array([normalized_query], dtype=np.float32)
-        logger.debug(f"Normalized query embedding (norm check: {np.linalg.norm(normalized_query):.4f})")
+        logger.debug(
+            f"Normalized query embedding (norm check: {np.linalg.norm(normalized_query):.4f})"
+        )
 
         distances, indices = self.faiss_index.search(query_np, top_k)
         distance_row = distances[0]
         id_row = indices[0]
 
-        id_to_path = {
-            entry.get("id"): path for path, entry in self.metadata_store.items()
-        }
+        id_to_path = {entry.get("id"): path for path, entry in self.metadata_store.items()}
 
         server_results: List[Dict[str, Any]] = []
         tool_results: List[Dict[str, Any]] = []
@@ -1052,7 +1137,11 @@ class FaissService:
                     "server_name": agent_card.get("name", ""),
                     "description": agent_card.get("description", ""),
                     "tags": agent_card.get("tags", []),
-                    "tool_list": [{"name": skill.get("name", "")} for skill in agent_card.get("skills", []) if isinstance(skill, dict)]
+                    "tool_list": [
+                        {"name": skill.get("name", "")}
+                        for skill in agent_card.get("skills", [])
+                        if isinstance(skill, dict)
+                    ],
                 }
                 keyword_boost = self._calculate_keyword_boost(query, agent_info_for_boost)
                 agent_relevance = min(1.0, base_relevance * keyword_boost)
@@ -1105,5 +1194,6 @@ class FaissService:
             "agents": agent_results[:max_results],
         }
 
+
 # Global service instance
-faiss_service = FaissService() 
+faiss_service = FaissService()

@@ -53,8 +53,14 @@ async def get_federation_config(
         404: Configuration not found
     """
     # Set audit action for federation config read
-    set_audit_action(request, "read", "federation", resource_id=config_id, description=f"Read federation config {config_id}")
-    
+    set_audit_action(
+        request,
+        "read",
+        "federation",
+        resource_id=config_id,
+        description=f"Read federation config {config_id}",
+    )
+
     logger.info(f"User {user_context['username']} retrieving federation config: {config_id}")
 
     config = await repo.get_config(config_id)
@@ -116,8 +122,14 @@ async def save_federation_config(
         ```
     """
     # Set audit action for federation config create/update
-    set_audit_action(request, "create", "federation", resource_id=config_id, description=f"Save federation config {config_id}")
-    
+    set_audit_action(
+        request,
+        "create",
+        "federation",
+        resource_id=config_id,
+        description=f"Save federation config {config_id}",
+    )
+
     logger.info(
         f"User {user_context['username']} saving federation config: {config_id} "
         f"(anthropic: {config.anthropic.enabled}, asor: {config.asor.enabled})"
@@ -166,8 +178,14 @@ async def update_federation_config(
         Updated configuration
     """
     # Set audit action for federation config update
-    set_audit_action(request, "update", "federation", resource_id=config_id, description=f"Update federation config {config_id}")
-    
+    set_audit_action(
+        request,
+        "update",
+        "federation",
+        resource_id=config_id,
+        description=f"Update federation config {config_id}",
+    )
+
     logger.info(f"User {user_context['username']} updating federation config: {config_id}")
 
     try:
@@ -493,8 +511,14 @@ async def sync_federation(
         ```
     """
     # Set audit action for federation sync
-    set_audit_action(request, "sync", "federation", resource_id=config_id, description=f"Sync federation from {source or 'all sources'}")
-    
+    set_audit_action(
+        request,
+        "sync",
+        "federation",
+        resource_id=config_id,
+        description=f"Sync federation from {source or 'all sources'}",
+    )
+
     logger.info(f"User {user_context['username']} triggering federation sync: {config_id}")
 
     # Get federation config

@@ -165,6 +165,13 @@ title = "MCP Registry Coverage Report"
 # Local-only project - never resolve from PyPI
 package = false
 
+# Bandit Configuration
+# B101 (assert_used): exclude test directories where assert is expected
+# Requires: bandit -c pyproject.toml -r .
+# See: https://bandit.readthedocs.io/en/latest/plugins/b101_assert_used.html
+[tool.bandit]
+exclude_dirs = ["tests", "*/test/*", "*/tests/*", ".venv"]
+
 # Ruff Configuration
 [tool.ruff]
 line-length = 100

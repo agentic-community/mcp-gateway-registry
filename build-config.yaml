@@ -65,10 +65,20 @@ images:
 
   # Metrics Collection and Monitoring Service
   metrics_service:
-    repo_name: "mcp-gateway-metrics"
+    repo_name: "mcp-gateway-metrics-service"
     dockerfile: "metrics-service/Dockerfile"
     context: "metrics-service"
     description: "Metrics collection and monitoring service"
+    tags:
+      - latest
+    build_args: {}
+
+  # Grafana OSS with pre-provisioned AMP datasource and dashboards
+  grafana:
+    repo_name: "mcp-gateway-grafana"
+    dockerfile: "terraform/aws-ecs/grafana/Dockerfile"
+    context: "terraform/aws-ecs/grafana"
+    description: "Grafana OSS with baked-in AMP datasource and MCP dashboards"
     tags:
       - latest
     build_args: {}

@@ -54,7 +54,6 @@ class AgentTester:
         if is_live:
             self.bedrock_client = boto3.client("bedrock-agentcore", region_name=AWS_REGION)
 
-
     def send_agent_message(
         self,
         agent_type: str,
@@ -71,7 +70,9 @@ class AgentTester:
 
         if self.is_live:
             # Use boto3 for AgentCore Runtime
-            return self._invoke_agentcore_runtime(endpoint, message, request_id, message_id, timestamp)
+            return self._invoke_agentcore_runtime(
+                endpoint, message, request_id, message_id, timestamp
+            )
         else:
             # Use HTTP for local A2A
             payload = {
@@ -92,7 +93,9 @@ class AgentTester:
             logger.debug(f"[REQUEST] Payload:\n{json.dumps(payload, indent=2)}")
 
             start_time = time.time()
-            response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json"})
+            response = requests.post(
+                endpoint, json=payload, headers={"Content-Type": "application/json"}, timeout=60
+            )
             response_time = time.time() - start_time
 
             response_json = response.json()
@@ -100,7 +103,6 @@ class AgentTester:
             logger.debug(f"[RESPONSE] Body:\n{json.dumps(response_json, indent=2, default=str)}")
 
             return response_json
-
 
     def _invoke_agentcore_runtime(
         self,
@@ -183,7 +185,6 @@ class AgentTester:
             logger.error(f"AgentCore invocation failed: {e}")
             return {"error": str(e)}
 
-
     def call_api_endpoint(
         self,
         agent_type: str,
@@ -193,7 +194,9 @@ class AgentTester:
     ) -> Dict[str, Any]:
         """Call direct API endpoint (only works for local)."""
         if self.is_live:
-            raise NotImplementedError("Direct API endpoints not available for live AgentCore Runtime")
+            raise NotImplementedError(
+                "Direct API endpoints not available for live AgentCore Runtime"
+            )
 
         url = f"{self.endpoints[agent_type]}{endpoint}"
         if not self.endpoints[agent_type]:
@@ -204,9 +207,9 @@ class AgentTester:
 
         start_time = time.time()
         if method.upper() == "GET":
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=60)
         else:
-            response = requests.post(url, params=params)
+            response = requests.post(url, params=params, timeout=60)
         response_time = time.time() - start_time
 
         response_json = response.json()
@@ -214,7 +217,6 @@ class AgentTester:
         logger.debug(f"[API RESPONSE] Body:\n{json.dumps(response_json, indent=2, default=str)}")
 
         return response_json
-
 
     def ping_agent(
         self,
@@ -252,14 +254,12 @@ class TravelAssistantTests:
         self.tester = tester
         self.agent_type = "travel_assistant"
 
-
     def test_ping(self) -> None:
         """Test agent health check."""
         print("Testing Travel Assistant ping...")
         result = self.tester.ping_agent(self.agent_type)
         assert result, "Travel Assistant ping failed"
         print("✓ Travel Assistant is healthy")
-
 
     def test_agent_flight_search(self) -> None:
         """Test agent flight search via A2A."""
@@ -282,14 +282,17 @@ class TravelAssistantTests:
                     if "text" in part:
                         response_text += part["text"]
 
-        assert "flight" in response_text.lower(), f"Response doesn't mention flights. Got: {response_text[:100]}"
+        assert "flight" in response_text.lower(), (
+            f"Response doesn't mention flights. Got: {response_text[:100]}"
+        )
         print("✓ Travel Assistant flight search working")
-
 
     def test_api_search_flights(self) -> None:
         """Test direct API endpoint (local only)."""
         if self.tester.is_live:
-            print("Skipping /api/search-flights endpoint (only available in local Docker container)")
+            print(
+                "Skipping /api/search-flights endpoint (only available in local Docker container)"
+            )
             return
 
         print("Testing Travel Assistant API endpoint...")
@@ -307,11 +310,12 @@ class TravelAssistantTests:
         assert len(result_data["flights"]) > 0, "No flights found"
         print("✓ Travel Assistant API endpoint working")
 
-
     def test_api_recommendations(self) -> None:
         """Test recommendations API (local only)."""
         if self.tester.is_live:
-            print("Skipping /api/recommendations endpoint (only available in local Docker container)")
+            print(
+                "Skipping /api/recommendations endpoint (only available in local Docker container)"
+            )
             return
 
         print("Testing Travel Assistant recommendations...")
@@ -339,14 +343,12 @@ class FlightBookingTests:
         self.tester = tester
         self.agent_type = "flight_booking"
 
-
     def test_ping(self) -> None:
         """Test agent health check."""
         print("Testing Flight Booking ping...")
         result = self.tester.ping_agent(self.agent_type)
         assert result, "Flight Booking ping failed"
         print("✓ Flight Booking is healthy")
-
 
     def test_agent_availability_check(self) -> None:
         """Test agent availability check via A2A."""
@@ -364,7 +366,6 @@ class FlightBookingTests:
         assert "available" in response_text.lower(), "Response doesn't mention availability"
         print("✓ Flight Booking availability check working")
 
-
     def test_agent_booking(self) -> None:
         """Test agent booking via A2A."""
         print("Testing Flight Booking reservation...")
@@ -375,20 +376,23 @@ class FlightBookingTests:
         artifacts = response["result"]["artifacts"]
         response_text = artifacts[0]["parts"][0]["text"]
 
-        assert (
-            "booking" in response_text.lower() or "reserved" in response_text.lower()
-        ), "Response doesn't mention booking/reservation"
+        assert "booking" in response_text.lower() or "reserved" in response_text.lower(), (
+            "Response doesn't mention booking/reservation"
+        )
         print("✓ Flight Booking reservation working")
-
 
     def test_api_check_availability(self) -> None:
         """Test direct API endpoint (local only)."""
         if self.tester.is_live:
-            print("Skipping /api/check-availability endpoint (only available in local Docker container)")
+            print(
+                "Skipping /api/check-availability endpoint (only available in local Docker container)"
+            )
             return
 
         print("Testing Flight Booking API endpoint...")
-        response = self.tester.call_api_endpoint(self.agent_type, "/api/check-availability", flight_id=1)
+        response = self.tester.call_api_endpoint(
+            self.agent_type, "/api/check-availability", flight_id=1
+        )
 
         assert "result" in response, f"No result in API response: {response}"
         result_data = json.loads(response["result"])

@@ -186,7 +186,6 @@ class AgentCardFactory(factory.Factory):
     # should be accessed via capabilities.get("streaming", False). See bug documentation:
     # .scratchpad/fixes/registry/fix-agent-streaming-attribute.md
     is_enabled = True
-    num_stars = fuzzy.FuzzyFloat(0.0, 5.0)
     rating_details = factory.List([])
     license = "MIT"
 
@@ -217,7 +216,6 @@ class AgentInfoFactory(factory.Factory):
     tags = factory.LazyAttribute(lambda _: TEST_TAGS_DATA.copy())
     skills = factory.LazyAttribute(lambda _: [TEST_SKILL_NAME_1])
     num_skills = 1
-    num_stars = fuzzy.FuzzyFloat(0.0, 5.0)
     is_enabled = True
     provider = factory.Faker("company")
     streaming = False
@@ -228,9 +226,7 @@ class AgentInfoFactory(factory.Factory):
 
 
 def create_server_with_tools(
-    name: str | None = None,
-    num_tools: int = 3,
-    **kwargs: Any
+    name: str | None = None, num_tools: int = 3, **kwargs: Any
 ) -> ServerDetail:
     """
     Create a ServerDetail with multiple tools in metadata.
@@ -248,28 +244,21 @@ def create_server_with_tools(
     # Add tools to metadata
     tools = []
     for i in range(num_tools):
-        tools.append({
-            "name": f"{TEST_TOOL_NAME_1}_{i}",
-            "description": f"{TEST_TOOL_DESCRIPTION_1} {i}",
-            "inputSchema": {
-                "type": "object",
-                "properties": {}
+        tools.append(
+            {
+                "name": f"{TEST_TOOL_NAME_1}_{i}",
+                "description": f"{TEST_TOOL_DESCRIPTION_1} {i}",
+                "inputSchema": {"type": "object", "properties": {}},
             }
-        })
+        )
 
-    server.meta = {
-        "tools": tools,
-        "prompts": [],
-        "resources": []
-    }
+    server.meta = {"tools": tools, "prompts": [], "resources": []}
 
     return server
 
 
 def create_agent_with_skills(
-    name: str | None = None,
-    num_skills: int = 3,
-    **kwargs: Any
+    name: str | None = None, num_skills: int = 3, **kwargs: Any
 ) -> AgentCard:
     """
     Create an AgentCard with multiple skills.
@@ -283,20 +272,14 @@ def create_agent_with_skills(
         AgentCard instance with multiple skills
     """
     skills = [
-        SkillFactory(
-            id=f"{TEST_SKILL_ID_1}_{i}",
-            name=f"{TEST_SKILL_NAME_1} {i}"
-        )
+        SkillFactory(id=f"{TEST_SKILL_ID_1}_{i}", name=f"{TEST_SKILL_NAME_1} {i}")
         for i in range(num_skills)
     ]
 
     return AgentCardFactory(name=name, skills=skills, **kwargs)
 
 
-def create_multiple_servers(
-    count: int = 5,
-    **kwargs: Any
-) -> list[ServerDetail]:
+def create_multiple_servers(count: int = 5, **kwargs: Any) -> list[ServerDetail]:
     """
     Create multiple ServerDetail instances.
 
@@ -310,10 +293,7 @@ def create_multiple_servers(
     return [ServerDetailFactory(**kwargs) for _ in range(count)]
 
 
-def create_multiple_agents(
-    count: int = 5,
-    **kwargs: Any
-) -> list[AgentCard]:
+def create_multiple_agents(count: int = 5, **kwargs: Any) -> list[AgentCard]:
     """
     Create multiple AgentCard instances.
 
@@ -327,10 +307,7 @@ def create_multiple_agents(
     return [AgentCardFactory(**kwargs) for _ in range(count)]
 
 
-def create_server_dict(
-    name: str | None = None,
-    **kwargs: Any
-) -> dict[str, Any]:
+def create_server_dict(name: str | None = None, **kwargs: Any) -> dict[str, Any]:
     """
     Create a server dictionary (not a Pydantic model).
 
@@ -347,10 +324,7 @@ def create_server_dict(
     return server.model_dump(by_alias=True, exclude_none=True)
 
 
-def create_agent_dict(
-    name: str | None = None,
-    **kwargs: Any
-) -> dict[str, Any]:
+def create_agent_dict(name: str | None = None, **kwargs: Any) -> dict[str, Any]:
     """
     Create an agent dictionary (not a Pydantic model).
 

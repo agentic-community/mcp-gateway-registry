@@ -29,7 +29,6 @@ class AgentService:
         self.registered_agents: Dict[str, AgentCard] = {}
         self.agent_state: Dict[str, List[str]] = {"enabled": [], "disabled": []}
 
-
     async def load_agents_and_state(self) -> None:
         """Load agent cards and persisted state from repository."""
         logger.info("Loading agent cards from repository...")
@@ -44,16 +43,15 @@ class AgentService:
 
         await self._load_agent_state()
 
-
     async def _load_agent_state(self) -> None:
         """Load persisted agent state from repository."""
         state_data = await self._repo.get_state()
-        
+
         # Initialize state for all registered agents
         for path in self.registered_agents.keys():
             if path not in state_data["enabled"] and path not in state_data["disabled"]:
                 state_data["disabled"].append(path)
-        
+
         self.agent_state = state_data
         await self._repo.save_state(state_data)
         logger.info(
@@ -61,11 +59,9 @@ class AgentService:
             f"{len(state_data['disabled'])} disabled"
         )
 
-
     async def _persist_state(self) -> None:
         """Persist agent state to repository."""
         await self._repo.save_state(self.agent_state)
-
 
     async def register_agent(
         self,
@@ -106,12 +102,10 @@ class AgentService:
             # Don't fail the primary operation
 
         logger.info(
-            f"New agent registered: '{agent_card.name}' at path '{path}' "
-            f"(disabled by default)"
+            f"New agent registered: '{agent_card.name}' at path '{path}' (disabled by default)"
         )
 
         return agent_card
-
 
     def get_agent(
         self,
@@ -144,7 +138,6 @@ class AgentService:
             raise ValueError(f"Agent not found at path: {path}")
 
         return agent
-
 
     def list_agents(self) -> List[AgentCard]:
         """
@@ -195,9 +188,7 @@ class AgentService:
 
         # Update rating details using shared service
         updated_details, is_new_rating = rating_service.update_rating_details(
-            agent_dict["rating_details"],
-            username,
-            rating
+            agent_dict["rating_details"], username, rating
         )
         agent_dict["rating_details"] = updated_details
 
@@ -272,7 +263,6 @@ class AgentService:
         logger.info(f"Agent '{updated_agent.name}' ({path}) updated")
         return updated_agent
 
-
     async def delete_agent(
         self,
         path: str,
@@ -324,7 +314,6 @@ class AgentService:
             logger.error(f"Failed to delete agent at path '{path}': {e}", exc_info=True)
             raise ValueError(f"Failed to delete agent: {e}")
 
-
     async def enable_agent(
         self,
         path: str,
@@ -353,7 +342,6 @@ class AgentService:
 
         agent_name = self.registered_agents[path].name
         logger.info(f"Enabled agent '{agent_name}' ({path})")
-
 
     async def disable_agent(
         self,
@@ -384,7 +372,6 @@ class AgentService:
         agent_name = self.registered_agents[path].name
         logger.info(f"Disabled agent '{agent_name}' ({path})")
 
-
     def is_agent_enabled(
         self,
         path: str,
@@ -410,7 +397,6 @@ class AgentService:
 
         return alternate_path in self.agent_state["enabled"]
 
-
     def get_enabled_agents(self) -> List[str]:
         """
         Get list of enabled agent paths.
@@ -420,7 +406,6 @@ class AgentService:
         """
         return list(self.agent_state["enabled"])
 
-
     def get_disabled_agents(self) -> List[str]:
         """
         Get list of disabled agent paths.
@@ -429,7 +414,6 @@ class AgentService:
             List of disabled agent paths
         """
         return list(self.agent_state["disabled"])
-
 
     async def index_agent(
         self,
@@ -453,7 +437,6 @@ class AgentService:
         except Exception as e:
             logger.error(f"Failed to index agent: {e}", exc_info=True)
 
-
     async def get_agent_info(
         self,
         path: str,
@@ -469,7 +452,6 @@ class AgentService:
         """
         return await self._repo.get(path)
 
-
     async def get_all_agents(self) -> List[AgentCard]:
         """
         Get all registered agents - queries repository directly.
@@ -479,7 +461,6 @@ class AgentService:
         """
         # Query repository directly instead of using cache
         return await self._repo.list_all()
-
 
     async def remove_agent(
         self,
@@ -499,7 +480,6 @@ class AgentService:
             return True
         except ValueError:
             return False
-
 
     async def toggle_agent(
         self,

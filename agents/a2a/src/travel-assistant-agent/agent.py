@@ -32,7 +32,11 @@ def search_flights(
         flights = get_db_manager().search_flights(departure_city, arrival_city, departure_date)
 
         result = {
-            "query": {"departure_city": departure_city, "arrival_city": arrival_city, "departure_date": departure_date},
+            "query": {
+                "departure_city": departure_city,
+                "arrival_city": arrival_city,
+                "departure_date": departure_date,
+            },
             "flights": flights,
             "count": len(flights),
         }
@@ -73,7 +77,9 @@ def get_recommendations(
     preferred_airlines: Optional[List[str]] = None,
 ) -> str:
     """Get flight recommendations based on customer preferences."""
-    logger.info(f"Tool called: get_recommendations(max_price={max_price}, preferred_airlines={preferred_airlines})")
+    logger.info(
+        f"Tool called: get_recommendations(max_price={max_price}, preferred_airlines={preferred_airlines})"
+    )
     try:
         recommendations = get_db_manager().get_recommendations(max_price, preferred_airlines)
 
@@ -106,7 +112,9 @@ def create_trip_plan(
     logger.debug(f"Return date: {return_date}, Budget: {budget}")
     try:
         db_manager = get_db_manager()
-        trip_plan_id = db_manager.create_trip_plan(departure_city, arrival_city, departure_date, return_date, budget)
+        trip_plan_id = db_manager.create_trip_plan(
+            departure_city, arrival_city, departure_date, return_date, budget
+        )
 
         # Get available flights for the trip
         outbound_flights = db_manager.search_flights(departure_city, arrival_city, departure_date)
@@ -127,7 +135,11 @@ def create_trip_plan(
             },
             "outbound_flights": outbound_flights,
             "return_flights": return_flights,
-            "next_steps": ["Review available flights", "Select preferred flights", "Contact Flight Booking Agent for reservation"],
+            "next_steps": [
+                "Review available flights",
+                "Select preferred flights",
+                "Contact Flight Booking Agent for reservation",
+            ],
         }
 
         logger.debug(f"Trip plan result:\n{json.dumps(result, indent=2)}")
@@ -163,11 +175,13 @@ async def discover_remote_agents(query: str, max_results: int = 5) -> str:
         )
 
         if not discovered:
-            return json.dumps({
-                "query": query,
-                "agents_found": 0,
-                "message": "No agents found matching your query",
-            })
+            return json.dumps(
+                {
+                    "query": query,
+                    "agents_found": 0,
+                    "message": "No agents found matching your query",
+                }
+            )
 
         # Get auth token and cache the agents
         auth_token = await registry_client._get_token()
@@ -198,7 +212,9 @@ async def discover_remote_agents(query: str, max_results: int = 5) -> str:
             ],
         }
 
-        logger.info(f"Discovery successful: found {len(discovered)} agents, cached {len(newly_cached)} new")
+        logger.info(
+            f"Discovery successful: found {len(discovered)} agents, cached {len(newly_cached)} new"
+        )
         return json.dumps(result, indent=2)
 
     except Exception as e:
@@ -220,10 +236,12 @@ async def view_cached_remote_agents() -> str:
         cache = get_remote_agent_cache()
 
         if len(cache) == 0:
-            return json.dumps({
-                "total": 0,
-                "message": "No agents cached. Use discover_remote_agents() to find and cache agents.",
-            })
+            return json.dumps(
+                {
+                    "total": 0,
+                    "message": "No agents cached. Use discover_remote_agents() to find and cache agents.",
+                }
+            )
 
         all_agents = cache.get_all()
         result = {
@@ -256,7 +274,9 @@ async def view_cached_remote_agents() -> str:
 @tool
 async def invoke_remote_agent(agent_id: str, message: str) -> str:
     """Invoke a cached remote agent by ID with a natural language message."""
-    logger.info(f"Tool called: invoke_remote_agent(agent_id='{agent_id}', message='{message[:100]}...')")
+    logger.info(
+        f"Tool called: invoke_remote_agent(agent_id='{agent_id}', message='{message[:100]}...')"
+    )
 
     try:
         cache = get_remote_agent_cache()
@@ -264,18 +284,20 @@ async def invoke_remote_agent(agent_id: str, message: str) -> str:
         if agent_id not in cache:
             all_agents = cache.get_all()
             available_ids = list(all_agents.keys())
-            return json.dumps({
-                "error": f"Agent '{agent_id}' not found in cache",
-                "available_agents": available_ids,
-                "hint": "Use discover_remote_agents() to find and cache agents, or view_cached_remote_agents() to see what's available",
-            })
+            return json.dumps(
+                {
+                    "error": f"Agent '{agent_id}' not found in cache",
+                    "available_agents": available_ids,
+                    "hint": "Use discover_remote_agents() to find and cache agents, or view_cached_remote_agents() to see what's available",
+                }
+            )
 
         # Get the cached agent client and invoke it
         agent_client = cache.get(agent_id)
         logger.info(f"Invoking agent: {agent_client.agent_name}")
-        
+
         response = await agent_client.send_message(message)
-        
+
         logger.info(f"Successfully invoked {agent_client.agent_name}")
         return response
 

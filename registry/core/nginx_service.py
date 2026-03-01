@@ -262,7 +262,7 @@ class NginxConfigService:
                 "on",
             ):
                 protected_api_block = """    # Protected API endpoints - require authentication
-    location /api/ {
+    location {{ROOT_PATH}}/api/ {
         # Authenticate request via auth server (validates JWT Bearer tokens)
         auth_request /validate;
 
@@ -301,7 +301,7 @@ class NginxConfigService:
     }"""
 
                 unprotected_api_block = """    # API endpoints - FastAPI handles authentication (session cookie / bearer)
-    location /api/ {
+    location {{ROOT_PATH}}/api/ {
         # Proxy to FastAPI service
         proxy_pass http://127.0.0.1:7860/api/;
         proxy_http_version 1.1;
@@ -360,7 +360,7 @@ class NginxConfigService:
                         else:
                             # Add commented out block for unhealthy services
                             commented_block = f"""
-#    location {path}/ {{
+#    location {{{{ROOT_PATH}}}}{path}/ {{
 #        # Service currently unhealthy (status: {health_status})
 #        # Proxy to MCP server
 #        proxy_pass {proxy_pass_url};
@@ -448,9 +448,7 @@ class NginxConfigService:
                 version_map = ""
 
             # Replace placeholders in template
-            root_path = os.environ.get("ROOT_PATH", "").rstrip("/")
-            config_content = template_content.replace("{{ROOT_PATH}}", root_path)
-            config_content = config_content.replace("{{VERSION_MAP}}", version_map)
+            config_content = template_content.replace("{{VERSION_MAP}}", version_map)
             config_content = config_content.replace(
                 "{{LOCATION_BLOCKS}}", "\n".join(location_blocks)
             )
@@ -500,6 +498,9 @@ class NginxConfigService:
             except Exception as e:
                 logger.error(f"Failed to generate virtual server config: {e}", exc_info=True)
                 config_content = config_content.replace("{{VIRTUAL_SERVER_BLOCKS}}", "")
+
+            root_path = os.environ.get("ROOT_PATH", "").rstrip("/")
+            config_content = config_content.replace("{{ROOT_PATH}}", root_path)
 
             # Write config file
             with open(settings.nginx_config_path, "w") as f:
@@ -576,7 +577,7 @@ class NginxConfigService:
         block = """
     # Registry-only mode: block MCP proxy requests with 503
     # Matches paths that don't start with known API/auth prefixes
-    location ~ ^/(?!api/|oauth2/|keycloak/|realms/|resources/|v0\\.1/|health|static/|assets/|_next/|validate).+ {
+    location ~ ^{{ROOT_PATH}}/(?!api/|oauth2/|keycloak/|realms/|resources/|v0\\.1/|health|static/|assets/|_next/|validate).+ {
         default_type application/json;
         return 503 '{"error":"gateway_proxy_disabled","message":"Gateway proxy is disabled in registry-only mode. Connect directly to the MCP server using the proxy_pass_url from server registration.","deployment_mode":"registry-only","hint":"Use GET /api/servers/{path} to retrieve the proxy_pass_url for direct connection."}';
     }"""
@@ -756,7 +757,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
                 block = f"""
     # Virtual MCP Server: {safe_name}
-    location {vs.path} {{
+    location {{{{ROOT_PATH}}}}{vs.path} {{
         set $virtual_server_id "{safe_id}";
         auth_request /validate;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -1127,6 +1128,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             transport_settings = """
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
         # For SSE connections and WebSocket upgrades
         proxy_buffering off;
@@ -1141,6 +1143,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             transport_settings = """
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
         # HTTP transport configuration
         proxy_buffering off;
@@ -1152,7 +1155,8 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             transport_settings = """
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
-        
+        log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
+
         # Generic transport configuration
         proxy_buffering off;
         proxy_cache off;
@@ -1166,7 +1170,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         logger.info(f"Creating location block for {location_path} with {transport_type} transport")
 
         return f"""
-    location {location_path} {{{transport_settings}{common_settings}
+    location {{{{ROOT_PATH}}}}{location_path} {{{transport_settings}{common_settings}
     }}"""
 
 

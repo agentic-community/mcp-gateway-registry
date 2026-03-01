@@ -19,7 +19,9 @@ class EnvSettings:
     def __init__(self) -> None:
         """Initialize environment settings."""
         self.db_path: str = os.getenv("DB_PATH", "/app/data/flights.db")
-        self.aws_region: str = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+        self.aws_region: str = os.getenv("AWS_REGION") or os.getenv(
+            "AWS_DEFAULT_REGION", "us-east-1"
+        )
         self.agent_name: str = os.getenv("AGENT_NAME", "travel-assistant")
         self.agent_version: str = os.getenv("AGENT_VERSION", "1.0.0")
 
@@ -30,7 +32,7 @@ class EnvSettings:
         self.agent_url: str = os.getenv("AGENTCORE_RUNTIME_URL", "http://127.0.0.1:9000/")
 
         # Server configuration (fixed for A2A protocol)
-        self.host: str = "0.0.0.0"
+        self.host: str = os.getenv("AGENT_HOST", "0.0.0.0")  # nosec B104
         self.port: int = 9000
 
         # Keycloak configuration for M2M authentication
@@ -43,7 +45,9 @@ class EnvSettings:
         # If set, this token is used directly instead of fetching from Keycloak
         self.registry_jwt_token: str = os.getenv("REGISTRY_JWT_TOKEN", "")
 
-        logger.info(f"EnvSettings initialized: agent_name={self.agent_name}, version={self.agent_version}")
+        logger.info(
+            f"EnvSettings initialized: agent_name={self.agent_name}, version={self.agent_version}"
+        )
         if self.registry_jwt_token:
             logger.info("Using direct JWT token for registry authentication")
         elif self.m2m_client_id and self.m2m_client_secret:

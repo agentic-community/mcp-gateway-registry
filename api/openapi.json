@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "v1.0.15"
+    "version": "v1.0.16"
   },
   "paths": {
     "/api/auth/login": {
@@ -583,7 +583,7 @@
           "Server Management"
         ],
         "summary": "Internal Register Service",
-        "description": "Internal service registration endpoint for mcpgw-server (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal service registration endpoint for mcpgw-server (requires admin authentication).",
         "operationId": "internal_register_service_api_internal_register_post",
         "requestBody": {
           "content": {
@@ -628,7 +628,7 @@
           "Server Management"
         ],
         "summary": "Internal Remove Service",
-        "description": "Internal service removal endpoint for mcpgw-server (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal service removal endpoint for mcpgw-server (requires admin authentication).",
         "operationId": "internal_remove_service_api_internal_remove_post",
         "requestBody": {
           "content": {
@@ -673,7 +673,7 @@
           "Server Management"
         ],
         "summary": "Internal Toggle Service",
-        "description": "Internal service toggle endpoint for mcpgw-server (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal service toggle endpoint for mcpgw-server (requires admin authentication).",
         "operationId": "internal_toggle_service_api_internal_toggle_post",
         "requestBody": {
           "content": {
@@ -718,7 +718,7 @@
           "Server Management"
         ],
         "summary": "Internal Healthcheck",
-        "description": "Internal health check endpoint for mcpgw-server (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal health check endpoint for mcpgw-server (requires admin authentication).",
         "operationId": "internal_healthcheck_api_internal_healthcheck_post",
         "responses": {
           "200": {
@@ -1118,7 +1118,7 @@
           "Server Management"
         ],
         "summary": "Internal Add Server To Groups",
-        "description": "Internal endpoint to add a server to specific scopes groups (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal endpoint to add a server to specific scopes groups (requires admin authentication).",
         "operationId": "internal_add_server_to_groups_api_internal_add_to_groups_post",
         "requestBody": {
           "content": {
@@ -1163,7 +1163,7 @@
           "Server Management"
         ],
         "summary": "Internal Remove Server From Groups",
-        "description": "Internal endpoint to remove a server from specific scopes groups (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal endpoint to remove a server from specific scopes groups (requires admin authentication).",
         "operationId": "internal_remove_server_from_groups_api_internal_remove_from_groups_post",
         "requestBody": {
           "content": {
@@ -1208,7 +1208,7 @@
           "Server Management"
         ],
         "summary": "Internal List Services",
-        "description": "Internal service listing endpoint for mcpgw-server (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal service listing endpoint for mcpgw-server (requires admin authentication).",
         "operationId": "internal_list_services_api_internal_list_get",
         "responses": {
           "200": {
@@ -1233,7 +1233,7 @@
           "Server Management"
         ],
         "summary": "Internal Create Group",
-        "description": "Internal endpoint to create a new group in both IdP and scopes.yml (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal endpoint to create a new group in both IdP and scopes.yml (requires admin authentication).",
         "operationId": "internal_create_group_api_internal_create_group_post",
         "requestBody": {
           "content": {
@@ -1278,7 +1278,7 @@
           "Server Management"
         ],
         "summary": "Internal Delete Group",
-        "description": "Internal endpoint to delete a group from both Keycloak and scopes (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal endpoint to delete a group from both Keycloak and scopes (requires admin authentication).",
         "operationId": "internal_delete_group_api_internal_delete_group_post",
         "requestBody": {
           "content": {
@@ -1323,7 +1323,7 @@
           "Server Management"
         ],
         "summary": "Internal List Groups",
-        "description": "Internal endpoint to list groups from Keycloak and/or scopes (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal endpoint to list groups from Keycloak and/or scopes (requires admin authentication).",
         "operationId": "internal_list_groups_api_internal_list_groups_get",
         "parameters": [
           {
@@ -1427,32 +1427,24 @@
         ]
       }
     },
-    "/api/admin/tokens": {
-      "get": {
+    "/api/servers/register": {
+      "post": {
         "tags": [
           "Server Management"
         ],
-        "summary": "Get Admin Tokens",
-        "description": "Admin-only endpoint to retrieve JWT tokens from Keycloak.\n\nReturns both access token and refresh token for admin users.\n\nReturns:\n    JSON object containing access_token, refresh_token, expires_in, etc.\n\nRaises:\n    HTTPException: If user is not admin or token retrieval fails",
-        "operationId": "get_admin_tokens_api_admin_tokens_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
+        "summary": "Register Service Api",
+        "description": "Register a service via JWT Bearer Token authentication (External API).\n\nThis endpoint provides the same functionality as POST /api/internal/register\nbut uses modern JWT Bearer token authentication via nginx headers, making it\nsuitable for external service-to-service communication.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Request body (form data):**\n- `name` (required): Service name\n- `description` (required): Service description\n- `path` (required): Service path (e.g., /myservice)\n- `proxy_pass_url` (required): Proxy URL (e.g., http://localhost:8000)\n- `tags` (optional): Comma-separated tags\n- `num_tools` (optional): Number of tools\n- `license` (optional): License name\n- `overwrite` (optional): Overwrite if exists (boolean, default true)\n- `auth_provider` (optional): Auth provider name\n- `auth_scheme` (optional): Auth scheme (none, bearer, api_key)\n- `auth_credential` (optional): Plaintext credential (encrypted before storage)\n- `auth_header_name` (optional): Custom header name for API key auth\n- `supported_transports` (optional): JSON array of transports\n- `headers` (optional): JSON object of headers\n- `tool_list_json` (optional): JSON array of tool definitions\n- `mcp_endpoint` (optional): Full URL for custom MCP endpoint (overrides /mcp suffix)\n- `sse_endpoint` (optional): Full URL for custom SSE endpoint (overrides /sse suffix)\n- `version` (optional): Server version (e.g., v1.0.0, v2.0.0)\n- `status` (optional): Version status (stable, beta, deprecated)\n\n**Response:**\n- `201 Created`: Service registered successfully\n- `400 Bad Request`: Invalid input data\n- `401 Unauthorized`: Missing or invalid JWT token\n- `409 Conflict`: Service already exists with same version (different version auto-creates new version)\n- `500 Internal Server Error`: Server error\n\n**Example:**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Service\" \\\n  -F \"description=My MCP Service\" \\\n  -F \"path=/myservice\" \\\n  -F \"proxy_pass_url=http://localhost:8000\"\n```",
+        "operationId": "register_service_api_api_servers_register_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_register_service_api_api_servers_register_post"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1480,23 +1472,34 @@
         ]
       }
     },
-    "/api/servers/register": {
-      "post": {
+    "/api/servers/{server_path}/auth-credential": {
+      "patch": {
         "tags": [
           "Server Management"
         ],
-        "summary": "Register Service Api",
-        "description": "Register a service via JWT Bearer Token authentication (External API).\n\nThis endpoint provides the same functionality as POST /api/internal/register\nbut uses modern JWT Bearer token authentication via nginx headers, making it\nsuitable for external service-to-service communication.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Request body (form data):**\n- `name` (required): Service name\n- `description` (required): Service description\n- `path` (required): Service path (e.g., /myservice)\n- `proxy_pass_url` (required): Proxy URL (e.g., http://localhost:8000)\n- `tags` (optional): Comma-separated tags\n- `num_tools` (optional): Number of tools\n- `num_stars` (optional): Star rating\n- `is_python` (optional): Is Python server (boolean)\n- `license` (optional): License name\n- `overwrite` (optional): Overwrite if exists (boolean, default true)\n- `auth_provider` (optional): Auth provider name\n- `auth_type` (optional): Auth type (e.g., oauth, basic)\n- `supported_transports` (optional): JSON array of transports\n- `headers` (optional): JSON object of headers\n- `tool_list_json` (optional): JSON array of tool definitions\n- `mcp_endpoint` (optional): Full URL for custom MCP endpoint (overrides /mcp suffix)\n- `sse_endpoint` (optional): Full URL for custom SSE endpoint (overrides /sse suffix)\n- `version` (optional): Server version (e.g., v1.0.0, v2.0.0)\n- `status` (optional): Version status (stable, beta, deprecated)\n\n**Response:**\n- `201 Created`: Service registered successfully\n- `400 Bad Request`: Invalid input data\n- `401 Unauthorized`: Missing or invalid JWT token\n- `409 Conflict`: Service already exists with same version (different version auto-creates new version)\n- `500 Internal Server Error`: Server error\n\n**Example:**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Service\" \\\n  -F \"description=My MCP Service\" \\\n  -F \"path=/myservice\" \\\n  -F \"proxy_pass_url=http://localhost:8000\"\n```",
-        "operationId": "register_service_api_api_servers_register_post",
+        "summary": "Update Server Auth Credential",
+        "description": "Update the authentication credential for a registered server.\n\nAllows updating the auth scheme, credential, and custom header name\nfor a backend MCP server without re-registering the entire server.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n\n**Path parameter:**\n- `server_path`: Server path (e.g., /my-server)\n\n**Request body (JSON):**\n- `auth_scheme` (required): Authentication scheme (none, bearer, api_key)\n- `auth_credential` (optional): New credential. Required if auth_scheme is not 'none'.\n- `auth_header_name` (optional): Custom header name. Default: X-API-Key for api_key.",
+        "operationId": "update_server_auth_credential_api_servers__server_path__auth_credential_patch",
+        "parameters": [
+          {
+            "name": "server_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Path"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
-            "application/x-www-form-urlencoded": {
+            "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Body_register_service_api_api_servers_register_post"
+                "$ref": "#/components/schemas/AuthCredentialUpdateRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -3254,6 +3257,64 @@
         ]
       }
     },
+    "/api/management/iam/users/{username}/groups": {
+      "patch": {
+        "tags": [
+          "Management API"
+        ],
+        "summary": "Management Update User Groups",
+        "description": "Update a user's group memberships (admin only).\n\nThis endpoint calculates the diff between current and desired groups,\nthen adds or removes group memberships as needed.",
+        "operationId": "management_update_user_groups_api_management_iam_users__username__groups_patch",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserGroupsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateUserGroupsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/management/iam/groups": {
       "get": {
         "tags": [
@@ -3362,6 +3423,108 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GroupDeleteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "Management API"
+        ],
+        "summary": "Management Get Group",
+        "description": "Get detailed information about a group (admin only).\n\nReturns both identity provider data and MongoDB scope data.",
+        "operationId": "management_get_group_api_management_iam_groups__group_name__get",
+        "parameters": [
+          {
+            "name": "group_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Management API"
+        ],
+        "summary": "Management Update Group",
+        "description": "Update a group's properties and scope configuration (admin only).\n\nThis updates the group in both:\n1. The configured identity provider (Keycloak or Entra ID)\n2. MongoDB scopes collection for authorization",
+        "operationId": "management_update_group_api_management_iam_groups__group_name__patch",
+        "parameters": [
+          {
+            "name": "group_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupDetailResponse"
                 }
               }
             }
@@ -6597,6 +6760,68 @@
         ]
       }
     },
+    "/api/peers/{peer_id}/token": {
+      "patch": {
+        "tags": [
+          "peer-management"
+        ],
+        "summary": "Update Peer Token",
+        "description": "Update federation token for a peer without triggering full update.\n\nThis endpoint specifically updates only the federation token, bypassing\nthe regular update_peer() flow. This is useful for recovering from\nissue #561 where tokens were lost during peer updates, or for rotating\ntokens without modifying other peer configuration.\n\nArgs:\n    peer_id: Peer identifier\n    federation_token: New federation token value\n    user_context: Authenticated user context\n\nReturns:\n    Success message with peer ID\n\nRaises:\n    HTTPException: 404 if peer not found\n    HTTPException: 400 if token update fails\n\nExample:\n    PATCH /api/peers/central-registry/token\n    {\n        \"federation_token\": \"new-token-value-here\"\n    }",
+        "operationId": "update_peer_token_api_peers__peer_id__token_patch",
+        "parameters": [
+          {
+            "name": "peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Peer Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_update_peer_token_api_peers__peer_id__token_patch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Update Peer Token Api Peers  Peer Id  Token Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/peers/{peer_id}/sync": {
       "post": {
         "tags": [
@@ -7208,7 +7433,7 @@
           "Audit Logs"
         ],
         "summary": "Get Audit Event",
-        "description": "Get a single audit event by request_id.\n\nReturns the complete audit event record including all fields.\n\nRequires admin access.",
+        "description": "Get audit events by request_id.\n\nReturns all audit event records matching the request_id,\noptionally filtered by log_type. A single request may have\nmultiple audit events (e.g., MCP server access + registry API access).\n\nRequires admin access.",
         "operationId": "get_audit_event_api_audit_events__request_id__get",
         "parameters": [
           {
@@ -7219,6 +7444,24 @@
               "type": "string",
               "title": "Request Id"
             }
+          },
+          {
+            "name": "log_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by log type: registry_api_access or mcp_server_access",
+              "title": "Log Type"
+            },
+            "description": "Filter by log type: registry_api_access or mcp_server_access"
           },
           {
             "name": "mcp_gateway_session",
@@ -8210,6 +8453,45 @@
         "title": "AuditEventsResponse",
         "description": "Response model for paginated audit events."
       },
+      "AuthCredentialUpdateRequest": {
+        "properties": {
+          "auth_scheme": {
+            "type": "string",
+            "title": "Auth Scheme",
+            "description": "Authentication scheme: none, bearer, api_key"
+          },
+          "auth_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Credential",
+            "description": "New credential (required if auth_scheme is not 'none')"
+          },
+          "auth_header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Header Name",
+            "description": "Custom header name. Default: X-API-Key for api_key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "auth_scheme"
+        ],
+        "title": "AuthCredentialUpdateRequest",
+        "description": "Request model for updating server auth credentials via PATCH."
+      },
       "Body_add_server_to_groups_api_api_servers_groups_add_post": {
         "properties": {
           "server_name": {
@@ -8329,23 +8611,6 @@
             "title": "Num Tools",
             "default": 0
           },
-          "num_stars": {
-            "type": "integer",
-            "title": "Num Stars",
-            "default": 0
-          },
-          "is_python": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Is Python",
-            "default": false
-          },
           "license": {
             "type": "string",
             "title": "License",
@@ -8388,6 +8653,33 @@
               }
             ],
             "title": "Allowed Groups"
+          },
+          "auth_scheme": {
+            "type": "string",
+            "title": "Auth Scheme",
+            "default": "none"
+          },
+          "auth_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Credential"
+          },
+          "auth_header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Header Name"
           }
         },
         "type": "object",
@@ -8489,16 +8781,6 @@
             "title": "Num Tools",
             "default": 0
           },
-          "num_stars": {
-            "type": "integer",
-            "title": "Num Stars",
-            "default": 0
-          },
-          "is_python": {
-            "type": "boolean",
-            "title": "Is Python",
-            "default": false
-          },
           "license": {
             "type": "string",
             "title": "License",
@@ -8520,7 +8802,12 @@
             ],
             "title": "Auth Provider"
           },
-          "auth_type": {
+          "auth_scheme": {
+            "type": "string",
+            "title": "Auth Scheme",
+            "default": "none"
+          },
+          "auth_credential": {
             "anyOf": [
               {
                 "type": "string"
@@ -8529,7 +8816,18 @@
                 "type": "null"
               }
             ],
-            "title": "Auth Type"
+            "title": "Auth Credential"
+          },
+          "auth_header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Header Name"
           },
           "supported_transports": {
             "anyOf": [
@@ -8680,16 +8978,6 @@
             "title": "Num Tools",
             "default": 0
           },
-          "num_stars": {
-            "type": "integer",
-            "title": "Num Stars",
-            "default": 0
-          },
-          "is_python": {
-            "type": "boolean",
-            "title": "Is Python",
-            "default": false
-          },
           "license": {
             "type": "string",
             "title": "License",
@@ -8711,7 +8999,12 @@
             ],
             "title": "Auth Provider"
           },
-          "auth_type": {
+          "auth_scheme": {
+            "type": "string",
+            "title": "Auth Scheme",
+            "default": "none"
+          },
+          "auth_credential": {
             "anyOf": [
               {
                 "type": "string"
@@ -8720,7 +9013,18 @@
                 "type": "null"
               }
             ],
-            "title": "Auth Type"
+            "title": "Auth Credential"
+          },
+          "auth_header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Header Name"
           },
           "supported_transports": {
             "anyOf": [
@@ -8848,16 +9152,6 @@
             "title": "Num Tools",
             "default": 0
           },
-          "num_stars": {
-            "type": "integer",
-            "title": "Num Stars",
-            "default": 0
-          },
-          "is_python": {
-            "type": "boolean",
-            "title": "Is Python",
-            "default": false
-          },
           "license": {
             "type": "string",
             "title": "License",
@@ -8911,6 +9205,33 @@
               }
             ],
             "title": "Allowed Groups"
+          },
+          "auth_scheme": {
+            "type": "string",
+            "title": "Auth Scheme",
+            "default": "none"
+          },
+          "auth_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Credential"
+          },
+          "auth_header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Header Name"
           }
         },
         "type": "object",
@@ -8987,6 +9308,19 @@
         },
         "type": "object",
         "title": "Body_toggle_service_route_api_toggle__service_path__post"
+      },
+      "Body_update_peer_token_api_peers__peer_id__token_patch": {
+        "properties": {
+          "federation_token": {
+            "type": "string",
+            "title": "Federation Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "federation_token"
+        ],
+        "title": "Body_update_peer_token_api_peers__peer_id__token_patch"
       },
       "CompatibilityRequirement": {
         "properties": {
@@ -9389,6 +9723,19 @@
               }
             ],
             "title": "Description"
+          },
+          "scope_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Config",
+            "description": "Scope configuration (accepted but not yet applied server-side)"
           }
         },
         "type": "object",
@@ -9396,7 +9743,7 @@
           "name"
         ],
         "title": "GroupCreateRequest",
-        "description": "Payload for creating a Keycloak group."
+        "description": "Payload for creating a group.\n\nNote: The backend currently only processes name and description.\nThe scope_config field is accepted but not yet wired to\nscope_service.import_group(). Future work should pass\nserver_access, group_mappings, and ui_permissions through\nto the scope service when creating a group."
       },
       "GroupDeleteResponse": {
         "properties": {
@@ -9416,6 +9763,95 @@
         ],
         "title": "GroupDeleteResponse",
         "description": "Response when a Keycloak group is deleted."
+      },
+      "GroupDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "server_access": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Access"
+          },
+          "group_mappings": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Mappings"
+          },
+          "ui_permissions": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui Permissions"
+          },
+          "agent_access": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Access"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "GroupDetailResponse",
+        "description": "Detailed group information."
       },
       "GroupListResponse": {
         "properties": {
@@ -9473,6 +9909,37 @@
         ],
         "title": "GroupSummary",
         "description": "Group information."
+      },
+      "GroupUpdateRequest": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "scope_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Config",
+            "description": "Scope configuration (server_access, ui_permissions, etc.)"
+          }
+        },
+        "type": "object",
+        "title": "GroupUpdateRequest",
+        "description": "Request to update a group."
       },
       "HTTPValidationError": {
         "properties": {
@@ -11705,6 +12172,59 @@
         ],
         "title": "ToolValidationResult",
         "description": "Result of tool availability validation."
+      },
+      "UpdateUserGroupsRequest": {
+        "properties": {
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups",
+            "description": "List of group names to assign"
+          }
+        },
+        "type": "object",
+        "required": [
+          "groups"
+        ],
+        "title": "UpdateUserGroupsRequest",
+        "description": "Payload for updating a user's group memberships."
+      },
+      "UpdateUserGroupsResponse": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Added"
+          },
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Removed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username"
+        ],
+        "title": "UpdateUserGroupsResponse",
+        "description": "Response after updating user's group memberships."
       },
       "UpdateVirtualServerRequest": {
         "properties": {

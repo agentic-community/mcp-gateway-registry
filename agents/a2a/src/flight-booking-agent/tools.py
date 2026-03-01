@@ -92,7 +92,9 @@ def process_payment(
     amount: Optional[float] = None,
 ) -> str:
     """Process payment for a booking (simulated)."""
-    logger.info(f"Tool called: process_payment(booking_number={booking_number}, payment_method={payment_method})")
+    logger.info(
+        f"Tool called: process_payment(booking_number={booking_number}, payment_method={payment_method})"
+    )
     logger.debug(f"Payment amount: {amount}")
     try:
         payment_result = get_db_manager().process_payment(booking_number, payment_method, amount)
@@ -114,7 +116,9 @@ def manage_reservation(
     reason: Optional[str] = None,
 ) -> str:
     """Update, view, or cancel existing reservations."""
-    logger.info(f"Tool called: manage_reservation(booking_number={booking_number}, action={action})")
+    logger.info(
+        f"Tool called: manage_reservation(booking_number={booking_number}, action={action})"
+    )
     logger.debug(f"Reason: {reason}")
     try:
         db_manager = get_db_manager()
@@ -151,4 +155,10 @@ def manage_reservation(
 # @tool
 # def delegate_to_agent(agent_capability: str, action: str, params: Dict) -> str:
 
-FLIGHT_BOOKING_TOOLS = [check_availability, reserve_flight, confirm_booking, process_payment, manage_reservation]
+FLIGHT_BOOKING_TOOLS = [
+    check_availability,
+    reserve_flight,
+    confirm_booking,
+    process_payment,
+    manage_reservation,
+]

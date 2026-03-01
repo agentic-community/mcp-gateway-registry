@@ -376,9 +376,374 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ---
 
+## Server Authentication Credentials
+
+The MCP Gateway Registry supports backend server authentication, allowing MCP servers that require their own authentication (API keys, bearer tokens, etc.) to be registered with encrypted credentials.
+
+### Overview
+
+When an MCP server requires authentication, you can provide the credentials during registration. The registry:
+
+1. **Encrypts** the credential using Fernet symmetric encryption
+2. **Stores** the encrypted credential in MongoDB/DocumentDB
+3. **Automatically decrypts** and uses the credential for:
+   - Health checks
+   - Tool discovery and fetching
+   - MCP client connections
+
+### Supported Authentication Schemes
+
+| Scheme | Description | Example Use Case |
+|--------|-------------|------------------|
+| `none` | No authentication required | Public MCP servers |
+| `bearer` | Bearer token in `Authorization` header | OAuth2-protected services |
+| `api_key` | API key with custom header name | Services requiring API keys (e.g., `X-API-Key`, `CONTEXT7_API_KEY`) |
+
+### Credential Encryption
+
+All credentials are encrypted before storage using the Fernet encryption scheme:
+
+- **Algorithm**: Fernet (symmetric encryption based on AES-128-CBC)
+- **Key**: Derived from `ENCRYPTION_KEY` environment variable
+- **Storage**: Encrypted credential stored as `auth_credential_encrypted` in MongoDB
+- **Decryption**: Automatic during health checks and MCP client initialization
+
+**Configuration** (`.env` file):
+```bash
+# Encryption key for server credentials (base64-encoded Fernet key)
+ENCRYPTION_KEY=your-base64-encoded-fernet-key-here
+
+# Generate a new key with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+### Registering Servers with Authentication
+
+#### Method 1: Registry UI
+
+1. Navigate to **Register Server** in the Registry UI
+2. Fill in server details (name, path, proxy URL, etc.)
+3. Select **Authentication Scheme**:
+   - `none` - No authentication
+   - `bearer` - Bearer token
+   - `api_key` - API key
+4. If `bearer` or `api_key`:
+   - Enter the **credential** (API key or bearer token)
+   - For `api_key`: Specify the **header name** (e.g., `CONTEXT7_API_KEY`, `X-API-Key`)
+5. Click **Register**
+
+![Server Registration with Authentication Scheme](img/auth-scheme.gif)
+
+The credential is automatically encrypted and stored securely.
+
+#### Method 2: REST API
+
+**Register server with bearer token:**
+
+```bash
+curl -X POST https://registry.example.com/api/servers/register \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "server_name=My Protected Server" \
+  -F "path=/my-server" \
+  -F "proxy_pass_url=http://backend:8000/" \
+  -F "auth_scheme=bearer" \
+  -F "auth_credential=my-bearer-token-value" \
+  -F "description=A server requiring bearer auth"
+```
+
+**Register server with API key:**
+
+```bash
+curl -X POST https://registry.example.com/api/servers/register \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "server_name=Context7" \
+  -F "path=/context7" \
+  -F "proxy_pass_url=http://context7:8000/" \
+  -F "auth_scheme=api_key" \
+  -F "auth_credential=ctx7sk-6dd75bd4-80ef-486e-99ef-b5493df4e578" \
+  -F "auth_header_name=CONTEXT7_API_KEY" \
+  -F "description=Context7 LLM context service"
+```
+
+**Response:**
+```json
+{
+  "message": "Server registered successfully",
+  "path": "/context7",
+  "server_name": "Context7",
+  "auth_scheme": "api_key",
+  "auth_header_name": "CONTEXT7_API_KEY",
+  "auth_credential_encrypted": true
+}
+```
+
+#### Method 3: CLI Tool (`registry_management.py`)
+
+**Register server with credentials:**
+
+```bash
+# Set up authentication
+export REGISTRY_URL=https://registry.example.com
+export REGISTRY_TOKEN=$(cat .token)
+
+# Register with API key
+python3 api/registry_management.py \
+  --registry-url $REGISTRY_URL \
+  --token $REGISTRY_TOKEN \
+  server-register \
+  --name "Context7" \
+  --path "/context7" \
+  --proxy-pass-url "http://context7:8000/" \
+  --auth-scheme api_key \
+  --auth-credential "ctx7sk-6dd75bd4-80ef-486e-99ef-b5493df4e578" \
+  --auth-header-name "CONTEXT7_API_KEY" \
+  --description "Context7 LLM context service"
+
+# Register with bearer token
+python3 api/registry_management.py \
+  --registry-url $REGISTRY_URL \
+  --token $REGISTRY_TOKEN \
+  server-register \
+  --name "Cloudflare API" \
+  --path "/cloudflare-api" \
+  --proxy-pass-url "http://cloudflare-mcp:8000/" \
+  --auth-scheme bearer \
+  --auth-credential "my-cloudflare-bearer-token" \
+  --description "Cloudflare MCP Server"
+```
+
+### Updating Server Credentials
+
+Credentials can be updated without re-registering the entire server.
+
+#### Method 1: REST API
+
+**Update credential endpoint:**
+
+```bash
+curl -X PUT https://registry.example.com/api/servers/context7/credentials \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auth_scheme": "api_key",
+    "auth_credential": "new-api-key-value",
+    "auth_header_name": "CONTEXT7_API_KEY"
+  }'
+```
+
+**Switch to bearer token:**
+
+```bash
+curl -X PUT https://registry.example.com/api/servers/my-server/credentials \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auth_scheme": "bearer",
+    "auth_credential": "new-bearer-token"
+  }'
+```
+
+**Remove authentication:**
+
+```bash
+curl -X PUT https://registry.example.com/api/servers/my-server/credentials \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auth_scheme": "none"
+  }'
+```
+
+**Response:**
+```json
+{
+  "message": "Auth credentials updated successfully",
+  "path": "/context7",
+  "auth_scheme": "api_key",
+  "auth_header_name": "CONTEXT7_API_KEY"
+}
+```
+
+#### Method 2: CLI Tool
+
+**Update server credential:**
+
+```bash
+python3 api/registry_management.py \
+  --registry-url $REGISTRY_URL \
+  --token $REGISTRY_TOKEN \
+  server-update-credential \
+  --path "/context7" \
+  --auth-scheme api_key \
+  --credential "new-api-key-value" \
+  --auth-header-name "CONTEXT7_API_KEY"
+```
+
+**Update to bearer token:**
+
+```bash
+python3 api/registry_management.py \
+  --registry-url $REGISTRY_URL \
+  --token $REGISTRY_TOKEN \
+  server-update-credential \
+  --path "/cloudflare-api" \
+  --auth-scheme bearer \
+  --credential "new-bearer-token-value"
+```
+
+**Remove authentication:**
+
+```bash
+python3 api/registry_management.py \
+  --registry-url $REGISTRY_URL \
+  --token $REGISTRY_TOKEN \
+  server-update-credential \
+  --path "/my-server" \
+  --auth-scheme none
+```
+
+**Output:**
+```
+Successfully updated credentials for server '/context7'
+New auth scheme: api_key
+Auth header name: CONTEXT7_API_KEY
+```
+
+### How Credentials Are Used
+
+#### 1. Health Checks
+
+When the health check service performs periodic checks, it:
+
+1. Retrieves the server's `auth_credential_encrypted` from MongoDB
+2. Decrypts the credential using the `ENCRYPTION_KEY`
+3. Includes the appropriate header in the MCP initialize request:
+   - Bearer: `Authorization: Bearer <decrypted_token>`
+   - API Key: `<auth_header_name>: <decrypted_key>`
+
+**Example health check with auth:**
+
+```python
+# Health check service automatically decrypts and uses credentials
+headers = {}
+if server.auth_scheme == "bearer":
+    headers["Authorization"] = f"Bearer {decrypt_credential(server.auth_credential_encrypted)}"
+elif server.auth_scheme == "api_key":
+    header_name = server.auth_header_name or "X-API-Key"
+    headers[header_name] = decrypt_credential(server.auth_credential_encrypted)
+
+# MCP initialize request with auth headers
+response = await mcp_client.initialize(url=server.proxy_pass_url, headers=headers)
+```
+
+#### 2. Tool Discovery
+
+When fetching tools from a server:
+
+1. Registry decrypts the credential
+2. Includes auth headers in the MCP `tools/list` request
+3. Stores the fetched tools in the database
+
+#### 3. MCP Client Connections
+
+When AI coding assistants connect to a server through the gateway:
+
+1. User provides gateway auth token (`X-Authorization` header)
+2. Gateway validates user permissions
+3. Gateway retrieves and decrypts server credential
+4. Gateway proxies the request with the server's auth header
+
+**Example MCP client configuration:**
+
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "type": "streamable-http",
+      "url": "https://mcpgateway.ddns.net/context7/mcp",
+      "disabled": false,
+      "headers": {
+        "X-Authorization": "Bearer <user_gateway_token>",
+        "CONTEXT7_API_KEY": "<server_api_key>"
+      }
+    }
+  }
+}
+```
+
+### Security Considerations
+
+1. **Encryption at Rest**:
+   - All credentials are encrypted in MongoDB using Fernet
+   - Never store plaintext credentials in the database
+
+2. **Key Management**:
+   - Store `ENCRYPTION_KEY` securely (AWS Secrets Manager, Vault, etc.)
+   - Never commit encryption keys to version control
+   - Rotate encryption keys periodically
+
+3. **Access Control**:
+   - Only users with `register_service` or `modify_service` permissions can set/update credentials
+   - Credentials are never returned in API responses (only `auth_credential_encrypted` flag)
+
+4. **Audit Logging**:
+   - All credential updates are logged with username and timestamp
+   - Review audit logs regularly for unauthorized changes
+
+### Best Practices
+
+1. **Use Environment-Specific Credentials**:
+   - Development: Use test credentials with limited access
+   - Production: Use production credentials with full access
+
+2. **Rotate Credentials Regularly**:
+   - Use the credential update API/CLI to rotate without downtime
+   - Update credentials before they expire
+
+3. **Monitor Health Checks**:
+   - Watch for "auth-expired" health status
+   - Set up alerts for authentication failures
+
+4. **Document Custom Headers**:
+   - For `api_key` auth, document the required header name
+   - Ensure consistency across environments
+
+### Troubleshooting
+
+**Credential Update Fails:**
+```bash
+# Verify server exists
+curl -H "Authorization: Bearer $TOKEN" \
+  https://registry.example.com/api/servers
+
+# Check auth scheme is valid
+# Valid values: none, bearer, api_key
+```
+
+**Health Check Shows "auth-expired":**
+```bash
+# Update the credential
+python3 api/registry_management.py \
+  server-update-credential \
+  --path "/my-server" \
+  --auth-scheme bearer \
+  --credential "new-valid-token"
+
+# Force immediate health check
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  https://registry.example.com/api/servers/my-server/refresh
+```
+
+**MCP Client Connection Fails:**
+- Verify both gateway auth (`X-Authorization`) and server auth headers are present
+- Check credential hasn't expired
+- Ensure `auth_header_name` matches server's expectation
+
+---
+
 ## Additional Resources
 
 - [Authentication Design](design/authentication-design.md) - Detailed auth flow diagrams
 - [IdP Provider Support](design/idp-provider-support.md) - Provider architecture
 - [Scopes Management](scopes-mgmt.md) - Scope file format reference
 - [Auth Management](auth-mgmt.md) - CLI operations guide
+- [AI Coding Assistants Setup](ai-coding-assistants-setup.md) - Complete setup with backend auth examples

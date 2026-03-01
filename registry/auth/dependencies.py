@@ -502,9 +502,7 @@ async def nginx_proxied_auth(
     x_auth_method: Annotated[
         str | None, Header(alias="X-Auth-Method", include_in_schema=False)
     ] = None,
-    x_client_id: Annotated[
-        str | None, Header(alias="X-Client-Id", include_in_schema=False)
-    ] = None,
+    x_client_id: Annotated[str | None, Header(alias="X-Client-Id", include_in_schema=False)] = None,
 ) -> dict[str, Any]:
     """
     Authentication dependency that works with both nginx-proxied requests and direct requests.
@@ -549,7 +547,13 @@ async def nginx_proxied_auth(
 
         # Map scopes to get groups based on auth method
         groups = []
-        if x_auth_method in ["keycloak", "entra", "cognito", "network-trusted", "federation-static"]:
+        if x_auth_method in [
+            "keycloak",
+            "entra",
+            "cognito",
+            "network-trusted",
+            "federation-static",
+        ]:
             # User authenticated via OAuth2 JWT (Keycloak, Entra ID, or Cognito)
             # Scopes already contain mapped permissions
             # Check if user has admin scopes
@@ -630,7 +634,9 @@ async def nginx_proxied_auth(
         # Set user context on request state for audit logging middleware
         request.state.user_context = user_context
 
-        logger.debug(f"nginx-proxied auth context for {username} (is_admin={is_admin}): {user_context}")
+        logger.debug(
+            f"nginx-proxied auth context for {username} (is_admin={is_admin}): {user_context}"
+        )
         return user_context
 
     # Fallback to session cookie authentication

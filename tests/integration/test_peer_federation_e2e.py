@@ -43,6 +43,7 @@ def _documentdb_available() -> bool:
     # Check if the TLS certificate exists
     return os.path.exists("global-bundle.pem")
 
+
 # =============================================================================
 # FIXTURES
 # =============================================================================

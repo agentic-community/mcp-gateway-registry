@@ -1277,6 +1277,30 @@
             }
         }
 
+        function toggleAuthFields() {
+            var scheme = document.getElementById('reg-auth-scheme').value;
+            var credContainer = document.getElementById('reg-auth-credential-container');
+            var headerContainer = document.getElementById('reg-auth-header-container');
+            var credLabel = document.getElementById('reg-auth-credential-label');
+            var credInput = document.getElementById('reg-auth-credential');
+
+            if (scheme === 'none') {
+                credContainer.style.display = 'none';
+                headerContainer.style.display = 'none';
+                credInput.value = '';
+            } else if (scheme === 'bearer') {
+                credContainer.style.display = 'block';
+                headerContainer.style.display = 'none';
+                credLabel.textContent = 'Bearer Token';
+                credInput.placeholder = 'Enter bearer token';
+            } else if (scheme === 'api_key') {
+                credContainer.style.display = 'block';
+                headerContainer.style.display = 'block';
+                credLabel.textContent = 'API Key';
+                credInput.placeholder = 'Enter API key';
+            }
+        }
+
         function showRegisterModal() {
             const modal = document.getElementById('register-server-modal');
             if (modal) {
@@ -1364,15 +1388,6 @@
                 }
             }
 
-            if (jsonData.hasOwnProperty('num_stars') && typeof jsonData.num_stars !== 'number') {
-                errors.push("'Stars (num_stars)' must be a number if provided.");
-            } else if (jsonData.hasOwnProperty('num_stars') && typeof jsonData.num_stars === 'number' && jsonData.num_stars < 0) {
-                 errors.push("'Stars (num_stars)' cannot be negative.");
-            }
-
-            if (jsonData.hasOwnProperty('is_python') && typeof jsonData.is_python !== 'boolean') {
-                errors.push("'Is Python (is_python)' must be a boolean (true/false) if provided.");
-            }
             if (jsonData.hasOwnProperty('license') && typeof jsonData.license !== 'string') {
                 errors.push("'License (license)' must be a string if provided.");
             }
@@ -1434,8 +1449,6 @@
             formData.append('path', jsonData.path);
             formData.append('proxy_pass_url', jsonData.proxy_pass_url);
             formData.append('tags', Array.isArray(jsonData.tags) ? jsonData.tags.join(',') : (jsonData.tags || ''));
-            formData.append('num_stars', jsonData.num_stars !== undefined ? jsonData.num_stars.toString() : '0');
-            formData.append('is_python', jsonData.is_python ? 'true' : ''); // FastAPI expects 'true' or empty for bool
             formData.append('license', jsonData.license || 'N/A');
             // Custom endpoint fields (optional)
             if (jsonData.mcp_endpoint) {
@@ -1452,6 +1465,16 @@
             formData.append('visibility', jsonData.visibility || 'public');
             if (jsonData.allowed_groups) {
                 formData.append('allowed_groups', Array.isArray(jsonData.allowed_groups) ? jsonData.allowed_groups.join(',') : (jsonData.allowed_groups || ''));
+            }
+            // Backend authentication fields (optional)
+            if (jsonData.auth_scheme && jsonData.auth_scheme !== 'none') {
+                formData.append('auth_scheme', jsonData.auth_scheme);
+                if (jsonData.auth_credential) {
+                    formData.append('auth_credential', jsonData.auth_credential);
+                }
+                if (jsonData.auth_scheme === 'api_key' && jsonData.auth_header_name) {
+                    formData.append('auth_header_name', jsonData.auth_header_name);
+                }
             }
 
             handleRegistrationSubmit(formData);
@@ -1493,16 +1516,6 @@
             event.preventDefault();
             const form = event.target;
             const formData = new FormData(form);
-
-            // FastAPI expects boolean Form fields to be 'true' or absent/empty string.
-            // If checkbox is not checked, 'is_python' won't be in formData if it's not set to a value.
-            // If it is checked, its value (e.g., 'true') will be sent.
-            // We need to ensure 'is_python' sends 'true' or an empty string for proper boolean conversion by FastAPI.
-            if (!formData.has('is_python')) { // If checkbox not checked, it won't be in FormData
-                formData.append('is_python', ''); // Send empty string, FastAPI bool conversion handles this as False
-            }
-            // For other fields, if they are empty, they will be sent as empty strings.
-            // The backend API handles default values for optional fields if they are empty.
 
             handleRegistrationSubmit(formData);
         }
@@ -2019,11 +2032,6 @@
                     event.preventDefault();
                     const formData = new FormData(this);
                     
-                    // FastAPI expects 'true' or empty for boolean fields
-                    if (!formData.has('is_python')) {
-                        formData.append('is_python', '');
-                    }
-                    
                     handleRegistrationSubmit(formData);
                 });
             }
@@ -2384,9 +2392,7 @@
                             {% else %}
                                 <span id="{{ num_tools_id }}" class="metadata" title="Tools info not available">🔧 {{ service.num_tools }}</span>
                             {% endif %}
-                            <span class="metadata">⭐ {{ service.num_stars }}</span>
                             <div class="platform-icons">
-                                 {% if service.is_python %}<span>🐍 Python</span>{% endif %}
                                  <span>⚖️ {{ service.license }}</span>
                                  <!-- Consider adding OS icons dynamically if needed -->
                                  <span>🐧</span> <span></span> <span>🪟</span>
@@ -2461,17 +2467,9 @@
                         <label for="reg-tags">Tags (comma-separated)</label>
                         <input type="text" id="reg-tags" name="tags" class="form-input">
                     </div>
-                     <div class="form-group">
-                        <label for="reg-num-stars">Stars</label>
-                        <input type="number" id="reg-num-stars" name="num_stars" class="form-input" value="0" min="0">
-                    </div>
                     <div class="form-group">
                         <label for="reg-license">License</label>
                         <input type="text" id="reg-license" name="license" class="form-input" value="N/A">
-                    </div>
-                    <div class="form-group">
-                        <input type="checkbox" id="reg-is-python" name="is_python" value="true"> <!-- Value 'true' is important for FastAPI -->
-                        <label for="reg-is-python" style="display: inline; font-weight: normal;">Is Python based?</label>
                     </div>
                     <div class="form-group">
                         <label for="reg-metadata">Metadata (optional, JSON object)</label>
@@ -2491,6 +2489,27 @@
                         <label for="reg-allowed-groups">Allowed Groups (comma-separated)</label>
                         <input type="text" id="reg-allowed-groups" name="allowed_groups" class="form-input" placeholder="e.g., engineering, devops">
                         <small style="color: #666;">Groups that can access this server when visibility is group-restricted</small>
+                    </div>
+                    <hr style="margin: 16px 0; border-color: #444;">
+                    <h4 style="margin-bottom: 8px;">Backend Authentication</h4>
+                    <small style="color: #666; display: block; margin-bottom: 12px;">Configure credentials the gateway will use when proxying requests to your backend MCP server.</small>
+                    <div class="form-group">
+                        <label for="reg-auth-scheme">Authentication Scheme</label>
+                        <select id="reg-auth-scheme" name="auth_scheme" class="form-input" onchange="toggleAuthFields()">
+                            <option value="none" selected>None</option>
+                            <option value="bearer">Bearer Token</option>
+                            <option value="api_key">API Key</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="reg-auth-credential-container" style="display: none;">
+                        <label for="reg-auth-credential" id="reg-auth-credential-label">Credential</label>
+                        <input type="password" id="reg-auth-credential" name="auth_credential" class="form-input" placeholder="Enter credential">
+                        <small style="color: #666;">This credential is stored securely (encrypted) and never displayed after saving.</small>
+                    </div>
+                    <div class="form-group" id="reg-auth-header-container" style="display: none;">
+                        <label for="reg-auth-header-name">Header Name</label>
+                        <input type="text" id="reg-auth-header-name" name="auth_header_name" class="form-input" value="X-API-Key" placeholder="X-API-Key">
+                        <small style="color: #666;">The HTTP header name used to send the API key (default: X-API-Key)</small>
                     </div>
                     <button type="submit" class="edit-button">Register Server</button>
                 </form>
@@ -2520,8 +2539,6 @@
     "proxy_pass_url": "http://localhost:8080",
     "description": "This is a great service.",
     "tags": ["awesome", "example"],
-    "num_stars": 5,
-    "is_python": true,
     "license": "MIT",
     "mcp_endpoint": "http://localhost:8080/custom-path",
     "sse_endpoint": "http://localhost:8080/events",
@@ -2531,9 +2548,12 @@
         "cost_center": "CC-1001"
     },
     "visibility": "public",
-    "allowed_groups": []
+    "allowed_groups": [],
+    "auth_scheme": "api_key",
+    "auth_credential": "your-api-key-here",
+    "auth_header_name": "X-API-Key"
 }'''></textarea>
-                        <small style="color: #666;">Note: mcp_endpoint, sse_endpoint, metadata, visibility, and allowed_groups are optional.</small>
+                        <small style="color: #666;">Note: mcp_endpoint, sse_endpoint, metadata, visibility, allowed_groups, and auth fields are optional.</small>
                     </div>
                     <button type="submit" class="edit-button">Paste and Register</button>
                 </form>

@@ -40,9 +40,7 @@ def mock_sentence_transformer():
         Mock SentenceTransformer instance
     """
     mock_model = MagicMock()
-    mock_model.encode.return_value = np.array(
-        [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dtype=np.float32
-    )
+    mock_model.encode.return_value = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dtype=np.float32)
     mock_model.get_sentence_embedding_dimension.return_value = 384
     return mock_model
 
@@ -117,6 +115,7 @@ class TestEmbeddingsClient:
 
     def test_abstract_encode_method(self):
         """Test that encode method is abstract and must be implemented."""
+
         # Arrange
         class IncompleteClient(EmbeddingsClient):
             def get_embedding_dimension(self) -> int:
@@ -128,6 +127,7 @@ class TestEmbeddingsClient:
 
     def test_abstract_get_embedding_dimension_method(self):
         """Test that get_embedding_dimension method is abstract."""
+
         # Arrange
         class IncompleteClient(EmbeddingsClient):
             def encode(self, texts: list[str]) -> np.ndarray:
@@ -139,6 +139,7 @@ class TestEmbeddingsClient:
 
     def test_concrete_implementation_works(self):
         """Test that concrete implementation can be instantiated."""
+
         # Arrange
         class ConcreteClient(EmbeddingsClient):
             def encode(self, texts: list[str]) -> np.ndarray:
@@ -214,9 +215,7 @@ class TestSentenceTransformersClient:
             assert client._model == mock_sentence_transformer
             assert client._dimension == 384
 
-    def test_load_model_from_local_directory(
-        self, mock_sentence_transformer, temp_model_dir
-    ):
+    def test_load_model_from_local_directory(self, mock_sentence_transformer, temp_model_dir):
         """Test loading model from local directory."""
         # Arrange
         with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
@@ -234,9 +233,7 @@ class TestSentenceTransformersClient:
             assert client._model == mock_sentence_transformer
             assert client._dimension == 384
 
-    def test_load_model_empty_local_directory(
-        self, mock_sentence_transformer, empty_model_dir
-    ):
+    def test_load_model_empty_local_directory(self, mock_sentence_transformer, empty_model_dir):
         """Test loading model when local directory exists but is empty."""
         # Arrange
         with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
@@ -254,9 +251,7 @@ class TestSentenceTransformersClient:
             mock_st_class.assert_called_once_with("all-MiniLM-L6-v2")
             assert client._model == mock_sentence_transformer
 
-    def test_load_model_with_cache_dir(
-        self, mock_sentence_transformer, tmp_path
-    ):
+    def test_load_model_with_cache_dir(self, mock_sentence_transformer, tmp_path):
         """Test loading model with custom cache directory."""
         # Arrange
         cache_dir = tmp_path / "cache"
@@ -274,9 +269,7 @@ class TestSentenceTransformersClient:
             assert cache_dir.exists()
             assert client._model == mock_sentence_transformer
 
-    def test_load_model_restores_environment_variable(
-        self, mock_sentence_transformer, tmp_path
-    ):
+    def test_load_model_restores_environment_variable(self, mock_sentence_transformer, tmp_path):
         """Test that loading model restores original SENTENCE_TRANSFORMERS_HOME."""
         # Arrange
         original_value = "/original/path"
@@ -428,9 +421,7 @@ class TestSentenceTransformersClient:
             assert dimension == 384
             mock_sentence_transformer.get_sentence_embedding_dimension.assert_called_once()
 
-    def test_get_embedding_dimension_lazy_loads_model(
-        self, mock_sentence_transformer
-    ):
+    def test_get_embedding_dimension_lazy_loads_model(self, mock_sentence_transformer):
         """Test that get_embedding_dimension lazy loads model if needed."""
         # Arrange
         with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
@@ -446,9 +437,7 @@ class TestSentenceTransformersClient:
             assert client._dimension == 384
             mock_st_class.assert_called_once()
 
-    def test_get_embedding_dimension_cached(
-        self, mock_sentence_transformer
-    ):
+    def test_get_embedding_dimension_cached(self, mock_sentence_transformer):
         """Test that dimension is cached after first load."""
         # Arrange
         with patch("sentence_transformers.SentenceTransformer") as mock_st_class:
@@ -687,9 +676,7 @@ class TestLiteLLMClient:
             # Assert
             assert client._validated_dimension == 4
 
-    def test_encode_warns_on_dimension_mismatch(
-        self, mock_litellm_response, caplog
-    ):
+    def test_encode_warns_on_dimension_mismatch(self, mock_litellm_response, caplog):
         """Test warning when dimension doesn't match expected."""
         # Arrange
         with patch("litellm.embedding") as mock_embedding:
@@ -706,9 +693,7 @@ class TestLiteLLMClient:
             # Assert
             assert "Embedding dimension mismatch" in caplog.text
 
-    def test_encode_caches_validated_dimension(
-        self, mock_litellm_response
-    ):
+    def test_encode_caches_validated_dimension(self, mock_litellm_response):
         """Test that validated dimension is cached after first call."""
         # Arrange
         with patch("litellm.embedding") as mock_embedding:
@@ -737,9 +722,7 @@ class TestLiteLLMClient:
             with pytest.raises(RuntimeError, match="Failed to generate embeddings via LiteLLM"):
                 client.encode(["test"])
 
-    def test_get_embedding_dimension_from_validated(
-        self, mock_litellm_response
-    ):
+    def test_get_embedding_dimension_from_validated(self, mock_litellm_response):
         """Test getting dimension from validated dimension (after encode)."""
         # Arrange
         with patch("litellm.embedding") as mock_embedding:
@@ -767,9 +750,7 @@ class TestLiteLLMClient:
         # Assert
         assert dimension == 1536
 
-    def test_get_embedding_dimension_makes_test_call(
-        self, mock_litellm_response
-    ):
+    def test_get_embedding_dimension_makes_test_call(self, mock_litellm_response):
         """Test that dimension is determined via test call if not known."""
         # Arrange
         with patch("litellm.embedding") as mock_embedding:
@@ -824,9 +805,7 @@ class TestCreateEmbeddingsClient:
             assert isinstance(client, SentenceTransformersClient)
             assert client.model_name == "all-MiniLM-L6-v2"
 
-    def test_create_sentence_transformers_client_case_insensitive(
-        self, mock_sentence_transformer
-    ):
+    def test_create_sentence_transformers_client_case_insensitive(self, mock_sentence_transformer):
         """Test that provider name is case-insensitive."""
         # Arrange
         with patch("sentence_transformers.SentenceTransformer") as mock_st_class:

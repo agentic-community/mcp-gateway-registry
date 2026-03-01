@@ -1,4 +1,5 @@
 """Integration tests for skill API endpoints."""
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -29,7 +30,7 @@ def mock_url_validation():
         mock.return_value = {
             "valid": True,
             "content_version": "abc123def456",
-            "content_updated_at": None
+            "content_updated_at": None,
         }
         yield mock
 
@@ -104,7 +105,7 @@ class TestSkillModels:
             path="/skills/test-skill",
             name="test-skill",
             description="A test skill",
-            skill_md_url="https://test.com/SKILL.md"
+            skill_md_url="https://test.com/SKILL.md",
         )
 
         assert skill.path == "/skills/test-skill"
@@ -128,7 +129,7 @@ class TestSkillModels:
             name="test",
             description="Test skill",
             skill_md_url="https://test.com/SKILL.md",
-            tags=["tag1", "tag2"]
+            tags=["tag1", "tag2"],
         )
 
         info = SkillInfo(
@@ -191,7 +192,7 @@ class TestSkillService:
             path="/skills/test",
             name="test",
             description="Test",
-            skill_md_url="https://test.com/SKILL.md"
+            skill_md_url="https://test.com/SKILL.md",
         )
         mock_skill_repository.get.return_value = skill
 
@@ -214,13 +215,13 @@ class TestSkillService:
                 path="/skills/skill1",
                 name="skill1",
                 description="Skill 1",
-                skill_md_url="https://test.com/SKILL.md"
+                skill_md_url="https://test.com/SKILL.md",
             ),
             SkillCard(
                 path="/skills/skill2",
                 name="skill2",
                 description="Skill 2",
-                skill_md_url="https://test.com/SKILL.md"
+                skill_md_url="https://test.com/SKILL.md",
             ),
         ]
         mock_skill_repository.list_filtered.return_value = skills
@@ -243,7 +244,7 @@ class TestSkillService:
             name="test",
             description="Test",
             skill_md_url="https://test.com/SKILL.md",
-            is_enabled=True
+            is_enabled=True,
         )
         mock_skill_repository.set_state.return_value = True
         mock_skill_repository.get.return_value = skill
@@ -386,7 +387,7 @@ class TestToolValidation:
             allowed_tools=[
                 ToolReference(tool_name="Read"),
                 ToolReference(tool_name="Write"),
-            ]
+            ],
         )
 
         # Mock server repository
@@ -397,7 +398,7 @@ class TestToolValidation:
                 "tool_list": [
                     {"name": "Read"},
                     {"name": "Write"},
-                ]
+                ],
             }
         }
         mock_server_repo.get_state.return_value = True
@@ -424,7 +425,7 @@ class TestToolValidation:
             allowed_tools=[
                 ToolReference(tool_name="Read"),
                 ToolReference(tool_name="NonExistent"),
-            ]
+            ],
         )
 
         # Mock server repository
@@ -434,7 +435,7 @@ class TestToolValidation:
                 "server_name": "filesystem",
                 "tool_list": [
                     {"name": "Read"},
-                ]
+                ],
             }
         }
         mock_server_repo.get_state.return_value = True
@@ -458,7 +459,7 @@ class TestToolValidation:
             name="test",
             description="Test",
             skill_md_url="https://test.com/SKILL.md",
-            allowed_tools=[]
+            allowed_tools=[],
         )
 
         service = ToolValidationService()

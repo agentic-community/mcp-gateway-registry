@@ -64,6 +64,7 @@ from registry.auth.internal import (
     _INTERNAL_JWT_ISSUER as JWT_ISSUER,
     _INTERNAL_JWT_AUDIENCE as JWT_AUDIENCE,
 )
+
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
 
@@ -1028,9 +1029,9 @@ class SimplifiedCognitoValidator:
             if unverified_claims.get("iss") == JWT_ISSUER:
                 logger.debug("Token appears to be self-signed, validating...")
                 return self.validate_self_signed_token(access_token)
-        except Exception:
+        except Exception as e:
             # Not our token or malformed, continue to Cognito validation
-            pass
+            logger.debug(f"Token is not self-signed or malformed, falling back to Cognito: {e}")
 
         # Try JWT validation with Cognito
         try:
@@ -2112,8 +2113,8 @@ def parse_arguments():
     parser.add_argument(
         "--host",
         type=str,
-        default="0.0.0.0",
-        help="Host for the server to listen on (default: 0.0.0.0)",
+        default=os.getenv("AUTH_SERVER_HOST", "127.0.0.1"),  # nosec B104
+        help="Host for the server to listen on (default: 127.0.0.1, override with AUTH_SERVER_HOST env var)",
     )
 
     parser.add_argument(

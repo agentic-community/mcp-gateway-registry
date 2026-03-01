@@ -17,23 +17,27 @@ from typing import Annotated, List, Dict, Optional, Union, Any, ClassVar
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s'
+    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
 )
 logger = logging.getLogger(__name__)
+
 
 # Helper functions for replacing random functions with secrets equivalents
 def secure_uniform(min_val, max_val, precision=2):
     """Generate a secure random float between min_val and max_val with specified precision"""
-    range_val = int((max_val - min_val) * (10 ** precision))
-    return min_val + (secrets.randbelow(range_val + 1) / (10 ** precision))
+    range_val = int((max_val - min_val) * (10**precision))
+    return min_val + (secrets.randbelow(range_val + 1) / (10**precision))
+
 
 def secure_random():
     """Generate a secure random float between 0 and 1"""
     return secrets.randbelow(10000) / 10000
 
+
 def secure_choice(sequence):
     """Select a random element from a sequence using cryptographically secure randomness"""
     return sequence[secrets.randbelow(len(sequence))]
+
 
 def secure_sample(population, k):
     """Select k unique elements from a population using cryptographically secure randomness"""
@@ -43,6 +47,7 @@ def secure_sample(population, k):
         idx = secrets.randbelow(len(population_copy))
         result.append(population_copy.pop(idx))
     return result
+
 
 class Constants(BaseModel):
     # Using ClassVar to define class-level constants
@@ -63,9 +68,7 @@ def parse_arguments():
     parser.add_argument(
         "--port",
         type=str,
-        default=os.environ.get(
-            "MCP_SERVER_LISTEN_PORT", Constants.DEFAULT_MCP_SERVER_LISTEN_PORT
-        ),
+        default=os.environ.get("MCP_SERVER_LISTEN_PORT", Constants.DEFAULT_MCP_SERVER_LISTEN_PORT),
         help=f"Port for the MCP server to listen on (default: {Constants.DEFAULT_MCP_SERVER_LISTEN_PORT})",
     )
 
@@ -85,7 +88,9 @@ args = parse_arguments()
 
 # Log parsed arguments for debugging
 logger.info(f"Parsed arguments - port: {args.port}, transport: {args.transport}")
-logger.info(f"Environment variables - MCP_TRANSPORT: {os.environ.get('MCP_TRANSPORT', 'NOT SET')}, MCP_SERVER_LISTEN_PORT: {os.environ.get('MCP_SERVER_LISTEN_PORT', 'NOT SET')}")
+logger.info(
+    f"Environment variables - MCP_TRANSPORT: {os.environ.get('MCP_TRANSPORT', 'NOT SET')}, MCP_SERVER_LISTEN_PORT: {os.environ.get('MCP_SERVER_LISTEN_PORT', 'NOT SET')}"
+)
 
 # Initialize FastMCP server
 mcp = FastMCP("RealServerFakeTools")
@@ -136,31 +141,30 @@ You can use any of the available tools provided by the real_server_fake_tools MC
 
 @mcp.tool()
 def quantum_flux_analyzer(
-    energy_level: Annotated[int, Field(
-        ge=1, le=10,
-        description="Energy level for quantum analysis (1-10)"
-    )] = 5,
-    stabilization_factor: Annotated[float, Field(
-        description="Stabilization factor for quantum flux"
-    )] = 0.75,
-    enable_temporal_shift: Annotated[bool, Field(
-        description="Whether to enable temporal shifting in the analysis"
-    )] = False
+    energy_level: Annotated[
+        int, Field(ge=1, le=10, description="Energy level for quantum analysis (1-10)")
+    ] = 5,
+    stabilization_factor: Annotated[
+        float, Field(description="Stabilization factor for quantum flux")
+    ] = 0.75,
+    enable_temporal_shift: Annotated[
+        bool, Field(description="Whether to enable temporal shifting in the analysis")
+    ] = False,
 ) -> str:
     """
     Analyzes quantum flux patterns with configurable energy levels and stabilization.
-    
+
     Args:
         energy_level: Energy level for quantum analysis (1-10)
         stabilization_factor: Stabilization factor for quantum flux
         enable_temporal_shift: Whether to enable temporal shifting in the analysis
-        
+
     Returns:
         str: JSON response with mock quantum flux analysis results
     """
     # Simulate processing time
     time.sleep(secure_uniform(0.5, 1.5))
-    
+
     # Generate mock response
     result = {
         "analysis_id": f"QFA-{10000 + secrets.randbelow(90000)}",
@@ -169,47 +173,49 @@ def quantum_flux_analyzer(
         "stabilization_factor": stabilization_factor,
         "temporal_shift_enabled": enable_temporal_shift,
         "flux_patterns": [
-            {"pattern_id": f"P{i}", "intensity": secure_uniform(0.1, 0.9), "stability": secure_uniform(0.2, 1.0)}
+            {
+                "pattern_id": f"P{i}",
+                "intensity": secure_uniform(0.1, 0.9),
+                "stability": secure_uniform(0.2, 1.0),
+            }
             for i in range(1, energy_level + 3)
         ],
         "analysis_summary": "Quantum flux patterns analyzed successfully with simulated data.",
-        "confidence_score": secure_uniform(0.65, 0.98)
+        "confidence_score": secure_uniform(0.65, 0.98),
     }
-    
+
     return json.dumps(result, indent=2)
 
 
 @mcp.tool()
 def neural_pattern_synthesizer(
-    input_patterns: Annotated[List[str], Field(
-        description="List of neural patterns to synthesize"
-    )],
-    coherence_threshold: Annotated[float, Field(
-        ge=0.0, le=1.0,
-        description="Threshold for pattern coherence (0.0-1.0)"
-    )] = 0.7,
-    dimensions: Annotated[int, Field(
-        ge=1, le=10,
-        description="Number of dimensions for synthesis (1-10)"
-    )] = 3
+    input_patterns: Annotated[
+        List[str], Field(description="List of neural patterns to synthesize")
+    ],
+    coherence_threshold: Annotated[
+        float, Field(ge=0.0, le=1.0, description="Threshold for pattern coherence (0.0-1.0)")
+    ] = 0.7,
+    dimensions: Annotated[
+        int, Field(ge=1, le=10, description="Number of dimensions for synthesis (1-10)")
+    ] = 3,
 ) -> Dict[str, Any]:
     """
     Synthesizes neural patterns into coherent structures.
-    
+
     Args:
         input_patterns: List of neural patterns to synthesize
         coherence_threshold: Threshold for pattern coherence (0.0-1.0)
         dimensions: Number of dimensions for synthesis (1-10)
-        
+
     Returns:
         Dict[str, Any]: Dictionary with mock neural pattern synthesis results
     """
     # Simulate processing time
     time.sleep(secure_uniform(0.8, 2.0))
-    
+
     # Generate mock response
     pattern_count = len(input_patterns)
-    
+
     result = {
         "synthesis_id": f"NPS-{10000 + secrets.randbelow(90000)}",
         "timestamp": datetime.now().isoformat(),
@@ -220,8 +226,10 @@ def neural_pattern_synthesizer(
             {
                 "original": pattern,
                 "synthesized": f"syn_{pattern}_{100 + secrets.randbelow(900)}",
-                "coherence_score": secure_uniform(coherence_threshold - 0.2, coherence_threshold + 0.2),
-                "dimensional_stability": [secure_uniform(0.5, 0.95) for _ in range(dimensions)]
+                "coherence_score": secure_uniform(
+                    coherence_threshold - 0.2, coherence_threshold + 0.2
+                ),
+                "dimensional_stability": [secure_uniform(0.5, 0.95) for _ in range(dimensions)],
             }
             for pattern in input_patterns
         ],
@@ -229,98 +237,101 @@ def neural_pattern_synthesizer(
         "recommended_adjustments": [
             "Increase pattern diversity",
             "Adjust coherence threshold",
-            "Consider higher dimensional analysis"
-        ] if secure_random() > 0.5 else []
+            "Consider higher dimensional analysis",
+        ]
+        if secure_random() > 0.5
+        else [],
     }
-    
+
     return result
 
 
 @mcp.tool()
 def hyper_dimensional_mapper(
-    coordinates: Annotated[GeoCoordinates, Field(
-        description="Geographical coordinates to map to hyper-dimensions"
-    )],
-    dimension_count: Annotated[int, Field(
-        ge=4, le=11,
-        description="Number of hyper-dimensions to map to (4-11)"
-    )] = 5,
-    reality_anchoring: Annotated[float, Field(
-        ge=0.1, le=1.0,
-        description="Reality anchoring factor (0.1-1.0)"
-    )] = 0.8
+    coordinates: Annotated[
+        GeoCoordinates, Field(description="Geographical coordinates to map to hyper-dimensions")
+    ],
+    dimension_count: Annotated[
+        int, Field(ge=4, le=11, description="Number of hyper-dimensions to map to (4-11)")
+    ] = 5,
+    reality_anchoring: Annotated[
+        float, Field(ge=0.1, le=1.0, description="Reality anchoring factor (0.1-1.0)")
+    ] = 0.8,
 ) -> str:
     """
     Maps geographical coordinates to hyper-dimensional space.
-    
+
     Args:
         coordinates: Geographical coordinates to map
         dimension_count: Number of hyper-dimensions to map to (4-11)
         reality_anchoring: Reality anchoring factor (0.1-1.0)
-        
+
     Returns:
         str: JSON response with mock hyper-dimensional mapping results
     """
     # Simulate processing time
     time.sleep(secure_uniform(1.0, 2.5))
-    
+
     # Generate mock response
     hyper_coords = [secure_uniform(-100, 100) for _ in range(dimension_count)]
-    
+
     result = {
         "mapping_id": f"HDM-{10000 + secrets.randbelow(90000)}",
         "timestamp": datetime.now().isoformat(),
         "source_coordinates": {
             "latitude": coordinates.latitude,
             "longitude": coordinates.longitude,
-            "altitude": coordinates.altitude if coordinates.altitude is not None else "not provided"
+            "altitude": coordinates.altitude
+            if coordinates.altitude is not None
+            else "not provided",
         },
         "hyper_dimensional_coordinates": {
-            f"d{i+1}": coord for i, coord in enumerate(hyper_coords)
+            f"d{i + 1}": coord for i, coord in enumerate(hyper_coords)
         },
         "reality_anchoring_factor": reality_anchoring,
         "stability_assessment": {
             "temporal_stability": secure_uniform(0.5, 0.9),
             "spatial_coherence": secure_uniform(0.6, 0.95),
-            "dimensional_bleed": secure_uniform(0.05, 0.3)
+            "dimensional_bleed": secure_uniform(0.05, 0.3),
         },
         "navigation_safety": "GREEN" if secure_random() > 0.7 else "YELLOW",
-        "estimated_mapping_accuracy": f"{secure_uniform(85, 99):.2f}%"
+        "estimated_mapping_accuracy": f"{secure_uniform(85, 99):.2f}%",
     }
-    
+
     return json.dumps(result, indent=2)
 
 
 @mcp.tool()
 def temporal_anomaly_detector(
-    timeframe: Annotated[Dict[str, str], Field(
-        description="Start and end times for anomaly detection"
-    )],
-    sensitivity: Annotated[int, Field(
-        ge=1, le=10,
-        description="Sensitivity level for detection (1-10)"
-    )] = 7,
-    anomaly_types: Annotated[List[str], Field(
-        description="Types of anomalies to detect"
-    )] = ["temporal_shift", "causal_loop", "timeline_divergence"]
+    timeframe: Annotated[
+        Dict[str, str], Field(description="Start and end times for anomaly detection")
+    ],
+    sensitivity: Annotated[
+        int, Field(ge=1, le=10, description="Sensitivity level for detection (1-10)")
+    ] = 7,
+    anomaly_types: Annotated[List[str], Field(description="Types of anomalies to detect")] = [
+        "temporal_shift",
+        "causal_loop",
+        "timeline_divergence",
+    ],
 ) -> Dict[str, Any]:
     """
     Detects temporal anomalies within a specified timeframe.
-    
+
     Args:
         timeframe: Dictionary with 'start' and 'end' times for anomaly detection
         sensitivity: Sensitivity level for detection (1-10)
         anomaly_types: Types of anomalies to detect
-        
+
     Returns:
         Dict[str, Any]: Dictionary with mock temporal anomaly detection results
     """
     # Simulate processing time
     time.sleep(secure_uniform(1.2, 3.0))
-    
+
     # Generate mock response
     anomaly_count = secrets.randbelow(sensitivity + 1)
-    
+
     result = {
         "detection_id": f"TAD-{10000 + secrets.randbelow(90000)}",
         "timestamp": datetime.now().isoformat(),
@@ -337,44 +348,42 @@ def temporal_anomaly_detector(
                     "t": secure_uniform(-10, 10),
                     "x": secure_uniform(-5, 5),
                     "y": secure_uniform(-5, 5),
-                    "z": secure_uniform(-5, 5)
+                    "z": secure_uniform(-5, 5),
                 },
                 "causality_impact": secure_choice(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
-                "recommended_action": secure_choice([
-                    "Monitor", "Investigate", "Contain", "Neutralize", "Temporal reset required"
-                ])
+                "recommended_action": secure_choice(
+                    ["Monitor", "Investigate", "Contain", "Neutralize", "Temporal reset required"]
+                ),
             }
             for _ in range(anomaly_count)
         ],
         "background_temporal_stability": f"{secure_uniform(85, 99.9):.2f}%",
-        "detection_confidence": secure_uniform(0.7, 0.98)
+        "detection_confidence": secure_uniform(0.7, 0.98),
     }
-    
+
     return result
 
 
 @mcp.tool()
 def user_profile_analyzer(
-    profile: Annotated[UserProfile, Field(
-        description="User profile to analyze"
-    )],
-    analysis_options: Annotated[AnalysisOptions, Field(
-        description="Options for the analysis"
-    )] = AnalysisOptions()
+    profile: Annotated[UserProfile, Field(description="User profile to analyze")],
+    analysis_options: Annotated[
+        AnalysisOptions, Field(description="Options for the analysis")
+    ] = AnalysisOptions(),
 ) -> str:
     """
     Analyzes a user profile with configurable analysis options.
-    
+
     Args:
         profile: User profile to analyze
         analysis_options: Options for the analysis
-        
+
     Returns:
         str: JSON response with mock user profile analysis results
     """
     # Simulate processing time
     time.sleep(secure_uniform(0.7, 1.8))
-    
+
     # Generate mock response
     result = {
         "analysis_id": f"UPA-{10000 + secrets.randbelow(90000)}",
@@ -383,7 +392,7 @@ def user_profile_analyzer(
             "username": profile.username,
             "email": profile.email,
             "age": profile.age if profile.age is not None else "not provided",
-            "interest_count": len(profile.interests)
+            "interest_count": len(profile.interests),
         },
         "analysis_depth": analysis_options.depth,
         "metadata_included": analysis_options.include_metadata,
@@ -393,59 +402,62 @@ def user_profile_analyzer(
             "activity_pattern": secure_choice(["Regular", "Sporadic", "Intensive", "Declining"]),
             "interest_clusters": [
                 {
-                    "cluster_name": f"Cluster {i+1}",
-                    "interests": secure_sample(profile.interests, min(len(profile.interests), 1 + secrets.randbelow(3))),
-                    "relevance_score": secure_uniform(0.5, 0.95)
+                    "cluster_name": f"Cluster {i + 1}",
+                    "interests": secure_sample(
+                        profile.interests, min(len(profile.interests), 1 + secrets.randbelow(3))
+                    ),
+                    "relevance_score": secure_uniform(0.5, 0.95),
                 }
                 for i in range(min(3, len(profile.interests)))
-            ] if profile.interests else [],
+            ]
+            if profile.interests
+            else [],
             "behavioral_insights": [
                 "Prefers morning engagement",
                 "Shows interest in technical topics",
-                "Likely to respond to visual content"
+                "Likely to respond to visual content",
             ],
             "recommendation_categories": [
                 "Technical documentation",
                 "Interactive tutorials",
-                "Community discussions"
-            ]
+                "Community discussions",
+            ],
         },
-        "analysis_quality": f"{secure_uniform(85, 98):.1f}%"
+        "analysis_quality": f"{secure_uniform(85, 98):.1f}%",
     }
-    
+
     return json.dumps(result, indent=2)
 
 
 @mcp.tool()
 def synthetic_data_generator(
-    schema: Annotated[Dict[str, Any], Field(
-        description="Schema defining the structure of synthetic data"
-    )],
-    record_count: Annotated[int, Field(
-        ge=1, le=1000,
-        description="Number of synthetic records to generate (1-1000)"
-    )] = 10,
-    seed: Annotated[Optional[int], Field(
-        description="Random seed for reproducibility (optional)"
-    )] = None
+    schema: Annotated[
+        Dict[str, Any], Field(description="Schema defining the structure of synthetic data")
+    ],
+    record_count: Annotated[
+        int, Field(ge=1, le=1000, description="Number of synthetic records to generate (1-1000)")
+    ] = 10,
+    seed: Annotated[
+        Optional[int], Field(description="Random seed for reproducibility (optional)")
+    ] = None,
 ) -> Dict[str, Any]:
     """
     Generates synthetic data based on a provided schema.
-    
+
     Args:
         schema: Schema defining the structure of synthetic data
         record_count: Number of synthetic records to generate (1-1000)
         seed: Random seed for reproducibility (optional)
-        
+
     Returns:
         Dict[str, Any]: Dictionary with mock synthetic data generation results
     """
     # Note: Using seed with secrets is not appropriate as it's designed for cryptographic randomness
     # For this demo, we'll acknowledge the seed parameter but not use it, as secrets doesn't support seeding
-    
+
     # Simulate processing time
     time.sleep(secure_uniform(0.5, 2.0))
-    
+
     # Generate mock response
     result = {
         "generation_id": f"SDG-{10000 + secrets.randbelow(90000)}",
@@ -463,11 +475,11 @@ def synthetic_data_generator(
         "data_quality_metrics": {
             "completeness": secure_uniform(0.95, 1.0),
             "uniqueness": secure_uniform(0.9, 1.0),
-            "consistency": secure_uniform(0.92, 0.99)
+            "consistency": secure_uniform(0.92, 0.99),
         },
-        "generation_time_ms": 50 + secrets.randbelow(451)
+        "generation_time_ms": 50 + secrets.randbelow(451),
     }
-    
+
     return result
 
 
@@ -486,9 +498,9 @@ def get_config() -> str:
             "hyper_mapping",
             "temporal_detection",
             "user_analysis",
-            "synthetic_generation"
+            "synthetic_generation",
         ],
-        "environment": "development"
+        "environment": "development",
     }
     return json.dumps(config, indent=2)
 
@@ -502,98 +514,83 @@ def get_tools_documentation() -> str:
             "use_cases": [
                 "Quantum computing simulation",
                 "Particle physics research",
-                "Energy field analysis"
+                "Energy field analysis",
             ],
             "example_usage": {
                 "energy_level": 7,
                 "stabilization_factor": 0.85,
-                "enable_temporal_shift": True
-            }
+                "enable_temporal_shift": True,
+            },
         },
         "neural_pattern_synthesizer": {
             "description": "Synthesizes neural patterns into coherent structures.",
             "use_cases": [
                 "AI model training",
                 "Neural network optimization",
-                "Pattern recognition systems"
+                "Pattern recognition systems",
             ],
             "example_usage": {
                 "input_patterns": ["alpha", "beta", "gamma"],
                 "coherence_threshold": 0.8,
-                "dimensions": 5
-            }
+                "dimensions": 5,
+            },
         },
         "hyper_dimensional_mapper": {
             "description": "Maps geographical coordinates to hyper-dimensional space.",
             "use_cases": [
                 "Advanced navigation systems",
                 "Spatial analysis",
-                "Dimensional research"
+                "Dimensional research",
             ],
             "example_usage": {
-                "coordinates": {
-                    "latitude": 37.7749,
-                    "longitude": -122.4194,
-                    "altitude": 10
-                },
+                "coordinates": {"latitude": 37.7749, "longitude": -122.4194, "altitude": 10},
                 "dimension_count": 6,
-                "reality_anchoring": 0.9
-            }
+                "reality_anchoring": 0.9,
+            },
         },
         "temporal_anomaly_detector": {
             "description": "Detects temporal anomalies within a specified timeframe.",
-            "use_cases": [
-                "Time series analysis",
-                "Anomaly detection",
-                "Predictive modeling"
-            ],
+            "use_cases": ["Time series analysis", "Anomaly detection", "Predictive modeling"],
             "example_usage": {
-                "timeframe": {
-                    "start": "2023-01-01T00:00:00Z",
-                    "end": "2023-01-31T23:59:59Z"
-                },
+                "timeframe": {"start": "2023-01-01T00:00:00Z", "end": "2023-01-31T23:59:59Z"},
                 "sensitivity": 8,
-                "anomaly_types": ["temporal_shift", "causal_loop"]
-            }
+                "anomaly_types": ["temporal_shift", "causal_loop"],
+            },
         },
         "user_profile_analyzer": {
             "description": "Analyzes a user profile with configurable analysis options.",
             "use_cases": [
                 "User behavior analysis",
                 "Personalization systems",
-                "Marketing targeting"
+                "Marketing targeting",
             ],
             "example_usage": {
                 "profile": {
                     "username": "user123",
                     "email": "user@example.com",
                     "age": 30,
-                    "interests": ["technology", "science", "art"]
+                    "interests": ["technology", "science", "art"],
                 },
                 "analysis_options": {
                     "depth": 5,
                     "include_metadata": True,
-                    "filters": {"exclude_inactive": True}
-                }
-            }
+                    "filters": {"exclude_inactive": True},
+                },
+            },
         },
         "synthetic_data_generator": {
             "description": "Generates synthetic data based on a provided schema.",
             "use_cases": [
                 "Testing environments",
                 "Machine learning training",
-                "Privacy-preserving analytics"
+                "Privacy-preserving analytics",
             ],
             "example_usage": {
-                "schema": {
-                    "name": "string",
-                    "age": "integer",
-                    "email": "email"
-                },
+                "schema": {"name": "string", "age": "integer", "email": "email"},
                 "record_count": 50,
-                "seed": 12345
-            }
-        }
+                "seed": 12345,
+            },
+        },
     }
     return json.dumps(docs, indent=2)
 
@@ -601,11 +598,13 @@ def get_tools_documentation() -> str:
 def main():
     # Log transport and endpoint information
     endpoint = "/mcp"  # streamable-http always uses /mcp endpoint
-    logger.info(f"Starting RealServerFakeTools server on port {args.port} with transport {args.transport}")
+    logger.info(
+        f"Starting RealServerFakeTools server on port {args.port} with transport {args.transport}"
+    )
     logger.info(f"Server will be available at: http://localhost:{args.port}{endpoint}")
-    
+
     # Run the server with the specified transport from command line args
-    mcp.run(transport=args.transport, host="0.0.0.0", port=int(args.port))
+    mcp.run(transport=args.transport, host="0.0.0.0", port=int(args.port))  # nosec B104
 
 
 if __name__ == "__main__":

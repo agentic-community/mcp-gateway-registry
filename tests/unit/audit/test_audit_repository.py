@@ -19,7 +19,9 @@ def make_test_record(request_id: str = "test-123") -> RegistryApiAccessRecord:
     return RegistryApiAccessRecord(
         timestamp=datetime.now(timezone.utc),
         request_id=request_id,
-        identity=Identity(username="testuser", auth_method="oauth2", credential_type="bearer_token"),
+        identity=Identity(
+            username="testuser", auth_method="oauth2", credential_type="bearer_token"
+        ),
         request=Request(method="GET", path="/api/test", client_ip="127.0.0.1"),
         response=Response(status_code=200, duration_ms=50.5),
     )
@@ -37,13 +39,20 @@ class TestFind:
         mock_cursor.limit = MagicMock(return_value=mock_cursor)
 
         test_docs = [{"request_id": "req-1"}, {"request_id": "req-2"}]
+
         async def async_iter():
             for doc in test_docs:
                 yield doc
+
         mock_cursor.__aiter__ = lambda self: async_iter()
         mock_collection.find = MagicMock(return_value=mock_cursor)
 
-        with patch.object(DocumentDBAuditRepository, '_get_collection', new_callable=AsyncMock, return_value=mock_collection):
+        with patch.object(
+            DocumentDBAuditRepository,
+            "_get_collection",
+            new_callable=AsyncMock,
+            return_value=mock_collection,
+        ):
             repo = DocumentDBAuditRepository()
             repo._collection = mock_collection
             results = await repo.find({})
@@ -61,10 +70,16 @@ class TestFind:
         async def async_iter():
             return
             yield
+
         mock_cursor.__aiter__ = lambda self: async_iter()
         mock_collection.find = MagicMock(return_value=mock_cursor)
 
-        with patch.object(DocumentDBAuditRepository, '_get_collection', new_callable=AsyncMock, return_value=mock_collection):
+        with patch.object(
+            DocumentDBAuditRepository,
+            "_get_collection",
+            new_callable=AsyncMock,
+            return_value=mock_collection,
+        ):
             repo = DocumentDBAuditRepository()
             repo._collection = mock_collection
             await repo.find({}, limit=25, offset=50)
@@ -81,7 +96,9 @@ class TestInsert:
         mock_collection = AsyncMock()
         mock_collection.insert_one.return_value = MagicMock(inserted_id="new_id")
 
-        with patch.object(DocumentDBAuditRepository, '_get_collection', return_value=mock_collection):
+        with patch.object(
+            DocumentDBAuditRepository, "_get_collection", return_value=mock_collection
+        ):
             repo = DocumentDBAuditRepository()
             repo._collection = mock_collection
 
@@ -95,7 +112,9 @@ class TestInsert:
         mock_collection = AsyncMock()
         mock_collection.insert_one.side_effect = Exception("Database error")
 
-        with patch.object(DocumentDBAuditRepository, '_get_collection', return_value=mock_collection):
+        with patch.object(
+            DocumentDBAuditRepository, "_get_collection", return_value=mock_collection
+        ):
             repo = DocumentDBAuditRepository()
             repo._collection = mock_collection
 
@@ -108,7 +127,9 @@ class TestInsert:
         mock_collection = AsyncMock()
         mock_collection.insert_one.side_effect = DuplicateKeyError("duplicate key error")
 
-        with patch.object(DocumentDBAuditRepository, '_get_collection', return_value=mock_collection):
+        with patch.object(
+            DocumentDBAuditRepository, "_get_collection", return_value=mock_collection
+        ):
             repo = DocumentDBAuditRepository()
             repo._collection = mock_collection
 

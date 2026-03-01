@@ -38,12 +38,7 @@ class EntraIdProvider(AuthProvider):
     - Group-based authorization with Azure AD security groups
     """
 
-    def __init__(
-        self,
-        tenant_id: str,
-        client_id: str,
-        client_secret: str
-    ):
+    def __init__(self, tenant_id: str, client_id: str, client_secret: str):
         """Initialize Entra ID provider.
 
         Args:
@@ -61,10 +56,7 @@ class EntraIdProvider(AuthProvider):
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
         # Get login base URL from environment variable or use default
-        login_base_url = os.environ.get(
-            "ENTRA_LOGIN_BASE_URL",
-            DEFAULT_ENTRA_LOGIN_BASE_URL
-        )
+        login_base_url = os.environ.get("ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL)
 
         # Entra ID endpoints
         base_url = f"{login_base_url}/{tenant_id}"
@@ -83,11 +75,7 @@ class EntraIdProvider(AuthProvider):
 
         logger.debug(f"Initialized Entra ID provider for tenant '{tenant_id}'")
 
-    def validate_token(
-        self,
-        token: str,
-        **kwargs: Any
-    ) -> Dict[str, Any]:
+    def validate_token(self, token: str, **kwargs: Any) -> Dict[str, Any]:
         """Validate Entra ID JWT token.
 
         Args:
@@ -113,11 +101,8 @@ class EntraIdProvider(AuthProvider):
 
             # First check if this is a self-signed token from our auth server
             try:
-                unverified_claims = jwt.decode(
-                    token,
-                    options={"verify_signature": False}
-                )
-                if unverified_claims.get('iss') == JWT_ISSUER:
+                unverified_claims = jwt.decode(token, options={"verify_signature": False})
+                if unverified_claims.get("iss") == JWT_ISSUER:
                     logger.debug("Token appears to be self-signed, validating...")
                     return self._validate_self_signed_token(token)
             except Exception as e:
@@ -128,16 +113,17 @@ class EntraIdProvider(AuthProvider):
 
             # Decode token header to get key ID
             unverified_header = jwt.get_unverified_header(token)
-            kid = unverified_header.get('kid')
+            kid = unverified_header.get("kid")
 
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
 
             # Find matching key
             signing_key = None
-            for key in jwks.get('keys', []):
-                if key.get('kid') == kid:
+            for key in jwks.get("keys", []):
+                if key.get("kid") == kid:
                     from jwt import PyJWK
+
                     signing_key = PyJWK(key).key
                     break
 
@@ -146,46 +132,46 @@ class EntraIdProvider(AuthProvider):
 
             # First, decode without validation to check issuer
             unverified_claims = jwt.decode(token, options={"verify_signature": False})
-            token_issuer = unverified_claims.get('iss')
+            token_issuer = unverified_claims.get("iss")
 
             # Check if issuer is valid (v1.0 or v2.0)
             if token_issuer not in self.valid_issuers:
-                raise ValueError(f"Invalid issuer: {token_issuer}. Expected one of: {self.valid_issuers}")
+                raise ValueError(
+                    f"Invalid issuer: {token_issuer}. Expected one of: {self.valid_issuers}"
+                )
 
             # Validate and decode token with the correct issuer
             claims = jwt.decode(
                 token,
                 signing_key,
-                algorithms=['RS256'],
+                algorithms=["RS256"],
                 issuer=token_issuer,
-                audience=[self.client_id, f'api://{self.client_id}'],  # Accept both formats
-                options={
-                    "verify_exp": True,
-                    "verify_iat": True,
-                    "verify_aud": True
-                }
+                audience=[self.client_id, f"api://{self.client_id}"],  # Accept both formats
+                options={"verify_exp": True, "verify_iat": True, "verify_aud": True},
             )
 
-            logger.debug(f"Token validation successful for user: {claims.get('preferred_username', 'unknown')}")
+            logger.debug(
+                f"Token validation successful for user: {claims.get('preferred_username', 'unknown')}"
+            )
 
             # Extract user info from claims
             # For M2M tokens, group memberships are in 'roles' claim instead of 'groups'
             # For user tokens, they're in 'groups' claim
-            groups = claims.get('groups', [])
-            if not groups and 'roles' in claims:
+            groups = claims.get("groups", [])
+            if not groups and "roles" in claims:
                 # M2M token - use roles claim as groups
-                groups = claims.get('roles', [])
+                groups = claims.get("roles", [])
                 logger.debug(f"M2M token detected, using roles claim as groups: {groups}")
 
             return {
-                'valid': True,
-                'username': claims.get('preferred_username', claims.get('sub')),
-                'email': claims.get('email'),
-                'groups': groups,
-                'scopes': claims.get('scope', '').split() if claims.get('scope') else [],
-                'client_id': claims.get('azp', self.client_id),
-                'method': 'entra',
-                'data': claims
+                "valid": True,
+                "username": claims.get("preferred_username", claims.get("sub")),
+                "email": claims.get("email"),
+                "groups": groups,
+                "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
+                "client_id": claims.get("azp", self.client_id),
+                "method": "entra",
+                "data": claims,
             }
 
         except jwt.ExpiredSignatureError:
@@ -198,10 +184,7 @@ class EntraIdProvider(AuthProvider):
             logger.error(f"Entra ID token validation error: {e}")
             raise ValueError(f"Token validation failed: {e}")
 
-    def _validate_self_signed_token(
-        self,
-        token: str
-    ) -> Dict[str, Any]:
+    def _validate_self_signed_token(self, token: str) -> Dict[str, Any]:
         """Validate a self-signed JWT token generated by our auth server.
 
         Self-signed tokens are generated for OAuth users to use for programmatic
@@ -223,29 +206,25 @@ class EntraIdProvider(AuthProvider):
                 algorithms=["HS256"],
                 audience=JWT_AUDIENCE,
                 issuer=JWT_ISSUER,
-                options={
-                    "verify_exp": True,
-                    "verify_iat": True,
-                    "verify_aud": True
-                }
+                options={"verify_exp": True, "verify_iat": True, "verify_aud": True},
             )
 
             # Check token_use claim
-            token_use = claims.get('token_use')
-            if token_use != 'access':
+            token_use = claims.get("token_use")
+            if token_use != "access":
                 raise ValueError(f"Invalid token_use: {token_use}")
 
             # Extract scopes from claims
             scopes = []
-            if 'scope' in claims:
-                scope_value = claims['scope']
+            if "scope" in claims:
+                scope_value = claims["scope"]
                 if isinstance(scope_value, str):
                     scopes = scope_value.split() if scope_value else []
                 elif isinstance(scope_value, list):
                     scopes = scope_value
 
             # Extract groups from claims
-            groups = claims.get('groups', [])
+            groups = claims.get("groups", [])
             if isinstance(groups, str):
                 groups = [groups]
 
@@ -255,16 +234,16 @@ class EntraIdProvider(AuthProvider):
             )
 
             return {
-                'valid': True,
-                'method': 'self_signed',
-                'data': claims,
-                'client_id': claims.get('client_id', 'user-generated'),
-                'username': claims.get('sub', ''),
-                'email': claims.get('email', ''),
-                'expires_at': claims.get('exp'),
-                'scopes': scopes,
-                'groups': groups,
-                'token_type': 'user_generated'
+                "valid": True,
+                "method": "self_signed",
+                "data": claims,
+                "client_id": claims.get("client_id", "user-generated"),
+                "username": claims.get("sub", ""),
+                "email": claims.get("email", ""),
+                "expires_at": claims.get("exp"),
+                "scopes": scopes,
+                "groups": groups,
+                "token_type": "user_generated",
             }
 
         except jwt.ExpiredSignatureError:
@@ -289,8 +268,7 @@ class EntraIdProvider(AuthProvider):
         current_time = time.time()
 
         # Check if cache is still valid
-        if (self._jwks_cache and
-            (current_time - self._jwks_cache_time) < self._jwks_cache_ttl):
+        if self._jwks_cache and (current_time - self._jwks_cache_time) < self._jwks_cache_ttl:
             logger.debug("Using cached JWKS")
             return self._jwks_cache
 
@@ -309,11 +287,7 @@ class EntraIdProvider(AuthProvider):
             logger.error(f"Failed to retrieve JWKS from Entra ID: {e}")
             raise ValueError(f"Cannot retrieve JWKS: {e}")
 
-    def exchange_code_for_token(
-        self,
-        code: str,
-        redirect_uri: str
-    ) -> Dict[str, Any]:
+    def exchange_code_for_token(self, code: str, redirect_uri: str) -> Dict[str, Any]:
         """Exchange authorization code for access token.
 
         Args:
@@ -335,16 +309,14 @@ class EntraIdProvider(AuthProvider):
             logger.debug("Exchanging authorization code for token")
 
             data = {
-                'grant_type': 'authorization_code',
-                'code': code,
-                'client_id': self.client_id,
-                'client_secret': self.client_secret,
-                'redirect_uri': redirect_uri
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "redirect_uri": redirect_uri,
             }
 
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
             response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
             response.raise_for_status()
@@ -358,10 +330,7 @@ class EntraIdProvider(AuthProvider):
             logger.error(f"Failed to exchange code for token: {e}")
             raise ValueError(f"Token exchange failed: {e}")
 
-    def get_user_info(
-        self,
-        access_token: str
-    ) -> Dict[str, Any]:
+    def get_user_info(self, access_token: str) -> Dict[str, Any]:
         """Get user information from Entra ID.
 
         Args:
@@ -379,12 +348,14 @@ class EntraIdProvider(AuthProvider):
         try:
             logger.debug("Fetching user info from Entra ID")
 
-            headers = {'Authorization': f'Bearer {access_token}'}
+            headers = {"Authorization": f"Bearer {access_token}"}
             response = requests.get(self.userinfo_url, headers=headers, timeout=10)
             response.raise_for_status()
 
             user_info = response.json()
-            logger.debug(f"User info retrieved for: {user_info.get('preferred_username', 'unknown')}")
+            logger.debug(
+                f"User info retrieved for: {user_info.get('preferred_username', 'unknown')}"
+            )
 
             return user_info
 
@@ -392,12 +363,7 @@ class EntraIdProvider(AuthProvider):
             logger.error(f"Failed to get user info: {e}")
             raise ValueError(f"User info retrieval failed: {e}")
 
-    def get_auth_url(
-        self,
-        redirect_uri: str,
-        state: str,
-        scope: Optional[str] = None
-    ) -> str:
+    def get_auth_url(self, redirect_uri: str, state: str, scope: Optional[str] = None) -> str:
         """Get Entra ID authorization URL.
 
         Args:
@@ -411,11 +377,11 @@ class EntraIdProvider(AuthProvider):
         logger.debug(f"Generating auth URL with redirect_uri: {redirect_uri}")
 
         params = {
-            'client_id': self.client_id,
-            'response_type': 'code',
-            'scope': scope or 'openid email profile',
-            'redirect_uri': redirect_uri,
-            'state': state
+            "client_id": self.client_id,
+            "response_type": "code",
+            "scope": scope or "openid email profile",
+            "redirect_uri": redirect_uri,
+            "state": state,
         }
 
         auth_url = f"{self.auth_url}?{urlencode(params)}"
@@ -423,10 +389,7 @@ class EntraIdProvider(AuthProvider):
 
         return auth_url
 
-    def get_logout_url(
-        self,
-        redirect_uri: str
-    ) -> str:
+    def get_logout_url(self, redirect_uri: str) -> str:
         """Get Entra ID logout URL.
 
         Args:
@@ -437,20 +400,14 @@ class EntraIdProvider(AuthProvider):
         """
         logger.debug(f"Generating logout URL with redirect_uri: {redirect_uri}")
 
-        params = {
-            'client_id': self.client_id,
-            'post_logout_redirect_uri': redirect_uri
-        }
+        params = {"client_id": self.client_id, "post_logout_redirect_uri": redirect_uri}
 
         logout_url = f"{self.logout_url}?{urlencode(params)}"
         logger.debug(f"Generated logout URL: {logout_url}")
 
         return logout_url
 
-    def refresh_token(
-        self,
-        refresh_token: str
-    ) -> Dict[str, Any]:
+    def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
         """Refresh an access token using a refresh token.
 
         Args:
@@ -466,15 +423,13 @@ class EntraIdProvider(AuthProvider):
             logger.debug("Refreshing access token")
 
             data = {
-                'grant_type': 'refresh_token',
-                'refresh_token': refresh_token,
-                'client_id': self.client_id,
-                'client_secret': self.client_secret
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
             }
 
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
             response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
             response.raise_for_status()
@@ -488,10 +443,7 @@ class EntraIdProvider(AuthProvider):
             logger.error(f"Failed to refresh token: {e}")
             raise ValueError(f"Token refresh failed: {e}")
 
-    def validate_m2m_token(
-        self,
-        token: str
-    ) -> Dict[str, Any]:
+    def validate_m2m_token(self, token: str) -> Dict[str, Any]:
         """Validate a machine-to-machine token.
 
         Args:
@@ -509,7 +461,7 @@ class EntraIdProvider(AuthProvider):
         self,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
-        scope: Optional[str] = None
+        scope: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get machine-to-machine token using client credentials.
 
@@ -535,18 +487,16 @@ class EntraIdProvider(AuthProvider):
 
             # Default scope for Entra ID M2M tokens
             if not scope:
-                scope = f'api://{client_id or self.client_id}/.default'
+                scope = f"api://{client_id or self.client_id}/.default"
 
             data = {
-                'grant_type': 'client_credentials',
-                'client_id': client_id or self.client_id,
-                'client_secret': client_secret or self.client_secret,
-                'scope': scope
+                "grant_type": "client_credentials",
+                "client_id": client_id or self.client_id,
+                "client_secret": client_secret or self.client_secret,
+                "scope": scope,
             }
 
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
             response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
             response.raise_for_status()
@@ -560,10 +510,7 @@ class EntraIdProvider(AuthProvider):
             logger.error(f"Failed to get M2M token: {e}")
             raise ValueError(f"M2M token generation failed: {e}")
 
-    def initiate_device_code_flow(
-        self,
-        scope: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def initiate_device_code_flow(self, scope: Optional[str] = None) -> Dict[str, Any]:
         """Initiate device code flow for user authentication.
 
         This allows CLI applications to authenticate users by displaying a code
@@ -590,26 +537,16 @@ class EntraIdProvider(AuthProvider):
 
             # Default scopes for user authentication
             if not scope:
-                scope = f'api://{self.client_id}/user_impersonation openid profile email'
+                scope = f"api://{self.client_id}/user_impersonation openid profile email"
 
-            data = {
-                'client_id': self.client_id,
-                'scope': scope
-            }
+            data = {"client_id": self.client_id, "scope": scope}
 
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
             # Device code endpoint
-            device_code_url = self.token_url.replace('/token', '/devicecode')
+            device_code_url = self.token_url.replace("/token", "/devicecode")
 
-            response = requests.post(
-                device_code_url,
-                data=data,
-                headers=headers,
-                timeout=10
-            )
+            response = requests.post(device_code_url, data=data, headers=headers, timeout=10)
             response.raise_for_status()
 
             result = response.json()
@@ -622,10 +559,7 @@ class EntraIdProvider(AuthProvider):
             raise ValueError(f"Device code flow initiation failed: {e}")
 
     def poll_device_code_token(
-        self,
-        device_code: str,
-        interval: int = 5,
-        timeout: int = 300
+        self, device_code: str, interval: int = 5, timeout: int = 300
     ) -> Dict[str, Any]:
         """Poll for token after user completes device code authentication.
 
@@ -649,24 +583,17 @@ class EntraIdProvider(AuthProvider):
             logger.info("Polling for device code token")
 
             data = {
-                'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
-                'client_id': self.client_id,
-                'device_code': device_code
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "client_id": self.client_id,
+                "device_code": device_code,
             }
 
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
             start_time = time.time()
 
             while (time.time() - start_time) < timeout:
-                response = requests.post(
-                    self.token_url,
-                    data=data,
-                    headers=headers,
-                    timeout=10
-                )
+                response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
 
                 if response.status_code == 200:
                     token_data = response.json()
@@ -674,25 +601,27 @@ class EntraIdProvider(AuthProvider):
                     return token_data
 
                 error_data = response.json()
-                error = error_data.get('error', '')
+                error = error_data.get("error", "")
 
-                if error == 'authorization_pending':
+                if error == "authorization_pending":
                     # User hasn't completed auth yet, keep polling
                     logger.debug("Authorization pending, continuing to poll")
                     time.sleep(interval)
                     continue
-                elif error == 'slow_down':
+                elif error == "slow_down":
                     # Polling too fast, increase interval
                     interval += 5
                     logger.debug(f"Slowing down, new interval: {interval}s")
                     time.sleep(interval)
                     continue
-                elif error == 'expired_token':
+                elif error == "expired_token":
                     raise ValueError("Device code expired. Please start over.")
-                elif error == 'access_denied':
+                elif error == "access_denied":
                     raise ValueError("User denied the authorization request.")
                 else:
-                    raise ValueError(f"Token request failed: {error_data.get('error_description', error)}")
+                    raise ValueError(
+                        f"Token request failed: {error_data.get('error_description', error)}"
+                    )
 
             raise ValueError("Device code authentication timed out")
 
@@ -707,18 +636,15 @@ class EntraIdProvider(AuthProvider):
             Dictionary containing provider configuration and endpoints
         """
         return {
-            'provider_type': 'entra',
-            'tenant_id': self.tenant_id,
-            'client_id': self.client_id,
-            'endpoints': {
-                'auth': self.auth_url,
-                'token': self.token_url,
-                'userinfo': self.userinfo_url,
-                'jwks': self.jwks_url,
-                'logout': self.logout_url
+            "provider_type": "entra",
+            "tenant_id": self.tenant_id,
+            "client_id": self.client_id,
+            "endpoints": {
+                "auth": self.auth_url,
+                "token": self.token_url,
+                "userinfo": self.userinfo_url,
+                "jwks": self.jwks_url,
+                "logout": self.logout_url,
             },
-            'issuers': {
-                'v2': self.issuer_v2,
-                'v1': self.issuer_v1
-            }
+            "issuers": {"v2": self.issuer_v2, "v1": self.issuer_v1},
         }

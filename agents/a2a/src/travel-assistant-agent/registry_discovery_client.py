@@ -27,7 +27,6 @@ class RegistryDiscoveryClient:
         realm: str = "mcp-gateway",
         jwt_token: Optional[str] = None,
     ) -> None:
-
         self.registry_url = registry_url.rstrip("/")
         self.keycloak_url = keycloak_url.rstrip("/") if keycloak_url else None
         self.client_id = client_id
@@ -40,9 +39,13 @@ class RegistryDiscoveryClient:
         self.direct_jwt_token = jwt_token
 
         if jwt_token:
-            logger.info(f"RegistryDiscoveryClient initialized with direct JWT token for {registry_url}")
+            logger.info(
+                f"RegistryDiscoveryClient initialized with direct JWT token for {registry_url}"
+            )
         else:
-            logger.info(f"RegistryDiscoveryClient initialized with M2M credentials for {registry_url}")
+            logger.info(
+                f"RegistryDiscoveryClient initialized with M2M credentials for {registry_url}"
+            )
 
     async def _get_token(self) -> str:
         """Get or refresh JWT token from Keycloak using client credentials flow.
@@ -113,15 +116,9 @@ class RegistryDiscoveryClient:
 
         token = await self._get_token()
         discovery_url = f"{self.registry_url}/api/agents/discover/semantic"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Host": "localhost"
-        }
+        headers = {"Authorization": f"Bearer {token}", "Host": "localhost"}
         # This endpoint uses query parameters, not JSON body
-        params = {
-            "query": query,
-            "max_results": max_results
-        }
+        params = {"query": query, "max_results": max_results}
 
         async with aiohttp.ClientSession() as session:
             try:

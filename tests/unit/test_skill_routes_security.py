@@ -146,8 +146,10 @@ class TestGetSkillSecurityScan:
 
         user_context = {"is_admin": True, "username": "admin", "groups": []}
 
-        with patch("registry.api.skill_routes.get_skill_service", return_value=mock_service), \
-             patch("registry.services.skill_scanner.skill_scanner_service", mock_scanner):
+        with (
+            patch("registry.api.skill_routes.get_skill_service", return_value=mock_service),
+            patch("registry.services.skill_scanner.skill_scanner_service", mock_scanner),
+        ):
             result = await get_skill_security_scan(
                 user_context=user_context,
                 skill_path="test-skill",
@@ -169,8 +171,10 @@ class TestGetSkillSecurityScan:
 
         user_context = {"is_admin": True, "username": "admin", "groups": []}
 
-        with patch("registry.api.skill_routes.get_skill_service", return_value=mock_service), \
-             patch("registry.services.skill_scanner.skill_scanner_service", mock_scanner):
+        with (
+            patch("registry.api.skill_routes.get_skill_service", return_value=mock_service),
+            patch("registry.services.skill_scanner.skill_scanner_service", mock_scanner),
+        ):
             result = await get_skill_security_scan(
                 user_context=user_context,
                 skill_path="test-skill",

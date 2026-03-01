@@ -23,7 +23,7 @@ class MockKeycloakProvider:
         self,
         realm: str = "test-realm",
         server_url: str = "http://localhost:8080",
-        client_id: str = "test-client"
+        client_id: str = "test-client",
     ):
         """
         Initialize mock Keycloak provider.
@@ -43,7 +43,7 @@ class MockKeycloakProvider:
         token: str,
         username: str,
         groups: list[str] | None = None,
-        roles: list[str] | None = None
+        roles: list[str] | None = None,
     ) -> None:
         """
         Register a valid token for testing.
@@ -61,10 +61,7 @@ class MockKeycloakProvider:
         }
         logger.debug(f"Registered token for {username} in mock Keycloak")
 
-    def validate_token(
-        self,
-        access_token: str
-    ) -> dict[str, Any]:
+    def validate_token(self, access_token: str) -> dict[str, Any]:
         """
         Validate a JWT token.
 
@@ -87,7 +84,7 @@ class MockKeycloakProvider:
                 "groups": token_info["groups"],
                 "scopes": [],  # Keycloak uses groups/roles, not scopes
                 "client_id": self.client_id,
-                "data": token_info
+                "data": token_info,
             }
 
         raise ValueError("Invalid Keycloak token")
@@ -103,7 +100,7 @@ class MockKeycloakProvider:
             "provider_type": "keycloak",
             "realm": self.realm,
             "server_url": self.server_url,
-            "client_id": self.client_id
+            "client_id": self.client_id,
         }
 
 
@@ -119,7 +116,7 @@ class MockCognitoValidator:
         self,
         region: str = "us-east-1",
         user_pool_id: str = "us-east-1_TEST12345",
-        client_id: str = "test-client-id"
+        client_id: str = "test-client-id",
     ):
         """
         Initialize mock Cognito validator.
@@ -135,11 +132,7 @@ class MockCognitoValidator:
         self._valid_tokens: dict[str, dict[str, Any]] = {}
 
     def register_token(
-        self,
-        token: str,
-        username: str,
-        groups: list[str] | None = None,
-        email: str | None = None
+        self, token: str, username: str, groups: list[str] | None = None, email: str | None = None
     ) -> None:
         """
         Register a valid token for testing.
@@ -154,16 +147,12 @@ class MockCognitoValidator:
             "username": username,
             "groups": groups or [],
             "email": email or f"{username}@example.com",
-            "email_verified": True
+            "email_verified": True,
         }
         logger.debug(f"Registered token for {username} in mock Cognito")
 
     def validate_token(
-        self,
-        access_token: str,
-        user_pool_id: str,
-        client_id: str,
-        region: str | None = None
+        self, access_token: str, user_pool_id: str, client_id: str, region: str | None = None
     ) -> dict[str, Any]:
         """
         Validate a Cognito JWT token.
@@ -193,8 +182,8 @@ class MockCognitoValidator:
                 "data": {
                     "cognito:username": token_info["username"],
                     "cognito:groups": token_info["groups"],
-                    "email": token_info["email"]
-                }
+                    "email": token_info["email"],
+                },
             }
 
         raise ValueError("Invalid Cognito token")
@@ -210,14 +199,11 @@ class MockCognitoValidator:
             "provider_type": "cognito",
             "region": self.region,
             "user_pool_id": self.user_pool_id,
-            "client_id": self.client_id
+            "client_id": self.client_id,
         }
 
 
-def create_mock_provider(
-    provider_type: str = "cognito",
-    **kwargs: Any
-) -> Any:
+def create_mock_provider(provider_type: str = "cognito", **kwargs: Any) -> Any:
     """
     Factory function to create mock authentication providers.
 

@@ -43,10 +43,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_ENTRA_LOGIN_BASE_URL = "https://login.microsoftonline.com"
 
 
-def _get_env_or_error(
-    name: str,
-    default: Optional[str] = None
-) -> str:
+def _get_env_or_error(name: str, default: Optional[str] = None) -> str:
     """Get environment variable or raise error if not set.
 
     Args:
@@ -65,11 +62,7 @@ def _get_env_or_error(
     return value
 
 
-def _initiate_device_code_flow(
-    tenant_id: str,
-    client_id: str,
-    scope: Optional[str] = None
-) -> dict:
+def _initiate_device_code_flow(tenant_id: str, client_id: str, scope: Optional[str] = None) -> dict:
     """Initiate device code flow.
 
     Args:
@@ -82,26 +75,20 @@ def _initiate_device_code_flow(
     """
     import requests
 
-    login_base_url = os.environ.get(
-        "ENTRA_LOGIN_BASE_URL",
-        DEFAULT_ENTRA_LOGIN_BASE_URL
-    )
+    login_base_url = os.environ.get("ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL)
 
     device_code_url = f"{login_base_url}/{tenant_id}/oauth2/v2.0/devicecode"
 
     if not scope:
-        scope = f'api://{client_id}/user_impersonation openid profile email'
+        scope = f"api://{client_id}/user_impersonation openid profile email"
 
-    data = {
-        'client_id': client_id,
-        'scope': scope
-    }
+    data = {"client_id": client_id, "scope": scope}
 
     response = requests.post(device_code_url, data=data, timeout=10)
 
     if response.status_code != 200:
         error_data = response.json()
-        error_desc = error_data.get('error_description', error_data.get('error', 'Unknown error'))
+        error_desc = error_data.get("error_description", error_data.get("error", "Unknown error"))
         logger.error(f"Device code request failed: {error_desc}")
         raise ValueError(f"Device code flow not available: {error_desc}")
 
@@ -109,11 +96,7 @@ def _initiate_device_code_flow(
 
 
 def _poll_for_token(
-    tenant_id: str,
-    client_id: str,
-    device_code: str,
-    interval: int = 5,
-    timeout: int = 300
+    tenant_id: str, client_id: str, device_code: str, interval: int = 5, timeout: int = 300
 ) -> dict:
     """Poll for token after user completes authentication.
 
@@ -129,17 +112,14 @@ def _poll_for_token(
     """
     import requests
 
-    login_base_url = os.environ.get(
-        "ENTRA_LOGIN_BASE_URL",
-        DEFAULT_ENTRA_LOGIN_BASE_URL
-    )
+    login_base_url = os.environ.get("ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL)
 
     token_url = f"{login_base_url}/{tenant_id}/oauth2/v2.0/token"
 
     data = {
-        'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
-        'client_id': client_id,
-        'device_code': device_code
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        "client_id": client_id,
+        "device_code": device_code,
     }
 
     start_time = time.time()
@@ -151,32 +131,29 @@ def _poll_for_token(
             return response.json()
 
         error_data = response.json()
-        error = error_data.get('error', '')
+        error = error_data.get("error", "")
 
-        if error == 'authorization_pending':
-            sys.stdout.write('.')
+        if error == "authorization_pending":
+            sys.stdout.write(".")
             sys.stdout.flush()
             time.sleep(interval)
             continue
-        elif error == 'slow_down':
+        elif error == "slow_down":
             interval += 5
             time.sleep(interval)
             continue
-        elif error == 'expired_token':
+        elif error == "expired_token":
             raise ValueError("Device code expired. Please try again.")
-        elif error == 'access_denied':
+        elif error == "access_denied":
             raise ValueError("Authorization was denied.")
         else:
-            error_desc = error_data.get('error_description', error)
+            error_desc = error_data.get("error_description", error)
             raise ValueError(f"Token request failed: {error_desc}")
 
     raise ValueError("Authentication timed out. Please try again.")
 
 
-def _save_token(
-    token_data: dict,
-    output_path: str
-) -> None:
+def _save_token(token_data: dict, output_path: str) -> None:
     """Save token data to file.
 
     Args:
@@ -184,9 +161,9 @@ def _save_token(
         output_path: Path to save token file
     """
     # Add metadata
-    token_data['obtained_at'] = datetime.utcnow().isoformat()
+    token_data["obtained_at"] = datetime.utcnow().isoformat()
 
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(token_data, f, indent=2)
 
     # Set restrictive permissions
@@ -195,9 +172,7 @@ def _save_token(
     logger.info(f"Token saved to {output_path}")
 
 
-def _extract_access_token(
-    token_data: dict
-) -> str:
+def _extract_access_token(token_data: dict) -> str:
     """Extract just the access token from response.
 
     Args:
@@ -206,7 +181,7 @@ def _extract_access_token(
     Returns:
         Access token string
     """
-    return token_data.get('access_token', '')
+    return token_data.get("access_token", "")
 
 
 def main() -> int:
@@ -233,47 +208,43 @@ Environment Variables:
     ENTRA_TENANT_ID     Azure AD tenant ID (required)
     ENTRA_CLIENT_ID     App registration client ID (required)
     ENTRA_LOGIN_BASE_URL  Login URL (default: https://login.microsoftonline.com)
-"""
+""",
     )
 
     parser.add_argument(
-        '--output', '-o',
+        "--output",
+        "-o",
         type=str,
-        help='Path to save the token file (default: .token)',
-        default='.token'
+        help="Path to save the token file (default: .token)",
+        default=".token",
     )
 
     parser.add_argument(
-        '--stdout',
-        action='store_true',
-        help='Print token to stdout instead of saving to file'
+        "--stdout", action="store_true", help="Print token to stdout instead of saving to file"
     )
 
     parser.add_argument(
-        '--full',
-        action='store_true',
-        help='Output full token response (with refresh token, expiry, etc.)'
+        "--full",
+        action="store_true",
+        help="Output full token response (with refresh token, expiry, etc.)",
     )
 
     parser.add_argument(
-        '--scope',
+        "--scope",
         type=str,
-        help='OAuth scopes to request (default: user_impersonation openid profile email)'
+        help="OAuth scopes to request (default: user_impersonation openid profile email)",
     )
 
     parser.add_argument(
-        '--timeout',
-        type=int,
-        default=300,
-        help='Authentication timeout in seconds (default: 300)'
+        "--timeout", type=int, default=300, help="Authentication timeout in seconds (default: 300)"
     )
 
     args = parser.parse_args()
 
     try:
         # Get configuration from environment
-        tenant_id = _get_env_or_error('ENTRA_TENANT_ID')
-        client_id = _get_env_or_error('ENTRA_CLIENT_ID')
+        tenant_id = _get_env_or_error("ENTRA_TENANT_ID")
+        client_id = _get_env_or_error("ENTRA_CLIENT_ID")
 
         logger.info("Starting device code authentication flow")
         logger.info(f"Tenant ID: {tenant_id}")
@@ -281,9 +252,7 @@ Environment Variables:
 
         # Initiate device code flow
         device_code_response = _initiate_device_code_flow(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            scope=args.scope
+            tenant_id=tenant_id, client_id=client_id, scope=args.scope
         )
 
         # Display instructions to user
@@ -294,15 +263,15 @@ Environment Variables:
         print(f"  URL:  {device_code_response.get('verification_uri', '')}")
         print(f"  Code: {device_code_response.get('user_code', '')}")
         print("\n" + "=" * 60)
-        print("\nWaiting for authentication", end='')
+        print("\nWaiting for authentication", end="")
 
         # Poll for token
         token_data = _poll_for_token(
             tenant_id=tenant_id,
             client_id=client_id,
-            device_code=device_code_response['device_code'],
-            interval=device_code_response.get('interval', 5),
-            timeout=args.timeout
+            device_code=device_code_response["device_code"],
+            interval=device_code_response.get("interval", 5),
+            timeout=args.timeout,
         )
 
         print("\n\nAuthentication successful!")
@@ -312,21 +281,23 @@ Environment Variables:
             if args.full:
                 print(json.dumps(token_data, indent=2))
             else:
-                print(token_data['access_token'])
+                print(token_data["access_token"])
         else:
             if args.full:
                 _save_token(token_data, args.output)
             else:
                 # Save just the access token for compatibility with CLI tools
-                with open(args.output, 'w') as f:
-                    f.write(token_data['access_token'])
+                with open(args.output, "w") as f:
+                    f.write(token_data["access_token"])
                 os.chmod(args.output, 0o600)
                 logger.info(f"Access token saved to {args.output}")
 
             print(f"\nToken saved to: {args.output}")
             print(f"Token expires in: {token_data.get('expires_in', 'unknown')} seconds")
             print(f"\nUsage:")
-            print(f"  uv run python api/registry_management.py --token-file {args.output} --registry-url http://localhost list")
+            print(
+                f"  uv run python api/registry_management.py --token-file {args.output} --registry-url http://localhost list"
+            )
 
         return 0
 

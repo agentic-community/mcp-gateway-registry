@@ -138,6 +138,7 @@ class ProgressSpinner:
         if final_message:
             print(f"  {final_message}")
 
+
 def print_step(
     step: str,
     icon: str = "->",
@@ -163,10 +164,12 @@ def load_server_config(config_file: str = "server_config.yml") -> Dict[str, Any]
             # Try current working directory
             config_path = config_file
             if not os.path.exists(config_path):
-                logger.warning(f"Server config file not found: {config_file}. Using default configuration.")
+                logger.warning(
+                    f"Server config file not found: {config_file}. Using default configuration."
+                )
                 return {"servers": {}}
 
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             config = yaml.safe_load(f)
             logger.info(f"Loaded server config from: {config_path}")
             return config or {"servers": {}}
@@ -203,7 +206,7 @@ def resolve_env_vars(value: str, server_name: str = None) -> str:
         return env_value
 
     # Find all ${VAR_NAME} patterns and replace them
-    pattern = r'\$\{([^}]+)\}'
+    pattern = r"\$\{([^}]+)\}"
     resolved_value = re.sub(pattern, replace_env_var, value)
 
     # If any environment variables were missing, raise an error
@@ -280,6 +283,7 @@ def enable_verbose_logging():
 
     logger.info("Verbose logging enabled for httpx, httpcore, mcp libraries, and main logger")
 
+
 def parse_arguments() -> argparse.Namespace:
     """
     Parse command line arguments for the Interactive LangGraph Agent.
@@ -288,7 +292,7 @@ def parse_arguments() -> argparse.Namespace:
         argparse.Namespace: The parsed command line arguments
     """
     parser = argparse.ArgumentParser(
-        description='Interactive LangGraph Agent with Registry Tool Discovery',
+        description="Interactive LangGraph Agent with Registry Tool Discovery",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -300,62 +304,62 @@ Examples:
 
     # Interactive mode:
     python agents/agent.py --jwt-token "$(cat api/.token)" --interactive
-"""
+""",
     )
 
     # Server connection arguments
     parser.add_argument(
-        '--mcp-registry-url',
+        "--mcp-registry-url",
         type=str,
-        default='https://mcpgateway.ddns.net/mcpgw/mcp',
-        help='URL of the MCP Registry (default: https://mcpgateway.ddns.net/mcpgw/mcp)',
+        default="https://mcpgateway.ddns.net/mcpgw/mcp",
+        help="URL of the MCP Registry (default: https://mcpgateway.ddns.net/mcpgw/mcp)",
     )
 
     # Authentication - JWT token required
     parser.add_argument(
-        '--jwt-token',
+        "--jwt-token",
         type=str,
         required=True,
-        help='JWT token for authentication (required)',
+        help="JWT token for authentication (required)",
     )
 
     # Model and provider arguments
     parser.add_argument(
-        '--provider',
+        "--provider",
         type=str,
-        choices=['anthropic', 'bedrock'],
-        default='bedrock',
-        help='Model provider to use (default: bedrock)',
+        choices=["anthropic", "bedrock"],
+        default="bedrock",
+        help="Model provider to use (default: bedrock)",
     )
     parser.add_argument(
-        '--model',
+        "--model",
         type=str,
-        default='us.anthropic.claude-3-7-sonnet-20250219-v1:0',
-        help='Model ID to use',
+        default="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        help="Model ID to use",
     )
 
     # Prompt arguments
     parser.add_argument(
-        '--prompt',
+        "--prompt",
         type=str,
         default=None,
-        help='Initial prompt to send to the agent',
+        help="Initial prompt to send to the agent",
     )
 
     # Interactive mode argument
     parser.add_argument(
-        '--interactive',
-        '-i',
-        action='store_true',
-        help='Enable interactive mode for multi-turn conversations',
+        "--interactive",
+        "-i",
+        action="store_true",
+        help="Enable interactive mode for multi-turn conversations",
     )
 
     # Verbose logging argument
     parser.add_argument(
-        '--verbose',
-        '-v',
-        action='store_true',
-        help='Enable verbose HTTP debugging output',
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose HTTP debugging output",
     )
 
     args = parser.parse_args()
@@ -365,6 +369,7 @@ Examples:
         enable_verbose_logging()
 
     return args
+
 
 @tool
 def calculator(expression: str) -> str:
@@ -390,12 +395,12 @@ def calculator(expression: str) -> str:
     expression = expression.replace(" ", "")
 
     # Check if the expression contains only allowed characters
-    if not re.match(r'^[0-9+\-*/().^ ]+$', expression):
+    if not re.match(r"^[0-9+\-*/().^ ]+$", expression):
         return "Error: Only basic arithmetic operations (+, -, *, /, ^, (), .) are allowed."
 
     try:
         # Replace ^ with ** for exponentiation
-        expression = expression.replace('^', '**')
+        expression = expression.replace("^", "**")
 
         # Evaluate the expression
         result = eval(expression)
@@ -438,9 +443,9 @@ async def search_registry_tools(
     global registry_client
 
     if registry_client is None:
-        return json.dumps({
-            "error": "Registry client not initialized. Check authentication configuration."
-        })
+        return json.dumps(
+            {"error": "Registry client not initialized. Check authentication configuration."}
+        )
 
     try:
         logger.info(f"Searching registry for tools: '{query}' (max_results={max_results})")
@@ -465,7 +470,8 @@ async def search_registry_tools(
             for matching_tool in server_result.matching_tools:
                 # Check if this tool is already in results
                 existing = [
-                    r for r in results
+                    r
+                    for r in results
                     if r["tool_name"] == matching_tool.tool_name
                     and r["server_path"] == server_result.path
                 ]
@@ -492,17 +498,18 @@ async def search_registry_tools(
 
         logger.info(f"Found {len(results)} matching tools for query: '{query}'")
 
-        return json.dumps({
-            "query": query,
-            "tools": results,
-            "total_found": len(results),
-        }, indent=2)
+        return json.dumps(
+            {
+                "query": query,
+                "tools": results,
+                "total_found": len(results),
+            },
+            indent=2,
+        )
 
     except Exception as e:
         logger.error(f"Error searching registry: {e}", exc_info=True)
-        return json.dumps({
-            "error": f"Search failed: {str(e)}"
-        })
+        return json.dumps({"error": f"Search failed: {str(e)}"})
 
 
 @tool
@@ -533,17 +540,17 @@ async def invoke_mcp_tool(
     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
     # Remove leading slash from server_name if present
-    server_name_clean = server_name.lstrip('/')
-    server_url = urljoin(base_url + '/', server_name_clean)
+    server_name_clean = server_name.lstrip("/")
+    server_url = urljoin(base_url + "/", server_name_clean)
 
     # Build headers with authentication
     auth_token = agent_settings.auth_token
     region = agent_settings.region
 
     headers = {
-        'X-Authorization': f'Bearer {auth_token}',
-        'X-Region': region,
-        'Authorization': f'Bearer {auth_token}',
+        "X-Authorization": f"Bearer {auth_token}",
+        "X-Region": region,
+        "Authorization": f"Bearer {auth_token}",
     }
 
     # Get server-specific headers from configuration
@@ -562,7 +569,7 @@ async def invoke_mcp_tool(
     )
 
     if use_sse:
-        server_url = server_url.rstrip('/') + '/sse'
+        server_url = server_url.rstrip("/") + "/sse"
 
     logger.info(f"Invoking {tool_name} on {server_name_clean}")
 
@@ -574,7 +581,7 @@ async def invoke_mcp_tool(
             return await _invoke_via_http(server_url, headers, tool_name, arguments)
     except Exception as e:
         # Always retry with /mcp suffix on first failure
-        mcp_url = server_url.rstrip('/') + '/mcp'
+        mcp_url = server_url.rstrip("/") + "/mcp"
         logger.info(f"First attempt failed, retrying with /mcp suffix: {mcp_url}")
         try:
             if use_sse:
@@ -593,8 +600,7 @@ def _add_egress_auth(
 ) -> Dict[str, str]:
     """Add egress authentication headers if available."""
     oauth_tokens_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        '.oauth-tokens'
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".oauth-tokens"
     )
     server_lower = server_name.lower()
     provider_lower = auth_provider.lower()
@@ -607,19 +613,19 @@ def _add_egress_auth(
 
     for egress_file in egress_files:
         if os.path.exists(egress_file):
-            with open(egress_file, 'r') as f:
+            with open(egress_file, "r") as f:
                 egress_data = json.load(f)
 
-            egress_token = egress_data.get('access_token')
+            egress_token = egress_data.get("access_token")
             if egress_token:
-                headers['Authorization'] = f'Bearer {egress_token}'
+                headers["Authorization"] = f"Bearer {egress_token}"
                 logger.info(f"Using egress auth for {auth_provider}")
 
             # Provider-specific headers
-            if provider_lower == 'atlassian':
-                cloud_id = egress_data.get('cloud_id')
+            if provider_lower == "atlassian":
+                cloud_id = egress_data.get("cloud_id")
                 if cloud_id:
-                    headers['X-Atlassian-Cloud-Id'] = cloud_id
+                    headers["X-Atlassian-Cloud-Id"] = cloud_id
 
             break
 
@@ -662,9 +668,10 @@ def _format_tool_response(result: Any) -> str:
     """Format MCP tool result as string."""
     response_parts = []
     for r in result.content:
-        if hasattr(r, 'text'):
+        if hasattr(r, "text"):
             response_parts.append(r.text)
     return "\n".join(response_parts).strip()
+
 
 # Get current UTC time (using timezone.utc to avoid deprecation warning)
 current_utc_time = str(datetime.now(timezone.utc))
@@ -684,6 +691,7 @@ agent_settings = AgentSettings()
 # Global server configuration
 server_config = {}
 
+
 def load_system_prompt():
     """
     Load the system prompt template from the system_prompt.txt file.
@@ -692,6 +700,7 @@ def load_system_prompt():
         str: The system prompt template
     """
     import os
+
     try:
         # Get the directory where this Python file is located
         current_dir = os.path.dirname(__file__)
@@ -708,6 +717,7 @@ def load_system_prompt():
         MCP Registry URL: {mcp_registry_url}
         </instructions>
         """
+
 
 def print_agent_response(
     response_dict: Dict[str, Any],
@@ -734,7 +744,7 @@ def print_agent_response(
         message_type = type(message).__name__
 
         if "AIMessage" in message_type:
-            content = getattr(message, 'content', None)
+            content = getattr(message, "content", None)
             if content:
                 print("\n" + str(content), flush=True)
             break
@@ -754,15 +764,17 @@ def _print_verbose_messages(messages: List[Any]) -> None:
 
     for i, message in enumerate(messages, 1):
         msg_type = type(message).__name__
-        color = colors.get("AI" if "AI" in msg_type else "TOOL" if "Tool" in msg_type else "HUMAN", colors["RESET"])
+        color = colors.get(
+            "AI" if "AI" in msg_type else "TOOL" if "Tool" in msg_type else "HUMAN", colors["RESET"]
+        )
 
-        content = getattr(message, 'content', str(message))
+        content = getattr(message, "content", str(message))
         preview = content[:100] + "..." if len(str(content)) > 100 else content
 
         print(f"{color}[{i}] {msg_type}: {preview}{colors['RESET']}")
 
         # Show tool calls if present
-        if hasattr(message, 'tool_calls') and message.tool_calls:
+        if hasattr(message, "tool_calls") and message.tool_calls:
             for tc in message.tool_calls:
                 print(f"     -> Tool: {tc.get('name', 'unknown')}")
 
@@ -807,7 +819,7 @@ class InteractiveAgent:
         if response and "messages" in response:
             for message in reversed(response["messages"]):
                 if "AIMessage" in type(message).__name__:
-                    ai_content = getattr(message, 'content', str(message))
+                    ai_content = getattr(message, "content", str(message))
                     self.conversation_history.append({"role": "assistant", "content": ai_content})
                     break
 
@@ -825,16 +837,16 @@ class InteractiveAgent:
             try:
                 user_input = input("\nYou: ").strip()
 
-                if user_input.lower() in ['exit', 'quit', 'bye']:
+                if user_input.lower() in ["exit", "quit", "bye"]:
                     print("\nGoodbye!")
                     break
 
-                if user_input.lower() in ['clear', 'reset']:
+                if user_input.lower() in ["clear", "reset"]:
                     self.conversation_history = []
                     print("History cleared.")
                     continue
 
-                if user_input.lower() == 'history':
+                if user_input.lower() == "history":
                     self._print_history()
                     continue
 
@@ -851,6 +863,7 @@ class InteractiveAgent:
                 print(f"\nError: {str(e)}")
                 if self.verbose:
                     import traceback
+
                     traceback.print_exc()
 
     def _print_history(self) -> None:
@@ -863,9 +876,8 @@ class InteractiveAgent:
         print("-" * 40)
         for i, msg in enumerate(self.conversation_history, 1):
             role = "You" if msg["role"] == "user" else "Agent"
-            preview = msg['content'][:80] + "..." if len(msg['content']) > 80 else msg['content']
+            preview = msg["content"][:80] + "..." if len(msg["content"]) > 80 else msg["content"]
             print(f"{i}. {role}: {preview}")
-
 
 
 async def main():
@@ -931,11 +943,12 @@ async def main():
             print("\nNo prompt provided. Use --prompt or --interactive")
             print("\nExamples:")
             print('  python agent.py --prompt "What time is it?"')
-            print('  python agent.py --interactive')
+            print("  python agent.py --interactive")
 
     except Exception as e:
         print(f"Error: {str(e)}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -944,8 +957,8 @@ def _create_model(
     model_id: str,
 ):
     """Create the LLM model based on provider."""
-    if provider == 'anthropic':
-        api_key = os.getenv('ANTHROPIC_API_KEY')
+    if provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             print("Error: ANTHROPIC_API_KEY not found")
             return None
@@ -958,7 +971,7 @@ def _create_model(
         )
 
     # Default to Bedrock
-    aws_region = os.getenv('AWS_DEFAULT_REGION', os.getenv('AWS_REGION', 'us-east-1'))
+    aws_region = os.getenv("AWS_DEFAULT_REGION", os.getenv("AWS_REGION", "us-east-1"))
     return ChatBedrock(
         model_id=model_id,
         region_name=aws_region,

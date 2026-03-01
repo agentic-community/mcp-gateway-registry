@@ -262,6 +262,7 @@ def _get_field_value(field_name: str) -> Any:
 # Rate limiter (in-memory sliding window)
 # ---------------------------------------------------------------------------
 
+
 def _check_rate_limit(user_id: str) -> bool:
     """Return True if the request is within the rate limit, False otherwise.
 
@@ -275,9 +276,7 @@ def _check_rate_limit(user_id: str) -> bool:
         _rate_limit_cache[user_id] = []
 
     # Prune timestamps outside the window
-    _rate_limit_cache[user_id] = [
-        t for t in _rate_limit_cache[user_id] if t > window_start
-    ]
+    _rate_limit_cache[user_id] = [t for t in _rate_limit_cache[user_id] if t > window_start]
 
     if len(_rate_limit_cache[user_id]) >= RATE_LIMIT_REQUESTS:
         return False
@@ -321,21 +320,25 @@ def _build_config_response() -> Dict[str, Any]:
             actual_sensitive = is_sensitive or _is_sensitive_field(field_name)
             formatted = _format_value(field_name, value, actual_sensitive)
 
-            fields.append({
-                "key": field_name,
-                "label": display_name,
-                "value": formatted["display"],
-                "raw_value": formatted["raw"],
-                "is_masked": formatted["is_masked"],
-                "unit": formatted["unit"],
-            })
+            fields.append(
+                {
+                    "key": field_name,
+                    "label": display_name,
+                    "value": formatted["display"],
+                    "raw_value": formatted["raw"],
+                    "is_masked": formatted["is_masked"],
+                    "unit": formatted["unit"],
+                }
+            )
 
-        groups.append({
-            "id": group_id,
-            "title": group_def["title"],
-            "order": group_def["order"],
-            "fields": fields,
-        })
+        groups.append(
+            {
+                "id": group_id,
+                "title": group_def["title"],
+                "order": group_def["order"],
+                "fields": fields,
+            }
+        )
 
     return {
         "groups": groups,
@@ -347,6 +350,7 @@ def _build_config_response() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # GET /api/config/full — admin-only full configuration view
 # ---------------------------------------------------------------------------
+
 
 @router.get(
     "/full",
@@ -428,6 +432,7 @@ async def get_full_config(
 # Existing endpoint (unchanged)
 # ---------------------------------------------------------------------------
 
+
 @router.get(
     "",
     summary="Get registry configuration",
@@ -442,10 +447,8 @@ async def get_config() -> Dict[str, Any]:
         "features": {
             "mcp_servers": settings.registry_mode
             in (RegistryMode.FULL, RegistryMode.MCP_SERVERS_ONLY),
-            "agents": settings.registry_mode
-            in (RegistryMode.FULL, RegistryMode.AGENTS_ONLY),
-            "skills": settings.registry_mode
-            in (RegistryMode.FULL, RegistryMode.SKILLS_ONLY),
+            "agents": settings.registry_mode in (RegistryMode.FULL, RegistryMode.AGENTS_ONLY),
+            "skills": settings.registry_mode in (RegistryMode.FULL, RegistryMode.SKILLS_ONLY),
             "federation": settings.registry_mode == RegistryMode.FULL,
             "gateway_proxy": settings.deployment_mode == DeploymentMode.WITH_GATEWAY,
         },
@@ -479,9 +482,7 @@ def _export_as_env(include_sensitive: bool = False) -> str:
         "",
     ]
 
-    for group_id, group_def in sorted(
-        CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]
-    ):
+    for group_id, group_def in sorted(CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]):
         lines.append(f"# === {group_def['title']} ===")
         for field_name, _display_name, is_sensitive in group_def["fields"]:
             value = _get_field_value(field_name)
@@ -548,9 +549,7 @@ def _export_as_tfvars(include_sensitive: bool = False) -> str:
         "",
     ]
 
-    for group_id, group_def in sorted(
-        CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]
-    ):
+    for group_id, group_def in sorted(CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]):
         lines.append(f"# {group_def['title']}")
         for field_name, _display_name, is_sensitive in group_def["fields"]:
             value = _get_field_value(field_name)
@@ -597,9 +596,7 @@ def _export_as_yaml(include_sensitive: bool = False) -> str:
         "configuration:",
     ]
 
-    for group_id, group_def in sorted(
-        CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]
-    ):
+    for group_id, group_def in sorted(CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]):
         lines.append(f"  # {group_def['title']}")
         lines.append(f"  {group_id}:")
         for field_name, _display_name, is_sensitive in group_def["fields"]:

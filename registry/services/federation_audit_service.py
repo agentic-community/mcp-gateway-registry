@@ -226,17 +226,11 @@ class FederationAuditService:
         """
         with self._operation_lock:
             # Filter by peer_id
-            peer_logs = [
-                log for log in self._connection_logs
-                if log.peer_id == peer_id
-            ]
+            peer_logs = [log for log in self._connection_logs if log.peer_id == peer_id]
 
             # Filter by timestamp if specified
             if since:
-                peer_logs = [
-                    log for log in peer_logs
-                    if log.timestamp > since
-                ]
+                peer_logs = [log for log in peer_logs if log.timestamp > since]
 
             # Apply limit
             return peer_logs[:limit]

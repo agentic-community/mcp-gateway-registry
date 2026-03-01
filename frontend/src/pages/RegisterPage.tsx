@@ -67,7 +67,6 @@ interface ServerFormData {
   tags: string;
   num_tools: number;
   license: string;
-  is_python: boolean;
   visibility: string;
   author: string;
   homepage: string;
@@ -75,6 +74,9 @@ interface ServerFormData {
   mcp_endpoint: string;
   sse_endpoint: string;
   metadata: string;
+  auth_scheme: string;
+  auth_credential: string;
+  auth_header_name: string;
 }
 
 
@@ -109,7 +111,6 @@ const initialServerForm: ServerFormData = {
   tags: '',
   num_tools: 0,
   license: 'MIT',
-  is_python: false,
   visibility: 'public',
   author: '',
   homepage: '',
@@ -117,6 +118,9 @@ const initialServerForm: ServerFormData = {
   mcp_endpoint: '',
   sse_endpoint: '',
   metadata: '',
+  auth_scheme: 'none',
+  auth_credential: '',
+  auth_header_name: 'X-API-Key',
 };
 
 
@@ -266,7 +270,6 @@ const RegisterPage: React.FC = () => {
             tags: Array.isArray(parsed.tags) ? parsed.tags.join(',') : (parsed.tags || prev.tags),
             num_tools: parsed.num_tools || parsed.numTools || prev.num_tools,
             license: parsed.license || prev.license,
-            is_python: parsed.is_python || parsed.isPython || prev.is_python,
             visibility: parsed.visibility || prev.visibility,
             author: parsed.author || prev.author,
             homepage: parsed.homepage || prev.homepage,
@@ -321,7 +324,6 @@ const RegisterPage: React.FC = () => {
       formData.append('tags', serverForm.tags);
       formData.append('num_tools', serverForm.num_tools.toString());
       formData.append('license', serverForm.license);
-      formData.append('is_python', serverForm.is_python.toString());
       if (serverForm.mcp_endpoint) {
         formData.append('mcp_endpoint', serverForm.mcp_endpoint);
       }
@@ -330,6 +332,15 @@ const RegisterPage: React.FC = () => {
       }
       if (serverForm.metadata) {
         formData.append('metadata', serverForm.metadata);
+      }
+      if (serverForm.auth_scheme !== 'none') {
+        formData.append('auth_scheme', serverForm.auth_scheme);
+        if (serverForm.auth_credential) {
+          formData.append('auth_credential', serverForm.auth_credential);
+        }
+        if (serverForm.auth_scheme === 'api_key' && serverForm.auth_header_name) {
+          formData.append('auth_header_name', serverForm.auth_header_name);
+        }
       }
 
       await axios.post('/api/register', formData, {
@@ -532,18 +543,6 @@ const RegisterPage: React.FC = () => {
           </select>
         </div>
 
-        <div className="md:col-span-2">
-          <label className="flex items-center">
-            <input
-              type="checkbox"
-              className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
-              checked={serverForm.is_python}
-              onChange={(e) => setServerForm(prev => ({ ...prev, is_python: e.target.checked }))}
-            />
-            <span className="ml-2 text-sm text-gray-700 dark:text-gray-200">Python-based server</span>
-          </label>
-        </div>
-
         <div>
           <label className={labelClass}>Author</label>
           <input
@@ -576,6 +575,72 @@ const RegisterPage: React.FC = () => {
             placeholder="https://github.com/username/repo"
           />
         </div>
+
+        {/* Backend Authentication */}
+        <div className="md:col-span-2 mt-4">
+          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
+            <span className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 px-2 py-1 rounded text-xs mr-2">Optional</span>
+            Backend Authentication
+          </h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
+            Configure credentials the gateway will use when proxying requests to your backend MCP server.
+          </p>
+        </div>
+
+        <div>
+          <label className={labelClass}>Authentication Scheme</label>
+          <select
+            className={inputClass}
+            value={serverForm.auth_scheme}
+            onChange={(e) => {
+              const newScheme = e.target.value;
+              setServerForm(prev => ({
+                ...prev,
+                auth_scheme: newScheme,
+                auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
+                auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
+              }));
+            }}
+          >
+            <option value="none">None</option>
+            <option value="bearer">Bearer Token</option>
+            <option value="api_key">API Key</option>
+          </select>
+        </div>
+
+        {serverForm.auth_scheme !== 'none' && (
+          <div>
+            <label className={labelClass}>
+              {serverForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
+            </label>
+            <input
+              type="password"
+              className={inputClass}
+              value={serverForm.auth_credential}
+              onChange={(e) => setServerForm(prev => ({ ...prev, auth_credential: e.target.value }))}
+              placeholder={serverForm.auth_scheme === 'bearer' ? 'Enter bearer token' : 'Enter API key'}
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              This credential is stored securely and never displayed after saving.
+            </p>
+          </div>
+        )}
+
+        {serverForm.auth_scheme === 'api_key' && (
+          <div>
+            <label className={labelClass}>Header Name</label>
+            <input
+              type="text"
+              className={inputClass}
+              value={serverForm.auth_header_name}
+              onChange={(e) => setServerForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
+              placeholder="X-API-Key"
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              The HTTP header name used to send the API key (default: X-API-Key)
+            </p>
+          </div>
+        )}
 
         {/* Advanced Settings */}
         <div className="md:col-span-2 mt-4">

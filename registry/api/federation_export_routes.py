@@ -54,9 +54,7 @@ async def _get_current_sync_generation() -> int:
                 enabled_server_count += 1
 
         all_agents = await agent_service.get_all_agents()
-        enabled_agent_count = len(
-            [a for a in all_agents if agent_service.is_agent_enabled(a.path)]
-        )
+        enabled_agent_count = len([a for a in all_agents if agent_service.is_agent_enabled(a.path)])
 
         generation = max(1, enabled_server_count + enabled_agent_count)
         return generation
@@ -104,10 +102,7 @@ def _check_federation_scope(
         HTTPException: 403 if no federation scope is present
     """
     scopes = user_context.get("scopes", [])
-    has_federation_scope = (
-        "federation-service" in scopes
-        or "federation/read" in scopes
-    )
+    has_federation_scope = "federation-service" in scopes or "federation/read" in scopes
     if not has_federation_scope:
         logger.warning(
             f"User {user_context.get('username')} attempted federation access "
@@ -345,13 +340,9 @@ async def federation_auth(
         if peer:
             user_context["peer_id"] = peer.peer_id
             user_context["peer_name"] = peer.name
-            logger.info(
-                f"Identified federation peer: {peer.peer_id} (client_id: {client_id})"
-            )
+            logger.info(f"Identified federation peer: {peer.peer_id} (client_id: {client_id})")
         else:
-            logger.debug(
-                f"Federation request from unregistered client_id: {client_id}"
-            )
+            logger.debug(f"Federation request from unregistered client_id: {client_id}")
 
     return user_context
 
@@ -676,9 +667,7 @@ async def export_security_scans(
             if allowed_groups & peer_group_set:
                 visible_server_paths.add(path)
 
-    logger.debug(
-        f"Visible server paths for peer: {len(visible_server_paths)} servers"
-    )
+    logger.debug(f"Visible server paths for peer: {len(visible_server_paths)} servers")
 
     # Get all security scans from repository
     scan_repo = get_security_scan_repository()
@@ -691,9 +680,7 @@ async def export_security_scans(
         if server_path in visible_server_paths:
             visible_scans.append(scan)
 
-    logger.debug(
-        f"Filtered {len(all_scans)} scans to {len(visible_scans)} for visible servers"
-    )
+    logger.debug(f"Filtered {len(all_scans)} scans to {len(visible_scans)} for visible servers")
 
     # Apply pagination
     total_count = len(visible_scans)

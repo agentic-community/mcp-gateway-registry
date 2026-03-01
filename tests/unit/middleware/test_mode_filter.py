@@ -182,8 +182,8 @@ class TestMiddlewareIntegration:
     """Test middleware behavior."""
 
     @pytest.mark.asyncio
-    @patch('registry.middleware.mode_filter.settings')
-    @patch('registry.middleware.mode_filter.MODE_BLOCKED_REQUESTS')
+    @patch("registry.middleware.mode_filter.settings")
+    @patch("registry.middleware.mode_filter.MODE_BLOCKED_REQUESTS")
     async def test_middleware_blocks_disabled_endpoint(
         self,
         mock_metrics,
@@ -213,8 +213,8 @@ class TestMiddlewareIntegration:
         assert "skills-only" in data["detail"]
 
     @pytest.mark.asyncio
-    @patch('registry.middleware.mode_filter.settings')
-    @patch('registry.middleware.mode_filter.MODE_BLOCKED_REQUESTS')
+    @patch("registry.middleware.mode_filter.settings")
+    @patch("registry.middleware.mode_filter.MODE_BLOCKED_REQUESTS")
     async def test_middleware_allows_enabled_endpoint(
         self,
         mock_metrics,

@@ -4,7 +4,7 @@
   "path": "/sre-gateway/",
   "proxy_pass_url": "https://sre-gateway-i7ge1zayhw.gateway.bedrock-agentcore.us-east-1.amazonaws.com/",
   "auth_provider": "bedrock-agentcore",
-  "auth_type": "oauth",
+  "auth_scheme": "bearer",
   "supported_transports": [
     "streamable-http"
   ],
@@ -19,8 +19,6 @@
     }
   ],
   "num_tools": 21,
-  "num_stars": 1,
-  "is_python": true,
   "license": "MIT-0",
   "tool_list": [
     {

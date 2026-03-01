@@ -25,7 +25,9 @@ from fastapi.testclient import TestClient
 logger = logging.getLogger(__name__)
 
 # Skip all tests in this file due to data persistence issue
-pytestmark = pytest.mark.skip(reason="Data persistence issue - servers register but don't appear in listings")
+pytestmark = pytest.mark.skip(
+    reason="Data persistence issue - servers register but don't appear in listings"
+)
 
 
 # =============================================================================
@@ -77,14 +79,9 @@ def mock_health_service():
         mock_health.initialize = AsyncMock()
         mock_health.shutdown = AsyncMock()
         mock_health.broadcast_health_update = AsyncMock()
-        mock_health.perform_immediate_health_check = AsyncMock(
-            return_value=("healthy", None)
-        )
+        mock_health.perform_immediate_health_check = AsyncMock(return_value=("healthy", None))
         mock_health._get_service_health_data = MagicMock(
-            return_value={
-                "status": "healthy",
-                "last_checked_iso": "2024-01-01T00:00:00"
-            }
+            return_value={"status": "healthy", "last_checked_iso": "2024-01-01T00:00:00"}
         )
         yield mock_health
 
@@ -145,9 +142,9 @@ def mock_auth_dependencies():
             "list_service": ["all"],
             "toggle_service": ["all"],
             "register_service": ["all"],
-            "modify_service": ["all"]
+            "modify_service": ["all"],
         },
-        "auth_method": "session"
+        "auth_method": "session",
     }
 
     regular_user_context = {
@@ -161,9 +158,9 @@ def mock_auth_dependencies():
             "list_service": ["test-server"],
             "toggle_service": [],
             "register_service": [],
-            "modify_service": []
+            "modify_service": [],
         },
-        "auth_method": "session"
+        "auth_method": "session",
     }
 
     def mock_enhanced_auth_override():
@@ -172,7 +169,9 @@ def mock_auth_dependencies():
     def mock_nginx_proxied_auth_override():
         return admin_user_context
 
-    def mock_user_has_permission(permission: str, service_name: str, permissions: dict[str, Any]) -> bool:
+    def mock_user_has_permission(
+        permission: str, service_name: str, permissions: dict[str, Any]
+    ) -> bool:
         """Mock permission checker that always returns True for admin"""
         return True
 
@@ -181,11 +180,10 @@ def mock_auth_dependencies():
     app.dependency_overrides[nginx_proxied_auth] = mock_nginx_proxied_auth_override
 
     # Patch the permission checker function
-    with patch("registry.auth.dependencies.user_has_ui_permission_for_service", mock_user_has_permission):
-        yield {
-            "admin": admin_user_context,
-            "regular": regular_user_context
-        }
+    with patch(
+        "registry.auth.dependencies.user_has_ui_permission_for_service", mock_user_has_permission
+    ):
+        yield {"admin": admin_user_context, "regular": regular_user_context}
 
     # Cleanup
     app.dependency_overrides.clear()
@@ -206,9 +204,7 @@ def test_server_data() -> dict[str, Any]:
         "proxy_pass_url": "http://localhost:9000",
         "tags": "test,integration",
         "num_tools": 5,
-        "num_stars": 4,
-        "is_python": True,
-        "license": "MIT"
+        "license": "MIT",
     }
 
 
@@ -227,9 +223,7 @@ def test_server_data_2() -> dict[str, Any]:
         "proxy_pass_url": "http://localhost:9001",
         "tags": "test,second",
         "num_tools": 3,
-        "num_stars": 5,
-        "is_python": False,
-        "license": "Apache-2.0"
+        "license": "Apache-2.0",
     }
 
 
@@ -241,7 +235,7 @@ def setup_test_environment(
     mock_health_service,
     mock_agent_service,
     mock_federation_service,
-    mock_auth_dependencies
+    mock_auth_dependencies,
 ):
     """
     Auto-use fixture to set up test environment with all mocks.
@@ -250,6 +244,7 @@ def setup_test_environment(
     """
     # Initialize server service with clean state
     from registry.services.server_service import server_service
+
     server_service.registered_servers = {}
     server_service.service_state = {}
 
@@ -270,16 +265,11 @@ class TestServerRegistration:
     """Test server registration functionality."""
 
     def test_register_server_success(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test successful server registration."""
         # Act
-        response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        response = test_client.post("/api/servers/register", data=test_server_data)
 
         # Assert
         if response.status_code != http_status.HTTP_201_CREATED:
@@ -292,25 +282,17 @@ class TestServerRegistration:
         assert "registered successfully" in data["message"].lower()
 
     def test_register_server_duplicate_path(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test registering server with duplicate path."""
         # Arrange - Register first server
-        response1 = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        response1 = test_client.post("/api/servers/register", data=test_server_data)
         assert response1.status_code == http_status.HTTP_201_CREATED
 
         # Act - Try to register duplicate (overwrite=false)
         duplicate_data = test_server_data.copy()
         duplicate_data["overwrite"] = False
-        response2 = test_client.post(
-            "/api/servers/register",
-            data=duplicate_data
-        )
+        response2 = test_client.post("/api/servers/register", data=duplicate_data)
 
         # Assert
         assert response2.status_code == http_status.HTTP_409_CONFLICT
@@ -318,26 +300,18 @@ class TestServerRegistration:
         assert "already exists" in data["reason"].lower()
 
     def test_register_server_overwrite_existing(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test overwriting existing server with overwrite=true."""
         # Arrange - Register first server
-        response1 = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        response1 = test_client.post("/api/servers/register", data=test_server_data)
         assert response1.status_code == http_status.HTTP_201_CREATED
 
         # Act - Overwrite with updated data
         updated_data = test_server_data.copy()
         updated_data["description"] = "Updated description"
         updated_data["overwrite"] = True
-        response2 = test_client.post(
-            "/api/servers/register",
-            data=updated_data
-        )
+        response2 = test_client.post("/api/servers/register", data=updated_data)
 
         # Assert
         assert response2.status_code == http_status.HTTP_201_CREATED
@@ -345,65 +319,49 @@ class TestServerRegistration:
         assert data["path"] == test_server_data["path"]
 
     def test_register_server_without_leading_slash(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test path normalization (adds leading slash)."""
         # Arrange
         test_server_data["path"] = "no-leading-slash"
 
         # Act
-        response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        response = test_client.post("/api/servers/register", data=test_server_data)
 
         # Assert
         assert response.status_code == http_status.HTTP_201_CREATED
         data = response.json()
         assert data["path"] == "/no-leading-slash"
 
-    def test_register_server_minimal_data(
-        self,
-        test_client: TestClient
-    ):
+    def test_register_server_minimal_data(self, test_client: TestClient):
         """Test registration with only required fields."""
         # Arrange
         minimal_data = {
             "name": "Minimal Server",
             "description": "Minimal test server",
             "path": "/minimal",
-            "proxy_pass_url": "http://localhost:8888"
+            "proxy_pass_url": "http://localhost:8888",
         }
 
         # Act
-        response = test_client.post(
-            "/api/servers/register",
-            data=minimal_data
-        )
+        response = test_client.post("/api/servers/register", data=minimal_data)
 
         # Assert
         assert response.status_code == http_status.HTTP_201_CREATED
 
     def test_register_server_with_tool_list(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test registration with tool_list_json."""
         # Arrange
         tools = [
             {"name": "get_data", "description": "Get data"},
-            {"name": "set_data", "description": "Set data"}
+            {"name": "set_data", "description": "Set data"},
         ]
         test_server_data["tool_list_json"] = json.dumps(tools)
 
         # Act
-        response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        response = test_client.post("/api/servers/register", data=test_server_data)
 
         # Assert
         assert response.status_code == http_status.HTTP_201_CREATED
@@ -418,10 +376,7 @@ class TestServerRegistration:
 class TestServerListing:
     """Test server listing functionality."""
 
-    def test_list_servers_empty(
-        self,
-        test_client: TestClient
-    ):
+    def test_list_servers_empty(self, test_client: TestClient):
         """Test listing servers when none are registered."""
         # Act
         response = test_client.get("/api/servers")
@@ -433,16 +388,11 @@ class TestServerListing:
         assert data["servers"] == []
 
     def test_list_servers_with_single_server(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test listing servers with one registered server."""
         # Arrange - Register a server
-        reg_response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        reg_response = test_client.post("/api/servers/register", data=test_server_data)
         assert reg_response.status_code == http_status.HTTP_201_CREATED
 
         # Act
@@ -461,7 +411,7 @@ class TestServerListing:
         self,
         test_client: TestClient,
         test_server_data: dict[str, Any],
-        test_server_data_2: dict[str, Any]
+        test_server_data_2: dict[str, Any],
     ):
         """Test listing multiple registered servers."""
         # Arrange - Register two servers
@@ -487,7 +437,7 @@ class TestServerListing:
         self,
         test_client: TestClient,
         test_server_data: dict[str, Any],
-        test_server_data_2: dict[str, Any]
+        test_server_data_2: dict[str, Any],
     ):
         """Test listing servers with search query filter."""
         # Arrange - Register two servers
@@ -504,9 +454,7 @@ class TestServerListing:
         assert data["servers"][0]["display_name"] == test_server_data_2["name"]
 
     def test_list_servers_includes_metadata(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test that server list includes all expected metadata."""
         # Arrange
@@ -528,8 +476,6 @@ class TestServerListing:
         assert "is_enabled" in server
         assert "tags" in server
         assert "num_tools" in server
-        assert "num_stars" in server
-        assert "is_python" in server
         assert "license" in server
         assert "health_status" in server
 
@@ -544,16 +490,11 @@ class TestServerRetrieval:
     """Test getting individual server details."""
 
     def test_get_server_by_path_success(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test retrieving server details by path."""
         # Arrange - Register server
-        reg_response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        reg_response = test_client.post("/api/servers/register", data=test_server_data)
         assert reg_response.status_code == http_status.HTTP_201_CREATED
 
         # Act
@@ -566,10 +507,7 @@ class TestServerRetrieval:
         assert data["path"] == test_server_data["path"]
         assert data["server_name"] == test_server_data["name"]
 
-    def test_get_server_nonexistent_path(
-        self,
-        test_client: TestClient
-    ):
+    def test_get_server_nonexistent_path(self, test_client: TestClient):
         """Test retrieving server with non-existent path."""
         # Act
         response = test_client.get("/api/server_details/nonexistent")
@@ -593,16 +531,11 @@ class TestServerUpdate:
     """
 
     def test_update_server_via_overwrite(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test updating server by re-registering with overwrite=true."""
         # Arrange - Register server
-        reg_response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        reg_response = test_client.post("/api/servers/register", data=test_server_data)
         assert reg_response.status_code == http_status.HTTP_201_CREATED
 
         # Act - Update by re-registering with overwrite=true
@@ -612,10 +545,7 @@ class TestServerUpdate:
         updated_data["num_tools"] = 10
         updated_data["overwrite"] = True
 
-        response = test_client.post(
-            "/api/servers/register",
-            data=updated_data
-        )
+        response = test_client.post("/api/servers/register", data=updated_data)
 
         # Assert
         assert response.status_code == http_status.HTTP_201_CREATED
@@ -630,9 +560,7 @@ class TestServerUpdate:
         assert updated_server["num_tools"] == updated_data["num_tools"]
 
     def test_update_server_reject_without_overwrite(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test that updating without overwrite=true fails."""
         # Arrange - Register server
@@ -643,10 +571,7 @@ class TestServerUpdate:
         updated_data["name"] = "Updated Test Server"
         updated_data["overwrite"] = False
 
-        response = test_client.post(
-            "/api/servers/register",
-            data=updated_data
-        )
+        response = test_client.post("/api/servers/register", data=updated_data)
 
         # Assert
         assert response.status_code == http_status.HTTP_409_CONFLICT
@@ -661,24 +586,14 @@ class TestServerUpdate:
 class TestServerDeletion:
     """Test server deletion functionality."""
 
-    def test_delete_server_success(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
-    ):
+    def test_delete_server_success(self, test_client: TestClient, test_server_data: dict[str, Any]):
         """Test successful server deletion."""
         # Arrange - Register server
-        reg_response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        reg_response = test_client.post("/api/servers/register", data=test_server_data)
         assert reg_response.status_code == http_status.HTTP_201_CREATED
 
         # Act - Delete server
-        response = test_client.post(
-            "/api/servers/remove",
-            data={"path": test_server_data["path"]}
-        )
+        response = test_client.post("/api/servers/remove", data={"path": test_server_data["path"]})
 
         # Assert
         assert response.status_code == http_status.HTTP_200_OK
@@ -690,16 +605,10 @@ class TestServerDeletion:
         servers = list_response.json()["servers"]
         assert len(servers) == 0
 
-    def test_delete_server_nonexistent(
-        self,
-        test_client: TestClient
-    ):
+    def test_delete_server_nonexistent(self, test_client: TestClient):
         """Test deleting non-existent server."""
         # Act
-        response = test_client.post(
-            "/api/servers/remove",
-            data={"path": "/nonexistent"}
-        )
+        response = test_client.post("/api/servers/remove", data={"path": "/nonexistent"})
 
         # Assert
         assert response.status_code == http_status.HTTP_404_NOT_FOUND
@@ -708,9 +617,7 @@ class TestServerDeletion:
         assert "service" in data["reason"].lower() or "not found" in data["reason"].lower()
 
     def test_delete_server_without_leading_slash(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test path normalization in delete operation."""
         # Arrange - Register server
@@ -718,10 +625,7 @@ class TestServerDeletion:
 
         # Act - Delete without leading slash
         path_without_slash = test_server_data["path"].lstrip("/")
-        response = test_client.post(
-            "/api/servers/remove",
-            data={"path": path_without_slash}
-        )
+        response = test_client.post("/api/servers/remove", data={"path": path_without_slash})
 
         # Assert
         assert response.status_code == http_status.HTTP_200_OK
@@ -736,22 +640,14 @@ class TestServerDeletion:
 class TestServerToggle:
     """Test server enable/disable toggle functionality."""
 
-    def test_toggle_server_enable(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
-    ):
+    def test_toggle_server_enable(self, test_client: TestClient, test_server_data: dict[str, Any]):
         """Test enabling a server."""
         # Arrange - Register server (defaults to disabled)
         test_client.post("/api/servers/register", data=test_server_data)
 
         # Act - Enable server
         response = test_client.post(
-            "/api/servers/toggle",
-            data={
-                "path": test_server_data["path"],
-                "new_state": True
-            }
+            "/api/servers/toggle", data={"path": test_server_data["path"], "new_state": True}
         )
 
         # Assert
@@ -759,26 +655,17 @@ class TestServerToggle:
         data = response.json()
         assert data["new_enabled_state"] is True
 
-    def test_toggle_server_disable(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
-    ):
+    def test_toggle_server_disable(self, test_client: TestClient, test_server_data: dict[str, Any]):
         """Test disabling a server."""
         # Arrange - Register and enable server
         test_client.post("/api/servers/register", data=test_server_data)
         test_client.post(
-            "/api/servers/toggle",
-            data={"path": test_server_data["path"], "new_state": True}
+            "/api/servers/toggle", data={"path": test_server_data["path"], "new_state": True}
         )
 
         # Act - Disable server
         response = test_client.post(
-            "/api/servers/toggle",
-            data={
-                "path": test_server_data["path"],
-                "new_state": False
-            }
+            "/api/servers/toggle", data={"path": test_server_data["path"], "new_state": False}
         )
 
         # Assert
@@ -786,15 +673,11 @@ class TestServerToggle:
         data = response.json()
         assert data["new_enabled_state"] is False
 
-    def test_toggle_server_nonexistent(
-        self,
-        test_client: TestClient
-    ):
+    def test_toggle_server_nonexistent(self, test_client: TestClient):
         """Test toggling non-existent server."""
         # Act
         response = test_client.post(
-            "/api/servers/toggle",
-            data={"path": "/nonexistent", "new_state": True}
+            "/api/servers/toggle", data={"path": "/nonexistent", "new_state": True}
         )
 
         # Assert
@@ -810,17 +693,10 @@ class TestServerToggle:
 class TestServerFullLifecycle:
     """Test complete server lifecycle (create -> read -> update -> delete)."""
 
-    def test_full_crud_lifecycle(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
-    ):
+    def test_full_crud_lifecycle(self, test_client: TestClient, test_server_data: dict[str, Any]):
         """Test complete CRUD lifecycle for a server."""
         # CREATE
-        create_response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        create_response = test_client.post("/api/servers/register", data=test_server_data)
         assert create_response.status_code == http_status.HTTP_201_CREATED
         created_path = create_response.json()["path"]
 
@@ -844,10 +720,7 @@ class TestServerFullLifecycle:
         update_data["num_tools"] = 99
         update_data["overwrite"] = True
 
-        update_response = test_client.post(
-            "/api/servers/register",
-            data=update_data
-        )
+        update_response = test_client.post("/api/servers/register", data=update_data)
         assert update_response.status_code == http_status.HTTP_201_CREATED
 
         # Verify update
@@ -859,10 +732,7 @@ class TestServerFullLifecycle:
         assert updated_server["num_tools"] == update_data["num_tools"]
 
         # DELETE
-        delete_response = test_client.post(
-            "/api/servers/remove",
-            data={"path": created_path}
-        )
+        delete_response = test_client.post("/api/servers/remove", data={"path": created_path})
         assert delete_response.status_code == http_status.HTTP_200_OK
 
         # Verify deletion
@@ -870,23 +740,17 @@ class TestServerFullLifecycle:
         assert len(list_after_delete.json()["servers"]) == 0
 
     def test_lifecycle_with_toggle_operations(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test lifecycle including enable/disable operations."""
         # CREATE
-        create_response = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        create_response = test_client.post("/api/servers/register", data=test_server_data)
         assert create_response.status_code == http_status.HTTP_201_CREATED
         path = create_response.json()["path"]
 
         # TOGGLE - Enable
         enable_response = test_client.post(
-            "/api/servers/toggle",
-            data={"path": path, "new_state": True}
+            "/api/servers/toggle", data={"path": path, "new_state": True}
         )
         assert enable_response.status_code == http_status.HTTP_200_OK
         assert enable_response.json()["new_enabled_state"] is True
@@ -898,23 +762,19 @@ class TestServerFullLifecycle:
 
         # TOGGLE - Disable
         disable_response = test_client.post(
-            "/api/servers/toggle",
-            data={"path": path, "new_state": False}
+            "/api/servers/toggle", data={"path": path, "new_state": False}
         )
         assert disable_response.status_code == http_status.HTTP_200_OK
 
         # DELETE
-        delete_response = test_client.post(
-            "/api/servers/remove",
-            data={"path": path}
-        )
+        delete_response = test_client.post("/api/servers/remove", data={"path": path})
         assert delete_response.status_code == http_status.HTTP_200_OK
 
     def test_multiple_servers_lifecycle(
         self,
         test_client: TestClient,
         test_server_data: dict[str, Any],
-        test_server_data_2: dict[str, Any]
+        test_server_data_2: dict[str, Any],
     ):
         """Test lifecycle with multiple servers."""
         # CREATE multiple servers
@@ -933,16 +793,12 @@ class TestServerFullLifecycle:
         update_data["name"] = "Updated First Server"
         update_data["overwrite"] = True
 
-        update_response = test_client.post(
-            "/api/servers/register",
-            data=update_data
-        )
+        update_response = test_client.post("/api/servers/register", data=update_data)
         assert update_response.status_code == http_status.HTTP_201_CREATED
 
         # DELETE first server
         delete_response = test_client.post(
-            "/api/servers/remove",
-            data={"path": test_server_data["path"]}
+            "/api/servers/remove", data={"path": test_server_data["path"]}
         )
         assert delete_response.status_code == http_status.HTTP_200_OK
 
@@ -954,8 +810,7 @@ class TestServerFullLifecycle:
 
         # DELETE second server
         delete2_response = test_client.post(
-            "/api/servers/remove",
-            data={"path": test_server_data_2["path"]}
+            "/api/servers/remove", data={"path": test_server_data_2["path"]}
         )
         assert delete2_response.status_code == http_status.HTTP_200_OK
 
@@ -973,29 +828,17 @@ class TestServerFullLifecycle:
 class TestServerErrorHandling:
     """Test error handling in server operations."""
 
-    def test_register_with_missing_required_fields(
-        self,
-        test_client: TestClient
-    ):
+    def test_register_with_missing_required_fields(self, test_client: TestClient):
         """Test registration with missing required fields."""
         # Act - Missing proxy_pass_url
         response = test_client.post(
-            "/api/servers/register",
-            data={
-                "name": "Test",
-                "description": "Test",
-                "path": "/test"
-            }
+            "/api/servers/register", data={"name": "Test", "description": "Test", "path": "/test"}
         )
 
         # Assert
         assert response.status_code == http_status.HTTP_422_UNPROCESSABLE_ENTITY
 
-    def test_update_preserves_path(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
-    ):
+    def test_update_preserves_path(self, test_client: TestClient, test_server_data: dict[str, Any]):
         """Test that update operation preserves the original path."""
         # Arrange - Register server
         test_client.post("/api/servers/register", data=test_server_data)
@@ -1007,10 +850,7 @@ class TestServerErrorHandling:
         update_data["proxy_pass_url"] = "http://localhost:9999"
         update_data["overwrite"] = True
 
-        update_response = test_client.post(
-            "/api/servers/register",
-            data=update_data
-        )
+        update_response = test_client.post("/api/servers/register", data=update_data)
         assert update_response.status_code == http_status.HTTP_201_CREATED
 
         # Assert - Path unchanged
@@ -1020,16 +860,11 @@ class TestServerErrorHandling:
         assert servers[0]["path"] == original_path
 
     def test_operations_on_same_server_sequential(
-        self,
-        test_client: TestClient,
-        test_server_data: dict[str, Any]
+        self, test_client: TestClient, test_server_data: dict[str, Any]
     ):
         """Test sequential operations on the same server."""
         # CREATE
-        create_resp = test_client.post(
-            "/api/servers/register",
-            data=test_server_data
-        )
+        create_resp = test_client.post("/api/servers/register", data=test_server_data)
         assert create_resp.status_code == http_status.HTTP_201_CREATED
         path = create_resp.json()["path"]
 
@@ -1038,16 +873,12 @@ class TestServerErrorHandling:
         update_data_1["name"] = "Updated 1"
         update_data_1["overwrite"] = True
 
-        update_resp = test_client.post(
-            "/api/servers/register",
-            data=update_data_1
-        )
+        update_resp = test_client.post("/api/servers/register", data=update_data_1)
         assert update_resp.status_code == http_status.HTTP_201_CREATED
 
         # TOGGLE
         toggle_resp = test_client.post(
-            "/api/servers/toggle",
-            data={"path": path, "new_state": True}
+            "/api/servers/toggle", data={"path": path, "new_state": True}
         )
         assert toggle_resp.status_code == http_status.HTTP_200_OK
 
@@ -1056,17 +887,11 @@ class TestServerErrorHandling:
         update_data_2["name"] = "Updated 2"
         update_data_2["overwrite"] = True
 
-        update2_resp = test_client.post(
-            "/api/servers/register",
-            data=update_data_2
-        )
+        update2_resp = test_client.post("/api/servers/register", data=update_data_2)
         assert update2_resp.status_code == http_status.HTTP_201_CREATED
 
         # DELETE
-        delete_resp = test_client.post(
-            "/api/servers/remove",
-            data={"path": path}
-        )
+        delete_resp = test_client.post("/api/servers/remove", data={"path": path})
         assert delete_resp.status_code == http_status.HTTP_200_OK
 
         # Verify final state

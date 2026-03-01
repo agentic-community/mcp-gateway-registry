@@ -193,12 +193,6 @@ for server_name in "${servers[@]}"; do
         transport_type=$(echo "$anthropic_json" | jq -r '.server.remotes[]? | .type' | head -1)
     fi
     
-    # Detect if Python
-    is_python="false"
-    if echo "$anthropic_json" | jq -e '.server.packages[]? | select(.registryType == "pypi")' > /dev/null 2>&1; then
-        is_python="true"
-    fi
-    
     # Generate tags from server name
     IFS='/' read -ra name_parts <<< "$server_name"
     server_basename="${name_parts[${#name_parts[@]}-1]}"
@@ -229,7 +223,7 @@ result['path'] = '/$safe_path'
 
 # Remove unsupported fields for register_service tool
 # The user-facing register_service tool only supports basic fields
-# Note: auth_type, auth_provider, headers, supported_transports, and tool_list are kept
+# Note: auth_scheme, auth_provider, headers, supported_transports, and tool_list are kept
 unsupported_fields = [
     'repository_url', 'website_url', 'package_npm', 'remote_url'
 ]

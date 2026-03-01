@@ -21,27 +21,29 @@ VALID_ANALYZERS = ["static", "behavioral", "llm", "meta", "virustotal", "ai-defe
 
 def _scan_result_dict_strategy():
     """Strategy for generating valid scan result dicts with realistic fields."""
-    return st.fixed_dictionaries({
-        "skill_path": st.from_regex(r"/[a-z][a-z0-9\-]{0,30}", fullmatch=True),
-        "scan_timestamp": st.from_regex(
-            r"2026-0[1-9]-[012][0-9]T[01][0-9]:[0-5][0-9]:[0-5][0-9]Z",
-            fullmatch=True,
-        ),
-        "is_safe": st.booleans(),
-        "critical_issues": st.integers(min_value=0, max_value=50),
-        "high_severity": st.integers(min_value=0, max_value=50),
-        "medium_severity": st.integers(min_value=0, max_value=50),
-        "low_severity": st.integers(min_value=0, max_value=50),
-        "analyzers_used": st.lists(
-            st.sampled_from(VALID_ANALYZERS),
-            min_size=1,
-            max_size=6,
-            unique=True,
-        ),
-        "raw_output": st.just({}),
-        "scan_failed": st.booleans(),
-        "error_message": st.one_of(st.none(), st.text(min_size=1, max_size=100)),
-    })
+    return st.fixed_dictionaries(
+        {
+            "skill_path": st.from_regex(r"/[a-z][a-z0-9\-]{0,30}", fullmatch=True),
+            "scan_timestamp": st.from_regex(
+                r"2026-0[1-9]-[012][0-9]T[01][0-9]:[0-5][0-9]:[0-5][0-9]Z",
+                fullmatch=True,
+            ),
+            "is_safe": st.booleans(),
+            "critical_issues": st.integers(min_value=0, max_value=50),
+            "high_severity": st.integers(min_value=0, max_value=50),
+            "medium_severity": st.integers(min_value=0, max_value=50),
+            "low_severity": st.integers(min_value=0, max_value=50),
+            "analyzers_used": st.lists(
+                st.sampled_from(VALID_ANALYZERS),
+                min_size=1,
+                max_size=6,
+                unique=True,
+            ),
+            "raw_output": st.just({}),
+            "scan_failed": st.booleans(),
+            "error_message": st.one_of(st.none(), st.text(min_size=1, max_size=100)),
+        }
+    )
 
 
 class TestRepositoryCreateRetrieveRoundTrip:

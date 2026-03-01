@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  # Amazon Managed Prometheus (AMP) - uses SigV4 authentication via IAM task role
+  - name: Amazon Managed Prometheus
+    type: prometheus
+    access: proxy
+    url: ${AMP_ENDPOINT}
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: "15s"
+      sigV4Auth: true
+      sigV4AuthType: ec2_iam_role
+      sigV4Region: ${AWS_REGION}

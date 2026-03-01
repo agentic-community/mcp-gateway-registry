@@ -38,9 +38,7 @@ class PeerRegistryClient(BaseFederationClient):
 
         # Validate auth is configured (either per-peer token or global OAuth2)
         if self._federation_token:
-            logger.info(
-                f"Using per-peer federation static token for peer '{peer_config.peer_id}'"
-            )
+            logger.info(f"Using per-peer federation static token for peer '{peer_config.peer_id}'")
         elif not self._auth_manager.is_configured():
             logger.warning(
                 f"Federation authentication not configured for peer '{peer_config.peer_id}'. "

@@ -78,15 +78,19 @@ def mock_vs_service():
     mock.delete_virtual_server = AsyncMock(return_value=True)
     mock.toggle_virtual_server = AsyncMock(return_value=True)
     mock.resolve_tools = AsyncMock(return_value=[])
-    mock.rate_virtual_server = AsyncMock(return_value={
-        "average_rating": 4.0,
-        "is_new_rating": True,
-        "total_ratings": 1,
-    })
-    mock.get_virtual_server_rating = AsyncMock(return_value={
-        "num_stars": 4.0,
-        "rating_details": [{"user": "testuser", "rating": 4}],
-    })
+    mock.rate_virtual_server = AsyncMock(
+        return_value={
+            "average_rating": 4.0,
+            "is_new_rating": True,
+            "total_ratings": 1,
+        }
+    )
+    mock.get_virtual_server_rating = AsyncMock(
+        return_value={
+            "num_stars": 4.0,
+            "rating_details": [{"user": "testuser", "rating": 4}],
+        }
+    )
     return mock
 
 

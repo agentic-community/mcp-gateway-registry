@@ -213,7 +213,9 @@ async def sync_all_peers(
 
 @router.get("/connections/all", response_model=list[FederationConnectionLog])
 async def get_all_connections(
-    since: datetime | None = Query(None, description="Only return connections after this timestamp"),
+    since: datetime | None = Query(
+        None, description="Only return connections after this timestamp"
+    ),
     limit: int = Query(100, ge=1, le=1000, description="Maximum entries to return"),
     user_context: dict = Depends(nginx_proxied_auth),
 ) -> list[FederationConnectionLog]:
@@ -369,6 +371,82 @@ async def update_peer(
             )
         else:
             logger.error(f"Invalid peer update: {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_msg,
+            )
+
+
+@router.patch("/{peer_id}/token")
+async def update_peer_token(
+    peer_id: str,
+    federation_token: str = Body(..., embed=True),
+    user_context: dict = Depends(nginx_proxied_auth),
+) -> dict[str, str]:
+    """
+    Update federation token for a peer without triggering full update.
+
+    This endpoint specifically updates only the federation token, bypassing
+    the regular update_peer() flow. This is useful for recovering from
+    issue #561 where tokens were lost during peer updates, or for rotating
+    tokens without modifying other peer configuration.
+
+    Args:
+        peer_id: Peer identifier
+        federation_token: New federation token value
+        user_context: Authenticated user context
+
+    Returns:
+        Success message with peer ID
+
+    Raises:
+        HTTPException: 404 if peer not found
+        HTTPException: 400 if token update fails
+
+    Example:
+        PATCH /api/peers/central-registry/token
+        {
+            "federation_token": "new-token-value-here"
+        }
+    """
+    _check_peer_management_scope(user_context)
+    username = user_context.get("username", "unknown")
+    logger.info(f"User '{username}' updating federation token for peer '{peer_id}'")
+
+    service = get_peer_federation_service()
+
+    try:
+        # Get peer info before update for audit context
+        peer_name = "unknown"
+        try:
+            existing_peer = await service.get_peer_by_id(peer_id)
+            peer_name = existing_peer.name
+        except Exception:
+            pass  # Continue even if we can't get peer name
+
+        # Use the standard update_peer with only the token field
+        # This goes through the now-fixed update flow
+        await service.update_peer(peer_id, {"federation_token": federation_token})
+
+        logger.info(
+            f"AUDIT: Federation token update successful via PATCH endpoint. "
+            f"Peer: '{peer_id}' (name='{peer_name}'), User: '{username}'"
+        )
+
+        return {
+            "message": "Federation token updated successfully",
+            "peer_id": peer_id,
+        }
+    except ValueError as e:
+        error_msg = str(e)
+        if "not found" in error_msg:
+            logger.error(f"Peer not found: {peer_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=error_msg,
+            )
+        else:
+            logger.error(f"Failed to update token: {error_msg}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=error_msg,
@@ -579,7 +657,9 @@ async def disable_peer(
 @router.get("/{peer_id}/connections", response_model=list[FederationConnectionLog])
 async def get_peer_connections(
     peer_id: str,
-    since: datetime | None = Query(None, description="Only return connections after this timestamp"),
+    since: datetime | None = Query(
+        None, description="Only return connections after this timestamp"
+    ),
     limit: int = Query(100, ge=1, le=1000, description="Maximum entries to return"),
     user_context: dict = Depends(nginx_proxied_auth),
 ) -> list[FederationConnectionLog]:

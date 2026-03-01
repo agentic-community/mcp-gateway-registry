@@ -19,15 +19,15 @@ async def create_api_key_for_service(service_name: str):
     """Create an API key for a service."""
     # Initialize database
     await init_database()
-    
+
     # Generate API key
     api_key = generate_api_key()
     key_hash = hash_api_key(api_key)
-    
+
     # Store in database
     storage = MetricsStorage()
     success = await storage.create_api_key(key_hash, service_name)
-    
+
     if success:
         print(f"API Key created for service '{service_name}':")
         print(f"API Key: {api_key}")
@@ -42,15 +42,10 @@ async def create_api_key_for_service(service_name: str):
 
 async def main():
     """Main function to create API keys for common services."""
-    services = [
-        "auth-server",
-        "registry-service", 
-        "mcpgw-server",
-        "test-client"
-    ]
-    
+    services = ["auth-server", "registry-service", "mcpgw-server", "test-client"]
+
     print("Creating API keys for MCP services...\n")
-    
+
     for service in services:
         api_key = await create_api_key_for_service(service)
         if api_key:

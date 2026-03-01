@@ -20,14 +20,12 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
         self._collection: Optional[AsyncIOMotorCollection] = None
         self._collection_name = get_collection_name("mcp_security_scans")
 
-
     async def _get_collection(self) -> AsyncIOMotorCollection:
         """Get DocumentDB collection."""
         if self._collection is None:
             db = await get_documentdb_client()
             self._collection = db[self._collection_name]
         return self._collection
-
 
     async def load_all(self) -> None:
         """Load all security scan results from DocumentDB."""
@@ -40,14 +38,12 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
         except Exception as e:
             logger.error(f"Error loading security scans from DocumentDB: {e}", exc_info=True)
 
-
     async def get(
         self,
         server_path: str,
     ) -> Optional[Dict[str, Any]]:
         """Get latest security scan result for a server."""
         return await self.get_latest(server_path)
-
 
     async def list_all(self) -> List[Dict[str, Any]]:
         """List all security scan results."""
@@ -63,7 +59,6 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
         except Exception as e:
             logger.error(f"Error listing security scans from DocumentDB: {e}", exc_info=True)
             return []
-
 
     async def create(
         self,
@@ -84,7 +79,9 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
             if "scan_timestamp" not in scan_result:
                 scan_result["scan_timestamp"] = datetime.utcnow().isoformat()
 
-            if "vulnerabilities" in scan_result and isinstance(scan_result["vulnerabilities"], list):
+            if "vulnerabilities" in scan_result and isinstance(
+                scan_result["vulnerabilities"], list
+            ):
                 vuln_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
                 for vuln in scan_result["vulnerabilities"]:
                     severity = vuln.get("severity", "").lower()
@@ -105,7 +102,6 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
             logger.error(f"Failed to index security scan in DocumentDB: {e}", exc_info=True)
             return False
 
-
     async def get_latest(
         self,
         server_path: str,
@@ -115,8 +111,7 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
             collection = await self._get_collection()
 
             scan_doc = await collection.find_one(
-                {"server_path": server_path},
-                sort=[("scan_timestamp", -1)]
+                {"server_path": server_path}, sort=[("scan_timestamp", -1)]
             )
 
             if scan_doc:
@@ -128,7 +123,6 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
             logger.error(f"Failed to get latest scan from DocumentDB: {e}", exc_info=True)
             return None
 
-
     async def query_by_status(
         self,
         status: str,
@@ -137,9 +131,7 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
         try:
             collection = await self._get_collection()
 
-            cursor = collection.find(
-                {"scan_status": status}
-            ).sort("scan_timestamp", -1)
+            cursor = collection.find({"scan_status": status}).sort("scan_timestamp", -1)
 
             scans = []
             async for doc in cursor:

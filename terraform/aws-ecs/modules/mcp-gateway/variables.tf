@@ -585,3 +585,32 @@ variable "registry_mode" {
   type        = string
   default     = "full"
 }
+
+# =============================================================================
+# OBSERVABILITY CONFIGURATION (Metrics Pipeline)
+# =============================================================================
+
+variable "enable_observability" {
+  description = "Enable full observability pipeline (AMP, metrics-service, ADOT collector, Grafana). When false, no observability resources are created."
+  type        = bool
+  default     = true
+}
+
+variable "metrics_service_image_uri" {
+  description = "Container image URI for metrics-service. Required when enable_observability is true."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_image_uri" {
+  description = "Container image URI for Grafana OSS (custom image with baked-in provisioning). Required when enable_observability is true."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_admin_password" {
+  description = "Admin password for Grafana. Must be set when enable_observability is true."
+  type        = string
+  sensitive   = true
+  default     = ""
+}

@@ -222,41 +222,29 @@ This is useful when you want to completely clean up before redeploying or when d
 
 The Travel Assistant Agent can discover and invoke other agents at runtime using the MCP Gateway Registry's semantic search API. This enables dynamic agent composition where agents find collaborators based on capabilities.
 
-### Prerequisites
+### Configuration
 
-1. **MCP Gateway Registry running** with at least one A2A agent registered
-2. **Authentication configured** - one of the following options:
-
-**Option 1: Direct JWT Token (recommended for testing)**
+1. Copy the example environment file:
 ```bash
-# Copy the token from .oauth-tokens/ingress.json into agents/a2a/.env
+cp agents/a2a/.env.example agents/a2a/.env
+```
+
+2. Edit `agents/a2a/.env` and set your JWT token:
+```bash
+# Registry URL (default works for Docker network)
+MCP_REGISTRY_URL=http://registry
+
+# Paste a valid JWT token from the registry UI or API
 REGISTRY_JWT_TOKEN=<your-jwt-token>
 ```
 
-**Option 2: M2M Client Credentials (recommended for production)**
-```bash
-# Configure Keycloak M2M credentials in agents/a2a/.env
-M2M_CLIENT_ID=agent-test-agent-m2m
-M2M_CLIENT_SECRET=<your-client-secret>
-KEYCLOAK_URL=http://keycloak:8080
-```
+The agent uses this token to authenticate with the registry's semantic search API. The `deploy_local.sh` script automatically loads `.env` before starting containers.
 
-### Configuration
+### Prerequisites
 
-Create or update `agents/a2a/.env` file:
-
-```bash
-# Copy from example
-cp agents/a2a/.env.example agents/a2a/.env
-
-# Edit with your credentials
-# Option 1: Use direct JWT token (takes precedence)
-REGISTRY_JWT_TOKEN=<token-from-.oauth-tokens/ingress.json>
-
-# Option 2: Use M2M credentials (fallback if JWT not set)
-TRAVEL_AGENT_M2M_CLIENT_ID=agent-test-agent-m2m
-TRAVEL_AGENT_M2M_CLIENT_SECRET=<secret-from-.oauth-tokens/agent-test-agent-m2m.json>
-```
+- MCP Gateway Registry running (`docker-compose up -d`)
+- Flight Booking Agent registered in the registry (via UI or CLI)
+- Valid JWT token configured in `agents/a2a/.env`
 
 ### Discovery Tools
 
@@ -270,37 +258,19 @@ The Travel Assistant Agent provides three tools for agent discovery:
 
 ### Testing Discovery
 
-1. **Start the MCP Gateway Registry** (if not already running):
-```bash
-docker-compose up -d
-```
+1. Start the MCP Gateway Registry and register the Flight Booking Agent
 
-2. **Register the Flight Booking Agent** in the registry (via UI or CLI)
-
-3. **Deploy agents locally:**
+2. Deploy agents locally:
 ```bash
 agents/a2a/deploy_local.sh
 ```
 
-4. **Test discovery via A2A protocol:**
+3. Run the test suite (includes discovery test):
 ```bash
-# Send a message that triggers discovery
-curl -X POST http://localhost:9001/a2a \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "message/send",
-    "params": {
-      "message": {
-        "role": "user",
-        "parts": [{"kind": "text", "text": "Find agents that can book flights"}]
-      }
-    },
-    "id": 1
-  }'
+uv run python agents/a2a/test/simple_agents_test.py --endpoint local --debug
 ```
 
-5. **View agent logs** to see discovery in action:
+4. View agent logs to see discovery in action:
 ```bash
 docker logs -f travel-assistant-agent
 ```

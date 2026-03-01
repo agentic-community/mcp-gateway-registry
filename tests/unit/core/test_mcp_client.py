@@ -702,8 +702,12 @@ async def test_get_tools_from_server_with_server_info_success(mock_server_info):
     """Test getting tools with server info successfully."""
     url = "http://localhost:8000"
 
-    with patch("registry.core.mcp_client.detect_server_transport_aware", return_value="streamable-http"):
-        with patch("registry.core.mcp_client._get_tools_streamable_http", return_value=[]) as mock_get:
+    with patch(
+        "registry.core.mcp_client.detect_server_transport_aware", return_value="streamable-http"
+    ):
+        with patch(
+            "registry.core.mcp_client._get_tools_streamable_http", return_value=[]
+        ) as mock_get:
             result = await get_tools_from_server_with_server_info(url, mock_server_info)
 
             mock_get.assert_awaited_once()
@@ -733,7 +737,10 @@ async def test_get_tools_from_server_with_server_info_exception():
     """
     url = "http://localhost:8000"
 
-    with patch("registry.core.mcp_client.detect_server_transport_aware", side_effect=Exception("Test error")):
+    with patch(
+        "registry.core.mcp_client.detect_server_transport_aware",
+        side_effect=Exception("Test error"),
+    ):
         # Actual behavior: exception propagates (not caught)
         # Expected behavior (when bug is fixed): should return None
         with pytest.raises(Exception, match="Test error"):
@@ -792,7 +799,10 @@ async def test_full_tool_discovery_flow_streamable_http(mock_server_info, mock_t
             mock_session_class.return_value.__aenter__.return_value = mock_session
 
             # Full flow: detect transport -> get tools
-            with patch("registry.core.mcp_client.detect_server_transport_aware", return_value="streamable-http"):
+            with patch(
+                "registry.core.mcp_client.detect_server_transport_aware",
+                return_value="streamable-http",
+            ):
                 result = await get_tools_from_server_with_server_info(url, mock_server_info)
 
                 assert result is not None
@@ -819,7 +829,9 @@ async def test_full_tool_discovery_flow_sse(mock_tools_response):
             mock_session_class.return_value.__aenter__.return_value = mock_session
 
             # Full flow: detect transport -> get tools
-            with patch("registry.core.mcp_client.detect_server_transport_aware", return_value="sse"):
+            with patch(
+                "registry.core.mcp_client.detect_server_transport_aware", return_value="sse"
+            ):
                 result = await get_tools_from_server_with_server_info(url, server_info)
 
                 assert result is not None

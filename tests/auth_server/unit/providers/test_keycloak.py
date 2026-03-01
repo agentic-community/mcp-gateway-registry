@@ -37,7 +37,7 @@ class TestKeycloakProviderInit:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Assert
@@ -56,7 +56,7 @@ class TestKeycloakProviderInit:
             realm="test-realm",
             client_id="test-client",
             client_secret="test-secret",
-            keycloak_external_url="https://keycloak.example.com"
+            keycloak_external_url="https://keycloak.example.com",
         )
 
         # Assert
@@ -76,7 +76,7 @@ class TestKeycloakProviderInit:
             keycloak_url="http://localhost:8080/",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Assert
@@ -92,7 +92,7 @@ class TestKeycloakProviderInit:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Assert
@@ -110,7 +110,7 @@ class TestKeycloakProviderInit:
             client_id="web-client",
             client_secret="web-secret",
             m2m_client_id="m2m-client",
-            m2m_client_secret="m2m-secret"
+            m2m_client_secret="m2m-secret",
         )
 
         # Assert
@@ -127,7 +127,7 @@ class TestKeycloakProviderInit:
 class TestKeycloakJWKS:
     """Tests for JWKS retrieval and caching."""
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_get_jwks_success(self, mock_get, mock_jwks_response):
         """Test successful JWKS retrieval."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -142,7 +142,7 @@ class TestKeycloakJWKS:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act
@@ -154,7 +154,7 @@ class TestKeycloakJWKS:
         mock_get.assert_called_once()
         assert "/protocol/openid-connect/certs" in mock_get.call_args[0][0]
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_get_jwks_caching(self, mock_get, mock_jwks_response):
         """Test that JWKS is cached and not fetched repeatedly."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -169,7 +169,7 @@ class TestKeycloakJWKS:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act - call multiple times
@@ -181,8 +181,8 @@ class TestKeycloakJWKS:
         assert mock_get.call_count == 1
         assert jwks1 == jwks2 == jwks3
 
-    @patch('auth_server.providers.keycloak.requests.get')
-    @patch('auth_server.providers.keycloak.time.time')
+    @patch("auth_server.providers.keycloak.requests.get")
+    @patch("auth_server.providers.keycloak.time.time")
     def test_get_jwks_cache_expiration(self, mock_time, mock_get, mock_jwks_response):
         """Test that JWKS cache expires after TTL."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -197,7 +197,7 @@ class TestKeycloakJWKS:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # First call
@@ -215,7 +215,7 @@ class TestKeycloakJWKS:
         # Assert
         assert mock_get.call_count == 2  # First call + after expiration
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_get_jwks_network_error(self, mock_get):
         """Test JWKS retrieval with network error."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -227,7 +227,7 @@ class TestKeycloakJWKS:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act & Assert
@@ -243,7 +243,7 @@ class TestKeycloakJWKS:
 class TestKeycloakTokenValidation:
     """Tests for JWT token validation."""
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_validate_token_success(self, mock_get, mock_jwks_response):
         """Test successful token validation."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -257,7 +257,7 @@ class TestKeycloakTokenValidation:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Create a mock token that will pass basic structure checks
@@ -272,17 +272,17 @@ class TestKeycloakTokenValidation:
             "scope": "openid profile email",
             "azp": "test-client",
             "exp": now + 3600,
-            "iat": now
+            "iat": now,
         }
 
         # Mock JWT validation
-        with patch('auth_server.providers.keycloak.jwt.get_unverified_header') as mock_header:
-            with patch('auth_server.providers.keycloak.jwt.decode') as mock_decode:
+        with patch("auth_server.providers.keycloak.jwt.get_unverified_header") as mock_header:
+            with patch("auth_server.providers.keycloak.jwt.decode") as mock_decode:
                 mock_header.return_value = {"kid": "test-key-id-1"}
                 mock_decode.return_value = payload
 
                 # Mock PyJWK - imported dynamically inside function so patch at source
-                with patch('jwt.PyJWK') as mock_pyjwk:
+                with patch("jwt.PyJWK") as mock_pyjwk:
                     mock_key = MagicMock()
                     mock_pyjwk.return_value.key = mock_key
 
@@ -297,7 +297,7 @@ class TestKeycloakTokenValidation:
                     assert "admins" in result["groups"]
                     assert result["method"] == "keycloak"
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_validate_token_expired(self, mock_get, mock_jwks_response):
         """Test validation of expired token."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -311,11 +311,11 @@ class TestKeycloakTokenValidation:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
-        with patch('auth_server.providers.keycloak.jwt.get_unverified_header') as mock_header:
-            with patch('auth_server.providers.keycloak.jwt.decode') as mock_decode:
+        with patch("auth_server.providers.keycloak.jwt.get_unverified_header") as mock_header:
+            with patch("auth_server.providers.keycloak.jwt.decode") as mock_decode:
                 mock_header.return_value = {"kid": "test-key-id-1"}
                 mock_decode.side_effect = jwt.ExpiredSignatureError("Token expired")
 
@@ -323,7 +323,7 @@ class TestKeycloakTokenValidation:
                 with pytest.raises(ValueError, match="expired"):
                     provider.validate_token("expired-token")
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_validate_token_no_kid(self, mock_get, mock_jwks_response):
         """Test validation of token without kid header."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -337,17 +337,17 @@ class TestKeycloakTokenValidation:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
-        with patch('auth_server.providers.keycloak.jwt.get_unverified_header') as mock_header:
+        with patch("auth_server.providers.keycloak.jwt.get_unverified_header") as mock_header:
             mock_header.return_value = {}  # No kid
 
             # Act & Assert
             with pytest.raises(ValueError, match="missing 'kid'"):
                 provider.validate_token("token-without-kid")
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_validate_token_key_not_found(self, mock_get, mock_jwks_response):
         """Test validation when signing key is not found."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -361,17 +361,17 @@ class TestKeycloakTokenValidation:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
-        with patch('auth_server.providers.keycloak.jwt.get_unverified_header') as mock_header:
+        with patch("auth_server.providers.keycloak.jwt.get_unverified_header") as mock_header:
             mock_header.return_value = {"kid": "unknown-key-id"}
 
             # Act & Assert
             with pytest.raises(ValueError, match="No matching key found"):
                 provider.validate_token("token-with-unknown-kid")
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_validate_token_multiple_issuers(self, mock_get, mock_jwks_response):
         """Test validation with multiple valid issuers."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -386,7 +386,7 @@ class TestKeycloakTokenValidation:
             realm="test-realm",
             client_id="test-client",
             client_secret="test-secret",
-            keycloak_external_url="https://keycloak.example.com"
+            keycloak_external_url="https://keycloak.example.com",
         )
 
         # Create payload with external issuer
@@ -397,16 +397,16 @@ class TestKeycloakTokenValidation:
             "sub": "user-123",
             "preferred_username": "testuser",
             "exp": now + 3600,
-            "iat": now
+            "iat": now,
         }
 
-        with patch('auth_server.providers.keycloak.jwt.get_unverified_header') as mock_header:
-            with patch('auth_server.providers.keycloak.jwt.decode') as mock_decode:
+        with patch("auth_server.providers.keycloak.jwt.get_unverified_header") as mock_header:
+            with patch("auth_server.providers.keycloak.jwt.decode") as mock_decode:
                 mock_header.return_value = {"kid": "test-key-id-1"}
                 mock_decode.return_value = payload
 
                 # Mock PyJWK - imported dynamically inside function so patch at source
-                with patch('jwt.PyJWK') as mock_pyjwk:
+                with patch("jwt.PyJWK") as mock_pyjwk:
                     mock_key = MagicMock()
                     mock_pyjwk.return_value.key = mock_key
 
@@ -425,7 +425,7 @@ class TestKeycloakTokenValidation:
 class TestKeycloakOAuth2:
     """Tests for OAuth2 authorization code flow."""
 
-    @patch('auth_server.providers.keycloak.requests.post')
+    @patch("auth_server.providers.keycloak.requests.post")
     def test_exchange_code_for_token_success(self, mock_post):
         """Test successful code exchange."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -437,7 +437,7 @@ class TestKeycloakOAuth2:
             "id_token": "id-token-value",
             "refresh_token": "refresh-token-value",
             "token_type": "Bearer",
-            "expires_in": 3600
+            "expires_in": 3600,
         }
         mock_response.raise_for_status.return_value = None
         mock_post.return_value = mock_response
@@ -446,13 +446,12 @@ class TestKeycloakOAuth2:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act
         result = provider.exchange_code_for_token(
-            code="auth-code",
-            redirect_uri="https://app.example.com/callback"
+            code="auth-code", redirect_uri="https://app.example.com/callback"
         )
 
         # Assert
@@ -461,7 +460,7 @@ class TestKeycloakOAuth2:
         assert result["expires_in"] == 3600
         mock_post.assert_called_once()
 
-    @patch('auth_server.providers.keycloak.requests.post')
+    @patch("auth_server.providers.keycloak.requests.post")
     def test_exchange_code_for_token_error(self, mock_post):
         """Test code exchange with error."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -473,14 +472,13 @@ class TestKeycloakOAuth2:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act & Assert
         with pytest.raises(ValueError, match="Token exchange failed"):
             provider.exchange_code_for_token(
-                code="invalid-code",
-                redirect_uri="https://app.example.com/callback"
+                code="invalid-code", redirect_uri="https://app.example.com/callback"
             )
 
     def test_get_auth_url(self):
@@ -492,14 +490,14 @@ class TestKeycloakOAuth2:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act
         auth_url = provider.get_auth_url(
             redirect_uri="https://app.example.com/callback",
             state="random-state",
-            scope="openid email profile"
+            scope="openid email profile",
         )
 
         # Assert
@@ -518,13 +516,11 @@ class TestKeycloakOAuth2:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act
-        logout_url = provider.get_logout_url(
-            redirect_uri="https://app.example.com/logout"
-        )
+        logout_url = provider.get_logout_url(redirect_uri="https://app.example.com/logout")
 
         # Assert
         assert "protocol/openid-connect/logout" in logout_url
@@ -540,7 +536,7 @@ class TestKeycloakOAuth2:
 class TestKeycloakUserInfo:
     """Tests for user information retrieval."""
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_get_user_info_success(self, mock_get):
         """Test successful user info retrieval."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -552,7 +548,7 @@ class TestKeycloakUserInfo:
             "preferred_username": "testuser",
             "email": "testuser@example.com",
             "email_verified": True,
-            "groups": ["users", "developers"]
+            "groups": ["users", "developers"],
         }
         mock_response.raise_for_status.return_value = None
         mock_get.return_value = mock_response
@@ -561,7 +557,7 @@ class TestKeycloakUserInfo:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act
@@ -572,7 +568,7 @@ class TestKeycloakUserInfo:
         assert user_info["email"] == "testuser@example.com"
         assert "users" in user_info["groups"]
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_get_user_info_error(self, mock_get):
         """Test user info retrieval with error."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -584,7 +580,7 @@ class TestKeycloakUserInfo:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act & Assert
@@ -600,7 +596,7 @@ class TestKeycloakUserInfo:
 class TestKeycloakTokenRefresh:
     """Tests for token refresh functionality."""
 
-    @patch('auth_server.providers.keycloak.requests.post')
+    @patch("auth_server.providers.keycloak.requests.post")
     def test_refresh_token_success(self, mock_post):
         """Test successful token refresh."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -611,7 +607,7 @@ class TestKeycloakTokenRefresh:
             "access_token": "new-access-token",
             "refresh_token": "new-refresh-token",
             "token_type": "Bearer",
-            "expires_in": 3600
+            "expires_in": 3600,
         }
         mock_response.raise_for_status.return_value = None
         mock_post.return_value = mock_response
@@ -620,7 +616,7 @@ class TestKeycloakTokenRefresh:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act
@@ -630,7 +626,7 @@ class TestKeycloakTokenRefresh:
         assert result["access_token"] == "new-access-token"
         assert result["token_type"] == "Bearer"
 
-    @patch('auth_server.providers.keycloak.requests.post')
+    @patch("auth_server.providers.keycloak.requests.post")
     def test_refresh_token_error(self, mock_post):
         """Test token refresh with error."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -642,7 +638,7 @@ class TestKeycloakTokenRefresh:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act & Assert
@@ -658,7 +654,7 @@ class TestKeycloakTokenRefresh:
 class TestKeycloakM2M:
     """Tests for machine-to-machine authentication."""
 
-    @patch('auth_server.providers.keycloak.requests.post')
+    @patch("auth_server.providers.keycloak.requests.post")
     def test_get_m2m_token_success(self, mock_post):
         """Test successful M2M token generation."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -668,7 +664,7 @@ class TestKeycloakM2M:
         mock_response.json.return_value = {
             "access_token": "m2m-access-token",
             "token_type": "Bearer",
-            "expires_in": 3600
+            "expires_in": 3600,
         }
         mock_response.raise_for_status.return_value = None
         mock_post.return_value = mock_response
@@ -679,7 +675,7 @@ class TestKeycloakM2M:
             client_id="web-client",
             client_secret="web-secret",
             m2m_client_id="m2m-client",
-            m2m_client_secret="m2m-secret"
+            m2m_client_secret="m2m-secret",
         )
 
         # Act
@@ -694,7 +690,7 @@ class TestKeycloakM2M:
         assert call_data["client_secret"] == "m2m-secret"
         assert call_data["grant_type"] == "client_credentials"
 
-    @patch('auth_server.providers.keycloak.requests.post')
+    @patch("auth_server.providers.keycloak.requests.post")
     def test_get_m2m_token_custom_credentials(self, mock_post):
         """Test M2M token generation with custom credentials."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -704,7 +700,7 @@ class TestKeycloakM2M:
         mock_response.json.return_value = {
             "access_token": "custom-m2m-token",
             "token_type": "Bearer",
-            "expires_in": 3600
+            "expires_in": 3600,
         }
         mock_response.raise_for_status.return_value = None
         mock_post.return_value = mock_response
@@ -713,14 +709,12 @@ class TestKeycloakM2M:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="default-client",
-            client_secret="default-secret"
+            client_secret="default-secret",
         )
 
         # Act
         result = provider.get_m2m_token(
-            client_id="custom-client",
-            client_secret="custom-secret",
-            scope="custom-scope"
+            client_id="custom-client", client_secret="custom-secret", scope="custom-scope"
         )
 
         # Assert
@@ -739,11 +733,11 @@ class TestKeycloakM2M:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Mock validate_token
-        with patch.object(provider, 'validate_token') as mock_validate:
+        with patch.object(provider, "validate_token") as mock_validate:
             mock_validate.return_value = {"valid": True}
 
             # Act
@@ -771,7 +765,7 @@ class TestKeycloakProviderInfo:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act
@@ -786,7 +780,7 @@ class TestKeycloakProviderInfo:
         assert "token" in info["endpoints"]
         assert "userinfo" in info["endpoints"]
 
-    @patch('auth_server.providers.keycloak.requests.get')
+    @patch("auth_server.providers.keycloak.requests.get")
     def test_check_keycloak_health(self, mock_get):
         """Test Keycloak health check."""
         from auth_server.providers.keycloak import KeycloakProvider
@@ -800,7 +794,7 @@ class TestKeycloakProviderInfo:
             keycloak_url="http://localhost:8080",
             realm="test-realm",
             client_id="test-client",
-            client_secret="test-secret"
+            client_secret="test-secret",
         )
 
         # Act

@@ -158,3 +158,31 @@ output "https_enabled" {
   description = "Whether HTTPS is enabled"
   value       = var.certificate_arn != ""
 }
+
+# Observability outputs
+output "observability_enabled" {
+  description = "Whether the observability pipeline is enabled"
+  value       = var.enable_observability
+}
+
+output "amp_workspace_id" {
+  description = "AMP workspace ID"
+  value       = var.enable_observability ? aws_prometheus_workspace.mcp[0].id : null
+}
+
+output "amp_endpoint" {
+  description = "AMP remote write endpoint"
+  value       = var.enable_observability ? local.amp_remote_write_endpoint : null
+}
+
+output "amp_query_endpoint" {
+  description = "AMP query endpoint for Grafana datasource"
+  value       = var.enable_observability ? local.amp_query_endpoint : null
+}
+
+output "grafana_url" {
+  description = "Grafana dashboard URL (path-based routing via ALB)"
+  value = var.enable_observability ? (
+    var.domain_name != "" ? "https://${var.domain_name}/grafana/" : "http://${module.alb.dns_name}/grafana/"
+  ) : null
+}

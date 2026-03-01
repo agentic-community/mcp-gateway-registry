@@ -14,8 +14,10 @@ from registry.audit import AuditLogger, AuditMiddleware
 
 class MockRequest:
     """Mock FastAPI Request object."""
-    
-    def __init__(self, path="/api/test", method="GET", headers=None, cookies=None, client_host="127.0.0.1"):
+
+    def __init__(
+        self, path="/api/test", method="GET", headers=None, cookies=None, client_host="127.0.0.1"
+    ):
         self.url = MagicMock()
         self.url.path = path
         self.method = method
@@ -27,11 +29,11 @@ class MockRequest:
         self.state.user_context = None
         self.state.audit_action = None
         self.query_params = {}
-    
+
     @property
     def headers(self):
         return self._headers
-    
+
     @property
     def cookies(self):
         return self._cookies
@@ -106,18 +108,20 @@ class TestDispatch:
         """Dispatch captures request and response details."""
         request = MockRequest(path="/api/servers", method="POST")
         request.state.user_context = {"username": "testuser", "auth_method": "oauth2"}
-        
+
         response = MagicMock()
         response.status_code = 201
         response.headers = {}
-        
+
         logged_events = []
+
         async def capture_log_event(record):
             logged_events.append(record)
+
         self.audit_logger.log_event = capture_log_event
-        
+
         result = await self.middleware.dispatch(request, lambda r: self._async_return(response))
-        
+
         assert result == response
         assert len(logged_events) == 1
         assert logged_events[0].request.method == "POST"
@@ -129,12 +133,14 @@ class TestDispatch:
         request = MockRequest(path="/health")
         response = MagicMock()
         response.status_code = 200
-        
+
         log_called = []
+
         async def track_log(record):
             log_called.append(record)
+
         self.audit_logger.log_event = track_log
-        
+
         await self.middleware.dispatch(request, lambda r: self._async_return(response))
         assert len(log_called) == 0
 

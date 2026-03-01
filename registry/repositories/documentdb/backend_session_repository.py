@@ -159,9 +159,7 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
             doc,
             upsert=True,
         )
-        logger.debug(
-            f"Stored backend session: {doc_id} -> {backend_session_id}"
-        )
+        logger.debug(f"Stored backend session: {doc_id} -> {backend_session_id}")
 
     async def delete_backend_session(
         self,

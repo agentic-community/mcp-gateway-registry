@@ -4,6 +4,10 @@ from typing import Any
 
 from ..repositories.factory import get_server_repository
 from ..repositories.interfaces import ServerRepositoryBase
+from ..utils.credential_encryption import (
+    _migrate_auth_type_to_auth_scheme,
+    strip_credentials_from_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +20,26 @@ class ServerService:
         from ..repositories.factory import get_search_repository
 
         self._search_repo = get_search_repository()
+
+    def _prepare_server_dict(
+        self,
+        server_dict: dict[str, Any],
+        include_credentials: bool = False,
+    ) -> dict[str, Any]:
+        """Apply read-time migration and optionally strip credentials.
+
+        Args:
+            server_dict: Raw server dict from storage.
+            include_credentials: If True, keep encrypted credentials in the dict.
+
+        Returns:
+            Prepared server dict with auth_scheme migrated and credentials
+            optionally stripped.
+        """
+        _migrate_auth_type_to_auth_scheme(server_dict)
+        if not include_credentials:
+            strip_credentials_from_dict(server_dict)
+        return server_dict
 
     async def load_servers_and_state(self):
         """Load server definitions and persisted state from repository."""
@@ -166,12 +190,31 @@ class ServerService:
 
         return result
 
-    async def get_server_info(self, path: str) -> dict[str, Any] | None:
-        """Get server information by path - queries repository directly."""
-        return await self._repo.get(path)
+    async def get_server_info(
+        self,
+        path: str,
+        include_credentials: bool = False,
+    ) -> dict[str, Any] | None:
+        """Get server information by path - queries repository directly.
+
+        Args:
+            path: Server path (e.g., "/my-server").
+            include_credentials: If True, include encrypted credentials in result.
+                Set to True only for internal callers like health checks.
+
+        Returns:
+            Server info dict, or None if not found.
+        """
+        result = await self._repo.get(path)
+        if result:
+            self._prepare_server_dict(result, include_credentials)
+        return result
 
     async def get_all_servers(
-        self, include_federated: bool = True, include_inactive: bool = False
+        self,
+        include_federated: bool = True,
+        include_inactive: bool = False,
+        include_credentials: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """
         Get all registered servers.
@@ -179,12 +222,17 @@ class ServerService:
         Args:
             include_federated: If True, include servers from federated registries
             include_inactive: If True, include inactive server versions (default False)
+            include_credentials: If True, include encrypted credentials in result
 
         Returns:
             Dict of all servers (local and federated if requested)
         """
         # Query repository directly instead of using cache
         all_servers = await self._repo.list_all()
+
+        # Apply read-time migration and credential stripping
+        for server_info in all_servers.values():
+            self._prepare_server_dict(server_info, include_credentials)
 
         # Filter out inactive servers (non-default versions) unless requested
         if not include_inactive:
@@ -215,7 +263,9 @@ class ServerService:
         return all_servers
 
     async def get_filtered_servers(
-        self, accessible_servers: list[str], include_inactive: bool = False
+        self,
+        accessible_servers: list[str],
+        include_inactive: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """
         Get servers filtered by user's accessible servers list.
@@ -233,6 +283,10 @@ class ServerService:
 
         # Query repository directly instead of using cache
         all_servers = await self._repo.list_all()
+
+        # Apply read-time migration and credential stripping
+        for server_info in all_servers.values():
+            self._prepare_server_dict(server_info, include_credentials=False)
 
         # Filter out inactive servers (non-default versions) unless requested
         if not include_inactive:
@@ -726,8 +780,11 @@ class ServerService:
         # Trigger an immediate health check for the newly active version
         try:
             from ..health.service import health_service
+
             asyncio.create_task(health_service.perform_immediate_health_check(path))
-            logger.info(f"Triggered background health check for {path} after version swap to {version}")
+            logger.info(
+                f"Triggered background health check for {path} after version swap to {version}"
+            )
         except Exception as e:
             logger.error(f"Failed to trigger health check after version swap for {path}: {e}")
 

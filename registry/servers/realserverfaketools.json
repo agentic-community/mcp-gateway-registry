@@ -4,11 +4,9 @@
   "path": "/realserverfaketools/",
   "proxy_pass_url": "http://realserverfaketools-server:8002/",  
   "supported_transports": ["streamable-http"],
-  "auth_type": "none",
+  "auth_scheme": "none",
   "tags": ["demo", "fake", "tools", "testing"],
   "num_tools": 6,
-  "num_stars": 0,
-  "is_python": true,
   "license": "MIT",
   "tool_list": [
     {

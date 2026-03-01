@@ -74,9 +74,7 @@ def _parse_frontmatter(
                     if value.startswith("["):
                         value = value.strip("[]")
                     result["tags"] = [
-                        t.strip().strip('"').strip("'")
-                        for t in value.split(",")
-                        if t.strip()
+                        t.strip().strip('"').strip("'") for t in value.split(",") if t.strip()
                     ]
 
     return result

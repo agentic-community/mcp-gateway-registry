@@ -99,12 +99,18 @@ def _get_token_from_entra(
         if response.status_code >= 400:
             try:
                 error_data = response.json()
-                error_msg = error_data.get("error_description", error_data.get("error", "Unknown error"))
+                error_msg = error_data.get(
+                    "error_description", error_data.get("error", "Unknown error")
+                )
                 print(f"{Colors.RED}[ERROR]{Colors.NC} Entra ID error: {error_msg}")
                 if verbose:
-                    print(f"{Colors.BLUE}[DEBUG]{Colors.NC} Full error response: {json.dumps(error_data, indent=2)}")
+                    print(
+                        f"{Colors.BLUE}[DEBUG]{Colors.NC} Full error response: {json.dumps(error_data, indent=2)}"
+                    )
             except json.JSONDecodeError:
-                print(f"{Colors.RED}[ERROR]{Colors.NC} HTTP {response.status_code}: {response.text}")
+                print(
+                    f"{Colors.RED}[ERROR]{Colors.NC} HTTP {response.status_code}: {response.text}"
+                )
             return None
 
         token_data = response.json()
@@ -122,9 +128,7 @@ def _get_token_from_entra(
         return token_data
 
     except requests.exceptions.RequestException as e:
-        print(
-            f"{Colors.RED}[ERROR]{Colors.NC} Failed to make token request to Entra ID: {e}"
-        )
+        print(f"{Colors.RED}[ERROR]{Colors.NC} Failed to make token request to Entra ID: {e}")
         return None
     except json.JSONDecodeError as e:
         print(f"{Colors.RED}[ERROR]{Colors.NC} Invalid JSON response: {e}")
@@ -204,9 +208,7 @@ def _load_identities_file(
             identities = json.load(f)
 
         if not isinstance(identities, list):
-            print(
-                f"{Colors.RED}[ERROR]{Colors.NC} Identities file must contain a JSON array"
-            )
+            print(f"{Colors.RED}[ERROR]{Colors.NC} Identities file must contain a JSON array")
             return None
 
         return identities
@@ -243,12 +245,10 @@ def generate_tokens(
     for identity in identities:
         identity_name = identity.get("identity_name")
         if not identity_name:
-            print(
-                f"{Colors.RED}[ERROR]{Colors.NC} Identity missing 'identity_name' field"
-            )
+            print(f"{Colors.RED}[ERROR]{Colors.NC} Identity missing 'identity_name' field")
             continue
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Processing identity: {identity_name}")
         print("=" * 60)
 
@@ -258,9 +258,7 @@ def generate_tokens(
         scope = identity.get("scope")
 
         if not client_id:
-            print(
-                f"{Colors.RED}[ERROR]{Colors.NC} Identity '{identity_name}' missing 'client_id'"
-            )
+            print(f"{Colors.RED}[ERROR]{Colors.NC} Identity '{identity_name}' missing 'client_id'")
             continue
         if not client_secret:
             print(
@@ -268,9 +266,7 @@ def generate_tokens(
             )
             continue
         if not tenant_id:
-            print(
-                f"{Colors.RED}[ERROR]{Colors.NC} Identity '{identity_name}' missing 'tenant_id'"
-            )
+            print(f"{Colors.RED}[ERROR]{Colors.NC} Identity '{identity_name}' missing 'tenant_id'")
             continue
 
         print(f"Requesting access token for identity: {identity_name}")
@@ -304,7 +300,7 @@ def generate_tokens(
         ):
             success_count += 1
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Token generation complete: {success_count}/{total_count} successful")
     print("=" * 60)
 

@@ -10,7 +10,7 @@ from registry_discovery_client import RegistryDiscoveryClient
 from remote_agent_client import RemoteAgentCache
 
 logging.basicConfig(
-    level=logging.INFO,  
+    level=logging.INFO,
     format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ def get_registry_client() -> Optional[RegistryDiscoveryClient]:
 @lru_cache()
 def get_remote_agent_cache() -> RemoteAgentCache:
     """Get the remote agent cache singleton.
-    
+
     Returns:
         RemoteAgentCache instance
     """

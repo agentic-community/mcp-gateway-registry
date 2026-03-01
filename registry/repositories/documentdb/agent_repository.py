@@ -22,14 +22,12 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         self._collection: Optional[AsyncIOMotorCollection] = None
         self._collection_name = get_collection_name("mcp_agents")
 
-
     async def _get_collection(self) -> AsyncIOMotorCollection:
         """Get DocumentDB collection."""
         if self._collection is None:
             db = await get_documentdb_client()
             self._collection = db[self._collection_name]
         return self._collection
-
 
     async def load_all(self) -> None:
         """Load all agents from DocumentDB."""
@@ -41,7 +39,6 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
             logger.info(f"Loaded {count} agents from DocumentDB")
         except Exception as e:
             logger.error(f"Error loading agents from DocumentDB: {e}", exc_info=True)
-
 
     async def get(
         self,
@@ -60,7 +57,6 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         except Exception as e:
             logger.error(f"Error getting agent '{path}' from DocumentDB: {e}", exc_info=True)
             return None
-
 
     async def list_all(self) -> List[AgentCard]:
         """List all agents."""
@@ -81,7 +77,6 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         except Exception as e:
             logger.error(f"Error listing agents from DocumentDB: {e}", exc_info=True)
             return []
-
 
     async def create(
         self,
@@ -114,7 +109,6 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
             logger.error(f"Failed to create agent in DocumentDB: {e}", exc_info=True)
             raise ValueError(f"Failed to create agent: {e}")
 
-
     async def update(
         self,
         path: str,
@@ -142,10 +136,7 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         update_dict.pop("path", None)
 
         try:
-            result = await collection.update_one(
-                {"_id": path},
-                {"$set": update_dict}
-            )
+            result = await collection.update_one({"_id": path}, {"$set": update_dict})
 
             if result.matched_count == 0:
                 raise ValueError(f"Agent at '{path}' not found in DocumentDB")
@@ -155,7 +146,6 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         except Exception as e:
             logger.error(f"Failed to update agent in DocumentDB: {e}", exc_info=True)
             raise ValueError(f"Failed to update agent: {e}")
-
 
     async def delete(
         self,
@@ -183,7 +173,6 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         except Exception as e:
             logger.error(f"Failed to delete agent from DocumentDB: {e}", exc_info=True)
             return False
-
 
     async def get_state(
         self,
@@ -213,7 +202,6 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
             return getattr(agent, "is_enabled", False)
         return False
 
-
     async def set_state(
         self,
         path: str,
@@ -232,12 +220,7 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
 
             result = await collection.update_one(
                 {"_id": path},
-                {
-                    "$set": {
-                        "is_enabled": enabled,
-                        "updated_at": datetime.utcnow().isoformat()
-                    }
-                }
+                {"$set": {"is_enabled": enabled, "updated_at": datetime.utcnow().isoformat()}},
             )
 
             if result.matched_count == 0:
@@ -249,7 +232,6 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         except Exception as e:
             logger.error(f"Failed to update agent state in DocumentDB: {e}", exc_info=True)
             return False
-
 
     async def save_state(
         self,

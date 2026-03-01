@@ -4,11 +4,9 @@
   "path": "/fininfo",
   "proxy_pass_url": "http://fininfo-server:8001/sse",
   "supported_transports": ["sse"],
-  "auth_type": "api_key",
+  "auth_scheme": "api_key",
   "tags": [],
   "num_tools": 2,
-  "num_stars": 0,
-  "is_python": true,
   "license": "N/A",
   "tool_list": [
     {

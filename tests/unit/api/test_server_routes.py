@@ -225,8 +225,6 @@ def sample_server_info() -> dict[str, Any]:
         "proxy_pass_url": "http://localhost:8080",
         "tags": ["test", "demo"],
         "num_tools": 5,
-        "num_stars": 4,
-        "is_python": True,
         "license": "MIT",
         "tool_list": [
             {"name": "test_tool", "description": "A test tool", "inputSchema": {"type": "object"}}
@@ -398,8 +396,6 @@ class TestGetServersJSON:
                 "description": "Test 1",
                 "tags": [],
                 "num_tools": 3,
-                "num_stars": 5,
-                "is_python": True,
                 "license": "MIT",
                 "proxy_pass_url": "http://localhost:8080",
             }
@@ -426,8 +422,6 @@ class TestGetServersJSON:
                 "description": "Test",
                 "tags": [],
                 "num_tools": 2,
-                "num_stars": 4,
-                "is_python": False,
                 "license": "Apache-2.0",
                 "proxy_pass_url": "http://localhost:9000",
             }
@@ -452,8 +446,6 @@ class TestGetServersJSON:
                 "description": "A Python-based server",
                 "tags": ["python"],
                 "num_tools": 3,
-                "num_stars": 5,
-                "is_python": True,
                 "license": "MIT",
                 "proxy_pass_url": "http://localhost:8080",
             },
@@ -462,8 +454,6 @@ class TestGetServersJSON:
                 "description": "A Node.js-based server",
                 "tags": ["nodejs"],
                 "num_tools": 2,
-                "num_stars": 4,
-                "is_python": False,
                 "license": "MIT",
                 "proxy_pass_url": "http://localhost:8081",
             },
@@ -490,8 +480,6 @@ class TestGetServersJSON:
                 "description": "Test",
                 "tags": [],
                 "num_tools": 3,
-                "num_stars": 5,
-                "is_python": True,
                 "license": "MIT",
                 "proxy_pass_url": "http://localhost:8080",
             }
@@ -695,8 +683,6 @@ class TestRegisterService:
                     "proxy_pass_url": "http://localhost:9000",
                     "tags": "test, new",
                     "num_tools": 5,
-                    "num_stars": 4,
-                    "is_python": "true",
                     "license": "MIT",
                 },
             )

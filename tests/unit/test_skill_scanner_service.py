@@ -68,13 +68,15 @@ def _create_service() -> SkillScannerService:
 
 def _finding_strategy():
     """Strategy for generating a single finding dict."""
-    return st.fixed_dictionaries({
-        "severity": st.sampled_from(VALID_SEVERITIES),
-        "analyzer": st.sampled_from(VALID_ANALYZERS),
-        "threat_names": st.lists(st.text(min_size=1, max_size=20), max_size=3),
-        "threat_summary": st.text(max_size=100),
-        "is_safe": st.booleans(),
-    })
+    return st.fixed_dictionaries(
+        {
+            "severity": st.sampled_from(VALID_SEVERITIES),
+            "analyzer": st.sampled_from(VALID_ANALYZERS),
+            "threat_names": st.lists(st.text(min_size=1, max_size=20), max_size=3),
+            "threat_summary": st.text(max_size=100),
+            "is_safe": st.booleans(),
+        }
+    )
 
 
 def _ansi_prefix_strategy():

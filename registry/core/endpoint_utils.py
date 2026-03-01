@@ -22,12 +22,7 @@ def _url_contains_transport_path(url: str) -> bool:
     Returns:
         True if URL contains /mcp or /sse path segments.
     """
-    return (
-        url.endswith("/mcp")
-        or url.endswith("/sse")
-        or "/mcp/" in url
-        or "/sse/" in url
-    )
+    return url.endswith("/mcp") or url.endswith("/sse") or "/mcp/" in url or "/sse/" in url
 
 
 def get_endpoint_url(

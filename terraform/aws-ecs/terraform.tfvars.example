@@ -333,3 +333,23 @@ deployment_mode = "registry-only"
 # Note: with-gateway + skills-only is invalid and auto-corrects to registry-only + skills-only
 # Default: "full" (uncomment to change)
 # registry_mode = "full"
+
+# ============================================================================
+# OBSERVABILITY CONFIGURATION (Metrics Pipeline)
+# ============================================================================
+
+# Enable full observability pipeline (AMP, metrics-service, ADOT collector, Grafana)
+# When false, no observability resources are created
+# Default: true
+# enable_observability = true
+
+# Container image URIs for observability services (required when enable_observability = true)
+# metrics_service_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-metrics-service:latest"
+# grafana_image_uri         = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-grafana:latest"
+
+# Grafana admin password (REQUIRED when enable_observability = true)
+# IMPORTANT: You MUST set a strong, random password. Do NOT use "admin" or any weak default.
+# Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+# Can also be set via environment variable:
+#   export TF_VAR_grafana_admin_password="your-secure-password"
+grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"

@@ -673,7 +673,7 @@ class AgentSkillsE2ETest:
         print(f"    \033[92mPassed:\033[0m       {passed}")
         print(f"    \033[91mFailed:\033[0m       {failed}")
         print(f"    \033[93mSkipped:\033[0m      {skipped}")
-        print(f"    Total Time:   {total_time:.2f}ms ({total_time/1000:.2f}s)")
+        print(f"    Total Time:   {total_time:.2f}ms ({total_time / 1000:.2f}s)")
 
         if failed > 0:
             print(f"\n  \033[91m*** {failed} TEST(S) FAILED ***\033[0m")

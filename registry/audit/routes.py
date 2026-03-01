@@ -42,13 +42,13 @@ def get_audit_repository() -> DocumentDBAuditRepository:
 def require_admin(user_context: Dict[str, Any] = Depends(enhanced_auth)) -> Dict[str, Any]:
     """
     Dependency that requires admin access for audit endpoints.
-    
+
     Args:
         user_context: User context from enhanced_auth dependency
-        
+
     Returns:
         The user context if admin access is granted
-        
+
     Raises:
         HTTPException: 403 Forbidden if user is not an admin
     """
@@ -67,7 +67,7 @@ def require_admin(user_context: Dict[str, Any] = Depends(enhanced_auth)) -> Dict
 # Response models
 class AuditEventSummary(BaseModel):
     """Summary of an audit event for list responses."""
-    
+
     timestamp: datetime
     request_id: str
     log_type: str = "registry_api_access"
@@ -85,7 +85,7 @@ class AuditEventSummary(BaseModel):
 
 class AuditEventsResponse(BaseModel):
     """Response model for paginated audit events."""
-    
+
     total: int = Field(description="Total number of matching events")
     limit: int = Field(description="Maximum events per page")
     offset: int = Field(description="Number of events skipped")
@@ -94,7 +94,7 @@ class AuditEventsResponse(BaseModel):
 
 class AuditEventDetail(BaseModel):
     """Full audit event detail."""
-    
+
     event: Dict[str, Any] = Field(description="Complete audit event record")
 
 
@@ -112,7 +112,7 @@ def _build_query(
 ) -> Dict[str, Any]:
     """
     Build MongoDB query from filter parameters.
-    
+
     Args:
         stream: Log stream type (registry_api or mcp_access)
         from_time: Start of time range filter
@@ -124,7 +124,7 @@ def _build_query(
         status_min: Minimum HTTP status code
         status_max: Maximum HTTP status code
         auth_decision: Filter by authorization decision
-        
+
     Returns:
         MongoDB query dictionary
     """
@@ -134,7 +134,7 @@ def _build_query(
         "mcp_access": "mcp_server_access",
     }
     query: Dict[str, Any] = {"log_type": log_type_map.get(stream, stream)}
-    
+
     # Time range filter
     if from_time or to_time:
         query["timestamp"] = {}
@@ -142,13 +142,13 @@ def _build_query(
             query["timestamp"]["$gte"] = from_time
         if to_time:
             query["timestamp"]["$lte"] = to_time
-    
+
     # Identity filters - use case-insensitive regex for partial matching
     if username:
         # Escape special regex characters in the username
         escaped_username = re.escape(username)
         query["identity.username"] = {"$regex": escaped_username, "$options": "i"}
-    
+
     # Action filters - different fields per stream
     if stream == "mcp_access":
         # MCP records use mcp_request.method and mcp_server.name
@@ -165,7 +165,7 @@ def _build_query(
             query["action.resource_type"] = resource_type
         if resource_id:
             query["action.resource_id"] = resource_id
-    
+
     # Response status filter
     # For registry_api: use numeric response.status_code
     # For mcp_access: use string mcp_response.status ("success" or "error")
@@ -173,7 +173,11 @@ def _build_query(
         if stream == "mcp_access":
             # Map numeric ranges to MCP status strings
             # 2xx (200-299) -> success, 4xx/5xx (400-599) -> error
-            if status_min is not None and status_min >= 200 and (status_max is None or status_max < 400):
+            if (
+                status_min is not None
+                and status_min >= 200
+                and (status_max is None or status_max < 400)
+            ):
                 # 2xx range = success
                 query["mcp_response.status"] = "success"
             elif status_min is not None and status_min >= 400:
@@ -189,11 +193,11 @@ def _build_query(
                 query["response.status_code"]["$gte"] = status_min
             if status_max is not None:
                 query["response.status_code"]["$lte"] = status_max
-    
+
     # Authorization filter
     if auth_decision:
         query["authorization.decision"] = auth_decision
-    
+
     return query
 
 
@@ -268,17 +272,17 @@ async def get_audit_events(
 ) -> AuditEventsResponse:
     """
     Query recent audit events from MongoDB.
-    
+
     Returns paginated audit events matching the specified filters.
     All filters are optional and can be combined.
-    
+
     Requires admin access.
     """
     logger.info(
         f"Admin '{user_context.get('username')}' querying audit events: "
         f"stream={stream}, limit={limit}, offset={offset}"
     )
-    
+
     query = _build_query(
         stream=stream,
         from_time=from_time,
@@ -291,13 +295,13 @@ async def get_audit_events(
         status_max=status_max,
         auth_decision=auth_decision,
     )
-    
+
     repository = get_audit_repository()
-    
+
     try:
         # Get total count for pagination
         total = await repository.count(query)
-        
+
         # Get events
         events = await repository.find(
             query=query,
@@ -306,9 +310,9 @@ async def get_audit_events(
             sort_field="timestamp",
             sort_order=sort_order,
         )
-        
+
         logger.debug(f"Found {len(events)} audit events (total: {total})")
-        
+
         return AuditEventsResponse(
             total=total,
             limit=limit,
@@ -378,6 +382,7 @@ async def get_audit_event(
 def _generate_jsonl(events: List[Dict[str, Any]]):
     """Generate JSONL output from events."""
     import json
+
     for event in events:
         # Convert datetime objects to ISO format strings
         if "timestamp" in event and isinstance(event["timestamp"], datetime):
@@ -390,9 +395,9 @@ def _generate_csv(events: List[Dict[str, Any]]):
     if not events:
         yield ""
         return
-    
+
     output = io.StringIO()
-    
+
     # Define CSV columns (flattened structure)
     fieldnames = [
         "timestamp",
@@ -410,10 +415,10 @@ def _generate_csv(events: List[Dict[str, Any]]):
         "resource_id",
         "auth_decision",
     ]
-    
+
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
-    
+
     for event in events:
         # Flatten nested structure
         row = {
@@ -427,18 +432,26 @@ def _generate_csv(events: List[Dict[str, Any]]):
             "path": event.get("request", {}).get("path", ""),
             "status_code": event.get("response", {}).get("status_code", ""),
             "duration_ms": event.get("response", {}).get("duration_ms", ""),
-            "operation": event.get("action", {}).get("operation", "") if event.get("action") else "",
-            "resource_type": event.get("action", {}).get("resource_type", "") if event.get("action") else "",
-            "resource_id": event.get("action", {}).get("resource_id", "") if event.get("action") else "",
-            "auth_decision": event.get("authorization", {}).get("decision", "") if event.get("authorization") else "",
+            "operation": event.get("action", {}).get("operation", "")
+            if event.get("action")
+            else "",
+            "resource_type": event.get("action", {}).get("resource_type", "")
+            if event.get("action")
+            else "",
+            "resource_id": event.get("action", {}).get("resource_id", "")
+            if event.get("action")
+            else "",
+            "auth_decision": event.get("authorization", {}).get("decision", "")
+            if event.get("authorization")
+            else "",
         }
-        
+
         # Convert datetime to string if needed
         if isinstance(row["timestamp"], datetime):
             row["timestamp"] = row["timestamp"].isoformat()
-        
+
         writer.writerow(row)
-    
+
     yield output.getvalue()
 
 
@@ -507,17 +520,17 @@ async def export_audit_events(
 ) -> StreamingResponse:
     """
     Export filtered audit events as JSONL or CSV file.
-    
+
     Returns a downloadable file containing audit events matching
     the specified filters.
-    
+
     Requires admin access.
     """
     logger.info(
         f"Admin '{user_context.get('username')}' exporting audit events: "
         f"format={format}, stream={stream}, limit={limit}"
     )
-    
+
     query = _build_query(
         stream=stream,
         from_time=from_time,
@@ -530,9 +543,9 @@ async def export_audit_events(
         status_max=status_max,
         auth_decision=auth_decision,
     )
-    
+
     repository = get_audit_repository()
-    
+
     try:
         # Get events for export (no offset, just limit)
         events = await repository.find(
@@ -542,11 +555,11 @@ async def export_audit_events(
             sort_field="timestamp",
             sort_order=-1,
         )
-        
+
         # Generate timestamp for filename
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         filename = f"audit-export-{timestamp}.{format}"
-        
+
         if format == "jsonl":
             return StreamingResponse(
                 _generate_jsonl(events),

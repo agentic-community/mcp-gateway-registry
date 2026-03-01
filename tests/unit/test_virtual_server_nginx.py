@@ -230,8 +230,7 @@ class TestWriteVirtualServerMappings:
         }
 
         m = mock_open()
-        with patch("registry.core.nginx_service.Path") as mock_path_cls, \
-             patch("builtins.open", m):
+        with patch("registry.core.nginx_service.Path") as mock_path_cls, patch("builtins.open", m):
             mock_mappings_dir = MagicMock()
             mock_path_cls.return_value = mock_mappings_dir
             mock_mapping_file = MagicMock()
@@ -273,8 +272,10 @@ class TestWriteVirtualServerMappings:
         def capture_write(data, f, **kwargs):
             written_data.update(data)
 
-        with patch("registry.core.nginx_service.Path") as mock_path_cls, \
-             patch("json.dump", side_effect=capture_write):
+        with (
+            patch("registry.core.nginx_service.Path") as mock_path_cls,
+            patch("json.dump", side_effect=capture_write),
+        ):
             mock_mappings_dir = MagicMock()
             mock_path_cls.return_value = mock_mappings_dir
             mock_mapping_file = MagicMock()
@@ -318,8 +319,10 @@ class TestWriteVirtualServerMappings:
         def capture_write(data, f, **kwargs):
             written_data.update(data)
 
-        with patch("registry.core.nginx_service.Path") as mock_path_cls, \
-             patch("json.dump", side_effect=capture_write):
+        with (
+            patch("registry.core.nginx_service.Path") as mock_path_cls,
+            patch("json.dump", side_effect=capture_write),
+        ):
             mock_mappings_dir = MagicMock()
             mock_path_cls.return_value = mock_mappings_dir
             mock_mapping_file = MagicMock()
@@ -354,8 +357,10 @@ class TestWriteVirtualServerMappings:
         def capture_write(data, f, **kwargs):
             written_data.update(data)
 
-        with patch("registry.core.nginx_service.Path") as mock_path_cls, \
-             patch("json.dump", side_effect=capture_write):
+        with (
+            patch("registry.core.nginx_service.Path") as mock_path_cls,
+            patch("json.dump", side_effect=capture_write),
+        ):
             mock_mappings_dir = MagicMock()
             mock_path_cls.return_value = mock_mappings_dir
             mock_mapping_file = MagicMock()

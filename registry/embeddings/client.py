@@ -107,9 +107,7 @@ class SentenceTransformersClient(EmbeddingsClient):
             )
 
             if model_exists:
-                logger.info(
-                    f"Loading SentenceTransformer model from local path: {self.model_dir}"
-                )
+                logger.info(f"Loading SentenceTransformer model from local path: {self.model_dir}")
                 self._model = SentenceTransformer(str(self.model_dir))
             else:
                 logger.info(
@@ -131,12 +129,8 @@ class SentenceTransformersClient(EmbeddingsClient):
             )
 
         except Exception as e:
-            logger.error(
-                f"Failed to load SentenceTransformer model: {e}", exc_info=True
-            )
-            self._load_error = RuntimeError(
-                f"Failed to load SentenceTransformer model: {e}"
-            )
+            logger.error(f"Failed to load SentenceTransformer model: {e}", exc_info=True)
+            self._load_error = RuntimeError(f"Failed to load SentenceTransformer model: {e}")
             raise self._load_error from e
 
     def encode(
@@ -227,9 +221,7 @@ class LiteLLMClient(EmbeddingsClient):
         # AWS Bedrock uses standard AWS credential chain (IAM roles, env vars, ~/.aws/credentials)
         # No need to set API key environment variable for Bedrock
         if provider == "bedrock":
-            logger.info(
-                "Using standard AWS credential chain for Bedrock authentication"
-            )
+            logger.info("Using standard AWS credential chain for Bedrock authentication")
             return
 
         # Handle other providers with API keys
@@ -265,9 +257,7 @@ class LiteLLMClient(EmbeddingsClient):
             from litellm import embedding
         except ImportError as e:
             logger.error("LiteLLM is not installed. Install it with: uv add litellm")
-            raise RuntimeError(
-                "LiteLLM is not installed. Install it with: uv add litellm"
-            ) from e
+            raise RuntimeError("LiteLLM is not installed. Install it with: uv add litellm") from e
 
         try:
             # LiteLLM expects 'input' parameter
@@ -276,9 +266,7 @@ class LiteLLMClient(EmbeddingsClient):
             if self.api_base:
                 kwargs["api_base"] = self.api_base
 
-            logger.debug(
-                f"Calling LiteLLM embedding API with model: {self.model_name}"
-            )
+            logger.debug(f"Calling LiteLLM embedding API with model: {self.model_name}")
             response = embedding(**kwargs)
 
             # Extract embeddings from response
@@ -325,16 +313,12 @@ class LiteLLMClient(EmbeddingsClient):
             return self._embedding_dimension
 
         # As a last resort, make a test call with a simple string
-        logger.info(
-            "Embedding dimension not known, making test call to determine dimension"
-        )
+        logger.info("Embedding dimension not known, making test call to determine dimension")
         try:
             test_embedding = self.encode(["test"])
             return test_embedding.shape[1]
         except Exception as e:
-            logger.error(
-                f"Failed to determine embedding dimension: {e}", exc_info=True
-            )
+            logger.error(f"Failed to determine embedding dimension: {e}", exc_info=True)
             raise RuntimeError(
                 f"Failed to determine embedding dimension: {e}. "
                 "Consider setting EMBEDDINGS_DIMENSION in configuration."
@@ -377,9 +361,7 @@ def create_embeddings_client(
     provider_lower = provider.lower()
 
     if provider_lower == "sentence-transformers":
-        logger.info(
-            f"Creating SentenceTransformersClient with model: {model_name}"
-        )
+        logger.info(f"Creating SentenceTransformersClient with model: {model_name}")
         return SentenceTransformersClient(
             model_name=model_name,
             model_dir=model_dir,

@@ -375,7 +375,7 @@ def _get_supported_providers() -> list[str]:
                 "twitter",
             ]
 
-        with open(yaml_path) as f:
+        with open(yaml_path, "r") as f:
             config = yaml.safe_load(f)
             providers = config.get("providers", {})
 

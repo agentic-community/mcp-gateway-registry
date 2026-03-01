@@ -357,6 +357,76 @@ If you need to rotate the `FEDERATION_ENCRYPTION_KEY`:
 - Check sync_mode and filters are not too restrictive
 - Verify items exist on the exporting registry
 
+### Sync Reports 0 Items After Successful Authentication
+
+**Symptom:** Sync completes successfully and authentication passes, but 0 servers/agents are returned even though items exist on the peer registry.
+
+**Root Cause:** This can indicate that the federation token was lost or corrupted during a peer configuration update (issue #561, fixed in version XX.XX).
+
+**Diagnostic Steps:**
+
+1. Check if the peer had items synced previously:
+   ```bash
+   curl https://registry.com/api/peers/peer-id/status
+   ```
+   If `total_servers_synced` was > 0 before but is now 0, the token may be lost.
+
+2. Verify the peer registry is actually returning data:
+   ```bash
+   # Direct test to peer registry (replace with actual token)
+   curl -H "Authorization: Bearer <federation-token>" \
+        https://peer-registry.com/api/v1/federation/servers
+   ```
+
+**Resolution:**
+
+If authentication is working but 0 items are returned, update the federation token using the dedicated endpoint:
+
+```bash
+curl -X PATCH https://registry.com/api/peers/peer-id/token \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <admin-token>" \
+  -d '{
+    "federation_token": "<correct-token-from-peer-registry>"
+  }'
+```
+
+Or use the UI:
+1. Navigate to Settings > Federation > Peers
+2. Click the peer name
+3. Update the Federation Token field
+4. Save changes
+5. Trigger a manual sync to verify
+
+### Federation Token Lost After Peer Update (Fixed in XX.XX)
+
+**Symptom:** After updating a peer's configuration (name, endpoint, sync interval, etc.), all subsequent syncs fail with authentication errors or return 0 items.
+
+**Root Cause:** Bug in versions prior to XX.XX where the `update_peer()` operation would silently drop the encrypted federation token when updating any peer field.
+
+**Who is Affected:**
+- Anyone who updated peer configurations between version X.X and X.X
+
+**How to Identify:**
+- Sync was working before a peer update
+- Sync now returns 0 items or authentication errors
+- No changes were made to the token itself
+
+**Recovery:**
+
+Update the federation token using the dedicated token update endpoint:
+
+```bash
+curl -X PATCH https://registry.com/api/peers/<peer-id>/token \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <admin-token>" \
+  -d '{
+    "federation_token": "<correct-federation-token>"
+  }'
+```
+
+**Prevention:** This issue is fixed in version XX.XX. After upgrading, peer updates will preserve the federation token correctly.
+
 ### Synced Items Are Read-Only
 
 **Expected behavior:** Federated items cannot be modified locally.

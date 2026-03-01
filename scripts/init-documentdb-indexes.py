@@ -158,7 +158,9 @@ async def _create_vector_index(
         logger.info(f"DEBUG: Exception repr: {repr(e)}")
 
         # Check if index already exists with different options (error code 85)
-        if ("'code': 85" in str(e) or "code': 85" in str(e)) or "already exists with different options" in str(e).lower():
+        if (
+            "'code': 85" in str(e) or "code': 85" in str(e)
+        ) or "already exists with different options" in str(e).lower():
             if recreate:
                 logger.info(f"Vector index exists with different options. Recreating...")
 
@@ -166,7 +168,9 @@ async def _create_vector_index(
                 logger.info(f"Listing all indexes on {collection_name}...")
                 indexes = await collection.list_indexes().to_list(None)
                 for idx in indexes:
-                    logger.info(f"  Found index: name='{idx.get('name')}', key={idx.get('key', {})}")
+                    logger.info(
+                        f"  Found index: name='{idx.get('name')}', key={idx.get('key', {})}"
+                    )
 
                 # Drop ALL non-_id indexes to ensure clean slate
                 dropped_count = 0
@@ -195,12 +199,19 @@ async def _create_vector_index(
                             "efConstruction": 128,
                         },
                     )
-                    logger.info(f"Created vector index '{index_name}' on {collection_name} after dropping {dropped_count} old indexes")
+                    logger.info(
+                        f"Created vector index '{index_name}' on {collection_name} after dropping {dropped_count} old indexes"
+                    )
                 except Exception as create_err:
-                    logger.error(f"Failed to create vector index after dropping all indexes: {create_err}", exc_info=True)
+                    logger.error(
+                        f"Failed to create vector index after dropping all indexes: {create_err}",
+                        exc_info=True,
+                    )
                     raise
             else:
-                logger.info(f"Vector index already exists on {collection_name} (recreate=False, skipping)")
+                logger.info(
+                    f"Vector index already exists on {collection_name} (recreate=False, skipping)"
+                )
         # DocumentDB Elastic doesn't support vector indexes (error code 303)
         elif "vectorOptions" in str(e) or "not supported" in str(e):
             logger.warning(
@@ -394,9 +405,7 @@ async def _load_default_scopes(
 
         # Upsert the admin scope document
         result = await collection.update_one(
-            {"_id": admin_scope["_id"]},
-            {"$set": admin_scope},
-            upsert=True
+            {"_id": admin_scope["_id"]}, {"$set": admin_scope}, upsert=True
         )
 
         if result.upserted_id:
@@ -406,9 +415,7 @@ async def _load_default_scopes(
         else:
             logger.info(f"Admin scope already up-to-date: {admin_scope['_id']}")
 
-        logger.info(
-            f"Admin scope group_mappings: {admin_scope.get('group_mappings', [])}"
-        )
+        logger.info(f"Admin scope group_mappings: {admin_scope.get('group_mappings', [])}")
 
     except Exception as e:
         logger.error(f"Failed to load default admin scope: {e}", exc_info=True)
@@ -510,24 +517,16 @@ async def _create_audit_events_indexes(
     # Always try to drop the old single-field index (migration from previous versions)
     try:
         await collection.drop_index(old_index_name)
-        logger.info(
-            f"Dropped old single-field index '{old_index_name}' from {collection_name}"
-        )
+        logger.info(f"Dropped old single-field index '{old_index_name}' from {collection_name}")
     except Exception as e:
-        logger.debug(
-            f"No old index '{old_index_name}' to drop: {e}"
-        )
+        logger.debug(f"No old index '{old_index_name}' to drop: {e}")
 
     if recreate:
         try:
             await collection.drop_index(composite_index_name)
-            logger.info(
-                f"Dropped existing index '{composite_index_name}' from {collection_name}"
-            )
+            logger.info(f"Dropped existing index '{composite_index_name}' from {collection_name}")
         except Exception as e:
-            logger.debug(
-                f"No existing index '{composite_index_name}' to drop: {e}"
-            )
+            logger.debug(f"No existing index '{composite_index_name}' to drop: {e}")
 
     try:
         await collection.create_index(
@@ -535,13 +534,9 @@ async def _create_audit_events_indexes(
             name=composite_index_name,
             unique=True,
         )
-        logger.info(
-            f"Created composite unique index '{composite_index_name}' on {collection_name}"
-        )
+        logger.info(f"Created composite unique index '{composite_index_name}' on {collection_name}")
     except Exception as e:
-        logger.error(
-            f"Failed to create index '{composite_index_name}' on {collection_name}: {e}"
-        )
+        logger.error(f"Failed to create index '{composite_index_name}' on {collection_name}: {e}")
 
     # TTL index for automatic expiration
     # Default 7 days (604800 seconds), configurable via AUDIT_LOG_MONGODB_TTL_DAYS
@@ -807,9 +802,7 @@ Example usage:
         db = client[args.database]
 
         server_info = await client.server_info()
-        logger.info(
-            f"Connected to DocumentDB/MongoDB {server_info.get('version', 'unknown')}"
-        )
+        logger.info(f"Connected to DocumentDB/MongoDB {server_info.get('version', 'unknown')}")
 
         await _initialize_collections(
             db,
@@ -818,9 +811,7 @@ Example usage:
             args.entra_group_id,
         )
 
-        logger.info(
-            f"DocumentDB initialization complete for namespace '{args.namespace}'"
-        )
+        logger.info(f"DocumentDB initialization complete for namespace '{args.namespace}'")
 
         # Print summary of collections and indexes
         await _print_collection_summary(db, args.namespace)

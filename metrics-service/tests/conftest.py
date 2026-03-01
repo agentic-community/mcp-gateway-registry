@@ -1,4 +1,5 @@
 """Test configuration and fixtures."""
+
 import pytest
 import asyncio
 import tempfile
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 # Import the app modules
 import sys
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.config import Settings
@@ -28,15 +30,15 @@ def event_loop():
 @pytest.fixture
 def temp_db():
     """Create a temporary database for testing."""
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     # Override the settings to use temp database
     original_db_path = Settings.SQLITE_DB_PATH
     Settings.SQLITE_DB_PATH = db_path
-    
+
     yield db_path
-    
+
     # Cleanup
     Settings.SQLITE_DB_PATH = original_db_path
     try:
@@ -60,7 +62,7 @@ def test_settings():
         OTEL_PROMETHEUS_ENABLED=False,
         OTEL_OTLP_ENDPOINT=None,
         METRICS_RATE_LIMIT=100,
-        BATCH_SIZE=10
+        BATCH_SIZE=10,
     )
 
 
@@ -76,13 +78,9 @@ def sample_metric():
             "method": "jwt",
             "success": True,
             "server": "mcpgw",
-            "user_hash": "user_abc123"
+            "user_hash": "user_abc123",
         },
-        metadata={
-            "error_code": None,
-            "request_size": 1024,
-            "response_size": 512
-        }
+        metadata={"error_code": None, "request_size": 1024, "response_size": 512},
     )
 
 
@@ -90,10 +88,7 @@ def sample_metric():
 def sample_metric_request(sample_metric):
     """Sample metric request for testing."""
     return MetricRequest(
-        service="auth-server",
-        version="1.0.0",
-        instance_id="auth-01",
-        metrics=[sample_metric]
+        service="auth-server", version="1.0.0", instance_id="auth-01", metrics=[sample_metric]
     )
 
 
@@ -102,21 +97,17 @@ def test_api_key():
     """Test API key and its hash."""
     api_key = "test_api_key_12345"
     key_hash = hash_api_key(api_key)
-    return {
-        "key": api_key,
-        "hash": key_hash,
-        "service": "test-service"
-    }
+    return {"key": api_key, "hash": key_hash, "service": "test-service"}
 
 
 @pytest.fixture
 async def storage_with_api_key(initialized_db, test_api_key):
     """Storage instance with a test API key inserted."""
     storage = MetricsStorage()
-    
+
     # Insert test API key
     await storage.create_api_key(test_api_key["hash"], test_api_key["service"])
-    
+
     return storage, test_api_key
 
 

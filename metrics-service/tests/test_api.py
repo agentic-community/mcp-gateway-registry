@@ -1,4 +1,5 @@
 """Tests for API endpoints."""
+
 import pytest
 import json
 from unittest.mock import AsyncMock, patch
@@ -31,27 +32,23 @@ def valid_metric_request():
                     "method": "jwt",
                     "success": True,
                     "server": "mcpgw",
-                    "user_hash": "user_abc123"
+                    "user_hash": "user_abc123",
                 },
-                "metadata": {
-                    "error_code": None,
-                    "request_size": 1024,
-                    "response_size": 512
-                }
+                "metadata": {"error_code": None, "request_size": 1024, "response_size": 512},
             }
-        ]
+        ],
     }
 
 
 class TestHealthEndpoints:
     """Test health and info endpoints."""
-    
+
     def test_health_endpoint(self, client):
         """Test health check endpoint."""
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json() == {"status": "healthy", "service": "metrics-collection"}
-    
+
     def test_root_endpoint(self, client):
         """Test root info endpoint."""
         response = client.get("/")
@@ -65,14 +62,14 @@ class TestHealthEndpoints:
 
 class TestMetricsEndpoint:
     """Test metrics collection endpoint."""
-    
+
     def test_metrics_without_api_key(self, client, valid_metric_request):
         """Test metrics endpoint without API key."""
         response = client.post("/metrics", json=valid_metric_request)
         assert response.status_code == 401
         assert "API key required" in response.json()["detail"]
-    
-    @patch('app.api.auth.MetricsStorage')
+
+    @patch("app.api.auth.MetricsStorage")
     def test_metrics_with_invalid_api_key(self, mock_storage_class, client, valid_metric_request):
         """Test metrics endpoint with invalid API key."""
         # Mock storage to return None for key lookup (key not found)
@@ -84,22 +81,24 @@ class TestMetricsEndpoint:
         response = client.post("/metrics", json=valid_metric_request, headers=headers)
         assert response.status_code == 401
         assert "Invalid API key" in response.json()["detail"]
-    
-    @patch('app.api.auth.MetricsStorage')
-    @patch('app.api.routes.MetricsProcessor')
-    def test_metrics_with_valid_api_key(self, mock_processor_class, mock_storage_class, client, valid_metric_request):
+
+    @patch("app.api.auth.MetricsStorage")
+    @patch("app.api.routes.MetricsProcessor")
+    def test_metrics_with_valid_api_key(
+        self, mock_processor_class, mock_storage_class, client, valid_metric_request
+    ):
         """Test metrics endpoint with valid API key."""
         # Mock storage for API key validation
         mock_storage = AsyncMock()
         mock_storage.get_api_key.return_value = {
-            'service_name': 'test-service',
-            'is_active': True,
-            'rate_limit': 1000,
-            'last_used_at': None
+            "service_name": "test-service",
+            "is_active": True,
+            "rate_limit": 1000,
+            "last_used_at": None,
         }
         mock_storage.update_api_key_usage.return_value = None
         mock_storage_class.return_value = mock_storage
-        
+
         # Mock processor for metrics processing
         mock_processor = AsyncMock()
         mock_result = AsyncMock()
@@ -108,10 +107,10 @@ class TestMetricsEndpoint:
         mock_result.errors = []
         mock_processor.process_metrics.return_value = mock_result
         mock_processor_class.return_value = mock_processor
-        
+
         headers = {"X-API-Key": "test_key_123"}
         response = client.post("/metrics", json=valid_metric_request, headers=headers)
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -119,16 +118,16 @@ class TestMetricsEndpoint:
         assert data["rejected"] == 0
         assert data["errors"] == []
         assert "request_id" in data
-    
-    @patch('app.api.auth.MetricsStorage')
+
+    @patch("app.api.auth.MetricsStorage")
     def test_metrics_with_invalid_payload(self, mock_storage_class, client):
         """Test metrics endpoint with invalid payload."""
         # Mock storage to allow auth to pass
         mock_storage = AsyncMock()
         mock_storage.get_api_key.return_value = {
-            'service_name': 'test-service',
-            'is_active': True,
-            'rate_limit': 1000
+            "service_name": "test-service",
+            "is_active": True,
+            "rate_limit": 1000,
         }
         mock_storage.update_api_key_usage.return_value = None
         mock_storage_class.return_value = mock_storage
@@ -139,15 +138,15 @@ class TestMetricsEndpoint:
         response = client.post("/metrics", json=invalid_payload, headers=headers)
         assert response.status_code == 422  # Validation error
 
-    @patch('app.api.auth.MetricsStorage')
+    @patch("app.api.auth.MetricsStorage")
     def test_metrics_with_missing_required_fields(self, mock_storage_class, client):
         """Test metrics endpoint with missing required fields."""
         # Mock storage to allow auth to pass
         mock_storage = AsyncMock()
         mock_storage.get_api_key.return_value = {
-            'service_name': 'test-service',
-            'is_active': True,
-            'rate_limit': 1000
+            "service_name": "test-service",
+            "is_active": True,
+            "rate_limit": 1000,
         }
         mock_storage.update_api_key_usage.return_value = None
         mock_storage_class.return_value = mock_storage
@@ -161,15 +160,15 @@ class TestMetricsEndpoint:
         response = client.post("/metrics", json=invalid_payload, headers=headers)
         assert response.status_code == 422  # Validation error
 
-    @patch('app.api.auth.MetricsStorage')
+    @patch("app.api.auth.MetricsStorage")
     def test_metrics_with_invalid_metric_type(self, mock_storage_class, client):
         """Test metrics endpoint with invalid metric type."""
         # Mock storage to allow auth to pass
         mock_storage = AsyncMock()
         mock_storage.get_api_key.return_value = {
-            'service_name': 'test-service',
-            'is_active': True,
-            'rate_limit': 1000
+            "service_name": "test-service",
+            "is_active": True,
+            "rate_limit": 1000,
         }
         mock_storage.update_api_key_usage.return_value = None
         mock_storage_class.return_value = mock_storage
@@ -180,25 +179,27 @@ class TestMetricsEndpoint:
             "metrics": [
                 {
                     "type": "invalid_type",  # Invalid metric type
-                    "value": 1.0
+                    "value": 1.0,
                 }
-            ]
+            ],
         }
 
         response = client.post("/metrics", json=invalid_payload, headers=headers)
         assert response.status_code == 422  # Validation error
-    
-    @patch('app.api.auth.MetricsStorage')
-    @patch('app.api.routes.processor')
-    def test_metrics_processor_error(self, mock_processor, mock_storage_class, client, valid_metric_request):
+
+    @patch("app.api.auth.MetricsStorage")
+    @patch("app.api.routes.processor")
+    def test_metrics_processor_error(
+        self, mock_processor, mock_storage_class, client, valid_metric_request
+    ):
         """Test metrics endpoint when processor raises an error."""
         # Mock storage for API key validation
         mock_storage = AsyncMock()
         mock_storage.get_api_key.return_value = {
-            'service_name': 'test-service',
-            'is_active': True,
-            'rate_limit': 1000,
-            'last_used_at': None
+            "service_name": "test-service",
+            "is_active": True,
+            "rate_limit": 1000,
+            "last_used_at": None,
         }
         mock_storage.update_api_key_usage.return_value = None
         mock_storage_class.return_value = mock_storage
@@ -211,17 +212,17 @@ class TestMetricsEndpoint:
 
         assert response.status_code == 500
         assert "Internal server error" in response.json()["detail"]
-    
-    @patch('app.api.auth.MetricsStorage')
-    @patch('app.api.routes.MetricsProcessor')
+
+    @patch("app.api.auth.MetricsStorage")
+    @patch("app.api.routes.MetricsProcessor")
     def test_metrics_with_multiple_metrics(self, mock_processor_class, mock_storage_class, client):
         """Test metrics endpoint with multiple metrics in one request."""
         # Mock storage for API key validation
         mock_storage = AsyncMock()
         mock_storage.get_api_key.return_value = {
-            'service_name': 'test-service',
-            'is_active': True,
-            'rate_limit': 1000
+            "service_name": "test-service",
+            "is_active": True,
+            "rate_limit": 1000,
         }
         mock_storage.update_api_key_usage.return_value = None
         mock_storage_class.return_value = mock_storage
@@ -238,22 +239,10 @@ class TestMetricsEndpoint:
         payload = {
             "service": "multi-service",
             "metrics": [
-                {
-                    "type": "auth_request",
-                    "value": 1.0,
-                    "dimensions": {"success": True}
-                },
-                {
-                    "type": "tool_discovery",
-                    "value": 1.0,
-                    "dimensions": {"query": "test"}
-                },
-                {
-                    "type": "tool_execution",
-                    "value": 1.0,
-                    "dimensions": {"tool_name": "calculator"}
-                }
-            ]
+                {"type": "auth_request", "value": 1.0, "dimensions": {"success": True}},
+                {"type": "tool_discovery", "value": 1.0, "dimensions": {"query": "test"}},
+                {"type": "tool_execution", "value": 1.0, "dimensions": {"tool_name": "calculator"}},
+            ],
         }
 
         headers = {"X-API-Key": "test_key_123"}
@@ -266,36 +255,36 @@ class TestMetricsEndpoint:
 
 class TestFlushEndpoint:
     """Test metrics flush endpoint."""
-    
+
     def test_flush_without_api_key(self, client):
         """Test flush endpoint without API key."""
         response = client.post("/flush")
         assert response.status_code == 401
         assert "API key required" in response.json()["detail"]
-    
-    @patch('app.api.auth.MetricsStorage')
-    @patch('app.api.routes.MetricsProcessor')
+
+    @patch("app.api.auth.MetricsStorage")
+    @patch("app.api.routes.MetricsProcessor")
     def test_flush_with_valid_api_key(self, mock_processor_class, mock_storage_class, client):
         """Test flush endpoint with valid API key."""
         # Mock storage for API key validation
         mock_storage = AsyncMock()
         mock_storage.get_api_key.return_value = {
-            'service_name': 'test-service',
-            'is_active': True,
-            'rate_limit': 1000,
-            'last_used_at': None
+            "service_name": "test-service",
+            "is_active": True,
+            "rate_limit": 1000,
+            "last_used_at": None,
         }
         mock_storage.update_api_key_usage.return_value = None
         mock_storage_class.return_value = mock_storage
-        
+
         # Mock processor for flush
         mock_processor = AsyncMock()
         mock_processor.force_flush.return_value = None
         mock_processor_class.return_value = mock_processor
-        
+
         headers = {"X-API-Key": "test_key_123"}
         response = client.post("/flush", headers=headers)
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"

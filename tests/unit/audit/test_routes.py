@@ -23,10 +23,12 @@ class TestAdminOnlyAccess:
     """Property 11: Admin-only audit API access."""
 
     @given(
-        st.fixed_dictionaries({
-            "username": st.text(min_size=1, max_size=20).filter(lambda x: x.strip()),
-            "is_admin": st.just(False),
-        })
+        st.fixed_dictionaries(
+            {
+                "username": st.text(min_size=1, max_size=20).filter(lambda x: x.strip()),
+                "is_admin": st.just(False),
+            }
+        )
     )
     @settings(max_examples=50)
     def test_rejects_non_admin_users(self, user_context: dict):
@@ -52,17 +54,35 @@ class TestBuildQuery:
 
     def test_stream_only(self):
         """Build query with only stream parameter."""
-        query = _build_query(stream="registry_api", from_time=None, to_time=None,
-                            username=None, operation=None, resource_type=None,
-                            resource_id=None, status_min=None, status_max=None, auth_decision=None)
+        query = _build_query(
+            stream="registry_api",
+            from_time=None,
+            to_time=None,
+            username=None,
+            operation=None,
+            resource_type=None,
+            resource_id=None,
+            status_min=None,
+            status_max=None,
+            auth_decision=None,
+        )
         assert query == {"log_type": "registry_api_access"}
 
     def test_with_filters(self):
         """Build query with multiple filters."""
         from_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
-        query = _build_query(stream="registry_api", from_time=from_time, to_time=None,
-                            username="admin", operation="create", resource_type="server",
-                            resource_id=None, status_min=400, status_max=499, auth_decision=None)
+        query = _build_query(
+            stream="registry_api",
+            from_time=from_time,
+            to_time=None,
+            username="admin",
+            operation="create",
+            resource_type="server",
+            resource_id=None,
+            status_min=400,
+            status_max=499,
+            auth_decision=None,
+        )
 
         # Username uses case-insensitive regex for partial matching
         assert query["identity.username"]["$regex"] == "admin"
@@ -88,14 +108,16 @@ class TestExportFormats:
 
     def test_generate_csv(self):
         """Generate CSV from events."""
-        events = [{
-            "timestamp": datetime(2025, 1, 15, tzinfo=timezone.utc),
-            "request_id": "req-1",
-            "identity": {"username": "admin"},
-            "request": {"method": "GET", "path": "/api/test"},
-            "response": {"status_code": 200, "duration_ms": 50.0},
-            "action": {"operation": "read", "resource_type": "server"},
-        }]
+        events = [
+            {
+                "timestamp": datetime(2025, 1, 15, tzinfo=timezone.utc),
+                "request_id": "req-1",
+                "identity": {"username": "admin"},
+                "request": {"method": "GET", "path": "/api/test"},
+                "response": {"status_code": 200, "duration_ms": 50.0},
+                "action": {"operation": "read", "resource_type": "server"},
+            }
+        ]
         result = list(_generate_csv(events))
         csv_content = result[0]
         assert "timestamp" in csv_content

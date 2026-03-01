@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: 'MCP Gateway Dashboards'
+    orgId: 1
+    folder: 'MCP Gateway'
+    folderUid: 'mcp-gateway'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

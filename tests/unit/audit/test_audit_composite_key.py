@@ -112,9 +112,7 @@ class TestCompositeKeyInsert:
         """DuplicateKeyError is caught for true duplicates
         (same request_id AND same log_type)."""
         mock_collection = AsyncMock()
-        mock_collection.insert_one.side_effect = DuplicateKeyError(
-            "duplicate key error"
-        )
+        mock_collection.insert_one.side_effect = DuplicateKeyError("duplicate key error")
 
         with patch.object(
             DocumentDBAuditRepository,

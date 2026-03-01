@@ -193,9 +193,7 @@ async def _validate_skill_md_url(
                 logger.warning(
                     f"SSRF protection: Blocked redirect from {url} to unsafe URL {final_url}"
                 )
-                raise SkillUrlValidationError(
-                    url, f"Redirect to unsafe URL blocked: {final_url}"
-                )
+                raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {final_url}")
 
             if response.status_code >= 400:
                 raise SkillUrlValidationError(url, f"HTTP {response.status_code}")
@@ -248,9 +246,7 @@ async def _parse_skill_md_content(
     # Basic scheme/hostname validation before SSRF/IP checks
     parsed_raw = urlparse(raw_url_str)
     if parsed_raw.scheme not in {"http", "https"} or not parsed_raw.hostname:
-        raise SkillUrlValidationError(
-            url, "URL must use http/https scheme and include a hostname"
-        )
+        raise SkillUrlValidationError(url, "URL must use http/https scheme and include a hostname")
 
     # SSRF protection - check the raw URL we'll actually fetch
     if not _is_safe_url(raw_url_str):
@@ -271,9 +267,7 @@ async def _parse_skill_md_content(
                 logger.warning(
                     f"SSRF protection: Blocked redirect from {raw_url} to unsafe URL {final_url}"
                 )
-                raise SkillUrlValidationError(
-                    url, f"Redirect to unsafe URL blocked: {final_url}"
-                )
+                raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {final_url}")
 
             if response.status_code >= 400:
                 raise SkillUrlValidationError(url, f"HTTP {response.status_code}")
@@ -852,9 +846,7 @@ class SkillService:
             },
         )
 
-        logger.info(
-            f"Updated health status for skill {normalized}: {health_status}"
-        )
+        logger.info(f"Updated health status for skill {normalized}: {health_status}")
 
         return result
 

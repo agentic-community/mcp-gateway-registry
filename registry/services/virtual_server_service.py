@@ -579,9 +579,7 @@ class VirtualServerService:
                 is_enabled=config.is_enabled,
             )
         except Exception as e:
-            logger.warning(
-                f"Failed to index virtual server '{config.path}' for search: {e}"
-            )
+            logger.warning(f"Failed to index virtual server '{config.path}' for search: {e}")
 
     async def _remove_from_search(
         self,
@@ -596,9 +594,7 @@ class VirtualServerService:
             search_repo = get_search_repository()
             await search_repo.remove_entity(path)
         except Exception as e:
-            logger.warning(
-                f"Failed to remove virtual server '{path}' from search: {e}"
-            )
+            logger.warning(f"Failed to remove virtual server '{path}' from search: {e}")
 
     async def _trigger_nginx_reload(self) -> bool:
         """Trigger nginx configuration regeneration.

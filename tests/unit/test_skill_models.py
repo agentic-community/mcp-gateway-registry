@@ -1,4 +1,5 @@
 """Unit tests for skill models."""
+
 import pytest
 
 from registry.schemas.skill_models import (
@@ -23,7 +24,7 @@ class TestSkillCard:
                 path=f"/skills/{name}",
                 name=name,
                 description="Test description",
-                skill_md_url="https://github.com/test/skill/SKILL.md"
+                skill_md_url="https://github.com/test/skill/SKILL.md",
             )
             assert skill.name == name
 
@@ -34,7 +35,7 @@ class TestSkillCard:
                 path="/skills/PDF-Processing",
                 name="PDF-Processing",
                 description="Test",
-                skill_md_url="https://test.com/SKILL.md"
+                skill_md_url="https://test.com/SKILL.md",
             )
 
     def test_invalid_skill_name_consecutive_hyphens(self):
@@ -44,7 +45,7 @@ class TestSkillCard:
                 path="/skills/pdf--processing",
                 name="pdf--processing",
                 description="Test",
-                skill_md_url="https://test.com/SKILL.md"
+                skill_md_url="https://test.com/SKILL.md",
             )
 
     def test_invalid_skill_name_leading_hyphen(self):
@@ -54,7 +55,7 @@ class TestSkillCard:
                 path="/skills/-pdf-processing",
                 name="-pdf-processing",
                 description="Test",
-                skill_md_url="https://test.com/SKILL.md"
+                skill_md_url="https://test.com/SKILL.md",
             )
 
     def test_invalid_skill_name_trailing_hyphen(self):
@@ -64,7 +65,7 @@ class TestSkillCard:
                 path="/skills/pdf-processing-",
                 name="pdf-processing-",
                 description="Test",
-                skill_md_url="https://test.com/SKILL.md"
+                skill_md_url="https://test.com/SKILL.md",
             )
 
     def test_invalid_path_format(self):
@@ -74,7 +75,7 @@ class TestSkillCard:
                 path="/agents/test",
                 name="test",
                 description="Test",
-                skill_md_url="https://test.com/SKILL.md"
+                skill_md_url="https://test.com/SKILL.md",
             )
 
     def test_visibility_enum_default(self):
@@ -83,7 +84,7 @@ class TestSkillCard:
             path="/skills/test",
             name="test",
             description="Test",
-            skill_md_url="https://test.com/SKILL.md"
+            skill_md_url="https://test.com/SKILL.md",
         )
         assert skill.visibility == VisibilityEnum.PUBLIC
 
@@ -94,7 +95,7 @@ class TestSkillCard:
             name="test",
             description="Test",
             skill_md_url="https://test.com/SKILL.md",
-            visibility=VisibilityEnum.PRIVATE
+            visibility=VisibilityEnum.PRIVATE,
         )
         assert skill.visibility == VisibilityEnum.PRIVATE
 
@@ -106,7 +107,7 @@ class TestSkillCard:
             description="Test",
             skill_md_url="https://test.com/SKILL.md",
             visibility=VisibilityEnum.GROUP,
-            allowed_groups=["developers"]
+            allowed_groups=["developers"],
         )
         assert skill.visibility == VisibilityEnum.GROUP
         assert "developers" in skill.allowed_groups
@@ -117,7 +118,7 @@ class TestSkillCard:
             path="/skills/test",
             name="test",
             description="Test",
-            skill_md_url="https://test.com/SKILL.md"
+            skill_md_url="https://test.com/SKILL.md",
         )
         assert skill.is_enabled is True
         assert skill.registry_name == "local"
@@ -139,20 +140,14 @@ class TestToolReference:
 
     def test_tool_reference_with_capabilities(self):
         """Test ToolReference with capabilities."""
-        tool = ToolReference(
-            tool_name="Bash",
-            capabilities=["git:*", "docker:*"]
-        )
+        tool = ToolReference(tool_name="Bash", capabilities=["git:*", "docker:*"])
         assert tool.tool_name == "Bash"
         assert len(tool.capabilities) == 2
         assert "git:*" in tool.capabilities
 
     def test_tool_reference_with_server_path(self):
         """Test ToolReference with server path."""
-        tool = ToolReference(
-            tool_name="Read",
-            server_path="/servers/filesystem"
-        )
+        tool = ToolReference(tool_name="Read", server_path="/servers/filesystem")
         assert tool.server_path == "/servers/filesystem"
 
 
@@ -161,32 +156,20 @@ class TestCompatibilityRequirement:
 
     def test_compatibility_requirement_product(self):
         """Test product type requirement."""
-        req = CompatibilityRequirement(
-            type="product",
-            target="claude-code",
-            min_version="1.0.0"
-        )
+        req = CompatibilityRequirement(type="product", target="claude-code", min_version="1.0.0")
         assert req.type == "product"
         assert req.target == "claude-code"
         assert req.required is True
 
     def test_compatibility_requirement_tool(self):
         """Test tool type requirement."""
-        req = CompatibilityRequirement(
-            type="tool",
-            target="python>=3.10",
-            required=True
-        )
+        req = CompatibilityRequirement(type="tool", target="python>=3.10", required=True)
         assert req.type == "tool"
         assert req.required is True
 
     def test_compatibility_requirement_optional(self):
         """Test optional requirement."""
-        req = CompatibilityRequirement(
-            type="api",
-            target="openai-api",
-            required=False
-        )
+        req = CompatibilityRequirement(type="api", target="openai-api", required=False)
         assert req.required is False
 
 
@@ -200,7 +183,7 @@ class TestSkillRegistrationRequest:
             description="Extract text from PDFs",
             skill_md_url="https://github.com/org/skills/SKILL.md",
             tags=["pdf", "extraction"],
-            visibility=VisibilityEnum.PUBLIC
+            visibility=VisibilityEnum.PUBLIC,
         )
         assert request.name == "pdf-processing"
         assert len(request.tags) == 2
@@ -213,8 +196,8 @@ class TestSkillRegistrationRequest:
             skill_md_url="https://github.com/org/skills/SKILL.md",
             allowed_tools=[
                 ToolReference(tool_name="Bash", capabilities=["git:*"]),
-                ToolReference(tool_name="Read")
-            ]
+                ToolReference(tool_name="Read"),
+            ],
         )
         assert len(request.allowed_tools) == 2
 
@@ -223,26 +206,20 @@ class TestSkillRegistrationRequest:
         request = SkillRegistrationRequest(
             name="test",
             description="Test",
-            skill_md_url="https://raw.githubusercontent.com/org/repo/main/SKILL.md"
+            skill_md_url="https://raw.githubusercontent.com/org/repo/main/SKILL.md",
         )
         assert str(request.skill_md_url).startswith("https://")
 
     def test_url_validation_invalid(self):
         """Test invalid URL is rejected."""
         with pytest.raises(ValueError):
-            SkillRegistrationRequest(
-                name="test",
-                description="Test",
-                skill_md_url="not-a-url"
-            )
+            SkillRegistrationRequest(name="test", description="Test", skill_md_url="not-a-url")
 
     def test_name_validation(self):
         """Test name validation in request."""
         with pytest.raises(ValueError, match="lowercase"):
             SkillRegistrationRequest(
-                name="INVALID",
-                description="Test",
-                skill_md_url="https://test.com/SKILL.md"
+                name="INVALID", description="Test", skill_md_url="https://test.com/SKILL.md"
             )
 
 
@@ -255,7 +232,7 @@ class TestSkillInfo:
             path="/skills/test",
             name="test",
             description="Test skill",
-            skill_md_url="https://test.com/SKILL.md"
+            skill_md_url="https://test.com/SKILL.md",
         )
         assert info.path == "/skills/test"
         assert info.is_enabled is True
@@ -269,7 +246,7 @@ class TestSkillInfo:
             description="Test skill",
             skill_md_url="https://test.com/SKILL.md",
             author="John Doe",
-            version="1.0.0"
+            version="1.0.0",
         )
         assert info.author == "John Doe"
         assert info.version == "1.0.0"

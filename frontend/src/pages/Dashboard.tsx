@@ -45,11 +45,11 @@ interface Server {
   num_tools?: number;
   proxy_pass_url?: string;
   license?: string;
-  num_stars?: number;
-  is_python?: boolean;
   mcp_endpoint?: string;
   metadata?: Record<string, unknown>;
   sync_metadata?: SyncMetadata;
+  auth_scheme?: string;
+  auth_header_name?: string;
 }
 
 interface Agent {
@@ -168,10 +168,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     tags: [] as string[],
     license: 'N/A',
     num_tools: 0,
-    num_stars: 0,
-    is_python: false,
     mcp_endpoint: '',
-    metadata: ''
+    metadata: '',
+    auth_scheme: 'none',
+    auth_credential: '',
+    auth_header_name: 'X-API-Key',
   });
   const [editLoading, setEditLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -698,8 +699,23 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     event.stopPropagation(); // Prevent collapsing the section
     setSyncingPeer(peerId);
     try {
-      await axios.post(`/api/peers/${peerId}/sync`);
-      setToast({ message: `Synced from ${peerId} successfully`, type: 'success' });
+      const response = await axios.post(`/api/peers/${peerId}/sync`);
+      const result = response.data;
+
+      // Check the success field in the response body
+      if (result.success) {
+        setToast({
+          message: `Synced ${result.servers_synced || 0} servers and ${result.agents_synced || 0} agents from ${peerId}`,
+          type: 'success'
+        });
+      } else {
+        // Sync failed - show error message from response
+        setToast({
+          message: result.error_message || `Failed to sync from ${peerId}`,
+          type: 'error'
+        });
+      }
+
       // Refresh the server list to show updated data
       await refreshData();
     } catch (error) {
@@ -725,10 +741,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
         tags: serverDetails.tags || [],
         license: serverDetails.license || 'N/A',
         num_tools: serverDetails.num_tools || 0,
-        num_stars: serverDetails.num_stars || 0,
-        is_python: serverDetails.is_python || false,
         mcp_endpoint: serverDetails.mcp_endpoint || '',
-        metadata: serverDetails.metadata ? JSON.stringify(serverDetails.metadata, null, 2) : ''
+        metadata: serverDetails.metadata ? JSON.stringify(serverDetails.metadata, null, 2) : '',
+        auth_scheme: serverDetails.auth_scheme || 'none',
+        auth_credential: '',
+        auth_header_name: serverDetails.auth_header_name || 'X-API-Key',
       });
     } catch (error) {
       console.error('Failed to fetch server details:', error);
@@ -742,10 +759,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
         tags: server.tags || [],
         license: 'N/A',
         num_tools: server.num_tools || 0,
-        num_stars: 0,
-        is_python: false,
         mcp_endpoint: server.mcp_endpoint || '',
-        metadata: server.metadata ? JSON.stringify(server.metadata, null, 2) : ''
+        metadata: server.metadata ? JSON.stringify(server.metadata, null, 2) : '',
+        auth_scheme: server.auth_scheme || 'none',
+        auth_credential: '',
+        auth_header_name: server.auth_header_name || 'X-API-Key',
       });
     }
   }, []);
@@ -791,13 +809,22 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
       formData.append('tags', editForm.tags.join(','));
       formData.append('license', editForm.license);
       formData.append('num_tools', editForm.num_tools.toString());
-      formData.append('num_stars', editForm.num_stars.toString());
-      formData.append('is_python', editForm.is_python.toString());
       if (editForm.mcp_endpoint) {
         formData.append('mcp_endpoint', editForm.mcp_endpoint);
       }
       if (editForm.metadata) {
         formData.append('metadata', editForm.metadata);
+      }
+      if (editForm.auth_scheme !== 'none') {
+        formData.append('auth_scheme', editForm.auth_scheme);
+        if (editForm.auth_credential) {
+          formData.append('auth_credential', editForm.auth_credential);
+        }
+        if (editForm.auth_scheme === 'api_key' && editForm.auth_header_name) {
+          formData.append('auth_header_name', editForm.auth_header_name);
+        }
+      } else {
+        formData.append('auth_scheme', 'none');
       }
 
       // Use the correct edit endpoint with the server path
@@ -2427,19 +2454,6 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                     min="0"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Stars
-                  </label>
-                  <input
-                    type="number"
-                    value={editForm.num_stars}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, num_stars: parseInt(e.target.value) || 0 }))}
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    min="0"
-                  />
-                </div>
               </div>
 
               <div>
@@ -2453,19 +2467,6 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                   className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
                   placeholder="MIT, Apache-2.0, etc."
                 />
-              </div>
-
-              <div className="flex items-center">
-                <input
-                  type="checkbox"
-                  id="is_python"
-                  checked={editForm.is_python}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, is_python: e.target.checked }))}
-                  className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
-                />
-                <label htmlFor="is_python" className="ml-2 block text-sm text-gray-700 dark:text-gray-200">
-                  Python-based server
-                </label>
               </div>
 
               <div>
@@ -2492,6 +2493,71 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                   className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500 font-mono text-sm"
                   placeholder='{"team": "platform", "owner": "alice@example.com"}'
                 />
+              </div>
+
+              {/* Backend Authentication */}
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
+                  Backend Authentication
+                </h4>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                      Authentication Scheme
+                    </label>
+                    <select
+                      value={editForm.auth_scheme}
+                      onChange={(e) => {
+                        const newScheme = e.target.value;
+                        setEditForm(prev => ({
+                          ...prev,
+                          auth_scheme: newScheme,
+                          auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
+                          auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
+                        }));
+                      }}
+                      className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                    >
+                      <option value="none">None</option>
+                      <option value="bearer">Bearer Token</option>
+                      <option value="api_key">API Key</option>
+                    </select>
+                  </div>
+
+                  {editForm.auth_scheme !== 'none' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                        {editForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'}
+                      </label>
+                      <input
+                        type="password"
+                        value={editForm.auth_credential}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, auth_credential: e.target.value }))}
+                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                        placeholder="Leave blank to keep current credential"
+                      />
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        Leave blank to keep the existing credential unchanged.
+                      </p>
+                    </div>
+                  )}
+
+                  {editForm.auth_scheme === 'api_key' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                        Header Name
+                      </label>
+                      <input
+                        type="text"
+                        value={editForm.auth_header_name}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
+                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                        placeholder="X-API-Key"
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div>

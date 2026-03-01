@@ -61,10 +61,7 @@ AGENTS_MODE_ALLOWED_PREFIXES = (
 )
 
 
-def _is_path_allowed(
-    path: str,
-    mode: RegistryMode
-) -> bool:
+def _is_path_allowed(path: str, mode: RegistryMode) -> bool:
     """Check if path is allowed for the given registry mode.
 
     Args:
@@ -120,9 +117,7 @@ def _is_path_allowed(
     return True
 
 
-def _get_path_category(
-    path: str
-) -> str:
+def _get_path_category(path: str) -> str:
     """Extract path category for metrics labeling.
 
     Args:
@@ -149,11 +144,7 @@ def _get_path_category(
 class RegistryModeMiddleware(BaseHTTPMiddleware):
     """Middleware to filter requests based on registry mode."""
 
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: Callable
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request and block if endpoint is disabled for current mode.
 
         Args:
@@ -177,10 +168,7 @@ class RegistryModeMiddleware(BaseHTTPMiddleware):
 
             # Increment metrics counter
             category = _get_path_category(path)
-            MODE_BLOCKED_REQUESTS.labels(
-                path_category=category,
-                mode=mode.value
-            ).inc()
+            MODE_BLOCKED_REQUESTS.labels(path_category=category, mode=mode.value).inc()
 
             return JSONResponse(
                 status_code=403,
@@ -188,8 +176,8 @@ class RegistryModeMiddleware(BaseHTTPMiddleware):
                     "detail": f"This endpoint is disabled in {mode.value} mode",
                     "error": "endpoint_disabled",
                     "registry_mode": mode.value,
-                    "path": path
-                }
+                    "path": path,
+                },
             )
 
         return await call_next(request)

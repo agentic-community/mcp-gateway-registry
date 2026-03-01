@@ -362,9 +362,7 @@ class TestGetEntraAdminToken:
         mock_response = MagicMock()
         mock_response.status_code = 401
         mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Unauthorized",
-            request=MagicMock(),
-            response=mock_response
+            "Unauthorized", request=MagicMock(), response=mock_response
         )
 
         mock_client = AsyncMock()

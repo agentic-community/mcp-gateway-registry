@@ -162,9 +162,7 @@ class SkillCard(BaseModel):
     health_status: Literal["healthy", "unhealthy", "unknown"] = Field(
         default="unknown", description="Health status from last SKILL.md accessibility check"
     )
-    last_checked_time: datetime | None = Field(
-        None, description="When health was last checked"
-    )
+    last_checked_time: datetime | None = Field(None, description="When health was last checked")
 
     # Rating
     num_stars: float = Field(default=0.0, ge=0.0, le=5.0, description="Average rating (1-5 stars)")
@@ -237,9 +235,7 @@ class SkillInfo(BaseModel):
     health_status: Literal["healthy", "unhealthy", "unknown"] = Field(
         default="unknown", description="Health status from last SKILL.md accessibility check"
     )
-    last_checked_time: datetime | None = Field(
-        None, description="When health was last checked"
-    )
+    last_checked_time: datetime | None = Field(None, description="When health was last checked")
 
 
 class SkillRegistrationRequest(BaseModel):

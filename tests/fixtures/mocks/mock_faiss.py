@@ -21,10 +21,7 @@ class MockFaissIndex:
     FAISS library to be loaded.
     """
 
-    def __init__(
-        self,
-        dimension: int = 384
-    ):
+    def __init__(self, dimension: int = 384):
         """
         Initialize mock FAISS index.
 
@@ -46,11 +43,7 @@ class MockFaissIndex:
         """Get the total number of vectors in the index."""
         return len(self._vectors)
 
-    def add_with_ids(
-        self,
-        vectors: np.ndarray,
-        ids: np.ndarray
-    ) -> None:
+    def add_with_ids(self, vectors: np.ndarray, ids: np.ndarray) -> None:
         """
         Add vectors with specific IDs to the index.
 
@@ -68,10 +61,7 @@ class MockFaissIndex:
 
         logger.debug(f"Added {len(ids)} vectors to mock index (total: {self.ntotal})")
 
-    def add(
-        self,
-        vectors: np.ndarray
-    ) -> None:
+    def add(self, vectors: np.ndarray) -> None:
         """
         Add vectors to the index with auto-generated IDs.
 
@@ -88,11 +78,7 @@ class MockFaissIndex:
         self.add_with_ids(vectors, ids)
         self._next_id += n
 
-    def search(
-        self,
-        query_vectors: np.ndarray,
-        k: int
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def search(self, query_vectors: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
         """
         Search for nearest neighbors.
 
@@ -113,7 +99,7 @@ class MockFaissIndex:
 
         if n_vectors == 0:
             # No vectors in index, return empty results
-            distances = np.full((n_queries, k), float('inf'), dtype=np.float32)
+            distances = np.full((n_queries, k), float("inf"), dtype=np.float32)
             indices = np.full((n_queries, k), -1, dtype=np.int64)
             return distances, indices
 
@@ -133,7 +119,7 @@ class MockFaissIndex:
             top_k_indices = np.argsort(dists)[:k_actual]
 
             # Build result arrays
-            result_distances = np.full(k, float('inf'), dtype=np.float32)
+            result_distances = np.full(k, float("inf"), dtype=np.float32)
             result_indices = np.full(k, -1, dtype=np.int64)
 
             result_distances[:k_actual] = dists[top_k_indices]
@@ -148,10 +134,7 @@ class MockFaissIndex:
         logger.debug(f"Searched {n_queries} queries, found {k} neighbors each")
         return distances, indices
 
-    def remove_ids(
-        self,
-        ids: np.ndarray
-    ) -> int:
+    def remove_ids(self, ids: np.ndarray) -> int:
         """
         Remove vectors with specific IDs from the index.
 
@@ -184,10 +167,7 @@ class MockIndexIDMap:
     This wraps a MockFaissIndex to provide ID mapping functionality.
     """
 
-    def __init__(
-        self,
-        index: MockFaissIndex
-    ):
+    def __init__(self, index: MockFaissIndex):
         """
         Initialize mock IndexIDMap.
 
@@ -207,26 +187,15 @@ class MockIndexIDMap:
         """Get the total number of vectors."""
         return self.index.ntotal
 
-    def add_with_ids(
-        self,
-        vectors: np.ndarray,
-        ids: np.ndarray
-    ) -> None:
+    def add_with_ids(self, vectors: np.ndarray, ids: np.ndarray) -> None:
         """Add vectors with IDs."""
         self.index.add_with_ids(vectors, ids)
 
-    def search(
-        self,
-        query_vectors: np.ndarray,
-        k: int
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def search(self, query_vectors: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
         """Search for nearest neighbors."""
         return self.index.search(query_vectors, k)
 
-    def remove_ids(
-        self,
-        ids: np.ndarray
-    ) -> int:
+    def remove_ids(self, ids: np.ndarray) -> int:
         """Remove vectors by IDs."""
         return self.index.remove_ids(ids)
 
@@ -245,6 +214,7 @@ def create_mock_faiss_module() -> Any:
     Returns:
         Mock FAISS module object
     """
+
     class MockFaissModule:
         """Mock FAISS module."""
 

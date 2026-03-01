@@ -36,6 +36,7 @@ STANDARD_METHODS: list[str] = [
     "resources/templates/list",
 ]
 
+
 async def _trigger_auth_server_reload() -> bool:
     """
     Trigger the auth server to reload its scopes configuration.

@@ -72,7 +72,7 @@ def _parse_sse_response(body: str) -> Optional[Dict[str, Any]]:
     for line in body.splitlines():
         stripped = line.strip()
         if stripped.startswith("data:"):
-            payload = stripped[len("data:"):].strip()
+            payload = stripped[len("data:") :].strip()
             if payload:
                 return json.loads(payload)
     return None
@@ -223,9 +223,7 @@ def _print_scenario_report(name: str, result: _StressResult, duration: float) ->
     print(f"Error rate:     {result.error_rate:.1f}%")
     print(f"Duration:       {duration:.1f}s")
     print(f"Throughput:     {throughput:.1f} req/s")
-    print(
-        f"Latency (ms):   p50={p50:.1f}  p95={p95:.1f}  p99={p99:.1f}  max={max_lat:.1f}"
-    )
+    print(f"Latency (ms):   p50={p50:.1f}  p95={p95:.1f}  p99={p99:.1f}  max={max_lat:.1f}")
 
     if result.errors:
         unique_errors = {}

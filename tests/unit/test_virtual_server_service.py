@@ -958,9 +958,7 @@ class TestToolCatalogService:
         mock_server_repo.get_state.return_value = True
 
         # User has read:repos but not admin:jira
-        catalog = await catalog_service.get_tool_catalog(
-            user_scopes=["read:repos"]
-        )
+        catalog = await catalog_service.get_tool_catalog(user_scopes=["read:repos"])
 
         assert len(catalog) == 2
         tool_names = [entry.tool_name for entry in catalog]
@@ -969,9 +967,7 @@ class TestToolCatalogService:
         assert "get_ticket" not in tool_names
 
     @pytest.mark.asyncio
-    async def test_catalog_no_filtering_when_scopes_none(
-        self, catalog_service, mock_server_repo
-    ):
+    async def test_catalog_no_filtering_when_scopes_none(self, catalog_service, mock_server_repo):
         """Test that passing user_scopes=None returns all servers (no filtering)."""
         mock_server_repo.list_all.return_value = {
             "/github": {
@@ -1017,9 +1013,7 @@ class TestToolCatalogService:
         assert catalog[0].tool_name == "send_message"
 
     @pytest.mark.asyncio
-    async def test_catalog_user_with_all_scopes_sees_all(
-        self, catalog_service, mock_server_repo
-    ):
+    async def test_catalog_user_with_all_scopes_sees_all(self, catalog_service, mock_server_repo):
         """Test that user with all required scopes sees all servers."""
         mock_server_repo.list_all.return_value = {
             "/github": {
@@ -1080,7 +1074,9 @@ class TestNginxReloadFailureHandling:
 
     @pytest.mark.asyncio
     async def test_create_succeeds_when_nginx_reload_fails(
-        self, service, mock_vs_repo,
+        self,
+        service,
+        mock_vs_repo,
     ):
         """Test that create succeeds even if nginx reload returns False."""
         request = CreateVirtualServerRequest(
@@ -1152,8 +1148,7 @@ class TestNginxReloadFailureHandling:
 
         assert result is False
         assert any(
-            "Failed to regenerate nginx config" in record.message
-            for record in caplog.records
+            "Failed to regenerate nginx config" in record.message for record in caplog.records
         )
 
     @pytest.mark.asyncio
@@ -1180,7 +1175,9 @@ class TestNginxReloadFailureHandling:
 
     @pytest.mark.asyncio
     async def test_delete_succeeds_when_nginx_reload_fails(
-        self, service, mock_vs_repo,
+        self,
+        service,
+        mock_vs_repo,
     ):
         """Test that delete succeeds even if nginx reload fails."""
         mock_vs_repo.get.return_value = VirtualServerConfig(
@@ -1202,7 +1199,9 @@ class TestNginxReloadFailureHandling:
 
     @pytest.mark.asyncio
     async def test_update_succeeds_when_nginx_reload_fails(
-        self, service, mock_vs_repo,
+        self,
+        service,
+        mock_vs_repo,
     ):
         """Test that update succeeds even if nginx reload fails."""
         mock_vs_repo.get.return_value = VirtualServerConfig(
@@ -1263,12 +1262,12 @@ class TestPathAutoGenerationCollision:
 
     @pytest.mark.asyncio
     async def test_auto_generated_path_collision_raises_error(
-        self, service, mock_vs_repo,
+        self,
+        service,
+        mock_vs_repo,
     ):
         """Test that auto-generated path collision raises VirtualServerAlreadyExistsError."""
-        mock_vs_repo.create.side_effect = VirtualServerAlreadyExistsError(
-            "/virtual/my-cool-server"
-        )
+        mock_vs_repo.create.side_effect = VirtualServerAlreadyExistsError("/virtual/my-cool-server")
 
         request = CreateVirtualServerRequest(
             server_name="My Cool Server",
@@ -1282,12 +1281,12 @@ class TestPathAutoGenerationCollision:
 
     @pytest.mark.asyncio
     async def test_explicit_path_collision_raises_error(
-        self, service, mock_vs_repo,
+        self,
+        service,
+        mock_vs_repo,
     ):
         """Test that explicit path collision raises VirtualServerAlreadyExistsError."""
-        mock_vs_repo.create.side_effect = VirtualServerAlreadyExistsError(
-            "/virtual/dev-essentials"
-        )
+        mock_vs_repo.create.side_effect = VirtualServerAlreadyExistsError("/virtual/dev-essentials")
 
         request = CreateVirtualServerRequest(
             server_name="Dev Essentials",

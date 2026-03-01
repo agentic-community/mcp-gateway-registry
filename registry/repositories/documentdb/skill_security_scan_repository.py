@@ -29,7 +29,9 @@ class DocumentDBSkillSecurityScanRepository(SkillSecurityScanRepositoryBase):
 
     async def load_all(self) -> None:
         """Load all skill security scan results from DocumentDB."""
-        logger.info(f"Loading skill security scans from DocumentDB collection: {self._collection_name}")
+        logger.info(
+            f"Loading skill security scans from DocumentDB collection: {self._collection_name}"
+        )
         collection = await self._get_collection()
 
         try:
@@ -93,8 +95,7 @@ class DocumentDBSkillSecurityScanRepository(SkillSecurityScanRepositoryBase):
             collection = await self._get_collection()
 
             scan_doc = await collection.find_one(
-                {"skill_path": skill_path},
-                sort=[("scan_timestamp", -1)]
+                {"skill_path": skill_path}, sort=[("scan_timestamp", -1)]
             )
 
             if scan_doc:
@@ -114,9 +115,7 @@ class DocumentDBSkillSecurityScanRepository(SkillSecurityScanRepositoryBase):
         try:
             collection = await self._get_collection()
 
-            cursor = collection.find(
-                {"scan_status": status}
-            ).sort("scan_timestamp", -1)
+            cursor = collection.find({"scan_status": status}).sort("scan_timestamp", -1)
 
             scans = []
             async for doc in cursor:
@@ -125,5 +124,7 @@ class DocumentDBSkillSecurityScanRepository(SkillSecurityScanRepositoryBase):
 
             return scans
         except Exception as e:
-            logger.error(f"Failed to query skill scans by status from DocumentDB: {e}", exc_info=True)
+            logger.error(
+                f"Failed to query skill scans by status from DocumentDB: {e}", exc_info=True
+            )
             return []

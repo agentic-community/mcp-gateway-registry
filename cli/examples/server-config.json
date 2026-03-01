@@ -5,7 +5,5 @@
   "proxy_pass_url": "http://example-server:9000/",
   "tags": ["example", "demo", "test"],
   "num_tools": 3,
-  "num_stars": 0,
-  "is_python": true,
   "license": "MIT"
 }

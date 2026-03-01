@@ -10,12 +10,14 @@ from pydantic_settings import BaseSettings
 
 class DeploymentMode(str, Enum):
     """Deployment mode options."""
+
     WITH_GATEWAY = "with-gateway"
     REGISTRY_ONLY = "registry-only"
 
 
 class RegistryMode(str, Enum):
     """Registry operating modes."""
+
     FULL = "full"
     SKILLS_ONLY = "skills-only"
     MCP_SERVERS_ONLY = "mcp-servers-only"
@@ -24,13 +26,13 @@ class RegistryMode(str, Enum):
 
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
-    
+
     model_config = ConfigDict(
         env_file=".env",
         case_sensitive=False,
-        extra="ignore"  # Ignore extra environment variables
+        extra="ignore",  # Ignore extra environment variables
     )
-    
+
     # Auth settings
     secret_key: str = ""
     admin_user: str = "admin"
@@ -46,7 +48,7 @@ class Settings(BaseSettings):
     registry_static_token_auth_enabled: bool = False  # Enable static token auth (IdP-independent)
     registry_api_token: str = ""  # Static API token for registry access
     max_tokens_per_user_per_hour: int = 100  # JWT token vending rate limit
-    
+
     # Embeddings settings [Default]
     embeddings_provider: str = "sentence-transformers"  # 'sentence-transformers' or 'litellm'
     embeddings_model_name: str = "all-MiniLM-L6-v2"
@@ -64,11 +66,13 @@ class Settings(BaseSettings):
     embeddings_secret_key: Optional[str] = None
     embeddings_api_base: Optional[str] = None
     embeddings_aws_region: Optional[str] = "us-east-1"
-    
+
     # Health check settings
-    health_check_interval_seconds: int = 300  # 5 minutes for automatic background checks (configurable via env var)
+    health_check_interval_seconds: int = (
+        300  # 5 minutes for automatic background checks (configurable via env var)
+    )
     health_check_timeout_seconds: int = 2  # Very fast timeout for user-driven actions
-    
+
     # WebSocket performance settings
     max_websocket_connections: int = 100  # Reasonable limit for development/testing
     websocket_send_timeout_seconds: float = 2.0  # Allow slightly more time per connection
@@ -93,7 +97,9 @@ class Settings(BaseSettings):
     agent_security_scan_enabled: bool = True
     agent_security_scan_on_registration: bool = True
     agent_security_block_unsafe_agents: bool = True
-    agent_security_analyzers: str = "yara,spec"  # Comma-separated: yara, spec, heuristic, llm, endpoint
+    agent_security_analyzers: str = (
+        "yara,spec"  # Comma-separated: yara, spec, heuristic, llm, endpoint
+    )
     agent_security_scan_timeout: int = 60  # 1 minute
     agent_security_add_pending_tag: bool = True
     a2a_scanner_llm_api_key: str = ""  # Optional Azure OpenAI API key for LLM-based analysis
@@ -102,7 +108,9 @@ class Settings(BaseSettings):
     skill_security_scan_enabled: bool = True
     skill_security_scan_on_registration: bool = True
     skill_security_block_unsafe_skills: bool = True
-    skill_security_analyzers: str = "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
+    skill_security_analyzers: str = (
+        "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
+    )
     skill_security_scan_timeout: int = 120  # 2 minutes
     skill_security_add_pending_tag: bool = True
     skill_scanner_llm_api_key: str = ""  # Optional LLM API key for LLM-based analysis
@@ -119,22 +127,23 @@ class Settings(BaseSettings):
     audit_log_dir: str = "logs/audit"  # Directory for local audit log files
     audit_log_rotation_hours: int = 1  # Hours between time-based file rotations
     audit_log_rotation_max_mb: int = 100  # Maximum file size in MB before rotation
-    audit_log_local_retention_hours: int = 1  # Hours to retain local files (default 1 hour, configurable)
+    audit_log_local_retention_hours: int = (
+        1  # Hours to retain local files (default 1 hour, configurable)
+    )
     audit_log_health_checks: bool = False  # Whether to log health check requests
     audit_log_static_assets: bool = False  # Whether to log static asset requests
-    
+
     # Audit Logging MongoDB Configuration
     audit_log_mongodb_enabled: bool = True  # Enable/disable MongoDB storage for audit logs
     audit_log_mongodb_ttl_days: int = 7  # Days to retain audit events in MongoDB (default 7 days)
-    
+
     # Deployment Mode Configuration
     deployment_mode: DeploymentMode = Field(
         default=DeploymentMode.WITH_GATEWAY,
-        description="Deployment mode: with-gateway or registry-only"
+        description="Deployment mode: with-gateway or registry-only",
     )
     registry_mode: RegistryMode = Field(
-        default=RegistryMode.FULL,
-        description="Registry operating mode"
+        default=RegistryMode.FULL, description="Registry operating mode"
     )
 
     @property
@@ -165,7 +174,7 @@ class Settings(BaseSettings):
     container_app_dir: Path = Path("/app")
     container_registry_dir: Path = Path("/app/registry")
     container_log_dir: Path = Path("/app/logs")
-    
+
     # Local development mode detection
     @property
     def is_local_dev(self) -> bool:
@@ -272,12 +281,8 @@ class Settings(BaseSettings):
 class EmbeddingConfig:
     """Helper class for embedding configuration and metadata generation."""
 
-    def __init__(
-        self,
-        settings_instance: Settings
-    ):
+    def __init__(self, settings_instance: Settings):
         self.settings = settings_instance
-
 
     @property
     def model_family(self) -> str:
@@ -300,7 +305,6 @@ class EmbeddingConfig:
         else:
             return self.settings.embeddings_provider
 
-
     @property
     def index_name(self) -> str:
         """Generate dimension-specific collection/index name.
@@ -314,7 +318,6 @@ class EmbeddingConfig:
 
         # Replace base name with dimension-specific name
         return f"{base_name}-{dimensions}-{namespace}"
-
 
     def get_embedding_metadata(self) -> dict:
         """Generate embedding metadata for document storage.
@@ -349,7 +352,7 @@ class EmbeddingConfig:
             "dimensions": self.settings.embeddings_model_dimensions,
             "version": version,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "indexing_strategy": "hybrid"
+            "indexing_strategy": "hybrid",
         }
 
 
@@ -357,8 +360,7 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_mode_combination(
-    deployment_mode: DeploymentMode,
-    registry_mode: RegistryMode
+    deployment_mode: DeploymentMode, registry_mode: RegistryMode
 ) -> Tuple[DeploymentMode, RegistryMode, bool]:
     """
     Validate and potentially correct deployment/registry mode combination.
@@ -372,8 +374,7 @@ def _validate_mode_combination(
     """
     # Invalid: with-gateway + skills-only
     # Skills don't need gateway, auto-convert to registry-only
-    if (deployment_mode == DeploymentMode.WITH_GATEWAY and
-            registry_mode == RegistryMode.SKILLS_ONLY):
+    if deployment_mode == DeploymentMode.WITH_GATEWAY and registry_mode == RegistryMode.SKILLS_ONLY:
         return (DeploymentMode.REGISTRY_ONLY, RegistryMode.SKILLS_ONLY, True)
 
     return (deployment_mode, registry_mode, False)
@@ -383,7 +384,7 @@ def _print_config_warning_banner(
     original_deployment: DeploymentMode,
     original_registry: RegistryMode,
     corrected_deployment: DeploymentMode,
-    corrected_registry: RegistryMode
+    corrected_registry: RegistryMode,
 ) -> None:
     """Print conspicuous warning banner for invalid configuration."""
     banner = """
@@ -401,7 +402,7 @@ Auto-converting to:
         original_deploy=original_deployment.value,
         original_reg=original_registry.value,
         corrected_deploy=corrected_deployment.value,
-        corrected_reg=corrected_registry.value
+        corrected_reg=corrected_registry.value,
     )
     logger.warning(banner)
     print(banner)
@@ -411,4 +412,4 @@ Auto-converting to:
 settings = Settings()
 
 # Global embedding config instance
-embedding_config = EmbeddingConfig(settings) 
+embedding_config = EmbeddingConfig(settings)

@@ -24,6 +24,17 @@ fi
 # Change to agents/a2a directory for the deployment
 cd "$A2A_DIR"
 
+# Load environment variables from .env file if it exists
+if [ -f ".env" ]; then
+    echo "Loading configuration from .env file..."
+    set -a
+    source .env
+    set +a
+else
+    echo "Warning: No .env file found in $A2A_DIR"
+    echo "Copy .env.example to .env and configure REGISTRY_JWT_TOKEN for agent discovery."
+fi
+
 # Parse command line arguments
 COMPOSE_FILE="docker-compose.local.yml"
 ARCHITECTURE=""

@@ -53,6 +53,7 @@ def test_app(mock_user_context):
 
     # Override the auth dependency to return mock user context
     from registry.api.agent_routes import nginx_proxied_auth
+
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_user_context
 
     client = TestClient(app)
@@ -133,6 +134,7 @@ def test_app_admin(mock_admin_context):
     app.include_router(router)
 
     from registry.api.agent_routes import nginx_proxied_auth
+
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_admin_context
 
     client = TestClient(app)
@@ -149,6 +151,7 @@ def test_app_limited(mock_limited_user_context):
     app.include_router(router)
 
     from registry.api.agent_routes import nginx_proxied_auth
+
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_limited_user_context
 
     client = TestClient(app)
@@ -467,10 +470,11 @@ class TestRegisterAgent:
             "tags": "test,new",
         }
 
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.utils.agent_validator.agent_validator") as mock_validator, \
-             patch("registry.search.service.faiss_service") as mock_faiss:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch("registry.utils.agent_validator.agent_validator") as mock_validator,
+            patch("registry.search.service.faiss_service") as mock_faiss,
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
             mock_agent_service.register_agent = AsyncMock(return_value=True)
             mock_agent_service.is_agent_enabled.return_value = True
@@ -493,7 +497,9 @@ class TestRegisterAgent:
             assert data["agent"]["path"] == "/new-agent"
 
     @pytest.mark.asyncio
-    async def test_register_agent_path_conflict(self, test_app, mock_user_context, sample_agent_card):
+    async def test_register_agent_path_conflict(
+        self, test_app, mock_user_context, sample_agent_card
+    ):
         """Test agent registration fails with path conflict (409)."""
         # Arrange
         request_data = {
@@ -505,7 +511,6 @@ class TestRegisterAgent:
         }
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
 
             # Act
@@ -527,9 +532,10 @@ class TestRegisterAgent:
             "tags": "test",
         }
 
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.utils.agent_validator.agent_validator") as mock_validator:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch("registry.utils.agent_validator.agent_validator") as mock_validator,
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
             mock_validation_result = MagicMock()
@@ -576,7 +582,6 @@ class TestListAgents:
         """Test successful agent listing."""
         # Arrange - patch where agent_service is used
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_all_agents = AsyncMock(return_value=[sample_agent_card])
             mock_agent_service.is_agent_enabled.return_value = True
 
@@ -599,8 +604,9 @@ class TestListAgents:
         disabled_agent = AgentCardFactory(path="/agents/disabled", is_enabled=False)
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
-            mock_agent_service.get_all_agents = AsyncMock(return_value=[enabled_agent, disabled_agent])
+            mock_agent_service.get_all_agents = AsyncMock(
+                return_value=[enabled_agent, disabled_agent]
+            )
             mock_agent_service.is_agent_enabled.side_effect = lambda path: path == "/agents/enabled"
 
             # Act
@@ -620,8 +626,9 @@ class TestListAgents:
         internal_agent = AgentCardFactory(visibility="internal", path="/agents/internal")
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
-            mock_agent_service.get_all_agents = AsyncMock(return_value=[public_agent, internal_agent])
+            mock_agent_service.get_all_agents = AsyncMock(
+                return_value=[public_agent, internal_agent]
+            )
             mock_agent_service.is_agent_enabled.return_value = True
 
             # Act
@@ -651,7 +658,6 @@ class TestListAgents:
         )
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_all_agents = AsyncMock(return_value=[data_agent, image_agent])
             mock_agent_service.is_agent_enabled.return_value = True
 
@@ -675,9 +681,10 @@ class TestCheckAgentHealth:
     async def test_check_agent_health_healthy(self, test_app, mock_user_context, sample_agent_card):
         """Test health check returns healthy status."""
         # Arrange
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("httpx.AsyncClient") as mock_httpx_client:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch("httpx.AsyncClient") as mock_httpx_client,
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.is_agent_enabled.return_value = True
 
@@ -700,14 +707,17 @@ class TestCheckAgentHealth:
             assert "response_time_ms" in data
 
     @pytest.mark.asyncio
-    async def test_check_agent_health_unhealthy(self, test_app, mock_user_context, sample_agent_card):
+    async def test_check_agent_health_unhealthy(
+        self, test_app, mock_user_context, sample_agent_card
+    ):
         """Test health check returns unhealthy status."""
         # Arrange
         import httpx
 
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("httpx.AsyncClient") as mock_httpx_client:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch("httpx.AsyncClient") as mock_httpx_client,
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.is_agent_enabled.return_value = True
 
@@ -732,7 +742,6 @@ class TestCheckAgentHealth:
         """Test health check on non-existent agent (404)."""
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
             # Act
@@ -742,11 +751,12 @@ class TestCheckAgentHealth:
             assert response.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.asyncio
-    async def test_check_agent_health_disabled_agent(self, test_app, mock_user_context, sample_agent_card):
+    async def test_check_agent_health_disabled_agent(
+        self, test_app, mock_user_context, sample_agent_card
+    ):
         """Test health check on disabled agent (400)."""
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.is_agent_enabled.return_value = False
 
@@ -771,7 +781,6 @@ class TestRateAgent:
         rating_request = {"rating": 5}
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.update_rating = AsyncMock(return_value=4.7)
 
@@ -791,9 +800,10 @@ class TestRateAgent:
         rating_request = {"rating": 10}
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
-            mock_agent_service.update_rating = AsyncMock(side_effect=ValueError("Rating must be between 1 and 5"))
+            mock_agent_service.update_rating = AsyncMock(
+                side_effect=ValueError("Rating must be between 1 and 5")
+            )
 
             # Act
             response = test_app.post("/agents/test-agent/rate", json=rating_request)
@@ -808,7 +818,6 @@ class TestRateAgent:
         rating_request = {"rating": 5}
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
             # Act
@@ -818,7 +827,9 @@ class TestRateAgent:
             assert response.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.asyncio
-    async def test_rate_agent_no_access(self, test_app, mock_limited_user_context, sample_internal_agent_card):
+    async def test_rate_agent_no_access(
+        self, test_app, mock_limited_user_context, sample_internal_agent_card
+    ):
         """Test rating agent without access (403)."""
         # Arrange
         rating_request = {"rating": 5}
@@ -826,7 +837,6 @@ class TestRateAgent:
         sample_internal_agent_card.registered_by = "differentuser"
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_internal_agent_card)
 
             # Act
@@ -847,7 +857,6 @@ class TestGetAgentRating:
         """Test successfully retrieving agent rating."""
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
 
             # Act
@@ -865,7 +874,6 @@ class TestGetAgentRating:
         """Test getting rating for non-existent agent (404)."""
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
             # Act
@@ -882,13 +890,18 @@ class TestToggleAgent:
     """Tests for POST /agents/{path:path}/toggle endpoint."""
 
     @pytest.mark.asyncio
-    async def test_toggle_agent_enable_success(self, test_app, mock_user_context, sample_agent_card):
+    async def test_toggle_agent_enable_success(
+        self, test_app, mock_user_context, sample_agent_card
+    ):
         """Test successfully enabling an agent."""
         # Arrange
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True), \
-             patch("registry.search.service.faiss_service") as mock_faiss:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+            patch("registry.search.service.faiss_service") as mock_faiss,
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.toggle_agent = AsyncMock(return_value=True)
             mock_faiss.add_or_update_entity = AsyncMock()
@@ -903,12 +916,17 @@ class TestToggleAgent:
             assert data["is_enabled"] is True
 
     @pytest.mark.asyncio
-    async def test_toggle_agent_no_permission(self, test_app, mock_limited_user_context, sample_agent_card):
+    async def test_toggle_agent_no_permission(
+        self, test_app, mock_limited_user_context, sample_agent_card
+    ):
         """Test toggling agent without permission (403)."""
         # Arrange
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.auth.dependencies.user_has_ui_permission_for_service", return_value=False):
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=False
+            ),
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
 
             # Act
@@ -922,7 +940,6 @@ class TestToggleAgent:
         """Test toggling non-existent agent (404)."""
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
             # Act
@@ -943,7 +960,6 @@ class TestGetAgent:
         """Test successfully retrieving an agent."""
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
 
             # Act
@@ -960,7 +976,6 @@ class TestGetAgent:
         """Test getting non-existent agent (404)."""
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
             # Act
@@ -970,13 +985,14 @@ class TestGetAgent:
             assert response.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.asyncio
-    async def test_get_agent_no_access(self, test_app, mock_limited_user_context, sample_internal_agent_card):
+    async def test_get_agent_no_access(
+        self, test_app, mock_limited_user_context, sample_internal_agent_card
+    ):
         """Test getting agent without access (403)."""
         # Arrange
         sample_internal_agent_card.registered_by = "differentuser"
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_internal_agent_card)
 
             # Act
@@ -1004,11 +1020,14 @@ class TestUpdateAgent:
             "tags": "updated,test",
         }
 
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True), \
-             patch("registry.utils.agent_validator.agent_validator") as mock_validator, \
-             patch("registry.search.service.faiss_service") as mock_faiss:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+            patch("registry.utils.agent_validator.agent_validator") as mock_validator,
+            patch("registry.search.service.faiss_service") as mock_faiss,
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.update_agent = AsyncMock(return_value=True)
             mock_agent_service.is_agent_enabled.return_value = True
@@ -1039,9 +1058,12 @@ class TestUpdateAgent:
             "tags": "test",
         }
 
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True):
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=other_user_agent)
 
             # Act
@@ -1052,7 +1074,9 @@ class TestUpdateAgent:
             assert "only update agents you registered" in response.json()["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_update_agent_validation_failure(self, test_app, mock_user_context, sample_agent_card):
+    async def test_update_agent_validation_failure(
+        self, test_app, mock_user_context, sample_agent_card
+    ):
         """Test updating agent with validation failure (422)."""
         # Arrange
         update_data = {
@@ -1062,10 +1086,13 @@ class TestUpdateAgent:
             "tags": "test",
         }
 
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True), \
-             patch("registry.utils.agent_validator.agent_validator") as mock_validator:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+            patch("registry.utils.agent_validator.agent_validator") as mock_validator,
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
 
             mock_validation_result = MagicMock()
@@ -1090,9 +1117,10 @@ class TestDeleteAgent:
     async def test_delete_agent_success(self, test_app, mock_user_context, sample_agent_card):
         """Test successfully deleting an agent."""
         # Arrange
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.search.service.faiss_service") as mock_faiss:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch("registry.search.service.faiss_service") as mock_faiss,
+        ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.remove_agent = AsyncMock(return_value=True)
             mock_faiss.remove_entity = AsyncMock()
@@ -1113,7 +1141,6 @@ class TestDeleteAgent:
         )
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=other_user_agent)
 
             # Act
@@ -1129,7 +1156,6 @@ class TestDeleteAgent:
         """Test deleting non-existent agent (404)."""
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
             # Act
@@ -1169,7 +1195,6 @@ class TestDiscoverAgentsBySkills:
         }
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent_with_skill])
             mock_agent_service.is_agent_enabled.return_value = True
 
@@ -1231,8 +1256,9 @@ class TestDiscoverAgentsBySkills:
         }
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-
-            mock_agent_service.get_all_agents = AsyncMock(return_value=[agent_with_tags, agent_without_tags])
+            mock_agent_service.get_all_agents = AsyncMock(
+                return_value=[agent_with_tags, agent_without_tags]
+            )
             mock_agent_service.is_agent_enabled.return_value = True
 
             # Act
@@ -1270,9 +1296,10 @@ class TestDiscoverAgentsSemantic:
         ]
 
         # Patch faiss_service where it's dynamically imported in the route function
-        with patch("registry.api.agent_routes.agent_service") as mock_agent_service, \
-             patch("registry.search.service.faiss_service") as mock_faiss:
-
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch("registry.search.service.faiss_service") as mock_faiss,
+        ):
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
             mock_faiss.search_entities = AsyncMock(return_value=mock_search_results)
 
@@ -1290,7 +1317,10 @@ class TestDiscoverAgentsSemantic:
                 assert "agents" in data
             else:
                 # If content-type mismatch, this test documents the behavior
-                assert response.status_code in [status.HTTP_422_UNPROCESSABLE_ENTITY, status.HTTP_400_BAD_REQUEST]
+                assert response.status_code in [
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status.HTTP_400_BAD_REQUEST,
+                ]
 
     @pytest.mark.asyncio
     async def test_discover_agents_semantic_empty_query(self, test_app, mock_user_context):
@@ -1306,7 +1336,10 @@ class TestDiscoverAgentsSemantic:
         )
 
         # Assert - empty query should fail with 400 or 422
-        assert response.status_code in [status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_ENTITY]
+        assert response.status_code in [
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        ]
 
 
 # =============================================================================

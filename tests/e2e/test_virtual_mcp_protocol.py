@@ -50,9 +50,7 @@ def _refresh_token() -> str:
         cwd=str(PROJECT_ROOT),
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"Token refresh failed (exit {result.returncode}):\n{result.stderr}"
-        )
+        raise RuntimeError(f"Token refresh failed (exit {result.returncode}):\n{result.stderr}")
 
     with open(TOKEN_FILE, "r") as f:
         token_data = json.load(f)
@@ -301,12 +299,8 @@ class VirtualMCPProtocolTests:
         status, body, _ = _send_raw_http("POST", self._token, self._session_id, data)
 
         try:
-            assert status == 202, (
-                f"Expected HTTP 202 Accepted, got {status}"
-            )
-            assert body.strip() == "", (
-                f"Expected empty body for 202, got: '{body[:100]}'"
-            )
+            assert status == 202, f"Expected HTTP 202 Accepted, got {status}"
+            assert body.strip() == "", f"Expected empty body for 202, got: '{body[:100]}'"
             self._record("notifications/initialized -> 202", True)
         except AssertionError as e:
             self._record("notifications/initialized -> 202", False, str(e))
@@ -316,9 +310,7 @@ class VirtualMCPProtocolTests:
         status, _, _ = _send_raw_http("GET", self._token, self._session_id)
 
         try:
-            assert status == 405, (
-                f"Expected HTTP 405 for GET, got {status}"
-            )
+            assert status == 405, f"Expected HTTP 405 for GET, got {status}"
             self._record("GET -> 405 Method Not Allowed", True)
         except AssertionError as e:
             self._record("GET -> 405 Method Not Allowed", False, str(e))
@@ -328,9 +320,7 @@ class VirtualMCPProtocolTests:
         status, _, _ = _send_raw_http("DELETE", self._token, self._session_id)
 
         try:
-            assert status == 405, (
-                f"Expected HTTP 405 for DELETE, got {status}"
-            )
+            assert status == 405, f"Expected HTTP 405 for DELETE, got {status}"
             self._record("DELETE -> 405 Method Not Allowed", True)
         except AssertionError as e:
             self._record("DELETE -> 405 Method Not Allowed", False, str(e))
@@ -346,9 +336,7 @@ class VirtualMCPProtocolTests:
 
         try:
             assert "result" in body, f"No result key in response: {body}"
-            assert body["result"] == {}, (
-                f"Expected empty result, got: {body['result']}"
-            )
+            assert body["result"] == {}, f"Expected empty result, got: {body['result']}"
             self._record("ping", True)
         except AssertionError as e:
             self._record("ping", False, str(e))
@@ -371,9 +359,7 @@ class VirtualMCPProtocolTests:
             )
 
             for tool in tools:
-                assert "inputSchema" in tool, (
-                    f"Tool '{tool['name']}' missing inputSchema key"
-                )
+                assert "inputSchema" in tool, f"Tool '{tool['name']}' missing inputSchema key"
 
             self._record("tools/list", True, f"{len(tools)} tools found")
         except (AssertionError, KeyError) as e:
@@ -493,9 +479,7 @@ class VirtualMCPProtocolTests:
 
         try:
             result = body.get("result", {})
-            assert "resources" in result, (
-                f"Expected 'resources' key in result, got: {result}"
-            )
+            assert "resources" in result, f"Expected 'resources' key in result, got: {result}"
             self._record("resources/list", True)
         except AssertionError as e:
             self._record("resources/list", False, str(e))
@@ -511,9 +495,7 @@ class VirtualMCPProtocolTests:
         body, _ = _send_request(payload, self._token, self._session_id)
 
         try:
-            assert "error" in body, (
-                f"Expected error response, got: {body}"
-            )
+            assert "error" in body, f"Expected error response, got: {body}"
             self._record("resources/read error", True)
         except AssertionError as e:
             self._record("resources/read error", False, str(e))
@@ -529,9 +511,7 @@ class VirtualMCPProtocolTests:
 
         try:
             result = body.get("result", {})
-            assert "prompts" in result, (
-                f"Expected 'prompts' key in result, got: {result}"
-            )
+            assert "prompts" in result, f"Expected 'prompts' key in result, got: {result}"
             self._record("prompts/list", True)
         except AssertionError as e:
             self._record("prompts/list", False, str(e))
@@ -547,9 +527,7 @@ class VirtualMCPProtocolTests:
         body, _ = _send_request(payload, self._token, self._session_id)
 
         try:
-            assert "error" in body, (
-                f"Expected error response, got: {body}"
-            )
+            assert "error" in body, f"Expected error response, got: {body}"
             self._record("prompts/get error", True)
         except AssertionError as e:
             self._record("prompts/get error", False, str(e))
@@ -568,9 +546,7 @@ class VirtualMCPProtocolTests:
         body, _ = _send_request(payload, self._token, self._session_id)
 
         try:
-            assert "error" in body, (
-                f"Expected error for nonexistent tool, got: {body}"
-            )
+            assert "error" in body, f"Expected error for nonexistent tool, got: {body}"
             self._record("error: non-existent tool", True)
         except AssertionError as e:
             self._record("error: non-existent tool", False, str(e))
@@ -585,9 +561,7 @@ class VirtualMCPProtocolTests:
         body, _ = _send_request(payload, self._token, self._session_id)
 
         try:
-            assert "error" in body, (
-                f"Expected error for unknown method, got: {body}"
-            )
+            assert "error" in body, f"Expected error for unknown method, got: {body}"
             self._record("error: unknown method", True)
         except AssertionError as e:
             self._record("error: unknown method", False, str(e))

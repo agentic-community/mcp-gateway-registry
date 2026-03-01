@@ -120,9 +120,7 @@ class TestSaveToFile:
     """Tests for _save_to_file method."""
 
     @pytest.mark.asyncio
-    async def test_save_to_file_success(
-        self, server_repository, sample_server_dict, mock_settings
-    ):
+    async def test_save_to_file_success(self, server_repository, sample_server_dict, mock_settings):
         """Test successful file save."""
         # Arrange
         m = mock_open()
@@ -133,15 +131,11 @@ class TestSaveToFile:
 
             # Assert
             assert result is True
-            mock_settings.servers_dir.mkdir.assert_called_with(
-                parents=True, exist_ok=True
-            )
+            mock_settings.servers_dir.mkdir.assert_called_with(parents=True, exist_ok=True)
             m.assert_called_once()
             # Verify JSON was written
             handle = m()
-            written_data = "".join(
-                call.args[0] for call in handle.write.call_args_list
-            )
+            written_data = "".join(call.args[0] for call in handle.write.call_args_list)
             assert "Test Server" in written_data
 
     @pytest.mark.asyncio
@@ -157,9 +151,7 @@ class TestSaveToFile:
             await server_repository._save_to_file(sample_server_dict)
 
             # Assert
-            mock_settings.servers_dir.mkdir.assert_called_with(
-                parents=True, exist_ok=True
-            )
+            mock_settings.servers_dir.mkdir.assert_called_with(parents=True, exist_ok=True)
 
     @pytest.mark.asyncio
     async def test_save_to_file_handles_errors(
@@ -199,9 +191,7 @@ class TestSaveState:
             # Assert
             m.assert_called_once_with(mock_settings.state_file_path, "w")
             handle = m()
-            written_data = "".join(
-                call.args[0] for call in handle.write.call_args_list
-            )
+            written_data = "".join(call.args[0] for call in handle.write.call_args_list)
             parsed_data = json.loads(written_data)
             assert parsed_data == {"/test1": True, "/test2": False}
 
@@ -230,9 +220,7 @@ class TestLoadState:
     """Tests for _load_state method."""
 
     @pytest.mark.asyncio
-    async def test_load_state_with_existing_file(
-        self, server_repository, mock_settings
-    ):
+    async def test_load_state_with_existing_file(self, server_repository, mock_settings):
         """Test loading state from existing file."""
         # Arrange
         server_repository._servers = {"/test1": {}, "/test2": {}}
@@ -280,9 +268,7 @@ class TestLoadState:
             assert server_repository._state["/test"] is True
 
     @pytest.mark.asyncio
-    async def test_load_state_handles_corrupt_file(
-        self, server_repository, mock_settings
-    ):
+    async def test_load_state_handles_corrupt_file(self, server_repository, mock_settings):
         """Test loading state when file is corrupted."""
         # Arrange
         server_repository._servers = {"/test": {}}

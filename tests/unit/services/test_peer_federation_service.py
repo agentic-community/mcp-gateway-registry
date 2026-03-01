@@ -226,9 +226,7 @@ class TestPeerFederationServiceCRUD:
             mock_repository.create_peer.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_add_peer_duplicate_peer_id_fails(
-        self, mock_repository, sample_peer_config
-    ):
+    async def test_add_peer_duplicate_peer_id_fails(self, mock_repository, sample_peer_config):
         """Test that adding duplicate peer_id raises error."""
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
@@ -314,6 +312,92 @@ class TestPeerFederationServiceCRUD:
                 await service.update_peer("nonexistent-peer", {"name": "New Name"})
 
     @pytest.mark.asyncio
+    async def test_update_peer_preserves_federation_token(self, mock_repository):
+        """
+        Test that updating a peer preserves the federation_token.
+
+        This test validates the fix for issue #561 where update_peer()
+        was silently dropping encrypted federation tokens during updates.
+        """
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            # Create peer with federation token
+            peer_config = PeerRegistryConfig(
+                peer_id="test-peer",
+                name="Test Peer",
+                endpoint="https://test.example.com",
+                enabled=True,
+                sync_mode="all",
+                sync_interval_minutes=60,
+                federation_token="secret-token-abc123",
+            )
+
+            # Mock repository to return peer with token before update
+            mock_repository.get_peer.return_value = peer_config
+
+            # Mock update to return updated peer with token preserved
+            updated_config = peer_config.model_copy()
+            updated_config.name = "Updated Name"
+            updated_config.sync_interval_minutes = 120
+            # Token should still be present after update
+            updated_config.federation_token = "secret-token-abc123"
+            mock_repository.update_peer.return_value = updated_config
+
+            service = PeerFederationService()
+
+            # Update non-token fields
+            updates = {
+                "name": "Updated Name",
+                "sync_interval_minutes": 120,
+            }
+
+            result = await service.update_peer("test-peer", updates)
+
+            # Verify token is preserved
+            assert result.federation_token == "secret-token-abc123"
+            assert result.name == "Updated Name"
+            assert result.sync_interval_minutes == 120
+
+    @pytest.mark.asyncio
+    async def test_update_peer_token_itself(self, mock_repository):
+        """Test that the federation token can be updated directly."""
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            # Create peer with old token
+            peer_config = PeerRegistryConfig(
+                peer_id="test-peer",
+                name="Test Peer",
+                endpoint="https://test.example.com",
+                enabled=True,
+                sync_mode="all",
+                sync_interval_minutes=60,
+                federation_token="old-token",
+            )
+
+            mock_repository.get_peer.return_value = peer_config
+
+            # Mock update to return peer with new token
+            updated_config = peer_config.model_copy()
+            updated_config.federation_token = "new-token-xyz"
+            mock_repository.update_peer.return_value = updated_config
+
+            service = PeerFederationService()
+
+            # Update just the token
+            updates = {"federation_token": "new-token-xyz"}
+
+            result = await service.update_peer("test-peer", updates)
+
+            # Verify token was updated
+            assert result.federation_token == "new-token-xyz"
+            # Verify other fields unchanged
+            assert result.name == "Test Peer"
+
+    @pytest.mark.asyncio
     async def test_remove_peer_success(self, mock_repository, sample_peer_config):
         """Test successfully removing a peer."""
         with patch(
@@ -327,9 +411,7 @@ class TestPeerFederationServiceCRUD:
             result = await service.remove_peer(sample_peer_config.peer_id)
 
             assert result is True
-            mock_repository.delete_peer.assert_called_once_with(
-                sample_peer_config.peer_id
-            )
+            mock_repository.delete_peer.assert_called_once_with(sample_peer_config.peer_id)
 
     @pytest.mark.asyncio
     async def test_remove_peer_nonexistent_raises_error(self, mock_repository):
@@ -411,9 +493,7 @@ class TestPeerFederationServiceSyncStatus:
     """Tests for sync status operations."""
 
     @pytest.mark.asyncio
-    async def test_get_sync_status_from_cache(
-        self, mock_repository, sample_peer_config
-    ):
+    async def test_get_sync_status_from_cache(self, mock_repository, sample_peer_config):
         """Test getting sync status from in-memory cache."""
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
@@ -447,9 +527,7 @@ class TestPeerFederationServiceSyncStatus:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_all_sync_statuses_in_cache(
-        self, mock_repository, sample_peer_config
-    ):
+    async def test_all_sync_statuses_in_cache(self, mock_repository, sample_peer_config):
         """Test all sync statuses are stored in cache."""
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",

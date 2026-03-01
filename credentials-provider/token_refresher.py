@@ -412,7 +412,7 @@ def _refresh_token(filepath: Path, token_data: dict) -> bool:
 
 def _scan_noauth_services() -> list[dict]:
     """
-    Scan registry servers and find services with auth_type: none.
+    Scan registry servers and find services with auth_scheme: none.
 
     Returns:
         List of no-auth service configurations
@@ -435,8 +435,9 @@ def _scan_noauth_services() -> list[dict]:
             with open(json_file) as f:
                 server_config = json.load(f)
 
-            auth_type = server_config.get("auth_type")
-            if auth_type == "none":
+            # Backward-compatible read: prefer auth_scheme, fall back to auth_type
+            auth_scheme = server_config.get("auth_scheme", server_config.get("auth_type", "none"))
+            if auth_scheme == "none":
                 # Extract relevant service information
                 service = {
                     "server_name": server_config.get("server_name", "Unknown"),
@@ -788,8 +789,8 @@ def _generate_vscode_config(
         if "temp_path" in locals():
             try:
                 os.unlink(temp_path)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to clean up temp file: {e}")
         return False
 
 
@@ -865,8 +866,8 @@ def _generate_roocode_config(
         if "temp_path" in locals():
             try:
                 os.unlink(temp_path)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to clean up temp file: {e}")
         return False
 
 
@@ -1113,8 +1114,8 @@ Examples:
                             "Use --no-kill flag to prevent automatic killing, or stop the existing instance first"
                         )
                         sys.exit(1)
-                except:
-                    pass  # Invalid PID file, continue
+                except Exception as e:
+                    logger.debug(f"Invalid PID file, continuing: {e}")
         else:
             # Kill existing instance if found
             killed = _kill_existing_instance()

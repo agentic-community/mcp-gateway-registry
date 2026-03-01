@@ -54,7 +54,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, Dict, Optional
 
 import requests
 

@@ -4,13 +4,11 @@
     "path": "/atlassian",
     "proxy_pass_url": "http://atlassian-server:8005/mcp/",
     "auth_provider": "atlassian",
-  "auth_type": "oauth",
+  "auth_scheme": "bearer",
     "tags": [
       "Atlassian", "Jira", "Confluence"
     ],
     "num_tools": 42,
-    "num_stars": 0,
-    "is_python": true,
     "license": "MIT",
     "tool_list": [
       {

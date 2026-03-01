@@ -303,9 +303,7 @@ async def _add_service_principal_to_group(
 
         # 204 = success, 400 with "already exist" = also acceptable
         if response.status_code == 204:
-            logger.info(
-                f"Successfully added service principal {sp_id} to group '{group_name}'"
-            )
+            logger.info(f"Successfully added service principal {sp_id} to group '{group_name}'")
             return
 
         if response.status_code == 400:
@@ -317,9 +315,7 @@ async def _add_service_principal_to_group(
                     f"Service principal {sp_id} is already a member of group '{group_name}'"
                 )
                 return
-            logger.warning(
-                f"Failed to add SP to group '{group_name}': {error_msg}"
-            )
+            logger.warning(f"Failed to add SP to group '{group_name}': {error_msg}")
             return
 
         if response.status_code == 404:
@@ -339,14 +335,13 @@ async def _add_service_principal_to_group(
 
         # Other error status codes
         logger.warning(
-            f"Failed to add service principal to group '{group_name}': "
-            f"HTTP {response.status_code}"
+            f"Failed to add service principal to group '{group_name}': HTTP {response.status_code}"
         )
         try:
             error_detail = response.json()
             logger.debug(f"Error details: {error_detail}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not parse error response from Entra: {e}")
         return
 
     logger.warning(

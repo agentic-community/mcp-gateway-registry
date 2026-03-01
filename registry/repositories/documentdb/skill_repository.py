@@ -7,6 +7,7 @@ Implements all recommendations:
 - Database-level filtering
 - Duplicate key handling
 """
+
 import logging
 from datetime import datetime
 from typing import (
@@ -63,14 +64,12 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         self._collection_name = get_collection_name("agent_skills")
         self._indexes_created = False
 
-
     async def _get_collection(self) -> AsyncIOMotorCollection:
         """Get DocumentDB collection."""
         if self._collection is None:
             db = await get_documentdb_client()
             self._collection = db[self._collection_name]
         return self._collection
-
 
     async def ensure_indexes(self) -> None:
         """Create required indexes if not present."""
@@ -96,17 +95,14 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
             await collection.create_index("owner")
 
             # Compound index for common query patterns
-            await collection.create_index([
-                ("visibility", 1),
-                ("is_enabled", 1),
-                ("registry_name", 1)
-            ])
+            await collection.create_index(
+                [("visibility", 1), ("is_enabled", 1), ("registry_name", 1)]
+            )
 
             self._indexes_created = True
             logger.info(f"Created indexes for {self._collection_name} collection")
         except Exception as e:
             logger.warning(f"Could not create indexes: {e}")
-
 
     async def get(
         self,
@@ -119,7 +115,6 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         if doc:
             return _document_to_skill(doc)
         return None
-
 
     async def list_all(
         self,
@@ -145,7 +140,6 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
             except Exception as e:
                 logger.error(f"Failed to parse skill document: {e}")
         return skills
-
 
     async def list_filtered(
         self,
@@ -181,7 +175,6 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
                 logger.error(f"Failed to parse skill document: {e}")
         return skills
 
-
     async def create(
         self,
         skill: SkillCard,
@@ -202,7 +195,6 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
             logger.error(f"Failed to create skill {skill.path}: {e}")
             raise SkillServiceError(f"Failed to create skill: {e}") from e
 
-
     async def update(
         self,
         path: str,
@@ -215,9 +207,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
 
         try:
             result = await collection.find_one_and_update(
-                {"_id": path},
-                {"$set": updates},
-                return_document=True
+                {"_id": path}, {"$set": updates}, return_document=True
             )
 
             if result:
@@ -227,7 +217,6 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         except Exception as e:
             logger.error(f"Failed to update skill {path}: {e}")
             raise SkillServiceError(f"Failed to update skill: {e}") from e
-
 
     async def delete(
         self,
@@ -242,7 +231,6 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
             return True
         return False
 
-
     async def get_state(
         self,
         path: str,
@@ -250,12 +238,8 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         """Get skill enabled state."""
         await self.ensure_indexes()
         collection = await self._get_collection()
-        doc = await collection.find_one(
-            {"_id": path},
-            {"is_enabled": 1}
-        )
+        doc = await collection.find_one({"_id": path}, {"is_enabled": 1})
         return doc.get("is_enabled", False) if doc else False
-
 
     async def set_state(
         self,
@@ -267,13 +251,12 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         collection = await self._get_collection()
         result = await collection.update_one(
             {"_id": path},
-            {"$set": {"is_enabled": enabled, "updated_at": datetime.utcnow().isoformat()}}
+            {"$set": {"is_enabled": enabled, "updated_at": datetime.utcnow().isoformat()}},
         )
         if result.modified_count > 0:
             logger.info(f"Set skill {path} enabled={enabled}")
             return True
         return False
-
 
     async def create_many(
         self,
@@ -296,7 +279,6 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
             logger.error(f"Failed to create skills in batch: {e}")
             raise SkillServiceError(f"Batch create failed: {e}") from e
 
-
     async def update_many(
         self,
         updates: Dict[str, Dict[str, Any]],
@@ -311,11 +293,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         count = 0
         for path, update_data in updates.items():
             update_data["updated_at"] = datetime.utcnow().isoformat()
-            result = await collection.update_one(
-                {"_id": path},
-                {"$set": update_data},
-                upsert=True
-            )
+            result = await collection.update_one({"_id": path}, {"$set": update_data}, upsert=True)
             if result.modified_count > 0 or result.upserted_id:
                 count += 1
 

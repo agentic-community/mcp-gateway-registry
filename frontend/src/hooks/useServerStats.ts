@@ -162,7 +162,7 @@ export const useServerStats = (): UseServerStatsReturn => {
           tags: serverInfo.tags || [],
           last_checked_time: serverInfo.last_checked_iso,  // Fixed field mapping
           usersCount: 0, // Not available in backend
-          rating: serverInfo.num_stars || 0,
+          rating: 0,
           status: mapHealthStatus(serverInfo.health_status || 'unknown'),
           num_tools: serverInfo.num_tools || 0,
           type: 'server' as const,
@@ -174,6 +174,8 @@ export const useServerStats = (): UseServerStatsReturn => {
           mcp_server_version_previous: serverInfo.mcp_server_version_previous,
           mcp_server_version_updated_at: serverInfo.mcp_server_version_updated_at,
           sync_metadata: serverInfo.sync_metadata,
+          auth_scheme: serverInfo.auth_scheme,
+          auth_header_name: serverInfo.auth_header_name,
         };
         
         // Debug log the transformed server

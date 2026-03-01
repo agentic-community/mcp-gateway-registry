@@ -184,6 +184,12 @@ class DocumentDBPeerFederationRepository(PeerFederationRepositoryBase):
             # Remove _id before merging
             existing_doc.pop("_id", None)
 
+            # Decrypt federation token before constructing Pydantic model.
+            # Without this, federation_token_encrypted (unknown to Pydantic)
+            # is silently dropped during model_dump(), permanently losing the
+            # token on any peer update. Fixes issue #561.
+            decrypt_token_in_peer_dict(existing_doc)
+
             # Merge updates with existing data
             existing_doc.update(updates)
 

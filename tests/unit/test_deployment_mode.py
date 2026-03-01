@@ -27,8 +27,7 @@ class TestDeploymentModeValidation:
     def test_default_mode_valid(self):
         """Default modes should be valid."""
         deployment, registry, corrected = _validate_mode_combination(
-            DeploymentMode.WITH_GATEWAY,
-            RegistryMode.FULL
+            DeploymentMode.WITH_GATEWAY, RegistryMode.FULL
         )
         assert deployment == DeploymentMode.WITH_GATEWAY
         assert registry == RegistryMode.FULL
@@ -37,8 +36,7 @@ class TestDeploymentModeValidation:
     def test_gateway_skills_only_invalid(self):
         """Gateway + skills-only should auto-correct to registry-only."""
         deployment, registry, corrected = _validate_mode_combination(
-            DeploymentMode.WITH_GATEWAY,
-            RegistryMode.SKILLS_ONLY
+            DeploymentMode.WITH_GATEWAY, RegistryMode.SKILLS_ONLY
         )
         assert deployment == DeploymentMode.REGISTRY_ONLY
         assert registry == RegistryMode.SKILLS_ONLY
@@ -47,8 +45,7 @@ class TestDeploymentModeValidation:
     def test_registry_only_full_valid(self):
         """Registry-only + full should be valid."""
         deployment, registry, corrected = _validate_mode_combination(
-            DeploymentMode.REGISTRY_ONLY,
-            RegistryMode.FULL
+            DeploymentMode.REGISTRY_ONLY, RegistryMode.FULL
         )
         assert deployment == DeploymentMode.REGISTRY_ONLY
         assert registry == RegistryMode.FULL
@@ -57,8 +54,7 @@ class TestDeploymentModeValidation:
     def test_registry_only_skills_valid(self):
         """Registry-only + skills-only should be valid."""
         deployment, registry, corrected = _validate_mode_combination(
-            DeploymentMode.REGISTRY_ONLY,
-            RegistryMode.SKILLS_ONLY
+            DeploymentMode.REGISTRY_ONLY, RegistryMode.SKILLS_ONLY
         )
         assert deployment == DeploymentMode.REGISTRY_ONLY
         assert registry == RegistryMode.SKILLS_ONLY
@@ -67,8 +63,7 @@ class TestDeploymentModeValidation:
     def test_gateway_mcp_servers_only_valid(self):
         """Gateway + mcp-servers-only should be valid."""
         deployment, registry, corrected = _validate_mode_combination(
-            DeploymentMode.WITH_GATEWAY,
-            RegistryMode.MCP_SERVERS_ONLY
+            DeploymentMode.WITH_GATEWAY, RegistryMode.MCP_SERVERS_ONLY
         )
         assert deployment == DeploymentMode.WITH_GATEWAY
         assert registry == RegistryMode.MCP_SERVERS_ONLY
@@ -94,6 +89,7 @@ class TestNginxUpdatesEnabled:
         settings = Settings(deployment_mode=DeploymentMode.REGISTRY_ONLY)
         assert settings.nginx_updates_enabled is False
 
+
 from unittest.mock import MagicMock, patch
 
 
@@ -106,9 +102,9 @@ from unittest.mock import MagicMock, patch
 class TestNginxServiceDeploymentMode:
     """Test nginx service respects deployment mode."""
 
-    @patch('registry.core.nginx_service.NGINX_UPDATES_SKIPPED')
-    @patch('registry.core.nginx_service.settings')
-    @patch('registry.core.nginx_service.Path')
+    @patch("registry.core.nginx_service.NGINX_UPDATES_SKIPPED")
+    @patch("registry.core.nginx_service.settings")
+    @patch("registry.core.nginx_service.Path")
     def test_generate_config_skipped_in_registry_only(
         self,
         mock_path_class,
@@ -126,6 +122,7 @@ class TestNginxServiceDeploymentMode:
         mock_path_class.return_value = mock_path_instance
 
         from registry.core.nginx_service import NginxConfigService
+
         service = NginxConfigService()
 
         result = service.generate_config({})
@@ -134,9 +131,9 @@ class TestNginxServiceDeploymentMode:
         mock_counter.labels.assert_called_with(operation="generate_config")
         mock_counter.labels().inc.assert_called_once()
 
-    @patch('registry.core.nginx_service.NGINX_UPDATES_SKIPPED')
-    @patch('registry.core.nginx_service.settings')
-    @patch('registry.core.nginx_service.Path')
+    @patch("registry.core.nginx_service.NGINX_UPDATES_SKIPPED")
+    @patch("registry.core.nginx_service.settings")
+    @patch("registry.core.nginx_service.Path")
     def test_reload_nginx_skipped_in_registry_only(
         self,
         mock_path_class,
@@ -154,6 +151,7 @@ class TestNginxServiceDeploymentMode:
         mock_path_class.return_value = mock_path_instance
 
         from registry.core.nginx_service import NginxConfigService
+
         service = NginxConfigService()
 
         result = service.reload_nginx()

@@ -64,11 +64,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <Link to="/" className="flex items-center hover:opacity-80 transition-opacity">
                   <img
                     src={logo}
-                    alt="MCP Servers & A2A Agents Registry Logo"
+                    alt="AI Gateway & Registry Logo"
                     className="h-8 w-8 dark:brightness-0 dark:invert"
                   />
                   <span className="ml-2 text-xl font-bold text-gray-900 dark:text-white">
-                    MCP Servers & A2A Agents Registry
+                    AI Gateway & Registry
                   </span>
                 </Link>
               </div>

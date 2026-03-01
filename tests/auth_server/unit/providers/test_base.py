@@ -40,21 +40,22 @@ class TestAuthProviderInterface:
 
         # Act
         abstract_methods = {
-            name for name, method in inspect.getmembers(AuthProvider)
-            if getattr(method, '__isabstractmethod__', False)
+            name
+            for name, method in inspect.getmembers(AuthProvider)
+            if getattr(method, "__isabstractmethod__", False)
         }
 
         # Assert
         expected_methods = {
-            'validate_token',
-            'get_jwks',
-            'exchange_code_for_token',
-            'get_user_info',
-            'get_auth_url',
-            'get_logout_url',
-            'refresh_token',
-            'validate_m2m_token',
-            'get_m2m_token'
+            "validate_token",
+            "get_jwks",
+            "exchange_code_for_token",
+            "get_user_info",
+            "get_auth_url",
+            "get_logout_url",
+            "refresh_token",
+            "validate_m2m_token",
+            "get_m2m_token",
         }
 
         assert abstract_methods == expected_methods
@@ -96,10 +97,7 @@ class TestConcreteImplementation:
                 return {"valid": True}
 
             def get_m2m_token(
-                self,
-                client_id: str = None,
-                client_secret: str = None,
-                scope: str = None
+                self, client_id: str = None, client_secret: str = None, scope: str = None
             ) -> dict[str, Any]:
                 return {"access_token": "m2m_token"}
 
@@ -182,11 +180,11 @@ class TestAuthProviderTypeHints:
         sig = inspect.signature(AuthProvider.validate_token)
 
         # Assert
-        assert 'token' in sig.parameters
-        assert sig.parameters['token'].annotation is str
+        assert "token" in sig.parameters
+        assert sig.parameters["token"].annotation is str
         # Return type should be Dict[str, Any] (or dict[str, Any] in Python 3.12+)
         return_str = str(sig.return_annotation).lower()
-        assert 'dict' in return_str
+        assert "dict" in return_str
 
     def test_get_jwks_signature(self):
         """Test get_jwks has correct type hints."""
@@ -200,7 +198,7 @@ class TestAuthProviderTypeHints:
         # Assert
         # Should return Dict[str, Any] (or dict[str, Any] in Python 3.12+)
         return_str = str(sig.return_annotation).lower()
-        assert 'dict' in return_str
+        assert "dict" in return_str
 
     def test_exchange_code_for_token_signature(self):
         """Test exchange_code_for_token has correct type hints."""
@@ -212,7 +210,7 @@ class TestAuthProviderTypeHints:
         sig = inspect.signature(AuthProvider.exchange_code_for_token)
 
         # Assert
-        assert 'code' in sig.parameters
-        assert 'redirect_uri' in sig.parameters
-        assert sig.parameters['code'].annotation is str
-        assert sig.parameters['redirect_uri'].annotation is str
+        assert "code" in sig.parameters
+        assert "redirect_uri" in sig.parameters
+        assert sig.parameters["code"].annotation is str
+        assert sig.parameters["redirect_uri"].annotation is str

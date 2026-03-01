@@ -976,14 +976,14 @@ def interactive_configuration() -> dict[str, Any]:
 
     # Redirect URI (skip for M2M providers)
     if not provider_config.get("is_m2m", False):
-        print("\n🔄 Redirect URI")
+        print(f"\n🔄 Redirect URI")
 
         # Try to get public IP for better remote access
         try:
             import subprocess
 
             public_ip = (
-                subprocess.check_output(["curl", "-s", "http://checkip.amazonaws.com/"])  # nosec B603 B607 - hardcoded curl command with static URL
+                subprocess.check_output(["curl", "-s", "http://checkip.amazonaws.com/"])
                 .decode()
                 .strip()
             )
@@ -1030,7 +1030,7 @@ def interactive_configuration() -> dict[str, Any]:
     # Summary (redacted for security)
     from ..utils import redact_sensitive_value
 
-    print("\n📋 Configuration Summary")
+    print(f"\n📋 Configuration Summary")
     print("=" * 30)
     print(f"Provider: {provider_config['display_name']}")
     print(f"Client ID: {redact_sensitive_value(client_id, 8)}")

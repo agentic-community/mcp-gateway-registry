@@ -17,8 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 async def load_scopes_from_repository(
-    max_retries: int = 5,
-    initial_delay: float = 2.0
+    max_retries: int = 5, initial_delay: float = 2.0
 ) -> Dict[str, Any]:
     """
     Load scopes configuration from repository with retry logic.
@@ -39,9 +38,7 @@ async def load_scopes_from_repository(
             from ..repositories.factory import get_scope_repository
 
             if attempt == 0:
-                logger.info(
-                    f"Repository settings - backend: {settings.storage_backend}"
-                )
+                logger.info(f"Repository settings - backend: {settings.storage_backend}")
 
             scope_repo = get_scope_repository()
 
@@ -94,7 +91,7 @@ async def load_scopes_from_repository(
         except (ConnectionRefusedError, OSError) as e:
             last_exception = e
             if attempt < max_retries - 1:
-                delay = initial_delay * (2 ** attempt)
+                delay = initial_delay * (2**attempt)
                 logger.warning(
                     f"Repository not ready (attempt {attempt + 1}/{max_retries}), "
                     f"retrying in {delay}s: {e}"
@@ -103,13 +100,13 @@ async def load_scopes_from_repository(
             else:
                 logger.error(
                     f"Failed to connect to repository after {max_retries} attempts: {e}",
-                    exc_info=True
+                    exc_info=True,
                 )
         except Exception as e:
             # Other exceptions should also be retried (might be transient repository errors)
             last_exception = e
             if attempt < max_retries - 1:
-                delay = initial_delay * (2 ** attempt)
+                delay = initial_delay * (2**attempt)
                 logger.warning(
                     f"Error loading scopes (attempt {attempt + 1}/{max_retries}), "
                     f"retrying in {delay}s: {e}"
@@ -117,8 +114,7 @@ async def load_scopes_from_repository(
                 await asyncio.sleep(delay)
             else:
                 logger.error(
-                    f"Failed to load scopes after {max_retries} attempts: {e}",
-                    exc_info=True
+                    f"Failed to load scopes after {max_retries} attempts: {e}", exc_info=True
                 )
 
     # If we get here, all retries failed
@@ -145,7 +141,9 @@ def load_scopes_from_yaml(scopes_path: Optional[str] = None) -> Dict[str, Any]:
 
         # Check alternative location (EFS mount)
         if not scopes_file.exists():
-            alt_scopes_file = Path(__file__).parent.parent.parent / "auth_server" / "auth_config" / "scopes.yml"
+            alt_scopes_file = (
+                Path(__file__).parent.parent.parent / "auth_server" / "auth_config" / "scopes.yml"
+            )
             if alt_scopes_file.exists():
                 scopes_file = alt_scopes_file
 
@@ -153,7 +151,7 @@ def load_scopes_from_yaml(scopes_path: Optional[str] = None) -> Dict[str, Any]:
             logger.warning(f"Scopes config file not found at {scopes_file}")
             return {"group_mappings": {}}
 
-        with open(scopes_file, 'r') as f:
+        with open(scopes_file, "r") as f:
             config = yaml.safe_load(f)
             logger.info(
                 f"Loaded scopes from YAML with "
@@ -178,6 +176,7 @@ async def reload_scopes_config(storage_backend: Optional[str] = None) -> Dict[st
     """
     if storage_backend is None:
         from ..core.config import settings
+
         storage_backend = settings.storage_backend
 
     logger.info(f"Reloading scopes with storage backend: {storage_backend}")
@@ -187,6 +186,7 @@ async def reload_scopes_config(storage_backend: Optional[str] = None) -> Dict[st
     else:
         # For file backend, also load into the repository so get_ui_scopes works
         from ..repositories.factory import get_scope_repository
+
         scope_repo = get_scope_repository()
         await scope_repo.load_all()
 

@@ -14,10 +14,16 @@ from pydantic import BaseModel, Field
 class AgentSecurityScanFinding(BaseModel):
     """Individual security finding from A2A scanner."""
 
-    skill_name: Optional[str] = Field(None, description="Name of the skill that was scanned (if applicable)")
-    agent_component: str = Field("agent_card", description="Component scanned: agent_card, skill, endpoint")
+    skill_name: Optional[str] = Field(
+        None, description="Name of the skill that was scanned (if applicable)"
+    )
+    agent_component: str = Field(
+        "agent_card", description="Component scanned: agent_card, skill, endpoint"
+    )
     severity: str = Field(..., description="Severity level: CRITICAL, HIGH, MEDIUM, LOW, SAFE")
-    threat_names: list[str] = Field(default_factory=list, description="List of detected threat names")
+    threat_names: list[str] = Field(
+        default_factory=list, description="List of detected threat names"
+    )
     threat_summary: str = Field(default="", description="Summary of threats found")
     is_safe: bool = Field(..., description="Whether the component is considered safe")
 
@@ -25,8 +31,12 @@ class AgentSecurityScanFinding(BaseModel):
 class AgentSecurityScanAnalyzerResult(BaseModel):
     """Results from a specific A2A security analyzer."""
 
-    analyzer_name: str = Field(..., description="Name of the analyzer (yara, spec, heuristic, llm, endpoint)")
-    findings: list[AgentSecurityScanFinding] = Field(default_factory=list, description="List of findings from this analyzer")
+    analyzer_name: str = Field(
+        ..., description="Name of the analyzer (yara, spec, heuristic, llm, endpoint)"
+    )
+    findings: list[AgentSecurityScanFinding] = Field(
+        default_factory=list, description="List of findings from this analyzer"
+    )
 
 
 class AgentSecurityScanResult(BaseModel):
@@ -40,7 +50,9 @@ class AgentSecurityScanResult(BaseModel):
     high_severity: int = Field(default=0, description="Count of high severity issues")
     medium_severity: int = Field(default=0, description="Count of medium severity issues")
     low_severity: int = Field(default=0, description="Count of low severity issues")
-    analyzers_used: list[str] = Field(default_factory=list, description="List of analyzers used in scan")
+    analyzers_used: list[str] = Field(
+        default_factory=list, description="List of analyzers used in scan"
+    )
     raw_output: dict = Field(default_factory=dict, description="Full scanner output")
     output_file: Optional[str] = Field(None, description="Path to detailed JSON output file")
     scan_failed: bool = Field(default=False, description="Whether the scan failed to complete")
@@ -52,11 +64,19 @@ class AgentSecurityScanConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable/disable agent security scanning")
     scan_on_registration: bool = Field(default=True, description="Scan agents during registration")
-    block_unsafe_agents: bool = Field(default=True, description="Disable agents that fail security scan")
-    analyzers: str = Field(default="yara,spec", description="Comma-separated list of analyzers to use")
-    scan_timeout_seconds: int = Field(default=300, description="Timeout for security scans in seconds")
+    block_unsafe_agents: bool = Field(
+        default=True, description="Disable agents that fail security scan"
+    )
+    analyzers: str = Field(
+        default="yara,spec", description="Comma-separated list of analyzers to use"
+    )
+    scan_timeout_seconds: int = Field(
+        default=300, description="Timeout for security scans in seconds"
+    )
     llm_api_key: Optional[str] = Field(None, description="API key for LLM-based analysis")
-    add_security_pending_tag: bool = Field(default=True, description="Add 'security-pending' tag to unsafe agents")
+    add_security_pending_tag: bool = Field(
+        default=True, description="Add 'security-pending' tag to unsafe agents"
+    )
 
 
 class AgentSecurityStatus(BaseModel):
@@ -69,4 +89,6 @@ class AgentSecurityStatus(BaseModel):
     critical_issues: int = Field(default=0, description="Count of critical issues")
     high_severity: int = Field(default=0, description="Count of high severity issues")
     scan_status: str = Field(default="pending", description="Status: pending, completed, failed")
-    is_disabled_for_security: bool = Field(default=False, description="Whether agent is disabled due to security issues")
+    is_disabled_for_security: bool = Field(
+        default=False, description="Whether agent is disabled due to security issues"
+    )

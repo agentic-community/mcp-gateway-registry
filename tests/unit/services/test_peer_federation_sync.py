@@ -190,11 +190,9 @@ class TestSyncPeer:
                     service = PeerFederationService()
 
                     # Set up peer in cache
-                    service.registered_peers[sample_peer_config.peer_id] = (
-                        sample_peer_config
-                    )
-                    service.peer_sync_status[sample_peer_config.peer_id] = (
-                        PeerSyncStatus(peer_id=sample_peer_config.peer_id)
+                    service.registered_peers[sample_peer_config.peer_id] = sample_peer_config
+                    service.peer_sync_status[sample_peer_config.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config.peer_id
                     )
 
                     # Mock PeerRegistryClient
@@ -254,8 +252,8 @@ class TestSyncPeer:
                     service.registered_peers[sample_peer_config_disabled.peer_id] = (
                         sample_peer_config_disabled
                     )
-                    service.peer_sync_status[sample_peer_config_disabled.peer_id] = (
-                        PeerSyncStatus(peer_id=sample_peer_config_disabled.peer_id)
+                    service.peer_sync_status[sample_peer_config_disabled.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config_disabled.peer_id
                     )
 
                     with pytest.raises(ValueError, match="is disabled"):
@@ -307,11 +305,9 @@ class TestSyncPeer:
                     service = PeerFederationService()
 
                     # Set up peer in cache
-                    service.registered_peers[sample_peer_config.peer_id] = (
-                        sample_peer_config
-                    )
-                    service.peer_sync_status[sample_peer_config.peer_id] = (
-                        PeerSyncStatus(peer_id=sample_peer_config.peer_id)
+                    service.registered_peers[sample_peer_config.peer_id] = sample_peer_config
+                    service.peer_sync_status[sample_peer_config.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config.peer_id
                     )
 
                     # Mock PeerRegistryClient to raise exception
@@ -319,9 +315,7 @@ class TestSyncPeer:
                         "registry.services.peer_federation_service.PeerRegistryClient"
                     ) as mock_client_class:
                         mock_client = MagicMock()
-                        mock_client.fetch_servers.side_effect = Exception(
-                            "Network error"
-                        )
+                        mock_client.fetch_servers.side_effect = Exception("Network error")
                         mock_client_class.return_value = mock_client
 
                         result = await service.sync_peer(sample_peer_config.peer_id)
@@ -341,7 +335,13 @@ class TestSyncPeer:
         mock_agent_service,
         sample_peer_config,
     ):
-        """Test sync handles None responses gracefully."""
+        """
+        Test sync fails when client returns None (indicates fetch error).
+
+        Updated for issue #561 fix: None indicates an error (auth failure,
+        network error, etc.), not an empty result. The sync should fail
+        with a clear error message.
+        """
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
             return_value=mock_repository,
@@ -357,20 +357,77 @@ class TestSyncPeer:
                     service = PeerFederationService()
 
                     # Set up peer in cache
-                    service.registered_peers[sample_peer_config.peer_id] = (
-                        sample_peer_config
-                    )
-                    service.peer_sync_status[sample_peer_config.peer_id] = (
-                        PeerSyncStatus(peer_id=sample_peer_config.peer_id)
+                    service.registered_peers[sample_peer_config.peer_id] = sample_peer_config
+                    service.peer_sync_status[sample_peer_config.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config.peer_id
                     )
 
-                    # Mock PeerRegistryClient - return None
+                    # Mock PeerRegistryClient - return None to simulate fetch failure
                     with patch(
                         "registry.services.peer_federation_service.PeerRegistryClient"
                     ) as mock_client_class:
                         mock_client = MagicMock()
                         mock_client.fetch_servers.return_value = None
                         mock_client.fetch_agents.return_value = None
+                        mock_client.fetch_security_scans.return_value = None
+                        mock_client_class.return_value = mock_client
+
+                        result = await service.sync_peer(sample_peer_config.peer_id)
+
+                        # Should fail with error message
+                        assert result.success is False
+                        assert result.servers_synced == 0
+                        assert result.agents_synced == 0
+                        assert result.error_message is not None
+                        assert "Failed to fetch" in result.error_message
+                        assert (
+                            "authentication" in result.error_message.lower()
+                            or "network" in result.error_message.lower()
+                        )
+
+    @pytest.mark.asyncio
+    async def test_sync_peer_succeeds_with_empty_list_responses(
+        self,
+        mock_repository,
+        mock_server_service,
+        mock_agent_service,
+        sample_peer_config,
+    ):
+        """
+        Test sync succeeds when client returns empty lists (legitimate empty result).
+
+        Updated for issue #561 fix: Empty list [] indicates a legitimate
+        empty result (peer has no servers/agents), not an error. This is
+        different from None which indicates a fetch failure.
+        """
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            with patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ):
+                with patch(
+                    "registry.services.peer_federation_service.agent_service",
+                    mock_agent_service,
+                ):
+                    service = PeerFederationService()
+
+                    # Set up peer in cache
+                    service.registered_peers[sample_peer_config.peer_id] = sample_peer_config
+                    service.peer_sync_status[sample_peer_config.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config.peer_id
+                    )
+
+                    # Mock PeerRegistryClient - return empty lists (legitimate empty result)
+                    with patch(
+                        "registry.services.peer_federation_service.PeerRegistryClient"
+                    ) as mock_client_class:
+                        mock_client = MagicMock()
+                        mock_client.fetch_servers.return_value = []
+                        mock_client.fetch_agents.return_value = []
+                        mock_client.fetch_security_scans.return_value = []
                         mock_client_class.return_value = mock_client
 
                         result = await service.sync_peer(sample_peer_config.peer_id)
@@ -379,6 +436,61 @@ class TestSyncPeer:
                         assert result.success is True
                         assert result.servers_synced == 0
                         assert result.agents_synced == 0
+                        assert result.error_message is None
+
+    @pytest.mark.asyncio
+    async def test_sync_peer_fails_with_partial_none_responses(
+        self,
+        mock_repository,
+        mock_server_service,
+        mock_agent_service,
+        sample_peer_config,
+    ):
+        """
+        Test sync fails when any fetch returns None (partial failure).
+
+        If servers fetch succeeds but agents fetch fails (None), the entire
+        sync should be marked as failed with a clear error message indicating
+        which fetch(es) failed.
+        """
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            with patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ):
+                with patch(
+                    "registry.services.peer_federation_service.agent_service",
+                    mock_agent_service,
+                ):
+                    service = PeerFederationService()
+
+                    # Set up peer in cache
+                    service.registered_peers[sample_peer_config.peer_id] = sample_peer_config
+                    service.peer_sync_status[sample_peer_config.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config.peer_id
+                    )
+
+                    # Mock PeerRegistryClient - servers succeed, agents fail
+                    with patch(
+                        "registry.services.peer_federation_service.PeerRegistryClient"
+                    ) as mock_client_class:
+                        mock_client = MagicMock()
+                        mock_client.fetch_servers.return_value = [
+                            {"path": "/server1", "name": "Server 1"}
+                        ]
+                        mock_client.fetch_agents.return_value = None  # Failure
+                        mock_client.fetch_security_scans.return_value = []
+                        mock_client_class.return_value = mock_client
+
+                        result = await service.sync_peer(sample_peer_config.peer_id)
+
+                        # Should fail even though servers fetch succeeded
+                        assert result.success is False
+                        assert result.error_message is not None
+                        assert "agents" in result.error_message
 
 
 @pytest.mark.unit
@@ -410,17 +522,15 @@ class TestSyncAllPeers:
                     service = PeerFederationService()
 
                     # Set up peers in cache
-                    service.registered_peers[sample_peer_config.peer_id] = (
-                        sample_peer_config
-                    )
+                    service.registered_peers[sample_peer_config.peer_id] = sample_peer_config
                     service.registered_peers[sample_peer_config_disabled.peer_id] = (
                         sample_peer_config_disabled
                     )
-                    service.peer_sync_status[sample_peer_config.peer_id] = (
-                        PeerSyncStatus(peer_id=sample_peer_config.peer_id)
+                    service.peer_sync_status[sample_peer_config.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config.peer_id
                     )
-                    service.peer_sync_status[sample_peer_config_disabled.peer_id] = (
-                        PeerSyncStatus(peer_id=sample_peer_config_disabled.peer_id)
+                    service.peer_sync_status[sample_peer_config_disabled.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config_disabled.peer_id
                     )
 
                     # Mock PeerRegistryClient
@@ -487,9 +597,7 @@ class TestSyncAllPeers:
                         mock_client = MagicMock()
                         call_count[0] += 1
                         if call_count[0] == 1:
-                            mock_client.fetch_servers.side_effect = Exception(
-                                "Peer 1 error"
-                            )
+                            mock_client.fetch_servers.side_effect = Exception("Peer 1 error")
                         else:
                             mock_client.fetch_servers.return_value = [
                                 {"path": "/server1", "name": "Server 1"}
@@ -516,9 +624,7 @@ class TestSyncAllPeers:
 class TestFilterServersByConfig:
     """Tests for _filter_servers_by_config method."""
 
-    def test_sync_mode_all_returns_all_servers(
-        self, mock_repository, sample_peer_config
-    ):
+    def test_sync_mode_all_returns_all_servers(self, mock_repository, sample_peer_config):
         """Test sync_mode=all returns all servers."""
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
@@ -553,9 +659,7 @@ class TestFilterServersByConfig:
                 {"path": "/server3", "name": "Server 3"},
             ]
 
-            result = service._filter_servers_by_config(
-                servers, sample_peer_config_whitelist
-            )
+            result = service._filter_servers_by_config(servers, sample_peer_config_whitelist)
 
             assert len(result) == 2
             paths = [s["path"] for s in result]
@@ -563,9 +667,7 @@ class TestFilterServersByConfig:
             assert "/server2" in paths
             assert "/server3" not in paths
 
-    def test_sync_mode_whitelist_with_empty_whitelist_returns_empty(
-        self, mock_repository
-    ):
+    def test_sync_mode_whitelist_with_empty_whitelist_returns_empty(self, mock_repository):
         """Test sync_mode=whitelist with empty whitelist returns empty."""
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
@@ -606,9 +708,7 @@ class TestFilterServersByConfig:
                 {"path": "/server3", "name": "Server 3", "tags": ["production", "api"]},
             ]
 
-            result = service._filter_servers_by_config(
-                servers, sample_peer_config_tag_filter
-            )
+            result = service._filter_servers_by_config(servers, sample_peer_config_tag_filter)
 
             # Should only include servers with "production" or "public" tags
             assert len(result) == 2
@@ -681,9 +781,7 @@ class TestFilterAgentsByConfig:
                 {"path": "/agent2", "name": "Agent 2"},
             ]
 
-            result = service._filter_agents_by_config(
-                agents, sample_peer_config_whitelist
-            )
+            result = service._filter_agents_by_config(agents, sample_peer_config_whitelist)
 
             assert len(result) == 1
             assert result[0]["path"] == "/agent1"
@@ -806,9 +904,7 @@ class TestStoreSyncedServers:
 
                     servers = [{"path": "/server1", "name": "Server 1"}]
 
-                    stored_count = await service._store_synced_servers(
-                        "test-peer", servers
-                    )
+                    stored_count = await service._store_synced_servers("test-peer", servers)
 
                     assert stored_count == 1
                     # Verify register_server was called
@@ -852,9 +948,7 @@ class TestStoreSyncedServers:
 
                     servers = [{"path": "/server1", "name": "Server 1 Updated"}]
 
-                    stored_count = await service._store_synced_servers(
-                        "test-peer", servers
-                    )
+                    stored_count = await service._store_synced_servers("test-peer", servers)
 
                     assert stored_count == 1
                     # Verify update_server was called (not register_server)
@@ -919,9 +1013,7 @@ class TestStoreSyncedServers:
                         {"path": "/server1", "name": "Server 1"},
                     ]
 
-                    stored_count = await service._store_synced_servers(
-                        "test-peer", servers
-                    )
+                    stored_count = await service._store_synced_servers("test-peer", servers)
 
                     # Only one server should be stored
                     assert stored_count == 1
@@ -1002,9 +1094,7 @@ class TestStoreSyncedAgents:
                         },
                     ]
 
-                    stored_count = await service._store_synced_agents(
-                        "test-peer", agents
-                    )
+                    stored_count = await service._store_synced_agents("test-peer", agents)
 
                     # Only one agent should be stored
                     assert stored_count == 1
@@ -1061,10 +1151,8 @@ class TestDetectOrphanedItems:
                     current_server_paths = ["/server1"]
                     current_agent_paths = []
 
-                    orphaned_servers, orphaned_agents = (
-                        await service.detect_orphaned_items(
-                            "test-peer", current_server_paths, current_agent_paths
-                        )
+                    orphaned_servers, orphaned_agents = await service.detect_orphaned_items(
+                        "test-peer", current_server_paths, current_agent_paths
                     )
 
                     # server2 should be detected as orphaned
@@ -1097,10 +1185,8 @@ class TestDetectOrphanedItems:
 
                     service = PeerFederationService()
 
-                    orphaned_servers, orphaned_agents = (
-                        await service.detect_orphaned_items(
-                            "test-peer", ["/server1"], ["/agent1"]
-                        )
+                    orphaned_servers, orphaned_agents = await service.detect_orphaned_items(
+                        "test-peer", ["/server1"], ["/agent1"]
                     )
 
                     assert len(orphaned_servers) == 0
@@ -1139,9 +1225,7 @@ class TestSetLocalOverride:
 
                     service = PeerFederationService()
 
-                    result = await service.set_local_override(
-                        "/peer-test/server1", "server", True
-                    )
+                    result = await service.set_local_override("/peer-test/server1", "server", True)
 
                     assert result is True
                     mock_server_service.update_server.assert_called_once()
@@ -1171,9 +1255,7 @@ class TestSetLocalOverride:
 
                     service = PeerFederationService()
 
-                    result = await service.set_local_override(
-                        "/nonexistent", "server", True
-                    )
+                    result = await service.set_local_override("/nonexistent", "server", True)
 
                     assert result is False
 
@@ -1264,9 +1346,7 @@ class TestLocalOverrideIntegration:
 
                     servers = [{"path": "/server1", "name": "Remote Server Name"}]
 
-                    stored_count = await service._store_synced_servers(
-                        "test-peer", servers
-                    )
+                    stored_count = await service._store_synced_servers("test-peer", servers)
 
                     # Server should be skipped (not updated)
                     assert stored_count == 0

@@ -50,9 +50,11 @@ def get_server_repository() -> ServerRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.server_repository import DocumentDBServerRepository
+
         _server_repo = DocumentDBServerRepository()
     else:
         from .file.server_repository import FileServerRepository
+
         _server_repo = FileServerRepository()
 
     return _server_repo
@@ -70,9 +72,11 @@ def get_agent_repository() -> AgentRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.agent_repository import DocumentDBAgentRepository
+
         _agent_repo = DocumentDBAgentRepository()
     else:
         from .file.agent_repository import FileAgentRepository
+
         _agent_repo = FileAgentRepository()
 
     return _agent_repo
@@ -90,9 +94,11 @@ def get_scope_repository() -> ScopeRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.scope_repository import DocumentDBScopeRepository
+
         _scope_repo = DocumentDBScopeRepository()
     else:
         from .file.scope_repository import FileScopeRepository
+
         _scope_repo = FileScopeRepository()
 
     return _scope_repo
@@ -110,9 +116,11 @@ def get_security_scan_repository() -> SecurityScanRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.security_scan_repository import DocumentDBSecurityScanRepository
+
         _security_scan_repo = DocumentDBSecurityScanRepository()
     else:
         from .file.security_scan_repository import FileSecurityScanRepository
+
         _security_scan_repo = FileSecurityScanRepository()
 
     return _security_scan_repo
@@ -130,9 +138,11 @@ def get_search_repository() -> SearchRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.search_repository import DocumentDBSearchRepository
+
         _search_repo = DocumentDBSearchRepository()
     else:
         from .file.search_repository import FaissSearchRepository
+
         _search_repo = FaissSearchRepository()
 
     return _search_repo
@@ -150,9 +160,11 @@ def get_federation_config_repository() -> FederationConfigRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.federation_config_repository import DocumentDBFederationConfigRepository
+
         _federation_config_repo = DocumentDBFederationConfigRepository()
     else:
         from .file.federation_config_repository import FileFederationConfigRepository
+
         _federation_config_repo = FileFederationConfigRepository()
 
     return _federation_config_repo
@@ -170,9 +182,11 @@ def get_peer_federation_repository() -> PeerFederationRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.peer_federation_repository import DocumentDBPeerFederationRepository
+
         _peer_federation_repo = DocumentDBPeerFederationRepository()
     else:
         from .file.peer_federation_repository import FilePeerFederationRepository
+
         _peer_federation_repo = FilePeerFederationRepository()
 
     return _peer_federation_repo
@@ -194,6 +208,7 @@ def get_audit_repository() -> AuditRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .audit_repository import DocumentDBAuditRepository
+
         _audit_repo = DocumentDBAuditRepository()
     else:
         # Audit repository requires MongoDB - return None for file backend
@@ -215,14 +230,17 @@ def get_skill_repository() -> SkillRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.skill_repository import DocumentDBSkillRepository
+
         _skill_repo = DocumentDBSkillRepository()
     else:
         # File-based skill repository not implemented yet
         # Fall back to DocumentDB repository for now
         from .documentdb.skill_repository import DocumentDBSkillRepository
+
         _skill_repo = DocumentDBSkillRepository()
 
     return _skill_repo
+
 
 def get_skill_security_scan_repository() -> SkillSecurityScanRepositoryBase:
     """Get skill security scan repository singleton."""
@@ -236,13 +254,14 @@ def get_skill_security_scan_repository() -> SkillSecurityScanRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.skill_security_scan_repository import DocumentDBSkillSecurityScanRepository
+
         _skill_security_scan_repo = DocumentDBSkillSecurityScanRepository()
     else:
         from .file.skill_security_scan_repository import FileSkillSecurityScanRepository
+
         _skill_security_scan_repo = FileSkillSecurityScanRepository()
 
     return _skill_security_scan_repo
-
 
 
 def get_virtual_server_repository() -> VirtualServerRepositoryBase:
@@ -257,11 +276,13 @@ def get_virtual_server_repository() -> VirtualServerRepositoryBase:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.virtual_server_repository import DocumentDBVirtualServerRepository
+
         _virtual_server_repo = DocumentDBVirtualServerRepository()
     else:
         # File-based virtual server repository not implemented
         # Fall back to DocumentDB repository
         from .documentdb.virtual_server_repository import DocumentDBVirtualServerRepository
+
         _virtual_server_repo = DocumentDBVirtualServerRepository()
 
     return _virtual_server_repo
@@ -283,9 +304,12 @@ def get_backend_session_repository() -> Optional[BackendSessionRepositoryBase]:
 
     if backend in ("documentdb", "mongodb-ce"):
         from .documentdb.backend_session_repository import DocumentDBBackendSessionRepository
+
         _backend_session_repo = DocumentDBBackendSessionRepository()
     else:
-        logger.warning("Backend session repository requires MongoDB backend. File backend not supported.")
+        logger.warning(
+            "Backend session repository requires MongoDB backend. File backend not supported."
+        )
         return None
 
     return _backend_session_repo
@@ -293,7 +317,19 @@ def get_backend_session_repository() -> Optional[BackendSessionRepositoryBase]:
 
 def reset_repositories() -> None:
     """Reset all repository singletons. USE ONLY IN TESTS."""
-    global _server_repo, _agent_repo, _scope_repo, _security_scan_repo, _search_repo, _federation_config_repo, _peer_federation_repo, _audit_repo, _skill_repo, _virtual_server_repo, _backend_session_repo, _skill_security_scan_repo
+    global \
+        _server_repo, \
+        _agent_repo, \
+        _scope_repo, \
+        _security_scan_repo, \
+        _search_repo, \
+        _federation_config_repo, \
+        _peer_federation_repo, \
+        _audit_repo, \
+        _skill_repo, \
+        _virtual_server_repo, \
+        _backend_session_repo, \
+        _skill_security_scan_repo
     _server_repo = None
     _agent_repo = None
     _scope_repo = None

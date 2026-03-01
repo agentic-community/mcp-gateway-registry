@@ -13,7 +13,7 @@ from typing import Annotated, Dict, Any
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s'
+    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -45,10 +45,12 @@ args = _parse_arguments()
 
 # Log parsed arguments for debugging
 logger.info(f"Parsed arguments - port: {args.port}, transport: {args.transport}")
-logger.info(f"Environment variables - MCP_TRANSPORT: {os.environ.get('MCP_TRANSPORT', 'NOT SET')}, MCP_SERVER_LISTEN_PORT: {os.environ.get('MCP_SERVER_LISTEN_PORT', 'NOT SET')}")
+logger.info(
+    f"Environment variables - MCP_TRANSPORT: {os.environ.get('MCP_TRANSPORT', 'NOT SET')}, MCP_SERVER_LISTEN_PORT: {os.environ.get('MCP_SERVER_LISTEN_PORT', 'NOT SET')}"
+)
 
 # Initialize FastMCP server
-mcp = FastMCP("ExampleMCPServer", host="0.0.0.0", port=int(args.port))
+mcp = FastMCP("ExampleMCPServer", host="0.0.0.0", port=int(args.port))  # nosec B104
 mcp.settings.mount_path = "/example-server"
 
 
@@ -96,16 +98,14 @@ def _process_message(message: str) -> Dict[str, Any]:
         "processed_message": message.upper(),
         "message_length": len(message),
         "word_count": len(message.split()),
-        "timestamp": "2025-09-26T23:00:00Z"
+        "timestamp": "2025-09-26T23:00:00Z",
     }
     return processed
 
 
 @mcp.tool()
 def example_tool(
-    message: Annotated[str, Field(
-        description="Example message to process"
-    )]
+    message: Annotated[str, Field(description="Example message to process")],
 ) -> Dict[str, Any]:
     """
     An example tool that demonstrates MCP functionality.
@@ -134,13 +134,10 @@ def example_tool(
 
 @mcp.tool()
 def echo_tool(
-    input_text: Annotated[str, Field(
-        description="Text to echo back"
-    )],
-    include_metadata: Annotated[bool, Field(
-        default=True,
-        description="Whether to include metadata in the response"
-    )] = True
+    input_text: Annotated[str, Field(description="Text to echo back")],
+    include_metadata: Annotated[
+        bool, Field(default=True, description="Whether to include metadata in the response")
+    ] = True,
 ) -> Dict[str, Any]:
     """
     A simple echo tool that returns the input with optional metadata.
@@ -157,19 +154,18 @@ def echo_tool(
     """
     try:
         logger.info(f"Echoing text: {input_text}")
-        response = {
-            "echo": input_text,
-            "success": True
-        }
+        response = {"echo": input_text, "success": True}
 
         if include_metadata:
-            response.update({
-                "metadata": {
-                    "character_count": len(input_text),
-                    "server": "Example MCP Server",
-                    "version": "0.1.0"
+            response.update(
+                {
+                    "metadata": {
+                        "character_count": len(input_text),
+                        "server": "Example MCP Server",
+                        "version": "0.1.0",
+                    }
                 }
-            })
+            )
 
         return response
     except Exception as e:
@@ -197,7 +193,7 @@ def status_tool() -> Dict[str, Any]:
             "port": args.port,
             "transport": args.transport,
             "available_tools": ["example_tool", "echo_tool", "status_tool"],
-            "health": "healthy"
+            "health": "healthy",
         }
         return status
     except Exception as e:

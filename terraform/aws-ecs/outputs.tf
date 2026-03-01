@@ -173,6 +173,30 @@ output "deployment_mode" {
 }
 
 #
+# Observability Outputs
+#
+
+output "observability_enabled" {
+  description = "Whether the observability pipeline is enabled"
+  value       = module.mcp_gateway.observability_enabled
+}
+
+output "amp_workspace_id" {
+  description = "AMP workspace ID"
+  value       = module.mcp_gateway.amp_workspace_id
+}
+
+output "amp_endpoint" {
+  description = "AMP remote write endpoint"
+  value       = module.mcp_gateway.amp_endpoint
+}
+
+output "grafana_url" {
+  description = "Grafana dashboard URL"
+  value       = module.mcp_gateway.grafana_url
+}
+
+#
 # DocumentDB Cluster Outputs
 #
 

@@ -219,6 +219,7 @@ async def test_health_service_initialize(health_service):
 @pytest.mark.asyncio
 async def test_health_service_shutdown(health_service):
     """Test health service shutdown."""
+
     # Create a proper asyncio Task
     async def dummy_task():
         while True:
@@ -257,9 +258,7 @@ async def test_health_service_add_websocket_connection(health_service, mock_webs
 @pytest.mark.asyncio
 async def test_health_service_remove_websocket_connection(health_service, mock_websocket):
     """Test removing WebSocket connection from health service."""
-    with patch.object(
-        health_service.websocket_manager, "remove_connection"
-    ) as mock_remove:
+    with patch.object(health_service.websocket_manager, "remove_connection") as mock_remove:
         await health_service.remove_websocket_connection(mock_websocket)
 
         mock_remove.assert_awaited_once_with(mock_websocket)
@@ -275,7 +274,9 @@ async def test_health_service_broadcast_health_update_no_connections(health_serv
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_health_service_broadcast_health_update_specific_service(health_service, mock_server_info):
+async def test_health_service_broadcast_health_update_specific_service(
+    health_service, mock_server_info
+):
     """Test broadcasting health update for specific service."""
     service_path = "/test-server"
 
@@ -286,9 +287,7 @@ async def test_health_service_broadcast_health_update_specific_service(health_se
         mock_ws = AsyncMock(spec=WebSocket)
         health_service.websocket_manager.connections.add(mock_ws)
 
-        with patch.object(
-            health_service.websocket_manager, "broadcast_update"
-        ) as mock_broadcast:
+        with patch.object(health_service.websocket_manager, "broadcast_update") as mock_broadcast:
             await health_service.broadcast_health_update(service_path)
 
             mock_broadcast.assert_awaited_once()
@@ -302,9 +301,9 @@ async def test_health_service_broadcast_health_update_specific_service(health_se
 async def test_health_service_get_cached_health_data(health_service):
     """Test getting cached health data."""
     with patch("registry.services.server_service.server_service") as mock_server_service:
-        mock_server_service.get_all_servers = AsyncMock(return_value={
-            "/test-server": {"server_name": "test", "proxy_pass_url": "http://test"}
-        })
+        mock_server_service.get_all_servers = AsyncMock(
+            return_value={"/test-server": {"server_name": "test", "proxy_pass_url": "http://test"}}
+        )
 
         data = await health_service._get_cached_health_data()
 
@@ -389,13 +388,12 @@ def test_health_service_build_headers_for_server(health_service, mock_server_inf
 @pytest.mark.unit
 def test_health_service_build_headers_with_session_id(health_service, mock_server_info):
     """Test building headers with session ID."""
-    headers = health_service._build_headers_for_server(
-        mock_server_info, include_session_id=True
-    )
+    headers = health_service._build_headers_for_server(mock_server_info, include_session_id=True)
 
     assert "Mcp-Session-Id" in headers
     # Should be a valid UUID
     import uuid
+
     try:
         uuid.UUID(headers["Mcp-Session-Id"])
         assert True
@@ -446,9 +444,7 @@ async def test_health_service_try_ping_without_auth_success(health_service):
     mock_response.status_code = 200
     mock_client.post.return_value = mock_response
 
-    result = await health_service._try_ping_without_auth(
-        mock_client, "http://localhost:8000/mcp"
-    )
+    result = await health_service._try_ping_without_auth(mock_client, "http://localhost:8000/mcp")
 
     assert result is True
 
@@ -460,9 +456,7 @@ async def test_health_service_try_ping_without_auth_failure(health_service):
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.side_effect = httpx.ConnectError("Connection refused")
 
-    result = await health_service._try_ping_without_auth(
-        mock_client, "http://localhost:8000/mcp"
-    )
+    result = await health_service._try_ping_without_auth(mock_client, "http://localhost:8000/mcp")
 
     assert result is False
 
@@ -547,9 +541,7 @@ async def test_health_service_perform_immediate_health_check(health_service, moc
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_health_service_check_single_service_status_changed(
-    health_service, mock_server_info
-):
+async def test_health_service_check_single_service_status_changed(health_service, mock_server_info):
     """Test checking single service when status changes."""
     service_path = "/test-server"
     health_service.server_health_status[service_path] = HealthStatus.UNHEALTHY_TIMEOUT
@@ -609,9 +601,9 @@ async def test_health_service_update_tools_background(health_service, mock_serve
 async def test_health_service_get_all_health_status(health_service, mock_server_info):
     """Test getting all health status."""
     with patch("registry.services.server_service.server_service") as mock_server_service:
-        mock_server_service.get_all_servers = AsyncMock(return_value={
-            "/test-server": mock_server_info
-        })
+        mock_server_service.get_all_servers = AsyncMock(
+            return_value={"/test-server": mock_server_info}
+        )
 
         all_status = await health_service.get_all_health_status()
 
@@ -626,9 +618,7 @@ def test_health_service_get_service_health_data_fast(health_service, mock_server
     service_path = "/test-server"
     health_service.server_health_status[service_path] = HealthStatus.HEALTHY
 
-    health_data = health_service._get_service_health_data_fast(
-        service_path, mock_server_info
-    )
+    health_data = health_service._get_service_health_data_fast(service_path, mock_server_info)
 
     assert health_data["status"] == HealthStatus.HEALTHY
     assert health_data["num_tools"] == 1
@@ -642,9 +632,7 @@ def test_health_service_get_service_health_data_disabled(health_service, mock_se
     # Set is_enabled to False in server_info
     mock_server_info["is_enabled"] = False
 
-    health_data = health_service._get_service_health_data_fast(
-        service_path, mock_server_info
-    )
+    health_data = health_service._get_service_health_data_fast(service_path, mock_server_info)
 
     assert health_data["status"] == "disabled"
 
@@ -667,7 +655,9 @@ async def test_ws_manager_add_connection_exception(ws_manager, mock_websocket):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_ws_manager_send_initial_status_optimized_with_cached_data(ws_manager, mock_websocket):
+async def test_ws_manager_send_initial_status_optimized_with_cached_data(
+    ws_manager, mock_websocket
+):
     """Test sending initial status with cached data."""
     with patch("registry.health.service.health_service") as mock_health_service:
         mock_health_service._get_cached_health_data = AsyncMock(return_value={"test": "data"})
@@ -708,7 +698,9 @@ async def test_ws_manager_broadcast_update_single_service(ws_manager, mock_webso
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_ws_manager_broadcast_update_with_pending_updates(ws_manager, mock_websocket, mock_settings):
+async def test_ws_manager_broadcast_update_with_pending_updates(
+    ws_manager, mock_websocket, mock_settings
+):
     """Test broadcast update with pending updates batch."""
     mock_settings.websocket_broadcast_interval_ms = 10
     mock_settings.websocket_max_batch_size = 5
@@ -721,7 +713,9 @@ async def test_ws_manager_broadcast_update_with_pending_updates(ws_manager, mock
             "path2": {"status": "unhealthy"},
         }
 
-        with patch.object(ws_manager, "_send_to_connections_optimized", new=AsyncMock()) as mock_send:
+        with patch.object(
+            ws_manager, "_send_to_connections_optimized", new=AsyncMock()
+        ) as mock_send:
             await ws_manager.broadcast_update()
 
             mock_send.assert_awaited_once()
@@ -740,7 +734,9 @@ async def test_ws_manager_broadcast_update_full_status(ws_manager, mock_websocke
     with patch("registry.health.service.health_service") as mock_health_service:
         mock_health_service._get_cached_health_data = AsyncMock(return_value={"full": "status"})
 
-        with patch.object(ws_manager, "_send_to_connections_optimized", new=AsyncMock()) as mock_send:
+        with patch.object(
+            ws_manager, "_send_to_connections_optimized", new=AsyncMock()
+        ) as mock_send:
             await ws_manager.broadcast_update()
 
             mock_send.assert_awaited_once()
@@ -843,9 +839,7 @@ async def test_health_service_shutdown_with_connection_errors(health_service):
 @pytest.mark.asyncio
 async def test_health_service_add_websocket_connection_failure(health_service, mock_websocket):
     """Test adding WebSocket connection when it fails."""
-    with patch.object(
-        health_service.websocket_manager, "add_connection", return_value=False
-    ):
+    with patch.object(health_service.websocket_manager, "add_connection", return_value=False):
         success = await health_service.add_websocket_connection(mock_websocket)
 
         assert success is False
@@ -858,9 +852,7 @@ async def test_health_service_broadcast_health_update_full(health_service):
     mock_ws = AsyncMock(spec=WebSocket)
     health_service.websocket_manager.connections.add(mock_ws)
 
-    with patch.object(
-        health_service.websocket_manager, "broadcast_update"
-    ) as mock_broadcast:
+    with patch.object(health_service.websocket_manager, "broadcast_update") as mock_broadcast:
         await health_service.broadcast_health_update()
 
         mock_broadcast.assert_awaited_once_with()
@@ -909,7 +901,9 @@ async def test_health_service_run_health_checks_loop(health_service):
             # Raise CancelledError directly to stop the loop
             raise asyncio.CancelledError()
 
-    with patch.object(health_service, "_perform_health_checks", side_effect=mock_perform_health_checks):
+    with patch.object(
+        health_service, "_perform_health_checks", side_effect=mock_perform_health_checks
+    ):
         with patch("asyncio.sleep", new=AsyncMock()):
             try:
                 await health_service._run_health_checks()
@@ -937,7 +931,9 @@ async def test_health_service_run_health_checks_with_exception(health_service, m
             raise asyncio.CancelledError()
 
     with patch("registry.health.service.settings", mock_settings):
-        with patch.object(health_service, "_perform_health_checks", side_effect=mock_perform_with_error):
+        with patch.object(
+            health_service, "_perform_health_checks", side_effect=mock_perform_with_error
+        ):
             with patch("asyncio.sleep", new=AsyncMock()):
                 try:
                     await health_service._run_health_checks()
@@ -964,9 +960,9 @@ async def test_health_service_perform_health_checks_many_services(health_service
     """Test performing health checks on many services."""
     with patch("registry.services.server_service.server_service") as mock_server_service:
         # Multiple services to trigger debug logging
-        mock_server_service.get_enabled_services = AsyncMock(return_value=[
-            "/service1", "/service2", "/service3"
-        ])
+        mock_server_service.get_enabled_services = AsyncMock(
+            return_value=["/service1", "/service2", "/service3"]
+        )
         mock_server_service.get_server_info = AsyncMock(return_value=mock_server_info)
 
         with patch.object(health_service, "_check_single_service", return_value=False):
@@ -975,14 +971,18 @@ async def test_health_service_perform_health_checks_many_services(health_service
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_health_service_perform_health_checks_status_changed(health_service, mock_server_info):
+async def test_health_service_perform_health_checks_status_changed(
+    health_service, mock_server_info
+):
     """Test performing health checks when status changes."""
     with patch("registry.services.server_service.server_service") as mock_server_service:
         mock_server_service.get_enabled_services = AsyncMock(return_value=["/test-server"])
         mock_server_service.get_server_info = AsyncMock(return_value=mock_server_info)
 
         with patch.object(health_service, "_check_single_service", return_value=True):
-            with patch.object(health_service, "broadcast_health_update", new=AsyncMock()) as mock_broadcast:
+            with patch.object(
+                health_service, "broadcast_health_update", new=AsyncMock()
+            ) as mock_broadcast:
                 with patch("registry.core.nginx_service.nginx_service") as mock_nginx:
                     mock_nginx.generate_config_async = AsyncMock()
 
@@ -1002,7 +1002,9 @@ async def test_health_service_perform_health_checks_nginx_error(health_service, 
         with patch.object(health_service, "_check_single_service", return_value=True):
             with patch.object(health_service, "broadcast_health_update", new=AsyncMock()):
                 with patch("registry.core.nginx_service.nginx_service") as mock_nginx:
-                    mock_nginx.generate_config_async = AsyncMock(side_effect=Exception("Nginx error"))
+                    mock_nginx.generate_config_async = AsyncMock(
+                        side_effect=Exception("Nginx error")
+                    )
 
                     # Should handle exception gracefully
                     await health_service._perform_health_checks()
@@ -1020,16 +1022,16 @@ async def test_health_service_check_single_service_timeout(health_service, mock_
         "_check_server_endpoint_transport_aware",
         side_effect=httpx.TimeoutException("Timeout"),
     ):
-        await health_service._check_single_service(
-            mock_client, service_path, mock_server_info
-        )
+        await health_service._check_single_service(mock_client, service_path, mock_server_info)
 
         assert health_service.server_health_status[service_path] == HealthStatus.UNHEALTHY_TIMEOUT
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_health_service_check_single_service_connection_error(health_service, mock_server_info):
+async def test_health_service_check_single_service_connection_error(
+    health_service, mock_server_info
+):
     """Test checking single service with connection error."""
     service_path = "/test-server"
     mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -1039,11 +1041,12 @@ async def test_health_service_check_single_service_connection_error(health_servi
         "_check_server_endpoint_transport_aware",
         side_effect=httpx.ConnectError("Connection failed"),
     ):
-        await health_service._check_single_service(
-            mock_client, service_path, mock_server_info
-        )
+        await health_service._check_single_service(mock_client, service_path, mock_server_info)
 
-        assert health_service.server_health_status[service_path] == HealthStatus.UNHEALTHY_CONNECTION_ERROR
+        assert (
+            health_service.server_health_status[service_path]
+            == HealthStatus.UNHEALTHY_CONNECTION_ERROR
+        )
 
 
 @pytest.mark.unit
@@ -1058,16 +1061,16 @@ async def test_health_service_check_single_service_generic_error(health_service,
         "_check_server_endpoint_transport_aware",
         side_effect=ValueError("Something went wrong"),
     ):
-        await health_service._check_single_service(
-            mock_client, service_path, mock_server_info
-        )
+        await health_service._check_single_service(mock_client, service_path, mock_server_info)
 
         assert "error: ValueError" in health_service.server_health_status[service_path]
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_health_service_check_single_service_first_time_healthy(health_service, mock_server_info):
+async def test_health_service_check_single_service_first_time_healthy(
+    health_service, mock_server_info
+):
     """Test checking service for the first time when healthy."""
     service_path = "/test-server"
     health_service.server_health_status[service_path] = HealthStatus.UNKNOWN
@@ -1090,7 +1093,9 @@ async def test_health_service_check_single_service_first_time_healthy(health_ser
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_health_service_check_single_service_transition_to_healthy(health_service, mock_server_info):
+async def test_health_service_check_single_service_transition_to_healthy(
+    health_service, mock_server_info
+):
     """Test service transitioning from unhealthy to healthy."""
     service_path = "/test-server"
     health_service.server_health_status[service_path] = HealthStatus.UNHEALTHY_TIMEOUT
@@ -1112,7 +1117,9 @@ async def test_health_service_check_single_service_transition_to_healthy(health_
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_health_service_check_single_service_already_healthy_no_tools(health_service, mock_server_info):
+async def test_health_service_check_single_service_already_healthy_no_tools(
+    health_service, mock_server_info
+):
     """Test service that is already healthy but has no tools."""
     service_path = "/test-server"
     health_service.server_health_status[service_path] = HealthStatus.HEALTHY
@@ -1184,6 +1191,7 @@ async def test_health_service_initialize_mcp_session_no_server_session_id(health
     # Should generate client-side session ID
     assert session_id is not None
     import uuid
+
     uuid.UUID(session_id)  # Verify it's a valid UUID
 
 
@@ -1210,9 +1218,7 @@ async def test_health_service_try_ping_without_auth_auth_errors(health_service):
     mock_response.status_code = 401
     mock_client.post.return_value = mock_response
 
-    result = await health_service._try_ping_without_auth(
-        mock_client, "http://localhost:8000/mcp"
-    )
+    result = await health_service._try_ping_without_auth(mock_client, "http://localhost:8000/mcp")
 
     assert result is True
 
@@ -1226,9 +1232,7 @@ async def test_health_service_try_ping_without_auth_server_error(health_service)
     mock_response.status_code = 500
     mock_client.post.return_value = mock_response
 
-    result = await health_service._try_ping_without_auth(
-        mock_client, "http://localhost:8000/mcp"
-    )
+    result = await health_service._try_ping_without_auth(mock_client, "http://localhost:8000/mcp")
 
     assert result is False
 
@@ -1312,14 +1316,14 @@ async def test_health_service_check_server_endpoint_auth_failure(health_service,
 
 
 @pytest.mark.unit
-def test_health_service_get_service_health_data_fast_transitioning_from_disabled(health_service, mock_server_info):
+def test_health_service_get_service_health_data_fast_transitioning_from_disabled(
+    health_service, mock_server_info
+):
     """Test getting service health data when transitioning from disabled."""
     service_path = "/test-server"
     health_service.server_health_status[service_path] = "disabled"
 
-    health_data = health_service._get_service_health_data_fast(
-        service_path, mock_server_info
-    )
+    health_data = health_service._get_service_health_data_fast(service_path, mock_server_info)
 
     # Should transition to checking
     assert health_data["status"] == HealthStatus.CHECKING

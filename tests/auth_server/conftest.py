@@ -45,7 +45,7 @@ def _setup_auth_server_mocks() -> None:
     # Mock metrics_middleware
     mock_metrics = MagicMock()
     mock_metrics.add_auth_metrics_middleware = MagicMock()
-    sys.modules['metrics_middleware'] = mock_metrics
+    sys.modules["metrics_middleware"] = mock_metrics
     logger.info("Auto-mocked: metrics_middleware")
 
 
@@ -74,7 +74,7 @@ def mock_jwks_response() -> dict:
                 "alg": "RS256",
                 "use": "sig",
                 "n": "xGOr-H7A-PWgGZ8J0lYnBQTJHQLIvFKvSfBbQddPn8A",
-                "e": "AQAB"
+                "e": "AQAB",
             },
             {
                 "kid": "test-key-id-2",
@@ -82,8 +82,8 @@ def mock_jwks_response() -> dict:
                 "alg": "RS256",
                 "use": "sig",
                 "n": "yHPr-I8B-QXhHa9K1mZoCRUKIHRMJwGLwGTcTgeQo9B",
-                "e": "AQAB"
-            }
+                "e": "AQAB",
+            },
         ]
     }
 
@@ -99,7 +99,7 @@ def mock_requests_get(mock_jwks_response):
     Yields:
         Mock requests.get function
     """
-    with patch('requests.get') as mock_get:
+    with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = mock_jwks_response
         mock_response.raise_for_status.return_value = None
@@ -127,7 +127,7 @@ def valid_jwt_token() -> str:
         username="testuser",
         groups=["users", "developers"],
         scopes=["read:servers", "write:servers"],
-        expires_in=3600
+        expires_in=3600,
     )
 
 
@@ -175,10 +175,10 @@ def self_signed_token(auth_env_vars) -> str:
         "exp": now + 3600,
         "iat": now,
         "token_use": "access",
-        "client_id": "user-generated"
+        "client_id": "user-generated",
     }
 
-    return jwt.encode(payload, secret_key, algorithm='HS256')
+    return jwt.encode(payload, secret_key, algorithm="HS256")
 
 
 @pytest.fixture
@@ -194,7 +194,7 @@ def m2m_token() -> str:
         scopes=["admin:all"],
         token_use="access",
         client_id="m2m-client",
-        azp="m2m-client"
+        azp="m2m-client",
     )
 
 
@@ -328,29 +328,31 @@ def mock_cognito_provider():
         Mock Cognito provider
     """
     provider = MagicMock()
-    provider.validate_token = MagicMock(return_value={
-        "valid": True,
-        "method": "cognito",
-        "username": "testuser",
-        "email": "testuser@example.com",
-        "groups": ["users", "developers"],
-        "scopes": [],
-        "client_id": "test-client-id",
-        "data": {
-            "cognito:username": "testuser",
-            "cognito:groups": ["users", "developers"],
-            "email": "testuser@example.com"
+    provider.validate_token = MagicMock(
+        return_value={
+            "valid": True,
+            "method": "cognito",
+            "username": "testuser",
+            "email": "testuser@example.com",
+            "groups": ["users", "developers"],
+            "scopes": [],
+            "client_id": "test-client-id",
+            "data": {
+                "cognito:username": "testuser",
+                "cognito:groups": ["users", "developers"],
+                "email": "testuser@example.com",
+            },
         }
-    })
-    provider.get_provider_info = MagicMock(return_value={
-        "provider_type": "cognito",
-        "region": "us-east-1",
-        "user_pool_id": "us-east-1_TEST12345",
-        "client_id": "test-client-id"
-    })
-    provider.get_jwks = MagicMock(return_value={
-        "keys": [{"kid": "test-key", "kty": "RSA"}]
-    })
+    )
+    provider.get_provider_info = MagicMock(
+        return_value={
+            "provider_type": "cognito",
+            "region": "us-east-1",
+            "user_pool_id": "us-east-1_TEST12345",
+            "client_id": "test-client-id",
+        }
+    )
+    provider.get_jwks = MagicMock(return_value={"keys": [{"kid": "test-key", "kty": "RSA"}]})
 
     return provider
 
@@ -364,29 +366,31 @@ def mock_keycloak_provider():
         Mock Keycloak provider
     """
     provider = MagicMock()
-    provider.validate_token = MagicMock(return_value={
-        "valid": True,
-        "method": "keycloak",
-        "username": "testuser",
-        "email": "testuser@example.com",
-        "groups": ["users", "admins"],
-        "scopes": ["openid", "profile"],
-        "client_id": "test-client",
-        "data": {
-            "preferred_username": "testuser",
+    provider.validate_token = MagicMock(
+        return_value={
+            "valid": True,
+            "method": "keycloak",
+            "username": "testuser",
             "email": "testuser@example.com",
-            "groups": ["users", "admins"]
+            "groups": ["users", "admins"],
+            "scopes": ["openid", "profile"],
+            "client_id": "test-client",
+            "data": {
+                "preferred_username": "testuser",
+                "email": "testuser@example.com",
+                "groups": ["users", "admins"],
+            },
         }
-    })
-    provider.get_provider_info = MagicMock(return_value={
-        "provider_type": "keycloak",
-        "realm": "test-realm",
-        "keycloak_url": "http://localhost:8080",
-        "client_id": "test-client"
-    })
-    provider.get_jwks = MagicMock(return_value={
-        "keys": [{"kid": "test-key", "kty": "RSA"}]
-    })
+    )
+    provider.get_provider_info = MagicMock(
+        return_value={
+            "provider_type": "keycloak",
+            "realm": "test-realm",
+            "keycloak_url": "http://localhost:8080",
+            "client_id": "test-client",
+        }
+    )
+    provider.get_jwks = MagicMock(return_value={"keys": [{"kid": "test-key", "kty": "RSA"}]})
 
     return provider
 
@@ -400,28 +404,30 @@ def mock_entra_provider():
         Mock Entra ID provider
     """
     provider = MagicMock()
-    provider.validate_token = MagicMock(return_value={
-        "valid": True,
-        "method": "entra",
-        "username": "testuser@example.com",
-        "email": "testuser@example.com",
-        "groups": ["group-id-1", "group-id-2"],
-        "scopes": ["openid", "profile", "email"],
-        "client_id": "test-client-id",
-        "data": {
-            "preferred_username": "testuser@example.com",
+    provider.validate_token = MagicMock(
+        return_value={
+            "valid": True,
+            "method": "entra",
+            "username": "testuser@example.com",
             "email": "testuser@example.com",
-            "groups": ["group-id-1", "group-id-2"]
+            "groups": ["group-id-1", "group-id-2"],
+            "scopes": ["openid", "profile", "email"],
+            "client_id": "test-client-id",
+            "data": {
+                "preferred_username": "testuser@example.com",
+                "email": "testuser@example.com",
+                "groups": ["group-id-1", "group-id-2"],
+            },
         }
-    })
-    provider.get_provider_info = MagicMock(return_value={
-        "provider_type": "entra",
-        "tenant_id": "test-tenant-id",
-        "client_id": "test-client-id"
-    })
-    provider.get_jwks = MagicMock(return_value={
-        "keys": [{"kid": "test-key", "kty": "RSA"}]
-    })
+    )
+    provider.get_provider_info = MagicMock(
+        return_value={
+            "provider_type": "entra",
+            "tenant_id": "test-tenant-id",
+            "client_id": "test-client-id",
+        }
+    )
+    provider.get_jwks = MagicMock(return_value={"keys": [{"kid": "test-key", "kty": "RSA"}]})
 
     return provider
 
@@ -452,7 +458,7 @@ def valid_session_cookie(auth_env_vars) -> str:
         "email": "testuser@example.com",
         "groups": ["users", "developers"],
         "provider": "cognito",
-        "auth_method": "oauth2"
+        "auth_method": "oauth2",
     }
 
     return signer.dumps(session_data)
@@ -487,29 +493,19 @@ def mock_scopes_config() -> dict:
         "group_mappings": {
             "users": ["read:servers", "read:tools"],
             "developers": ["read:servers", "write:servers", "read:tools", "tools:call"],
-            "admins": ["admin:all"]
+            "admins": ["admin:all"],
         },
         "read:servers": [
-            {
-                "server": "test-server",
-                "methods": ["initialize", "tools/list"],
-                "tools": []
-            }
+            {"server": "test-server", "methods": ["initialize", "tools/list"], "tools": []}
         ],
         "write:servers": [
             {
                 "server": "test-server",
                 "methods": ["initialize", "tools/list", "tools/call"],
-                "tools": ["*"]
+                "tools": ["*"],
             }
         ],
-        "admin:all": [
-            {
-                "server": "*",
-                "methods": ["*"],
-                "tools": ["*"]
-            }
-        ]
+        "admin:all": [{"server": "*", "methods": ["*"], "tools": ["*"]}],
     }
 
 
@@ -528,7 +524,7 @@ def mock_scopes_config_file(tmp_path, mock_scopes_config):
     import yaml
 
     scopes_file = tmp_path / "scopes.yml"
-    with open(scopes_file, 'w') as f:
+    with open(scopes_file, "w") as f:
         yaml.dump(mock_scopes_config, f)
 
     logger.debug(f"Created mock scopes config file: {scopes_file}")
@@ -584,7 +580,4 @@ def mock_rate_limiter():
     Returns:
         Dictionary to track rate limit state
     """
-    return {
-        "counts": {},
-        "limit": 100
-    }
+    return {"counts": {}, "limit": 100}

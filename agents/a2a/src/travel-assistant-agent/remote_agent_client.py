@@ -43,21 +43,23 @@ class RemoteAgentClient:
         self.client = None
         self.httpx_client = None
         self._initialized = False
-        logger.info(f"Created RemoteAgentClient for: {agent_name} (ID: {agent_id}, Skills: {len(self.skills)})")
+        logger.info(
+            f"Created RemoteAgentClient for: {agent_name} (ID: {agent_id}, Skills: {len(self.skills)})"
+        )
 
     async def _ensure_initialized(self):
         if self._initialized:
             return
 
         logger.info(f"Initializing A2A client for {self.agent_name} at {self.agent_url}")
-        
+
         headers = {}
         if self.auth_token:
             headers["Authorization"] = f"Bearer {self.auth_token}"
 
         # Create persistent httpx client (not using context manager)
         self.httpx_client = httpx.AsyncClient(timeout=300, headers=headers)
-        
+
         # Get agent card
         resolver = A2ACardResolver(httpx_client=self.httpx_client, base_url=self.agent_url)
         self.agent_card = await resolver.get_agent_card()
@@ -108,22 +110,24 @@ class RemoteAgentClient:
             logger.info(f"Closed httpx client for {self.agent_name}")
 
 
-class RemoteAgentCache:    
+class RemoteAgentCache:
     def __init__(self):
         self._cache: dict[str, RemoteAgentClient] = {}
         logger.info("RemoteAgentCache initialized")
-    
+
     def get(self, agent_id: str) -> Optional[RemoteAgentClient]:
         return self._cache.get(agent_id)
-    
+
     def get_all(self) -> dict[str, RemoteAgentClient]:
         return self._cache.copy()
-    
+
     def add(self, agent_id: str, agent_client: RemoteAgentClient):
         self._cache[agent_id] = agent_client
         logger.info(f"Added agent to cache: {agent_id}")
-    
-    def cache_discovered_agents(self, agents: List[DiscoveredAgent], auth_token: Optional[str] = None) -> dict[str, RemoteAgentClient]:
+
+    def cache_discovered_agents(
+        self, agents: List[DiscoveredAgent], auth_token: Optional[str] = None
+    ) -> dict[str, RemoteAgentClient]:
         newly_cached = {}
 
         for agent in agents:
@@ -149,23 +153,17 @@ class RemoteAgentCache:
 
         logger.info(f"Cached {len(newly_cached)} new agents. Total in cache: {len(self._cache)}")
         return newly_cached
-    
+
     async def clear(self):
         count = len(self._cache)
         for agent_client in self._cache.values():
             await agent_client.close()
-        
+
         self._cache.clear()
         logger.info(f"Cleared {count} agents from cache")
-    
+
     def __len__(self) -> int:
         return len(self._cache)
-    
+
     def __contains__(self, agent_id: str) -> bool:
         return agent_id in self._cache
-
-
-
-
-
-

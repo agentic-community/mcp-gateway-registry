@@ -60,6 +60,8 @@ The infrastructure runs on an ECS cluster with Fargate launch type, eliminating 
 
 ### Observability
 
+**Amazon Managed Prometheus (AMP) + Grafana** provides an optional metrics pipeline when `enable_observability = true`. A metrics-service container with an AWS Distro for OpenTelemetry (ADOT) sidecar scrapes application metrics and remote-writes them to an AMP workspace. Grafana OSS (pinned to v12.3.1) is deployed as an ECS service with pre-provisioned AMP datasource and dashboards, accessible at `https://<your-domain>/grafana/`. Anonymous access is disabled by default; login requires the admin password configured via `grafana_admin_password` in `terraform.tfvars`. The `aps:*` IAM permission is required for the deploying role when this feature is enabled.
+
 **CloudWatch Logs** provides centralized logging for all ECS tasks with separate log groups created for each service to organize and isolate log streams. Log retention policies automatically expire old logs after a configurable period, and the logs integrate with CloudWatch Alarms to trigger alerts based on specific patterns or error rates found in the log data.
 
 **CloudWatch Alarms** continuously monitor key infrastructure and application metrics including CPU and memory utilization across all ECS tasks, database connection counts and pool exhaustion, and HTTP error rates from the load balancers. When alarm thresholds are breached, notifications are sent through Amazon SNS to configured endpoints such as email, SMS, or other automated incident response systems.
@@ -261,6 +263,7 @@ cp terraform.tfvars.example terraform.tfvars
 | `keycloak_admin_password` | Keycloak admin password (min 12 chars) |
 | `keycloak_database_password` | Database password (min 12 chars) |
 | `session_cookie_secure` | Set to `true` for HTTPS (all modes except development) |
+| `grafana_admin_password` | Grafana admin password (required when `enable_observability = true`) |
 | 7 ECR image URIs | Container image URIs with your account ID and region |
 
 **Mode-Specific Parameters:**
@@ -344,6 +347,16 @@ mcpgw_image_uri                  = "123456789012.dkr.ecr.us-east-1.amazonaws.com
 realserverfaketools_image_uri    = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-realserverfaketools:latest"
 flight_booking_agent_image_uri   = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-flight-booking-agent:latest"
 travel_assistant_agent_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-travel-assistant-agent:latest"
+
+# Observability (optional - creates AMP workspace, metrics-service, Grafana)
+# enable_observability       = true
+# metrics_service_image_uri  = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-metrics-service:latest"
+# grafana_image_uri          = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-grafana:latest"
+
+# Grafana admin password (REQUIRED when enable_observability = true)
+# IMPORTANT: Do NOT use "admin" or any weak default. Generate a strong random password.
+# Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+# grafana_admin_password     = "YOUR-STRONG-RANDOM-PASSWORD"
 ```
 
 **Example terraform.tfvars for Mode 2 or 3 (Custom Domain):**
@@ -1004,7 +1017,8 @@ For running Terraform and the deployment scripts, your IAM user or role needs th
         "sns:*",
         "ssm:*",
         "kms:*",
-        "servicediscovery:*"
+        "servicediscovery:*",
+        "aps:*"
     ],
     "Resource": "*"
 }
@@ -1013,6 +1027,8 @@ For running Terraform and the deployment scripts, your IAM user or role needs th
 **Note:** For production, consider restricting these permissions to specific resource ARNs.
 
 **Note:** The `cloudfront:*` permission is required for CloudFront deployment modes (Mode 1: CloudFront Only, Mode 3: CloudFront + Custom Domain). If you are only using Mode 2 (Custom Domain Only), you can omit this permission.
+
+**Note:** The `aps:*` permission is required when `enable_observability = true` (Amazon Managed Prometheus). If you are not using the observability pipeline, you can omit this permission.
 
 **ECS Task Role Security:**
 - ECS task roles follow principle of least privilege

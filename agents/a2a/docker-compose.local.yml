@@ -18,12 +18,12 @@ services:
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
       - AGENT_NAME=travel-assistant
       - AGENTCORE_RUNTIME_URL=http://travel-assistant-agent:9000/
-      - KEYCLOAK_URL=${KEYCLOAK_URL}
-      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
-      - MCP_REGISTRY_URL=${MCP_REGISTRY_URL}
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-}
+      - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://registry}
       - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}
-      - M2M_CLIENT_ID=${TRAVEL_AGENT_M2M_CLIENT_ID}
-      - M2M_CLIENT_SECRET=${TRAVEL_AGENT_M2M_CLIENT_SECRET}
+      - M2M_CLIENT_ID=${TRAVEL_AGENT_M2M_CLIENT_ID:-}
+      - M2M_CLIENT_SECRET=${TRAVEL_AGENT_M2M_CLIENT_SECRET:-}
     volumes:
       - travel_assistant_data:/app/data
     healthcheck:
@@ -52,12 +52,12 @@ services:
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
       - AGENT_NAME=flight-booking
       - AGENTCORE_RUNTIME_URL=http://flight-booking-agent:9000/
-      - KEYCLOAK_URL=${KEYCLOAK_URL}
-      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
-      - MCP_REGISTRY_URL=${MCP_REGISTRY_URL}
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-}
+      - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://registry}
       - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}
-      - M2M_CLIENT_ID=${FLIGHT_BOOKING_M2M_CLIENT_ID}
-      - M2M_CLIENT_SECRET=${FLIGHT_BOOKING_M2M_CLIENT_SECRET}
+      - M2M_CLIENT_ID=${FLIGHT_BOOKING_M2M_CLIENT_ID:-}
+      - M2M_CLIENT_SECRET=${FLIGHT_BOOKING_M2M_CLIENT_SECRET:-}
     volumes:
       - flight_booking_data:/app/data
     healthcheck:

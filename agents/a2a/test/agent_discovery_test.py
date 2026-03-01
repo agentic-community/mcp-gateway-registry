@@ -35,7 +35,7 @@ class AgentTester:
     def send_agent_message(self, agent_type, message):
         """Send message to agent using A2A protocol."""
         endpoint = self.endpoints[agent_type]
-        
+
         payload = {
             "jsonrpc": "2.0",
             "id": f"test-{message[:10]}",
@@ -49,14 +49,16 @@ class AgentTester:
             },
         }
 
-        response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json"})
+        response = requests.post(
+            endpoint, json=payload, headers={"Content-Type": "application/json"}, timeout=60
+        )
         return response.json()
 
     def extract_response_text(self, response):
         """Extract text from A2A response."""
         if "result" not in response:
             return ""
-        
+
         artifacts = response["result"].get("artifacts", [])
         response_text = ""
         for artifact in artifacts:
@@ -84,9 +86,11 @@ class AgentDiscoveryTests:
         response_text = self.tester.extract_response_text(response)
 
         # Check if flight search happened
-        assert any(keyword in response_text.lower() for keyword in ["flight", "new york", "los angeles", "nyc", "lax"]), \
-            f"Response doesn't mention flight search. Got: {response_text[:300]}"
-        
+        assert any(
+            keyword in response_text.lower()
+            for keyword in ["flight", "new york", "los angeles", "nyc", "lax"]
+        ), f"Response doesn't mention flight search. Got: {response_text[:300]}"
+
         print("   ✓ Travel agent searched for flights using its own tools")
         print(f"   Response preview: {response_text[:200]}...")
         return response_text
@@ -101,20 +105,24 @@ class AgentDiscoveryTests:
         )
         response = self.tester.send_agent_message(self.agent_type, message)
         response_text = self.tester.extract_response_text(response)
-        
+
         # Check if agent discovery and delegation happened
-        assert any(keyword in response_text.lower() for keyword in ["reserve", "book", "confirm", "agent", "discover"]), \
-            f"Booking workflow failed. Got: {response_text[:300]}"
+        assert any(
+            keyword in response_text.lower()
+            for keyword in ["reserve", "book", "confirm", "agent", "discover"]
+        ), f"Booking workflow failed. Got: {response_text[:300]}"
         print("      ✓ Booking agent discovered and invoked")
         print(f"   Response preview: {response_text[:200]}...")
-        
+
         print("   ✓ Complete booking workflow succeeded")
         return response_text
 
 
 def run_tests(endpoint_type):
     """Run all discovery tests."""
-    print(f"Running agent discovery and booking workflow tests against {endpoint_type} endpoints...")
+    print(
+        f"Running agent discovery and booking workflow tests against {endpoint_type} endpoints..."
+    )
     print("=" * 70)
     print("Test 1: Travel agent searches for flights (solo)")
     print("Test 2: Travel agent discovers booking agent and completes booking")
@@ -126,7 +134,7 @@ def run_tests(endpoint_type):
 
     try:
         discovery_tests = AgentDiscoveryTests(tester)
-        
+
         # Run tests in sequence
         discovery_tests.test_search_flight_solo()
         discovery_tests.test_book_flight_with_discovery()

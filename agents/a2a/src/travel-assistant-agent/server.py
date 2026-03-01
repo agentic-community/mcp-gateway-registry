@@ -102,7 +102,9 @@ def api_recommendations(
     preferred_airlines: Optional[str] = None,
 ):
     """Get recommendations API endpoint."""
-    logger.info(f"Getting recommendations: max_price={max_price}, preferred_airlines={preferred_airlines}")
+    logger.info(
+        f"Getting recommendations: max_price={max_price}, preferred_airlines={preferred_airlines}"
+    )
     airlines = preferred_airlines.split(",") if preferred_airlines else None
     result = get_recommendations(max_price, airlines)
     logger.debug(f"Recommendations result: {result}")
@@ -118,7 +120,9 @@ def api_create_trip_plan(
     budget: Optional[float] = None,
 ):
     """Create trip plan API endpoint."""
-    logger.info(f"Creating trip plan: {departure_city} to {arrival_city}, dates: {departure_date} - {return_date}")
+    logger.info(
+        f"Creating trip plan: {departure_city} to {arrival_city}, dates: {departure_date} - {return_date}"
+    )
     logger.debug(f"Budget: {budget}")
     result = create_trip_plan(departure_city, arrival_city, departure_date, return_date, budget)
     logger.debug(f"Trip plan result: {result}")

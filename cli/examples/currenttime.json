@@ -4,11 +4,9 @@
   "path": "/currenttime/",
   "proxy_pass_url": "http://currenttime-server:8000/",
   "mcp_endpoint": "http://currenttime-server:8000/mcp",
-  "auth_type": "none",
+  "auth_scheme": "none",
   "tags": ["time", "timezone", "datetime", "api", "utility"],
   "num_tools": 1,
-  "num_stars": 0,
-  "is_python": true,
   "license": "MIT-0",
   "metadata": {
     "team": "platform-services",

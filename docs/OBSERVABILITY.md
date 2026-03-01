@@ -766,9 +766,16 @@ See `config/otel-collector-config.example.yaml` for a complete configuration tem
 
 Access Grafana dashboards at: `http://localhost:3000`
 
-**Default credentials:**
+**Credentials:**
 - Username: `admin`
-- Password: `admin`
+- Password: The value of `GRAFANA_ADMIN_PASSWORD` from your `.env` file
+
+**Important:** You must set a strong, random password for `GRAFANA_ADMIN_PASSWORD` in your `.env` file before starting Grafana. Generate one with:
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+```
+
+For ECS deployments, the Grafana dashboard is available at `https://<your-domain>/grafana/` and the password is configured via `grafana_admin_password` in `terraform.tfvars`.
 
 ### Pre-configured Dashboards
 

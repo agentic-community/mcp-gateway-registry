@@ -385,7 +385,7 @@ try:
         errors.append('proxy_pass_url must start with http:// or https://')
 
     # Check for unknown fields (not part of tool spec)
-    allowed_fields = {'server_name', 'path', 'proxy_pass_url', 'description', 'tags', 'num_tools', 'num_stars', 'is_python', 'license', 'auth_provider', 'auth_type', 'supported_transports', 'headers', 'tool_list', 'repository_url', 'website_url', 'package_npm'}
+    allowed_fields = {'server_name', 'path', 'proxy_pass_url', 'description', 'tags', 'num_tools', 'license', 'auth_provider', 'auth_scheme', 'supported_transports', 'headers', 'tool_list', 'repository_url', 'website_url', 'package_npm'}
     unknown_fields = set(config.keys()) - allowed_fields
     if unknown_fields:
         errors.append(f'Unknown fields not allowed by register_service tool spec: {sorted(unknown_fields)}')
@@ -404,14 +404,6 @@ try:
     if 'num_tools' in config and config['num_tools'] is not None:
         if not isinstance(config['num_tools'], int) or config['num_tools'] < 0:
             errors.append('num_tools must be a non-negative integer')
-
-    if 'num_stars' in config and config['num_stars'] is not None:
-        if not isinstance(config['num_stars'], int) or config['num_stars'] < 0:
-            errors.append('num_stars must be a non-negative integer')
-
-    if 'is_python' in config and config['is_python'] is not None:
-        if not isinstance(config['is_python'], bool):
-            errors.append('is_python must be a boolean')
 
     if 'license' in config and config['license'] is not None:
         if not isinstance(config['license'], str):
@@ -945,15 +937,14 @@ show_usage() {
     echo ""
     echo "Config File Requirements:"
     echo "  Required fields: server_name, path, proxy_pass_url"
-    echo "  Optional fields: description, tags, num_tools, num_stars, is_python, license,"
-    echo "                   auth_provider, auth_type, supported_transports, headers, tool_list"
+    echo "  Optional fields: description, tags, num_tools, license,"
+    echo "                   auth_provider, auth_scheme, supported_transports, headers, tool_list"
     echo "  Constraints:"
     echo "    - path must start with '/' and be more than just '/'"
     echo "    - proxy_pass_url must start with http:// or https://"
     echo "    - server_name must be non-empty string"
     echo "    - tags must be array of strings"
-    echo "    - num_tools/num_stars must be non-negative integers"
-    echo "    - is_python must be boolean"
+    echo "    - num_tools must be a non-negative integer"
     echo "    - supported_transports must be array of strings"
     echo "    - headers must be array of objects"
     echo "    - tool_list must be array of objects"

@@ -50,8 +50,7 @@ class ServerSearchResult(BaseModel):
     relevance_score: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score")
     match_context: Optional[str] = Field(None, description="Match context")
     matching_tools: List[MatchingTool] = Field(
-        default_factory=list,
-        description="Tools matching the query"
+        default_factory=list, description="Tools matching the query"
     )
 
 
@@ -71,14 +70,8 @@ class SearchResponse(BaseModel):
     """Response from semantic search API."""
 
     query: str = Field(..., description="Original query")
-    servers: List[ServerSearchResult] = Field(
-        default_factory=list,
-        description="Matching servers"
-    )
-    tools: List[ToolSearchResult] = Field(
-        default_factory=list,
-        description="Matching tools"
-    )
+    servers: List[ServerSearchResult] = Field(default_factory=list, description="Matching servers")
+    tools: List[ToolSearchResult] = Field(default_factory=list, description="Matching tools")
     total_servers: int = Field(0, description="Total matching servers")
     total_tools: int = Field(0, description="Total matching tools")
 
@@ -235,7 +228,9 @@ class RegistryClient:
                     )
 
                     # Log full response for debugging
-                    logger.info(f"Full search API response:\n{json.dumps(result, indent=2, default=str)}")
+                    logger.info(
+                        f"Full search API response:\n{json.dumps(result, indent=2, default=str)}"
+                    )
 
                     return SearchResponse(**result)
 

@@ -23,7 +23,7 @@ def create_mock_jwt_token(
     expires_in: int = 3600,
     token_use: str = "access",
     client_id: str = "test-client-id",
-    **extra_claims: Any
+    **extra_claims: Any,
 ) -> str:
     """
     Create a mock JWT token for testing.
@@ -52,7 +52,7 @@ def create_mock_jwt_token(
         "token_use": token_use,
         "client_id": client_id,
         "iss": "test-issuer",
-        "aud": "test-audience"
+        "aud": "test-audience",
     }
 
     if groups:
@@ -72,10 +72,7 @@ def create_mock_jwt_token(
 
 
 def decode_mock_jwt_token(
-    token: str,
-    secret_key: str = "test-secret-key",
-    algorithm: str = "HS256",
-    verify: bool = True
+    token: str, secret_key: str = "test-secret-key", algorithm: str = "HS256", verify: bool = True
 ) -> dict[str, Any]:
     """
     Decode a mock JWT token.
@@ -94,21 +91,14 @@ def decode_mock_jwt_token(
     """
     options = {} if verify else {"verify_signature": False}
 
-    payload = jwt.decode(
-        token,
-        secret_key,
-        algorithms=[algorithm],
-        options=options
-    )
+    payload = jwt.decode(token, secret_key, algorithms=[algorithm], options=options)
 
     logger.debug(f"Decoded mock JWT token for {payload.get('username')}")
     return payload
 
 
 def create_expired_jwt_token(
-    username: str,
-    secret_key: str = "test-secret-key",
-    algorithm: str = "HS256"
+    username: str, secret_key: str = "test-secret-key", algorithm: str = "HS256"
 ) -> str:
     """
     Create an expired JWT token for testing expiration handling.
@@ -128,7 +118,7 @@ def create_expired_jwt_token(
         "username": username,
         "iat": now - 7200,  # Issued 2 hours ago
         "exp": now - 3600,  # Expired 1 hour ago
-        "token_use": "access"
+        "token_use": "access",
     }
 
     token = jwt.encode(payload, secret_key, algorithm=algorithm)

@@ -23,7 +23,7 @@ class MockResponse:
         status_code: int = 200,
         json_data: dict[str, Any] | None = None,
         text: str = "",
-        headers: dict[str, str] | None = None
+        headers: dict[str, str] | None = None,
     ):
         """
         Initialize mock response.
@@ -60,10 +60,7 @@ class MockAsyncClient:
     Mimics the interface of httpx.AsyncClient.
     """
 
-    def __init__(
-        self,
-        responses: dict[str, MockResponse] | None = None
-    ):
+    def __init__(self, responses: dict[str, MockResponse] | None = None):
         """
         Initialize mock async client.
 
@@ -73,11 +70,7 @@ class MockAsyncClient:
         self.responses = responses or {}
         self.request_history: list[dict[str, Any]] = []
 
-    async def get(
-        self,
-        url: str,
-        **kwargs: Any
-    ) -> MockResponse:
+    async def get(self, url: str, **kwargs: Any) -> MockResponse:
         """
         Mock GET request.
 
@@ -88,22 +81,14 @@ class MockAsyncClient:
         Returns:
             Mock response
         """
-        self.request_history.append({
-            "method": "GET",
-            "url": url,
-            "kwargs": kwargs
-        })
+        self.request_history.append({"method": "GET", "url": url, "kwargs": kwargs})
 
         if url in self.responses:
             return self.responses[url]
 
         return MockResponse(status_code=404, json_data={"error": "Not found"})
 
-    async def post(
-        self,
-        url: str,
-        **kwargs: Any
-    ) -> MockResponse:
+    async def post(self, url: str, **kwargs: Any) -> MockResponse:
         """
         Mock POST request.
 
@@ -114,11 +99,7 @@ class MockAsyncClient:
         Returns:
             Mock response
         """
-        self.request_history.append({
-            "method": "POST",
-            "url": url,
-            "kwargs": kwargs
-        })
+        self.request_history.append({"method": "POST", "url": url, "kwargs": kwargs})
 
         if url in self.responses:
             return self.responses[url]
@@ -134,9 +115,7 @@ class MockAsyncClient:
         pass
 
 
-def create_mock_httpx_client(
-    responses: dict[str, MockResponse] | None = None
-) -> MockAsyncClient:
+def create_mock_httpx_client(responses: dict[str, MockResponse] | None = None) -> MockAsyncClient:
     """
     Create a mock httpx async client.
 
@@ -152,7 +131,7 @@ def create_mock_httpx_client(
 def create_mock_mcp_server_response(
     tools: list[dict[str, Any]] | None = None,
     prompts: list[dict[str, Any]] | None = None,
-    resources: list[dict[str, Any]] | None = None
+    resources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     Create a mock MCP server response.
@@ -168,18 +147,12 @@ def create_mock_mcp_server_response(
     return {
         "jsonrpc": "2.0",
         "id": 1,
-        "result": {
-            "tools": tools or [],
-            "prompts": prompts or [],
-            "resources": resources or []
-        }
+        "result": {"tools": tools or [], "prompts": prompts or [], "resources": resources or []},
     }
 
 
 def create_mock_tool_definition(
-    name: str,
-    description: str = "Test tool",
-    input_schema: dict[str, Any] | None = None
+    name: str, description: str = "Test tool", input_schema: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """
     Create a mock MCP tool definition.
@@ -195,8 +168,5 @@ def create_mock_tool_definition(
     return {
         "name": name,
         "description": description,
-        "inputSchema": input_schema or {
-            "type": "object",
-            "properties": {}
-        }
+        "inputSchema": input_schema or {"type": "object", "properties": {}},
     }

@@ -23,12 +23,84 @@ def _insert_seed_data(
 ) -> None:
     """Insert seed data into the database."""
     seed_data = [
-        (1, "UA101", "United", "SF", "NY", "2025-11-15 08:00", "2025-11-15 16:30", 330, 250.00, 85, "B737"),
-        (2, "AA202", "American", "SF", "NY", "2025-11-15 10:15", "2025-11-15 18:45", 330, 280.00, 45, "A320"),
-        (3, "DL303", "Delta", "SF", "NY", "2025-11-15 14:30", "2025-11-15 23:00", 330, 220.00, 120, "B757"),
-        (4, "UA104", "United", "SF", "LA", "2025-11-16 07:00", "2025-11-16 08:30", 90, 120.00, 95, "B737"),
-        (5, "AA205", "American", "NY", "SF", "2025-11-17 09:00", "2025-11-17 12:30", 330, 260.00, 78, "A321"),
-        (6, "DL306", "Delta", "LA", "NY", "2025-11-18 11:00", "2025-11-18 19:30", 330, 240.00, 92, "B757"),
+        (
+            1,
+            "UA101",
+            "United",
+            "SF",
+            "NY",
+            "2025-11-15 08:00",
+            "2025-11-15 16:30",
+            330,
+            250.00,
+            85,
+            "B737",
+        ),
+        (
+            2,
+            "AA202",
+            "American",
+            "SF",
+            "NY",
+            "2025-11-15 10:15",
+            "2025-11-15 18:45",
+            330,
+            280.00,
+            45,
+            "A320",
+        ),
+        (
+            3,
+            "DL303",
+            "Delta",
+            "SF",
+            "NY",
+            "2025-11-15 14:30",
+            "2025-11-15 23:00",
+            330,
+            220.00,
+            120,
+            "B757",
+        ),
+        (
+            4,
+            "UA104",
+            "United",
+            "SF",
+            "LA",
+            "2025-11-16 07:00",
+            "2025-11-16 08:30",
+            90,
+            120.00,
+            95,
+            "B737",
+        ),
+        (
+            5,
+            "AA205",
+            "American",
+            "NY",
+            "SF",
+            "2025-11-17 09:00",
+            "2025-11-17 12:30",
+            330,
+            260.00,
+            78,
+            "A321",
+        ),
+        (
+            6,
+            "DL306",
+            "Delta",
+            "LA",
+            "NY",
+            "2025-11-18 11:00",
+            "2025-11-18 19:30",
+            330,
+            240.00,
+            92,
+            "B757",
+        ),
     ]
 
     conn.executemany(
@@ -56,7 +128,6 @@ class FlightDatabaseManager:
         self.db_path = db_path
         logger.info(f"Initializing FlightDatabaseManager with db_path: {db_path}")
         self.init_database()
-
 
     def init_database(self) -> None:
         """Initialize the database with tables and seed data."""
@@ -97,11 +168,9 @@ class FlightDatabaseManager:
             if cursor.fetchone()[0] == 0:
                 _insert_seed_data(conn)
 
-
     def get_connection(self) -> sqlite3.Connection:
         """Get a database connection."""
         return sqlite3.connect(self.db_path)
-
 
     def search_flights(
         self,
@@ -110,7 +179,9 @@ class FlightDatabaseManager:
         departure_date: str,
     ) -> List[Dict[str, Any]]:
         """Search for available flights between cities on a specific date."""
-        logger.info(f"Searching flights: {departure_city} -> {arrival_city}, date: {departure_date}")
+        logger.info(
+            f"Searching flights: {departure_city} -> {arrival_city}, date: {departure_date}"
+        )
         with self.get_connection() as conn:
             cursor = conn.execute(
                 """
@@ -145,7 +216,6 @@ class FlightDatabaseManager:
 
             logger.info(f"Found {len(flights)} flights")
             return flights
-
 
     def get_flight_details(
         self,
@@ -183,14 +253,15 @@ class FlightDatabaseManager:
                 "availability_status": "Available" if row[7] > 0 else "Sold Out",
             }
 
-
     def get_recommendations(
         self,
         max_price: float,
         preferred_airlines: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Get flight recommendations based on price and airline preferences."""
-        logger.info(f"Getting recommendations: max_price={max_price}, airlines={preferred_airlines}")
+        logger.info(
+            f"Getting recommendations: max_price={max_price}, airlines={preferred_airlines}"
+        )
         with self.get_connection() as conn:
             query = "SELECT * FROM flights WHERE price <= ? AND available_seats > 0"
             params: List[Any] = [max_price]
@@ -218,13 +289,14 @@ class FlightDatabaseManager:
                         "price": float(row[8]),
                         "available_seats": row[9],
                         "aircraft_type": row[10],
-                        "recommendation_score": min(100, int((max_price - float(row[8])) / max_price * 100)),
+                        "recommendation_score": min(
+                            100, int((max_price - float(row[8])) / max_price * 100)
+                        ),
                     }
                 )
 
             logger.info(f"Found {len(recommendations)} recommendations")
             return recommendations
-
 
     def create_trip_plan(
         self,
@@ -235,7 +307,9 @@ class FlightDatabaseManager:
         budget: Optional[float] = None,
     ) -> int:
         """Create a new trip plan."""
-        logger.info(f"Creating trip plan: {departure_city} -> {arrival_city}, date: {departure_date}, budget: {budget}")
+        logger.info(
+            f"Creating trip plan: {departure_city} -> {arrival_city}, date: {departure_date}, budget: {budget}"
+        )
         with self.get_connection() as conn:
             cursor = conn.execute(
                 """

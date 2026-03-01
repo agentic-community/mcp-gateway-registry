@@ -22,11 +22,7 @@ class MockEmbeddingsClient:
     results across test runs without requiring real ML models.
     """
 
-    def __init__(
-        self,
-        model_name: str = "all-MiniLM-L6-v2",
-        dimension: int = 384
-    ):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", dimension: int = 384):
         """
         Initialize mock embeddings client.
 
@@ -43,7 +39,7 @@ class MockEmbeddingsClient:
         texts: str | list[str],
         normalize_embeddings: bool = False,
         show_progress_bar: bool = False,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> np.ndarray:
         """
         Generate mock embeddings for input texts.
@@ -80,10 +76,7 @@ class MockEmbeddingsClient:
         logger.debug(f"Generated {len(texts)} mock embeddings, shape={result.shape}")
         return result
 
-    def _generate_embedding(
-        self,
-        text: str
-    ) -> np.ndarray:
+    def _generate_embedding(self, text: str) -> np.ndarray:
         """
         Generate a deterministic embedding from text.
 
@@ -116,11 +109,7 @@ class MockSentenceTransformer:
     Mimics the interface of sentence_transformers.SentenceTransformer.
     """
 
-    def __init__(
-        self,
-        model_name_or_path: str,
-        **kwargs: Any
-    ):
+    def __init__(self, model_name_or_path: str, **kwargs: Any):
         """
         Initialize mock sentence transformer.
 
@@ -133,11 +122,7 @@ class MockSentenceTransformer:
         self._client = MockEmbeddingsClient(model_name_or_path, self.dimension)
         logger.debug(f"Created MockSentenceTransformer: {model_name_or_path}")
 
-    def encode(
-        self,
-        sentences: str | list[str],
-        **kwargs: Any
-    ) -> np.ndarray:
+    def encode(self, sentences: str | list[str], **kwargs: Any) -> np.ndarray:
         """
         Encode sentences to embeddings.
 
@@ -162,6 +147,7 @@ def create_mock_st_module() -> Any:
     Returns:
         Mock sentence_transformers module object
     """
+
     class MockSTModule:
         """Mock sentence_transformers module."""
 
@@ -177,6 +163,7 @@ def create_mock_litellm_module() -> Any:
     Returns:
         Mock litellm module object
     """
+
     class MockLiteLLMModule:
         """Mock litellm module."""
 
@@ -190,16 +177,11 @@ def create_mock_litellm_module() -> Any:
             """Mock embedding API response."""
 
             def __init__(self, embeddings: list[list[float]]):
-                self.data = [
-                    {"embedding": emb, "index": i}
-                    for i, emb in enumerate(embeddings)
-                ]
+                self.data = [{"embedding": emb, "index": i} for i, emb in enumerate(embeddings)]
 
         @staticmethod
         def embedding(
-            model: str,
-            input: str | list[str],
-            **kwargs: Any
+            model: str, input: str | list[str], **kwargs: Any
         ) -> "MockLiteLLMModule.MockEmbeddingResponse":
             """
             Mock LiteLLM embedding function.
