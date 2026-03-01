@@ -212,7 +212,6 @@ class ServerService:
 
     async def get_all_servers(
         self,
-        include_federated: bool = True,
         include_inactive: bool = False,
         include_credentials: bool = False,
     ) -> dict[str, dict[str, Any]]:
@@ -220,12 +219,11 @@ class ServerService:
         Get all registered servers.
 
         Args:
-            include_federated: If True, include servers from federated registries
             include_inactive: If True, include inactive server versions (default False)
             include_credentials: If True, include encrypted credentials in result
 
         Returns:
-            Dict of all servers (local and federated if requested)
+            Dict of all servers
         """
         # Query repository directly instead of using cache
         all_servers = await self._repo.list_all()
@@ -241,24 +239,6 @@ class ServerService:
                 for path, server_info in all_servers.items()
                 if server_info.get("is_active", True)  # Default to True for backward compatibility
             }
-
-        # Add federated servers if requested
-        if include_federated:
-            try:
-                from .federation_service import get_federation_service
-
-                federation_service = get_federation_service()
-                federated_servers = await federation_service.get_federated_servers()
-
-                # Add federated servers with their paths as keys
-                for fed_server in federated_servers:
-                    path = fed_server.get("path")
-                    if path and path not in all_servers:
-                        all_servers[path] = fed_server
-
-                logger.debug(f"Included {len(federated_servers)} federated servers")
-            except Exception as e:
-                logger.error(f"Failed to get federated servers: {e}")
 
         return all_servers
 
@@ -325,7 +305,7 @@ class ServerService:
         return filtered_servers
 
     async def get_all_servers_with_permissions(
-        self, accessible_servers: list[str] | None = None, include_federated: bool = True
+        self, accessible_servers: list[str] | None = None
     ) -> dict[str, dict[str, Any]]:
         """
         Get servers with optional filtering based on user permissions.
@@ -333,22 +313,20 @@ class ServerService:
         Args:
             accessible_servers: Optional list of server names the user can access.
                                If None, returns all servers (admin access).
-            include_federated: If True, include servers from federated registries
 
         Returns:
             Dict of servers the user is authorized to see
         """
         if accessible_servers is None:
-            # Admin access - return all servers (including federated)
+            # Admin access - return all servers
             logger.debug("Admin access - returning all servers")
-            return await self.get_all_servers(include_federated=include_federated)
+            return await self.get_all_servers()
         else:
             # Filtered access - return only accessible servers
             logger.debug(
                 f"Filtered access - returning servers accessible to user: {accessible_servers}"
             )
-            # Note: Federated servers are read-only, so we include them in filtered results too
-            all_servers = await self.get_all_servers(include_federated=include_federated)
+            all_servers = await self.get_all_servers()
 
             # Filter based on accessible_servers
             filtered_servers = {}

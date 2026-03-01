@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     registry_id: Optional[str] = None  # Unique identifier for this registry instance in federation
     federation_static_token_auth_enabled: bool = False  # Enable federation static token auth
     federation_static_token: str = ""  # Federation static token for peer registry access
+    workday_token_url: str = Field(
+        default="https://your-tenant.workday.com/ccx/oauth2/your_instance/token",
+        description="Workday OAuth token endpoint URL for ASOR federation (must use HTTPS in production)",
+    )
 
     # Audit Logging Configuration
     audit_log_enabled: bool = True  # Enable/disable audit logging globally

@@ -214,7 +214,7 @@ class HealthMonitoringService:
             from ..services.server_service import server_service
 
             all_servers = await server_service.get_all_servers(
-                include_federated=False, include_credentials=True
+                include_credentials=True
             )
             servers_with_creds = [
                 path for path, info in all_servers.items() if info.get("auth_credential_encrypted")

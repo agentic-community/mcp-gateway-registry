@@ -4,22 +4,19 @@
     "endpoint": "https://registry.modelcontextprotocol.io",
     "sync_on_startup": true,
     "servers": [
-      {"name": "io.github.jgador/websharp"},
-      {"name": "ai.smithery/smithery-ai-github"},
-      {"name": "ai.smithery/Hint-Services-obsidian-github-mcp"},
-      {"name": "ai.smithery/data-mindset-sts-google-forms-mcp"},
-      {"name": "ai.smithery/saidsef-mcp-github-pr-issue-analyser"},
-      {"name": "ai.shawndurrani/mcp-merchant"}
+      {"name": "com.hydrata/hydrata-mcp-server"},
+      {"name": "io.github.OneNicolas/mcp-service-public"},
+      {"name": "ai.exa/exa"}
     ]
   },
   "asor": {
-    "enabled": true,
-    "endpoint": "https://wcpdev-services1.wd103.myworkday.com/ccx/api/asor/v1/awsasor_wcpdev1",
+    "enabled": false,
+    "endpoint": "https://your-asor-endpoint.example.com/api/asor/v1/your-tenant",
     "auth_env_var": "ASOR_ACCESS_TOKEN",
-    "sync_on_startup": true,
+    "sync_on_startup": false,
     "agents": [
-      {"id": "aws_assistant"},
-      {"id": "data_analyst"}
+      {"id": "agent_1"},
+      {"id": "agent_2"}
     ]
   }
 }

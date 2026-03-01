@@ -68,14 +68,15 @@ class TestGetEndpointUrlStreamableHttp:
         )
         assert result == "http://custom.server.com/use-case"
 
-    def test_explicit_mcp_endpoint_strips_trailing_slash(self) -> None:
-        """Explicit mcp_endpoint should have trailing slash stripped."""
+    def test_explicit_mcp_endpoint_preserves_trailing_slash(self) -> None:
+        """Explicit mcp_endpoint should preserve trailing slash (changed behavior)."""
         result = get_endpoint_url(
             proxy_pass_url="http://server.com/api",
             transport_type="streamable-http",
             mcp_endpoint="http://custom.server.com/use-case/",
         )
-        assert result == "http://custom.server.com/use-case"
+        # Changed: Now preserves trailing slash for servers that require it
+        assert result == "http://custom.server.com/use-case/"
 
     def test_url_with_mcp_used_as_is(self) -> None:
         """URL already containing /mcp should be used as-is."""
@@ -136,14 +137,15 @@ class TestGetEndpointUrlSse:
         )
         assert result == "http://custom.server.com/events"
 
-    def test_explicit_sse_endpoint_strips_trailing_slash(self) -> None:
-        """Explicit sse_endpoint should have trailing slash stripped."""
+    def test_explicit_sse_endpoint_preserves_trailing_slash(self) -> None:
+        """Explicit sse_endpoint should preserve trailing slash (changed behavior)."""
         result = get_endpoint_url(
             proxy_pass_url="http://server.com/api",
             transport_type="sse",
             sse_endpoint="http://custom.server.com/events/",
         )
-        assert result == "http://custom.server.com/events"
+        # Changed: Now preserves trailing slash for servers that require it
+        assert result == "http://custom.server.com/events/"
 
     def test_url_with_sse_used_as_is(self) -> None:
         """URL already ending with /sse should be used as-is."""
@@ -278,3 +280,156 @@ class TestRealWorldScenarios:
         }
         result = get_endpoint_url_from_server_info(server_info)
         assert result == "http://server.com/api/mcp"
+
+
+# =============================================================================
+# TEST CLASS: Trailing Slash Preservation (Issue #539 Fix)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestTrailingSlashPreservation:
+    """Test trailing slash preservation for servers that require it (e.g., Hydrata)."""
+
+    def test_hydrata_url_with_trailing_slash(self) -> None:
+        """Hydrata URL with /mcp/ should preserve trailing slash."""
+        result = get_endpoint_url(
+            proxy_pass_url="https://hydrata.com/mcp/",
+            transport_type="streamable-http",
+        )
+        # Critical fix: Preserve trailing slash to avoid 301 redirect → 405 error
+        assert result == "https://hydrata.com/mcp/"
+
+    def test_url_with_mcp_and_trailing_slash(self) -> None:
+        """URL ending with /mcp/ should preserve trailing slash."""
+        result = get_endpoint_url(
+            proxy_pass_url="https://example.com/mcp/",
+            transport_type="streamable-http",
+        )
+        assert result == "https://example.com/mcp/"
+
+    def test_url_with_sse_and_trailing_slash(self) -> None:
+        """URL ending with /sse/ should preserve trailing slash."""
+        result = get_endpoint_url(
+            proxy_pass_url="https://example.com/sse/",
+            transport_type="sse",
+        )
+        assert result == "https://example.com/sse/"
+
+    def test_url_with_mcp_in_middle_and_trailing_slash(self) -> None:
+        """URL with /mcp/ in middle and trailing slash should preserve it."""
+        result = get_endpoint_url(
+            proxy_pass_url="https://example.com/mcp/v1/",
+            transport_type="streamable-http",
+        )
+        assert result == "https://example.com/mcp/v1/"
+
+    def test_url_without_transport_still_strips_slash(self) -> None:
+        """URL without transport path should still strip trailing slash before appending."""
+        result = get_endpoint_url(
+            proxy_pass_url="http://server.com/api/",
+            transport_type="streamable-http",
+        )
+        assert result == "http://server.com/api/mcp"
+
+
+# =============================================================================
+# TEST CLASS: Production URL Patterns (All 4 Patterns)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestProductionUrlPatterns:
+    """Test all 4 URL patterns found in production database."""
+
+    def test_pattern1_no_transport_no_slash(self) -> None:
+        """Pattern 1: No transport, no slash (1 server in prod)."""
+        # Example: http://localhost:3000
+        result = get_endpoint_url("http://localhost:3000")
+        assert result == "http://localhost:3000/mcp"
+
+    def test_pattern2_no_transport_with_slash(self) -> None:
+        """Pattern 2: No transport, has slash (7 servers in prod)."""
+        # Examples: http://mcpgw-server:8003/, http://currenttime-server:8000/
+        result1 = get_endpoint_url("http://mcpgw-server:8003/")
+        result2 = get_endpoint_url("http://currenttime-server:8000/")
+        assert result1 == "http://mcpgw-server:8003/mcp"
+        assert result2 == "http://currenttime-server:8000/mcp"
+
+    def test_pattern3_has_transport_no_slash(self) -> None:
+        """Pattern 3: Has transport, no slash (10 servers in prod)."""
+        # Examples: https://docs.mcp.cloudflare.com/mcp, https://mcp.context7.com/mcp
+        result1 = get_endpoint_url("https://docs.mcp.cloudflare.com/mcp")
+        result2 = get_endpoint_url("https://mcp.context7.com/mcp")
+        result3 = get_endpoint_url("https://mcp.cloudflare.com/mcp")
+        assert result1 == "https://docs.mcp.cloudflare.com/mcp"
+        assert result2 == "https://mcp.context7.com/mcp"
+        assert result3 == "https://mcp.cloudflare.com/mcp"
+
+    def test_pattern4_has_transport_with_slash(self) -> None:
+        """Pattern 4: Has transport, has slash (1 server in prod - Hydrata)."""
+        # Example: https://hydrata.com/mcp/
+        result = get_endpoint_url("https://hydrata.com/mcp/")
+        # This is the ONLY pattern with changed behavior (fix for issue #539)
+        assert result == "https://hydrata.com/mcp/"
+
+    def test_all_patterns_except_pattern4_unchanged(self) -> None:
+        """Verify patterns 1-3 have identical behavior to old code."""
+        # Pattern 1
+        assert get_endpoint_url("http://localhost:3000") == "http://localhost:3000/mcp"
+
+        # Pattern 2
+        assert get_endpoint_url("http://mcpgw-server:8003/") == "http://mcpgw-server:8003/mcp"
+
+        # Pattern 3
+        assert get_endpoint_url("https://docs.mcp.cloudflare.com/mcp") == "https://docs.mcp.cloudflare.com/mcp"
+
+        # Only Pattern 4 has different behavior (this is the fix)
+        assert get_endpoint_url("https://hydrata.com/mcp/") == "https://hydrata.com/mcp/"
+
+
+# =============================================================================
+# TEST CLASS: Regression Prevention
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestRegressionPrevention:
+    """Tests to prevent regression of the Hydrata 301/405 bug."""
+
+    def test_prevents_301_redirect_issue(self) -> None:
+        """Ensure URLs with trailing slash don't cause 301 redirects.
+
+        Background: When POSTing to https://hydrata.com/mcp (no slash),
+        Hydrata redirects with 301 to https://hydrata.com/mcp/ (with slash).
+        HTTP clients change POST to GET on 301 redirects, causing 405 errors.
+
+        Fix: Preserve trailing slash so we POST directly to the correct URL.
+        """
+        url_with_slash = "https://hydrata.com/mcp/"
+        result = get_endpoint_url(url_with_slash)
+
+        # Should return URL with slash to avoid redirect
+        assert result == "https://hydrata.com/mcp/"
+        assert not result.endswith("/mcp")  # Should NOT strip the slash
+
+    def test_explicit_endpoint_with_slash_preserved(self) -> None:
+        """Explicit endpoints with trailing slash should be preserved."""
+        result = get_endpoint_url(
+            proxy_pass_url="http://localhost:3000",
+            mcp_endpoint="https://hydrata.com/mcp/",
+        )
+        assert result == "https://hydrata.com/mcp/"
+
+    def test_cloudflare_docs_url_unchanged(self) -> None:
+        """Cloudflare docs URL without slash should remain unchanged."""
+        result = get_endpoint_url("https://docs.mcp.cloudflare.com/mcp")
+        assert result == "https://docs.mcp.cloudflare.com/mcp"
+
+    def test_context7_url_unchanged(self) -> None:
+        """Context7 URL without slash should remain unchanged."""
+        result = get_endpoint_url("https://mcp.context7.com/mcp")
+        assert result == "https://mcp.context7.com/mcp"

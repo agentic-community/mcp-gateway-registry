@@ -1,14 +1,15 @@
 import React, { useState, useEffect, Fragment } from 'react';
 import { Menu, Transition } from '@headlessui/react';
 import { Link } from 'react-router-dom';
-import { 
-  Bars3Icon, 
-  UserIcon, 
+import {
+  Bars3Icon,
+  UserIcon,
   ChevronDownIcon,
   ArrowRightOnRectangleIcon,
   Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import Sidebar from './Sidebar';
+import UptimeDisplay from './UptimeDisplay';
 import { useServerStats } from '../hooks/useServerStats';
 import { useAuth } from '../contexts/AuthContext';
 import logo from '../assets/logo.png';
@@ -106,6 +107,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   </span>
                 </div>
               )}
+
+              {/* Uptime display */}
+              <UptimeDisplay />
 
               {/* Settings gear icon (admin only) */}
               {user?.is_admin && (

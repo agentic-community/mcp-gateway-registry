@@ -526,7 +526,8 @@ async def get_tool_catalog(
     and available versions.
     """
     service = get_tool_catalog_service()
-    user_scopes = user_context.get("scopes", [])
+    # Admin users bypass scope filtering (consistent with /api/servers)
+    user_scopes = None if user_context.get("is_admin") else user_context.get("scopes", [])
     catalog = await service.get_tool_catalog(
         server_path_filter=server_path,
         user_scopes=user_scopes,

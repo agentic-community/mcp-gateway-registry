@@ -86,6 +86,40 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             logger.error(f"Error listing servers from DocumentDB: {e}", exc_info=True)
             return {}
 
+    async def list_by_source(
+        self,
+        source: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """List all servers from a specific federation source.
+
+        Args:
+            source: Federation source identifier (e.g., "anthropic")
+
+        Returns:
+            Dictionary mapping server path to server info
+        """
+        logger.debug(
+            f"DocumentDB READ: Listing servers with source='{source}' from collection '{self._collection_name}'"
+        )
+        collection = await self._get_collection()
+
+        try:
+            cursor = collection.find({"source": source})
+            servers = {}
+            async for doc in cursor:
+                path = doc.pop("_id")
+                doc["path"] = path
+                servers[path] = doc
+            logger.info(
+                f"DocumentDB READ: Retrieved {len(servers)} servers with source='{source}' from collection '{self._collection_name}'"
+            )
+            return servers
+        except Exception as e:
+            logger.error(
+                f"Error listing servers by source '{source}' from DocumentDB: {e}", exc_info=True
+            )
+            return {}
+
     async def create(
         self,
         server_info: Dict[str, Any],
@@ -268,3 +302,22 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         except Exception as e:
             logger.error(f"Failed to update server state in DocumentDB: {e}", exc_info=True)
             return False
+
+    async def count(self) -> int:
+        """Get total count of servers.
+
+        Returns:
+            Total number of servers in the repository.
+        """
+        logger.debug(
+            f"DocumentDB COUNT: Counting servers in collection '{self._collection_name}'"
+        )
+        collection = await self._get_collection()
+
+        try:
+            count = await collection.count_documents({})
+            logger.debug(f"DocumentDB COUNT: Found {count} servers")
+            return count
+        except Exception as e:
+            logger.error(f"Error counting servers in DocumentDB: {e}", exc_info=True)
+            return 0

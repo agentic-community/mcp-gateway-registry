@@ -47,13 +47,18 @@ def get_endpoint_url(
     Returns:
         The resolved endpoint URL.
     """
-    base_url = proxy_pass_url.rstrip("/")
+    # Only strip trailing slash if URL doesn't already contain transport path
+    # Some servers like Hydrata require the trailing slash
+    if _url_contains_transport_path(proxy_pass_url):
+        base_url = proxy_pass_url
+    else:
+        base_url = proxy_pass_url.rstrip("/")
 
     if transport_type == "sse":
         # Priority 1: Explicit sse_endpoint
         if sse_endpoint:
             logger.debug(f"Using explicit sse_endpoint: {sse_endpoint}")
-            return sse_endpoint.rstrip("/")
+            return sse_endpoint
 
         # Priority 2: URL already contains transport path
         if base_url.endswith("/sse") or "/sse/" in base_url:
@@ -70,7 +75,7 @@ def get_endpoint_url(
         # Priority 1: Explicit mcp_endpoint
         if mcp_endpoint:
             logger.debug(f"Using explicit mcp_endpoint: {mcp_endpoint}")
-            return mcp_endpoint.rstrip("/")
+            return mcp_endpoint
 
         # Priority 2: URL already contains transport path
         if _url_contains_transport_path(base_url):

@@ -307,7 +307,7 @@ class PeerFederationService:
 
         try:
             # Get all servers from the repository
-            all_servers = await server_service.get_all_servers(include_federated=True)
+            all_servers = await server_service.get_all_servers()
 
             # Find servers with paths starting with the peer prefix
             for path in list(all_servers.keys()):
@@ -963,7 +963,7 @@ class PeerFederationService:
         }
 
         # Find all local servers with sync_metadata.source_peer_id == peer_id
-        all_servers = await server_service.get_all_servers(include_federated=True)
+        all_servers = await server_service.get_all_servers()
         for server in all_servers.values():
             server_dict = server if isinstance(server, dict) else server
             sync_metadata = server_dict.get("sync_metadata") or {}

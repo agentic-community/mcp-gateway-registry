@@ -30,6 +30,27 @@ import urllib.error
 
 logger = logging.getLogger(__name__)
 
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _validate_url_scheme(url: str) -> None:
+    """Validate that a URL uses an allowed scheme (http or https).
+
+    Prevents SSRF via file://, ftp://, or other unexpected schemes.
+
+    Args:
+        url: The URL string to validate.
+
+    Raises:
+        ValueError: If the URL scheme is not http or https.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in _ALLOWED_URL_SCHEMES:
+        raise ValueError(
+            f"Invalid URL scheme '{parsed.scheme}' in URL '{url}'. "
+            f"Only {_ALLOWED_URL_SCHEMES} are allowed."
+        )
+
 
 def _load_oauth_token_from_file(token_file_path: Union[str, Path]) -> Optional[str]:
     """
@@ -181,6 +202,8 @@ class MCPClient:
         Raises:
             Exception: If request fails or response is invalid
         """
+        _validate_url_scheme(self.gateway_url)
+
         headers = self._build_headers()
         data = json.dumps(payload).encode("utf-8")
 
@@ -189,7 +212,7 @@ class MCPClient:
                 self.gateway_url, data=data, headers=headers, method="POST"
             )
 
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # nosec B310
                 response_data = response.read().decode("utf-8")
                 content_type = response.headers.get("content-type", "")
 

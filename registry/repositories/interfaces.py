@@ -39,6 +39,21 @@ class ServerRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_by_source(
+        self,
+        source: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """List all servers from a specific federation source.
+
+        Args:
+            source: Federation source identifier (e.g., "anthropic")
+
+        Returns:
+            Dictionary mapping server path to server info
+        """
+        pass
+
+    @abstractmethod
     async def create(
         self,
         server_info: Dict[str, Any],
@@ -103,6 +118,15 @@ class ServerRepositoryBase(ABC):
         """Load/reload all servers from storage."""
         pass
 
+    @abstractmethod
+    async def count(self) -> int:
+        """Get total count of servers.
+
+        Returns:
+            Total number of servers in the repository.
+        """
+        pass
+
 
 class AgentRepositoryBase(ABC):
     """Abstract base class for A2A agent data access."""
@@ -165,6 +189,15 @@ class AgentRepositoryBase(ABC):
     @abstractmethod
     async def load_all(self) -> None:
         """Load/reload all agents from storage."""
+        pass
+
+    @abstractmethod
+    async def count(self) -> int:
+        """Get total count of agents.
+
+        Returns:
+            Total number of agents in the repository.
+        """
         pass
 
 
@@ -1029,6 +1062,15 @@ class SkillRepositoryBase(ABC):
         updates: Dict[str, Dict[str, Any]],
     ) -> int:
         """Update multiple skills by path, return count."""
+        pass
+
+    @abstractmethod
+    async def count(self) -> int:
+        """Get total count of skills.
+
+        Returns:
+            Total number of skills in the repository.
+        """
         pass
 
 

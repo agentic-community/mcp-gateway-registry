@@ -90,6 +90,40 @@ class AuditRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def distinct(
+        self,
+        field: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        """
+        Get distinct values for a field in audit events.
+
+        Args:
+            field: The document field path (e.g., 'identity.username')
+            query: Optional filter query to scope the distinct values
+
+        Returns:
+            Sorted list of distinct string values
+        """
+        pass
+
+    @abstractmethod
+    async def aggregate(
+        self,
+        pipeline: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Run a MongoDB aggregation pipeline on audit events.
+
+        Args:
+            pipeline: MongoDB aggregation pipeline stages
+
+        Returns:
+            List of aggregation result documents
+        """
+        pass
+
+    @abstractmethod
     async def insert(
         self,
         record: AuditRecord,
@@ -231,6 +265,40 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
         except Exception as e:
             logger.error(f"Error counting audit events: {e}", exc_info=True)
             return 0
+
+    async def distinct(
+        self,
+        field: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        """Get distinct values for a field in audit events."""
+        logger.debug(f"DocumentDB READ: Getting distinct values for field={field}")
+        collection = await self._get_collection()
+        try:
+            values = await collection.distinct(field, query or {})
+            result = sorted([str(v) for v in values if v])
+            logger.debug(f"DocumentDB READ: Found {len(result)} distinct values for {field}")
+            return result
+        except Exception as e:
+            logger.error(f"Error getting distinct values for {field}: {e}", exc_info=True)
+            return []
+
+    async def aggregate(
+        self,
+        pipeline: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Run a MongoDB aggregation pipeline on audit events."""
+        logger.debug(f"DocumentDB READ: Running aggregation pipeline with {len(pipeline)} stages")
+        collection = await self._get_collection()
+        try:
+            results = []
+            async for doc in collection.aggregate(pipeline):
+                results.append(doc)
+            logger.debug(f"DocumentDB READ: Aggregation returned {len(results)} results")
+            return results
+        except Exception as e:
+            logger.error(f"Error running aggregation pipeline: {e}", exc_info=True)
+            return []
 
     async def insert(
         self,

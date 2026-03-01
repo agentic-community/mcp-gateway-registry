@@ -211,7 +211,7 @@ class EntraIdProvider(AuthProvider):
 
             # Check token_use claim
             token_use = claims.get("token_use")
-            if token_use != "access":
+            if token_use != "access":  # nosec B105 - OAuth2 token type validation per RFC 6749, not a password
                 raise ValueError(f"Invalid token_use: {token_use}")
 
             # Extract scopes from claims

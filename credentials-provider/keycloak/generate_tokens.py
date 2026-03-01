@@ -167,7 +167,7 @@ class TokenGenerator:
         token_json = {
             "agent_name": agent_name,
             "access_token": access_token,
-            "token_type": "Bearer",
+            "token_type": "Bearer",  # nosec B105 - OAuth2 standard token type per RFC 6750
             "expires_in": expires_in,
             "generated_at": generated_at,
             "expires_at": expires_at,
@@ -179,7 +179,7 @@ class TokenGenerator:
             "metadata": {
                 "generated_by": "generate_tokens.py",
                 "script_version": "1.0",
-                "token_format": "JWT",
+                "token_format": "JWT",  # nosec B105 - Standard token format identifier, not a password
                 "auth_method": "client_credentials",
             },
         }

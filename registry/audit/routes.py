@@ -9,11 +9,13 @@ All endpoints require admin access (is_admin=True in user context).
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
 import re
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -96,6 +98,82 @@ class AuditEventDetail(BaseModel):
     """Full audit event detail."""
 
     event: Dict[str, Any] = Field(description="Complete audit event record")
+
+
+class AuditFilterOptions(BaseModel):
+    """Available filter values for audit log dropdowns."""
+
+    usernames: List[str] = Field(
+        default_factory=list,
+        description="Distinct usernames found in audit events",
+    )
+    server_names: List[str] = Field(
+        default_factory=list,
+        description="Distinct MCP server names (MCP stream only)",
+    )
+
+
+class UsageSummaryItem(BaseModel):
+    """A single row in a usage summary."""
+
+    name: str = Field(description="Username, server name, or category")
+    count: int = Field(description="Number of events")
+
+
+class TimeSeriesBucket(BaseModel):
+    """A single time bucket for the activity chart."""
+
+    period: str = Field(description="Time period label (e.g., '2026-02-28')")
+    count: int = Field(description="Number of events in this period")
+
+
+class StatusDistribution(BaseModel):
+    """Status code distribution."""
+
+    status_2xx: int = Field(default=0, description="2xx success count")
+    status_4xx: int = Field(default=0, description="4xx client error count")
+    status_5xx: int = Field(default=0, description="5xx server error count")
+
+
+class UserActivityItem(BaseModel):
+    """Per-user activity breakdown showing top operations."""
+
+    username: str = Field(description="Username")
+    total: int = Field(description="Total requests by this user")
+    operations: List[UsageSummaryItem] = Field(
+        default_factory=list,
+        description="Top operations for this user",
+    )
+
+
+class AuditStatisticsResponse(BaseModel):
+    """Aggregated audit statistics."""
+
+    total_events: int = Field(description="Total events in time range")
+    top_users: List[UsageSummaryItem] = Field(
+        default_factory=list,
+        description="Top 10 users by event count",
+    )
+    top_servers: List[UsageSummaryItem] = Field(
+        default_factory=list,
+        description="Top 10 MCP servers (MCP stream only)",
+    )
+    top_operations: List[UsageSummaryItem] = Field(
+        default_factory=list,
+        description="Top 10 operations by event count",
+    )
+    activity_timeline: List[TimeSeriesBucket] = Field(
+        default_factory=list,
+        description="Daily event counts for the time range",
+    )
+    status_distribution: StatusDistribution = Field(
+        default_factory=StatusDistribution,
+        description="Distribution of HTTP status codes",
+    )
+    user_activity: List[UserActivityItem] = Field(
+        default_factory=list,
+        description="Per-user breakdown of top operations",
+    )
 
 
 def _build_query(
@@ -199,6 +277,297 @@ def _build_query(
         query["authorization.decision"] = auth_decision
 
     return query
+
+
+@router.get("/filter-options", response_model=AuditFilterOptions)
+async def get_filter_options(
+    user_context: Annotated[Dict[str, Any], Depends(require_admin)],
+    stream: str = Query(
+        "registry_api",
+        pattern="^(registry_api|mcp_access)$",
+        description="Log stream type",
+    ),
+) -> AuditFilterOptions:
+    """Get distinct filter values for audit log dropdowns. Requires admin access."""
+    start_time = time.time()
+
+    log_type_map = {
+        "registry_api": "registry_api_access",
+        "mcp_access": "mcp_server_access",
+    }
+    log_type = log_type_map.get(stream, stream)
+    query = {"log_type": log_type}
+
+    repository = get_audit_repository()
+
+    usernames = await repository.distinct("identity.username", query)
+
+    server_names: List[str] = []
+    if stream == "mcp_access":
+        server_names = await repository.distinct("mcp_server.name", query)
+
+    elapsed = time.time() - start_time
+    logger.info(
+        f"Filter options fetched in {elapsed:.2f}s (stream={stream}, "
+        f"usernames={len(usernames)}, servers={len(server_names)})"
+    )
+
+    return AuditFilterOptions(
+        usernames=usernames,
+        server_names=server_names,
+    )
+
+
+@router.get("/statistics", response_model=AuditStatisticsResponse)
+async def get_statistics(
+    user_context: Annotated[Dict[str, Any], Depends(require_admin)],
+    stream: str = Query(
+        "registry_api",
+        pattern="^(registry_api|mcp_access)$",
+        description="Log stream type",
+    ),
+    days: int = Query(
+        7,
+        ge=1,
+        le=30,
+        description="Number of days to include in statistics",
+    ),
+    username: Optional[str] = Query(
+        None,
+        description="Filter statistics to a specific username",
+    ),
+) -> AuditStatisticsResponse:
+    """Get aggregated audit statistics for the dashboard. Requires admin access."""
+    start_time = time.time()
+
+    log_type_map = {
+        "registry_api": "registry_api_access",
+        "mcp_access": "mcp_server_access",
+    }
+    log_type = log_type_map.get(stream, stream)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    base_match: Dict[str, Any] = {"log_type": log_type, "timestamp": {"$gte": cutoff}}
+
+    if username:
+        escaped_username = re.escape(username)
+        base_match["identity.username"] = {"$regex": f"^{escaped_username}$", "$options": "i"}
+
+    repository = get_audit_repository()
+
+    # Build all pipelines upfront
+    op_field = "$mcp_request.method" if stream == "mcp_access" else "$action.operation"
+
+    # Status distribution pipeline differs by stream
+    if stream == "mcp_access":
+        status_pipeline: List[Dict[str, Any]] = [
+            {"$match": base_match},
+            {"$group": {"_id": "$mcp_response.status", "count": {"$sum": 1}}},
+        ]
+    else:
+        status_pipeline = [
+            {"$match": base_match},
+            {
+                "$project": {
+                    "bucket": {
+                        "$switch": {
+                            "branches": [
+                                {
+                                    "case": {
+                                        "$and": [
+                                            {"$gte": ["$response.status_code", 200]},
+                                            {"$lt": ["$response.status_code", 300]},
+                                        ]
+                                    },
+                                    "then": "2xx",
+                                },
+                                {
+                                    "case": {
+                                        "$and": [
+                                            {"$gte": ["$response.status_code", 400]},
+                                            {"$lt": ["$response.status_code", 500]},
+                                        ]
+                                    },
+                                    "then": "4xx",
+                                },
+                                {
+                                    "case": {"$gte": ["$response.status_code", 500]},
+                                    "then": "5xx",
+                                },
+                            ],
+                            "default": "other",
+                        }
+                    }
+                }
+            },
+            {"$group": {"_id": "$bucket", "count": {"$sum": 1}}},
+        ]
+
+    # Run ALL pipelines concurrently with asyncio.gather()
+    # Note: audit data is bounded by TTL (default 7 days), so collection size is naturally limited
+    tasks = [
+        repository.count(base_match),
+        repository.aggregate(
+            [
+                {"$match": base_match},
+                {"$group": {"_id": "$identity.username", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 10},
+            ]
+        ),
+        repository.aggregate(
+            [
+                {"$match": base_match},
+                {"$group": {"_id": op_field, "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 10},
+            ]
+        ),
+        repository.aggregate(
+            [
+                {"$match": base_match},
+                {
+                    "$group": {
+                        "_id": {
+                            "$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}
+                        },
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        ),
+        repository.aggregate(status_pipeline),
+        # Per-user activity breakdown: group by (username, operation), then re-group by username
+        repository.aggregate(
+            [
+                {"$match": base_match},
+                {
+                    "$group": {
+                        "_id": {
+                            "user": "$identity.username",
+                            "op": op_field,
+                        },
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"count": -1}},
+                {
+                    "$group": {
+                        "_id": "$_id.user",
+                        "total": {"$sum": "$count"},
+                        "operations": {
+                            "$push": {"name": "$_id.op", "count": "$count"}
+                        },
+                    }
+                },
+                {"$sort": {"total": -1}},
+                {"$limit": 10},
+            ]
+        ),
+    ]
+
+    # Conditionally add MCP server aggregation
+    if stream == "mcp_access":
+        tasks.append(
+            repository.aggregate(
+                [
+                    {"$match": base_match},
+                    {"$group": {"_id": "$mcp_server.name", "count": {"$sum": 1}}},
+                    {"$sort": {"count": -1}},
+                    {"$limit": 10},
+                ]
+            )
+        )
+
+    results = await asyncio.gather(*tasks)
+
+    # Unpack results
+    total_events = results[0]
+    top_users_raw = results[1]
+    top_ops_raw = results[2]
+    timeline_raw = results[3]
+    status_raw = results[4]
+    user_activity_raw = results[5]
+    top_servers_raw = results[6] if stream == "mcp_access" else []
+
+    # Transform results
+    top_users = [
+        UsageSummaryItem(name=r["_id"] or "unknown", count=r["count"])
+        for r in top_users_raw
+        if r.get("_id")
+    ]
+
+    top_servers = (
+        [
+            UsageSummaryItem(name=r["_id"] or "unknown", count=r["count"])
+            for r in top_servers_raw
+            if r.get("_id")
+        ]
+        if top_servers_raw
+        else []
+    )
+
+    top_operations = [
+        UsageSummaryItem(name=r["_id"] or "unknown", count=r["count"])
+        for r in top_ops_raw
+        if r.get("_id")
+    ]
+
+    activity_timeline = [
+        TimeSeriesBucket(period=r["_id"], count=r["count"]) for r in timeline_raw
+    ]
+
+    status_dist = StatusDistribution()
+    if stream == "mcp_access":
+        for r in status_raw:
+            if r["_id"] == "success":
+                status_dist.status_2xx = r["count"]
+            elif r["_id"] == "error":
+                status_dist.status_5xx = r["count"]
+    else:
+        for r in status_raw:
+            if r.get("_id") == "2xx":
+                status_dist.status_2xx = r["count"]
+            elif r.get("_id") == "4xx":
+                status_dist.status_4xx = r["count"]
+            elif r.get("_id") == "5xx":
+                status_dist.status_5xx = r["count"]
+
+    # Transform per-user activity breakdown
+    if user_activity_raw:
+        logger.debug(f"Raw user_activity sample: {user_activity_raw[0]}")
+    user_activity = []
+    for r in user_activity_raw:
+        if not r.get("_id"):
+            continue
+        ops = []
+        for op in (r.get("operations") or [])[:5]:
+            op_name = op.get("name") or op.get("_id", {}).get("op") if isinstance(op, dict) else None
+            op_count = op.get("count", 0) if isinstance(op, dict) else 0
+            if op_name:
+                ops.append(UsageSummaryItem(name=str(op_name), count=op_count))
+        user_activity.append(
+            UserActivityItem(
+                username=r["_id"] or "unknown",
+                total=r.get("total", 0),
+                operations=ops,
+            )
+        )
+
+    elapsed = time.time() - start_time
+    logger.info(
+        f"Audit statistics computed in {elapsed:.2f}s (stream={stream}, days={days})"
+    )
+
+    return AuditStatisticsResponse(
+        total_events=total_events,
+        top_users=top_users,
+        top_servers=top_servers,
+        top_operations=top_operations,
+        activity_timeline=activity_timeline,
+        status_distribution=status_dist,
+        user_activity=user_activity,
+    )
 
 
 @router.get("/events", response_model=AuditEventsResponse)

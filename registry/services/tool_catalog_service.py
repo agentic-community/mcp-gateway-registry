@@ -67,9 +67,12 @@ class ToolCatalogService:
             if ":" in path:
                 continue
 
-            # Apply server path filter if specified
-            if server_path_filter and path != server_path_filter:
-                continue
+            # Apply server path filter if specified (normalize slashes for comparison)
+            if server_path_filter:
+                normalized_filter = server_path_filter.strip("/")
+                normalized_path = path.strip("/")
+                if normalized_path != normalized_filter:
+                    continue
 
             # Check if server is enabled
             is_enabled = await self._server_repo.get_state(path)

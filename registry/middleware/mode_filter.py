@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 ALWAYS_ALLOWED_PREFIXES = (
     "/health",
     "/api/version",
+    "/api/stats",
     "/api/config",
     "/api/auth/",
     "/api/tokens/",

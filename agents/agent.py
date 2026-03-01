@@ -52,6 +52,8 @@ import asyncio
 import argparse
 import json
 import logging
+import ast
+import operator as _operator
 import os
 import re
 import sys
@@ -67,6 +69,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Union,
 )
 from urllib.parse import (
     urlparse,
@@ -371,6 +374,70 @@ Examples:
     return args
 
 
+_SAFE_OPERATORS: dict = {
+    ast.Add: _operator.add,
+    ast.Sub: _operator.sub,
+    ast.Mult: _operator.mul,
+    ast.Div: _operator.truediv,
+    ast.Pow: _operator.pow,
+    ast.FloorDiv: _operator.floordiv,
+    ast.Mod: _operator.mod,
+}
+
+_SAFE_UNARY_OPERATORS: dict = {
+    ast.UAdd: _operator.pos,
+    ast.USub: _operator.neg,
+}
+
+
+def _safe_eval_arithmetic(expression: str) -> Union[int, float]:
+    """Safely evaluate an arithmetic expression using AST node whitelisting.
+
+    Only numeric literals and basic arithmetic operators are permitted.
+    Function calls, attribute access, names, and all other non-arithmetic
+    constructs raise ValueError immediately.
+
+    Args:
+        expression: A pre-validated arithmetic expression string.
+
+    Returns:
+        The numeric result of the expression.
+
+    Raises:
+        ValueError: If the expression contains unsupported operations.
+        ZeroDivisionError: If the expression divides by zero.
+    """
+
+    def _eval_node(node: ast.AST) -> Union[int, float]:
+        if isinstance(node, ast.Expression):
+            return _eval_node(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        if isinstance(node, ast.BinOp):
+            op_func = _SAFE_OPERATORS.get(type(node.op))
+            if op_func is None:
+                raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+
+            # Special handling for exponentiation to prevent DoS
+            if isinstance(node.op, ast.Pow):
+                left_val = _eval_node(node.left)
+                right_val = _eval_node(node.right)
+                if abs(right_val) > 100:
+                    raise ValueError("Exponent too large (max 100)")
+                return op_func(left_val, right_val)
+
+            return op_func(_eval_node(node.left), _eval_node(node.right))
+        if isinstance(node, ast.UnaryOp):
+            op_func = _SAFE_UNARY_OPERATORS.get(type(node.op))
+            if op_func is None:
+                raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+            return op_func(_eval_node(node.operand))
+        raise ValueError(f"Unsupported expression type: {type(node).__name__}")
+
+    tree = ast.parse(expression, mode="eval")
+    return _eval_node(tree)
+
+
 @tool
 def calculator(expression: str) -> str:
     """
@@ -394,6 +461,10 @@ def calculator(expression: str) -> str:
     # Remove all whitespace
     expression = expression.replace(" ", "")
 
+    # Guard against excessively long expressions (DoS via large exponents)
+    if len(expression) > 200:
+        return "Error: Expression too long (max 200 characters)."
+
     # Check if the expression contains only allowed characters
     if not re.match(r"^[0-9+\-*/().^ ]+$", expression):
         return "Error: Only basic arithmetic operations (+, -, *, /, ^, (), .) are allowed."
@@ -402,8 +473,8 @@ def calculator(expression: str) -> str:
         # Replace ^ with ** for exponentiation
         expression = expression.replace("^", "**")
 
-        # Evaluate the expression
-        result = eval(expression)
+        # Safely evaluate using AST node whitelisting (no arbitrary code execution)
+        result = _safe_eval_arithmetic(expression)
         return str(result)
     except Exception as e:
         return f"Error evaluating expression: {str(e)}"

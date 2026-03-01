@@ -101,20 +101,6 @@ def mock_agent_service():
         yield mock_agent
 
 
-@pytest.fixture
-def mock_federation_service():
-    """
-    Mock federation service to avoid actual federation operations.
-
-    Returns:
-        Mock federation service instance
-    """
-    with patch("registry.services.federation_service.get_federation_service") as mock_get_fed:
-        mock_fed_service = MagicMock()
-        mock_fed_service.config.is_any_federation_enabled = MagicMock(return_value=False)
-        mock_fed_service.get_federated_servers = AsyncMock(return_value=[])
-        mock_get_fed.return_value = mock_fed_service
-        yield mock_fed_service
 
 
 @pytest.fixture
@@ -234,7 +220,6 @@ def setup_test_environment(
     mock_faiss_service,
     mock_health_service,
     mock_agent_service,
-    mock_federation_service,
     mock_auth_dependencies,
 ):
     """

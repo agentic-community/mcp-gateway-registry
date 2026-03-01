@@ -961,7 +961,7 @@ class SimplifiedCognitoValidator:
 
             # Validate token_use
             token_use = claims.get("token_use")
-            if token_use != "access":
+            if token_use != "access":  # nosec B105 - OAuth2 token type validation per RFC 6749, not a password
                 raise ValueError(f"Invalid token_use: {token_use}")
 
             # Extract scopes from space-separated string
@@ -1805,7 +1805,7 @@ async def manage_federation_token(request: Request):
             ),
         }
     else:
-        FEDERATION_STATIC_TOKEN = ""
+        FEDERATION_STATIC_TOKEN = ""  # nosec B105 - Intentional token revocation, clearing the variable
         FEDERATION_STATIC_TOKEN_AUTH_ENABLED = False
         logger.info("Federation static token revoked via admin API")
         return {
@@ -2037,7 +2037,7 @@ async def reload_scopes(request: Request, authorization: str | None = Header(Non
                 leeway=30,
             )
             token_use = claims.get("token_use")
-            if token_use != "access":
+            if token_use != "access":  # nosec B105 - OAuth2 token type validation per RFC 6749, not a password
                 raise ValueError(f"Invalid token_use: {token_use}")
             caller_identity = claims.get("sub", "service")
             logger.info(f"Reload-scopes authorized via JWT for: {caller_identity}")

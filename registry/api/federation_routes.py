@@ -139,11 +139,39 @@ async def save_federation_config(
         saved_config = await repo.save_config(config, config_id)
         logger.info(f"Federation config saved successfully: {config_id}")
 
-        return {
+        # Reconcile: remove stale federated servers
+        reconciliation_result = None
+        try:
+            from ..services.federation_reconciliation import reconcile_anthropic_servers
+            from ..services.server_service import server_service
+            from ..repositories.factory import get_server_repository
+            from ..core.nginx_service import nginx_service
+
+            server_repo = get_server_repository()
+            reconciliation_result = await reconcile_anthropic_servers(
+                config=saved_config,
+                server_service=server_service,
+                server_repo=server_repo,
+                nginx_service=nginx_service,
+                audit_username=user_context.get("username"),
+            )
+            if reconciliation_result.get("removed"):
+                logger.info(
+                    f"Reconciliation removed {reconciliation_result['removed_count']} stale servers: "
+                    f"{reconciliation_result['removed']}"
+                )
+        except Exception as e:
+            logger.error(f"Reconciliation failed (non-fatal): {e}")
+
+        response = {
             "message": "Federation configuration saved successfully",
             "config_id": config_id,
             "config": saved_config.model_dump(),
         }
+        if reconciliation_result:
+            response["reconciliation"] = reconciliation_result
+
+        return response
 
     except Exception as e:
         logger.error(f"Failed to save federation config: {e}", exc_info=True)
@@ -192,11 +220,39 @@ async def update_federation_config(
         saved_config = await repo.save_config(config, config_id)
         logger.info(f"Federation config updated successfully: {config_id}")
 
-        return {
+        # Reconcile: remove stale federated servers
+        reconciliation_result = None
+        try:
+            from ..services.federation_reconciliation import reconcile_anthropic_servers
+            from ..services.server_service import server_service
+            from ..repositories.factory import get_server_repository
+            from ..core.nginx_service import nginx_service
+
+            server_repo = get_server_repository()
+            reconciliation_result = await reconcile_anthropic_servers(
+                config=saved_config,
+                server_service=server_service,
+                server_repo=server_repo,
+                nginx_service=nginx_service,
+                audit_username=user_context.get("username"),
+            )
+            if reconciliation_result.get("removed"):
+                logger.info(
+                    f"Reconciliation removed {reconciliation_result['removed_count']} stale servers: "
+                    f"{reconciliation_result['removed']}"
+                )
+        except Exception as e:
+            logger.error(f"Reconciliation failed (non-fatal): {e}")
+
+        response = {
             "message": "Federation configuration updated successfully",
             "config_id": config_id,
             "config": saved_config.model_dump(),
         }
+        if reconciliation_result:
+            response["reconciliation"] = reconciliation_result
+
+        return response
 
     except Exception as e:
         logger.error(f"Failed to update federation config: {e}", exc_info=True)
@@ -324,7 +380,7 @@ async def add_anthropic_server(
 
 
 @router.delete(
-    "/federation/config/{config_id}/anthropic/servers/{server_name}",
+    "/federation/config/{config_id}/anthropic/servers/{server_name:path}",
     tags=["federation"],
     summary="Remove Anthropic server from config",
 )
@@ -337,14 +393,17 @@ async def remove_anthropic_server(
     """
     Remove a server from Anthropic federation configuration.
 
+    Also removes the server from mcp_servers_default if it was
+    previously synced.
+
     Args:
         config_id: Configuration ID
-        server_name: Server name to remove
+        server_name: Server name to remove (e.g., "io.github.jgador/websharp")
         user_context: Authenticated user context
         repo: Federation config repository
 
     Returns:
-        Updated configuration
+        Updated configuration with removal details
     """
     logger.info(f"User {user_context['username']} removing Anthropic server: {server_name}")
 
@@ -355,7 +414,7 @@ async def remove_anthropic_server(
             detail=f"Federation config '{config_id}' not found",
         )
 
-    # Find and remove server
+    # Find and remove server from config
     original_count = len(config.anthropic.servers)
     config.anthropic.servers = [s for s in config.anthropic.servers if s.name != server_name]
 
@@ -368,9 +427,37 @@ async def remove_anthropic_server(
     # Save updated config
     saved_config = await repo.save_config(config, config_id)
 
+    # Remove the server from mcp_servers_default if it exists
+    server_path = f"/{server_name.replace('/', '-')}"
+    server_removed = False
+    try:
+        from ..services.server_service import server_service
+
+        server_info = await server_service.get_server_info(server_path)
+        if server_info and server_info.get("source") == "anthropic":
+            server_removed = await server_service.remove_server(server_path)
+            if server_removed:
+                logger.info(f"Removed server '{server_name}' from mcp_servers_default ({server_path})")
+
+                # Regenerate nginx config
+                from ..core.nginx_service import nginx_service
+
+                all_servers = await server_service.get_all_servers(
+                    include_inactive=False,
+                )
+                enabled_servers = {
+                    p: info
+                    for p, info in all_servers.items()
+                    if info.get("is_enabled", False)
+                }
+                await nginx_service.generate_config_async(enabled_servers)
+    except Exception as e:
+        logger.error(f"Failed to remove server from mcp_servers_default: {e}")
+
     return {
         "message": f"Server '{server_name}' removed from Anthropic configuration",
         "config": saved_config.model_dump(),
+        "server_removed_from_registry": server_removed,
     }
 
 
@@ -657,11 +744,35 @@ async def sync_federation(
             results["asor"]["count"] = len(results["asor"]["agents"])
             logger.info(f"Synced {results['asor']['count']} agents from ASOR")
 
+        # Reconcile: remove stale federated servers after sync
+        reconciliation_result = None
+        try:
+            from ..services.federation_reconciliation import reconcile_anthropic_servers
+            from ..repositories.factory import get_server_repository
+            from ..core.nginx_service import nginx_service as nginx_svc
+
+            server_repo = get_server_repository()
+            reconciliation_result = await reconcile_anthropic_servers(
+                config=config,
+                server_service=server_service,
+                server_repo=server_repo,
+                nginx_service=nginx_svc,
+                audit_username=user_context.get("username"),
+            )
+            if reconciliation_result.get("removed"):
+                logger.info(
+                    f"Reconciliation removed {reconciliation_result['removed_count']} stale servers: "
+                    f"{reconciliation_result['removed']}"
+                )
+        except Exception as reconcile_error:
+            logger.warning(f"Reconciliation failed after sync: {reconcile_error}")
+
         return {
             "message": "Federation sync completed",
             "config_id": config_id,
             "results": results,
             "total_synced": results["anthropic"]["count"] + results["asor"]["count"],
+            "reconciliation": reconciliation_result,
         }
 
     except Exception as e:

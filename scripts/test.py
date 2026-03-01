@@ -8,7 +8,7 @@ checking dependencies, and generating reports.
 
 import argparse
 import logging
-import subprocess
+import subprocess  # nosec B404
 import sys
 import time
 from pathlib import Path

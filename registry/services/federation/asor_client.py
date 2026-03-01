@@ -10,6 +10,8 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from registry.core.config import settings
+
 from ...schemas.federation_schema import AsorAgentConfig
 from .base_client import BaseFederationClient
 
@@ -106,8 +108,20 @@ class AsorFederationClient(BaseFederationClient):
             logger.error("No auth_env_var configured for ASOR")
             return None
 
-        # Request token from Workday - use tenant-specific URL
-        token_url = "https://wcpdev-services1.wd103.myworkday.com/ccx/oauth2/awsasor_wcpdev1/token"
+        # Request token from Workday - use tenant-specific URL from config
+        token_url = settings.workday_token_url
+
+        # Check if using placeholder URL (exact match to avoid false positive security warning)
+        # This is not a security check - we're validating our own config default, not user input
+        PLACEHOLDER_URL = "https://your-tenant.workday.com/ccx/oauth2/your_instance/token"
+        if token_url == PLACEHOLDER_URL:
+            logger.warning(
+                "WORKDAY_TOKEN_URL is using placeholder value. "
+                "ASOR federation is disabled. "
+                "Set WORKDAY_TOKEN_URL environment variable to your actual Workday tenant URL to enable ASOR federation. "
+                f"Example: https://services.wd101.myworkday.com/ccx/oauth2/instance_name/token"
+            )
+            return None
 
         logger.info(f"Requesting access token from Workday: {token_url}")
 

@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import AuditFilterBar, { AuditFilters } from '../components/AuditFilterBar';
 import AuditLogTable, { AuditEvent } from '../components/AuditLogTable';
 import AuditEventDetail from '../components/AuditEventDetail';
+import AuditStatistics from '../components/AuditStatistics';
 import { ShieldExclamationIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 
 interface AuditLogsPageProps {
@@ -125,6 +126,9 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
           />
         </div>
 
+        {/* Statistics Dashboard */}
+        <AuditStatistics stream={filters.stream} username={filters.username} />
+
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Table - takes 2 columns when detail is shown, full width otherwise */}
@@ -194,6 +198,9 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
             onRefresh={handleRefresh}
           />
         </div>
+
+        {/* Statistics Dashboard */}
+        <AuditStatistics stream={filters.stream} username={filters.username} />
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -248,7 +248,7 @@ function _buildScopeJson(
     .filter((e) => e.server.trim())
     .map((e) => {
       const entry: Record<string, unknown> = {
-        server: e.server.trim(),
+        server: e.server.trim().replace(/^\/+|\/+$/g, ''),
         methods: e.methods.length > 0 ? e.methods : ['all'],
       };
       // Tools is now an array; check for wildcard or list
@@ -278,25 +278,31 @@ function _buildScopeJson(
     if (items.length > 0) perms[key] = items;
   }
 
-  // Auto-populate list_service/health_check_service for MCP servers
-  // and list_virtual_server for virtual servers
-  // This ensures users can see the servers in the UI without manual configuration
+  // Auto-sync UI permissions with server_access entries.
+  // Normalize server paths (strip slashes) for consistent matching.
   const serverPaths = serverAccess
     .filter((e) => e.server.trim())
     .map((e) => e.server.trim());
 
   // Separate virtual servers from regular MCP servers
   const virtualServerPaths = serverPaths.filter((p) => p.startsWith('/virtual/'));
-  const mcpServerPaths = serverPaths.filter((p) => !p.startsWith('/virtual/'));
+  const mcpServerPaths = serverPaths
+    .filter((p) => !p.startsWith('/virtual/'))
+    .map((p) => p.replace(/^\/+|\/+$/g, ''));
 
+  // Always sync MCP server UI permissions with current server_access
   if (mcpServerPaths.length > 0) {
-    // Only auto-populate if not already manually configured
-    if (!perms['list_service']) {
-      perms['list_service'] = mcpServerPaths;
-    }
-    if (!perms['health_check_service']) {
-      perms['health_check_service'] = mcpServerPaths;
-    }
+    perms['list_service'] = mcpServerPaths;
+    perms['health_check_service'] = mcpServerPaths;
+    perms['get_service'] = mcpServerPaths;
+    perms['list_tools'] = mcpServerPaths;
+    perms['call_tool'] = mcpServerPaths;
+  } else {
+    delete perms['list_service'];
+    delete perms['health_check_service'];
+    delete perms['get_service'];
+    delete perms['list_tools'];
+    delete perms['call_tool'];
   }
 
   // Always sync list_virtual_server with selected virtual servers
@@ -489,8 +495,10 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
       const serverAccessPayload = serverAccess
         .filter((e) => e.server.trim())
         .map((e) => {
+          // Normalize server path: strip leading/trailing slashes for consistency
+          const normalizedServer = e.server.trim().replace(/^\/+|\/+$/g, '');
           const entry: {server: string; methods: string[]; tools?: string[]} = {
-            server: e.server.trim(),
+            server: normalizedServer,
             methods: e.methods.length > 0 ? e.methods : ['all'],
           };
           if (e.tools.length > 0) {
@@ -506,23 +514,32 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
         if (items.length > 0) perms[key] = items;
       }
 
-      // Auto-populate list_service/health_check_service for MCP servers
-      // and list_virtual_server for virtual servers
+      // Auto-sync UI permissions with server_access entries.
+      // Normalize server paths (strip slashes) for consistent matching.
       const serverPaths = serverAccess
         .filter((e) => e.server.trim())
         .map((e) => e.server.trim());
 
       // Separate virtual servers from regular MCP servers
       const virtualServerPaths = serverPaths.filter((p) => p.startsWith('/virtual/'));
-      const mcpServerPaths = serverPaths.filter((p) => !p.startsWith('/virtual/'));
+      const mcpServerPaths = serverPaths
+        .filter((p) => !p.startsWith('/virtual/'))
+        .map((p) => p.replace(/^\/+|\/+$/g, ''));
 
+      // Always sync MCP server UI permissions with current server_access
+      // (matches the virtual server sync pattern below)
       if (mcpServerPaths.length > 0) {
-        if (!perms['list_service']) {
-          perms['list_service'] = mcpServerPaths;
-        }
-        if (!perms['health_check_service']) {
-          perms['health_check_service'] = mcpServerPaths;
-        }
+        perms['list_service'] = mcpServerPaths;
+        perms['health_check_service'] = mcpServerPaths;
+        perms['get_service'] = mcpServerPaths;
+        perms['list_tools'] = mcpServerPaths;
+        perms['call_tool'] = mcpServerPaths;
+      } else {
+        delete perms['list_service'];
+        delete perms['health_check_service'];
+        delete perms['get_service'];
+        delete perms['list_tools'];
+        delete perms['call_tool'];
       }
 
       // Always sync list_virtual_server with selected virtual servers

@@ -96,15 +96,6 @@ def mock_health_service():
         yield mock_health
 
 
-@pytest.fixture
-def mock_federation_service():
-    """Mock federation service."""
-    with patch("registry.services.federation_service.get_federation_service") as mock_get_fed:
-        mock_fed_service = MagicMock()
-        mock_fed_service.config.is_any_federation_enabled = MagicMock(return_value=False)
-        mock_fed_service.get_federated_servers = AsyncMock(return_value=[])
-        mock_get_fed.return_value = mock_fed_service
-        yield mock_fed_service
 
 
 @pytest.fixture(autouse=True)
@@ -113,7 +104,6 @@ def setup_search_environment(
     mock_auth_dependencies,
     mock_nginx_service,
     mock_health_service,
-    mock_federation_service,
 ):
     """
     Auto-use fixture to set up test environment with all mocks.

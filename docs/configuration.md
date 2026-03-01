@@ -351,6 +351,49 @@ These credentials are **entirely optional** and only needed if you want to:
 
 ---
 
+### Federation Configuration
+
+#### WORKDAY_TOKEN_URL (Optional)
+
+Configuration for Workday ASOR (Agent Service Orchestrator) federation integration.
+
+| Variable | Description | Example | Required |
+|----------|-------------|---------|----------|
+| `WORKDAY_TOKEN_URL` | Workday OAuth2 token endpoint URL | `https://services.wd101.myworkday.com/ccx/oauth2/production_instance/token` | **Optional** |
+
+**Required only if using Workday ASOR federation**
+
+- **Default**: `https://your-tenant.workday.com/ccx/oauth2/your_instance/token` (placeholder)
+- **Format**: `https://<tenant>.workday.com/ccx/oauth2/<instance>/token`
+- **Example**: `https://services.wd101.myworkday.com/ccx/oauth2/production_instance/token`
+- **Security**: Must use HTTPS in production environments
+- **Behavior**: If not configured with a valid URL, ASOR federation will be automatically disabled with a warning logged
+
+**Getting your Workday token URL:**
+
+Replace the placeholder values with your actual Workday tenant identifiers:
+- `<tenant>`: Your Workday tenant domain (e.g., `services.wd101.myworkday.com`)
+- `<instance>`: Your Workday instance name (e.g., `production_instance`, `sandbox_instance`)
+
+**Configuration example:**
+
+```bash
+# For production Workday instance
+WORKDAY_TOKEN_URL=https://services.wd101.myworkday.com/ccx/oauth2/production_instance/token
+
+# For sandbox/testing instance
+WORKDAY_TOKEN_URL=https://services.wd101.myworkday.com/ccx/oauth2/sandbox_instance/token
+```
+
+**Troubleshooting:**
+
+- If ASOR federation is not working, check the registry logs for warnings about WORKDAY_TOKEN_URL
+- Ensure the URL uses HTTPS (HTTP will fail in production)
+- Verify your Workday tenant and instance names are correct
+- Contact your Workday administrator if you're unsure about your instance configuration
+
+---
+
 ## Keycloak Setup and Configuration
 
 When using Keycloak as your authentication provider, the system provides comprehensive setup scripts and configuration options:

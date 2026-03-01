@@ -146,3 +146,12 @@ class FileAgentRepository(AgentRepositoryBase):
     async def set_state(self, path: str, enabled: bool) -> None:
         """Set agent state (alias for set_enabled)."""
         await self.set_enabled(path, enabled)
+
+    async def count(self) -> int:
+        """Get total count of agents.
+
+        Returns:
+            Total number of agents in the repository.
+        """
+        agents = await self.get_all()
+        return len(agents)

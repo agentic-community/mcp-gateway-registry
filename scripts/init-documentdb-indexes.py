@@ -488,6 +488,11 @@ async def _create_audit_events_indexes(
         (("action.resource_type", 1), ("timestamp", 1)),
     ]
 
+    # Single-field index for MCP server name distinct/filter queries
+    single_field_indexes = [
+        ("mcp_server.name", 1),
+    ]
+
     for fields in indexes:
         index_spec = [(f[0], f[1]) for f in fields]
         index_name = "_".join(f[0].replace(".", "_") for f in fields) + "_idx"
@@ -502,6 +507,26 @@ async def _create_audit_events_indexes(
         try:
             await collection.create_index(
                 index_spec,
+                name=index_name,
+            )
+            logger.info(f"Created index '{index_name}' on {collection_name}")
+        except Exception as e:
+            logger.error(f"Failed to create index '{index_name}' on {collection_name}: {e}")
+
+    # Create single-field indexes for distinct/filter queries
+    for field, order in single_field_indexes:
+        index_name = field.replace(".", "_") + "_idx"
+
+        if recreate:
+            try:
+                await collection.drop_index(index_name)
+                logger.info(f"Dropped existing index '{index_name}' from {collection_name}")
+            except Exception as e:
+                logger.debug(f"No existing index '{index_name}' to drop: {e}")
+
+        try:
+            await collection.create_index(
+                [(field, order)],
                 name=index_name,
             )
             logger.info(f"Created index '{index_name}' on {collection_name}")

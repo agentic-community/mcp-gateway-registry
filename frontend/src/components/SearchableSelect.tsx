@@ -25,6 +25,7 @@ interface SearchableSelectProps {
   maxDescriptionWords?: number;
   allowCustom?: boolean;  // Allow entering values not in the list
   specialOptions?: SelectOption[];  // Options shown at top (e.g., "* All")
+  focusColor?: string;
 }
 
 
@@ -48,6 +49,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
   maxDescriptionWords = 8,
   allowCustom = false,
   specialOptions = [],
+  focusColor,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -124,10 +126,10 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={disabled}
-          className="w-full pl-9 pr-8 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg
+          className={`w-full pl-9 pr-8 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg
                      bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-purple-500 focus:border-transparent
-                     disabled:opacity-50 disabled:cursor-not-allowed"
+                     focus:ring-2 ${focusColor || 'focus:ring-purple-500'} focus:border-transparent
+                     disabled:opacity-50 disabled:cursor-not-allowed`}
         />
         {value && !disabled && (
           <button

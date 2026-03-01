@@ -164,6 +164,9 @@ async def _create_standard_indexes(
             [("action.resource_type", ASCENDING), ("timestamp", ASCENDING)]
         )
 
+        # Index for MCP server name distinct/filter queries
+        await collection.create_index([("mcp_server.name", ASCENDING)])
+
         # Migration: drop old single-field request_id index if it exists
         # Try both auto-generated name and explicit name variants
         for old_index_name in ("request_id_1", "request_id_idx"):

@@ -242,3 +242,19 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
             f"Updated agent state cache: {len(state['enabled'])} enabled, "
             f"{len(state['disabled'])} disabled"
         )
+
+    async def count(self) -> int:
+        """Get total count of agents.
+
+        Returns:
+            Total number of agents in the repository.
+        """
+        collection = await self._get_collection()
+
+        try:
+            count = await collection.count_documents({})
+            logger.debug(f"DocumentDB COUNT: Found {count} agents")
+            return count
+        except Exception as e:
+            logger.error(f"Error counting agents in DocumentDB: {e}", exc_info=True)
+            return 0

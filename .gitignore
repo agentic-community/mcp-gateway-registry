@@ -352,8 +352,9 @@ terraform/.admin_password
 image-manifest.json
 agent_security_scans/
 
-# Helm dependency charts (fetched via helm dependency build)
+# Helm dependency charts and lock files (fetched via helm dependency build)
 charts/*/charts/
+charts/*/Chart.lock
 
 # Shell config artifacts
 .ash/

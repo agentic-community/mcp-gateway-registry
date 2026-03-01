@@ -299,3 +299,20 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
 
         logger.info(f"Updated {count} skills in batch")
         return count
+
+    async def count(self) -> int:
+        """Get total count of skills.
+
+        Returns:
+            Total number of skills in the repository.
+        """
+        await self.ensure_indexes()
+        collection = await self._get_collection()
+
+        try:
+            count = await collection.count_documents({})
+            logger.debug(f"DocumentDB COUNT: Found {count} skills")
+            return count
+        except Exception as e:
+            logger.error(f"Error counting skills in DocumentDB: {e}", exc_info=True)
+            return 0
