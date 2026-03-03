@@ -1,266 +1,336 @@
 ---
 name: macos-setup
-description: "Complete macOS setup and teardown for MCP Gateway & Registry. Guides users through the full installation (Docker containers, Keycloak auth, Python environment, embeddings model, all services) or complete removal of everything. Uses progressive disclosure - presents each phase, asks for confirmation, and executes only after approval. Handles both /macos-setup setup and /macos-setup teardown modes."
+description: "Complete macOS setup and teardown for MCP Gateway & Registry (AI-registry). Clones the repository, installs all services, configures Keycloak auth, registers the Cloudflare docs server, and verifies the full stack. Also supports complete teardown. Can be run directly from its GitHub URL without the repository already cloned. Uses an interactive or default-values mode chosen at startup."
 license: Apache-2.0
 metadata:
   author: mcp-gateway-registry
-  version: "1.0"
+  version: "2.0"
 ---
 
-# MCP Gateway & Registry - macOS Setup & Teardown Skill
+# MCP Gateway & Registry — macOS Setup Skill
 
-Use this skill when the user wants to:
-- **Set up** the MCP Gateway & Registry from scratch on macOS so they can access `http://localhost` and see the registry fully running
-- **Tear down** and completely remove all MCP Gateway components from their macOS system
+**Repository:** https://github.com/agentic-community/mcp-gateway-registry
+**This skill:** https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/macos-setup/SKILL.md
+**Full macOS guide:** https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/macos-setup-guide.md
 
-## Overview
+## How to run this skill without cloning the repository
 
-This skill follows `docs/macos-setup-guide.md` with **progressive disclosure**: each phase is announced to the user with a description of what will happen, confirmation is requested using `AskUserQuestion`, and only then are commands executed. No system changes happen without explicit user approval.
+This skill is self-contained. You can invoke it from any directory in Claude Code using the GitHub URL. It will clone the repository for you.
+
+```
+/macos-setup
+```
+
+Or reference it remotely if you have not installed this repo:
+
+```
+@https://raw.githubusercontent.com/agentic-community/mcp-gateway-registry/main/.claude/skills/macos-setup/SKILL.md
+```
+
+---
+
+## What this skill does
+
+**`/macos-setup setup`** — Full guided installation on a fresh macOS machine:
+- Clones the MCP Gateway & Registry repository
+- Installs and configures all services (Keycloak, registry, auth-server, MCP servers)
+- Builds all Docker images from source
+- Registers the Cloudflare Documentation MCP server so it appears immediately on login
+- Ends with a complete summary of every step taken
+
+**`/macos-setup teardown`** — Removes all MCP Gateway components from your system
+
+---
+
+## Step tracking
+
+Throughout the entire execution, Claude must maintain an internal step log. After every phase completes (success, skip, or failure), append an entry to this log. Display the full log as a formatted table in the Final Summary phase.
+
+Step log format: `{ phase, name, status (DONE / SKIPPED / FAILED), notes }`
+
+---
 
 ## Step 0: Determine Mode
 
-**Before doing anything else**, use `AskUserQuestion` to ask the user which operation they want:
+**Before doing anything else**, use `AskUserQuestion` to ask:
 
+**Question 1 — Operation:**
 ```
 Which operation would you like to perform?
 
-  Setup   - Install and configure MCP Gateway & Registry from scratch.
-            Requires: Docker Desktop running, ~10GB free disk, ~15-20 min.
+  Setup   - Install the MCP Gateway & Registry (AI-registry) from scratch.
+            Builds all services from source. Estimated time: 20-40 minutes.
 
-  Teardown - Stop all services, remove all containers, volumes, credentials,
-             and generated files. This is irreversible.
+  Teardown - Stop all services and remove all components. Irreversible.
 ```
 
-If the user invoked the skill with an argument (e.g., `/macos-setup setup` or `/macos-setup teardown`), skip this question and go directly to the appropriate workflow.
+If the user invoked the skill with an argument (`/macos-setup setup` or `/macos-setup teardown`), skip this question.
+
+**Question 2 — Execution mode (Setup only):**
+```
+How should I run the setup?
+
+  Default (recommended) - Use sensible defaults for all prompts. I will only
+    pause for decisions that truly require your input. Passwords will be
+    auto-generated and shown in the final summary.
+
+  Interactive - Ask for your confirmation and input before every phase.
+    You control each step individually.
+```
+
+Store the answer as `EXECUTION_MODE` = `default` or `interactive`.
+
+**Question 3 — Installation directory (Setup only):**
+```
+Where should the AI-registry project be installed?
+
+Default: ~/AI-registry
+
+Enter a path, or press Enter / select the default option to use ~/AI-registry.
+```
+
+Store the answer as `INSTALL_DIR`. If the user provides no input or selects the default, set `INSTALL_DIR=~/AI-registry` and inform the user:
+> "Using default installation directory: ~/AI-registry"
+
+**Expand the path immediately:**
+```bash
+INSTALL_DIR=$(eval echo "${INSTALL_DIR}")
+echo "Installation directory: ${INSTALL_DIR}"
+```
+
+Log: `{ 0, "Mode & Directory Selection", DONE, "Mode: ${EXECUTION_MODE}, Dir: ${INSTALL_DIR}" }`
 
 ---
 
 ## SETUP WORKFLOW
 
-Work through each phase in order. **Never skip ahead.** After each phase succeeds, announce the next phase and ask for confirmation before executing.
+For every phase below, apply this rule:
+- **Interactive mode**: announce the phase, use `AskUserQuestion` to confirm before executing
+- **Default mode**: announce what you are doing with a one-line message, then execute immediately without asking confirmation
 
 ---
 
 ### Phase 1: Prerequisites Check
 
-**Announce to the user:**
-> "Phase 1 of 13: Prerequisites Check. I will verify that all required software is installed and Docker Desktop is running. No files will be modified."
-
-Use `AskUserQuestion` with options: "Check prerequisites" / "Skip (I know everything is installed)".
-
-If user confirms, run the following checks:
+**Announce:** "Checking prerequisites..."
 
 ```bash
-echo "=== Checking Docker ==="
+echo "=== Docker ==="
 docker --version 2>/dev/null && docker ps >/dev/null 2>&1 && echo "DOCKER_OK" || echo "DOCKER_FAIL"
 
-echo "=== Checking Python 3.12+ ==="
+echo "=== Python ==="
 python3 --version 2>/dev/null && echo "PYTHON_OK" || echo "PYTHON_FAIL"
 
-echo "=== Checking uv ==="
+echo "=== uv ==="
 uv --version 2>/dev/null && echo "UV_OK" || echo "UV_FAIL"
 
-echo "=== Checking jq ==="
-jq --version 2>/dev/null && echo "JQ_OK" || echo "JQ_FAIL"
+echo "=== Node.js (required for building from source) ==="
+node --version 2>/dev/null && echo "NODE_OK" || echo "NODE_FAIL"
 
-echo "=== Checking git ==="
+echo "=== git ==="
 git --version 2>/dev/null && echo "GIT_OK" || echo "GIT_FAIL"
 
-echo "=== Checking we are in the repo root ==="
-ls docker-compose.yml pyproject.toml build_and_run.sh 2>/dev/null && echo "REPO_OK" || echo "REPO_FAIL"
+echo "=== jq ==="
+jq --version 2>/dev/null && echo "JQ_OK" || echo "JQ_FAIL"
 ```
 
-**Evaluate results and report clearly:**
+For any failed check, display the install instructions:
 
-| Check | Fail Action |
-|-------|-------------|
-| DOCKER_FAIL | "Docker Desktop is not running. Open Docker Desktop from Applications and wait for the whale icon in the menu bar, then retry." |
-| PYTHON_FAIL | "Install Python 3.12+: `brew install python@3.12`" |
-| UV_FAIL | "Install uv: `curl -LsSf https://astral.sh/uv/install.sh \| sh` then restart your terminal" |
-| JQ_FAIL | "Install jq: `brew install jq`" |
-| GIT_FAIL | "Install Git: `xcode-select --install`" |
-| REPO_FAIL | "You are not in the repository root. Navigate to the mcp-gateway-registry directory with `cd ~/workspace/mcp-gateway-registry` (or wherever you cloned it) and run this skill again." |
+| Check | Install command |
+|-------|----------------|
+| DOCKER_FAIL | "Install Docker Desktop from https://www.docker.com/products/docker-desktop/ then start it and wait for the whale icon in the menu bar" |
+| PYTHON_FAIL | `brew install python@3.12` |
+| UV_FAIL | `curl -LsSf https://astral.sh/uv/install.sh \| sh` — then restart your terminal |
+| NODE_FAIL | `brew install node@20` or download from https://nodejs.org/ |
+| GIT_FAIL | `xcode-select --install` |
+| JQ_FAIL | `brew install jq` |
 
-**Do not proceed to Phase 2 if any check fails.** Ask the user to fix the issues and confirm before retrying.
+**Do not proceed if Docker or git fail.** Python, uv, Node.js, and jq must also be present before continuing. Ask the user to install missing tools and retry.
+
+Log: `{ 1, "Prerequisites Check", DONE/FAILED, list of what passed/failed }`
 
 ---
 
-### Phase 2: Collect Required Configuration
+### Phase 2: Clone Repository
 
-**Announce to the user:**
-> "Phase 2 of 13: Configuration Collection. I need two passwords before we can proceed. These will be set for Keycloak (the authentication server). No files are modified in this phase."
+**Announce:** "Cloning the MCP Gateway & Registry repository to `${INSTALL_DIR}`..."
 
-Use `AskUserQuestion` to collect:
+First check if the directory already exists:
 
-**Question 1 - Keycloak Admin Password:**
-```
-Enter a password for the Keycloak admin account (minimum 8 characters).
-
-This is REQUIRED. There is no default - you must set a strong, memorable password.
-You will use this to log in to the Keycloak admin console at http://localhost:8080/admin.
-```
-
-**Question 2 - Keycloak Database Password:**
-```
-Enter a password for the internal Keycloak PostgreSQL database (minimum 8 characters).
-
-This is REQUIRED. There is no default. This password is used internally by Keycloak to connect to its database. You won't need to type this again after setup.
+```bash
+if [ -d "${INSTALL_DIR}" ]; then
+    echo "ALREADY_EXISTS"
+    ls "${INSTALL_DIR}/docker-compose.yml" 2>/dev/null && echo "REPO_OK" || echo "NOT_A_REPO"
+else
+    echo "WILL_CLONE"
+fi
 ```
 
-Store both responses as variables named `KEYCLOAK_ADMIN_PASSWORD` and `KEYCLOAK_DB_PASSWORD`.
-
-**Validate passwords**: If either password is fewer than 8 characters or empty, inform the user and ask again. Do NOT proceed with empty or short passwords.
-
-**Confirm with the user** by presenting a summary (never show actual password values):
+**If `ALREADY_EXISTS` and `REPO_OK`:** Inform the user and ask (both modes):
 ```
-Configuration Summary:
-  - Keycloak Admin Password: [set - N characters]
-  - Keycloak Database Password: [set - N characters]
-  - Auth Provider: keycloak (default)
-  - Auth Server URL: http://localhost (default)
-  - Secret Key: will be auto-generated
+The directory ${INSTALL_DIR} already contains the repository.
 
-Shall I proceed to create the environment file?
+  Use existing - Continue setup with the existing copy
+  Re-clone     - Remove it and clone fresh (WARNING: deletes existing data)
 ```
+
+**If `WILL_CLONE`:** Clone the repository:
+```bash
+# Create parent directory if needed
+mkdir -p "$(dirname "${INSTALL_DIR}")"
+
+# Clone
+git clone https://github.com/agentic-community/mcp-gateway-registry.git "${INSTALL_DIR}"
+echo "Clone exit code: $?"
+```
+
+After cloning or confirming existing, change into the directory:
+```bash
+cd "${INSTALL_DIR}"
+echo "Working directory: $(pwd)"
+ls docker-compose.yml build_and_run.sh 2>/dev/null && echo "REPO_VERIFIED" || echo "REPO_INVALID"
+```
+
+All subsequent phases run commands from within `${INSTALL_DIR}`.
+
+Key files now available locally (GitHub references for documentation):
+- [`build_and_run.sh`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/build_and_run.sh)
+- [`docker-compose.yml`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docker-compose.yml)
+- [`.env.example`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.env.example)
+
+Log: `{ 2, "Repository Clone", DONE/SKIPPED, "Cloned to ${INSTALL_DIR} / Used existing" }`
 
 ---
 
-### Phase 3: Create Environment Configuration
+### Phase 3: Credentials Configuration
 
-**Announce to the user:**
-> "Phase 3 of 13: Environment Configuration. I will copy `.env.example` to `.env` and configure it with your settings. If `.env` already exists, I will ask before overwriting."
+**Announce:** "Configuring credentials..."
 
-Use `AskUserQuestion` to confirm: "Create/update .env file" / "Cancel".
+**In default mode:** Auto-generate both passwords using Python. Store them for the final summary.
+
+```bash
+KEYCLOAK_ADMIN_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
+KEYCLOAK_DB_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
+echo "Passwords auto-generated (will be shown in final summary)"
+echo "Admin password length: ${#KEYCLOAK_ADMIN_PASSWORD}"
+echo "DB password length: ${#KEYCLOAK_DB_PASSWORD}"
+```
+
+**In interactive mode:** Use `AskUserQuestion` to collect:
+
+- **Keycloak Admin Password** — minimum 8 characters, REQUIRED, no default. Used to log in at `http://localhost:8080/admin`.
+- **Keycloak Database Password** — minimum 8 characters, REQUIRED, no default. Internal Keycloak database credential.
+
+Validate: if either password is fewer than 8 characters or empty, re-prompt. Do not proceed with weak passwords.
+
+Log: `{ 3, "Credentials Configuration", DONE, "default-generated / user-provided" }`
+
+---
+
+### Phase 4: Environment File Setup
+
+**Announce:** "Creating `.env` configuration file..."
 
 Check for existing `.env`:
 ```bash
-ls -la .env 2>/dev/null && echo "ENV_EXISTS" || echo "ENV_MISSING"
+ls -la "${INSTALL_DIR}/.env" 2>/dev/null && echo "ENV_EXISTS" || echo "ENV_MISSING"
 ```
 
-If `.env` exists, warn the user:
-> "A `.env` file already exists. This may be from a previous setup. Overwriting it will reset all configuration. Do you want to overwrite it?"
-
-Use `AskUserQuestion`: "Overwrite existing .env" / "Keep existing .env and skip this phase".
-
-If proceeding:
+In **interactive mode** with existing `.env`, ask to overwrite. In **default mode**, overwrite automatically and note it in the log.
 
 ```bash
+cd "${INSTALL_DIR}"
+
 # Copy template
 cp .env.example .env
 
-# Generate a secure SECRET_KEY
+# Generate SECRET_KEY
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
-echo "SECRET_KEY generated (${#SECRET_KEY} characters)"
+echo "SECRET_KEY generated: ${#SECRET_KEY} characters"
 ```
 
-Now update the `.env` file. Use `sed -i ''` (macOS syntax). Run each line separately:
+Update `.env` using Python to handle special characters safely:
 
 ```bash
-# Set auth provider
-sed -i '' "s|^AUTH_PROVIDER=.*|AUTH_PROVIDER=keycloak|" .env
-grep -q "^AUTH_PROVIDER=" .env || echo "AUTH_PROVIDER=keycloak" >> .env
+cd "${INSTALL_DIR}"
 
-# Set auth server URL
-sed -i '' "s|^AUTH_SERVER_EXTERNAL_URL=.*|AUTH_SERVER_EXTERNAL_URL=http://localhost|" .env
-grep -q "^AUTH_SERVER_EXTERNAL_URL=" .env || echo "AUTH_SERVER_EXTERNAL_URL=http://localhost" >> .env
+python3 << 'PYEOF'
+import re, os
 
-# Set admin password (use printf to handle special characters safely)
-python3 -c "
-import re, sys
-content = open('.env').read()
-pwd = '''${KEYCLOAK_ADMIN_PASSWORD}'''
-content = re.sub(r'^KEYCLOAK_ADMIN_PASSWORD=.*', f'KEYCLOAK_ADMIN_PASSWORD={pwd}', content, flags=re.MULTILINE)
-if 'KEYCLOAK_ADMIN_PASSWORD=' not in content:
-    content += f'\nKEYCLOAK_ADMIN_PASSWORD={pwd}'
-open('.env', 'w').write(content)
-print('Admin password set in .env')
-"
+env_path = '.env'
+content = open(env_path).read()
 
-# Set DB password
-python3 -c "
-import re
-content = open('.env').read()
-pwd = '''${KEYCLOAK_DB_PASSWORD}'''
-content = re.sub(r'^KEYCLOAK_DB_PASSWORD=.*', f'KEYCLOAK_DB_PASSWORD={pwd}', content, flags=re.MULTILINE)
-if 'KEYCLOAK_DB_PASSWORD=' not in content:
-    content += f'\nKEYCLOAK_DB_PASSWORD={pwd}'
-open('.env', 'w').write(content)
-print('DB password set in .env')
-"
+updates = {
+    'AUTH_PROVIDER': 'keycloak',
+    'AUTH_SERVER_EXTERNAL_URL': 'http://localhost',
+    'KEYCLOAK_ADMIN_PASSWORD': os.environ.get('KEYCLOAK_ADMIN_PASSWORD', ''),
+    'KEYCLOAK_DB_PASSWORD': os.environ.get('KEYCLOAK_DB_PASSWORD', ''),
+    'SECRET_KEY': os.environ.get('SECRET_KEY', ''),
+}
 
-# Set SECRET_KEY
-python3 -c "
-import re
-content = open('.env').read()
-key = '${SECRET_KEY}'
-content = re.sub(r'^SECRET_KEY=.*', f'SECRET_KEY={key}', content, flags=re.MULTILINE)
-if 'SECRET_KEY=' not in content:
-    content += f'\nSECRET_KEY={key}'
-open('.env', 'w').write(content)
-print('SECRET_KEY set in .env')
-"
+for key, value in updates.items():
+    pattern = rf'^{key}=.*'
+    replacement = f'{key}={value}'
+    if re.search(pattern, content, flags=re.MULTILINE):
+        content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+    else:
+        content += f'\n{key}={value}'
+
+open(env_path, 'w').write(content)
+print('Environment file updated successfully')
+PYEOF
 ```
 
-Verify the key settings (without showing password values):
+Verify (without exposing values):
 ```bash
-echo "=== Verifying .env settings ==="
-grep "^AUTH_PROVIDER=" .env
-grep "^AUTH_SERVER_EXTERNAL_URL=" .env
-grep "^KEYCLOAK_ADMIN_PASSWORD=" .env | sed 's/=.*/=[set]/'
-grep "^KEYCLOAK_DB_PASSWORD=" .env | sed 's/=.*/=[set]/'
-grep "^SECRET_KEY=" .env | sed 's/=.*/=[set - 88 chars]/'
+cd "${INSTALL_DIR}"
+for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLOAK_DB_PASSWORD SECRET_KEY; do
+    VALUE=$(grep "^${KEY}=" .env | cut -d'=' -f2)
+    if [ -n "$VALUE" ]; then
+        echo "${KEY}=[set]"
+    else
+        echo "${KEY}=[MISSING - ERROR]"
+    fi
+done
 ```
 
-Report: "Environment file configured at `.env`."
+The template is at: [`.env.example`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.env.example)
+
+Log: `{ 4, "Environment File Setup", DONE, ".env created and configured" }`
 
 ---
 
-### Phase 4: Python Virtual Environment
+### Phase 5: Python Virtual Environment
 
-**Announce to the user:**
-> "Phase 4 of 13: Python Virtual Environment. I will run `uv sync` to install all Python dependencies into a `.venv` directory. This may take 1-2 minutes on first run."
-
-Use `AskUserQuestion` to confirm: "Install Python dependencies" / "Skip (already set up)".
+**Announce:** "Installing Python dependencies via `uv sync`..."
 
 ```bash
+cd "${INSTALL_DIR}"
 uv sync
-echo "Python venv exit code: $?"
-```
-
-Verify:
-```bash
+echo "uv sync exit code: $?"
 ls -la .venv/bin/python 2>/dev/null && echo "VENV_OK" || echo "VENV_FAIL"
 ```
 
-Report: "Python virtual environment ready at `.venv/`."
+Log: `{ 5, "Python Virtual Environment", DONE/FAILED, "" }`
 
 ---
 
-### Phase 5: Download Embeddings Model
+### Phase 6: Download Embeddings Model
 
-**Announce to the user:**
-> "Phase 5 of 13: Embeddings Model Download. The MCP Gateway requires a sentence-transformers model (~90MB) for intelligent tool discovery. It will be saved to `~/mcp-gateway/models/all-MiniLM-L6-v2/`."
+**Announce:** "Downloading sentence-transformers embeddings model (~90MB) to `~/mcp-gateway/models/`..."
 
-Use `AskUserQuestion` to confirm: "Download embeddings model (~90MB)" / "Skip (already downloaded)".
+This model powers intelligent tool discovery. It is downloaded from HuggingFace.
 
-If skipping, verify the model directory exists:
 ```bash
-ls ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2/ 2>/dev/null && echo "MODEL_EXISTS" || echo "MODEL_MISSING"
-```
+mkdir -p "${HOME}/mcp-gateway/models/all-MiniLM-L6-v2"
 
-If MODEL_MISSING and user skipped, warn: "The embeddings model is required. Services may fail to start without it. Consider running this phase."
+cd "${INSTALL_DIR}"
 
-If downloading:
-```bash
-# Create directory
-mkdir -p ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2
-
-# Try huggingface-cli first
+# Try huggingface-cli first, fall back to Python API
 if command -v huggingface-cli >/dev/null 2>&1; then
     huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 \
-        --local-dir ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2
+        --local-dir "${HOME}/mcp-gateway/models/all-MiniLM-L6-v2"
 else
-    # Fall back to Python API
     uv run python -c "
 from huggingface_hub import snapshot_download
 import os
@@ -271,655 +341,589 @@ path = snapshot_download(
 print(f'Downloaded to: {path}')
 "
 fi
+
+echo "Model files: $(ls ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2/ | wc -l | tr -d ' ') files"
 ```
 
-Verify:
-```bash
-ls -la ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2/ | head -10
-echo "Total files: $(ls ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2/ | wc -l)"
-```
-
-Report: "Embeddings model downloaded to `~/mcp-gateway/models/all-MiniLM-L6-v2/`."
+Log: `{ 6, "Embeddings Model Download", DONE/FAILED, "~/mcp-gateway/models/all-MiniLM-L6-v2" }`
 
 ---
 
-### Phase 6: Create Required Directories
+### Phase 7: Create Required Directories
 
-**Announce to the user:**
-> "Phase 6 of 13: Directory Setup. I will create the required Docker volume mount directories under `~/mcp-gateway/`."
-
-Use `AskUserQuestion` to confirm: "Create directories" / "Skip".
+**Announce:** "Creating Docker volume mount directories..."
 
 ```bash
-mkdir -p ${HOME}/mcp-gateway/{servers,models,auth_server,secrets/fininfo,logs,ssl}
-ls -la ${HOME}/mcp-gateway/
+mkdir -p "${HOME}/mcp-gateway/{servers,models,auth_server,secrets/fininfo,logs,ssl}"
+ls -la "${HOME}/mcp-gateway/"
 ```
 
-Report: "Required directories created."
+Log: `{ 7, "Directory Creation", DONE, "~/mcp-gateway/{servers,models,auth_server,secrets/fininfo,logs,ssl}" }`
 
 ---
 
-### Phase 7: Start Keycloak Services
+### Phase 8: Start Keycloak Services
 
-**Announce to the user:**
-> "Phase 7 of 13: Starting Keycloak. I will start the Keycloak database and Keycloak server containers. Allow 2-3 minutes for full initialization. The terminal will show polling output while waiting."
-
-Use `AskUserQuestion` to confirm: "Start Keycloak services" / "Cancel".
+**Announce:** "Starting Keycloak authentication services (1-3 minute wait)..."
 
 ```bash
-# Export passwords - these must be set before docker compose reads them
+cd "${INSTALL_DIR}"
+
 export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}"
 export KEYCLOAK_DB_PASSWORD="${KEYCLOAK_DB_PASSWORD}"
 
-# Start only Keycloak and its database
 docker compose up -d keycloak-db keycloak
 echo "Docker compose exit code: $?"
 ```
 
-Wait for Keycloak to be ready by polling (max 180 seconds):
+Poll until Keycloak responds (max 180 seconds):
 
 ```bash
-echo "Waiting for Keycloak to become ready (this takes 1-3 minutes)..."
+echo "Waiting for Keycloak to be ready..."
 TIMEOUT=180
 ELAPSED=0
 READY=false
 
 while [ $ELAPSED -lt $TIMEOUT ]; do
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/realms/master 2>/dev/null || echo "000")
-    if [ "$HTTP_CODE" = "200" ]; then
-        echo "Keycloak is ready! (HTTP 200 from /realms/master)"
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/realms/master 2>/dev/null || echo "000")
+    if [ "$HTTP" = "200" ]; then
+        echo "Keycloak ready after ${ELAPSED}s"
         READY=true
         break
     fi
-    echo "  Waiting... ($ELAPSED/${TIMEOUT}s) - HTTP status: $HTTP_CODE"
+    echo "  ${ELAPSED}s — HTTP ${HTTP}, still waiting..."
     sleep 10
     ELAPSED=$((ELAPSED + 10))
 done
 
-if [ "$READY" = "false" ]; then
-    echo "ERROR: Keycloak did not respond within ${TIMEOUT} seconds"
-    docker compose logs keycloak --tail 20
-fi
+[ "$READY" = "false" ] && echo "ERROR: Keycloak did not start within ${TIMEOUT}s" && docker compose logs keycloak --tail 20
 ```
 
-Verify the master realm is accessible:
+Verify:
 ```bash
 curl -s http://localhost:8080/realms/master | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
-    print('Keycloak master realm:', d.get('realm', 'unknown'))
-except:
-    print('Could not parse Keycloak response')
+    print('Keycloak master realm:', d.get('realm'))
+except Exception as e:
+    print('Parse error:', e)
 "
 ```
 
-**If Keycloak fails to start**, show the logs and stop:
-```bash
-docker compose logs keycloak --tail 30
-docker compose ps
-```
-Inform the user of the error and ask them to investigate before retrying.
+Log: `{ 8, "Keycloak Startup", DONE/FAILED, "Ready in Xs / timed out" }`
 
 ---
 
-### Phase 8: Fix macOS SSL Requirement (Master Realm)
+### Phase 9: Fix macOS SSL Requirement
 
-**Announce to the user:**
-> "Phase 8 of 13: Keycloak SSL Configuration. On macOS, Docker runs in a VM which causes Keycloak to require HTTPS even for localhost. I will disable this requirement for local development. This is a standard macOS-specific configuration step."
+**Announce:** "Disabling Keycloak HTTPS requirement for local macOS development..."
 
-Use `AskUserQuestion` to confirm: "Disable SSL requirement for Keycloak" / "Cancel".
+On macOS, Docker's VM causes Keycloak to enforce HTTPS on all connections. This must be disabled for local development.
 
-First, detect the Keycloak container name dynamically:
+Detect the Keycloak container name:
 ```bash
 KEYCLOAK_CONTAINER=$(docker ps --format "{{.Names}}" | grep keycloak | grep -v db | head -1)
-echo "Detected Keycloak container: ${KEYCLOAK_CONTAINER}"
-
-if [ -z "$KEYCLOAK_CONTAINER" ]; then
-    echo "ERROR: No running Keycloak container found"
-    docker ps
-    exit 1
-fi
+echo "Keycloak container: ${KEYCLOAK_CONTAINER}"
+[ -z "$KEYCLOAK_CONTAINER" ] && echo "ERROR: No Keycloak container running" && docker ps && exit 1
 ```
 
-Configure Keycloak admin CLI:
+Disable SSL on master realm:
 ```bash
 docker exec ${KEYCLOAK_CONTAINER} /opt/keycloak/bin/kcadm.sh config credentials \
-    --server http://localhost:8080 \
-    --realm master \
-    --user admin \
-    --password "${KEYCLOAK_ADMIN_PASSWORD}"
-echo "Admin CLI config exit code: $?"
-```
+    --server http://localhost:8080 --realm master \
+    --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
 
-Disable SSL for master realm:
-```bash
 docker exec ${KEYCLOAK_CONTAINER} /opt/keycloak/bin/kcadm.sh update realms/master -s sslRequired=NONE
-echo "SSL disable for master realm exit code: $?"
+echo "SSL disabled for master realm, exit code: $?"
 ```
 
 Verify:
 ```bash
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/admin/")
-echo "Admin endpoint HTTP status: ${HTTP_CODE} (302 = success/redirect to login)"
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/admin/")
+echo "Admin endpoint: HTTP ${HTTP} (302 = success)"
 ```
 
-A `302` response means the admin endpoint is accessible (redirects to login page). Any `403` or `400` indicates SSL is still required.
-
-Report: "SSL requirement disabled for Keycloak master realm."
+Log: `{ 9, "Keycloak SSL Fix (master realm)", DONE/FAILED, "HTTP ${HTTP}" }`
 
 ---
 
-### Phase 9: Initialize Keycloak Realm and Clients
+### Phase 10: Initialize Keycloak Realm and Clients
 
-**Announce to the user:**
-> "Phase 9 of 13: Keycloak Initialization. I will run the initialization script to create the 'mcp-gateway' realm, the web OAuth client (mcp-gateway-web), and the machine-to-machine client (mcp-gateway-m2m). This takes about 30-60 seconds."
+**Announce:** "Initializing Keycloak — creating mcp-gateway realm and OAuth clients..."
 
-Use `AskUserQuestion` to confirm: "Initialize Keycloak realm and clients" / "Cancel".
+Script: [`keycloak/setup/init-keycloak.sh`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/keycloak/setup/init-keycloak.sh)
 
 ```bash
+cd "${INSTALL_DIR}"
 chmod +x keycloak/setup/init-keycloak.sh
 
-# The init script needs the admin password available
 export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}"
-
 ./keycloak/setup/init-keycloak.sh
-echo "Init script exit code: $?"
+echo "Init exit code: $?"
 ```
 
-**If the init script fails**, common causes are:
-- SSL still required (re-run Phase 8)
-- Keycloak not fully ready (wait 30 more seconds and retry)
-- Admin password incorrect (check the `.env` file)
-
-After initialization, disable SSL for the newly created `mcp-gateway` realm:
+After initialization, disable SSL on the newly created `mcp-gateway` realm:
 
 ```bash
 KEYCLOAK_CONTAINER=$(docker ps --format "{{.Names}}" | grep keycloak | grep -v db | head -1)
 
-# Re-authenticate (session may have expired)
 docker exec ${KEYCLOAK_CONTAINER} /opt/keycloak/bin/kcadm.sh config credentials \
-    --server http://localhost:8080 \
-    --realm master \
-    --user admin \
-    --password "${KEYCLOAK_ADMIN_PASSWORD}"
+    --server http://localhost:8080 --realm master \
+    --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
 
-# Disable SSL for the mcp-gateway realm
 docker exec ${KEYCLOAK_CONTAINER} /opt/keycloak/bin/kcadm.sh update realms/mcp-gateway -s sslRequired=NONE
-echo "SSL disable for mcp-gateway realm exit code: $?"
+echo "SSL disabled for mcp-gateway realm, exit code: $?"
 ```
 
-Verify both realms are accessible:
+Verify both realms:
 ```bash
-echo "=== Verifying realms ==="
-curl -s http://localhost:8080/realms/master | python3 -c "import sys,json; d=json.load(sys.stdin); print('master realm:', d.get('realm'))"
-curl -s http://localhost:8080/realms/mcp-gateway | python3 -c "import sys,json; d=json.load(sys.stdin); print('mcp-gateway realm:', d.get('realm'))"
+curl -s http://localhost:8080/realms/master | python3 -c "import sys,json; print('master:', json.load(sys.stdin).get('realm'))"
+curl -s http://localhost:8080/realms/mcp-gateway | python3 -c "import sys,json; print('mcp-gateway:', json.load(sys.stdin).get('realm'))"
 ```
 
-Report: "Keycloak realm 'mcp-gateway' created with web and M2M clients."
+**Common failures and fixes:**
+- If the script fails with an SSL error: re-run Phase 9 before retrying
+- If Keycloak is not responding: wait 30 seconds and retry — it may still be initializing
+- If admin credentials are rejected: verify `KEYCLOAK_ADMIN_PASSWORD` matches what was set in Phase 3
+
+Log: `{ 10, "Keycloak Init (realm + clients)", DONE/FAILED, "mcp-gateway realm created" }`
 
 ---
 
-### Phase 10: Retrieve and Save Client Credentials
+### Phase 11: Retrieve Client Credentials
 
-**Announce to the user:**
-> "Phase 10 of 13: Client Credentials. I will retrieve the auto-generated OAuth client secrets from Keycloak and save them to `.oauth-tokens/`. Then I will update `.env` with these secrets so the services can authenticate."
+**Announce:** "Retrieving OAuth client secrets from Keycloak and updating `.env`..."
 
-Use `AskUserQuestion` to confirm: "Retrieve and save client credentials" / "Cancel".
+Script: [`keycloak/setup/get-all-client-credentials.sh`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/keycloak/setup/get-all-client-credentials.sh)
 
 ```bash
+cd "${INSTALL_DIR}"
 chmod +x keycloak/setup/get-all-client-credentials.sh
 ./keycloak/setup/get-all-client-credentials.sh
 echo "Credentials retrieval exit code: $?"
 ```
 
-Display the saved credential summary (these are secrets - inform the user to keep them safe):
-```bash
-echo "=== Saved credentials ==="
-cat .oauth-tokens/keycloak-client-secrets.txt 2>/dev/null || echo "Credentials file not found"
-```
+Parse the retrieved secrets and update `.env`:
 
-Parse and update `.env` with the client secrets:
 ```bash
-# Extract the web client secret
+cd "${INSTALL_DIR}"
+
 WEB_SECRET=$(grep "^KEYCLOAK_CLIENT_SECRET=" .oauth-tokens/keycloak-client-secrets.txt 2>/dev/null | head -1 | cut -d'=' -f2)
 M2M_SECRET=$(grep "^KEYCLOAK_M2M_CLIENT_SECRET=" .oauth-tokens/keycloak-client-secrets.txt 2>/dev/null | head -1 | cut -d'=' -f2)
 
-echo "Web secret retrieved: ${#WEB_SECRET} characters"
-echo "M2M secret retrieved: ${#M2M_SECRET} characters"
+echo "Web client secret: ${#WEB_SECRET} characters"
+echo "M2M client secret: ${#M2M_SECRET} characters"
 
-# Update .env using Python to handle special characters safely
-python3 -c "
+python3 << PYEOF
 import re
+
 content = open('.env').read()
-web_secret = '${WEB_SECRET}'
-m2m_secret = '${M2M_SECRET}'
+web = '${WEB_SECRET}'
+m2m = '${M2M_SECRET}'
 
-content = re.sub(r'^KEYCLOAK_CLIENT_SECRET=.*', f'KEYCLOAK_CLIENT_SECRET={web_secret}', content, flags=re.MULTILINE)
-if 'KEYCLOAK_CLIENT_SECRET=' not in content:
-    content += f'\nKEYCLOAK_CLIENT_SECRET={web_secret}'
-
-content = re.sub(r'^KEYCLOAK_M2M_CLIENT_SECRET=.*', f'KEYCLOAK_M2M_CLIENT_SECRET={m2m_secret}', content, flags=re.MULTILINE)
-if 'KEYCLOAK_M2M_CLIENT_SECRET=' not in content:
-    content += f'\nKEYCLOAK_M2M_CLIENT_SECRET={m2m_secret}'
+for key, val in [('KEYCLOAK_CLIENT_SECRET', web), ('KEYCLOAK_M2M_CLIENT_SECRET', m2m)]:
+    if re.search(rf'^{key}=', content, flags=re.MULTILINE):
+        content = re.sub(rf'^{key}=.*', f'{key}={val}', content, flags=re.MULTILINE)
+    else:
+        content += f'\n{key}={val}'
 
 open('.env', 'w').write(content)
-print('Secrets updated in .env')
-"
+print('Secrets written to .env')
+PYEOF
 ```
 
-Verify:
-```bash
-grep "^KEYCLOAK_CLIENT_SECRET=" .env | sed 's/=.*/=[set]/'
-grep "^KEYCLOAK_M2M_CLIENT_SECRET=" .env | sed 's/=.*/=[set]/'
-```
-
-Report: "Client credentials retrieved and saved to `.oauth-tokens/`. `.env` updated with secrets."
+Log: `{ 11, "Client Credentials Retrieved", DONE/FAILED, ".oauth-tokens/ populated, .env updated" }`
 
 ---
 
-### Phase 11: Create Test Agents
+### Phase 12: Create Test Agents
 
-**Announce to the user:**
-> "Phase 11 of 13: Test Agent Setup. I will create service account agents that can authenticate with the MCP Gateway. These agents are used by AI coding assistants and for testing."
+**Announce:** "Creating service account agents for MCP Gateway access..."
 
-Use `AskUserQuestion` to confirm: "Create test agents" / "Skip".
+Script: [`keycloak/setup/setup-agent-service-account.sh`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/keycloak/setup/setup-agent-service-account.sh)
 
 ```bash
+cd "${INSTALL_DIR}"
 chmod +x keycloak/setup/setup-agent-service-account.sh
 
 export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}"
 
-# Create a test agent with unrestricted access
 echo "Creating test-agent..."
 ./keycloak/setup/setup-agent-service-account.sh \
     --agent-id test-agent \
     --group mcp-servers-unrestricted
-echo "test-agent creation exit code: $?"
+echo "test-agent exit code: $?"
 
-# Create an AI coding assistant agent
 echo "Creating ai-coding-assistant..."
 ./keycloak/setup/setup-agent-service-account.sh \
     --agent-id ai-coding-assistant \
     --group mcp-servers-unrestricted
-echo "ai-coding-assistant creation exit code: $?"
-```
+echo "ai-coding-assistant exit code: $?"
 
-Retrieve updated credentials including new agents:
-```bash
+# Refresh credentials to include new agents
 ./keycloak/setup/get-all-client-credentials.sh
-echo "Updated credentials in .oauth-tokens/"
+echo "Credentials refreshed"
 ls .oauth-tokens/
 ```
 
-Report: "Test agents created. Credentials saved to `.oauth-tokens/`."
+Log: `{ 12, "Test Agents Created", DONE/FAILED, "test-agent, ai-coding-assistant" }`
 
 ---
 
-### Phase 12: Start All Services
+### Phase 13: Build and Start All Services
 
-**Announce to the user:**
-> "Phase 12 of 13: Starting All Services. I will start the complete MCP Gateway stack using pre-built Docker images. This includes: registry, auth-server, nginx proxy, currenttime-server, fininfo-server, mcpgw-server, and realserverfaketools-server. First-run image pulls may take 3-5 minutes."
+**Announce:** "Building all Docker images from source and starting all services. This builds the React frontend and all containers locally — this will take 20-40 minutes on first run."
 
-Use `AskUserQuestion` to confirm: "Start all MCP Gateway services" / "Cancel".
+Script: [`build_and_run.sh`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/build_and_run.sh)
 
 ```bash
+cd "${INSTALL_DIR}"
 chmod +x build_and_run.sh
 
-# Start all services with pre-built images (fastest option, no local build required)
-./build_and_run.sh --prebuilt
+# Build from source (no --prebuilt flag)
+./build_and_run.sh
 echo "build_and_run.sh exit code: $?"
 ```
 
-Wait for services to start:
+After the build completes, wait for services to initialize:
+
 ```bash
-echo "Waiting 20 seconds for services to initialize..."
-sleep 20
+echo "Waiting 30 seconds for all services to start..."
+sleep 30
 
 echo "=== Service Status ==="
 docker compose ps
-```
 
-Check core endpoints:
-```bash
 echo "=== Health Checks ==="
-
-# Registry health
-REGISTRY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health 2>/dev/null || echo "000")
-echo "Registry health (http://localhost/health): HTTP ${REGISTRY_STATUS}"
-
-# Keycloak realm
-KEYCLOAK_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/realms/mcp-gateway 2>/dev/null || echo "000")
-echo "Keycloak mcp-gateway realm: HTTP ${KEYCLOAK_STATUS}"
-
-# Main UI
-UI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ 2>/dev/null || echo "000")
-echo "Main UI (http://localhost/): HTTP ${UI_STATUS}"
+for URL in "http://localhost/health" "http://localhost/" "http://localhost:8080/realms/mcp-gateway"; do
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${URL}" 2>/dev/null || echo "000")
+    echo "  ${URL}: HTTP ${STATUS}"
+done
 ```
 
-If `REGISTRY_STATUS` is not `200`, show logs:
+If services are not healthy, show logs:
 ```bash
 docker compose logs registry --tail 20
 docker compose logs auth-server --tail 20
 ```
 
-Report services that are up and any that may need attention.
+Log: `{ 13, "Build and Start All Services", DONE/FAILED, "Build time: ~Xmin, services: up/partial" }`
 
 ---
 
-### Phase 13: Verification and Summary
+### Phase 14: Generate Access Tokens
 
-**Announce to the user:**
-> "Phase 13 of 13: Final Verification. I will run a complete health check across all components and provide a summary of your MCP Gateway installation."
+**Announce:** "Generating access tokens for all agents..."
+
+Script: [`credentials-provider/keycloak/generate_tokens.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/credentials-provider/keycloak/generate_tokens.py)
 
 ```bash
-echo "=== Complete Service Status ==="
+cd "${INSTALL_DIR}"
+
+uv run credentials-provider/keycloak/generate_tokens.py --all-agents 2>/dev/null
+echo "Token generation exit code: $?"
+
+echo "=== Available token files ==="
+ls .oauth-tokens/*.env 2>/dev/null | head -10
+```
+
+Log: `{ 14, "Access Token Generation", DONE/FAILED, "Tokens in .oauth-tokens/" }`
+
+---
+
+### Phase 15: Register Cloudflare Documentation Server
+
+**Announce:** "Registering Cloudflare Documentation MCP Server so it appears immediately on login..."
+
+Config file: [`cli/examples/cloudflare-docs-server-config.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/cloudflare-docs-server-config.json)
+
+Registration CLI: [`api/registry_management.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/registry_management.py)
+
+```bash
+cd "${INSTALL_DIR}"
+
+# Verify token file exists for test-agent
+TOKEN_FILE=".oauth-tokens/agent-test-agent-m2m.env"
+if [ ! -f "$TOKEN_FILE" ]; then
+    echo "ERROR: Token file not found: $TOKEN_FILE"
+    ls .oauth-tokens/
+    exit 1
+fi
+
+echo "Token file found: ${TOKEN_FILE}"
+
+# Register the Cloudflare Documentation server
+uv run python api/registry_management.py \
+    --token-file "${TOKEN_FILE}" \
+    --registry-url http://localhost \
+    register \
+    --config cli/examples/cloudflare-docs-server-config.json \
+    --overwrite
+
+echo "Cloudflare registration exit code: $?"
+```
+
+Verify the server was registered:
+
+```bash
+cd "${INSTALL_DIR}"
+
+uv run python api/registry_management.py \
+    --token-file ".oauth-tokens/agent-test-agent-m2m.env" \
+    --registry-url http://localhost \
+    list 2>/dev/null | grep -i cloudflare && echo "Cloudflare server confirmed in registry" || echo "WARNING: Cloudflare server not found in list"
+```
+
+The server configuration that was registered:
+```json
+{
+  "server_name": "Cloudflare Documentation MCP Server",
+  "description": "Search Cloudflare documentation and get migration guides",
+  "path": "/cloudflare-docs",
+  "proxy_pass_url": "https://docs.mcp.cloudflare.com/mcp",
+  "supported_transports": ["streamable-http"],
+  "tags": ["documentation", "cloudflare", "cdn", "workers", "pages", "migration-guide"]
+}
+```
+
+Log: `{ 15, "Cloudflare Server Registration", DONE/FAILED, "Registered at /cloudflare-docs" }`
+
+---
+
+### Phase 16: Final Verification and Summary
+
+**Announce:** "Running final verification and preparing your summary..."
+
+```bash
+cd "${INSTALL_DIR}"
+
+echo "=== All Services ==="
 docker compose ps
 
 echo ""
-echo "=== Endpoint Verification ==="
-for URL in "http://localhost/health" "http://localhost:8080/realms/mcp-gateway" "http://localhost/"; do
-    STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
-    echo "  ${URL}: HTTP ${STATUS}"
+echo "=== Endpoint Health ==="
+declare -A ENDPOINTS=(
+    ["Main UI"]="http://localhost/"
+    ["Registry Health"]="http://localhost/health"
+    ["Keycloak mcp-gateway realm"]="http://localhost:8080/realms/mcp-gateway"
+    ["Cloudflare MCP endpoint"]="http://localhost/cloudflare-docs/mcp"
+)
+
+for NAME in "${!ENDPOINTS[@]}"; do
+    URL="${ENDPOINTS[$NAME]}"
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${URL}" 2>/dev/null || echo "000")
+    echo "  ${NAME}: ${URL} — HTTP ${STATUS}"
 done
 
 echo ""
-echo "=== OAuth Token Files ==="
-ls .oauth-tokens/ 2>/dev/null | head -20
-
-echo ""
-echo "=== Key .env Settings ==="
-grep -E "^(AUTH_PROVIDER|AUTH_SERVER_EXTERNAL_URL|KEYCLOAK_REALM|KEYCLOAK_CLIENT_ID)=" .env
-grep "^KEYCLOAK_ADMIN_PASSWORD=" .env | sed 's/=.*/=[set]/'
-grep "^KEYCLOAK_CLIENT_SECRET=" .env | sed 's/=.*/=[set]/'
+echo "=== Registered Servers ==="
+uv run python api/registry_management.py \
+    --token-file ".oauth-tokens/agent-test-agent-m2m.env" \
+    --registry-url http://localhost \
+    list 2>/dev/null || echo "Could not retrieve server list"
 ```
 
-Present the final summary to the user:
+**Display the complete step summary table:**
+
+Present a formatted summary of every phase from the internal step log:
 
 ```
-Setup Complete! MCP Gateway & Registry is running on your Mac.
+========================================
+   AI-REGISTRY SETUP COMPLETE
+========================================
+
+Installation Directory: ${INSTALL_DIR}
+
+Step Summary:
++-------+--------------------------------------------+----------+-----------------------------+
+| Phase | Name                                       | Status   | Notes                       |
++-------+--------------------------------------------+----------+-----------------------------+
+|  0    | Mode & Directory Selection                 | DONE     | mode, dir                   |
+|  1    | Prerequisites Check                        | DONE     | all passed                  |
+|  2    | Repository Clone                           | DONE     | ${INSTALL_DIR}              |
+|  3    | Credentials Configuration                  | DONE     | default-generated/provided  |
+|  4    | Environment File Setup                     | DONE     | .env configured             |
+|  5    | Python Virtual Environment                 | DONE     | .venv created               |
+|  6    | Embeddings Model Download                  | DONE     | ~90MB downloaded            |
+|  7    | Directory Creation                         | DONE     | ~/mcp-gateway/...           |
+|  8    | Keycloak Startup                           | DONE     | ready in Xs                 |
+|  9    | Keycloak SSL Fix (master)                  | DONE     | sslRequired=NONE            |
+| 10    | Keycloak Init (realm + clients)            | DONE     | mcp-gateway realm           |
+| 11    | Client Credentials Retrieved               | DONE     | .oauth-tokens/ updated      |
+| 12    | Test Agents Created                        | DONE     | test-agent, ai-assistant    |
+| 13    | Build and Start All Services               | DONE     | all containers up           |
+| 14    | Access Token Generation                    | DONE     | .oauth-tokens/*.env         |
+| 15    | Cloudflare Server Registration             | DONE     | /cloudflare-docs            |
+| 16    | Final Verification                         | DONE     | all checks passed           |
++-------+--------------------------------------------+----------+-----------------------------+
 
 Access Points:
-  Main UI:           http://localhost
-  Keycloak Admin:    http://localhost:8080/admin
-  Registry API:      http://localhost/health
-  API Gateway:       http://localhost/mcpgw/mcp
+  Main UI (login here):   http://localhost
+  Keycloak Admin:         http://localhost:8080/admin
+  Registry API:           http://localhost/health
+  MCP Gateway:            http://localhost/mcpgw/mcp
+  Cloudflare MCP server:  http://localhost/cloudflare-docs/mcp
 
 Login Credentials:
+  URL:      http://localhost
   Username: admin
-  Password: [the KEYCLOAK_ADMIN_PASSWORD you set in Phase 2]
+  Password: [KEYCLOAK_ADMIN_PASSWORD shown only in default mode — see below]
 
-Agent Credentials (for AI tools like Claude, Cursor, VS Code):
-  Test Agent:          .oauth-tokens/agent-test-agent-m2m.env
-  AI Coding Assistant: .oauth-tokens/agent-ai-coding-assistant-m2m.env
+Agent Credentials:
+  Test agent:    ${INSTALL_DIR}/.oauth-tokens/agent-test-agent-m2m.env
+  AI assistant:  ${INSTALL_DIR}/.oauth-tokens/agent-ai-coding-assistant-m2m.env
 
-Quick Test (run in a new terminal):
+Registered Servers:
+  - Cloudflare Documentation MCP Server (/cloudflare-docs) — visible immediately on login
+
+Quick Test:
+  cd ${INSTALL_DIR}
   source .venv/bin/activate
   source .oauth-tokens/agent-test-agent-m2m.env
   uv run cli/mcp_client.py ping
+```
 
-Next Steps:
-  1. Open http://localhost in your browser
-  2. Click "Login with Keycloak"
-  3. Use admin / [your password] to access the registry
-  4. Explore the web interface to register and manage MCP servers
-  5. Configure your AI coding assistant using the agent credentials above
+**In default mode only**, display the auto-generated passwords clearly since the user never set them:
 
-To completely remove the installation later, run: /macos-setup teardown
+```
+Generated Credentials (SAVE THESE):
+  Keycloak Admin Password: ${KEYCLOAK_ADMIN_PASSWORD}
+  Keycloak DB Password:    ${KEYCLOAK_DB_PASSWORD}
+
+These passwords are also stored in: ${INSTALL_DIR}/.env
 ```
 
 ---
 
 ## TEARDOWN WORKFLOW
 
-The teardown workflow removes all MCP Gateway components. It asks for confirmation at each step and presents options for how thorough the cleanup should be.
+### Phase T1: Confirm Scope
 
----
+Use `AskUserQuestion` (always, regardless of mode) to ask:
 
-### Phase T1: Confirm Scope of Removal
-
-**Announce to the user:**
-> "Teardown Mode: I will help you remove the MCP Gateway & Registry components from your system."
-
-Use `AskUserQuestion` to ask the user about the scope of removal. Present each as a separate yes/no question:
-
-**Question 1 - Core teardown (always required):**
+**Required confirmation:**
 ```
-This will:
-  - Stop and remove ALL running MCP Gateway Docker containers
-  - Remove ALL Docker volumes (Keycloak config, database data - IRREVERSIBLE)
-  - Remove .oauth-tokens/ directory (all credentials)
-  - Remove .env configuration file
+This will permanently remove:
+  - All running MCP Gateway Docker containers
+  - All Docker volumes (Keycloak config, database — IRREVERSIBLE)
+  - .env configuration file
+  - .oauth-tokens/ directory
 
-This is required for a proper teardown. Do you want to proceed?
+This cannot be undone. Proceed?
 ```
 
-**If user says No, stop immediately. Do not proceed.**
+Also ask:
+- Remove model files at `~/mcp-gateway/`? (Yes / No)
+- Remove cached Docker images? (Yes / No)
 
-**Question 2 - Model files:**
-```
-Remove the embeddings model files (~90MB) at ~/mcp-gateway/?
-
-  Yes - Remove ~/mcp-gateway/ directory (frees ~90MB, saves time to re-download if you set up again)
-  No  - Keep ~/mcp-gateway/ (faster re-setup if you plan to reinstall)
-```
-
-Store answer as `REMOVE_MODELS`.
-
-**Question 3 - Docker images:**
-```
-Remove MCP Gateway Docker images from your local Docker cache?
-
-  Yes - Remove downloaded images (frees several GB of disk space; images will re-download on next setup)
-  No  - Keep images cached (much faster if you re-install later)
-```
-
-Store answer as `REMOVE_IMAGES`.
-
-**Question 4 - Docker system prune (only ask if user said Yes to images):**
-```
-Run 'docker system prune' to also remove ALL unused Docker resources
-(not just MCP Gateway - any unused container, image, volume, or network)?
-
-  Yes - Full Docker cleanup (maximum disk recovery)
-  No  - Only remove MCP Gateway images
-```
-
-Store answer as `DOCKER_PRUNE`.
-
-Present a final confirmation:
-```
-About to perform the following:
-  - Stop and remove all MCP Gateway containers and volumes [ALWAYS]
-  - Remove .env and .oauth-tokens/ [ALWAYS]
-  - Remove ~/mcp-gateway/ model files: [YES/NO]
-  - Remove Docker images: [YES/NO]
-  - Docker system prune: [YES/NO]
-
-THIS CANNOT BE UNDONE. Confirm to proceed.
-```
-
-Use `AskUserQuestion`: "Yes, remove everything I selected" / "Cancel - do not change anything".
+**Only proceed if the user explicitly confirms.**
 
 ---
 
 ### Phase T2: Stop All Services and Remove Volumes
 
-**Announce to the user:**
-> "Stopping all containers and removing Docker volumes..."
-
 ```bash
-# Stop all services and remove volumes (-v removes named volumes)
-docker compose down -v 2>/dev/null || docker-compose down -v 2>/dev/null || echo "Note: docker compose returned non-zero (may be no services were running)"
+# Detect install dir if not set
+INSTALL_DIR="${INSTALL_DIR:-~/AI-registry}"
+INSTALL_DIR=$(eval echo "${INSTALL_DIR}")
 
-echo "=== Verifying containers are stopped ==="
-docker ps | grep -E "keycloak|registry|auth-server|nginx|mcpgw|fininfo|currenttime|realserver" && echo "WARNING: Some containers still running" || echo "All MCP Gateway containers stopped"
+cd "${INSTALL_DIR}" 2>/dev/null || echo "Directory not found, skipping cd"
 
-echo "=== Verifying volumes removed ==="
-docker volume ls | grep -E "mcp.gateway|keycloak" && echo "WARNING: Some volumes still exist" || echo "All MCP Gateway volumes removed"
+docker compose down -v 2>/dev/null || docker-compose down -v 2>/dev/null || echo "No services were running"
+
+docker ps | grep -E "keycloak|registry|auth-server|nginx|mcpgw|fininfo|currenttime" \
+    && echo "WARNING: some containers still running" \
+    || echo "All MCP Gateway containers stopped"
 ```
 
 ---
 
 ### Phase T3: Remove Generated Files
 
-**Announce to the user:**
-> "Removing generated credentials and configuration files..."
-
 ```bash
-# Remove OAuth token files
-if [ -d ".oauth-tokens" ]; then
-    rm -rf .oauth-tokens/
-    echo "Removed .oauth-tokens/ directory"
-else
-    echo ".oauth-tokens/ directory not found (already removed or never created)"
-fi
+cd "${INSTALL_DIR}" 2>/dev/null || true
 
-# Remove .env file
-if [ -f ".env" ]; then
-    rm .env
-    echo "Removed .env file"
-else
-    echo ".env file not found (already removed or never created)"
-fi
+rm -rf .oauth-tokens/ && echo "Removed .oauth-tokens/"
+rm -f .env && echo "Removed .env"
 ```
 
 ---
 
 ### Phase T4: Remove Model Files (if selected)
 
-**Only execute if user chose to remove models in Phase T1.**
-
 ```bash
-if [ -d "${HOME}/mcp-gateway" ]; then
-    rm -rf ${HOME}/mcp-gateway/
-    echo "Removed ${HOME}/mcp-gateway/ directory"
-else
-    echo "${HOME}/mcp-gateway/ directory not found (already removed or never created)"
-fi
+rm -rf "${HOME}/mcp-gateway/" && echo "Removed ~/mcp-gateway/"
 ```
 
 ---
 
 ### Phase T5: Remove Docker Images (if selected)
 
-**Only execute if user chose to remove images in Phase T1.**
-
 ```bash
-echo "=== Finding MCP Gateway Docker images ==="
-docker images | grep -E "mcpgateway|mcp-gateway-registry" | awk '{print $1":"$2}' | head -20
-
-# Remove MCP Gateway images
-docker images | grep -E "mcpgateway|mcp-gateway-registry" | awk '{print $3}' | sort -u | xargs -r docker rmi -f 2>/dev/null
-echo "MCP Gateway image removal exit code: $?"
-
-echo "=== Remaining images ==="
-docker images | grep -E "mcpgateway|mcp-gateway-registry" && echo "Some images remain" || echo "All MCP Gateway images removed"
-```
-
-If user also selected Docker system prune:
-
-```bash
-echo "Running Docker system prune (removes ALL unused Docker resources)..."
-docker system prune -a --volumes --force
-echo "Docker system prune exit code: $?"
+docker images | grep -E "mcpgateway|mcp-gateway-registry" | awk '{print $3}' | sort -u | xargs -r docker rmi -f
+echo "Docker image removal complete"
 ```
 
 ---
 
-### Phase T6: Verify Cleanup
+### Phase T6: Teardown Summary
 
 ```bash
-echo "=== Teardown Verification ==="
+echo "=== Remaining containers ==="
+docker ps -a | grep -E "keycloak|registry|auth-server" || echo "None"
 
-echo ""
-echo "Running containers:"
-docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "keycloak|registry|auth-server" && echo "WARNING: MCP Gateway containers still running" || echo "No MCP Gateway containers running"
+echo "=== Remaining volumes ==="
+docker volume ls | grep -E "mcp.gateway|keycloak" || echo "None"
 
-echo ""
-echo "Docker volumes:"
-docker volume ls | grep -E "mcp.gateway|keycloak" && echo "WARNING: MCP Gateway volumes still exist" || echo "No MCP Gateway volumes"
-
-echo ""
-echo "Configuration files:"
-ls .env 2>/dev/null && echo "WARNING: .env still exists" || echo ".env removed"
-ls -d .oauth-tokens/ 2>/dev/null && echo "WARNING: .oauth-tokens/ still exists" || echo ".oauth-tokens/ removed"
-
-echo ""
-echo "Model files:"
-ls -d ${HOME}/mcp-gateway/ 2>/dev/null && echo "~/mcp-gateway/ still exists (was not selected for removal or removal failed)" || echo "~/mcp-gateway/ removed"
+echo "=== Files ==="
+ls "${INSTALL_DIR}/.env" 2>/dev/null && echo "WARNING: .env still exists" || echo ".env removed"
+ls -d "${INSTALL_DIR}/.oauth-tokens/" 2>/dev/null && echo "WARNING: .oauth-tokens/ still exists" || echo ".oauth-tokens/ removed"
 ```
 
-Present the teardown summary:
-
-```
-Teardown Complete.
-
-Removed:
-  - All Docker containers (keycloak, registry, auth-server, and others)
-  - All Docker volumes (all Keycloak and database data)
-  - .env configuration file
-  - .oauth-tokens/ credential directory
-  [- ~/mcp-gateway/ model files (if selected)]
-  [- Docker images (if selected)]
-
-The repository source code remains at its current location.
-
-To reinstall, run: /macos-setup setup
-```
+Present final teardown summary to the user listing everything that was removed.
 
 ---
 
 ## Error Handling Reference
 
-### Docker Not Running
-If any docker command fails with "Cannot connect to the Docker daemon":
-> "Docker Desktop is not running. Please open Docker Desktop from your Applications folder and wait for the whale icon to appear in the Mac menu bar (top right). Then confirm to retry."
+### Docker not running
+> "Docker Desktop is not running. Open it from Applications and wait for the whale icon in the menu bar."
 
-### Port Conflicts
-If services fail to start due to port conflicts:
+### Port conflict
 ```bash
 lsof -i :80 && echo "Port 80 in use"
 lsof -i :8080 && echo "Port 8080 in use"
-lsof -i :7860 && echo "Port 7860 in use"
 ```
-Inform the user which process holds the port and suggest stopping it.
 
-### Keycloak Container Name Varies
-The Keycloak container may be named differently. Always detect dynamically:
+### Keycloak container name varies
+Always detect dynamically:
 ```bash
 KEYCLOAK_CONTAINER=$(docker ps --format "{{.Names}}" | grep keycloak | grep -v db | head -1)
 ```
-Use `${KEYCLOAK_CONTAINER}` in all `docker exec` commands.
 
-### init-keycloak.sh Fails
-1. Check Keycloak logs: `docker compose logs keycloak --tail 30`
-2. Verify SSL was disabled: re-run Phase 8 commands
-3. Verify Keycloak is fully ready: `curl -s http://localhost:8080/realms/master | python3 -m json.tool`
-4. Retry the init script after confirming Keycloak is healthy
+### init-keycloak.sh fails
+1. Check logs: `docker compose logs keycloak --tail 30`
+2. Re-run Phase 9 SSL fix
+3. Verify Keycloak is responding: `curl -s http://localhost:8080/realms/master`
+4. Retry Phase 10
 
-### Partial/Interrupted Setup
-If the user runs setup again after a failure, check what already exists:
-```bash
-ls .env 2>/dev/null && echo ".env exists"
-ls .oauth-tokens/ 2>/dev/null && echo ".oauth-tokens exists"
-docker ps | grep keycloak && echo "Keycloak running"
-```
-Offer to skip phases that are already complete, or start fresh with a teardown.
-
-### sed Command Failures on macOS
-Always use `sed -i ''` (with empty string argument) for macOS. Linux uses `sed -i`. When in doubt, use the Python-based `.env` update approach shown in Phase 3.
+### Cloudflare registration fails
+1. Verify services are healthy: `docker compose ps`
+2. Verify token file exists and is valid
+3. Check registry logs: `docker compose logs registry --tail 20`
+4. Retry: `uv run python api/registry_management.py --token-file .oauth-tokens/agent-test-agent-m2m.env --registry-url http://localhost register --config cli/examples/cloudflare-docs-server-config.json --overwrite`
 
 ---
 
 ## Important Rules
 
-- **Never execute a phase without user confirmation** - always use `AskUserQuestion` before any system-modifying action
-- **Never show passwords** in terminal output or summaries - always mask with `[set]`
-- **Both Keycloak passwords are mandatory** - there are no acceptable defaults for security credentials
-- **Export passwords before docker compose** - they must be in the environment when Docker Compose reads them
-- **macOS sed syntax** - always `sed -i ''` not `sed -i`
-- **Detect container names dynamically** - never hardcode `mcp-gateway-registry-keycloak-1`, always query with `docker ps`
-- **One phase at a time** - complete and verify each phase before announcing the next
-- **Teardown is irreversible** - always present a final confirmation with a full list of what will be removed before executing any teardown action
-- **Carry variables across phases** - `KEYCLOAK_ADMIN_PASSWORD`, `KEYCLOAK_DB_PASSWORD`, and `KEYCLOAK_CONTAINER` must persist across all phases. Re-export them at the start of any phase that uses them in shell commands.
+- **EXECUTION_MODE and INSTALL_DIR must be established in Step 0** before any other phase runs
+- **In default mode**: execute phases immediately after a brief announcement, no confirmation prompts — the only questions asked are in Step 0
+- **In interactive mode**: use `AskUserQuestion` before each phase
+- **Never display passwords** in output except in the Final Summary for default-mode auto-generated passwords
+- **All commands run from within `${INSTALL_DIR}`** — `cd "${INSTALL_DIR}"` at the start of every phase that runs commands
+- **NO `--prebuilt` flag** on `build_and_run.sh` — always build from source
+- **Carry `KEYCLOAK_ADMIN_PASSWORD`, `KEYCLOAK_DB_PASSWORD`, `KEYCLOAK_CONTAINER`, `INSTALL_DIR`, `EXECUTION_MODE`** across all phases — re-export shell variables at the start of any phase that uses them
+- **macOS `sed` syntax**: always `sed -i ''`, never `sed -i` — or use the Python `.env` update approach
+- **Log every phase** to the internal step log and display the full table in Phase 16
