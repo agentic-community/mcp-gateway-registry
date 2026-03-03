@@ -38,3 +38,6 @@ spec:
             - secretRef:
                 name: {{ .Values.global.sharedSecretName }}
             {{- end }}
+          env:
+            - name: HOST
+              value: 0.0.0.0
