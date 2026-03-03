@@ -42,6 +42,14 @@ Or reference it remotely if you have not installed this repo:
 
 ---
 
+## CRITICAL: First action is ALWAYS Step 0
+
+**DO NOT run any Bash commands. DO NOT check prerequisites. DO NOT read any files.**
+**The very first action when this skill is invoked MUST be using `AskUserQuestion` to complete Step 0.**
+**Nothing else happens until the user has answered all three Step 0 questions.**
+
+---
+
 ## Step tracking
 
 Throughout the entire execution, Claude must maintain an internal step log. After every phase completes (success, skip, or failure), append an entry to this log. Display the full log as a formatted table in the Final Summary phase.
@@ -50,9 +58,9 @@ Step log format: `{ phase, name, status (DONE / SKIPPED / FAILED), notes }`
 
 ---
 
-## Step 0: Determine Mode
+## Step 0: Determine Mode — MUST BE FIRST, NO EXCEPTIONS
 
-**Before doing anything else**, use `AskUserQuestion` to ask:
+**STOP. Do not run any commands. Use `AskUserQuestion` right now to ask all three questions below before taking any other action.**
 
 **Question 1 — Operation:**
 ```
