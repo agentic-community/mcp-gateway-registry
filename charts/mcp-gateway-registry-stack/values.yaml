@@ -53,6 +53,7 @@ global:
     paths:
       authServer: /auth-server
       registry: /registry
+      mcpgw: /mcpgw
       keycloak: /keycloak # make sure to update keycloak.httpRelativePath (/keycloak/)
 
 mongodb-kubernetes:
@@ -175,6 +176,23 @@ registry:
     # Skill security scanning configuration
     skillSecurityScanEnabled: true  # Enable/disable skill security scanning
     skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
+  ingress:
+    enabled: true
+    ingressClassName: alb
+
+  nodeSelector: {}
+
+# MCPGW MCP server configuration
+mcpgw:
+  enabled: true # Set to true to deploy the MCPGW MCP server
+  app:
+    replicas: 1
+
+    # Embeddings configuration
+    embeddingsProvider: sentence-transformers
+    embeddingsModelName: all-MiniLM-L6-v2
+    embeddingsModelDimensions: "384"
+
   ingress:
     enabled: true
     ingressClassName: alb

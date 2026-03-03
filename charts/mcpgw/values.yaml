@@ -1,0 +1,61 @@
+# Global configuration
+global:
+  image:
+    repository: public.ecr.aws/p3v1o3c6/mcpgw
+    tag: latest
+    pullPolicy: IfNotPresent
+
+# Application configuration
+app:
+  name: mcpgw
+  replicas: 1
+  envSecretName: mcpgw-secret
+  port: 8000
+
+  # Registry connection
+  registryUrl: http://registry:7860
+
+  # Security settings
+  # secretKey: Required for standalone deployment (not needed when deployed via stack).
+  # When deployed via mcp-gateway-registry-stack, SECRET_KEY comes from the shared secret.
+  # Uncomment to use a specific key:
+  # secretKey: "your-secure-key-here"
+
+  # Embeddings configuration
+  embeddingsProvider: sentence-transformers
+  embeddingsModelName: all-MiniLM-L6-v2
+  embeddingsModelDimensions: "384"
+  embeddingsApiKey: ""
+  embeddingsApiBase: ""
+  embeddingsAwsRegion: us-east-1
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8000
+  annotations: {}
+
+# Resource limits and requests
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 1
+    memory: 2Gi
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: alb
+  hostname: ""
+  annotations: {}
+  tls: false
+  # Routing mode: "subdomain" or "path"
+  # - subdomain: mcpgw.domain.com
+  # - path: domain.com/mcpgw
+  routingMode: subdomain
+  # Path prefix when using path-based routing (default: /mcpgw)
+  path: /mcpgw
+
+nodeSelector: {}

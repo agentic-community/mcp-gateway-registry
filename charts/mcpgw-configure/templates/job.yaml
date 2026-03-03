@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: register-mcpgw
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  template:
+    spec:
+      containers:
+        - name: register-mcpgw
+          image: public.ecr.aws/docker/library/python:3.13-slim
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              pip install --no-cache-dir pyjwt requests
+              python /app/register.py
+          envFrom:
+            {{- if and .Values.global .Values.global.sharedSecretName }}
+            - secretRef:
+                name: {{ .Values.global.sharedSecretName }}
+            {{- end }}
+          env:
+            - name: REGISTRY_URL
+              value: {{ .Values.registry.url | quote }}
+            - name: MCPGW_SERVER_NAME
+              value: {{ .Values.mcpgw.serverName | quote }}
+            - name: MCPGW_DESCRIPTION
+              value: {{ .Values.mcpgw.description | quote }}
+            - name: MCPGW_PATH
+              value: {{ .Values.mcpgw.path | quote }}
+            - name: MCPGW_PROXY_PASS_URL
+              value: {{ .Values.mcpgw.proxyPassUrl | quote }}
+            - name: MCPGW_SUPPORTED_TRANSPORTS
+              value: {{ .Values.mcpgw.supportedTransports | quote }}
+            - name: MCPGW_AUTH_SCHEME
+              value: {{ .Values.mcpgw.authScheme | quote }}
+            - name: MCPGW_TAGS
+              value: {{ .Values.mcpgw.tags | quote }}
+          volumeMounts:
+            - mountPath: /app/register.py
+              name: script
+              subPath: register.py
+      restartPolicy: Never
+      volumes:
+        - name: script
+          configMap:
+            name: register-mcpgw
+  backoffLimit: 4

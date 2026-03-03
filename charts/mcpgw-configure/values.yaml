@@ -1,0 +1,15 @@
+# MCPGW registration configuration
+mcpgw:
+  # Server registration details
+  serverName: "MCP Gateway Tools"
+  description: "Provides tools to interact with the MCP Gateway Registry API."
+  path: "/mcpgw/"
+  proxyPassUrl: "http://mcpgw:8000/"
+  supportedTransports: '["streamable-http"]'
+  authScheme: "none"
+  tags: "registry,management,admin,gateway,mcp-tools,server-management"
+
+# Registry connection
+registry:
+  # Internal URL of the registry service
+  url: "http://registry:8000"

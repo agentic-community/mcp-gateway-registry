@@ -1,15 +1,14 @@
-name: Release Docker Images
+name: Build MCPGW Image
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [main]
+    paths:
+      - 'servers/mcpgw/**'
+      - 'registry/**'
+      - 'docker/Dockerfile.mcp-server'
+      - '.github/workflows/build-mcpgw.yml'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g., v1.0.0)'
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -17,28 +16,20 @@ permissions:
   attestations: write
   id-token: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: public.ecr.aws
-  NAMESPACE: p3v1o3c6
+  IMAGE_NAME: p3v1o3c6/mcpgw
 
 jobs:
-  build-release-images:
-    name: Build ${{ matrix.service }} Release
+  build-and-push:
+    if: github.repository == 'agentic-community/mcp-gateway-registry'
+    name: Build and Push
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: github.repository == 'agentic-community/mcp-gateway-registry'
-    
-    strategy:
-      matrix:
-        include:
-          - service: auth-server
-            dockerfile: docker/Dockerfile.auth
-          - service: registry
-            dockerfile: docker/Dockerfile.registry
-          - service: mcpgw
-            dockerfile: docker/Dockerfile.mcp-server
-            extra_build_args: |-
-              SERVER_DIR=servers/mcpgw
 
     steps:
       - name: Checkout code
@@ -47,14 +38,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Configure AWS Credentials
+      - name: Configure Role to Acquire Credentials
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
         with:
           aws-region: us-east-1
-          role-session-name: ${{ matrix.service }}-release
+          role-session-name: mcpgw-build
           role-to-assume: ${{ secrets.ECR_ROLE }}
 
       - name: Login to Amazon ECR Public
+        id: login-ecr-public
         uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076 # v2.0.1
         with:
           registry-type: public
@@ -63,38 +55,36 @@ jobs:
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.service }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=,format=long
 
       - name: Build and push
         id: push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: docker/Dockerfile.mcp-server
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            BUILD_VERSION=${{ github.ref_name }}
-            ${{ matrix.extra_build_args }}
+            BUILD_VERSION=${{ github.sha }}
+            SERVER_DIR=servers/mcpgw
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Generate attestation
         uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.service }}
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
       - name: Image Summary
         run: |
-          echo "## ${{ matrix.service }} Release Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "## MCPGW Image Published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

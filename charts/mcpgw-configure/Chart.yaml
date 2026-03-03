@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mcpgw-configure
+description: A Helm chart job to register the MCPGW MCP server in the registry
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

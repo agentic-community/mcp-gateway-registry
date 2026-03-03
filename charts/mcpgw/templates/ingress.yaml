@@ -1,0 +1,49 @@
+{{- if .Values.ingress.enabled }}
+{{- $routingMode := .Values.global.ingress.routingMode | default "subdomain" }}
+{{- $domain := .Values.global.domain | default .Values.ingress.hostname }}
+{{- $pathPrefix := .Values.global.ingress.paths.mcpgw | default .Values.ingress.path | default "/mcpgw" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.app.name }}
+  namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    {{- if eq $routingMode "path" }}
+    alb.ingress.kubernetes.io/group.name: mcp-gateway-stack
+    alb.ingress.kubernetes.io/group.order: '40'
+    {{- end }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/success-codes: 200,302
+    {{- if .Values.global.ingress.inboundCidrs }}
+    alb.ingress.kubernetes.io/inbound-cidrs: {{ .Values.global.ingress.inboundCidrs }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    {{- if eq $routingMode "path" }}
+    - host: {{ $domain | quote }}
+      http:
+        paths:
+          - path: {{ $pathPrefix }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.app.name }}
+                port:
+                  name: http
+    {{- else }}
+    - host: {{ printf "mcpgw.%s" $domain | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.app.name }}
+                port:
+                  name: http
+    {{- end }}
+{{- end }}
