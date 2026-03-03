@@ -12,11 +12,12 @@ metadata:
     alb.ingress.kubernetes.io/group.name: mcp-gateway-stack
     alb.ingress.kubernetes.io/group.order: '40'
     {{- end }}
+    alb.ingress.kubernetes.io/healthcheck-path: /mcp
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/ssl-redirect: '443'
     alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/success-codes: 200,302
+    alb.ingress.kubernetes.io/success-codes: 200,302,406
     {{- if .Values.global.ingress.inboundCidrs }}
     alb.ingress.kubernetes.io/inbound-cidrs: {{ .Values.global.ingress.inboundCidrs }}
     {{- end }}
