@@ -7,13 +7,16 @@ All tools require bearer token authentication via the Authorization header.
 """
 
 import logging
+import os
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from fastmcp import Context, FastMCP
-
 from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
+
+# Default registry URL from environment, falling back to http://localhost
+DEFAULT_REGISTRY_URL: str = os.environ.get("REGISTRY_BASE_URL", "http://localhost")
 
 # Configure logging
 logging.basicConfig(
@@ -22,13 +25,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Security constants
-ALLOWED_REGISTRY_HOSTS: list[str] = [
+# Security constants — static allowlist plus the configured registry host
+_STATIC_ALLOWED_HOSTS: list[str] = [
     "localhost",
     "127.0.0.1",
     "mcpgw-server",
     "registry",
 ]
+
+# Dynamically allow the configured REGISTRY_BASE_URL hostname
+_configured_host = urlparse(DEFAULT_REGISTRY_URL).hostname
+ALLOWED_REGISTRY_HOSTS: list[str] = (
+    _STATIC_ALLOWED_HOSTS
+    if not _configured_host or _configured_host in _STATIC_ALLOWED_HOSTS
+    else [*_STATIC_ALLOWED_HOSTS, _configured_host]
+)
 MAX_QUERY_LENGTH: int = 500
 MIN_TOP_N: int = 1
 MAX_TOP_N: int = 100
@@ -73,9 +84,7 @@ def _validate_top_n(top_n: int) -> int:
         ValueError: If top_n is out of bounds
     """
     if not isinstance(top_n, int) or top_n < MIN_TOP_N or top_n > MAX_TOP_N:
-        raise ValueError(
-            f"top_n must be an integer between {MIN_TOP_N} and {MAX_TOP_N}"
-        )
+        raise ValueError(f"top_n must be an integer between {MIN_TOP_N} and {MAX_TOP_N}")
     return top_n
 
 
@@ -95,9 +104,7 @@ def _validate_query(query: str) -> str:
         raise ValueError("Query cannot be empty")
 
     if len(query) > MAX_QUERY_LENGTH:
-        raise ValueError(
-            f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
-        )
+        raise ValueError(f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters")
 
     return query.strip()
 
@@ -132,9 +139,7 @@ def _extract_bearer_token(ctx: Context | None) -> str:
 
                 raise ValueError("Authorization header not found or not a Bearer token")
             else:
-                raise ValueError(
-                    "Request object or headers not found in request_context"
-                )
+                raise ValueError("Request object or headers not found in request_context")
         else:
             raise ValueError("request_context not available in Context")
 
@@ -147,7 +152,7 @@ def _extract_bearer_token(ctx: Context | None) -> str:
 
 @mcp.tool()
 async def list_services(
-    registry_url: str = "http://localhost", ctx: Context | None = None
+    registry_url: str = DEFAULT_REGISTRY_URL, ctx: Context | None = None
 ) -> dict[str, Any]:
     """
     List all MCP servers registered in the gateway.
@@ -167,9 +172,7 @@ async def list_services(
         headers = {"Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{registry_url}/api/servers", headers=headers
-            )
+            response = await client.get(f"{registry_url}/api/servers", headers=headers)
             response.raise_for_status()
             data = response.json()
 
@@ -219,7 +222,7 @@ async def list_services(
 
 @mcp.tool()
 async def list_agents(
-    registry_url: str = "http://localhost", ctx: Context | None = None
+    registry_url: str = DEFAULT_REGISTRY_URL, ctx: Context | None = None
 ) -> dict[str, Any]:
     """
     List all agents registered in the gateway.
@@ -280,7 +283,7 @@ async def list_agents(
 
 @mcp.tool()
 async def list_skills(
-    registry_url: str = "http://localhost", ctx: Context | None = None
+    registry_url: str = DEFAULT_REGISTRY_URL, ctx: Context | None = None
 ) -> dict[str, Any]:
     """
     List all skills registered in the gateway.
@@ -343,7 +346,7 @@ async def list_skills(
 async def intelligent_tool_finder(
     query: str,
     top_n: int = 5,
-    registry_url: str = "http://localhost",
+    registry_url: str = DEFAULT_REGISTRY_URL,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -419,7 +422,7 @@ async def intelligent_tool_finder(
 
 @mcp.tool()
 async def healthcheck(
-    registry_url: str = "http://localhost", ctx: Context | None = None
+    registry_url: str = DEFAULT_REGISTRY_URL, ctx: Context | None = None
 ) -> dict[str, Any]:
     """
     Get registry health status and statistics.
@@ -439,9 +442,7 @@ async def healthcheck(
         headers = {"Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{registry_url}/api/servers/health", headers=headers
-            )
+            response = await client.get(f"{registry_url}/api/servers/health", headers=headers)
             response.raise_for_status()
             data = response.json()
 
