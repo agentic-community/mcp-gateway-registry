@@ -3,6 +3,7 @@
 import logging
 import os
 
+from .auth0 import Auth0Provider
 from .base import AuthProvider
 from .cognito import CognitoProvider
 from .entra import EntraIdProvider
@@ -42,6 +43,8 @@ def get_auth_provider(provider_type: str | None = None) -> AuthProvider:
         return _create_entra_provider()
     elif provider_type == "okta":
         return _create_okta_provider()
+    elif provider_type == "auth0":
+        return _create_auth0_provider()
     else:
         raise ValueError(f"Unknown auth provider: {provider_type}")
 
@@ -185,6 +188,48 @@ def _create_okta_provider() -> OktaProvider:
         client_secret=client_secret,
         m2m_client_id=m2m_client_id,
         m2m_client_secret=m2m_client_secret,
+    )
+
+
+
+def _create_auth0_provider() -> Auth0Provider:
+    """Create and configure Auth0 provider."""
+    # Required configuration
+    domain = os.environ.get("AUTH0_DOMAIN")
+    client_id = os.environ.get("AUTH0_CLIENT_ID")
+    client_secret = os.environ.get("AUTH0_CLIENT_SECRET")
+
+    # Optional configuration
+    audience = os.environ.get("AUTH0_AUDIENCE")
+    m2m_client_id = os.environ.get("AUTH0_M2M_CLIENT_ID")
+    m2m_client_secret = os.environ.get("AUTH0_M2M_CLIENT_SECRET")
+    groups_claim = os.environ.get("AUTH0_GROUPS_CLAIM", "https://mcp-gateway/groups")
+
+    # Validate required configuration
+    missing_vars = []
+    if not domain:
+        missing_vars.append("AUTH0_DOMAIN")
+    if not client_id:
+        missing_vars.append("AUTH0_CLIENT_ID")
+    if not client_secret:
+        missing_vars.append("AUTH0_CLIENT_SECRET")
+
+    if missing_vars:
+        raise ValueError(
+            f"Missing required Auth0 configuration: {', '.join(missing_vars)}. "
+            "Please set these environment variables."
+        )
+
+    logger.info(f"Initializing Auth0 provider for domain '{domain}'")
+
+    return Auth0Provider(
+        domain=domain,
+        client_id=client_id,
+        client_secret=client_secret,
+        audience=audience,
+        m2m_client_id=m2m_client_id,
+        m2m_client_secret=m2m_client_secret,
+        groups_claim=groups_claim,
     )
 
 

@@ -91,6 +91,26 @@ providers:
     name_claim: "name"
     enabled: "${GITHUB_ENABLED}"
 
+  auth0:
+    display_name: "Auth0"
+    client_id: "${AUTH0_CLIENT_ID}"
+    client_secret: "${AUTH0_CLIENT_SECRET}"
+    auth_url: "https://${AUTH0_DOMAIN}/authorize"
+    token_url: "https://${AUTH0_DOMAIN}/oauth/token"
+    user_info_url: "https://${AUTH0_DOMAIN}/userinfo"
+    logout_url: "https://${AUTH0_DOMAIN}/v2/logout"
+    scopes: ["openid", "email", "profile"]
+    response_type: "code"
+    grant_type: "authorization_code"
+    # Claims mapping for user info
+    # Auth0 uses 'nickname' for display name and requires a custom
+    # Rule/Action to add groups to tokens as a namespaced claim
+    username_claim: "nickname"
+    groups_claim: "${AUTH0_GROUPS_CLAIM}"
+    email_claim: "email"
+    name_claim: "name"
+    enabled: "${AUTH0_ENABLED}"
+
   google:
     display_name: "Google"
     client_id: "${GOOGLE_CLIENT_ID}"

@@ -394,6 +394,70 @@ def mock_keycloak_provider():
 
 
 @pytest.fixture
+def auth0_env_vars(monkeypatch) -> dict[str, str]:
+    """
+    Set up Auth0 environment variables for testing.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+
+    Returns:
+        Dictionary of environment variables set
+    """
+    env_vars = {
+        "AUTH_PROVIDER": "auth0",
+        "AUTH0_DOMAIN": "test-tenant.auth0.com",
+        "AUTH0_CLIENT_ID": "test-client-id",
+        "AUTH0_CLIENT_SECRET": "test-client-secret",
+        "AUTH0_AUDIENCE": "https://api.example.com",
+        "AUTH0_GROUPS_CLAIM": "https://mcp-gateway/groups",
+    }
+
+    for key, value in env_vars.items():
+        monkeypatch.setenv(key, value)
+
+    logger.debug(f"Set up {len(env_vars)} Auth0 environment variables")
+    return env_vars
+
+
+@pytest.fixture
+def mock_auth0_provider():
+    """
+    Create a mock Auth0 provider for testing.
+
+    Returns:
+        Mock Auth0 provider
+    """
+    provider = MagicMock()
+    provider.validate_token = MagicMock(
+        return_value={
+            "valid": True,
+            "method": "auth0",
+            "username": "testuser",
+            "email": "testuser@example.com",
+            "groups": ["registry-admins", "developers"],
+            "scopes": ["openid", "profile", "email"],
+            "client_id": "test-client-id",
+            "data": {
+                "nickname": "testuser",
+                "email": "testuser@example.com",
+                "https://mcp-gateway/groups": ["registry-admins", "developers"],
+            },
+        }
+    )
+    provider.get_provider_info = MagicMock(
+        return_value={
+            "provider_type": "auth0",
+            "domain": "test-tenant.auth0.com",
+            "client_id": "test-client-id",
+        }
+    )
+    provider.get_jwks = MagicMock(return_value={"keys": [{"kid": "test-key", "kty": "RSA"}]})
+
+    return provider
+
+
+@pytest.fixture
 def mock_entra_provider():
     """
     Create a mock Entra ID provider for testing.
