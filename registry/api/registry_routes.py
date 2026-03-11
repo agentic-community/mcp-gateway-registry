@@ -84,13 +84,19 @@ async def list_servers(
     filtered_servers = []
 
     for path, server_info in all_servers.items():
-        # Add health status and enabled state for transformation
-        health_data = health_service._get_service_health_data(path, server_info)
+        # Fetch enabled status before health check to avoid race condition (Issue #612)
+        is_enabled = await server_service.is_service_enabled(path)
+
+        # Add health status with current enabled state
+        health_data = health_service._get_service_health_data(
+            path,
+            {**server_info, "is_enabled": is_enabled},
+        )
 
         server_info_with_status = server_info.copy()
         server_info_with_status["health_status"] = health_data["status"]
         server_info_with_status["last_checked_iso"] = health_data["last_checked_iso"]
-        server_info_with_status["is_enabled"] = await server_service.is_service_enabled(path)
+        server_info_with_status["is_enabled"] = is_enabled
 
         filtered_servers.append(server_info_with_status)
 
@@ -173,13 +179,19 @@ async def list_server_versions(
             )
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
 
+    # Fetch enabled status before health check to avoid race condition (Issue #612)
+    is_enabled = await server_service.is_service_enabled(path)
+
     # Add health and status info using the correct path
-    health_data = health_service._get_service_health_data(path, server_info)
+    health_data = health_service._get_service_health_data(
+        path,
+        {**server_info, "is_enabled": is_enabled},
+    )
 
     server_info_with_status = server_info.copy()
     server_info_with_status["health_status"] = health_data["status"]
     server_info_with_status["last_checked_iso"] = health_data["last_checked_iso"]
-    server_info_with_status["is_enabled"] = await server_service.is_service_enabled(path)
+    server_info_with_status["is_enabled"] = is_enabled
 
     # Since we only have one version, return a list with one item
     server_list = transform_to_server_list([server_info_with_status])
@@ -268,13 +280,19 @@ async def get_server_version(
             detail=f"Version {decoded_version} not found",
         )
 
+    # Fetch enabled status before health check to avoid race condition (Issue #612)
+    is_enabled = await server_service.is_service_enabled(path)
+
     # Add health and status info
-    health_data = health_service._get_service_health_data(path, server_info)
+    health_data = health_service._get_service_health_data(
+        path,
+        {**server_info, "is_enabled": is_enabled},
+    )
 
     server_info_with_status = server_info.copy()
     server_info_with_status["health_status"] = health_data["status"]
     server_info_with_status["last_checked_iso"] = health_data["last_checked_iso"]
-    server_info_with_status["is_enabled"] = await server_service.is_service_enabled(path)
+    server_info_with_status["is_enabled"] = is_enabled
 
     # Transform to Anthropic format
     server_response = transform_to_server_response(

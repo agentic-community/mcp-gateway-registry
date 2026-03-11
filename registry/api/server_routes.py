@@ -204,10 +204,16 @@ async def read_root(
         # Include description and tags in search
         searchable_text = f"{server_name.lower()} {server_info.get('description', '').lower()} {' '.join(server_info.get('tags', []))}"
         if not search_query or search_query in searchable_text:
+            # Fetch enabled status before health check to avoid race condition (Issue #612)
+            is_enabled = await server_service.is_service_enabled(path)
+
             # Get real health status from health service
             from ..health.service import health_service
 
-            health_data = health_service._get_service_health_data(path, server_info)
+            health_data = health_service._get_service_health_data(
+                path,
+                {**server_info, "is_enabled": is_enabled},
+            )
 
             # Normalize health status to enum values only (strip error messages)
             raw_status = health_data["status"]
@@ -233,7 +239,7 @@ async def read_root(
                     "path": path,
                     "description": server_info.get("description", ""),
                     "proxy_pass_url": server_info.get("proxy_pass_url", ""),
-                    "is_enabled": await server_service.is_service_enabled(path),
+                    "is_enabled": is_enabled,
                     "tags": server_info.get("tags", []),
                     "num_tools": server_info.get("num_tools", 0),
                     "license": server_info.get("license", "N/A"),
@@ -309,10 +315,16 @@ async def get_servers_json(
         # Include description and tags in search
         searchable_text = f"{server_name.lower()} {server_info.get('description', '').lower()} {' '.join(server_info.get('tags', []))}"
         if not search_query or search_query in searchable_text:
+            # Fetch enabled status before health check to avoid race condition (Issue #612)
+            is_enabled = await server_service.is_service_enabled(path)
+
             # Get real health status from health service
             from ..health.service import health_service
 
-            health_data = health_service._get_service_health_data(path, server_info)
+            health_data = health_service._get_service_health_data(
+                path,
+                {**server_info, "is_enabled": is_enabled},
+            )
 
             # Normalize health status to enum values only (strip error messages)
             raw_status = health_data["status"]
@@ -367,7 +379,7 @@ async def get_servers_json(
                     "path": path,
                     "description": server_info.get("description", ""),
                     "proxy_pass_url": server_info.get("proxy_pass_url", ""),
-                    "is_enabled": await server_service.is_service_enabled(path),
+                    "is_enabled": is_enabled,
                     "tags": server_info.get("tags", []),
                     "num_tools": server_info.get("num_tools", 0),
                     "license": server_info.get("license", "N/A"),
@@ -1900,15 +1912,21 @@ async def internal_list_services(
     for service_path, server_info in all_servers.items():
         from ..health.service import health_service
 
+        # Fetch enabled status before health check to avoid race condition (Issue #612)
+        is_enabled = await server_service.is_service_enabled(service_path)
+
         # Get real health status from health service
-        health_data = health_service._get_service_health_data(service_path)
+        health_data = health_service._get_service_health_data(
+            service_path,
+            {**server_info, "is_enabled": is_enabled},
+        )
 
         service_data = {
             "server_name": server_info.get("server_name", "Unknown"),
             "path": service_path,
             "description": server_info.get("description", ""),
             "proxy_pass_url": server_info.get("proxy_pass_url", ""),
-            "is_enabled": await server_service.is_service_enabled(service_path),
+            "is_enabled": is_enabled,
             "tags": server_info.get("tags", []),
             "num_tools": server_info.get("num_tools", 0),
             "license": server_info.get("license", "N/A"),

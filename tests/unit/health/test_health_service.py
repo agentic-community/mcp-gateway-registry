@@ -637,6 +637,51 @@ def test_health_service_get_service_health_data_disabled(health_service, mock_se
     assert health_data["status"] == "disabled"
 
 
+@pytest.mark.unit
+def test_health_service_enabled_status_consistency(health_service):
+    """Test that health data correctly reflects enabled status from server_info (Issue #612)."""
+    service_path = "/test-server"
+
+    # Test Case 1: Enabled service should NOT return "disabled" status
+    server_info_enabled = {
+        "server_name": "test-server",
+        "is_enabled": True,
+        "num_tools": 5,
+    }
+    health_data = health_service._get_service_health_data_fast(
+        service_path, server_info_enabled
+    )
+
+    # Should NOT return "disabled" status for enabled service
+    assert health_data["status"] != "disabled"
+    assert health_data["status"] in ["healthy", "unhealthy", "unknown", "checking"]
+
+    # Test Case 2: Disabled service should return "disabled" status
+    server_info_disabled = {
+        "server_name": "test-server",
+        "is_enabled": False,
+        "num_tools": 5,
+    }
+    health_data = health_service._get_service_health_data_fast(
+        service_path, server_info_disabled
+    )
+
+    # Should return "disabled" status
+    assert health_data["status"] == "disabled"
+
+    # Test Case 3: Missing is_enabled defaults to False (disabled)
+    server_info_missing = {
+        "server_name": "test-server",
+        "num_tools": 5,
+    }
+    health_data = health_service._get_service_health_data_fast(
+        service_path, server_info_missing
+    )
+
+    # Should default to disabled when is_enabled is missing
+    assert health_data["status"] == "disabled"
+
+
 # =============================================================================
 # ADDITIONAL TESTS FOR MISSING COVERAGE
 # =============================================================================
