@@ -130,13 +130,17 @@ export async function executeMappedTool(
   }
 
   if (invocation.type === "shell") {
-    const { execSync } = await import("child_process");
+    const { execFileSync } = await import("child_process");
     const command = String(invocation.input.command || "").trim();
     if (!command) {
       return {output: "Missing command field", isError: true};
     }
+    // Split command into executable and arguments to avoid shell injection
+    const parts = command.split(/\s+/);
+    const executable = parts[0];
+    const args = parts.slice(1);
     try {
-      const output = execSync(command, {encoding: "utf-8", maxBuffer: 10 * 1024 * 1024});
+      const output = execFileSync(executable, args, {encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, timeout: 30000});
       return {output};
     } catch (error) {
       const errorMessage = (error as Error).message || String(error);
