@@ -62,6 +62,12 @@ from registry.core.config import (
 )
 from registry.core.metrics import DEPLOYMENT_MODE_INFO
 from registry.core.nginx_service import nginx_service
+from registry.core.telemetry import (
+    initialize_telemetry,
+    send_startup_ping,
+    start_heartbeat_scheduler,
+    stop_heartbeat_scheduler,
+)
 from registry.health.routes import router as health_router
 from registry.health.service import health_service
 
@@ -454,6 +460,11 @@ async def lifespan(app: FastAPI):
 
         logger.info("✅ All services initialized successfully!")
 
+        # Initialize and send anonymous startup telemetry (opt-out: MCP_TELEMETRY_DISABLED=1)
+        await initialize_telemetry()
+        await send_startup_ping()
+        await start_heartbeat_scheduler()
+
     except Exception as e:
         logger.error(f"❌ Failed to initialize services: {e}", exc_info=True)
         raise
@@ -470,6 +481,9 @@ async def lifespan(app: FastAPI):
 
             ans_scheduler = get_ans_sync_scheduler()
             await ans_scheduler.stop()
+
+        # Stop telemetry scheduler
+        await stop_heartbeat_scheduler()
 
         # Stop peer sync scheduler
         peer_sync_scheduler = get_peer_sync_scheduler()

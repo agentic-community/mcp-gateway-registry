@@ -307,6 +307,24 @@ class Settings(BaseSettings):
         default=RegistryMode.FULL, description="Registry operating mode"
     )
 
+    # Telemetry settings (anonymous usage tracking)
+    telemetry_enabled: bool = Field(
+        default=True,
+        description="Enable anonymous telemetry (startup ping). Opt-out: MCP_TELEMETRY_DISABLED=1",
+    )
+    telemetry_opt_in: bool = Field(
+        default=False,
+        description="Enable richer telemetry (daily heartbeat with counts). Opt-in: MCP_TELEMETRY_OPT_IN=1",
+    )
+    telemetry_endpoint: str = Field(
+        default="https://telemetry.mcpgateway.io/v1/collect",
+        description="HTTPS endpoint for telemetry collector (must be HTTPS; supports self-hosted)",
+    )
+    telemetry_debug: bool = Field(
+        default=False,
+        description="Log telemetry payloads instead of sending (for debugging)",
+    )
+
     @property
     def nginx_updates_enabled(self) -> bool:
         """Check if nginx updates should be performed."""
@@ -437,6 +455,13 @@ class Settings(BaseSettings):
         if self.is_local_dev:
             return Path.cwd() / self.audit_log_dir
         return self.container_log_dir / "audit"
+
+    @property
+    def data_dir(self) -> Path:
+        """Get data directory for persistent storage (telemetry ID, etc.)."""
+        if self.is_local_dev:
+            return Path.cwd() / "registry" / "data"
+        return self.container_registry_dir / "data"
 
 
 class EmbeddingConfig:

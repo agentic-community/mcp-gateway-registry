@@ -230,6 +230,7 @@ keycloak/setup/retrieved-keycloak-secrets.txt
 registry/server_state.json
 registry/nginx_mcp_revproxy.conf
 registry/agents/
+registry/data/
 logs/
 token_refresher.pid
 token_refresher.log

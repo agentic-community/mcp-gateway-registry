@@ -33,6 +33,15 @@ def set_server_start_time(
     logger.info(f"System routes: Server start time set to {start_time.isoformat()}")
 
 
+def get_server_start_time() -> datetime | None:
+    """Get the server start time.
+
+    Returns:
+        Server start time if set, None otherwise
+    """
+    return _server_start_time
+
+
 def _detect_deployment_type() -> str:
     """Auto-detect deployment environment based on environment variables.
 

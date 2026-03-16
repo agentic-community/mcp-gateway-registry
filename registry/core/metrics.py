@@ -51,3 +51,10 @@ PEER_TOKEN_MISSING = Gauge(
 PEER_SYNC_DURATION_SECONDS = Gauge(
     "peer_sync_duration_seconds", "Duration of peer sync operations", ["peer_id", "success"]
 )
+
+# Telemetry metrics (issue #558)
+telemetry_sends_total = Counter(
+    "telemetry_sends_total",
+    "Total telemetry events sent",
+    ["event", "status"],  # event: startup/heartbeat, status: success/timeout/error/http_XXX
+)
