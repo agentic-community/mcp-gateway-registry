@@ -2662,42 +2662,13 @@ async def oauth2_callback(
                 mapped_user = map_user_info(user_info, provider_config)
                 logger.info(f"Mapped user info from userInfo: {mapped_user}")
         elif provider == "auth0":
-            # For Auth0, extract user info from ID token claims
-            # Groups are in a custom namespaced claim configured via Auth0 Actions/Rules
+            # For Auth0, delegate ID token parsing to the Auth0Provider
+            # which validates issuer/audience claims and extracts groups
+            # from a custom namespaced claim configured via Auth0 Actions/Rules
             try:
-                if "id_token" in token_data:
-                    import jwt
-
-                    # Decode without verification (we trust the token since we just got it)
-                    id_token_claims = jwt.decode(
-                        token_data["id_token"], options={"verify_signature": False}
-                    )
-                    logger.info(f"Auth0 ID token claims: {id_token_claims}")
-
-                    # Extract groups from custom namespaced claim
-                    groups_claim = provider_config.get(
-                        "groups_claim", "https://mcp-gateway/groups"
-                    )
-                    groups = id_token_claims.get(groups_claim, [])
-                    if not groups:
-                        # Fallback: check permissions claim (Auth0 RBAC)
-                        groups = id_token_claims.get("permissions", [])
-
-                    mapped_user = {
-                        "username": id_token_claims.get("nickname")
-                        or id_token_claims.get("email")
-                        or id_token_claims.get("sub"),
-                        "email": id_token_claims.get("email"),
-                        "name": id_token_claims.get("name")
-                        or id_token_claims.get("given_name"),
-                        "groups": groups,
-                    }
-                    logger.info(f"User extracted from Auth0 ID token: {mapped_user}")
-                else:
-                    logger.warning(
-                        "No ID token found in Auth0 response, falling back to userInfo"
-                    )
-                    raise ValueError("Missing ID token")
+                auth0_provider = get_auth_provider("auth0")
+                mapped_user = auth0_provider.extract_user_from_tokens(token_data)
+                logger.info(f"User extracted from Auth0 ID token: {mapped_user}")
 
             except Exception as e:
                 logger.warning(
