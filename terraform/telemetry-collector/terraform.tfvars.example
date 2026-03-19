@@ -35,3 +35,8 @@ rate_limit_window_seconds = 60  # Time window in seconds
 # Optional: CloudWatch Alarms Email (Production Only)
 # Leave empty to disable alarms
 # alarm_email = "alerts@example.com"
+
+# Optional: Bastion host for DocumentDB access (free tier t2.micro)
+# bastion_enabled      = true
+# bastion_public_key   = "ssh-rsa AAAA..."   # your ~/.ssh/id_rsa.pub
+# bastion_allowed_cidrs = ["YOUR_IP/32"]      # restrict to your IP for security
