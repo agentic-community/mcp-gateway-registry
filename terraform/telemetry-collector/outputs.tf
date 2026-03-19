@@ -47,3 +47,13 @@ output "custom_domain_url" {
   description = "Custom domain URL (if configured)"
   value       = var.custom_domain != "" ? "https://${var.custom_domain}/v1/collect" : "Not configured"
 }
+
+output "bastion_public_ip" {
+  description = "Public IP of the bastion host (if enabled)"
+  value       = var.bastion_enabled ? aws_instance.bastion[0].public_ip : "Bastion not enabled"
+}
+
+output "bastion_ssh_command" {
+  description = "SSH command to connect to the bastion host"
+  value       = var.bastion_enabled ? "ssh -i <your-key.pem> ec2-user@${aws_instance.bastion[0].public_ip}" : "Bastion not enabled"
+}

@@ -80,3 +80,22 @@ variable "lambda_package_path" {
   type        = string
   default     = "lambda_function.zip"
 }
+
+# Bastion variables
+variable "bastion_enabled" {
+  description = "Whether to create a bastion host for DocumentDB access"
+  type        = bool
+  default     = false
+}
+
+variable "bastion_public_key" {
+  description = "SSH public key for bastion host access"
+  type        = string
+  default     = ""
+}
+
+variable "bastion_allowed_cidrs" {
+  description = "CIDR blocks allowed to SSH to the bastion host"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
