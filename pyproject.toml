@@ -167,6 +167,7 @@ directory = "htmlcov"
 title = "MCP Registry Coverage Report"
 
 [tool.uv]
+package = false
 
 # Bandit Configuration
 # B101 (assert_used): exclude test directories where assert is expected
