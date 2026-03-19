@@ -119,13 +119,98 @@ In multi-replica deployments (ECS, Kubernetes), telemetry uses MongoDB-based dis
 
 ## Self-Hosted Telemetry Collector
 
-If you want to run your own telemetry collector instead of using the default endpoint:
+If you want to run your own telemetry collector instead of using the default endpoint, you can deploy the server-side infrastructure from issue #559.
+
+### Why Self-Host?
+
+- **Data Sovereignty**: Keep telemetry data in your own AWS account
+- **Compliance**: Meet specific regulatory requirements
+- **Custom Analytics**: Run your own queries and dashboards
+- **Air-Gapped Deployments**: Collect telemetry without external network access
+
+### Quick Start
+
+The telemetry collector infrastructure is available in `terraform/telemetry-collector/`:
 
 ```bash
-export MCP_TELEMETRY_ENDPOINT=https://your-collector.example.com/v1/collect
+cd terraform/telemetry-collector
+
+# Configure deployment
+cp terraform.tfvars.example terraform.tfvars
+vi terraform.tfvars  # Set aws_region, deployment_stage, etc.
+
+# Deploy infrastructure (~15-20 minutes)
+terraform init
+terraform apply
+
+# Get your collector URL
+terraform output collector_url
 ```
 
-The collector must implement the same API contract as issue #559.
+### Point Registry to Your Collector
+
+```bash
+# Set custom endpoint
+export MCP_TELEMETRY_ENDPOINT=https://your-collector-url.execute-api.us-east-1.amazonaws.com/v1/collect
+
+# Start registry
+uv run python -m registry
+```
+
+### Infrastructure Components
+
+The self-hosted collector includes:
+
+- **API Gateway HTTP API**: HTTPS endpoint (`/v1/collect`)
+- **Lambda Function**: VPC-enabled, validates events with Pydantic schemas
+- **DynamoDB**: Privacy-preserving rate limiting (hashed IPs)
+- **DocumentDB**: MongoDB-compatible storage with 365-day TTL
+- **Secrets Manager**: Secure credential management
+- **CloudWatch**: Logs and alarms (production)
+
+### Cost Estimate
+
+- **Testing**: ~$85-90/month (db.t3.medium DocumentDB)
+- **Production**: ~$195-200/month (db.r5.large DocumentDB)
+
+See `terraform/telemetry-collector/README.md` for detailed cost breakdown.
+
+### Security Features
+
+- ✅ **No IP Logging**: Source IPs are hashed (SHA-256) for rate limiting only
+- ✅ **VPC Isolated**: DocumentDB not accessible from internet
+- ✅ **TLS Everywhere**: All connections encrypted
+- ✅ **Always Returns 204**: No information leakage
+- ✅ **IAM Least Privilege**: Minimal Lambda permissions
+
+### Querying Your Data
+
+Connect to DocumentDB to analyze telemetry:
+
+```bash
+# Get DocumentDB endpoint
+DOCDB_ENDPOINT=$(terraform output -raw documentdb_endpoint)
+
+# Get credentials
+aws secretsmanager get-secret-value --secret-id telemetry-collector-docdb
+
+# Connect with mongosh
+mongosh --host $DOCDB_ENDPOINT --username telemetry_admin --tls --tlsCAFile global-bundle.pem
+
+# Query telemetry
+use telemetry;
+db.startup_events.find({"v": "1.0.16"}).count();
+db.heartbeat_events.find({"search_backend": "documentdb"});
+```
+
+### Full Documentation
+
+See `terraform/telemetry-collector/README.md` for:
+- Prerequisites and deployment steps
+- DocumentDB index setup
+- Testing procedures
+- Troubleshooting guide
+- Production deployment (custom domain, alarms)
 
 ## Questions?
 

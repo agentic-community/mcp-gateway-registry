@@ -1,0 +1,10 @@
+# AWS Lambda dependencies for telemetry collector
+
+# Sync MongoDB driver
+pymongo>=4.6.0
+
+# Data validation
+pydantic>=2.5.0
+
+# AWS SDK (available in Lambda runtime, pinned for local testing)
+boto3>=1.34.0
