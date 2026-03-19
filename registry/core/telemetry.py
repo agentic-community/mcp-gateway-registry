@@ -436,9 +436,7 @@ async def send_startup_ping() -> None:
 
         # Build and send payload
         payload = _build_startup_payload()
-
-        # Fire and forget (don't await)
-        asyncio.create_task(_send_telemetry(payload))
+        await _send_telemetry(payload)
 
     except Exception as e:
         logger.warning(f"[telemetry] Startup ping failed: {e}")
