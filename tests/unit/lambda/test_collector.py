@@ -207,8 +207,9 @@ class TestRateLimiting:
 class TestDocumentDBConnection:
     """Test DocumentDB connection and credential retrieval."""
 
+    @patch("index._init_aws_clients")
     @patch("index.secretsmanager")
-    def test_get_credentials(self, mock_sm):
+    def test_get_credentials(self, mock_sm, _mock_init):
         mock_sm.get_secret_value.return_value = {
             "SecretString": json.dumps({
                 "username": "telemetry_admin",

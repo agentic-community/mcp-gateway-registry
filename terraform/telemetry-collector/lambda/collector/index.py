@@ -29,9 +29,16 @@ from schemas import HeartbeatEvent, StartupEvent
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# AWS clients
-dynamodb = boto3.resource("dynamodb")
-secretsmanager = boto3.client("secretsmanager")
+# AWS clients (lazy-init for testability without credentials)
+dynamodb = None
+secretsmanager = None
+
+
+def _init_aws_clients():
+    global dynamodb, secretsmanager
+    if dynamodb is None:
+        dynamodb = boto3.resource("dynamodb")
+        secretsmanager = boto3.client("secretsmanager")
 
 # Environment variables
 RATE_LIMIT_TABLE = os.environ.get("RATE_LIMIT_TABLE", "test-rate-limit-table")
@@ -51,6 +58,7 @@ _credentials: dict | None = None
 def _get_credentials() -> dict:
     """Get DocumentDB credentials from Secrets Manager (cached)."""
     global _credentials
+    _init_aws_clients()
 
     if _credentials is not None:
         return _credentials
@@ -103,6 +111,7 @@ def _hash_ip(ip: str) -> str:
 
 def _check_rate_limit(ip_hash: str) -> bool:
     """Check rate limit using DynamoDB atomic counter. Returns True if allowed."""
+    _init_aws_clients()
     try:
         table = dynamodb.Table(RATE_LIMIT_TABLE)
         now = int(datetime.now(UTC).timestamp())
