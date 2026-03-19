@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mcp-registry"
 version = "0.1.0"
@@ -163,8 +167,6 @@ directory = "htmlcov"
 title = "MCP Registry Coverage Report"
 
 [tool.uv]
-# Local-only project - never resolve from PyPI
-package = false
 
 # Bandit Configuration
 # B101 (assert_used): exclude test directories where assert is expected
