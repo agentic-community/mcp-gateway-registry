@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -1073,9 +1074,13 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
         # Common proxy settings
         common_settings = f"""
-        # Use IPv4 resolver (disable IPv6)
-        resolver 8.8.8.8 8.8.4.4 valid=10s;
-        resolver_timeout 5s;
+        # DNS resolver for dynamic proxy_pass upstreams.
+        # Default: 8.8.8.8 8.8.4.4 (public DNS).
+        # Override with NGINX_DNS_RESOLVER env var for environments where
+        # backend servers use internal hostnames (e.g., Kubernetes
+        # cluster-local names like *.svc.cluster.local need kube-dns).
+        resolver {os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")} valid=10s;
+        resolver_timeout {os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")}s;
 
         # Authenticate request - pass entire request to auth server
         auth_request /validate;
