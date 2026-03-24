@@ -443,6 +443,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - SETUID   # Required by gosu to switch to mongodb user at startup
+      - SETGID   # Required by gosu to switch to mongodb group at startup
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 60s

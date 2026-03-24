@@ -363,6 +363,29 @@ services:
 - High port binding (8080, 8443) - Non-root operation
 - Read-only root filesystem (where possible)
 
+**MongoDB Capability Exception:**
+
+MongoDB requires `SETUID` and `SETGID` capabilities because its entrypoint uses `gosu` to drop privileges from `root` to the `mongodb` user at startup. Without these capabilities, MongoDB fails with:
+
+```text
+error: failed switching to 'mongodb': operation not permitted
+```
+
+The correct least-privilege pattern is to drop all capabilities and then explicitly add back only the minimum required:
+
+```yaml
+  mongodb:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID   # Required by gosu to switch to mongodb user at startup
+      - SETGID   # Required by gosu to switch to mongodb group at startup
+```
+
+This follows CIS Docker Benchmark guidance: explicitly enumerate the minimum capabilities a container needs rather than leaving it with a broad default set.
+
 ### Image Supply Chain
 
 **Image Signing & Verification:**
