@@ -121,6 +121,7 @@ markers = [
     "repositories: Repository layer tests",
     "slow: Slow running tests",
     "requires_models: Tests that require real ML models (will load heavy dependencies)",
+    "live: Tests that require live AWS infrastructure (collector endpoint, CloudWatch)",
 ]
 
 # Coverage Configuration

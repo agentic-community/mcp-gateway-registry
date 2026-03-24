@@ -212,7 +212,7 @@ async def _build_heartbeat_payload() -> dict:
     # Get aggregate counts (with detailed error logging)
     try:
         server_repo = get_server_repository()
-        servers = await server_repo.list_servers()
+        servers = await server_repo.list_all()
         servers_count = len(servers)
     except Exception as e:
         logger.warning(f"[telemetry] Failed to get server count: {e}")
@@ -220,7 +220,7 @@ async def _build_heartbeat_payload() -> dict:
 
     try:
         agent_repo = get_agent_repository()
-        agents = await agent_repo.list_agents()
+        agents = await agent_repo.list_all()
         agents_count = len(agents)
     except Exception as e:
         logger.warning(f"[telemetry] Failed to get agent count: {e}")
@@ -228,7 +228,7 @@ async def _build_heartbeat_payload() -> dict:
 
     try:
         skill_repo = get_skill_repository()
-        skills = await skill_repo.list_skills()
+        skills = await skill_repo.list_all()
         skills_count = len(skills)
     except Exception as e:
         logger.warning(f"[telemetry] Failed to get skill count: {e}")
