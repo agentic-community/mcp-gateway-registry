@@ -117,6 +117,13 @@ class ServerInfo(BaseModel):
         default=None, description="Metadata for items synced from peer registries"
     )
 
+    # ANS Integration
+    ans_metadata: dict[str, Any] | None = Field(
+        default=None,
+        alias="ansMetadata",
+        description="ANS (Agent Naming Service) verification metadata",
+    )
+
     # Backend authentication (replaces legacy auth_type)
     auth_scheme: str = Field(
         default="none",

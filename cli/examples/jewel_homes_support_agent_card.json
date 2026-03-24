@@ -1,0 +1,40 @@
+{
+  "name": "Jewel Homes Support Agent",
+  "description": "AI customer support agent for Jewel Homes: answers questions about products and services, looks up orders, and resolves issues",
+  "url": "https://support-c17fedfd-13da-4026-87f5-d3c78b3f6f95.helpagent.club/a2a",
+  "preferredTransport": "JSONRPC",
+  "protocolVersion": "0.3.0",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": false
+  },
+  "defaultInputModes": [
+    "text/plain"
+  ],
+  "defaultOutputModes": [
+    "text/plain"
+  ],
+  "skills": [
+    {
+      "id": "answer-questions",
+      "name": "Answer Questions",
+      "description": "Answer customer questions about products and services",
+      "tags": ["customer-support", "faq", "product-info", "guidance"]
+    },
+    {
+      "id": "order-lookup",
+      "name": "Order Lookup",
+      "description": "Look up order status and details",
+      "tags": ["orders", "order-status"]
+    }
+  ],
+  "tags": ["customer-support", "faq", "order-status", "a2a", "ans-verified"],
+  "path": "/jewel-homes-support-agent",
+  "status": "active",
+  "provider": {
+    "organization": "GoDaddy",
+    "url": "https://godaddy.com"
+  },
+  "visibility": "public",
+  "ans_agent_id": "ans://v1.0.0.support-c17fedfd-13da-4026-87f5-d3c78b3f6f95.helpagent.club"
+}

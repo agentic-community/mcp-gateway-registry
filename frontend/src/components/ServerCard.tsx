@@ -23,6 +23,7 @@ import VersionBadge from './VersionBadge';
 import VersionSelectorModal from './VersionSelectorModal';
 import DeleteConfirmation from './DeleteConfirmation';
 import StatusBadge from './StatusBadge';
+import { ANSBadge } from './ANSBadge';
 import ServerDetailsModal from './ServerDetailsModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { formatRelativeTime } from '../utils/dateUtils';
@@ -78,6 +79,19 @@ export interface Server {
   lifecycle_status?: 'active' | 'deprecated' | 'draft' | 'beta';
   source_created_at?: string;
   source_updated_at?: string;
+  // ANS Integration
+  ans_metadata?: {
+    ans_agent_id: string;
+    status: 'verified' | 'expired' | 'revoked' | 'not_found' | 'pending';
+    domain?: string;
+    organization?: string;
+    certificate?: {
+      not_after?: string;
+      subject_dn?: string;
+      issuer_dn?: string;
+    };
+    last_verified?: string;
+  };
 }
 
 interface ServerCardProps {
@@ -420,6 +434,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600">
                     SECURITY PENDING
                   </span>
+                )}
+                {/* ANS Verification Badge */}
+                {server.ans_metadata && (
+                  <ANSBadge ansMetadata={server.ans_metadata} compact />
                 )}
                 {/* Registry source badge - only show for federated (peer registry) items */}
                 {isFederatedServer && (

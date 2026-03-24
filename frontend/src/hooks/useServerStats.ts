@@ -38,6 +38,18 @@ interface Server {
   mcp_server_version_previous?: string;
   mcp_server_version_updated_at?: string;
   sync_metadata?: SyncMetadata;
+  ans_metadata?: {
+    ans_agent_id: string;
+    status: 'verified' | 'expired' | 'revoked' | 'not_found' | 'pending';
+    domain?: string;
+    organization?: string;
+    certificate?: {
+      not_after?: string;
+      subject_dn?: string;
+      issuer_dn?: string;
+    };
+    last_verified?: string;
+  };
   registered_by?: string | null;
 }
 
@@ -174,6 +186,7 @@ export const useServerStats = (): UseServerStatsReturn => {
           mcp_server_version_previous: serverInfo.mcp_server_version_previous,
           mcp_server_version_updated_at: serverInfo.mcp_server_version_updated_at,
           sync_metadata: serverInfo.sync_metadata,
+          ans_metadata: serverInfo.ans_metadata || serverInfo.ansMetadata,
           auth_scheme: serverInfo.auth_scheme,
           auth_header_name: serverInfo.auth_header_name,
         };
@@ -204,6 +217,7 @@ export const useServerStats = (): UseServerStatsReturn => {
           num_tools: agentInfo.num_skills || 0, // Use num_skills for agents
           type: 'agent' as const,
           sync_metadata: agentInfo.sync_metadata,
+          ans_metadata: agentInfo.ans_metadata || agentInfo.ansMetadata,
           registered_by: agentInfo.registered_by || agentInfo.registeredBy || null,
         };
         

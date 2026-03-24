@@ -343,3 +343,54 @@ class FileServerRepository(ServerRepositoryBase):
             Total number of servers in the repository.
         """
         return len(self._servers)
+
+    async def update_field(
+        self,
+        path: str,
+        field: str,
+        value: Any,
+    ) -> bool:
+        """Update a single field on a document (file-based)."""
+        data = await self.get(path)
+        if not data:
+            return False
+
+        if value is None:
+            parts = field.split(".")
+            obj = data
+            for part in parts[:-1]:
+                obj = obj.get(part, {})
+            obj.pop(parts[-1], None)
+        else:
+            parts = field.split(".")
+            obj = data
+            for part in parts[:-1]:
+                if part not in obj:
+                    obj[part] = {}
+                obj = obj[part]
+            obj[parts[-1]] = value
+
+        await self._save_to_file(data)
+        self._servers[path] = data
+        return True
+
+    async def find_with_filter(
+        self,
+        filter_dict: dict[str, Any],
+    ) -> dict[str, dict]:
+        """Find documents matching a filter (file-based, basic support)."""
+        all_data = await self.list_all()
+        results = {}
+        for path, data in all_data.items():
+            match = True
+            for field_name, condition in filter_dict.items():
+                if isinstance(condition, dict) and "$exists" in condition:
+                    has_field = data.get(field_name) is not None
+                    if condition.get("$ne") is not None:
+                        has_field = has_field and data.get(field_name) != condition["$ne"]
+                    if condition["$exists"] != has_field:
+                        match = False
+                        break
+            if match:
+                results[path] = data
+        return results

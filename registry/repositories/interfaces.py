@@ -128,6 +128,40 @@ class ServerRepositoryBase(ABC):
         """
         pass
 
+    @abstractmethod
+    async def update_field(
+        self,
+        path: str,
+        field: str,
+        value: Any,
+    ) -> bool:
+        """Update a single field on a document.
+
+        Args:
+            path: Document path/ID
+            field: Field name (supports dot notation for nested fields)
+            value: New value (None to unset the field)
+
+        Returns:
+            True if document was found and updated
+        """
+        ...
+
+    @abstractmethod
+    async def find_with_filter(
+        self,
+        filter_dict: dict[str, Any],
+    ) -> dict[str, dict]:
+        """Find documents matching a MongoDB-style filter.
+
+        Args:
+            filter_dict: MongoDB-style filter
+
+        Returns:
+            Dict mapping path -> document data for matching documents
+        """
+        ...
+
 
 class AgentRepositoryBase(ABC):
     """Abstract base class for A2A agent data access."""
@@ -200,6 +234,40 @@ class AgentRepositoryBase(ABC):
             Total number of agents in the repository.
         """
         pass
+
+    @abstractmethod
+    async def update_field(
+        self,
+        path: str,
+        field: str,
+        value: Any,
+    ) -> bool:
+        """Update a single field on a document.
+
+        Args:
+            path: Document path/ID
+            field: Field name (supports dot notation for nested fields)
+            value: New value (None to unset the field)
+
+        Returns:
+            True if document was found and updated
+        """
+        ...
+
+    @abstractmethod
+    async def find_with_filter(
+        self,
+        filter_dict: dict[str, Any],
+    ) -> dict[str, dict]:
+        """Find documents matching a MongoDB-style filter.
+
+        Args:
+            filter_dict: MongoDB-style filter
+
+        Returns:
+            Dict mapping path -> document data for matching documents
+        """
+        ...
 
 
 class ScopeRepositoryBase(ABC):

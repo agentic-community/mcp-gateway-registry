@@ -96,6 +96,7 @@ interface AgentFormData {
   status: string;
   provider_organization: string;
   provider_url: string;
+  ans_agent_id: string;
   source_created_at: string;
   source_updated_at: string;
 }
@@ -143,6 +144,7 @@ const initialAgentForm: AgentFormData = {
   status: 'active',
   provider_organization: '',
   provider_url: '',
+  ans_agent_id: '',
   source_created_at: '',
   source_updated_at: '',
 };
@@ -324,6 +326,7 @@ const RegisterPage: React.FC = () => {
             status: parsed.status || prev.status,
             provider_organization: parsed.provider?.organization || parsed.provider_organization || prev.provider_organization,
             provider_url: parsed.provider?.url || parsed.provider_url || prev.provider_url,
+            ans_agent_id: parsed.ans_agent_id || prev.ans_agent_id,
             source_created_at: toDatetimeLocal(parsed.source_created_at) || prev.source_created_at,
             source_updated_at: toDatetimeLocal(parsed.source_updated_at) || prev.source_updated_at,
           }));
@@ -436,6 +439,7 @@ const RegisterPage: React.FC = () => {
         } : undefined,
         source_created_at: agentForm.source_created_at || undefined,
         source_updated_at: agentForm.source_updated_at || undefined,
+        ans_agent_id: agentForm.ans_agent_id || undefined,
       };
 
       await axios.post('/api/agents/register', payload, {
@@ -944,6 +948,21 @@ const RegisterPage: React.FC = () => {
             placeholder="https://example.com"
           />
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Provider's website or documentation URL</p>
+        </div>
+
+        <div className="col-span-2">
+          <label className={labelClass}>ANS Agent ID (Optional)</label>
+          <input
+            type="text"
+            className={inputClass}
+            value={agentForm.ans_agent_id}
+            onChange={(e) => setAgentForm(prev => ({ ...prev, ans_agent_id: e.target.value }))}
+            placeholder="ans://v1.0.0.myagent.example.com"
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            If your agent is registered with GoDaddy ANS (Agent Naming Service), enter the ANS Agent ID to display a verification badge.
+            The ID will be verified against the ANS registry during registration.
+          </p>
         </div>
 
       </div>

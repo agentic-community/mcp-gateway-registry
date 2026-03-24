@@ -257,3 +257,39 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         except Exception as e:
             logger.error(f"Error counting agents in DocumentDB: {e}", exc_info=True)
             return 0
+
+    async def update_field(
+        self,
+        path: str,
+        field: str,
+        value: Any,
+    ) -> bool:
+        """Update a single field on a document."""
+        collection = await self._get_collection()
+
+        if value is None:
+            result = await collection.update_one(
+                {"_id": path},
+                {"$unset": {field: ""}},
+            )
+        else:
+            result = await collection.update_one(
+                {"_id": path},
+                {"$set": {field: value}},
+            )
+
+        return result.modified_count > 0
+
+    async def find_with_filter(
+        self,
+        filter_dict: dict[str, Any],
+    ) -> dict[str, dict]:
+        """Find documents matching a MongoDB-style filter."""
+        collection = await self._get_collection()
+        cursor = collection.find(filter_dict)
+        results = {}
+        async for doc in cursor:
+            doc_id = doc.pop("_id", None)
+            if doc_id:
+                results[doc_id] = doc
+        return results

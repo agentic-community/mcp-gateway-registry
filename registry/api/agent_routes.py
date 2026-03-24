@@ -474,6 +474,31 @@ async def register_agent(
         path, agent_card, agent_card_dict
     )
 
+    # Best-effort ANS linking if ans_agent_id is provided
+    if request.ans_agent_id and settings.ans_integration_enabled:
+        try:
+            from ..services.ans_service import link_ans_to_agent
+
+            ans_result = await link_ans_to_agent(
+                agent_path=path,
+                ans_agent_id=request.ans_agent_id,
+                username=user_context["username"],
+            )
+            if ans_result.get("success"):
+                logger.info(
+                    f"ANS ID '{request.ans_agent_id}' linked to agent '{path}'"
+                )
+            else:
+                logger.warning(
+                    f"Failed to link ANS ID '{request.ans_agent_id}' to agent '{path}': "
+                    f"{ans_result.get('message', 'Unknown error')}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"ANS linking failed for agent '{path}' with ANS ID "
+                f"'{request.ans_agent_id}': {e}"
+            )
+
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={
@@ -572,6 +597,7 @@ async def list_agents(
                 streaming=streaming,
                 trust_level=agent.trust_level,
                 sync_metadata=agent.sync_metadata,
+                ans_metadata=agent.ans_metadata,
                 registered_by=agent.registered_by,
                 status=agent.status.value if hasattr(agent, 'status') and agent.status else "active",
                 provider_organization=agent.provider.organization if agent.provider else None,

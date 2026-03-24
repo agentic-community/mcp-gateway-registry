@@ -155,6 +155,36 @@ class Settings(BaseSettings):
         description="Documentation or support URL",
     )
 
+    # ANS Integration
+    ans_integration_enabled: bool = Field(
+        default=False,
+        description="Enable ANS (Agent Naming Service) integration",
+    )
+    ans_api_endpoint: str = Field(
+        default="https://api.godaddy.com",
+        description="ANS API base URL",
+    )
+    ans_api_key: str = Field(
+        default="",
+        description="GoDaddy API key for ANS",
+    )
+    ans_api_secret: str = Field(
+        default="",
+        description="GoDaddy API secret for ANS",
+    )
+    ans_api_timeout_seconds: int = Field(
+        default=30,
+        description="ANS API request timeout in seconds",
+    )
+    ans_sync_interval_hours: int = Field(
+        default=6,
+        description="ANS background sync interval in hours",
+    )
+    ans_verification_cache_ttl_seconds: int = Field(
+        default=3600,
+        description="ANS verification cache TTL in seconds",
+    )
+
     # Audit Logging Configuration
     audit_log_enabled: bool = True  # Enable/disable audit logging globally
     audit_log_dir: str = "logs/audit"  # Directory for local audit log files

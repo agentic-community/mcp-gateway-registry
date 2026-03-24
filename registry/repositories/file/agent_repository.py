@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from ...core.config import settings
 from ...schemas.agent_models import AgentCard
@@ -153,3 +154,57 @@ class FileAgentRepository(AgentRepositoryBase):
         """
         agents = await self.get_all()
         return len(agents)
+
+    async def update_field(
+        self,
+        path: str,
+        field: str,
+        value: Any,
+    ) -> bool:
+        """Update a single field on a document (file-based)."""
+        agent = await self.get(path)
+        if not agent:
+            return False
+
+        data = agent.model_dump(mode="json")
+
+        if value is None:
+            parts = field.split(".")
+            obj = data
+            for part in parts[:-1]:
+                obj = obj.get(part, {})
+            obj.pop(parts[-1], None)
+        else:
+            parts = field.split(".")
+            obj = data
+            for part in parts[:-1]:
+                if part not in obj:
+                    obj[part] = {}
+                obj = obj[part]
+            obj[parts[-1]] = value
+
+        updated_agent = AgentCard(**data)
+        await self.save(updated_agent)
+        return True
+
+    async def find_with_filter(
+        self,
+        filter_dict: dict[str, Any],
+    ) -> dict[str, dict]:
+        """Find documents matching a filter (file-based, basic support)."""
+        all_agents = await self.get_all()
+        results = {}
+        for agent_path, agent in all_agents.items():
+            data = agent.model_dump(mode="json")
+            match = True
+            for field_name, condition in filter_dict.items():
+                if isinstance(condition, dict) and "$exists" in condition:
+                    has_field = data.get(field_name) is not None
+                    if condition.get("$ne") is not None:
+                        has_field = has_field and data.get(field_name) != condition["$ne"]
+                    if condition["$exists"] != has_field:
+                        match = False
+                        break
+            if match:
+                results[agent_path] = data
+        return results

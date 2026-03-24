@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from registry.api.agent_routes import router as agent_router
+from registry.api.ans_routes import router as ans_router
 from registry.api.config_routes import router as config_router
 from registry.api.federation_export_routes import router as federation_export_router
 from registry.api.federation_routes import router as federation_router
@@ -421,6 +422,14 @@ async def lifespan(app: FastAPI):
         await peer_sync_scheduler.start()
         logger.info("Peer sync scheduler started")
 
+        # Start ANS sync scheduler
+        if settings.ans_integration_enabled:
+            from registry.services.ans_sync_scheduler import get_ans_sync_scheduler
+
+            ans_scheduler = get_ans_sync_scheduler()
+            await ans_scheduler.start()
+            logger.info("ANS sync scheduler started")
+
         # Initialize built-in demo servers (airegistry-tools)
         # This ensures the registry management tools are always available
         from registry.services.demo_servers_init import initialize_demo_servers
@@ -455,6 +464,13 @@ async def lifespan(app: FastAPI):
     # Shutdown tasks
     logger.info("🔄 Shutting down MCP Gateway Registry...")
     try:
+        # Stop ANS sync scheduler
+        if settings.ans_integration_enabled:
+            from registry.services.ans_sync_scheduler import get_ans_sync_scheduler
+
+            ans_scheduler = get_ans_sync_scheduler()
+            await ans_scheduler.stop()
+
         # Stop peer sync scheduler
         peer_sync_scheduler = get_peer_sync_scheduler()
         await peer_sync_scheduler.stop()
@@ -601,6 +617,7 @@ app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring
 app.include_router(federation_export_router)
 app.include_router(peer_management_router)
 app.include_router(audit_router, prefix="/api", tags=["Audit Logs"])
+app.include_router(ans_router, prefix="/api", tags=["ANS Integration"])
 
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])

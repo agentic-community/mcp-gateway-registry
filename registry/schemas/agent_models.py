@@ -523,6 +523,13 @@ class AgentCard(BaseModel):
         description="unverified, community, verified, trusted",
     )
 
+    # ANS Integration
+    ans_metadata: dict[str, Any] | None = Field(
+        default=None,
+        alias="ansMetadata",
+        description="ANS (Agent Naming Service) verification metadata",
+    )
+
     # Lifecycle and federation metadata
     status: LifecycleStatus = Field(
         default=LifecycleStatus.ACTIVE,
@@ -717,6 +724,11 @@ class AgentInfo(BaseModel):
         alias="syncMetadata",
         description="Federation sync metadata for items from peer registries",
     )
+    ans_metadata: dict[str, Any] | None = Field(
+        default=None,
+        alias="ansMetadata",
+        description="ANS verification metadata",
+    )
     registered_by: str | None = Field(
         None,
         alias="registeredBy",
@@ -843,6 +855,10 @@ class AgentRegistrationRequest(BaseModel):
     external_tags: str | list[str] | None = Field(
         None,
         description="Comma-separated tags or list of tags from external/source system",
+    )
+    ans_agent_id: str | None = Field(
+        default=None,
+        description="Optional ANS Agent ID to link during registration",
     )
     model_config = ConfigDict(populate_by_name=True)
 

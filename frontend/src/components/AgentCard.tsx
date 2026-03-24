@@ -21,6 +21,7 @@ import SecurityScanModal from './SecurityScanModal';
 import StarRatingWidget from './StarRatingWidget';
 import DeleteConfirmation from './DeleteConfirmation';
 import StatusBadge from './StatusBadge';
+import { ANSBadge } from './ANSBadge';
 import { formatRelativeTime } from '../utils/dateUtils';
 
 interface SyncMetadata {
@@ -53,6 +54,19 @@ export interface Agent {
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   // Federation sync metadata
   sync_metadata?: SyncMetadata;
+  // ANS verification metadata
+  ans_metadata?: {
+    ans_agent_id: string;
+    status: 'verified' | 'expired' | 'revoked' | 'not_found' | 'pending';
+    domain?: string;
+    organization?: string;
+    certificate?: {
+      not_after?: string;
+      subject_dn?: string;
+      issuer_dn?: string;
+    };
+    last_verified?: string;
+  };
   // Lifecycle status
   lifecycle_status?: 'active' | 'deprecated' | 'draft' | 'beta';
   source_created_at?: string;
@@ -398,6 +412,10 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                       <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-red-100 to-rose-100 text-red-700 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-300 rounded-full flex-shrink-0 border border-red-200 dark:border-red-600" title="No longer exists on peer registry">
                         ORPHANED
                       </span>
+                    )}
+                    {/* ANS Verification Badge */}
+                    {agent.ans_metadata && (
+                      <ANSBadge ansMetadata={agent.ans_metadata} compact />
                     )}
                   </div>
 
