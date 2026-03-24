@@ -549,7 +549,7 @@ async def register_service(
     auth_scheme: Annotated[str, Form()] = "none",
     auth_credential: Annotated[str | None, Form()] = None,
     auth_header_name: Annotated[str | None, Form()] = None,
-    status: Annotated[str | None, Form()] = None,
+    service_status: Annotated[str | None, Form(alias="status")] = None,
     provider_organization: Annotated[str | None, Form()] = None,
     provider_url: Annotated[str | None, Form()] = None,
     source_created_at: Annotated[str | None, Form()] = None,
@@ -656,8 +656,8 @@ async def register_service(
             )
 
     # Add lifecycle and federation fields
-    if status:
-        server_entry["status"] = status
+    if service_status:
+        server_entry["status"] = service_status
 
     # Add provider information (stored as nested AgentProvider object)
     if provider_organization or provider_url:
