@@ -1,6 +1,6 @@
 output "collector_url" {
   description = "Telemetry collector API endpoint URL"
-  value       = "${aws_apigatewayv2_stage.telemetry.invoke_url}/v1/collect"
+  value       = "${trimsuffix(aws_apigatewayv2_stage.telemetry.invoke_url, "/")}/v1/collect"
 }
 
 output "api_gateway_id" {
