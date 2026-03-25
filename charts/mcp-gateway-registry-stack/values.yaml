@@ -187,6 +187,16 @@ registry:
     otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
     otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
     otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
+
+  # Registry Card Configuration (for federation and discovery)
+  registryCard:
+    url: ""  # External URL of the registry (defaults to computed ingress URL)
+    name: "AI Registry"  # Human-readable name
+    organizationName: ""  # Organization operating the registry
+    description: ""  # Optional description
+    contactEmail: ""  # Optional contact email
+    contactUrl: ""  # Optional contact URL/website
+
   ingress:
     enabled: true
     ingressClassName: alb
