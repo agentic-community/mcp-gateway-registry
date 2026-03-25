@@ -147,6 +147,10 @@ class AgentSearchResult(BaseModel):
     relevance_score: float = Field(..., ge=0.0, le=1.0)
     match_context: str | None = None
     agent_card: dict = Field(..., description="Full agent card with all details")
+    trust_verified: str = Field(
+        default="none",
+        description="Trust verification status: none, verified, expired, revoked, not_found, pending",
+    )
 
 
 class SkillSearchResult(BaseModel):
@@ -357,6 +361,24 @@ async def _user_can_access_skill(
         return bool(user_groups & skill_groups)
 
     return False
+
+
+def _compute_trust_verified(
+    ans_metadata: dict | None,
+) -> str:
+    """Derive the trust_verified label from ANS metadata.
+
+    Args:
+        ans_metadata: ANS metadata dict from the agent card, or None.
+
+    Returns:
+        "none" when there is no ANS metadata, otherwise the ANS status
+        value (verified, expired, revoked, not_found, pending).
+    """
+    if not ans_metadata:
+        return "none"
+
+    return ans_metadata.get("status", "none")
 
 
 _HASHTAG_PATTERN = re.compile(r"#([\w-]+)")
@@ -575,12 +597,17 @@ async def semantic_search(
         if agent_card_dict and "path" not in agent_card_dict:
             agent_card_dict["path"] = agent_path
 
+        # Compute trust verification status from ANS metadata
+        ans_meta = agent_card_dict.get("ans_metadata") if agent_card_dict else None
+        trust_verified = _compute_trust_verified(ans_meta)
+
         filtered_agents.append(
             AgentSearchResult(
                 path=agent_path,
                 relevance_score=agent.get("relevance_score", 0.0),
                 match_context=agent.get("match_context") or agent_card_dict.get("description"),
                 agent_card=agent_card_dict or {},
+                trust_verified=trust_verified,
             )
         )
 
