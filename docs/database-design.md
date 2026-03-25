@@ -134,9 +134,12 @@ Stores MCP server definitions and metadata.
   ],
   "is_enabled": true,
   "registered_at": "2026-01-03T10:00:00Z",
-  "updated_at": "2026-01-03T12:30:00Z"
+  "updated_at": "2026-01-03T12:30:00Z",
+  "ans_metadata": null
 }
 ```
+
+The `ans_metadata` field follows the same structure as in the agents collection (see below). It is `null` when no ANS link is configured.
 
 **Indexes:**
 
@@ -170,9 +173,33 @@ Stores Agent-to-Agent (A2A) agent cards and capabilities.
   "visibility": "public",
   "trust_level": "high",
   "registered_at": "2026-01-02T09:00:00Z",
-  "updated_at": "2026-01-03T11:00:00Z"
+  "updated_at": "2026-01-03T11:00:00Z",
+  "ans_metadata": {
+    "ans_agent_id": "ans://v1.0.0.agent.example.com",
+    "linked_at": "2026-01-02T09:00:00Z",
+    "last_verified": "2026-01-02T09:00:00Z",
+    "status": "verified",
+    "domain": "agent.example.com",
+    "organization": null,
+    "ans_name": "ans://v1.0.0.agent.example.com",
+    "ans_display_name": "Financial Analysis Agent",
+    "ans_version": "1.0.0",
+    "registered_with_ans_at": "2026-01-01T12:00:00Z",
+    "certificate": null,
+    "endpoints": [
+      { "type": "http", "url": "https://agent.example.com/a2a", "protocol": "A2A", "transports": ["STREAMABLE-HTTP"], "functions": [] }
+    ],
+    "links": [
+      { "rel": "self", "href": "https://api.godaddy.com/v1/agents/uuid" },
+      { "rel": "server-certificates", "href": "https://api.godaddy.com/v1/agents/uuid/certificates/server" },
+      { "rel": "identity-certificates", "href": "https://api.godaddy.com/v1/agents/uuid/certificates/identity" }
+    ],
+    "raw_ans_response": {}
+  }
 }
 ```
+
+The `ans_metadata` field is `null` when no ANS Agent ID is linked. It is populated when an agent is linked to the GoDaddy Agent Naming Service (ANS) for PKI-based identity verification.
 
 **Indexes:**
 
@@ -181,6 +208,7 @@ Stores Agent-to-Agent (A2A) agent cards and capabilities.
 - `tags` - Tag-based filtering
 - `name` - Text search
 - `visibility` - Access control
+- `ans_metadata.status` - Filter by ANS verification status
 
 ---
 

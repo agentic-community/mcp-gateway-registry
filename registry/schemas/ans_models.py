@@ -44,6 +44,14 @@ class ANSCertificateInfo(BaseModel):
     )
 
 
+class ANSFunctionInfo(BaseModel):
+    """Function (skill) information from an ANS endpoint."""
+
+    id: str = Field(description="Function identifier")
+    name: str = Field(description="Function display name")
+    tags: list[str] | None = Field(default=None, description="Function tags")
+
+
 class ANSEndpointInfo(BaseModel):
     """Endpoint information from ANS."""
 
@@ -56,6 +64,14 @@ class ANSEndpointInfo(BaseModel):
     protocol: str | None = Field(
         default=None,
         description="Protocol (A2A, MCP, HTTP-API)",
+    )
+    transports: list[str] = Field(
+        default_factory=list,
+        description="Transport types (e.g., STREAMABLE-HTTP, JSON-RPC)",
+    )
+    functions: list[ANSFunctionInfo] = Field(
+        default_factory=list,
+        description="Functions available on this endpoint",
     )
 
 
@@ -87,6 +103,22 @@ class ANSMetadata(BaseModel):
         default=None,
         description="Full ANS name (e.g., ans://v1.0.0.myagent.example.com)",
     )
+    ans_display_name: str | None = Field(
+        default=None,
+        description="Display name as registered in ANS",
+    )
+    ans_description: str | None = Field(
+        default=None,
+        description="Description as registered in ANS",
+    )
+    ans_version: str | None = Field(
+        default=None,
+        description="Agent version registered in ANS",
+    )
+    registered_with_ans_at: str | None = Field(
+        default=None,
+        description="When the agent was registered with ANS (ISO 8601)",
+    )
     certificate: ANSCertificateInfo | None = Field(
         default=None,
         description="Certificate details from ANS",
@@ -94,6 +126,14 @@ class ANSMetadata(BaseModel):
     endpoints: list[ANSEndpointInfo] = Field(
         default_factory=list,
         description="Endpoints registered in ANS",
+    )
+    links: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="HATEOAS links from ANS API (self, server-certificates, identity-certificates)",
+    )
+    raw_ans_response: dict | None = Field(
+        default=None,
+        description="Full raw JSON response from the ANS API",
     )
 
 

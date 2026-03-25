@@ -154,6 +154,15 @@ module "mcp_gateway" {
   federation_static_token              = var.federation_static_token
   federation_encryption_key            = var.federation_encryption_key
 
+  # ANS (Agent Naming Service) configuration
+  ans_integration_enabled            = var.ans_integration_enabled
+  ans_api_endpoint                   = var.ans_api_endpoint
+  ans_api_key                        = var.ans_api_key
+  ans_api_secret                     = var.ans_api_secret
+  ans_api_timeout_seconds            = var.ans_api_timeout_seconds
+  ans_sync_interval_hours            = var.ans_sync_interval_hours
+  ans_verification_cache_ttl_seconds = var.ans_verification_cache_ttl_seconds
+
   # Registry card configuration (federation metadata)
   registry_name              = var.registry_name
   registry_organization_name = var.registry_organization_name

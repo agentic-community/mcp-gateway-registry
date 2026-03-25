@@ -67,6 +67,18 @@ interface Agent {
   rating?: number;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   sync_metadata?: SyncMetadata;
+  ans_metadata?: {
+    ans_agent_id: string;
+    status: 'verified' | 'expired' | 'revoked' | 'not_found' | 'pending';
+    domain?: string;
+    organization?: string;
+    certificate?: {
+      not_after?: string;
+      subject_dn?: string;
+      issuer_dn?: string;
+    };
+    last_verified?: string;
+  };
   registered_by?: string | null;
 }
 
@@ -358,6 +370,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
       visibility: 'public',
       trust_level: 'community',
       sync_metadata: a.sync_metadata,
+      ans_metadata: a.ans_metadata,
       registered_by: a.registered_by,
     }));
   }, [agentsFromStats]);

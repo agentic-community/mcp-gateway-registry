@@ -305,6 +305,35 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # registry_contact_url = ""
 
 # ============================================================================
+# ANS (AGENT NAMING SERVICE) CONFIGURATION
+# ============================================================================
+
+# Enable ANS integration for agent identity verification
+# When enabled, agents can be linked to ANS records for verified identity
+# Default: false
+# ans_integration_enabled = true
+
+# ANS API endpoint URL
+# Default: "https://api.godaddy.com"
+# ans_api_endpoint = "https://api.godaddy.com"
+
+# ANS API credentials (required when ans_integration_enabled = true)
+# RECOMMENDED: Set via environment variables for security:
+#   export TF_VAR_ans_api_key="your-ans-api-key"
+#   export TF_VAR_ans_api_secret="your-ans-api-secret"
+# ans_api_key    = "your-ans-api-key"
+# ans_api_secret = "your-ans-api-secret"
+
+# ANS API request timeout in seconds (default: 30)
+# ans_api_timeout_seconds = 30
+
+# How often to re-sync ANS verification status in hours (default: 6)
+# ans_sync_interval_hours = 6
+
+# Cache TTL for ANS verification results in seconds (default: 3600)
+# ans_verification_cache_ttl_seconds = 3600
+
+# ============================================================================
 # FEDERATION CONFIGURATION (Peer-to-Peer Registry Sync)
 # ============================================================================
 

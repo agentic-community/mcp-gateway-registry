@@ -210,10 +210,10 @@ export const useServerStats = (): UseServerStatsReturn => {
           official: false, // Agents don't have official flag
           enabled: agentInfo.is_enabled !== undefined ? agentInfo.is_enabled : false,
           tags: agentInfo.tags || [],
-          last_checked_time: undefined, // Agents don't have health check timestamp
+          last_checked_time: agentInfo.last_health_check || agentInfo.lastHealthCheck || undefined,
           usersCount: 0,
           rating: agentInfo.num_stars || 0,
-          status: 'unknown' as const, // Agents don't have health status yet
+          status: mapHealthStatus(agentInfo.health_status || agentInfo.healthStatus || 'unknown'),
           num_tools: agentInfo.num_skills || 0, // Use num_skills for agents
           type: 'agent' as const,
           sync_metadata: agentInfo.sync_metadata,

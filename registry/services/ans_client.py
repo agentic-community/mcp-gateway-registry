@@ -14,6 +14,7 @@ from registry.core.config import settings
 from registry.schemas.ans_models import (
     ANSCertificateInfo,
     ANSEndpointInfo,
+    ANSFunctionInfo,
     ANSMetadata,
 )
 
@@ -143,13 +144,27 @@ def _extract_metadata(
 
     endpoints = []
     for ep in ans_data.get("endpoints", []):
+        functions = []
+        for fn in ep.get("functions", []):
+            if fn and fn.get("id"):
+                functions.append(
+                    ANSFunctionInfo(
+                        id=fn.get("id", ""),
+                        name=fn.get("name", ""),
+                        tags=fn.get("tags"),
+                    )
+                )
         endpoints.append(
             ANSEndpointInfo(
                 type=ep.get("type", "http"),
                 url=ep.get("agentUrl") or ep.get("url", ""),
                 protocol=ep.get("protocol"),
+                transports=ep.get("transports", []),
+                functions=functions,
             )
         )
+
+    links = ans_data.get("links", [])
 
     return ANSMetadata(
         ans_agent_id=ans_agent_id,
@@ -159,9 +174,82 @@ def _extract_metadata(
         domain=ans_data.get("agentHost") or ans_data.get("domain"),
         organization=ans_data.get("organization"),
         ans_name=ans_data.get("ansName") or ans_data.get("name"),
+        ans_display_name=ans_data.get("agentDisplayName"),
+        ans_description=ans_data.get("agentDescription"),
+        ans_version=ans_data.get("version"),
+        registered_with_ans_at=ans_data.get("registrationTimestamp"),
         certificate=certificate,
         endpoints=endpoints,
+        links=links,
+        raw_ans_response=ans_data,
     )
+
+
+async def _resolve_ans_id(
+    ans_agent_id: str,
+) -> str | None:
+    """Resolve an ANS agent identifier to a UUID.
+
+    If the input is already a UUID, return it as-is.
+    If the input is an ans:// URI, search the ANS API to find the UUID.
+
+    Args:
+        ans_agent_id: ANS Agent ID (UUID or ans:// URI)
+
+    Returns:
+        UUID string if found, None if ans:// URI could not be resolved
+    """
+    if not ans_agent_id.startswith("ans://"):
+        return ans_agent_id
+
+    headers = _build_auth_header()
+    search_url = f"{settings.ans_api_endpoint}/v1/agents"
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.ans_api_timeout_seconds) as client:
+            response = await client.get(
+                search_url,
+                headers=headers,
+                params={"limit": 100, "offset": 0},
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            for agent in data.get("agents", []):
+                if agent.get("ansName") == ans_agent_id:
+                    agent_uuid = agent.get("agentId")
+                    logger.info(
+                        f"Resolved ANS name '{ans_agent_id}' to UUID '{agent_uuid}'"
+                    )
+                    return agent_uuid
+
+            # Search remaining pages if needed
+            total_count = data.get("totalCount", 0)
+            offset = 100
+            while offset < total_count:
+                response = await client.get(
+                    search_url,
+                    headers=headers,
+                    params={"limit": 100, "offset": offset},
+                )
+                response.raise_for_status()
+                page_data = response.json()
+
+                for agent in page_data.get("agents", []):
+                    if agent.get("ansName") == ans_agent_id:
+                        agent_uuid = agent.get("agentId")
+                        logger.info(
+                            f"Resolved ANS name '{ans_agent_id}' to UUID '{agent_uuid}'"
+                        )
+                        return agent_uuid
+
+                offset += 100
+
+    except Exception as e:
+        logger.error(f"Failed to resolve ANS name '{ans_agent_id}': {e}")
+
+    logger.warning(f"Could not resolve ANS name to UUID: {ans_agent_id}")
+    return None
 
 
 async def verify_ans_agent(
@@ -185,10 +273,16 @@ async def verify_ans_agent(
     if not _check_circuit_breaker():
         raise RuntimeError("ANS API circuit breaker is open -- API assumed unavailable")
 
-    headers = _build_auth_header()
-    url = f"{settings.ans_api_endpoint}/v1/agents/{ans_agent_id}"
+    # If ans_agent_id is an ans:// URI, resolve it to a UUID first
+    resolved_id = await _resolve_ans_id(ans_agent_id)
+    if resolved_id is None:
+        logger.info(f"ANS name not found in registry: {ans_agent_id}")
+        return None
 
-    logger.info(f"Verifying ANS Agent ID: {ans_agent_id}")
+    headers = _build_auth_header()
+    url = f"{settings.ans_api_endpoint}/v1/agents/{resolved_id}"
+
+    logger.info(f"Verifying ANS Agent ID: {resolved_id} (input: {ans_agent_id})")
 
     last_exception = None
     for attempt in range(MAX_RETRIES):

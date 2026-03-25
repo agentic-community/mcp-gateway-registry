@@ -247,8 +247,8 @@ class AgentService:
             logger.error(f"Failed to validate updated agent: {e}")
             raise ValueError(f"Invalid agent update: {e}")
 
-        # Save to repository
-        updated_agent = await self._repo.save(updated_agent)
+        # Save to repository (pass full merged dict to repo for persistence)
+        updated_agent = await self._repo.update(path, agent_dict)
         self.registered_agents[path] = updated_agent
 
         # Re-index in search backend

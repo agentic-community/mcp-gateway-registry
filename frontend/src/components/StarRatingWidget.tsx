@@ -41,7 +41,9 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
   const [ratingCount, setRatingCount] = useState(initialCount);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
 
   // Load current rating on mount
@@ -195,7 +197,14 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
     <div className="relative" ref={dropdownRef}>
       {/* Rating Display - Clickable */}
       <button
-        onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+        ref={buttonRef}
+        onClick={() => {
+          if (!isDropdownOpen && buttonRef.current) {
+            const rect = buttonRef.current.getBoundingClientRect();
+            setDropdownPos({ top: rect.bottom + 8, left: rect.left });
+          }
+          setIsDropdownOpen(!isDropdownOpen);
+        }}
         className="flex items-center gap-2 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 p-2 rounded-lg transition-colors duration-200"
         title={`Click to rate this ${resourceType.slice(0, -1)}`}
         aria-label={`Rate this ${resourceType.slice(0, -1)}`}
@@ -218,7 +227,8 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
       {/* Rating Dropdown */}
       {isDropdownOpen && (
         <div
-          className="absolute top-full left-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 z-50 p-4"
+          className="fixed w-80 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 p-4"
+          style={{ top: dropdownPos.top, left: dropdownPos.left, zIndex: 9999 }}
           role="dialog"
           aria-label={`${resourceType.slice(0, -1)} rating form`}
         >

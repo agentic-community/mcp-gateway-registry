@@ -91,6 +91,14 @@ services:
       - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY}
       - EMBEDDINGS_API_BASE=${EMBEDDINGS_API_BASE}
       - EMBEDDINGS_AWS_REGION=${EMBEDDINGS_AWS_REGION:-us-east-1}
+      # ANS (Agent Naming Service) Configuration
+      - ANS_INTEGRATION_ENABLED=${ANS_INTEGRATION_ENABLED:-false}
+      - ANS_API_ENDPOINT=${ANS_API_ENDPOINT:-https://api.godaddy.com}
+      - ANS_API_KEY=${ANS_API_KEY:-}
+      - ANS_API_SECRET=${ANS_API_SECRET:-}
+      - ANS_API_TIMEOUT_SECONDS=${ANS_API_TIMEOUT_SECONDS:-30}
+      - ANS_SYNC_INTERVAL_HOURS=${ANS_SYNC_INTERVAL_HOURS:-6}
+      - ANS_VERIFICATION_CACHE_TTL_SECONDS=${ANS_VERIFICATION_CACHE_TTL_SECONDS:-3600}
       # Podman/local: allow the dashboard to call /api/* using the session cookie
       # (disables nginx auth_request for /api/*; FastAPI still enforces auth)
       - NGINX_DISABLE_API_AUTH_REQUEST=${NGINX_DISABLE_API_AUTH_REQUEST:-true}

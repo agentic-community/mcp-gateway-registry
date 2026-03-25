@@ -615,6 +615,54 @@ variable "federation_encryption_key" {
 }
 
 # =============================================================================
+# ANS (AGENT NAMING SERVICE) CONFIGURATION
+# =============================================================================
+
+variable "ans_integration_enabled" {
+  description = "Enable ANS integration for agent identity verification."
+  type        = bool
+  default     = false
+}
+
+variable "ans_api_endpoint" {
+  description = "ANS API endpoint URL."
+  type        = string
+  default     = "https://api.godaddy.com"
+}
+
+variable "ans_api_key" {
+  description = "ANS API key for authentication."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "ans_api_secret" {
+  description = "ANS API secret for authentication."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "ans_api_timeout_seconds" {
+  description = "ANS API request timeout in seconds."
+  type        = number
+  default     = 30
+}
+
+variable "ans_sync_interval_hours" {
+  description = "How often to re-sync ANS verification status (in hours)."
+  type        = number
+  default     = 6
+}
+
+variable "ans_verification_cache_ttl_seconds" {
+  description = "Cache TTL for ANS verification results (in seconds)."
+  type        = number
+  default     = 3600
+}
+
+# =============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # =============================================================================
 

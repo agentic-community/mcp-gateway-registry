@@ -68,10 +68,12 @@ async def _sync_asset_type(
         )
     else:
         all_assets = await repo.list_all()
-        linked_assets = {
-            p: d for p, d in all_assets.items()
-            if d.get("ans_metadata")
-        }
+        linked_assets = {}
+        for asset in all_assets:
+            asset_dict = asset.model_dump() if hasattr(asset, "model_dump") else asset
+            asset_path = asset_dict.get("path", "")
+            if asset_dict.get("ans_metadata"):
+                linked_assets[asset_path] = asset_dict
 
     for path, asset_data in linked_assets.items():
         ans_meta = asset_data.get("ans_metadata", {})
@@ -116,7 +118,7 @@ async def link_ans_to_agent(
     if not agent:
         return {"success": False, "message": f"Agent not found: {agent_path}"}
 
-    registered_by = agent.get("registered_by")
+    registered_by = getattr(agent, "registered_by", None)
     if username and registered_by and username != registered_by:
         return {"success": False, "message": "Not authorized: you are not the owner of this agent"}
 
@@ -164,7 +166,7 @@ async def link_ans_to_server(
     if not server:
         return {"success": False, "message": f"Server not found: {server_path}"}
 
-    registered_by = server.get("registered_by")
+    registered_by = getattr(server, "registered_by", None)
     if username and registered_by and username != registered_by:
         return {"success": False, "message": "Not authorized: you are not the owner of this server"}
 
@@ -209,7 +211,7 @@ async def unlink_ans_from_agent(
     if not agent:
         return {"success": False, "message": f"Agent not found: {agent_path}"}
 
-    registered_by = agent.get("registered_by")
+    registered_by = getattr(agent, "registered_by", None)
     if username and registered_by and username != registered_by:
         return {"success": False, "message": "Not authorized: you are not the owner of this agent"}
 
@@ -236,7 +238,7 @@ async def unlink_ans_from_server(
     if not server:
         return {"success": False, "message": f"Server not found: {server_path}"}
 
-    registered_by = server.get("registered_by")
+    registered_by = getattr(server, "registered_by", None)
     if username and registered_by and username != registered_by:
         return {"success": False, "message": "Not authorized: you are not the owner of this server"}
 
@@ -292,8 +294,9 @@ async def get_ans_metrics() -> ANSIntegrationMetrics:
     metrics = ANSIntegrationMetrics()
 
     agents = await agent_repo.list_all()
-    for agent_data in agents.values():
-        ans_meta = agent_data.get("ans_metadata")
+    for agent in agents:
+        agent_dict = agent.model_dump() if hasattr(agent, "model_dump") else agent
+        ans_meta = agent_dict.get("ans_metadata")
         if ans_meta:
             metrics.total_linked += 1
             status = ans_meta.get("status", "pending")
@@ -301,8 +304,9 @@ async def get_ans_metrics() -> ANSIntegrationMetrics:
             metrics.by_asset_type["agent"] = metrics.by_asset_type.get("agent", 0) + 1
 
     servers = await server_repo.list_all()
-    for server_data in servers.values():
-        ans_meta = server_data.get("ans_metadata")
+    for server in servers:
+        server_dict = server.model_dump() if hasattr(server, "model_dump") else server
+        ans_meta = server_dict.get("ans_metadata")
         if ans_meta:
             metrics.total_linked += 1
             status = ans_meta.get("status", "pending")

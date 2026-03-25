@@ -146,6 +146,28 @@ class RatingRequest(BaseModel):
     rating: int
 
 
+def _build_agent_health_urls(
+    base_url: str,
+) -> list[str]:
+    """Build health check URLs for an A2A agent in priority order.
+
+    Per the A2A spec, there is no /ping endpoint. Agent availability
+    is determined by fetching the agent card at /.well-known/agent-card.json.
+    Falls back to the registered URL for non-A2A agents.
+
+    Args:
+        base_url: The agent's registered URL (e.g., https://agent.example.com/a2a)
+
+    Returns:
+        List of URLs to try in order (agent card first, then registered URL)
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    agent_card_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/agent-card.json"
+    return [agent_card_url, base_url]
+
+
 def _normalize_path(
     path: str | None,
     agent_name: str | None = None,
@@ -606,6 +628,8 @@ async def list_agents(
                 source_updated_at=agent.source_updated_at.isoformat() if agent.source_updated_at else None,
                 registered_at=agent.registered_at.isoformat() if agent.registered_at else None,
                 updated_at=agent.updated_at.isoformat() if agent.updated_at else None,
+                health_status=agent.health_status or "unknown",
+                last_health_check=agent.last_health_check.isoformat() if agent.last_health_check else None,
             )
             filtered_agents.append(agent_info)
 
@@ -629,7 +653,13 @@ async def check_agent_health(
     path: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
 ):
-    """Perform a live /ping health check against an agent endpoint."""
+    """Perform a health check against an A2A agent.
+
+    Per the A2A spec, there is no /ping endpoint. Agent availability is
+    determined by fetching the agent card from /.well-known/agent-card.json
+    on the agent's host. Falls back to the registered URL if the agent card
+    endpoint is not available.
+    """
     path = _normalize_path(path)
 
     agent_card = await agent_service.get_agent_info(path)
@@ -656,42 +686,67 @@ async def check_agent_health(
         )
 
     base_url = str(agent_card.url).rstrip("/")
-    ping_url = f"{base_url}/ping"
+    health_urls = _build_agent_health_urls(base_url)
     timeout_seconds = max(1, settings.health_check_timeout_seconds)
 
-    status_label = "unknown"
+    status_label = "unhealthy"
     detail = None
     status_code = None
     response_time_ms = None
-    start_time = datetime.now(UTC)
+    health_check_url = health_urls[0]
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.get(ping_url)
-        status_code = response.status_code
-        response_time_ms = int((datetime.now(UTC) - start_time).total_seconds() * 1000)
-        if response.status_code == 200:
-            status_label = "healthy"
-        else:
-            status_label = "unhealthy"
+    for url in health_urls:
+        health_check_url = url
+        start_time = datetime.now(UTC)
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                response = await client.get(url)
+            status_code = response.status_code
+            response_time_ms = int((datetime.now(UTC) - start_time).total_seconds() * 1000)
+
+            if response.status_code == 200:
+                status_label = "healthy"
+                detail = None
+                logger.info(f"Agent health check for {path} succeeded on {url}")
+                break
+
             detail = f"Agent responded with HTTP {response.status_code}"
-    except httpx.TimeoutException:
-        status_label = "unhealthy"
-        detail = "Health check timed out"
-    except httpx.HTTPError as exc:
-        status_label = "unhealthy"
-        detail = f"Health check failed: {exc}"
-    except Exception as exc:
-        status_label = "unhealthy"
-        detail = f"Unexpected health check error: {exc}"
+            logger.debug(f"Agent health check for {path} got HTTP {response.status_code} on {url}")
 
-    last_checked_iso = datetime.now(UTC).isoformat()
+        except httpx.TimeoutException:
+            detail = f"Health check timed out on {url}"
+            logger.debug(f"Agent health check for {path} timed out on {url}")
+        except httpx.HTTPError as exc:
+            detail = f"Health check failed on {url}: {exc}"
+            logger.debug(f"Agent health check for {path} failed on {url}: {exc}")
+        except Exception as exc:
+            detail = f"Unexpected health check error on {url}: {exc}"
+            logger.debug(f"Agent health check for {path} unexpected error on {url}: {exc}")
 
-    logger.info(f"Agent health check for {path} ({ping_url}) completed with status {status_label}")
+    last_checked = datetime.now(UTC)
+    last_checked_iso = last_checked.isoformat()
+
+    # Persist health status to MongoDB
+    try:
+        await agent_service.update_agent(
+            path,
+            {
+                "health_status": status_label,
+                "last_health_check": last_checked,
+            },
+        )
+    except Exception as e:
+        logger.warning(f"Failed to persist health status for agent {path}: {e}")
+
+    logger.info(
+        f"Agent health check for {path} completed with status {status_label} "
+        f"(last URL tried: {health_check_url})"
+    )
 
     return {
         "agent_path": path,
-        "ping_url": ping_url,
+        "health_check_url": health_check_url,
         "status": status_label,
         "status_code": status_code,
         "detail": detail,
@@ -1412,21 +1467,8 @@ async def rescan_agent(
             timeout=None,  # Use default timeout from config
         )
 
-        # Return the scan result data
-        return {
-            "agent_path": scan_result.agent_path,
-            "agent_url": scan_result.agent_url,
-            "scan_timestamp": scan_result.scan_timestamp,
-            "is_safe": scan_result.is_safe,
-            "critical_issues": scan_result.critical_issues,
-            "high_severity": scan_result.high_severity,
-            "medium_severity": scan_result.medium_severity,
-            "low_severity": scan_result.low_severity,
-            "analyzers_used": scan_result.analyzers_used,
-            "scan_failed": scan_result.scan_failed,
-            "error_message": scan_result.error_message,
-            "output_file": scan_result.output_file,
-        }
+        # Return the full scan result including raw_output for detailed findings
+        return scan_result.model_dump(mode="json")
 
     except Exception as e:
         logger.error(f"Manual security scan failed for agent '{path}': {e}")

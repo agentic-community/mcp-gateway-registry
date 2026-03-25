@@ -530,6 +530,18 @@ class AgentCard(BaseModel):
         description="ANS (Agent Naming Service) verification metadata",
     )
 
+    # Health check status (persisted to MongoDB)
+    health_status: str = Field(
+        default="unknown",
+        alias="healthStatus",
+        description="Last known health status: healthy, unhealthy, unknown",
+    )
+    last_health_check: datetime | None = Field(
+        default=None,
+        alias="lastHealthCheck",
+        description="Timestamp of last health check",
+    )
+
     # Lifecycle and federation metadata
     status: LifecycleStatus = Field(
         default=LifecycleStatus.ACTIVE,
@@ -767,6 +779,16 @@ class AgentInfo(BaseModel):
         None,
         alias="updatedAt",
         description="Last update timestamp in this registry (ISO format)",
+    )
+    health_status: str = Field(
+        default="unknown",
+        alias="healthStatus",
+        description="Last known health status: healthy, unhealthy, unknown",
+    )
+    last_health_check: str | None = Field(
+        default=None,
+        alias="lastHealthCheck",
+        description="Timestamp of last health check (ISO format)",
     )
 
     model_config = ConfigDict(

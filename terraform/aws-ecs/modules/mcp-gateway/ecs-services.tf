@@ -204,6 +204,34 @@ module "ecs_service_auth" {
           value = var.federation_encryption_key
         },
         {
+          name  = "ANS_INTEGRATION_ENABLED"
+          value = tostring(var.ans_integration_enabled)
+        },
+        {
+          name  = "ANS_API_ENDPOINT"
+          value = var.ans_api_endpoint
+        },
+        {
+          name  = "ANS_API_KEY"
+          value = var.ans_api_key
+        },
+        {
+          name  = "ANS_API_SECRET"
+          value = var.ans_api_secret
+        },
+        {
+          name  = "ANS_API_TIMEOUT_SECONDS"
+          value = tostring(var.ans_api_timeout_seconds)
+        },
+        {
+          name  = "ANS_SYNC_INTERVAL_HOURS"
+          value = tostring(var.ans_sync_interval_hours)
+        },
+        {
+          name  = "ANS_VERIFICATION_CACHE_TTL_SECONDS"
+          value = tostring(var.ans_verification_cache_ttl_seconds)
+        },
+        {
           name  = "STORAGE_BACKEND"
           value = var.storage_backend
         },
@@ -672,6 +700,34 @@ module "ecs_service_registry" {
         {
           name  = "FEDERATION_ENCRYPTION_KEY"
           value = var.federation_encryption_key
+        },
+        {
+          name  = "ANS_INTEGRATION_ENABLED"
+          value = tostring(var.ans_integration_enabled)
+        },
+        {
+          name  = "ANS_API_ENDPOINT"
+          value = var.ans_api_endpoint
+        },
+        {
+          name  = "ANS_API_KEY"
+          value = var.ans_api_key
+        },
+        {
+          name  = "ANS_API_SECRET"
+          value = var.ans_api_secret
+        },
+        {
+          name  = "ANS_API_TIMEOUT_SECONDS"
+          value = tostring(var.ans_api_timeout_seconds)
+        },
+        {
+          name  = "ANS_SYNC_INTERVAL_HOURS"
+          value = tostring(var.ans_sync_interval_hours)
+        },
+        {
+          name  = "ANS_VERIFICATION_CACHE_TTL_SECONDS"
+          value = tostring(var.ans_verification_cache_ttl_seconds)
         },
         {
           name  = "AUDIT_LOG_ENABLED"

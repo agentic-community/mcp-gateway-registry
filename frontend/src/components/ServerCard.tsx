@@ -138,7 +138,9 @@ const formatTimeSince = (timestamp: string | null | undefined): string | null =>
     const diffDays = Math.floor(diffHours / 24);
     
     let result;
-    if (diffDays > 0) {
+    if (diffSeconds < 0) {
+      result = 'just now';
+    } else if (diffDays > 0) {
       result = `${diffDays}d ago`;
     } else if (diffHours > 0) {
       result = `${diffHours}h ago`;
@@ -435,10 +437,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                     SECURITY PENDING
                   </span>
                 )}
-                {/* ANS Verification Badge */}
-                {server.ans_metadata && (
-                  <ANSBadge ansMetadata={server.ans_metadata} compact />
-                )}
+                {/* ANS badge moved to trust bar below description */}
                 {/* Registry source badge - only show for federated (peer registry) items */}
                 {isFederatedServer && (
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-cyan-100 to-blue-100 text-cyan-700 dark:from-cyan-900/30 dark:to-blue-900/30 dark:text-cyan-300 rounded-full flex-shrink-0 border border-cyan-200 dark:border-cyan-600" title={`Synced from ${peerRegistryId}`}>
@@ -517,6 +516,16 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
           <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed line-clamp-2 mb-4">
             {server.description || 'No description available'}
           </p>
+
+          {/* ANS Trust Bar */}
+          {server.ans_metadata && (
+            <div className="mb-4 p-2.5 rounded-lg bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200/60 dark:border-gray-700/60 flex items-center gap-3">
+              <ANSBadge ansMetadata={server.ans_metadata} compact />
+              <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                {server.ans_metadata.domain || server.ans_metadata.ans_agent_id}
+              </span>
+            </div>
+          )}
 
           {/* Tags */}
           {server.tags && server.tags.length > 0 && (
