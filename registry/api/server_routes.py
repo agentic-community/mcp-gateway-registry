@@ -418,6 +418,7 @@ async def get_servers_json(
                     "source_updated_at": server_info.get("source_updated_at"),
                     "registered_at": server_info.get("registered_at"),
                     "updated_at": server_info.get("updated_at"),
+                    "ans_metadata": server_info.get("ans_metadata"),
                 }
             )
 

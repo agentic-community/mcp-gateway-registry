@@ -120,6 +120,10 @@ class ServerSearchResult(BaseModel):
     supported_transports: list[str] = Field(
         default_factory=list, description="Supported transport types (e.g., streamable-http, sse)"
     )
+    trust_verified: str = Field(
+        default="none",
+        description="Trust verification status: none, verified, expired, revoked, not_found, pending",
+    )
 
 
 class ToolSearchResult(BaseModel):
@@ -523,6 +527,11 @@ async def semantic_search(
             base_url=base_url,
         )
 
+        # Look up ANS metadata from server info for trust verification
+        server_full_info = await server_service.get_server_info(server_path)
+        server_ans_meta = server_full_info.get("ans_metadata") if server_full_info else None
+        server_trust = _compute_trust_verified(server_ans_meta)
+
         filtered_servers.append(
             ServerSearchResult(
                 path=server_path,
@@ -540,6 +549,7 @@ async def semantic_search(
                 mcp_endpoint=server_mcp_endpoint,
                 sse_endpoint=server.get("sse_endpoint"),
                 supported_transports=server.get("supported_transports", []),
+                trust_verified=server_trust,
             )
         )
 

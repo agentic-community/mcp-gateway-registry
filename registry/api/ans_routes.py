@@ -166,7 +166,7 @@ async def get_agent_ans_status(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    ans_metadata = agent.get("ans_metadata")
+    ans_metadata = agent.ans_metadata
     if not ans_metadata:
         raise HTTPException(status_code=404, detail="No ANS link found")
 
