@@ -605,6 +605,7 @@ if settings.audit_log_enabled:
 app.include_router(system_router, tags=["System"])  # /api/version, /api/stats
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(servers_router, prefix="/api", tags=["Server Management"])
+app.include_router(ans_router, prefix="/api", tags=["ANS Integration"])
 app.include_router(agent_router, prefix="/api", tags=["Agent Management"])
 app.include_router(management_router, prefix="/api")
 app.include_router(search_router, prefix="/api/search", tags=["Semantic Search"])
@@ -617,7 +618,6 @@ app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring
 app.include_router(federation_export_router)
 app.include_router(peer_management_router)
 app.include_router(audit_router, prefix="/api", tags=["Audit Logs"])
-app.include_router(ans_router, prefix="/api", tags=["ANS Integration"])
 
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])
