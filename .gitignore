@@ -219,6 +219,7 @@ agents/agent_config.json
 .cognito_access_token
 .network-trusted-token
 .token
+.token-*
 api/.token
 api/.mcp-session
 
