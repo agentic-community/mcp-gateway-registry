@@ -44,6 +44,9 @@ class StartupEvent(BaseModel):
     )
     auth: str = Field(..., min_length=1, max_length=50, description="Auth provider")
     federation: bool = Field(..., description="Federation enabled")
+    search_queries_total: int = Field(
+        default=0, ge=0, description="Lifetime semantic search query count"
+    )
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")
@@ -101,6 +104,9 @@ class HeartbeatEvent(BaseModel):
     )
     embeddings_provider: str = Field(..., min_length=1, max_length=100)
     uptime_hours: int = Field(..., ge=0, description="Instance uptime in hours")
+    search_queries_total: int = Field(
+        default=0, ge=0, description="Lifetime semantic search query count"
+    )
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")
