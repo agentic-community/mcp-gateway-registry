@@ -187,6 +187,17 @@ registry:
     otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
     otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
     otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
+
+  # ANS (Agent Name Service) Integration
+  ans:
+    enabled: false  # Enable ANS integration for trust verification
+    apiEndpoint: "https://api.godaddy.com"  # ANS API base URL
+    apiKey: ""  # GoDaddy API key (required when enabled)
+    apiSecret: ""  # GoDaddy API secret (required when enabled)
+    apiTimeoutSeconds: "30"  # HTTP request timeout for ANS API calls
+    syncIntervalHours: "6"  # Background re-verification interval
+    verificationCacheTtlSeconds: "3600"  # Cache TTL for verification results
+
   ingress:
     enabled: true
     ingressClassName: alb
