@@ -960,7 +960,7 @@ const RegisterPage: React.FC = () => {
             placeholder="ans://v1.0.0.myagent.example.com"
           />
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            If your agent is registered with GoDaddy ANS (Agent Naming Service), enter the ANS Agent ID to display a verification badge.
+            If your agent is registered with GoDaddy ANS (Agent Name Service), enter the ANS Agent ID to display a verification badge.
             The ID will be verified against the ANS registry during registration.
           </p>
         </div>

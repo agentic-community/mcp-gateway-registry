@@ -121,7 +121,7 @@ class ServerInfo(BaseModel):
     ans_metadata: dict[str, Any] | None = Field(
         default=None,
         alias="ansMetadata",
-        description="ANS (Agent Naming Service) verification metadata",
+        description="ANS (Agent Name Service) verification metadata",
     )
 
     # Backend authentication (replaces legacy auth_type)

@@ -256,7 +256,7 @@ class Settings(BaseSettings):
     # ANS Integration
     ans_integration_enabled: bool = Field(
         default=False,
-        description="Enable ANS (Agent Naming Service) integration",
+        description="Enable ANS (Agent Name Service) integration",
     )
     ans_api_endpoint: str = Field(
         default="https://api.godaddy.com",

@@ -199,7 +199,7 @@ Stores Agent-to-Agent (A2A) agent cards and capabilities.
 }
 ```
 
-The `ans_metadata` field is `null` when no ANS Agent ID is linked. It is populated when an agent is linked to the GoDaddy Agent Naming Service (ANS) for PKI-based identity verification.
+The `ans_metadata` field is `null` when no ANS Agent ID is linked. It is populated when an agent is linked to the GoDaddy Agent Name Service (ANS) for PKI-based identity verification.
 
 **Indexes:**
 

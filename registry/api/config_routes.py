@@ -204,7 +204,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         ],
     },
     "ans": {
-        "title": "ANS (Agent Naming Service)",
+        "title": "ANS (Agent Name Service)",
         "order": 12,
         "fields": [
             ("ans_integration_enabled", "ANS Enabled", False),

@@ -527,7 +527,7 @@ class AgentCard(BaseModel):
     ans_metadata: dict[str, Any] | None = Field(
         default=None,
         alias="ansMetadata",
-        description="ANS (Agent Naming Service) verification metadata",
+        description="ANS (Agent Name Service) verification metadata",
     )
 
     # Health check status (persisted to MongoDB)

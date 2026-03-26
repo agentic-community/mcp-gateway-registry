@@ -154,7 +154,7 @@ module "mcp_gateway" {
   federation_static_token              = var.federation_static_token
   federation_encryption_key            = var.federation_encryption_key
 
-  # ANS (Agent Naming Service) configuration
+  # ANS (Agent Name Service) configuration
   ans_integration_enabled            = var.ans_integration_enabled
   ans_api_endpoint                   = var.ans_api_endpoint
   ans_api_key                        = var.ans_api_key

@@ -23,6 +23,7 @@ import AgentDetailsModal from './AgentDetailsModal';
 import type { Server } from './ServerCard';
 import type { Agent as AgentType } from './AgentCard';
 import useEscapeKey from '../hooks/useEscapeKey';
+import ANSBadge from './ANSBadge';
 
 interface SemanticSearchResultsProps {
   query: string;
@@ -822,6 +823,12 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
 
   const mapHitToAgent = (hit: SemanticAgentHit): AgentType => {
     const card = hit.agent_card || {};
+    // Derive trust_level from the top-level trust_verified field returned by search API
+    const trustVerified = hit.trust_verified || 'none';
+    let trustLevel: AgentType['trust_level'] = card.trust_level || 'unverified';
+    if (trustVerified === 'verified') {
+      trustLevel = 'verified';
+    }
     return {
       name: card.name || hit.path.replace(/^\//, ''),
       path: hit.path,
@@ -829,10 +836,11 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
       description: card.description,
       version: card.version,
       visibility: (card.visibility as AgentType['visibility']) ?? 'public',
-      trust_level: (card.trust_level as AgentType['trust_level']) ?? 'unverified',
+      trust_level: trustLevel,
       enabled: card.is_enabled ?? true,
       tags: card.tags || [],
       status: 'unknown',
+      ans_metadata: card.ans_metadata || card.ansMetadata || undefined,
     };
   };
 
@@ -1062,7 +1070,8 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
               const agentDescription = card.description;
               const agentTags = card.tags || [];
               const agentVisibility = card.visibility || 'public';
-              const agentTrustLevel = card.trust_level || 'unverified';
+              const trustVerified = agent.trust_verified || 'none';
+              const agentTrustLevel = trustVerified === 'verified' ? 'verified' : (card.trust_level || 'unverified');
               const agentIsEnabled = card.is_enabled ?? false;
               const syncMetadata = card.sync_metadata;
 
@@ -1152,9 +1161,13 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                 )}
 
                 <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-                  <span className="font-semibold text-cyan-700 dark:text-cyan-200">
-                    {agentTrustLevel}
-                  </span>
+                  {(card.ans_metadata || card.ansMetadata) ? (
+                    <ANSBadge ansMetadata={card.ans_metadata || card.ansMetadata} compact />
+                  ) : (
+                    <span className="font-semibold text-cyan-700 dark:text-cyan-200">
+                      {agentTrustLevel}
+                    </span>
+                  )}
                   <span>{agentIsEnabled ? 'Enabled' : 'Disabled'}</span>
                 </div>
               </div>

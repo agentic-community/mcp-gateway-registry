@@ -61,6 +61,7 @@ export interface SemanticAgentHit {
   relevance_score: number;
   match_context?: string;
   agent_card: Record<string, any>;
+  trust_verified?: string;
 }
 
 export interface SemanticSkillHit {
