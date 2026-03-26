@@ -154,9 +154,22 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("federation_static_token", "Federation Static Token", True),
         ],
     },
+    "ans": {
+        "title": "ANS (Agent Naming Service)",
+        "order": 11,
+        "fields": [
+            ("ans_integration_enabled", "ANS Enabled", False),
+            ("ans_api_endpoint", "API Endpoint", False),
+            ("ans_api_key", "API Key", True),
+            ("ans_api_secret", "API Secret", True),
+            ("ans_api_timeout_seconds", "API Timeout (s)", False),
+            ("ans_sync_interval_hours", "Sync Interval (hours)", False),
+            ("ans_verification_cache_ttl_seconds", "Cache TTL (s)", False),
+        ],
+    },
     "discovery": {
         "title": "Well-Known Discovery",
-        "order": 11,
+        "order": 12,
         "fields": [
             ("enable_wellknown_discovery", "Enabled", False),
             ("wellknown_cache_ttl", "Cache TTL", False),
@@ -164,7 +177,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "otel": {
         "title": "OpenTelemetry / OTLP",
-        "order": 12,
+        "order": 13,
         "fields": [
             ("otel_otlp_endpoint", "OTLP Endpoint", False),
             ("otel_otlp_export_interval_ms", "Export Interval (ms)", False),
