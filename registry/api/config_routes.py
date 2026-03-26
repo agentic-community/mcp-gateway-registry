@@ -27,7 +27,8 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 # ---------------------------------------------------------------------------
-# Configuration group definitions — 11 groups, ordered 1-11
+# Configuration group definitions — 14 groups, ordered 1-14
+# Groups may contain optional "subgroups" for nested display (e.g. Identity Providers)
 # Each field tuple: (settings_attr_name, display_label, is_sensitive)
 # ---------------------------------------------------------------------------
 CONFIG_GROUPS: dict[str, dict[str, Any]] = {
@@ -72,9 +73,57 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("secret_key", "Secret Key", True),
         ],
     },
+    "identity_providers": {
+        "title": "Identity Providers",
+        "order": 4,
+        "fields": [],
+        "subgroups": [
+            {
+                "id": "keycloak",
+                "title": "Keycloak",
+                "fields": [
+                    ("keycloak_enabled", "Enabled", False),
+                    ("keycloak_url", "Internal URL", False),
+                    ("keycloak_external_url", "External URL", False),
+                    ("keycloak_realm", "Realm", False),
+                    ("keycloak_client_id", "Client ID", True),
+                    ("keycloak_client_secret", "Client Secret", True),
+                    ("keycloak_admin", "Admin Username", True),
+                    ("keycloak_admin_password", "Admin Password", True),
+                    ("keycloak_m2m_client_id", "M2M Client ID", True),
+                    ("keycloak_m2m_client_secret", "M2M Client Secret", True),
+                ],
+            },
+            {
+                "id": "okta",
+                "title": "Okta",
+                "fields": [
+                    ("okta_enabled", "Enabled", False),
+                    ("okta_domain", "Domain", False),
+                    ("okta_client_id", "Client ID", True),
+                    ("okta_client_secret", "Client Secret", True),
+                    ("okta_m2m_client_id", "M2M Client ID", True),
+                    ("okta_m2m_client_secret", "M2M Client Secret", True),
+                    ("okta_api_token", "API Token", True),
+                    ("okta_auth_server_id", "Auth Server ID", False),
+                ],
+            },
+            {
+                "id": "entra",
+                "title": "Microsoft Entra ID",
+                "fields": [
+                    ("entra_enabled", "Enabled", False),
+                    ("entra_tenant_id", "Tenant ID", False),
+                    ("entra_client_id", "Client ID", True),
+                    ("entra_client_secret", "Client Secret", True),
+                    ("entra_group_admin_id", "Admin Group ID", False),
+                ],
+            },
+        ],
+    },
     "embeddings": {
         "title": "Embeddings / Vector Search",
-        "order": 4,
+        "order": 5,
         "fields": [
             ("embeddings_provider", "Provider", False),
             ("embeddings_model_name", "Model Name", False),
@@ -87,7 +136,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "health_check": {
         "title": "Health Checks",
-        "order": 5,
+        "order": 6,
         "fields": [
             ("health_check_interval_seconds", "Check Interval", False),
             ("health_check_timeout_seconds", "Check Timeout", False),
@@ -95,7 +144,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "websocket": {
         "title": "WebSocket Settings",
-        "order": 6,
+        "order": 7,
         "fields": [
             ("max_websocket_connections", "Max Connections", False),
             ("websocket_send_timeout_seconds", "Send Timeout", False),
@@ -106,7 +155,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "security_servers": {
         "title": "Security Scanning (MCP Servers)",
-        "order": 7,
+        "order": 8,
         "fields": [
             ("security_scan_enabled", "Scan Enabled", False),
             ("security_scan_on_registration", "Scan on Registration", False),
@@ -119,7 +168,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "security_agents": {
         "title": "Security Scanning (Agents)",
-        "order": 8,
+        "order": 9,
         "fields": [
             ("agent_security_scan_enabled", "Scan Enabled", False),
             ("agent_security_scan_on_registration", "Scan on Registration", False),
@@ -132,7 +181,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "audit": {
         "title": "Audit Logging",
-        "order": 9,
+        "order": 10,
         "fields": [
             ("audit_log_enabled", "Enabled", False),
             ("audit_log_dir", "Log Directory", False),
@@ -147,7 +196,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "federation": {
         "title": "Federation",
-        "order": 10,
+        "order": 11,
         "fields": [
             ("registry_id", "Registry ID", False),
             ("federation_static_token_auth_enabled", "Static Token Auth Enabled", False),
@@ -156,7 +205,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "ans": {
         "title": "ANS (Agent Naming Service)",
-        "order": 11,
+        "order": 12,
         "fields": [
             ("ans_integration_enabled", "ANS Enabled", False),
             ("ans_api_endpoint", "API Endpoint", False),
@@ -169,7 +218,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "discovery": {
         "title": "Well-Known Discovery",
-        "order": 12,
+        "order": 13,
         "fields": [
             ("enable_wellknown_discovery", "Enabled", False),
             ("wellknown_cache_ttl", "Cache TTL", False),
@@ -177,7 +226,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     },
     "otel": {
         "title": "OpenTelemetry / OTLP",
-        "order": 13,
+        "order": 14,
         "fields": [
             ("otel_otlp_endpoint", "OTLP Endpoint", False),
             ("otel_otlp_export_interval_ms", "Export Interval (ms)", False),
@@ -329,6 +378,29 @@ def _get_cached_config_response() -> dict[str, Any]:
     return _config_cache
 
 
+def _build_fields_list(
+    field_defs: list[tuple[str, str, bool]],
+) -> list[dict[str, Any]]:
+    """Build a list of formatted field dicts from field definitions."""
+    fields = []
+    for field_name, display_name, is_sensitive in field_defs:
+        value = _get_field_value(field_name)
+        actual_sensitive = is_sensitive or _is_sensitive_field(field_name)
+        formatted = _format_value(field_name, value, actual_sensitive)
+
+        fields.append(
+            {
+                "key": field_name,
+                "label": display_name,
+                "value": formatted["display"],
+                "raw_value": formatted["raw"],
+                "is_masked": formatted["is_masked"],
+                "unit": formatted["unit"],
+            }
+        )
+    return fields
+
+
 def _build_config_response() -> dict[str, Any]:
     """Build the full configuration response with grouped settings."""
     groups = []
@@ -337,31 +409,29 @@ def _build_config_response() -> dict[str, Any]:
         CONFIG_GROUPS.items(),
         key=lambda x: x[1]["order"],
     ):
-        fields = []
-        for field_name, display_name, is_sensitive in group_def["fields"]:
-            value = _get_field_value(field_name)
-            actual_sensitive = is_sensitive or _is_sensitive_field(field_name)
-            formatted = _format_value(field_name, value, actual_sensitive)
+        fields = _build_fields_list(group_def["fields"])
 
-            fields.append(
-                {
-                    "key": field_name,
-                    "label": display_name,
-                    "value": formatted["display"],
-                    "raw_value": formatted["raw"],
-                    "is_masked": formatted["is_masked"],
-                    "unit": formatted["unit"],
-                }
-            )
+        group_entry: dict[str, Any] = {
+            "id": group_id,
+            "title": group_def["title"],
+            "order": group_def["order"],
+            "fields": fields,
+        }
 
-        groups.append(
-            {
-                "id": group_id,
-                "title": group_def["title"],
-                "order": group_def["order"],
-                "fields": fields,
-            }
-        )
+        if "subgroups" in group_def:
+            subgroups = []
+            for sg in group_def["subgroups"]:
+                sg_fields = _build_fields_list(sg["fields"])
+                subgroups.append(
+                    {
+                        "id": sg["id"],
+                        "title": sg["title"],
+                        "fields": sg_fields,
+                    }
+                )
+            group_entry["subgroups"] = subgroups
+
+        groups.append(group_entry)
 
     return {
         "groups": groups,
@@ -497,6 +567,23 @@ class ExportFormat(str, Enum):
     YAML = "yaml"
 
 
+def _iter_group_fields(
+    group_def: dict[str, Any],
+) -> list[tuple[str, str, bool, str | None]]:
+    """Yield (field_name, display_name, is_sensitive, subgroup_title) for all fields in a group.
+
+    For groups without subgroups, subgroup_title is None.
+    For groups with subgroups, top-level fields come first, then subgroup fields.
+    """
+    results: list[tuple[str, str, bool, str | None]] = []
+    for field_name, display_name, is_sensitive in group_def["fields"]:
+        results.append((field_name, display_name, is_sensitive, None))
+    for sg in group_def.get("subgroups", []):
+        for field_name, display_name, is_sensitive in sg["fields"]:
+            results.append((field_name, display_name, is_sensitive, sg["title"]))
+    return results
+
+
 def _export_as_env(include_sensitive: bool = False) -> str:
     """Export configuration as .env file format.
 
@@ -512,7 +599,11 @@ def _export_as_env(include_sensitive: bool = False) -> str:
 
     for group_id, group_def in sorted(CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]):
         lines.append(f"# === {group_def['title']} ===")
-        for field_name, _display_name, is_sensitive in group_def["fields"]:
+        current_sg = None
+        for field_name, _display_name, is_sensitive, sg_title in _iter_group_fields(group_def):
+            if sg_title and sg_title != current_sg:
+                lines.append(f"# --- {sg_title} ---")
+                current_sg = sg_title
             value = _get_field_value(field_name)
             env_key = field_name.upper()
             sensitive = is_sensitive or _is_sensitive_field(field_name)
@@ -541,7 +632,7 @@ def _export_as_json(include_sensitive: bool = False) -> str:
     config: dict[str, dict[str, Any]] = {}
     for group_id, group_def in CONFIG_GROUPS.items():
         group_config: dict[str, Any] = {}
-        for field_name, _display_name, is_sensitive in group_def["fields"]:
+        for field_name, _display_name, is_sensitive, _sg_title in _iter_group_fields(group_def):
             value = _get_field_value(field_name)
             sensitive = is_sensitive or _is_sensitive_field(field_name)
 
@@ -579,7 +670,11 @@ def _export_as_tfvars(include_sensitive: bool = False) -> str:
 
     for group_id, group_def in sorted(CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]):
         lines.append(f"# {group_def['title']}")
-        for field_name, _display_name, is_sensitive in group_def["fields"]:
+        current_sg = None
+        for field_name, _display_name, is_sensitive, sg_title in _iter_group_fields(group_def):
+            if sg_title and sg_title != current_sg:
+                lines.append(f"# {sg_title}")
+                current_sg = sg_title
             value = _get_field_value(field_name)
             tf_key = field_name.lower()
             sensitive = is_sensitive or _is_sensitive_field(field_name)
@@ -627,7 +722,11 @@ def _export_as_yaml(include_sensitive: bool = False) -> str:
     for group_id, group_def in sorted(CONFIG_GROUPS.items(), key=lambda x: x[1]["order"]):
         lines.append(f"  # {group_def['title']}")
         lines.append(f"  {group_id}:")
-        for field_name, _display_name, is_sensitive in group_def["fields"]:
+        current_sg = None
+        for field_name, _display_name, is_sensitive, sg_title in _iter_group_fields(group_def):
+            if sg_title and sg_title != current_sg:
+                lines.append(f"    # {sg_title}")
+                current_sg = sg_title
             value = _get_field_value(field_name)
             sensitive = is_sensitive or _is_sensitive_field(field_name)
 

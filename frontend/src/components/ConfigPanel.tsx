@@ -25,11 +25,18 @@ interface ConfigField {
   unit: string | null;
 }
 
+interface ConfigSubgroup {
+  id: string;
+  title: string;
+  fields: ConfigField[];
+}
+
 interface ConfigGroup {
   id: string;
   title: string;
   order: number;
   fields: ConfigField[];
+  subgroups?: ConfigSubgroup[];
 }
 
 interface ConfigResponse {
@@ -87,6 +94,60 @@ interface ConfigGroupPanelProps {
   onCopy: (key: string, value: string) => void;
 }
 
+/**
+ * Render a single field row (reused in top-level fields and subgroups).
+ */
+const FieldRow: React.FC<{
+  field: ConfigField;
+  searchTerm: string;
+  copiedKey: string | null;
+  onCopy: (key: string, value: string) => void;
+}> = ({ field, searchTerm, copiedKey, onCopy }) => (
+  <div
+    key={field.key}
+    className="flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+  >
+    <div className="flex-1 min-w-0 mr-4">
+      <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
+        {highlightMatch(field.key, searchTerm)}
+      </div>
+      <div className="text-sm text-gray-900 dark:text-white">
+        {highlightMatch(field.label, searchTerm)}
+      </div>
+    </div>
+    <div className="flex items-center space-x-2 flex-shrink-0">
+      <span
+        className={`text-sm font-mono ${
+          field.is_masked
+            ? 'text-gray-400 dark:text-gray-500 italic'
+            : 'text-gray-700 dark:text-gray-300'
+        }`}
+      >
+        {highlightMatch(field.value, searchTerm)}
+        {field.unit && !field.is_masked && (
+          <span className="text-xs text-gray-400 dark:text-gray-500 ml-1">
+            {field.unit}
+          </span>
+        )}
+      </span>
+      {!field.is_masked && field.raw_value !== null && (
+        <button
+          onClick={() => onCopy(field.key, String(field.raw_value))}
+          className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+          aria-label={`Copy ${field.label} value`}
+          title="Copy value"
+        >
+          {copiedKey === field.key ? (
+            <CheckIcon className="h-4 w-4 text-green-500" />
+          ) : (
+            <ClipboardIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+          )}
+        </button>
+      )}
+    </div>
+  </div>
+);
+
 const ConfigGroupPanel: React.FC<ConfigGroupPanelProps> = ({
   group,
   expanded,
@@ -96,6 +157,8 @@ const ConfigGroupPanel: React.FC<ConfigGroupPanelProps> = ({
   onCopy,
 }) => {
   const panelId = `config-group-${group.id}`;
+  const totalFields = group.fields.length +
+    (group.subgroups?.reduce((s, sg) => s + sg.fields.length, 0) || 0);
 
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
@@ -118,56 +181,57 @@ const ConfigGroupPanel: React.FC<ConfigGroupPanelProps> = ({
             {highlightMatch(group.title, searchTerm)}
           </span>
         </div>
-        <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded-full">
-          {group.fields.length} {group.fields.length === 1 ? 'field' : 'fields'}
-        </span>
+        <div className="flex items-center space-x-2">
+          {group.subgroups && group.subgroups.length > 0 && (
+            <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded-full">
+              {group.subgroups.length} {group.subgroups.length === 1 ? 'provider' : 'providers'}
+            </span>
+          )}
+          <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded-full">
+            {totalFields} {totalFields === 1 ? 'field' : 'fields'}
+          </span>
+        </div>
       </button>
 
-      {/* Group fields */}
+      {/* Group fields and subgroups */}
       {expanded && (
-        <div id={panelId} role="region" className="divide-y divide-gray-100 dark:divide-gray-700/50">
-          {group.fields.map((field) => (
-            <div
-              key={field.key}
-              className="flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-800/50"
-            >
-              <div className="flex-1 min-w-0 mr-4">
-                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
-                  {highlightMatch(field.key, searchTerm)}
-                </div>
-                <div className="text-sm text-gray-900 dark:text-white">
-                  {highlightMatch(field.label, searchTerm)}
-                </div>
-              </div>
-              <div className="flex items-center space-x-2 flex-shrink-0">
-                <span
-                  className={`text-sm font-mono ${
-                    field.is_masked
-                      ? 'text-gray-400 dark:text-gray-500 italic'
-                      : 'text-gray-700 dark:text-gray-300'
-                  }`}
-                >
-                  {highlightMatch(field.value, searchTerm)}
-                  {field.unit && !field.is_masked && (
-                    <span className="text-xs text-gray-400 dark:text-gray-500 ml-1">
-                      {field.unit}
-                    </span>
-                  )}
+        <div id={panelId} role="region">
+          {/* Top-level fields */}
+          {group.fields.length > 0 && (
+            <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+              {group.fields.map((field) => (
+                <FieldRow
+                  key={field.key}
+                  field={field}
+                  searchTerm={searchTerm}
+                  copiedKey={copiedKey}
+                  onCopy={onCopy}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Subgroups */}
+          {group.subgroups?.map((sg) => (
+            <div key={sg.id}>
+              <div className="px-4 py-2 bg-gray-100/50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
+                  {highlightMatch(sg.title, searchTerm)}
                 </span>
-                {!field.is_masked && field.raw_value !== null && (
-                  <button
-                    onClick={() => onCopy(field.key, String(field.raw_value))}
-                    className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                    aria-label={`Copy ${field.label} value`}
-                    title="Copy value"
-                  >
-                    {copiedKey === field.key ? (
-                      <CheckIcon className="h-4 w-4 text-green-500" />
-                    ) : (
-                      <ClipboardIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
-                    )}
-                  </button>
-                )}
+                <span className="text-xs text-gray-400 dark:text-gray-500 ml-2">
+                  {sg.fields.length} {sg.fields.length === 1 ? 'field' : 'fields'}
+                </span>
+              </div>
+              <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+                {sg.fields.map((field) => (
+                  <FieldRow
+                    key={field.key}
+                    field={field}
+                    searchTerm={searchTerm}
+                    copiedKey={copiedKey}
+                    onCopy={onCopy}
+                  />
+                ))}
               </div>
             </div>
           ))}
@@ -218,21 +282,28 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
     if (!searchTerm.trim()) return config.groups;
 
     const term = searchTerm.toLowerCase();
+    const matchField = (f: ConfigField) =>
+      f.key.toLowerCase().includes(term) ||
+      f.label.toLowerCase().includes(term) ||
+      f.value.toLowerCase().includes(term);
+
     return config.groups
       .map((group) => ({
         ...group,
-        fields: group.fields.filter(
-          (f) =>
-            f.key.toLowerCase().includes(term) ||
-            f.label.toLowerCase().includes(term) ||
-            f.value.toLowerCase().includes(term)
-        ),
+        fields: group.fields.filter(matchField),
+        subgroups: group.subgroups?.map((sg) => ({
+          ...sg,
+          fields: sg.fields.filter(matchField),
+        })).filter((sg) => sg.fields.length > 0),
       }))
-      .filter((group) => group.fields.length > 0);
+      .filter((group) => group.fields.length > 0 || (group.subgroups && group.subgroups.length > 0));
   }, [config, searchTerm]);
 
   const totalMatchingFields = useMemo(
-    () => filteredGroups.reduce((sum, g) => sum + g.fields.length, 0),
+    () => filteredGroups.reduce((sum, g) => {
+      const sgFields = g.subgroups?.reduce((s, sg) => s + sg.fields.length, 0) || 0;
+      return sum + g.fields.length + sgFields;
+    }, 0),
     [filteredGroups]
   );
 
