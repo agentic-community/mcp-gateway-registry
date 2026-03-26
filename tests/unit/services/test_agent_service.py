@@ -547,7 +547,7 @@ class TestUpdateAgent:
             path="/test-agent",
             description="Updated description",
         )
-        mock_agent_repository.save.return_value = updated_card
+        mock_agent_repository.update.return_value = updated_card
 
         updates = {"description": "Updated description"}
 
@@ -557,7 +557,7 @@ class TestUpdateAgent:
         # Assert
         assert result.description == "Updated description"
         assert result.path == "/test-agent"
-        mock_agent_repository.save.assert_called_once()
+        mock_agent_repository.update.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_update_agent_updates_timestamp(
@@ -579,7 +579,7 @@ class TestUpdateAgent:
             path="/test-agent",
             updated_at=datetime.now(UTC),
         )
-        mock_agent_repository.save.return_value = updated_card
+        mock_agent_repository.update.return_value = updated_card
 
         # Act
         result = await agent_service.update_agent("/test-agent", {"description": "New"})
@@ -614,7 +614,7 @@ class TestUpdateAgent:
         agent_service.registered_agents["/original-path"] = agent_card
 
         updated_card = AgentCardFactory(path="/original-path", description="Updated")
-        mock_agent_repository.save.return_value = updated_card
+        mock_agent_repository.update.return_value = updated_card
 
         # Act
         result = await agent_service.update_agent(
