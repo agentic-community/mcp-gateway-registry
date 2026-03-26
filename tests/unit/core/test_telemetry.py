@@ -196,6 +196,10 @@ class TestPayloadBuilding:
             assert "uptime_hours" in payload
             assert "search_queries_total" in payload
             assert payload["search_queries_total"] == 99
+            assert "search_queries_daily_7d_moving_avg" in payload
+            assert payload["search_queries_daily_7d_moving_avg"] is None
+            assert "search_queries_hourly_moving_avg" in payload
+            assert payload["search_queries_hourly_moving_avg"] is None
             assert "ts" in payload
 
     @pytest.mark.asyncio
