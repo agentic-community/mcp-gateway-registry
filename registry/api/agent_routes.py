@@ -1463,6 +1463,11 @@ async def discover_agents_semantic(
 
         logger.info(f"Semantic search returned {len(accessible_results)} agents for query: {query}")
 
+        # Increment semantic search counter (fail-silent)
+        from registry.repositories.stats_repository import increment_search_counter
+
+        await increment_search_counter()
+
         return {
             "agents": accessible_results,
             "query": query,

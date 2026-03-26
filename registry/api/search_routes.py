@@ -766,6 +766,11 @@ async def semantic_search(
         filtered_virtual_servers = []
     # In FULL mode, return all results (no filtering needed)
 
+    # Increment semantic search counter (fail-silent)
+    from registry.repositories.stats_repository import increment_search_counter
+
+    await increment_search_counter()
+
     return SemanticSearchResponse(
         query=request.query.strip(),
         servers=filtered_servers,

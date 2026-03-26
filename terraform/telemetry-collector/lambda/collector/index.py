@@ -162,6 +162,13 @@ def _store_event(event_type: str, payload: dict) -> None:
     db = _get_database()
     collection = db[f"{event_type}_events"]
 
+    # Convert ts string to BSON datetime for consistent querying
+    if "ts" in payload and isinstance(payload["ts"], str):
+        try:
+            payload["ts"] = datetime.fromisoformat(payload["ts"].replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            pass  # Keep as string if parsing fails
+
     document = {
         **payload,
         "received_at": datetime.now(UTC),

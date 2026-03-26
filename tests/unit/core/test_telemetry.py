@@ -81,16 +81,24 @@ class TestTelemetryEnabled:
 class TestPayloadBuilding:
     """Tests for payload construction."""
 
-    def test_build_startup_payload_structure(self):
+    @pytest.mark.asyncio
+    async def test_build_startup_payload_structure(self):
         """Test startup payload has correct fields."""
-        with patch("registry.core.telemetry.settings") as mock_settings:
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=42,
+            ),
+        ):
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.registry_mode.value = "full"
             mock_settings.storage_backend = "file"
             mock_settings.auth_provider = "cognito"
             mock_settings.federation_static_token_auth_enabled = False
 
-            payload = _build_startup_payload()
+            payload = await _build_startup_payload()
 
             # Required fields
             assert "event" in payload
@@ -104,18 +112,28 @@ class TestPayloadBuilding:
             assert "storage" in payload
             assert "auth" in payload
             assert "federation" in payload
+            assert "search_queries_total" in payload
+            assert payload["search_queries_total"] == 42
             assert "ts" in payload
 
-    def test_no_pii_in_startup_payload(self):
+    @pytest.mark.asyncio
+    async def test_no_pii_in_startup_payload(self):
         """Test startup payload contains no PII."""
-        with patch("registry.core.telemetry.settings") as mock_settings:
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+        ):
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.registry_mode.value = "full"
             mock_settings.storage_backend = "file"
             mock_settings.auth_provider = "cognito"
             mock_settings.federation_static_token_auth_enabled = False
 
-            payload = _build_startup_payload()
+            payload = await _build_startup_payload()
             payload_str = json.dumps(payload)
 
             # Should not contain hostnames, IPs
@@ -137,6 +155,11 @@ class TestPayloadBuilding:
                 "registry.repositories.factory.get_peer_federation_repository"
             ) as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=99,
+            ),
         ):
             mock_settings.storage_backend = "file"
             mock_settings.embeddings_provider = "sentence-transformers"
@@ -171,6 +194,8 @@ class TestPayloadBuilding:
             assert "search_backend" in payload
             assert "embeddings_provider" in payload
             assert "uptime_hours" in payload
+            assert "search_queries_total" in payload
+            assert payload["search_queries_total"] == 99
             assert "ts" in payload
 
     @pytest.mark.asyncio
@@ -185,6 +210,11 @@ class TestPayloadBuilding:
                 "registry.repositories.factory.get_peer_federation_repository"
             ) as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
         ):
             # Test DocumentDB backend
             mock_settings.storage_backend = "documentdb"
@@ -557,6 +587,11 @@ class TestRepositoryFailures:
                 "registry.repositories.factory.get_peer_federation_repository"
             ) as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
         ):
             mock_settings.storage_backend = "file"
             mock_settings.embeddings_provider = "sentence-transformers"

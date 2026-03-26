@@ -174,8 +174,12 @@ async def _acquire_telemetry_lock(event_type: str, interval_seconds: int) -> boo
         return True
 
 
-def _build_startup_payload() -> dict:
+async def _build_startup_payload() -> dict:
     """Build the anonymous startup event payload."""
+    from registry.repositories.stats_repository import get_search_count
+
+    search_queries_total = await get_search_count()
+
     return {
         "event": "startup",
         "v": __version__,
@@ -187,6 +191,7 @@ def _build_startup_payload() -> dict:
         "storage": settings.storage_backend,  # file, documentdb, mongodb-ce
         "auth": settings.auth_provider,  # cognito, keycloak, entra, github, google
         "federation": settings.federation_static_token_auth_enabled,
+        "search_queries_total": search_queries_total,
         "ts": datetime.now(UTC).isoformat(),
     }
 
@@ -200,6 +205,7 @@ async def _build_heartbeat_payload() -> dict:
         get_server_repository,
         get_skill_repository,
     )
+    from registry.repositories.stats_repository import get_search_count
 
     # Calculate uptime
     uptime_hours = 0
@@ -247,6 +253,8 @@ async def _build_heartbeat_payload() -> dict:
         "documentdb" if settings.storage_backend in ("documentdb", "mongodb-ce") else "faiss"
     )
 
+    search_queries_total = await get_search_count()
+
     return {
         "event": "heartbeat",
         "v": __version__,
@@ -257,6 +265,7 @@ async def _build_heartbeat_payload() -> dict:
         "search_backend": search_backend,
         "embeddings_provider": settings.embeddings_provider,
         "uptime_hours": uptime_hours,
+        "search_queries_total": search_queries_total,
         "ts": datetime.now(UTC).isoformat(),
     }
 
@@ -433,7 +442,7 @@ async def send_startup_ping() -> None:
             return
 
         # Build and send payload
-        payload = _build_startup_payload()
+        payload = await _build_startup_payload()
         await _send_telemetry(payload)
 
     except Exception as e:
