@@ -198,6 +198,15 @@ registry:
     syncIntervalHours: "6"  # Background re-verification interval
     verificationCacheTtlSeconds: "3600"  # Cache TTL for verification results
 
+  # Registry Card Configuration (for federation and discovery)
+  registryCard:
+    url: ""  # External URL of the registry (defaults to computed ingress URL)
+    name: "AI Registry"  # Human-readable name
+    organizationName: ""  # Organization operating the registry
+    description: ""  # Optional description
+    contactEmail: ""  # Optional contact email
+    contactUrl: ""  # Optional contact URL/website
+
   ingress:
     enabled: true
     ingressClassName: alb

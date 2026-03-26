@@ -132,7 +132,10 @@ class TestSkillModels:
             tags=["tag1", "tag2"],
         )
 
+        from uuid import uuid4
+
         info = SkillInfo(
+            id=uuid4(),
             path=skill.path,
             name=skill.name,
             description=skill.description,

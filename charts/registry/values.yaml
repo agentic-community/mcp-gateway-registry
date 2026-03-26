@@ -52,6 +52,15 @@ ans:
   syncIntervalHours: "6"  # Background re-verification interval
   verificationCacheTtlSeconds: "3600"  # Cache TTL for verification results
 
+# Registry Card Configuration (for federation and discovery)
+registryCard:
+  url: ""  # External URL of the registry (e.g., https://registry.example.com). Defaults to computed ingress URL.
+  name: "AI Registry"  # Human-readable name
+  organizationName: "ACME Inc."  # Organization operating the registry
+  description: ""  # Optional description
+  contactEmail: ""  # Optional contact email
+  contactUrl: ""  # Optional contact URL/website
+
 # Entra ID integration (used when authProvider.type = "entra" in standalone deployment)
 entra:
   clientId: ""
