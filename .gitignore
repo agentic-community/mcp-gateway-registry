@@ -218,8 +218,7 @@ agents/agent_config.json
 .agentcore-params
 .cognito_access_token
 .network-trusted-token
-.token
-.token-*
+.token*
 api/.token
 api/.mcp-session
 
@@ -365,4 +364,3 @@ charts/*/Chart.lock
 .claude/*
 !.claude/skills/
 .claude/skills/search-registry/
-.token?
