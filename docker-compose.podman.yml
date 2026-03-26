@@ -454,6 +454,8 @@ services:
     cap_add:
       - SETUID   # Required by gosu to switch to mongodb user at startup
       - SETGID   # Required by gosu to switch to mongodb group at startup
+      - CHOWN    # Required by entrypoint to fix /data/db ownership
+      - DAC_OVERRIDE  # Required by entrypoint to read /data/db before chown
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 60s

@@ -489,6 +489,8 @@ services:
     cap_add:
       - SETUID
       - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
     depends_on:
       mongodb-keyfile-init:
         condition: service_completed_successfully
