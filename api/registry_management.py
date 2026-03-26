@@ -1665,25 +1665,24 @@ def cmd_agent_get(args: argparse.Namespace) -> int:
         agent = client.get_agent(args.path)
 
         logger.info(f"Retrieved agent: {agent.name}")
-        print(
-            json.dumps(
-                {
-                    "name": agent.name,
-                    "path": agent.path,
-                    "description": agent.description,
-                    "url": agent.url,
-                    "version": agent.version,
-                    "provider": agent.provider.model_dump() if agent.provider else None,
-                    "is_enabled": agent.is_enabled,
-                    "visibility": agent.visibility,
-                    "skills": [
-                        {"name": skill.name, "description": skill.description}
-                        for skill in agent.skills
-                    ],
-                },
-                indent=2,
-            )
-        )
+        output = {
+            "name": agent.name,
+            "path": agent.path,
+            "description": agent.description,
+            "url": agent.url,
+            "version": agent.version,
+            "provider": agent.provider.model_dump() if agent.provider else None,
+            "is_enabled": agent.is_enabled,
+            "visibility": agent.visibility,
+            "trust_level": agent.trust_level,
+            "skills": [
+                {"name": skill.name, "description": skill.description}
+                for skill in agent.skills
+            ],
+        }
+        if agent.ans_metadata:
+            output["ans_metadata"] = agent.ans_metadata
+        print(json.dumps(output, indent=2))
         return 0
 
     except Exception as e:
@@ -1920,6 +1919,8 @@ def cmd_agent_search(args: argparse.Namespace) -> int:
             for agent in response.agents:
                 print(f"{agent.name} ({agent.path})")
                 print(f"  Relevance: {agent.relevance_score:.2%}")
+                if agent.trust_verified:
+                    print(f"  ANS Trust: {agent.trust_verified}")
                 print(f"  {agent.description[:100]}...")
                 print()
 
@@ -2055,6 +2056,103 @@ def cmd_agent_rescan(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Failed to trigger security scan: {e}")
+        return 1
+
+
+# ==========================================
+# Agent ANS (Agent Name Service) Command Handlers
+# ==========================================
+
+
+def cmd_agent_ans_link(args: argparse.Namespace) -> int:
+    """
+    Link an ANS Agent ID to an agent.
+
+    Args:
+        args: Command arguments with path and ans_agent_id
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        result = client.agent_ans_link(
+            path=args.path,
+            ans_agent_id=args.ans_agent_id,
+        )
+
+        if result.get("success"):
+            logger.info(f"Successfully linked ANS ID to agent '{args.path}'")
+            if result.get("ans_metadata"):
+                print(json.dumps(result["ans_metadata"], indent=2, default=str))
+        else:
+            logger.error(f"Failed to link ANS ID: {result.get('message', 'Unknown error')}")
+            return 1
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"ANS link failed: {e}")
+        return 1
+
+
+def cmd_agent_ans_status(args: argparse.Namespace) -> int:
+    """
+    Get ANS verification status for an agent.
+
+    Args:
+        args: Command arguments with path
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        result = client.agent_ans_status(path=args.path)
+
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            logger.info(f"\nANS status for agent '{args.path}':")
+            logger.info(f"  Status: {result.get('status', 'unknown')}")
+            logger.info(f"  Domain: {result.get('domain', 'N/A')}")
+            logger.info(f"  ANS Agent ID: {result.get('ans_agent_id', 'N/A')}")
+            if result.get("verified_at"):
+                logger.info(f"  Verified at: {result.get('verified_at')}")
+            if result.get("last_checked"):
+                logger.info(f"  Last checked: {result.get('last_checked')}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"ANS status check failed: {e}")
+        return 1
+
+
+def cmd_agent_ans_unlink(args: argparse.Namespace) -> int:
+    """
+    Remove ANS link from an agent.
+
+    Args:
+        args: Command arguments with path
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        result = client.agent_ans_unlink(path=args.path)
+
+        if result.get("success"):
+            logger.info(f"Successfully unlinked ANS from agent '{args.path}'")
+        else:
+            logger.error(f"Failed to unlink ANS: {result.get('message', 'Unknown error')}")
+            return 1
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"ANS unlink failed: {e}")
         return 1
 
 
@@ -4415,6 +4513,36 @@ Examples:
     )
     agent_rescan_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    # Agent ANS (Agent Name Service) commands
+    agent_ans_link_parser = subparsers.add_parser(
+        "agent-ans-link", help="Link an ANS Agent ID to an agent"
+    )
+    agent_ans_link_parser.add_argument(
+        "--path", required=True, help="Agent path (e.g., /code-reviewer)"
+    )
+    agent_ans_link_parser.add_argument(
+        "--ans-agent-id",
+        required=True,
+        help="ANS Agent ID (e.g., ans://v1.example.com)",
+    )
+
+    agent_ans_status_parser = subparsers.add_parser(
+        "agent-ans-status", help="Get ANS verification status for an agent"
+    )
+    agent_ans_status_parser.add_argument(
+        "--path", required=True, help="Agent path (e.g., /code-reviewer)"
+    )
+    agent_ans_status_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON"
+    )
+
+    agent_ans_unlink_parser = subparsers.add_parser(
+        "agent-ans-unlink", help="Remove ANS link from an agent"
+    )
+    agent_ans_unlink_parser.add_argument(
+        "--path", required=True, help="Agent path (e.g., /code-reviewer)"
+    )
+
     # ==========================================
     # Agent Skills Commands
     # ==========================================
@@ -4964,6 +5092,9 @@ Examples:
         "agent-rating": cmd_agent_rating,
         "agent-security-scan": cmd_agent_security_scan,
         "agent-rescan": cmd_agent_rescan,
+        "agent-ans-link": cmd_agent_ans_link,
+        "agent-ans-status": cmd_agent_ans_status,
+        "agent-ans-unlink": cmd_agent_ans_unlink,
         # Skill commands
         "skill-register": cmd_skill_register,
         "skill-list": cmd_skill_list,

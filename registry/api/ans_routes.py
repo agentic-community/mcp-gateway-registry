@@ -122,6 +122,15 @@ def _check_admin(
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
+def _normalize_path(path: str) -> str:
+    """Normalize entity path to ensure leading slash."""
+    if not path.startswith("/"):
+        path = "/" + path
+    if path.endswith("/") and len(path) > 1:
+        path = path.rstrip("/")
+    return path
+
+
 # --- Agent ANS endpoints ---
 
 
@@ -134,6 +143,7 @@ async def link_ans_to_agent_endpoint(
 ) -> dict[str, Any]:
     """Link an ANS Agent ID to an agent."""
     _check_ans_enabled()
+    path = _normalize_path(path)
     await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     _check_rate_limit(username)
@@ -159,6 +169,7 @@ async def get_agent_ans_status(
 ) -> dict[str, Any]:
     """Get ANS verification status for an agent."""
     _check_ans_enabled()
+    path = _normalize_path(path)
     from registry.repositories.factory import get_agent_repository
 
     repo = get_agent_repository()
@@ -181,6 +192,7 @@ async def unlink_ans_from_agent_endpoint(
 ) -> dict[str, Any]:
     """Remove ANS link from an agent."""
     _check_ans_enabled()
+    path = _normalize_path(path)
     await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     set_audit_action(
@@ -209,6 +221,7 @@ async def link_ans_to_server_endpoint(
 ) -> dict[str, Any]:
     """Link an ANS Agent ID to an MCP server."""
     _check_ans_enabled()
+    path = _normalize_path(path)
     await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     _check_rate_limit(username)
@@ -234,6 +247,7 @@ async def get_server_ans_status(
 ) -> dict[str, Any]:
     """Get ANS verification status for a server."""
     _check_ans_enabled()
+    path = _normalize_path(path)
     from registry.repositories.factory import get_server_repository
 
     repo = get_server_repository()
@@ -256,6 +270,7 @@ async def unlink_ans_from_server_endpoint(
 ) -> dict[str, Any]:
     """Remove ANS link from a server."""
     _check_ans_enabled()
+    path = _normalize_path(path)
     await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     set_audit_action(

@@ -578,6 +578,11 @@ class AgentDetail(BaseModel):
         default_factory=list, alias="allowedGroups", description="Groups with access"
     )
     trust_level: str = Field("unverified", alias="trustLevel", description="Trust level")
+    ans_metadata: dict[str, Any] | None = Field(
+        default=None,
+        alias="ansMetadata",
+        description="ANS (Agent Name Service) verification metadata",
+    )
     signature: str | None = Field(None, description="JWS signature for card integrity")
     status: str = Field(default="active", description="Agent status (active, deprecated, draft, beta)")
     source_created_at: str | None = Field(
@@ -616,6 +621,11 @@ class AgentListItem(BaseModel):
     provider: str | None = Field(None, description="Agent provider")
     streaming: bool = Field(default=False, description="Supports streaming")
     trust_level: str = Field(default="unverified", alias="trustLevel", description="Trust level")
+    ans_metadata: dict[str, Any] | None = Field(
+        default=None,
+        alias="ansMetadata",
+        description="ANS (Agent Name Service) verification metadata",
+    )
     sync_metadata: dict[str, Any] | None = Field(
         default=None,
         alias="syncMetadata",
@@ -681,6 +691,8 @@ class SemanticDiscoveredAgent(BaseModel):
     provider: dict[str, str] | None = Field(None, description="Provider information")
     capabilities: dict[str, Any] = Field(default_factory=dict, description="Agent capabilities")
     trust_level: str = Field("unverified", description="Trust level")
+    trust_verified: str | None = Field(None, description="ANS trust verification status")
+    ans_metadata: dict[str, Any] | None = Field(None, description="ANS verification metadata")
     num_stars: float = Field(0.0, description="Average rating")
     version: str | None = Field(None, description="Agent version")
 
@@ -2280,6 +2292,90 @@ class RegistryClient:
 
         result = AgentSecurityScanResponse(**response.json())
         logger.info(f"Retrieved security scan results for '{path}'")
+        return result
+
+    def agent_ans_link(
+        self,
+        path: str,
+        ans_agent_id: str,
+    ) -> dict[str, Any]:
+        """
+        Link an ANS Agent ID to an agent.
+
+        Args:
+            path: Agent path (e.g., /code-reviewer)
+            ans_agent_id: ANS Agent ID (e.g., ans://v1.example.com)
+
+        Returns:
+            Link result with success status, message, and ans_metadata
+
+        Raises:
+            requests.HTTPError: If linking fails
+        """
+        logger.info(f"Linking ANS ID '{ans_agent_id}' to agent: {path}")
+
+        response = self._make_request(
+            method="POST",
+            endpoint=f"/api/agents{path}/ans/link",
+            data={"ans_agent_id": ans_agent_id},
+        )
+
+        result = response.json()
+        logger.info(f"ANS link result for '{path}': {result.get('message', '')}")
+        return result
+
+    def agent_ans_status(
+        self,
+        path: str,
+    ) -> dict[str, Any]:
+        """
+        Get ANS verification status for an agent.
+
+        Args:
+            path: Agent path (e.g., /code-reviewer)
+
+        Returns:
+            ANS metadata dict with status, domain, ans_agent_id, etc.
+
+        Raises:
+            requests.HTTPError: If retrieval fails (404 if no ANS link)
+        """
+        logger.info(f"Getting ANS status for agent: {path}")
+
+        response = self._make_request(
+            method="GET",
+            endpoint=f"/api/agents{path}/ans/status",
+        )
+
+        result = response.json()
+        logger.info(f"ANS status for '{path}': {result.get('status', 'unknown')}")
+        return result
+
+    def agent_ans_unlink(
+        self,
+        path: str,
+    ) -> dict[str, Any]:
+        """
+        Remove ANS link from an agent.
+
+        Args:
+            path: Agent path (e.g., /code-reviewer)
+
+        Returns:
+            Unlink result with success status and message
+
+        Raises:
+            requests.HTTPError: If unlinking fails
+        """
+        logger.info(f"Unlinking ANS from agent: {path}")
+
+        response = self._make_request(
+            method="DELETE",
+            endpoint=f"/api/agents{path}/ans/link",
+        )
+
+        result = response.json()
+        logger.info(f"ANS unlink result for '{path}': {result.get('message', '')}")
         return result
 
     def rate_server(self, path: str, rating: int) -> RatingResponse:
