@@ -158,6 +158,33 @@ def test_docker_compose_has_security_options(repo_root: Path):
     assert "- ALL" in content, "docker-compose.yml missing cap_drop: ALL"
 
 
+def test_docker_compose_mongodb_cap_add(repo_root: Path):
+    """Test that all docker-compose files restore SETUID/SETGID for MongoDB after cap_drop ALL.
+
+    MongoDB uses gosu to switch from root to the mongodb user at startup.
+    gosu requires SETUID and SETGID capabilities. Without them, MongoDB
+    fails with: 'error: failed switching to mongodb: operation not permitted'.
+
+    Regression introduced in PR #624 and PR #651 where cap_drop: ALL was applied
+    to all services without adding back the minimum capabilities required by MongoDB.
+    Fixed in PR #688.
+    """
+    compose_files = [
+        "docker-compose.yml",
+        "docker-compose.prebuilt.yml",
+        "docker-compose.podman.yml",
+    ]
+    for compose_filename in compose_files:
+        compose_file = repo_root / compose_filename
+        assert compose_file.exists(), f"{compose_filename} not found"
+
+        content = compose_file.read_text()
+
+        assert "cap_add:" in content, f"{compose_filename}: missing cap_add for MongoDB"
+        assert "- SETUID" in content, f"{compose_filename}: missing SETUID in cap_add (required by MongoDB gosu)"
+        assert "- SETGID" in content, f"{compose_filename}: missing SETGID in cap_add (required by MongoDB gosu)"
+
+
 def test_docker_compose_registry_port_mapping(repo_root: Path):
     """Test that docker-compose.yml maps nginx to high ports."""
     compose_file = repo_root / "docker-compose.yml"
