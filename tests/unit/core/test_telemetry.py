@@ -95,8 +95,6 @@ class TestPayloadBuilding:
             # Required fields
             assert "event" in payload
             assert payload["event"] == "startup"
-            assert "schema_version" in payload
-            assert payload["schema_version"] == "1"
             assert "v" in payload  # Version
             assert "py" in payload  # Python version
             assert "os" in payload
@@ -145,15 +143,15 @@ class TestPayloadBuilding:
 
             # Mock repository methods
             mock_server_repo_instance = MagicMock()
-            mock_server_repo_instance.list_servers = AsyncMock(return_value=[])
+            mock_server_repo_instance.list_all = AsyncMock(return_value=[])
             mock_server_repo.return_value = mock_server_repo_instance
 
             mock_agent_repo_instance = MagicMock()
-            mock_agent_repo_instance.list_agents = AsyncMock(return_value=[])
+            mock_agent_repo_instance.list_all = AsyncMock(return_value=[])
             mock_agent_repo.return_value = mock_agent_repo_instance
 
             mock_skill_repo_instance = MagicMock()
-            mock_skill_repo_instance.list_skills = AsyncMock(return_value=[])
+            mock_skill_repo_instance.list_all = AsyncMock(return_value=[])
             mock_skill_repo.return_value = mock_skill_repo_instance
 
             mock_peer_repo_instance = MagicMock()
@@ -165,8 +163,6 @@ class TestPayloadBuilding:
             # Required fields
             assert "event" in payload
             assert payload["event"] == "heartbeat"
-            assert "schema_version" in payload
-            assert payload["schema_version"] == "1"
             assert "v" in payload
             assert "servers_count" in payload
             assert "agents_count" in payload
@@ -202,14 +198,10 @@ class TestPayloadBuilding:
                 mock_peer_repo,
             ]:
                 repo_instance = MagicMock()
-                if repo == mock_server_repo:
-                    repo_instance.list_servers = AsyncMock(return_value=[])
-                elif repo == mock_agent_repo:
-                    repo_instance.list_agents = AsyncMock(return_value=[])
-                elif repo == mock_skill_repo:
-                    repo_instance.list_skills = AsyncMock(return_value=[])
-                else:
+                if repo == mock_peer_repo:
                     repo_instance.list_peers = AsyncMock(return_value=[])
+                else:
+                    repo_instance.list_all = AsyncMock(return_value=[])
                 repo.return_value = repo_instance
 
             payload = await _build_heartbeat_payload()
@@ -571,18 +563,18 @@ class TestRepositoryFailures:
 
             # Mock server repo to raise exception
             mock_server_repo_instance = MagicMock()
-            mock_server_repo_instance.list_servers = AsyncMock(
+            mock_server_repo_instance.list_all = AsyncMock(
                 side_effect=Exception("Database error")
             )
             mock_server_repo.return_value = mock_server_repo_instance
 
             # Other repos succeed
             mock_agent_repo_instance = MagicMock()
-            mock_agent_repo_instance.list_agents = AsyncMock(return_value=[])
+            mock_agent_repo_instance.list_all = AsyncMock(return_value=[])
             mock_agent_repo.return_value = mock_agent_repo_instance
 
             mock_skill_repo_instance = MagicMock()
-            mock_skill_repo_instance.list_skills = AsyncMock(return_value=[])
+            mock_skill_repo_instance.list_all = AsyncMock(return_value=[])
             mock_skill_repo.return_value = mock_skill_repo_instance
 
             mock_peer_repo_instance = MagicMock()

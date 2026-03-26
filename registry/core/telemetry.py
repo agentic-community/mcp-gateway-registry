@@ -178,7 +178,6 @@ def _build_startup_payload() -> dict:
     """Build the anonymous startup event payload."""
     return {
         "event": "startup",
-        "schema_version": "1",  # Payload schema version for future-proofing
         "v": __version__,
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
         "os": platform.system().lower(),  # linux, darwin, windows
@@ -250,7 +249,6 @@ async def _build_heartbeat_payload() -> dict:
 
     return {
         "event": "heartbeat",
-        "schema_version": "1",  # Payload schema version for future-proofing
         "v": __version__,
         "servers_count": servers_count,
         "agents_count": agents_count,

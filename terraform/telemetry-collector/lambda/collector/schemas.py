@@ -22,7 +22,6 @@ class StartupEvent(BaseModel):
     """
 
     event: str = Field(..., pattern="^startup$")
-    schema_version: str = Field(..., pattern="^1$")
     instance_id: str = Field(..., min_length=36, max_length=36)  # UUID v4
     v: str = Field(..., min_length=1, max_length=50, description="Registry version")
     py: str = Field(..., pattern=r"^\d+\.\d+$", description="Python version (major.minor)")
@@ -61,7 +60,6 @@ class StartupEvent(BaseModel):
         json_schema_extra={
             "example": {
                 "event": "startup",
-                "schema_version": "1",
                 "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                 "v": "1.0.16",
                 "py": "3.12",
@@ -90,7 +88,6 @@ class HeartbeatEvent(BaseModel):
     """
 
     event: str = Field(..., pattern="^heartbeat$")
-    schema_version: str = Field(..., pattern="^1$")
     instance_id: str = Field(..., min_length=36, max_length=36)  # UUID v4
     v: str = Field(..., min_length=1, max_length=50, description="Registry version")
     servers_count: int = Field(..., ge=0, description="Number of registered MCP servers")
@@ -120,7 +117,6 @@ class HeartbeatEvent(BaseModel):
         json_schema_extra={
             "example": {
                 "event": "heartbeat",
-                "schema_version": "1",
                 "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                 "v": "1.0.16",
                 "servers_count": 15,
