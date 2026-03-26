@@ -159,17 +159,18 @@ def test_docker_compose_has_security_options(repo_root: Path):
 
 
 def test_docker_compose_mongodb_cap_add(repo_root: Path):
-    """Test that docker-compose files restore SETUID/SETGID for MongoDB after cap_drop ALL.
+    """Test that all docker-compose files restore SETUID/SETGID for MongoDB after cap_drop ALL.
 
     MongoDB uses gosu to switch from root to the mongodb user at startup.
     gosu requires SETUID and SETGID capabilities. Without them, MongoDB
     fails with: 'error: failed switching to mongodb: operation not permitted'.
 
-    This test verifies the fix for the regression introduced in PR #624 where
-    cap_drop: ALL was applied to all services without adding back the minimum
-    capabilities required by MongoDB.
+    Regression introduced in PR #624 and PR #651 where cap_drop: ALL was applied
+    to all services without adding back the minimum capabilities required by MongoDB.
+    Fixed in PR #688.
     """
     compose_files = [
+        "docker-compose.yml",
         "docker-compose.prebuilt.yml",
         "docker-compose.podman.yml",
     ]
