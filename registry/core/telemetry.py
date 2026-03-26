@@ -266,6 +266,8 @@ async def _build_heartbeat_payload() -> dict:
         "embeddings_provider": settings.embeddings_provider,
         "uptime_hours": uptime_hours,
         "search_queries_total": search_queries_total,
+        "search_queries_daily_7d_moving_avg": None,
+        "search_queries_hourly_moving_avg": None,
         "ts": datetime.now(UTC).isoformat(),
     }
 

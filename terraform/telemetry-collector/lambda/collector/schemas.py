@@ -107,6 +107,12 @@ class HeartbeatEvent(BaseModel):
     search_queries_total: int = Field(
         default=0, ge=0, description="Lifetime semantic search query count"
     )
+    search_queries_daily_7d_moving_avg: float | None = Field(
+        default=None, description="7-day moving average of daily search queries"
+    )
+    search_queries_hourly_moving_avg: float | None = Field(
+        default=None, description="Moving average of hourly search queries"
+    )
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")
@@ -132,6 +138,8 @@ class HeartbeatEvent(BaseModel):
                 "search_backend": "documentdb",
                 "embeddings_provider": "sentence-transformers",
                 "uptime_hours": 48,
+                "search_queries_daily_7d_moving_avg": None,
+                "search_queries_hourly_moving_avg": None,
                 "ts": "2026-03-18T12:00:00Z",
             }
         }
