@@ -41,9 +41,7 @@ class RegistryCapabilities(BaseModel):
     skills: bool = Field(default=True, description="Supports AI agent skills")
     prompts: bool = Field(default=False, description="Supports prompt templates")
     security_scans: bool = Field(default=True, description="Runs security scans")
-    incremental_sync: bool = Field(
-        default=False, description="Supports incremental sync"
-    )
+    incremental_sync: bool = Field(default=False, description="Supports incremental sync")
     webhooks: bool = Field(default=False, description="Supports webhook notifications")
 
 
@@ -54,12 +52,8 @@ class RegistryAuthConfig(BaseModel):
         default_factory=lambda: ["oauth2", "bearer"],
         description="Supported auth schemes",
     )
-    oauth2_issuer: str | None = Field(
-        default=None, description="OAuth2/OIDC issuer URL"
-    )
-    oauth2_token_endpoint: str | None = Field(
-        default=None, description="OAuth2 token endpoint"
-    )
+    oauth2_issuer: str | None = Field(default=None, description="OAuth2/OIDC issuer URL")
+    oauth2_token_endpoint: str | None = Field(default=None, description="OAuth2 token endpoint")
     scopes_supported: list[str] = Field(
         default_factory=lambda: ["federation/read"],
         description="OAuth2 scopes",
@@ -96,18 +90,12 @@ class RegistryCard(BaseModel):
     )
 
     # Base URL and organization (for frontend display)
-    registry_url: str | None = Field(
-        default=None,
-        description="Base URL of this registry instance"
-    )
+    registry_url: str | None = Field(default=None, description="Base URL of this registry instance")
     organization_name: str | None = Field(
-        default=None,
-        description="Organization name that operates this registry"
+        default=None, description="Organization name that operates this registry"
     )
 
-    federation_api_version: str = Field(
-        default="1.0", description="Federation API version"
-    )
+    federation_api_version: str = Field(default="1.0", description="Federation API version")
     federation_endpoint: HttpUrl = Field(
         ..., description="Federation API base URL (HTTPS required)"
     )
@@ -123,9 +111,7 @@ class RegistryCard(BaseModel):
         default="public_only",
         description="Visibility policy: public_only, authenticated, private",
     )
-    contact: RegistryContact | None = Field(
-        default=None, description="Contact information"
-    )
+    contact: RegistryContact | None = Field(default=None, description="Contact information")
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata (max 10KB serialized)",
@@ -133,9 +119,7 @@ class RegistryCard(BaseModel):
 
     # Internal tracking
     created_at: datetime | None = Field(default=None, description="Created timestamp")
-    updated_at: datetime | None = Field(
-        default=None, description="Last updated timestamp"
-    )
+    updated_at: datetime | None = Field(default=None, description="Last updated timestamp")
 
     @field_validator("visibility_policy")
     @classmethod

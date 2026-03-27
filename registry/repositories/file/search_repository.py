@@ -41,7 +41,11 @@ class FaissSearchRepository(SearchRepositoryBase):
         """Search entities by exact tag match from FAISS metadata store."""
         required = {t.lower() for t in tags}
         results: dict[str, list[dict[str, Any]]] = {
-            "servers": [], "tools": [], "agents": [], "skills": [], "virtual_servers": [],
+            "servers": [],
+            "tools": [],
+            "agents": [],
+            "skills": [],
+            "virtual_servers": [],
         }
         for path, metadata in self.faiss_service.metadata_store.items():
             entity_tags = {t.lower() for t in metadata.get("tags", [])}

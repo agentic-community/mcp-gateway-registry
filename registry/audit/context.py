@@ -5,7 +5,6 @@ This module provides helper functions for setting audit action context
 in route handlers, which is then captured by the AuditMiddleware.
 """
 
-
 from fastapi import Request
 
 

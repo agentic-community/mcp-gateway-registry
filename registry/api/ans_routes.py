@@ -17,9 +17,9 @@ from fastapi import (
     status,
 )
 
+from registry.audit import set_audit_action
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
-from registry.audit import set_audit_action
 from registry.core.config import settings
 from registry.schemas.ans_models import LinkANSRequest
 from registry.services.ans_service import (
@@ -59,9 +59,7 @@ def _check_rate_limit(
     now = time.time()
     window_start = now - RATE_LIMIT_WINDOW_SECONDS
 
-    _rate_limit_store[username] = [
-        t for t in _rate_limit_store[username] if t > window_start
-    ]
+    _rate_limit_store[username] = [t for t in _rate_limit_store[username] if t > window_start]
 
     if len(_rate_limit_store[username]) >= RATE_LIMIT_MAX_REQUESTS:
         raise HTTPException(
@@ -148,7 +146,9 @@ async def link_ans_to_agent_endpoint(
     username = _get_username(user_context)
     _check_rate_limit(username)
     set_audit_action(
-        request, "create", "ans_link",
+        request,
+        "create",
+        "ans_link",
         resource_id=path,
         description=f"Link ANS ID to agent {path}",
     )
@@ -196,7 +196,9 @@ async def unlink_ans_from_agent_endpoint(
     await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     set_audit_action(
-        request, "delete", "ans_link",
+        request,
+        "delete",
+        "ans_link",
         resource_id=path,
         description=f"Unlink ANS ID from agent {path}",
     )
@@ -226,7 +228,9 @@ async def link_ans_to_server_endpoint(
     username = _get_username(user_context)
     _check_rate_limit(username)
     set_audit_action(
-        request, "create", "ans_link",
+        request,
+        "create",
+        "ans_link",
         resource_id=path,
         description=f"Link ANS ID to server {path}",
     )
@@ -274,7 +278,9 @@ async def unlink_ans_from_server_endpoint(
     await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     set_audit_action(
-        request, "delete", "ans_link",
+        request,
+        "delete",
+        "ans_link",
         resource_id=path,
         description=f"Unlink ANS ID from server {path}",
     )
@@ -299,7 +305,9 @@ async def trigger_ans_sync(
     _check_ans_enabled()
     _check_admin(user_context)
     set_audit_action(
-        request, "execute", "ans_sync",
+        request,
+        "execute",
+        "ans_sync",
         description="Manual ANS sync triggered",
     )
     stats = await sync_all_ans_status()

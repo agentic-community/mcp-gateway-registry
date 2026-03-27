@@ -19,9 +19,7 @@ class ServerInfo(BaseModel):
     description: str | None = Field(None, description="Server description")
     enabled: bool = Field(..., alias="is_enabled", description="Whether the server is enabled")
     tags: list[str] = Field(default_factory=list, description="Server tags")
-    tool_count: int | None = Field(
-        None, alias="num_tools", description="Number of tools provided"
-    )
+    tool_count: int | None = Field(None, alias="num_tools", description="Number of tools provided")
 
 
 class AgentInfo(BaseModel):

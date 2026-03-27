@@ -4,14 +4,14 @@ import urllib.parse
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, Form, Request, status
+from fastapi import APIRouter, Cookie, Depends, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from prometheus_client import Counter
 
-from .csrf import generate_csrf_token, verify_csrf_token, verify_csrf_token_flexible
 from ..audit.context import set_audit_action
 from ..core.config import settings
+from .csrf import generate_csrf_token, verify_csrf_token_flexible
 
 logger = logging.getLogger(__name__)
 
@@ -327,9 +327,9 @@ async def get_csrf_token(
     """
     if not session:
         from fastapi.responses import JSONResponse
+
         return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"error": "No session found"}
+            status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "No session found"}
         )
 
     csrf_token = generate_csrf_token(session)

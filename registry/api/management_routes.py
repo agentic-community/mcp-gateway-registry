@@ -155,15 +155,17 @@ async def management_list_users(
         # Add M2M clients as users with special email pattern
         for doc in m2m_docs:
             client_id = doc.get("client_id", "")
-            raw_users.append({
-                "id": client_id,
-                "username": doc.get("name", client_id),
-                "email": f"{client_id}@service-account.local",  # Special email pattern for M2M
-                "firstName": None,
-                "lastName": None,
-                "enabled": doc.get("enabled", True),
-                "groups": doc.get("groups", []),
-            })
+            raw_users.append(
+                {
+                    "id": client_id,
+                    "username": doc.get("name", client_id),
+                    "email": f"{client_id}@service-account.local",  # Special email pattern for M2M
+                    "firstName": None,
+                    "lastName": None,
+                    "enabled": doc.get("enabled", True),
+                    "groups": doc.get("groups", []),
+                }
+            )
 
         logger.debug(f"[LIST_USERS] Added {len(m2m_docs)} M2M clients from MongoDB")
     except Exception as e:
@@ -206,6 +208,7 @@ async def management_create_m2m_user(
         try:
             from datetime import datetime
             from os import environ
+
             from registry.repositories.documentdb.client import get_documentdb_client
 
             db = await get_documentdb_client()
@@ -226,7 +229,9 @@ async def management_create_m2m_user(
             }
 
             await collection.insert_one(client_doc)
-            logger.info(f"Stored M2M client in MongoDB: {result.get('client_id')} (provider: {provider})")
+            logger.info(
+                f"Stored M2M client in MongoDB: {result.get('client_id')} (provider: {provider})"
+            )
         except Exception as e:
             logger.warning(f"Failed to store M2M client in MongoDB: {e}")
             # Don't fail the entire operation if MongoDB storage fails
@@ -337,9 +342,7 @@ async def management_update_user_groups(
                 },
             )
 
-            logger.info(
-                f"Updated M2M account {username}: added {added}, removed {removed}"
-            )
+            logger.info(f"Updated M2M account {username}: added {added}, removed {removed}")
 
             return UpdateUserGroupsResponse(
                 username=username,

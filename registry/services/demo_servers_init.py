@@ -117,9 +117,7 @@ async def initialize_airegistry_server() -> bool:
         proxy_pass_url = config.get("proxy_pass_url")
         if proxy_pass_url:
             asyncio.create_task(
-                security_scanner_service.scan_server(
-                    server_url=proxy_pass_url, server_path=path
-                )
+                security_scanner_service.scan_server(server_url=proxy_pass_url, server_path=path)
             )
             logger.info(f"Security scan scheduled for {path}")
         else:
@@ -155,6 +153,4 @@ async def initialize_demo_servers() -> None:
     if success:
         logger.info("✅ Built-in demo servers initialized successfully")
     else:
-        logger.warning(
-            "⚠️ Failed to initialize some demo servers (registry will continue)"
-        )
+        logger.warning("⚠️ Failed to initialize some demo servers (registry will continue)")

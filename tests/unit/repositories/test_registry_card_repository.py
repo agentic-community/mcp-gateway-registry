@@ -1,17 +1,18 @@
 """Unit tests for RegistryCard repository."""
 
+from datetime import datetime
+from unittest.mock import AsyncMock, patch
+from uuid import UUID
+
 import pytest
-from datetime import datetime, UTC
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
 
 from registry.repositories.documentdb.registry_card_repository import (
     DocumentDBRegistryCardRepository,
 )
 from registry.schemas.registry_card import (
-    RegistryCard,
-    RegistryCapabilities,
     RegistryAuthConfig,
+    RegistryCapabilities,
+    RegistryCard,
     RegistryContact,
 )
 
@@ -140,7 +141,9 @@ class TestDocumentDBRegistryCardRepository:
     @pytest.mark.asyncio
     async def test_save_preserves_all_fields(self, mock_collection):
         """Test save() preserves all RegistryCard fields."""
-        contact = RegistryContact(email="admin@full.example.com", url="https://full.example.com/contact")
+        contact = RegistryContact(
+            email="admin@full.example.com", url="https://full.example.com/contact"
+        )
         card = RegistryCard(
             schema_version="1.1.0",
             id=UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
@@ -150,7 +153,9 @@ class TestDocumentDBRegistryCardRepository:
             federation_endpoint="https://full.example.com/api/v1/federation",
             contact=contact,
             capabilities=RegistryCapabilities(servers=False, agents=True),
-            authentication=RegistryAuthConfig(schemes=["bearer"], oauth2_issuer="https://auth.test.com"),
+            authentication=RegistryAuthConfig(
+                schemes=["bearer"], oauth2_issuer="https://auth.test.com"
+            ),
             visibility_policy="authenticated",
             metadata={"tier": "production", "region": "us-west-2"},
         )

@@ -321,9 +321,7 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         Returns:
             Total number of servers in the repository.
         """
-        logger.debug(
-            f"DocumentDB COUNT: Counting servers in collection '{self._collection_name}'"
-        )
+        logger.debug(f"DocumentDB COUNT: Counting servers in collection '{self._collection_name}'")
         collection = await self._get_collection()
 
         try:

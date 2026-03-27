@@ -3,25 +3,22 @@
 import logging
 import time
 from datetime import (
+    UTC,
     datetime,
-    timezone,
 )
 from typing import Any
 
 import httpx
 
-from registry.core.config import settings
 from registry.repositories.factory import (
     get_agent_repository,
     get_server_repository,
 )
 from registry.schemas.ans_models import (
     ANSIntegrationMetrics,
-    ANSMetadata,
     ANSSyncStats,
 )
 from registry.services.ans_client import (
-    ANS_STATUS_ERROR,
     ANS_STATUS_NOT_FOUND,
     verify_ans_agent,
 )
@@ -42,10 +39,12 @@ def _store_sync_history(
 ) -> None:
     """Store sync result in history for admin visibility."""
     global _sync_history
-    _sync_history.append({
-        "completed_at": datetime.now(timezone.utc).isoformat(),
-        **stats.model_dump(),
-    })
+    _sync_history.append(
+        {
+            "completed_at": datetime.now(UTC).isoformat(),
+            **stats.model_dump(),
+        }
+    )
     if len(_sync_history) > MAX_SYNC_HISTORY:
         _sync_history = _sync_history[-MAX_SYNC_HISTORY:]
 
@@ -82,7 +81,7 @@ async def _sync_asset_type(
 
         try:
             result = await verify_ans_agent(ans_agent_id)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if result is None:
                 await repo.update_field(path, "ans_metadata.status", ANS_STATUS_NOT_FOUND)
                 await repo.update_field(path, "ans_metadata.last_verified", now.isoformat())
@@ -137,7 +136,9 @@ async def link_ans_to_agent(
     metadata_dict = ans_metadata.model_dump(mode="json")
     await repo.update_field(agent_path, "ans_metadata", metadata_dict)
 
-    logger.info(f"ANS ID linked to agent {agent_path}: {ans_agent_id} (status: {ans_metadata.status})")
+    logger.info(
+        f"ANS ID linked to agent {agent_path}: {ans_agent_id} (status: {ans_metadata.status})"
+    )
     return {
         "success": True,
         "message": f"ANS Agent ID linked and verified (status: {ans_metadata.status})",
@@ -185,7 +186,9 @@ async def link_ans_to_server(
     metadata_dict = ans_metadata.model_dump(mode="json")
     await repo.update_field(server_path, "ans_metadata", metadata_dict)
 
-    logger.info(f"ANS ID linked to server {server_path}: {ans_agent_id} (status: {ans_metadata.status})")
+    logger.info(
+        f"ANS ID linked to server {server_path}: {ans_agent_id} (status: {ans_metadata.status})"
+    )
     return {
         "success": True,
         "message": f"ANS Agent ID linked and verified (status: {ans_metadata.status})",
@@ -268,7 +271,9 @@ async def sync_all_ans_status() -> ANSSyncStats:
     minutes = int(elapsed // 60)
     seconds = elapsed % 60
     if minutes > 0:
-        logger.info(f"ANS sync completed in {minutes} minutes and {seconds:.1f} seconds: {stats.model_dump()}")
+        logger.info(
+            f"ANS sync completed in {minutes} minutes and {seconds:.1f} seconds: {stats.model_dump()}"
+        )
     else:
         logger.info(f"ANS sync completed in {seconds:.1f} seconds: {stats.model_dump()}")
 

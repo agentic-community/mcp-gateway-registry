@@ -154,6 +154,7 @@ def _create_entra_provider() -> EntraIdProvider:
 
     return EntraIdProvider(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
 
+
 def _create_okta_provider() -> OktaProvider:
     """Create and configure Okta provider."""
     okta_domain = os.environ.get("OKTA_DOMAIN")
@@ -185,7 +186,6 @@ def _create_okta_provider() -> OktaProvider:
         m2m_client_id=m2m_client_id,
         m2m_client_secret=m2m_client_secret,
     )
-
 
 
 def _get_provider_health_info() -> dict:

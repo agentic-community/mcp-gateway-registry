@@ -213,9 +213,7 @@ class HealthMonitoringService:
         try:
             from ..services.server_service import server_service
 
-            all_servers = await server_service.get_all_servers(
-                include_credentials=True
-            )
+            all_servers = await server_service.get_all_servers(include_credentials=True)
             servers_with_creds = [
                 path for path, info in all_servers.items() if info.get("auth_credential_encrypted")
             ]
@@ -672,9 +670,7 @@ class HealthMonitoringService:
                 headers = self._build_headers_for_server(server_info)
                 # For SSE endpoints, use a shorter timeout since they start streaming immediately
                 if proxy_pass_url.endswith("/sse") or "/sse/" in proxy_pass_url:
-                    logger.info(
-                        "[TRACE] Detected SSE endpoint in URL, using SSE-specific handling"
-                    )
+                    logger.info("[TRACE] Detected SSE endpoint in URL, using SSE-specific handling")
                     timeout = httpx.Timeout(connect=5.0, read=2.0, write=5.0, pool=5.0)
                     try:
                         response = await client.get(

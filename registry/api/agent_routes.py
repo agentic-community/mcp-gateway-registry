@@ -390,7 +390,9 @@ async def register_agent(
     external_tag_list = []
     if request.external_tags:
         if isinstance(request.external_tags, str):
-            external_tag_list = [tag.strip() for tag in request.external_tags.split(",") if tag.strip()]
+            external_tag_list = [
+                tag.strip() for tag in request.external_tags.split(",") if tag.strip()
+            ]
         elif isinstance(request.external_tags, list):
             external_tag_list = [tag.strip() for tag in request.external_tags if tag.strip()]
 
@@ -406,14 +408,18 @@ async def register_agent(
     source_created_dt = None
     if request.source_created_at:
         try:
-            source_created_dt = datetime.fromisoformat(request.source_created_at.replace('Z', '+00:00'))
+            source_created_dt = datetime.fromisoformat(
+                request.source_created_at.replace("Z", "+00:00")
+            )
         except ValueError:
             logger.warning(f"Invalid source_created_at format: {request.source_created_at}")
 
     source_updated_dt = None
     if request.source_updated_at:
         try:
-            source_updated_dt = datetime.fromisoformat(request.source_updated_at.replace('Z', '+00:00'))
+            source_updated_dt = datetime.fromisoformat(
+                request.source_updated_at.replace("Z", "+00:00")
+            )
         except ValueError:
             logger.warning(f"Invalid source_updated_at format: {request.source_updated_at}")
 
@@ -507,9 +513,7 @@ async def register_agent(
                 username=user_context["username"],
             )
             if ans_result.get("success"):
-                logger.info(
-                    f"ANS ID '{request.ans_agent_id}' linked to agent '{path}'"
-                )
+                logger.info(f"ANS ID '{request.ans_agent_id}' linked to agent '{path}'")
             else:
                 logger.warning(
                     f"Failed to link ANS ID '{request.ans_agent_id}' to agent '{path}': "
@@ -517,8 +521,7 @@ async def register_agent(
                 )
         except Exception as e:
             logger.warning(
-                f"ANS linking failed for agent '{path}' with ANS ID "
-                f"'{request.ans_agent_id}': {e}"
+                f"ANS linking failed for agent '{path}' with ANS ID '{request.ans_agent_id}': {e}"
             )
 
     return JSONResponse(
@@ -621,15 +624,23 @@ async def list_agents(
                 sync_metadata=agent.sync_metadata,
                 ans_metadata=agent.ans_metadata,
                 registered_by=agent.registered_by,
-                status=agent.status.value if hasattr(agent, 'status') and agent.status else "active",
+                status=agent.status.value
+                if hasattr(agent, "status") and agent.status
+                else "active",
                 provider_organization=agent.provider.organization if agent.provider else None,
                 provider_url=agent.provider.url if agent.provider else None,
-                source_created_at=agent.source_created_at.isoformat() if agent.source_created_at else None,
-                source_updated_at=agent.source_updated_at.isoformat() if agent.source_updated_at else None,
+                source_created_at=agent.source_created_at.isoformat()
+                if agent.source_created_at
+                else None,
+                source_updated_at=agent.source_updated_at.isoformat()
+                if agent.source_updated_at
+                else None,
                 registered_at=agent.registered_at.isoformat() if agent.registered_at else None,
                 updated_at=agent.updated_at.isoformat() if agent.updated_at else None,
                 health_status=agent.health_status or "unknown",
-                last_health_check=agent.last_health_check.isoformat() if agent.last_health_check else None,
+                last_health_check=agent.last_health_check.isoformat()
+                if agent.last_health_check
+                else None,
             )
             filtered_agents.append(agent_info)
 
@@ -1479,5 +1490,3 @@ async def discover_agents_semantic(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Semantic search failed",
         )
-
-

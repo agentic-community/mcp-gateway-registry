@@ -59,9 +59,7 @@ def _detect_deployment_type() -> str:
         return "Kubernetes"
 
     # Check for ECS
-    if os.getenv("ECS_CONTAINER_METADATA_URI") or os.getenv(
-        "ECS_CONTAINER_METADATA_URI_V4"
-    ):
+    if os.getenv("ECS_CONTAINER_METADATA_URI") or os.getenv("ECS_CONTAINER_METADATA_URI_V4"):
         return "ECS"
 
     # Check for EC2
@@ -332,6 +330,4 @@ async def get_system_stats():
         return stats
     except Exception as e:
         logger.error(f"Failed to get system stats: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, detail="Failed to compute system statistics"
-        )
+        raise HTTPException(status_code=500, detail="Failed to compute system statistics")

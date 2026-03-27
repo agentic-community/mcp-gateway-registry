@@ -17,7 +17,6 @@ import platform
 import sys
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import httpx
 
@@ -182,6 +181,7 @@ async def _build_startup_payload() -> dict:
 
     return {
         "event": "startup",
+        "schema_version": "1",
         "v": __version__,
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
         "os": platform.system().lower(),  # linux, darwin, windows
@@ -257,6 +257,7 @@ async def _build_heartbeat_payload() -> dict:
 
     return {
         "event": "heartbeat",
+        "schema_version": "1",
         "v": __version__,
         "servers_count": servers_count,
         "agents_count": agents_count,
@@ -315,9 +316,7 @@ async def _send_telemetry(payload: dict) -> None:
                     # Track success in Datadog
                     from registry.core.metrics import telemetry_sends_total
 
-                    telemetry_sends_total.labels(
-                        event=payload["event"], status="success"
-                    ).inc()
+                    telemetry_sends_total.labels(event=payload["event"], status="success").inc()
 
                     return  # Success, exit
 
@@ -329,14 +328,13 @@ async def _send_telemetry(payload: dict) -> None:
                     # Track failure in Datadog
                     from registry.core.metrics import telemetry_sends_total
 
+                    status_category = f"{response.status_code // 100}xx"
                     telemetry_sends_total.labels(
-                        event=payload["event"], status=f"http_{response.status_code}"
+                        event=payload["event"], status=status_category
                     ).inc()
 
         except httpx.TimeoutException:
-            logger.debug(
-                f"[telemetry] Request timed out (attempt {attempt + 1}/{max_retries + 1})"
-            )
+            logger.debug(f"[telemetry] Request timed out (attempt {attempt + 1}/{max_retries + 1})")
 
             # Track timeout in Datadog
             from registry.core.metrics import telemetry_sends_total
@@ -430,8 +428,7 @@ async def send_startup_ping() -> None:
 
     # Log conspicuous disclosure
     logger.info(
-        "[telemetry] Anonymous usage telemetry is ON. "
-        "To disable: set MCP_TELEMETRY_DISABLED=1"
+        "[telemetry] Anonymous usage telemetry is ON. To disable: set MCP_TELEMETRY_DISABLED=1"
     )
     logger.info("[telemetry] Details: https://mcpgateway.io/telemetry")
 
@@ -530,9 +527,7 @@ class TelemetryScheduler:
     async def _send_heartbeat(self) -> None:
         """Send heartbeat event if lock acquired."""
         # Acquire lock (24-hour interval)
-        lock_acquired = await _acquire_telemetry_lock(
-            "heartbeat", HEARTBEAT_LOCK_INTERVAL_SECONDS
-        )
+        lock_acquired = await _acquire_telemetry_lock("heartbeat", HEARTBEAT_LOCK_INTERVAL_SECONDS)
 
         if not lock_acquired:
             logger.debug("[telemetry] Heartbeat already sent recently by another replica")

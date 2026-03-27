@@ -1676,8 +1676,7 @@ def cmd_agent_get(args: argparse.Namespace) -> int:
             "visibility": agent.visibility,
             "trust_level": agent.trust_level,
             "skills": [
-                {"name": skill.name, "description": skill.description}
-                for skill in agent.skills
+                {"name": skill.name, "description": skill.description} for skill in agent.skills
             ],
         }
         if agent.ans_metadata:
@@ -4421,9 +4420,7 @@ Examples:
     agent_list_parser.add_argument(
         "--visibility", choices=["public", "private", "internal"], help="Filter by visibility level"
     )
-    agent_list_parser.add_argument(
-        "--json", action="store_true", help="Output raw JSON response"
-    )
+    agent_list_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 
     # Agent get command
     agent_get_parser = subparsers.add_parser("agent-get", help="Get agent details")
@@ -4532,9 +4529,7 @@ Examples:
     agent_ans_status_parser.add_argument(
         "--path", required=True, help="Agent path (e.g., /code-reviewer)"
     )
-    agent_ans_status_parser.add_argument(
-        "--json", action="store_true", help="Output raw JSON"
-    )
+    agent_ans_status_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     agent_ans_unlink_parser = subparsers.add_parser(
         "agent-ans-unlink", help="Remove ANS link from an agent"

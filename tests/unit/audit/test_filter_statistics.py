@@ -22,9 +22,7 @@ class TestDistinct:
     async def test_returns_sorted_distinct_values(self):
         """distinct() returns a sorted list of distinct string values."""
         mock_collection = AsyncMock()
-        mock_collection.distinct = AsyncMock(
-            return_value=["charlie", "alice", "bob"]
-        )
+        mock_collection.distinct = AsyncMock(return_value=["charlie", "alice", "bob"])
 
         with patch.object(
             DocumentDBAuditRepository,
@@ -37,16 +35,12 @@ class TestDistinct:
             result = await repo.distinct("identity.username")
 
             assert result == ["alice", "bob", "charlie"]
-            mock_collection.distinct.assert_called_once_with(
-                "identity.username", {}
-            )
+            mock_collection.distinct.assert_called_once_with("identity.username", {})
 
     async def test_filters_out_none_and_empty(self):
         """distinct() filters out None and empty string values."""
         mock_collection = AsyncMock()
-        mock_collection.distinct = AsyncMock(
-            return_value=["admin", None, "", "user1"]
-        )
+        mock_collection.distinct = AsyncMock(return_value=["admin", None, "", "user1"])
 
         with patch.object(
             DocumentDBAuditRepository,
@@ -76,9 +70,7 @@ class TestDistinct:
             repo._collection = mock_collection
             result = await repo.distinct("identity.username", query)
 
-            mock_collection.distinct.assert_called_once_with(
-                "identity.username", query
-            )
+            mock_collection.distinct.assert_called_once_with("identity.username", query)
             assert result == ["admin"]
 
     async def test_returns_empty_on_error(self):
@@ -191,9 +183,7 @@ class TestFilterOptionsEndpoint:
     async def test_returns_usernames_for_registry_stream(self):
         """Returns usernames for registry_api stream."""
         mock_repo = MagicMock()
-        mock_repo.distinct = AsyncMock(
-            side_effect=lambda field, query: ["admin", "user1"]
-        )
+        mock_repo.distinct = AsyncMock(side_effect=lambda field, query: ["admin", "user1"])
 
         with patch(
             "registry.audit.routes.get_audit_repository",

@@ -5,7 +5,6 @@ This module defines Pydantic models for security scan results, configurations,
 and related data structures used throughout the security scanning workflow.
 """
 
-
 from pydantic import BaseModel, Field
 
 

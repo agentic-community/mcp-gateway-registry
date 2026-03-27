@@ -438,7 +438,9 @@ async def remove_anthropic_server(
         if server_info and server_info.get("source") == "anthropic":
             server_removed = await server_service.remove_server(server_path)
             if server_removed:
-                logger.info(f"Removed server '{server_name}' from mcp_servers_default ({server_path})")
+                logger.info(
+                    f"Removed server '{server_name}' from mcp_servers_default ({server_path})"
+                )
 
                 # Regenerate nginx config
                 from ..core.nginx_service import nginx_service
@@ -447,9 +449,7 @@ async def remove_anthropic_server(
                     include_inactive=False,
                 )
                 enabled_servers = {
-                    p: info
-                    for p, info in all_servers.items()
-                    if info.get("is_enabled", False)
+                    p: info for p, info in all_servers.items() if info.get("is_enabled", False)
                 }
                 await nginx_service.generate_config_async(enabled_servers)
     except Exception as e:

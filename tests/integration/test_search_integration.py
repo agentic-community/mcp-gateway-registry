@@ -96,8 +96,6 @@ def mock_health_service():
         yield mock_health
 
 
-
-
 @pytest.fixture(autouse=True)
 def setup_search_environment(
     mock_settings,

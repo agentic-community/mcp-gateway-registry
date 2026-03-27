@@ -8,7 +8,6 @@ import pytest
 
 from auth_server.providers.okta import OktaProvider
 
-
 # =============================================================================
 # INITIALIZATION TESTS
 # =============================================================================
@@ -302,8 +301,11 @@ class TestOktaM2M:
         mock_post.return_value = mock_response
 
         provider = OktaProvider(
-            "dev-123.okta.com", "cid", "cs",
-            m2m_client_id="m2m-cid", m2m_client_secret="m2m-cs",
+            "dev-123.okta.com",
+            "cid",
+            "cs",
+            m2m_client_id="m2m-cid",
+            m2m_client_secret="m2m-cs",
         )
         result = provider.get_m2m_token()
 

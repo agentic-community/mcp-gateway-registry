@@ -120,8 +120,7 @@ async def list_okta_users(
                 groups_response = await client.get(groups_url, headers=headers)
                 if groups_response.status_code == 200:
                     user_data["groups"] = [
-                        g.get("profile", {}).get("name")
-                        for g in groups_response.json()
+                        g.get("profile", {}).get("name") for g in groups_response.json()
                     ]
 
             result.append(user_data)
@@ -433,15 +432,9 @@ async def create_okta_service_account(
         response.raise_for_status()
         created_app = response.json()
 
-        client_id = (
-            created_app.get("credentials", {})
-            .get("oauthClient", {})
-            .get("client_id")
-        )
+        client_id = created_app.get("credentials", {}).get("oauthClient", {}).get("client_id")
         client_secret = (
-            created_app.get("credentials", {})
-            .get("oauthClient", {})
-            .get("client_secret")
+            created_app.get("credentials", {}).get("oauthClient", {}).get("client_secret")
         )
 
         # Assign application to groups
@@ -521,10 +514,7 @@ async def update_okta_user_groups(
             params={"limit": 200},
         )
         all_groups_resp.raise_for_status()
-        all_groups = {
-            g.get("profile", {}).get("name"): g.get("id")
-            for g in all_groups_resp.json()
-        }
+        all_groups = {g.get("profile", {}).get("name"): g.get("id") for g in all_groups_resp.json()}
 
         target_names = set(groups)
 
@@ -577,8 +567,7 @@ async def update_okta_group(
             )
             response.raise_for_status()
             matched = [
-                g for g in response.json()
-                if g.get("profile", {}).get("name") == group_name_or_id
+                g for g in response.json() if g.get("profile", {}).get("name") == group_name_or_id
             ]
             if not matched:
                 raise ValueError(f"Group not found: {group_name_or_id}")

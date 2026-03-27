@@ -10,10 +10,8 @@ Works with both:
 """
 
 import logging
-import os
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,9 +100,7 @@ async def enrich_groups_from_mongodb(
         if doc:
             db_groups = doc.get("groups", [])
             if db_groups:
-                logger.info(
-                    f"Enriched groups for client {client_id} from database: {db_groups}"
-                )
+                logger.info(f"Enriched groups for client {client_id} from database: {db_groups}")
                 return db_groups
             else:
                 logger.debug(f"Client {client_id} found in database but has no groups")

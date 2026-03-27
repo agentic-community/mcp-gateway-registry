@@ -23,7 +23,6 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 
-
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -85,27 +84,21 @@ def _create_secret(arn: str, token: str) -> None:
     """
     logger.info("Step 1: Creating new secret version")
 
-    current = secretsmanager.get_secret_value(
-        SecretId=arn, VersionStage="AWSCURRENT"
-    )
+    current = secretsmanager.get_secret_value(SecretId=arn, VersionStage="AWSCURRENT")
     current_dict = json.loads(current["SecretString"])
 
     try:
-        secretsmanager.get_secret_value(
-            SecretId=arn, VersionId=token, VersionStage="AWSPENDING"
-        )
+        secretsmanager.get_secret_value(SecretId=arn, VersionId=token, VersionStage="AWSPENDING")
         logger.info("AWSPENDING version already exists, skipping creation")
         return
     except ClientError as e:
         if e.response["Error"]["Code"] != "ResourceNotFoundException":
             raise
 
-    exclude_chars = os.environ.get("EXCLUDE_CHARACTERS", '/@"\'\\')
+    exclude_chars = os.environ.get("EXCLUDE_CHARACTERS", "/@\"'\\")
     logger.info(f"Generating new password (excluding: {exclude_chars})")
 
-    passwd = secretsmanager.get_random_password(
-        ExcludeCharacters=exclude_chars, PasswordLength=32
-    )
+    passwd = secretsmanager.get_random_password(ExcludeCharacters=exclude_chars, PasswordLength=32)
 
     current_dict["password"] = passwd["RandomPassword"]
     secretsmanager.put_secret_value(

@@ -1,9 +1,7 @@
 """Unit tests for telemetry module."""
 
-import asyncio
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -23,10 +21,8 @@ from registry.core.telemetry import (
     _is_opt_in_enabled,
     _is_telemetry_enabled,
     _send_telemetry,
-    initialize_telemetry,
     send_startup_ping,
     start_heartbeat_scheduler,
-    stop_heartbeat_scheduler,
 )
 
 
@@ -151,9 +147,7 @@ class TestPayloadBuilding:
             patch("registry.repositories.factory.get_server_repository") as mock_server_repo,
             patch("registry.repositories.factory.get_agent_repository") as mock_agent_repo,
             patch("registry.repositories.factory.get_skill_repository") as mock_skill_repo,
-            patch(
-                "registry.repositories.factory.get_peer_federation_repository"
-            ) as mock_peer_repo,
+            patch("registry.repositories.factory.get_peer_federation_repository") as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
             patch(
                 "registry.repositories.stats_repository.get_search_count",
@@ -210,9 +204,7 @@ class TestPayloadBuilding:
             patch("registry.repositories.factory.get_server_repository") as mock_server_repo,
             patch("registry.repositories.factory.get_agent_repository") as mock_agent_repo,
             patch("registry.repositories.factory.get_skill_repository") as mock_skill_repo,
-            patch(
-                "registry.repositories.factory.get_peer_federation_repository"
-            ) as mock_peer_repo,
+            patch("registry.repositories.factory.get_peer_federation_repository") as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
             patch(
                 "registry.repositories.stats_repository.get_search_count",
@@ -587,9 +579,7 @@ class TestRepositoryFailures:
             patch("registry.repositories.factory.get_server_repository") as mock_server_repo,
             patch("registry.repositories.factory.get_agent_repository") as mock_agent_repo,
             patch("registry.repositories.factory.get_skill_repository") as mock_skill_repo,
-            patch(
-                "registry.repositories.factory.get_peer_federation_repository"
-            ) as mock_peer_repo,
+            patch("registry.repositories.factory.get_peer_federation_repository") as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
             patch(
                 "registry.repositories.stats_repository.get_search_count",
@@ -602,9 +592,7 @@ class TestRepositoryFailures:
 
             # Mock server repo to raise exception
             mock_server_repo_instance = MagicMock()
-            mock_server_repo_instance.list_all = AsyncMock(
-                side_effect=Exception("Database error")
-            )
+            mock_server_repo_instance.list_all = AsyncMock(side_effect=Exception("Database error"))
             mock_server_repo.return_value = mock_server_repo_instance
 
             # Other repos succeed

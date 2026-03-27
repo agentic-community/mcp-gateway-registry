@@ -56,5 +56,5 @@ PEER_SYNC_DURATION_SECONDS = Gauge(
 telemetry_sends_total = Counter(
     "telemetry_sends_total",
     "Total telemetry events sent",
-    ["event", "status"],  # event: startup/heartbeat, status: success/timeout/error/http_XXX
+    ["event", "status"],  # event: startup/heartbeat, status: success/timeout/error/2xx/4xx/5xx
 )

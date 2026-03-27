@@ -12,7 +12,6 @@ from typing import Any
 
 import httpx
 from fastmcp import Context, FastMCP
-
 from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
 
 # Configure logging
@@ -51,9 +50,7 @@ def _validate_top_n(top_n: int) -> int:
         ValueError: If top_n is out of bounds
     """
     if not isinstance(top_n, int) or top_n < MIN_TOP_N or top_n > MAX_TOP_N:
-        raise ValueError(
-            f"top_n must be an integer between {MIN_TOP_N} and {MAX_TOP_N}"
-        )
+        raise ValueError(f"top_n must be an integer between {MIN_TOP_N} and {MAX_TOP_N}")
     return top_n
 
 
@@ -73,9 +70,7 @@ def _validate_query(query: str) -> str:
         raise ValueError("Query cannot be empty")
 
     if len(query) > MAX_QUERY_LENGTH:
-        raise ValueError(
-            f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
-        )
+        raise ValueError(f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters")
 
     return query.strip()
 
@@ -118,9 +113,7 @@ def _extract_bearer_token(ctx: Context | None) -> str:
                     "Authorization or X-Authorization header not found or not a Bearer token"
                 )
             else:
-                raise ValueError(
-                    "Request object or headers not found in request_context"
-                )
+                raise ValueError("Request object or headers not found in request_context")
         else:
             raise ValueError("request_context not available in Context")
 
@@ -147,9 +140,7 @@ async def list_services(ctx: Context | None = None) -> dict[str, Any]:
         headers = {"X-Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{REGISTRY_URL}/api/servers", headers=headers
-            )
+            response = await client.get(f"{REGISTRY_URL}/api/servers", headers=headers)
             response.raise_for_status()
             data = response.json()
 
@@ -419,9 +410,7 @@ async def healthcheck(ctx: Context | None = None) -> dict[str, Any]:
         headers = {"X-Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{REGISTRY_URL}/api/servers/health", headers=headers
-            )
+            response = await client.get(f"{REGISTRY_URL}/api/servers/health", headers=headers)
             response.raise_for_status()
             data = response.json()
 

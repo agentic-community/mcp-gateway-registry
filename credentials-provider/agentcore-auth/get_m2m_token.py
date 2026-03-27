@@ -179,12 +179,8 @@ def _save_egress_token(
     expires_in = token_response.get("expires_in", 10800)  # Default 3 hours
     current_time = time.time()
     expires_at = current_time + expires_in
-    expires_at_human = datetime.fromtimestamp(expires_at, tz=UTC).strftime(
-        "%Y-%m-%d %H:%M:%S UTC"
-    )
-    saved_at = datetime.fromtimestamp(current_time, tz=UTC).strftime(
-        "%Y-%m-%d %H:%M:%S UTC"
-    )
+    expires_at_human = datetime.fromtimestamp(expires_at, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    saved_at = datetime.fromtimestamp(current_time, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # Build egress token data structure
     egress_data = {

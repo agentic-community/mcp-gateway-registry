@@ -170,11 +170,7 @@ class FileServerRepository(ServerRepositoryBase):
         Returns:
             Dictionary mapping server path to server info
         """
-        return {
-            path: info
-            for path, info in self._servers.items()
-            if info.get("source") == source
-        }
+        return {path: info for path, info in self._servers.items() if info.get("source") == source}
 
     async def create(
         self,

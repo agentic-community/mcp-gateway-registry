@@ -555,7 +555,6 @@ class TestGetAllServers:
         assert sample_server_dict_2["path"] in result
 
 
-
 # =============================================================================
 # TEST: Filtering Servers
 # =============================================================================
@@ -780,7 +779,8 @@ class TestGetAllServersWithPermissions:
 
         # Act
         result = await server_service.get_all_servers_with_permissions(
-            accessible_servers=None,         )
+            accessible_servers=None,
+        )
 
         # Assert
         assert len(result) == 2
@@ -804,12 +804,12 @@ class TestGetAllServersWithPermissions:
 
         # Act
         result = await server_service.get_all_servers_with_permissions(
-            accessible_servers=["test-server"],         )
+            accessible_servers=["test-server"],
+        )
 
         # Assert
         assert len(result) == 1
         assert "/test-server" in result
-
 
 
 # =============================================================================
@@ -1452,9 +1452,7 @@ class TestServerVersionManagement:
         }
 
         # Act
-        result = await server_service.get_all_servers(
-            include_inactive=True
-        )
+        result = await server_service.get_all_servers(include_inactive=True)
 
         # Assert - both servers should be returned
         assert len(result) == 2

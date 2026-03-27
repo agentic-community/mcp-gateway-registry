@@ -101,8 +101,6 @@ def mock_agent_service():
         yield mock_agent
 
 
-
-
 @pytest.fixture
 def mock_auth_dependencies():
     """

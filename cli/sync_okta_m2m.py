@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from registry.services.okta_m2m_sync import OktaM2MSync
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
@@ -80,18 +79,16 @@ async def main():
         logger.info(f"Updated: {result['updated_count']} clients")
         logger.info(f"Total synced: {result['synced_count']} clients")
 
-        if result['errors']:
+        if result["errors"]:
             logger.warning(f"\nErrors encountered: {len(result['errors'])}")
-            for error in result['errors']:
+            for error in result["errors"]:
                 logger.warning(f"  - {error}")
 
         # Display synced clients
         logger.info("\nSynced clients:")
         clients = await okta_sync.get_all_clients()
         for client in clients:
-            logger.info(
-                f"  - {client.name} (ID: {client.client_id}, Groups: {client.groups})"
-            )
+            logger.info(f"  - {client.name} (ID: {client.client_id}, Groups: {client.groups})")
 
         logger.info("\n✓ Sync successful!")
 

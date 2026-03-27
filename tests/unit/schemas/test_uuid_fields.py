@@ -1,12 +1,13 @@
 """Unit tests for UUID fields in all card models."""
 
-import pytest
 from uuid import UUID
+
+import pytest
 from pydantic import HttpUrl
 
-from registry.schemas.registry_card import RegistryCard
 from registry.core.schemas import ServerInfo
 from registry.schemas.agent_models import AgentCard
+from registry.schemas.registry_card import RegistryCard
 from registry.schemas.skill_models import SkillCard
 
 

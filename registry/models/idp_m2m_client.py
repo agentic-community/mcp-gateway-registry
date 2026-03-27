@@ -24,9 +24,7 @@ class IdPM2MClient(BaseModel):
     client_id: str = Field(..., description="IdP application client ID")
     name: str = Field(..., description="Application name")
     description: str | None = Field(None, description="Application description")
-    groups: list[str] = Field(
-        default_factory=list, description="Groups this client belongs to"
-    )
+    groups: list[str] = Field(default_factory=list, description="Groups this client belongs to")
     enabled: bool = Field(default=True, description="Whether client is active")
     provider: str = Field(..., description="Identity provider (okta, keycloak, entra)")
     created_at: datetime = Field(
@@ -56,7 +54,5 @@ class IdPM2MClient(BaseModel):
 class IdPM2MClientUpdate(BaseModel):
     """Payload for updating an IdP M2M client's group mappings."""
 
-    groups: list[str] = Field(
-        ..., description="New list of groups for this client", min_length=1
-    )
+    groups: list[str] = Field(..., description="New list of groups for this client", min_length=1)
     description: str | None = Field(None, description="Updated description")

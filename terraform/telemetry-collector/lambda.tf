@@ -42,7 +42,7 @@ resource "aws_apigatewayv2_api" "telemetry" {
   description   = "Privacy-first telemetry collector API for MCP Gateway Registry"
 
   cors_configuration {
-    allow_origins = ["*"]
+    allow_origins = var.cors_allowed_origins
     allow_methods = ["POST"]
     allow_headers = ["content-type"]
     max_age       = 300

@@ -167,7 +167,7 @@ class TestGetIAMManagerFactory:
 
         # Assert
         assert isinstance(manager, iam_module.EntraIAMManager)
-        
+
     def test_returns_okta_manager_when_auth_provider_is_okta(
         self,
         monkeypatch,

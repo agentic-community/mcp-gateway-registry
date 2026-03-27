@@ -126,8 +126,7 @@ async def reconcile_anthropic_servers(
         expected_paths = set()
 
     logger.info(
-        f"Reconciliation: {len(expected_paths)} servers expected "
-        f"from Anthropic federation config"
+        f"Reconciliation: {len(expected_paths)} servers expected from Anthropic federation config"
     )
 
     # Step 2: Get actual Anthropic servers in DB
@@ -152,13 +151,8 @@ async def reconcile_anthropic_servers(
             "dry_run": dry_run,
         }
 
-    stale_names = [
-        actual_servers[p].get("server_name", p) for p in sorted(stale_paths)
-    ]
-    logger.info(
-        f"Reconciliation: {len(stale_paths)} stale servers to remove: "
-        f"{stale_names}"
-    )
+    stale_names = [actual_servers[p].get("server_name", p) for p in sorted(stale_paths)]
+    logger.info(f"Reconciliation: {len(stale_paths)} stale servers to remove: {stale_names}")
 
     # Dry run: return what would be removed without deleting
     if dry_run:
@@ -180,16 +174,10 @@ async def reconcile_anthropic_servers(
             success = await server_service.remove_server(path)
             if success:
                 removed.append(server_name)
-                logger.info(
-                    f"Reconciliation: removed stale server "
-                    f"'{server_name}' ({path})"
-                )
+                logger.info(f"Reconciliation: removed stale server '{server_name}' ({path})")
             else:
                 errors.append(f"Failed to remove {server_name} ({path})")
-                logger.warning(
-                    f"Reconciliation: failed to remove server "
-                    f"'{server_name}' ({path})"
-                )
+                logger.warning(f"Reconciliation: failed to remove server '{server_name}' ({path})")
         except Exception as e:
             errors.append(f"Error removing {path}: {e}")
             logger.error(f"Reconciliation: error removing server {path}: {e}")
@@ -199,16 +187,12 @@ async def reconcile_anthropic_servers(
         try:
             all_servers = await server_repo.list_all()
             enabled_servers = {
-                p: info
-                for p, info in all_servers.items()
-                if info.get("is_enabled", False)
+                p: info for p, info in all_servers.items() if info.get("is_enabled", False)
             }
             await nginx_service.generate_config_async(enabled_servers)
             logger.info("Reconciliation: nginx config regenerated")
         except Exception as e:
-            logger.error(
-                f"Reconciliation: failed to regenerate nginx config: {e}"
-            )
+            logger.error(f"Reconciliation: failed to regenerate nginx config: {e}")
 
     elapsed = time.time() - start_time
 

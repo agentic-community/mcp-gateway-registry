@@ -117,19 +117,11 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private[count.index].id
 }
 
-# Security group for DocumentDB cluster
+# Security group for DocumentDB cluster (no inline rules to avoid cycle)
 resource "aws_security_group" "documentdb" {
   name        = "telemetry-collector-documentdb-sg"
   description = "Security group for DocumentDB cluster - allow Lambda access on port 27017"
   vpc_id      = aws_vpc.telemetry.id
-
-  ingress {
-    description     = "MongoDB protocol from Lambda"
-    from_port       = 27017
-    to_port         = 27017
-    protocol        = "tcp"
-    security_groups = [aws_security_group.lambda.id]
-  }
 
   egress {
     description = "Allow all outbound"
@@ -144,23 +136,44 @@ resource "aws_security_group" "documentdb" {
   }
 }
 
-# Security group for Lambda function
+# Security group for Lambda function (no inline rules to avoid cycle)
 resource "aws_security_group" "lambda" {
   name        = "telemetry-collector-lambda-sg"
   description = "Security group for Lambda function - allow outbound to DocumentDB and internet"
   vpc_id      = aws_vpc.telemetry.id
 
   egress {
-    description = "Allow all outbound (DocumentDB + DynamoDB + Secrets Manager)"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "HTTPS for AWS APIs (DynamoDB, Secrets Manager, CloudWatch)"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = {
     Name = "telemetry-collector-lambda-sg"
   }
+}
+
+# Standalone rules to break the DocumentDB <-> Lambda SG cycle
+resource "aws_security_group_rule" "documentdb_ingress_from_lambda" {
+  type                     = "ingress"
+  description              = "MongoDB protocol from Lambda"
+  from_port                = 27017
+  to_port                  = 27017
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.documentdb.id
+  source_security_group_id = aws_security_group.lambda.id
+}
+
+resource "aws_security_group_rule" "lambda_egress_to_documentdb" {
+  type                     = "egress"
+  description              = "DocumentDB access"
+  from_port                = 27017
+  to_port                  = 27017
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.lambda.id
+  source_security_group_id = aws_security_group.documentdb.id
 }
 
 # Data source for available AZs
