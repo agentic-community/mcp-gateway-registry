@@ -83,9 +83,9 @@ class TestPayloadBuilding:
         with (
             patch("registry.core.telemetry.settings") as mock_settings,
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=42,
+                return_value={"total": 42, "last_24h": 5, "last_1h": 1},
             ),
         ):
             mock_settings.deployment_mode.value = "with-gateway"
@@ -118,9 +118,9 @@ class TestPayloadBuilding:
         with (
             patch("registry.core.telemetry.settings") as mock_settings,
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             mock_settings.deployment_mode.value = "with-gateway"
@@ -150,9 +150,9 @@ class TestPayloadBuilding:
             patch("registry.repositories.factory.get_peer_federation_repository") as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=99,
+                return_value={"total": 99, "last_24h": 10, "last_1h": 2},
             ),
         ):
             mock_settings.storage_backend = "file"
@@ -190,10 +190,8 @@ class TestPayloadBuilding:
             assert "uptime_hours" in payload
             assert "search_queries_total" in payload
             assert payload["search_queries_total"] == 99
-            assert "search_queries_daily_7d_moving_avg" in payload
-            assert payload["search_queries_daily_7d_moving_avg"] is None
-            assert "search_queries_hourly_moving_avg" in payload
-            assert payload["search_queries_hourly_moving_avg"] is None
+            assert "search_queries_24h" in payload
+            assert "search_queries_1h" in payload
             assert "ts" in payload
 
     @pytest.mark.asyncio
@@ -207,9 +205,9 @@ class TestPayloadBuilding:
             patch("registry.repositories.factory.get_peer_federation_repository") as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             # Test DocumentDB backend
@@ -582,9 +580,9 @@ class TestRepositoryFailures:
             patch("registry.repositories.factory.get_peer_federation_repository") as mock_peer_repo,
             patch("registry.core.telemetry.settings") as mock_settings,
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             mock_settings.storage_backend = "file"

@@ -262,9 +262,9 @@ async def _acquire_telemetry_lock(event_type: str, interval_seconds: int) -> boo
 
 async def _build_startup_payload() -> dict:
     """Build the anonymous startup event payload."""
-    from registry.repositories.stats_repository import get_search_count
+    from registry.repositories.stats_repository import get_search_counts
 
-    search_queries_total = await get_search_count()
+    counts = await get_search_counts()
     registry_id = await _get_registry_id()
 
     return {
@@ -282,7 +282,9 @@ async def _build_startup_payload() -> dict:
         "storage": settings.storage_backend,  # file, documentdb, mongodb-ce
         "auth": settings.auth_provider,  # cognito, keycloak, entra, github, google
         "federation": settings.federation_static_token_auth_enabled,
-        "search_queries_total": search_queries_total,
+        "search_queries_total": counts["total"],
+        "search_queries_24h": counts["last_24h"],
+        "search_queries_1h": counts["last_1h"],
         "ts": datetime.now(UTC).isoformat(),
     }
 
@@ -296,7 +298,7 @@ async def _build_heartbeat_payload() -> dict:
         get_server_repository,
         get_skill_repository,
     )
-    from registry.repositories.stats_repository import get_search_count
+    from registry.repositories.stats_repository import get_search_counts
 
     # Calculate uptime
     uptime_hours = 0
@@ -344,7 +346,7 @@ async def _build_heartbeat_payload() -> dict:
         "documentdb" if settings.storage_backend in ("documentdb", "mongodb-ce") else "faiss"
     )
 
-    search_queries_total = await get_search_count()
+    counts = await get_search_counts()
     registry_id = await _get_registry_id()
 
     return {
@@ -361,9 +363,9 @@ async def _build_heartbeat_payload() -> dict:
         "search_backend": search_backend,
         "embeddings_provider": settings.embeddings_provider,
         "uptime_hours": uptime_hours,
-        "search_queries_total": search_queries_total,
-        "search_queries_daily_7d_moving_avg": None,
-        "search_queries_hourly_moving_avg": None,
+        "search_queries_total": counts["total"],
+        "search_queries_24h": counts["last_24h"],
+        "search_queries_1h": counts["last_1h"],
         "ts": datetime.now(UTC).isoformat(),
     }
 

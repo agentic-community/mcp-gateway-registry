@@ -51,6 +51,22 @@ async def get_search_count() -> int:
         return 0
 
 
+async def get_search_counts() -> dict[str, int]:
+    """Get search counts for all three time windows.
+
+    Returns:
+        Dict with keys: total, last_24h, last_1h (all default to 0 on failure).
+    """
+    try:
+        if settings.storage_backend in ("mongodb-ce", "documentdb"):
+            return await _get_counts_mongodb()
+        else:
+            return _get_counts_file()
+    except Exception as e:
+        logger.debug(f"[stats] Failed to get search counts: {e}")
+        return {"total": 0, "last_24h": 0, "last_1h": 0}
+
+
 async def _increment_mongodb() -> None:
     """Atomic increment in MongoDB with inline staleness reset."""
     from .documentdb.client import get_collection_name, get_documentdb_client
@@ -125,6 +141,24 @@ async def _get_count_mongodb() -> int:
     if doc:
         return doc.get("forever", {}).get("semantic_search_ctr", 0)
     return 0
+
+
+async def _get_counts_mongodb() -> dict[str, int]:
+    """Read all three time-window counters from MongoDB."""
+    from .documentdb.client import get_collection_name, get_documentdb_client
+
+    db = await get_documentdb_client()
+    collection_name = get_collection_name("mcp_stats")
+    collection = db[collection_name]
+
+    doc = await collection.find_one({"_id": "counters"})
+    if doc:
+        return {
+            "total": doc.get("forever", {}).get("semantic_search_ctr", 0),
+            "last_24h": doc.get("daily", {}).get("semantic_search_ctr", 0),
+            "last_1h": doc.get("hourly", {}).get("semantic_search_ctr", 0),
+        }
+    return {"total": 0, "last_24h": 0, "last_1h": 0}
 
 
 def _get_stats_file() -> Path:
@@ -214,3 +248,13 @@ def _get_count_file() -> int:
     """Read forever.semantic_search_ctr from file."""
     stats = _read_file_stats()
     return stats.get("forever", {}).get("semantic_search_ctr", 0)
+
+
+def _get_counts_file() -> dict[str, int]:
+    """Read all three time-window counters from file."""
+    stats = _read_file_stats()
+    return {
+        "total": stats.get("forever", {}).get("semantic_search_ctr", 0),
+        "last_24h": stats.get("daily", {}).get("semantic_search_ctr", 0),
+        "last_1h": stats.get("hourly", {}).get("semantic_search_ctr", 0),
+    }
