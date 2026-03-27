@@ -49,6 +49,50 @@ All telemetry requests are signed with HMAC-SHA256 to prevent unauthorized use o
 
 This is not a secret-based authentication mechanism -- the signing key is embedded in the open-source code. Its purpose is to raise the bar against casual abuse (e.g., random `curl` requests to the endpoint). Combined with IP-based rate limiting and strict Pydantic schema validation, this makes endpoint abuse impractical.
 
+### Example HTTP Request
+
+A startup event request looks like this:
+
+```http
+POST /v1/collect HTTP/1.1
+Host: m3ijrhd020.execute-api.us-east-1.amazonaws.com
+Content-Type: application/json
+X-Telemetry-Signature: 8a3f2b...c9d1e0
+
+{"arch":"x86_64","auth":"keycloak","cloud":"aws","compute":"ecs","event":"startup","federation":true,"mode":"with-gateway","os":"linux","py":"3.12","registry_id":"c546a650-8af9-4721-9efb-7df221b2a0d9","registry_mode":"full","schema_version":"1","search_queries_1h":3,"search_queries_24h":12,"search_queries_total":150,"storage":"documentdb","ts":"2026-03-18T00:00:00+00:00","v":"1.0.16"}
+```
+
+A heartbeat event request:
+
+```http
+POST /v1/collect HTTP/1.1
+Host: m3ijrhd020.execute-api.us-east-1.amazonaws.com
+Content-Type: application/json
+X-Telemetry-Signature: 5b7e1a...d4f2c3
+
+{"agents_count":8,"cloud":"aws","compute":"ecs","embeddings_provider":"sentence-transformers","event":"heartbeat","peers_count":2,"registry_id":"c546a650-8af9-4721-9efb-7df221b2a0d9","schema_version":"1","search_backend":"documentdb","search_queries_1h":3,"search_queries_24h":12,"search_queries_total":150,"servers_count":15,"skills_count":23,"ts":"2026-03-18T12:00:00+00:00","uptime_hours":48,"v":"1.0.16"}
+```
+
+Notes:
+- JSON body keys are sorted alphabetically (`sort_keys=True`) and compact (`separators=(",",":")`) for deterministic HMAC computation
+- The `X-Telemetry-Signature` header is the HMAC-SHA256 hex digest of the raw JSON body
+
+## Force Telemetry (Admin API)
+
+Admins can trigger telemetry events on demand (bypasses the distributed lock):
+
+```bash
+# Force heartbeat
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token-local telemetry-heartbeat
+
+# Force startup ping
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token-local telemetry-startup
+```
+
+API endpoints (require admin auth):
+- `POST /api/registry-management/telemetry/heartbeat`
+- `POST /api/registry-management/telemetry/startup`
+
 ## What is NOT Collected
 
 We never collect any personally identifiable information (PII):
