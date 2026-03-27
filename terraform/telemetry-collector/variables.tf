@@ -75,6 +75,12 @@ variable "rate_limit_window_seconds" {
   default     = 60
 }
 
+variable "cors_allowed_origins" {
+  description = "Origins allowed to submit telemetry (restrict to known registry domains)"
+  type        = list(string)
+  default     = ["https://mcpgateway.io", "https://app.mcpgateway.io"]
+}
+
 variable "lambda_package_path" {
   description = "Path to the Lambda deployment package zip file"
   type        = string
@@ -97,5 +103,5 @@ variable "bastion_public_key" {
 variable "bastion_allowed_cidrs" {
   description = "CIDR blocks allowed to SSH to the bastion host"
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = []
 }

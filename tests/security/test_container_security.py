@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-
 # List of Dockerfiles to test
 DOCKERFILES = [
     "Dockerfile",
@@ -47,9 +46,7 @@ def test_dockerfile_has_user_directive(repo_root: Path, dockerfile_path: str):
 
     # Check for USER directive
     user_pattern = re.compile(r"^USER\s+\w+", re.MULTILINE)
-    assert user_pattern.search(
-        content
-    ), f"{dockerfile_path}: Missing USER directive (CIS 4.1)"
+    assert user_pattern.search(content), f"{dockerfile_path}: Missing USER directive (CIS 4.1)"
 
 
 @pytest.mark.parametrize("dockerfile_path", DOCKERFILES)
@@ -66,9 +63,7 @@ def test_dockerfile_user_not_root(repo_root: Path, dockerfile_path: str):
 
     # Last USER directive should not be root
     last_user = user_lines[-1]
-    assert (
-        last_user.lower() != "root"
-    ), f"{dockerfile_path}: Last USER directive is 'root'"
+    assert last_user.lower() != "root", f"{dockerfile_path}: Last USER directive is 'root'"
 
 
 @pytest.mark.parametrize("dockerfile_path", DOCKERFILES)
@@ -80,9 +75,7 @@ def test_dockerfile_no_sudo(repo_root: Path, dockerfile_path: str):
     content = dockerfile.read_text()
 
     # Check that sudo is not being installed
-    assert (
-        "sudo" not in content
-    ), f"{dockerfile_path}: Contains 'sudo' package (security risk)"
+    assert "sudo" not in content, f"{dockerfile_path}: Contains 'sudo' package (security risk)"
 
 
 @pytest.mark.parametrize(
@@ -106,9 +99,7 @@ def test_dockerfile_has_healthcheck(repo_root: Path, dockerfile_path: str):
 
     # Check for HEALTHCHECK directive
     healthcheck_pattern = re.compile(r"^HEALTHCHECK\s+", re.MULTILINE)
-    assert healthcheck_pattern.search(
-        content
-    ), f"{dockerfile_path}: Missing HEALTHCHECK directive"
+    assert healthcheck_pattern.search(content), f"{dockerfile_path}: Missing HEALTHCHECK directive"
 
 
 @pytest.mark.parametrize(
@@ -121,9 +112,7 @@ def test_dockerfile_has_healthcheck(repo_root: Path, dockerfile_path: str):
         and not f.endswith("metrics-db")  # Exclude alpine-based
     ],
 )
-def test_python_dockerfile_has_pip_no_cache(
-    repo_root: Path, dockerfile_path: str
-):
+def test_python_dockerfile_has_pip_no_cache(repo_root: Path, dockerfile_path: str):
     """Test that Python Dockerfiles set PIP_NO_CACHE_DIR=1."""
     dockerfile = repo_root / dockerfile_path
     assert dockerfile.exists(), f"Dockerfile not found: {dockerfile}"
@@ -133,9 +122,9 @@ def test_python_dockerfile_has_pip_no_cache(
     # Check if it's a Python-based image
     if re.search(r"FROM.*python", content, re.IGNORECASE):
         # Check for PIP_NO_CACHE_DIR
-        assert (
-            "PIP_NO_CACHE_DIR" in content
-        ), f"{dockerfile_path}: Python image missing PIP_NO_CACHE_DIR"
+        assert "PIP_NO_CACHE_DIR" in content, (
+            f"{dockerfile_path}: Python image missing PIP_NO_CACHE_DIR"
+        )
 
 
 def test_docker_compose_has_security_options(repo_root: Path):
@@ -146,12 +135,8 @@ def test_docker_compose_has_security_options(repo_root: Path):
     content = compose_file.read_text()
 
     # Check for security_opt
-    assert (
-        "security_opt:" in content
-    ), "docker-compose.yml missing security_opt"
-    assert (
-        "no-new-privileges:true" in content
-    ), "docker-compose.yml missing no-new-privileges"
+    assert "security_opt:" in content, "docker-compose.yml missing security_opt"
+    assert "no-new-privileges:true" in content, "docker-compose.yml missing no-new-privileges"
 
     # Check for cap_drop
     assert "cap_drop:" in content, "docker-compose.yml missing cap_drop"
@@ -181,8 +166,12 @@ def test_docker_compose_mongodb_cap_add(repo_root: Path):
         content = compose_file.read_text()
 
         assert "cap_add:" in content, f"{compose_filename}: missing cap_add for MongoDB"
-        assert "- SETUID" in content, f"{compose_filename}: missing SETUID in cap_add (required by MongoDB gosu)"
-        assert "- SETGID" in content, f"{compose_filename}: missing SETGID in cap_add (required by MongoDB gosu)"
+        assert "- SETUID" in content, (
+            f"{compose_filename}: missing SETUID in cap_add (required by MongoDB gosu)"
+        )
+        assert "- SETGID" in content, (
+            f"{compose_filename}: missing SETGID in cap_add (required by MongoDB gosu)"
+        )
 
 
 def test_docker_compose_registry_port_mapping(repo_root: Path):
@@ -193,9 +182,5 @@ def test_docker_compose_registry_port_mapping(repo_root: Path):
     content = compose_file.read_text()
 
     # Check for port mapping 80:8080 and 443:8443
-    assert (
-        '"80:8080"' in content or "'80:8080'" in content
-    ), "Missing port mapping 80:8080"
-    assert (
-        '"443:8443"' in content or "'443:8443'" in content
-    ), "Missing port mapping 443:8443"
+    assert '"80:8080"' in content or "'80:8080'" in content, "Missing port mapping 80:8080"
+    assert '"443:8443"' in content or "'443:8443'" in content, "Missing port mapping 443:8443"

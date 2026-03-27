@@ -8,7 +8,6 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-
 from registry.core.auth import nginx_proxied_auth
 from registry.core.database import get_db
 from registry.models.okta_m2m_client import (
@@ -17,8 +16,8 @@ from registry.models.okta_m2m_client import (
     OktaSyncRequest,
     OktaSyncResponse,
 )
-from registry.services.okta_m2m_sync import get_okta_m2m_sync
 
+from registry.services.okta_m2m_sync import get_okta_m2m_sync
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,9 +81,7 @@ async def sync_okta_m2m_clients(
         )
 
     try:
-        result = await okta_sync.sync_from_okta(
-            force_full_sync=request.force_full_sync
-        )
+        result = await okta_sync.sync_from_okta(force_full_sync=request.force_full_sync)
         return OktaSyncResponse(**result)
 
     except Exception as e:

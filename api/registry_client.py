@@ -84,7 +84,9 @@ class InternalServiceRegistration(BaseModel):
     )
     provider_organization: str | None = Field(None, description="Provider organization name")
     provider_url: str | None = Field(None, description="Provider URL")
-    source_created_at: str | None = Field(None, description="Original creation timestamp (ISO format)")
+    source_created_at: str | None = Field(
+        None, description="Original creation timestamp (ISO format)"
+    )
     source_updated_at: str | None = Field(None, description="Last update timestamp (ISO format)")
     external_tags: list[str] | None = Field(None, description="Tags from external/source system")
 
@@ -112,15 +114,17 @@ class ServerDetail(BaseModel):
     num_tools: int = Field(..., description="Number of tools")
     health_status: str = Field(..., description="Health status")
     last_health_check: datetime | None = Field(None, description="Last health check timestamp")
-    status: str = Field(default="active", description="Server status (active, deprecated, draft, beta)")
+    status: str = Field(
+        default="active", description="Server status (active, deprecated, draft, beta)"
+    )
     provider: dict[str, str] | None = Field(
         None, description="Provider information (organization, url)"
     )
     source_created_at: str | None = Field(None, description="Creation timestamp in source system")
-    source_updated_at: str | None = Field(None, description="Last update timestamp in source system")
-    external_tags: list[str] = Field(
-        default_factory=list, description="Tags from external source"
+    source_updated_at: str | None = Field(
+        None, description="Last update timestamp in source system"
     )
+    external_tags: list[str] = Field(default_factory=list, description="Tags from external source")
 
 
 class ServerListResponse(BaseModel):
@@ -388,9 +392,7 @@ class AgentRegistration(BaseModel):
         alias="preferredTransport",
         description="Preferred transport protocol: JSONRPC, GRPC, HTTP+JSON",
     )
-    provider: Provider | None = Field(
-        None, description="Agent provider information per A2A spec"
-    )
+    provider: Provider | None = Field(None, description="Agent provider information per A2A spec")
     icon_url: str | None = Field(None, alias="iconUrl", description="Agent icon URL")
     documentation_url: str | None = Field(
         None, alias="documentationUrl", description="Documentation URL"
@@ -452,7 +454,9 @@ class AgentCard(BaseModel):
     num_skills: int = Field(..., description="Number of skills")
     registered_at: datetime | None = Field(None, description="Registration timestamp")
     is_enabled: bool = Field(..., description="Whether agent is enabled")
-    status: str = Field(default="active", description="Agent status (active, deprecated, draft, beta)")
+    status: str = Field(
+        default="active", description="Agent status (active, deprecated, draft, beta)"
+    )
     source_created_at: str | None = Field(
         None, alias="sourceCreatedAt", description="Creation timestamp in source system"
     )
@@ -536,9 +540,7 @@ class AgentDetail(BaseModel):
         alias="preferredTransport",
         description="Preferred transport protocol: JSONRPC, GRPC, HTTP+JSON",
     )
-    provider: Provider | None = Field(
-        None, description="Agent provider information per A2A spec"
-    )
+    provider: Provider | None = Field(None, description="Agent provider information per A2A spec")
     icon_url: str | None = Field(None, alias="iconUrl", description="Agent icon URL")
     documentation_url: str | None = Field(
         None, alias="documentationUrl", description="Documentation URL"
@@ -584,7 +586,9 @@ class AgentDetail(BaseModel):
         description="ANS (Agent Name Service) verification metadata",
     )
     signature: str | None = Field(None, description="JWS signature for card integrity")
-    status: str = Field(default="active", description="Agent status (active, deprecated, draft, beta)")
+    status: str = Field(
+        default="active", description="Agent status (active, deprecated, draft, beta)"
+    )
     source_created_at: str | None = Field(
         None, alias="sourceCreatedAt", description="Creation timestamp in source system"
     )
@@ -1103,9 +1107,7 @@ class RegistryAuthConfigResponse(BaseModel):
     schemes: list[str] = Field(..., description="Supported auth schemes (bearer, oauth2, etc.)")
     oauth2_issuer: str | None = Field(None, description="OAuth2 issuer URL")
     oauth2_token_endpoint: str | None = Field(None, description="OAuth2 token endpoint URL")
-    scopes_supported: list[str] = Field(
-        default_factory=list, description="Supported OAuth2 scopes"
-    )
+    scopes_supported: list[str] = Field(default_factory=list, description="Supported OAuth2 scopes")
 
 
 class RegistryContactResponse(BaseModel):
@@ -1627,7 +1629,9 @@ class RegistryClient:
         """
         logger.info("Fetching registry card via .well-known endpoint")
 
-        response = self._make_request(method="GET", endpoint="/api/v1/registry/.well-known/registry-card")
+        response = self._make_request(
+            method="GET", endpoint="/api/v1/registry/.well-known/registry-card"
+        )
 
         result = RegistryCardResponse(**response.json())
         logger.info(f"Retrieved registry card: {result.id} (name: {result.name})")
@@ -1675,7 +1679,9 @@ class RegistryClient:
         """
         logger.info("Updating registry card")
 
-        response = self._make_request(method="POST", endpoint="/api/v1/registry/card", data=card_data)
+        response = self._make_request(
+            method="POST", endpoint="/api/v1/registry/card", data=card_data
+        )
 
         result = response.json()
         logger.info("Registry card updated successfully")
@@ -1699,7 +1705,9 @@ class RegistryClient:
         """
         logger.info(f"Patching registry card with updates: {list(updates.keys())}")
 
-        response = self._make_request(method="PATCH", endpoint="/api/v1/registry/card", data=updates)
+        response = self._make_request(
+            method="PATCH", endpoint="/api/v1/registry/card", data=updates
+        )
 
         result = response.json()
         logger.info("Registry card patched successfully")

@@ -1,10 +1,10 @@
 """Unit tests for Registry Card fields added to ServerInfo and AgentCard."""
 
-import pytest
-from datetime import datetime, UTC
-from pydantic import ValidationError
+from datetime import UTC, datetime
 
-from registry.core.schemas import ServerInfo, AgentProvider
+import pytest
+
+from registry.core.schemas import AgentProvider, ServerInfo
 from registry.schemas.agent_models import AgentCard
 from registry.schemas.registry_card import LifecycleStatus
 

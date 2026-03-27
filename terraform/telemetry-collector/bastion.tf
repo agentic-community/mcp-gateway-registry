@@ -116,12 +116,6 @@ resource "aws_instance" "bastion" {
   associate_public_ip_address = true
   iam_instance_profile        = aws_iam_instance_profile.bastion[0].name
 
-  user_data = base64encode(templatefile("${path.module}/bastion-init.sh.tpl", {
-    docdb_endpoint = aws_docdb_cluster.telemetry.endpoint
-    secret_arn     = aws_secretsmanager_secret.documentdb_credentials.arn
-    aws_region     = var.aws_region
-  }))
-
   tags = {
     Name = "telemetry-collector-bastion"
   }

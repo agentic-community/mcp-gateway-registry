@@ -14,7 +14,13 @@ from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 # Add Lambda collector to path for imports
-lambda_path = Path(__file__).parent.parent.parent.parent / "terraform" / "telemetry-collector" / "lambda" / "collector"
+lambda_path = (
+    Path(__file__).parent.parent.parent.parent
+    / "terraform"
+    / "telemetry-collector"
+    / "lambda"
+    / "collector"
+)
 sys.path.insert(0, str(lambda_path))
 
 from index import (  # noqa: E402
@@ -33,6 +39,7 @@ from schemas import HeartbeatEvent, StartupEvent  # noqa: E402
 def _reset_globals():
     """Reset module-level singletons before each test."""
     import index
+
     index._mongo_client = None
     index._mongo_database = None
     index._credentials = None
@@ -211,11 +218,13 @@ class TestDocumentDBConnection:
     @patch("index.secretsmanager")
     def test_get_credentials(self, mock_sm, _mock_init):
         mock_sm.get_secret_value.return_value = {
-            "SecretString": json.dumps({
-                "username": "telemetry_admin",
-                "password": "test_password",
-                "database": "telemetry",
-            })
+            "SecretString": json.dumps(
+                {
+                    "username": "telemetry_admin",
+                    "password": "test_password",
+                    "database": "telemetry",
+                }
+            )
         }
         creds = _get_credentials()
         assert creds["username"] == "telemetry_admin"
@@ -270,21 +279,23 @@ class TestLambdaHandler:
 
         event = {
             "requestContext": {"http": {"sourceIp": "1.2.3.4"}},
-            "body": json.dumps({
-                "event": "startup",
-                "schema_version": "1",
-                "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-                "v": "1.0.16",
-                "py": "3.12",
-                "os": "linux",
-                "arch": "x86_64",
-                "mode": "with-gateway",
-                "registry_mode": "full",
-                "storage": "file",
-                "auth": "keycloak",
-                "federation": False,
-                "ts": "2026-03-18T00:00:00Z",
-            }),
+            "body": json.dumps(
+                {
+                    "event": "startup",
+                    "schema_version": "1",
+                    "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "v": "1.0.16",
+                    "py": "3.12",
+                    "os": "linux",
+                    "arch": "x86_64",
+                    "mode": "with-gateway",
+                    "registry_mode": "full",
+                    "storage": "file",
+                    "auth": "keycloak",
+                    "federation": False,
+                    "ts": "2026-03-18T00:00:00Z",
+                }
+            ),
         }
 
         response = lambda_handler(event, {})
@@ -300,20 +311,22 @@ class TestLambdaHandler:
 
         event = {
             "requestContext": {"http": {"sourceIp": "1.2.3.4"}},
-            "body": json.dumps({
-                "event": "heartbeat",
-                "schema_version": "1",
-                "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-                "v": "1.0.16",
-                "servers_count": 10,
-                "agents_count": 5,
-                "skills_count": 20,
-                "peers_count": 1,
-                "search_backend": "faiss",
-                "embeddings_provider": "sentence-transformers",
-                "uptime_hours": 24,
-                "ts": "2026-03-18T12:00:00Z",
-            }),
+            "body": json.dumps(
+                {
+                    "event": "heartbeat",
+                    "schema_version": "1",
+                    "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "v": "1.0.16",
+                    "servers_count": 10,
+                    "agents_count": 5,
+                    "skills_count": 20,
+                    "peers_count": 1,
+                    "search_backend": "faiss",
+                    "embeddings_provider": "sentence-transformers",
+                    "uptime_hours": 24,
+                    "ts": "2026-03-18T12:00:00Z",
+                }
+            ),
         }
 
         response = lambda_handler(event, {})
@@ -363,21 +376,23 @@ class TestLambdaHandler:
     def test_storage_failure_returns_204(self, mock_hash, mock_rate, mock_store):
         event = {
             "requestContext": {"http": {"sourceIp": "1.2.3.4"}},
-            "body": json.dumps({
-                "event": "startup",
-                "schema_version": "1",
-                "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-                "v": "1.0.16",
-                "py": "3.12",
-                "os": "linux",
-                "arch": "x86_64",
-                "mode": "with-gateway",
-                "registry_mode": "full",
-                "storage": "file",
-                "auth": "keycloak",
-                "federation": False,
-                "ts": "2026-03-18T00:00:00Z",
-            }),
+            "body": json.dumps(
+                {
+                    "event": "startup",
+                    "schema_version": "1",
+                    "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "v": "1.0.16",
+                    "py": "3.12",
+                    "os": "linux",
+                    "arch": "x86_64",
+                    "mode": "with-gateway",
+                    "registry_mode": "full",
+                    "storage": "file",
+                    "auth": "keycloak",
+                    "federation": False,
+                    "ts": "2026-03-18T00:00:00Z",
+                }
+            ),
         }
 
         assert lambda_handler(event, {})["statusCode"] == 204

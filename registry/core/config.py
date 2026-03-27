@@ -317,7 +317,7 @@ class Settings(BaseSettings):
         description="Enable richer telemetry (daily heartbeat with counts). Opt-in: MCP_TELEMETRY_OPT_IN=1",
     )
     telemetry_endpoint: str = Field(
-        default="https://telemetry.mcpgateway.io/v1/collect",
+        default="https://m3ijrhd020.execute-api.us-east-1.amazonaws.com/v1/collect",
         description="HTTPS endpoint for telemetry collector (must be HTTPS; supports self-hosted)",
     )
     telemetry_debug: bool = Field(

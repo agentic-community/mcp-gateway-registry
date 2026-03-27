@@ -944,9 +944,7 @@ class TestReloadScopesEndpoint:
 
     @patch("registry.common.scopes_loader.reload_scopes_config")
     @patch("auth_server.server.get_auth_provider")
-    def test_reload_scopes_basic_auth_rejected(
-        self, mock_get_provider, auth_env_vars
-    ):
+    def test_reload_scopes_basic_auth_rejected(self, mock_get_provider, auth_env_vars):
         """Test that Basic Auth is rejected (no longer supported)."""
         # Arrange
         import base64

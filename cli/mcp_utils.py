@@ -319,9 +319,7 @@ class MCPClient:
         payload = {"jsonrpc": "2.0", "id": self._get_next_request_id(), "method": "tools/list"}
         return self._make_request(payload)
 
-    def call_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
+    def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Call a specific tool.
 

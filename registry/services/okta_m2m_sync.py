@@ -11,9 +11,7 @@ from datetime import datetime
 
 import requests
 from motor.motor_asyncio import AsyncIOMotorDatabase
-
 from registry.models.okta_m2m_client import OktaM2MClient
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,7 +52,6 @@ class OktaM2MSync:
 
         logger.info(f"Initialized Okta M2M sync for domain: {self.okta_domain}")
 
-
     async def _get_okta_applications(self) -> list[dict]:
         """Fetch all applications from Okta Admin API.
 
@@ -83,7 +80,6 @@ class OktaM2MSync:
         except requests.RequestException as e:
             logger.error(f"Failed to fetch Okta applications: {e}")
             raise ValueError(f"Okta API request failed: {e}")
-
 
     def _filter_m2m_applications(self, apps: list[dict]) -> list[dict]:
         """Filter to only M2M service applications.
@@ -115,7 +111,6 @@ class OktaM2MSync:
         logger.info(f"Filtered to {len(m2m_apps)} M2M applications")
         return m2m_apps
 
-
     def _determine_groups(self, client_id: str) -> list[str]:
         """Determine groups for a client ID.
 
@@ -132,7 +127,6 @@ class OktaM2MSync:
         groups = DEFAULT_CLIENT_GROUPS.get(client_id, [])
         logger.debug(f"Client {client_id} assigned groups: {groups}")
         return groups
-
 
     async def sync_from_okta(self, force_full_sync: bool = False) -> dict:
         """Sync M2M clients from Okta to MongoDB.
@@ -175,7 +169,10 @@ class OktaM2MSync:
                     client_doc = {
                         "client_id": client_id,
                         "name": app.get("label", client_id),
-                        "description": app.get("_embedded", {}).get("user", {}).get("profile", {}).get("description"),
+                        "description": app.get("_embedded", {})
+                        .get("user", {})
+                        .get("profile", {})
+                        .get("description"),
                         "groups": groups,
                         "enabled": app.get("status") == "ACTIVE",
                         "okta_app_id": app.get("id"),
@@ -186,8 +183,7 @@ class OktaM2MSync:
                         # Update existing record
                         client_doc["updated_at"] = datetime.utcnow()
                         await self.collection.update_one(
-                            {"client_id": client_id},
-                            {"$set": client_doc}
+                            {"client_id": client_id}, {"$set": client_doc}
                         )
                         updated_count += 1
                         logger.info(f"Updated client: {client_id}")
@@ -228,7 +224,6 @@ class OktaM2MSync:
                 "errors": [str(e)],
             }
 
-
     async def get_all_clients(self) -> list[OktaM2MClient]:
         """Get all M2M clients from MongoDB.
 
@@ -250,7 +245,6 @@ class OktaM2MSync:
 
         return clients
 
-
     async def get_client_groups(self, client_id: str) -> list[str]:
         """Get groups for a specific client ID.
 
@@ -264,7 +258,6 @@ class OktaM2MSync:
         if doc:
             return doc.get("groups", [])
         return []
-
 
     async def update_client_groups(
         self,

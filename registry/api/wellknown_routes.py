@@ -240,9 +240,9 @@ async def _auto_initialize_registry_card():
 
     if card is None:
         # Auto-initialize from config defaults
-        from uuid import uuid4
-        from registry.version import __version__
         import random
+
+        from registry.version import __version__
 
         logger.info("Registry card not found, auto-initializing from config")
 
@@ -267,7 +267,9 @@ async def _auto_initialize_registry_card():
         # Remove git suffix if present (e.g., "1.0.17-6-gf5c000c3-main" -> "1.0.17")
         version_parts = version_str.split("-")[0]
         federation_api_version = version_parts
-        logger.info(f"Using federation API version: {federation_api_version} (from app version: {__version__})")
+        logger.info(
+            f"Using federation API version: {federation_api_version} (from app version: {__version__})"
+        )
 
         contact = None
         if settings.registry_contact_email or settings.registry_contact_url:
@@ -278,6 +280,7 @@ async def _auto_initialize_registry_card():
 
         # Build OAuth params based on auth provider
         import os
+
         oauth2_issuer = None
         oauth2_token_endpoint = None
 
@@ -286,25 +289,35 @@ async def _auto_initialize_registry_card():
             okta_auth_server_id = os.getenv("OKTA_AUTH_SERVER_ID", "default")
             if okta_domain:
                 oauth2_issuer = f"https://{okta_domain}/oauth2/{okta_auth_server_id}"
-                oauth2_token_endpoint = f"https://{okta_domain}/oauth2/{okta_auth_server_id}/v1/token"
+                oauth2_token_endpoint = (
+                    f"https://{okta_domain}/oauth2/{okta_auth_server_id}/v1/token"
+                )
         elif settings.auth_provider == "keycloak":
             keycloak_external_url = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8080")
             keycloak_realm = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
             oauth2_issuer = f"{keycloak_external_url}/realms/{keycloak_realm}"
-            oauth2_token_endpoint = f"{keycloak_external_url}/realms/{keycloak_realm}/protocol/openid-connect/token"
+            oauth2_token_endpoint = (
+                f"{keycloak_external_url}/realms/{keycloak_realm}/protocol/openid-connect/token"
+            )
         elif settings.auth_provider == "entra":
             entra_tenant_id = os.getenv("ENTRA_TENANT_ID")
             if entra_tenant_id:
                 oauth2_issuer = f"https://login.microsoftonline.com/{entra_tenant_id}/v2.0"
-                oauth2_token_endpoint = f"https://login.microsoftonline.com/{entra_tenant_id}/oauth2/v2.0/token"
+                oauth2_token_endpoint = (
+                    f"https://login.microsoftonline.com/{entra_tenant_id}/oauth2/v2.0/token"
+                )
         elif settings.auth_provider == "cognito":
             cognito_user_pool_id = os.getenv("COGNITO_USER_POOL_ID")
             cognito_domain = os.getenv("COGNITO_DOMAIN")
             aws_region = os.getenv("AWS_REGION", "us-east-1")
             if cognito_user_pool_id:
-                oauth2_issuer = f"https://cognito-idp.{aws_region}.amazonaws.com/{cognito_user_pool_id}"
+                oauth2_issuer = (
+                    f"https://cognito-idp.{aws_region}.amazonaws.com/{cognito_user_pool_id}"
+                )
             if cognito_domain:
-                oauth2_token_endpoint = f"https://{cognito_domain}.auth.{aws_region}.amazoncognito.com/oauth2/token"
+                oauth2_token_endpoint = (
+                    f"https://{cognito_domain}.auth.{aws_region}.amazoncognito.com/oauth2/token"
+                )
 
         from registry.schemas.registry_card import RegistryAuthConfig
 

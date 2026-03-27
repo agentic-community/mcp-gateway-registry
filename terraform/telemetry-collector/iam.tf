@@ -58,6 +58,8 @@ resource "aws_iam_role_policy" "lambda_vpc" {
           "ec2:AssignPrivateIpAddresses",
           "ec2:UnassignPrivateIpAddresses"
         ]
+        # AWS requires Resource = "*" for EC2 network interface operations
+        # (CreateNetworkInterface, DescribeNetworkInterfaces, etc.)
         Resource = "*"
       }
     ]
@@ -77,8 +79,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
         Action = [
           "dynamodb:GetItem",
           "dynamodb:PutItem",
-          "dynamodb:UpdateItem",
-          "dynamodb:DeleteItem"
+          "dynamodb:UpdateItem"
         ]
         Resource = aws_dynamodb_table.rate_limit.arn
       }

@@ -1,15 +1,16 @@
 """Unit tests for RegistryCard model and LifecycleStatus enum."""
 
+from datetime import UTC, datetime
+from uuid import UUID
+
 import pytest
-from datetime import datetime, UTC
 from pydantic import ValidationError
-from uuid import UUID, uuid4
 
 from registry.schemas.registry_card import (
     LifecycleStatus,
-    RegistryCard,
-    RegistryCapabilities,
     RegistryAuthConfig,
+    RegistryCapabilities,
+    RegistryCard,
     RegistryContact,
 )
 
@@ -177,7 +178,9 @@ class TestRegistryCard:
             federation_endpoint="https://full.example.com/api/v1/federation",
             contact=contact,
             capabilities=RegistryCapabilities(servers=True, agents=False),
-            authentication=RegistryAuthConfig(schemes=["bearer"], oauth2_issuer="https://auth.test.com"),
+            authentication=RegistryAuthConfig(
+                schemes=["bearer"], oauth2_issuer="https://auth.test.com"
+            ),
             visibility_policy="authenticated",
             metadata={"region": "us-east-1", "tier": "production"},
         )
@@ -238,7 +241,9 @@ class TestRegistryCard:
             federation_endpoint="http://insecure.example.com/api/v1/federation",
         )
         # HttpUrl adds trailing slash
-        assert str(card.federation_endpoint).startswith("http://insecure.example.com/api/v1/federation")
+        assert str(card.federation_endpoint).startswith(
+            "http://insecure.example.com/api/v1/federation"
+        )
 
     def test_valid_https_endpoint(self):
         """Test that HTTPS endpoints are accepted."""
@@ -248,7 +253,9 @@ class TestRegistryCard:
             federation_endpoint="https://secure.example.com/api/v1/federation",
         )
         # HttpUrl adds trailing slash automatically
-        assert str(card.federation_endpoint).startswith("https://secure.example.com/api/v1/federation")
+        assert str(card.federation_endpoint).startswith(
+            "https://secure.example.com/api/v1/federation"
+        )
 
     def test_visibility_policy_validation(self):
         """Test visibility_policy validation."""

@@ -1,7 +1,8 @@
 """Unit tests for skill models."""
 
-import pytest
 from uuid import uuid4
+
+import pytest
 
 from registry.schemas.skill_models import (
     CompatibilityRequirement,

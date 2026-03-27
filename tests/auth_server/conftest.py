@@ -645,8 +645,6 @@ def mock_okta_provider():
             "client_id": "test-client-id",
         }
     )
-    provider.get_jwks = MagicMock(
-        return_value={"keys": [{"kid": "test-key", "kty": "RSA"}]}
-    )
+    provider.get_jwks = MagicMock(return_value={"keys": [{"kid": "test-key", "kty": "RSA"}]})
 
     return provider

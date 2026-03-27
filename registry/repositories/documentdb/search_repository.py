@@ -755,8 +755,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         # Build a case-insensitive match for ALL tags
         tag_conditions = [
-            {"tags": {"$regex": f"^{re.escape(tag)}$", "$options": "i"}}
-            for tag in tags
+            {"tags": {"$regex": f"^{re.escape(tag)}$", "$options": "i"}} for tag in tags
         ]
         query_filter: dict[str, Any] = {"$and": tag_conditions}
         if entity_types:

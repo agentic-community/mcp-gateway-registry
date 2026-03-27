@@ -10,11 +10,9 @@ import logging
 import os
 import sys
 import tempfile
-from urllib.parse import urljoin
 
 import jwt
 import requests
-
 
 # Configure logging
 logging.basicConfig(
@@ -38,9 +36,7 @@ def _get_okta_domain() -> str:
     if domain:
         return domain.replace("https://", "").rstrip("/")
 
-    raise ValueError(
-        "Okta domain must be provided via --okta-domain or OKTA_DOMAIN env var"
-    )
+    raise ValueError("Okta domain must be provided via --okta-domain or OKTA_DOMAIN env var")
 
 
 def _get_client_id() -> str:
@@ -56,9 +52,7 @@ def _get_client_id() -> str:
     if client_id:
         return client_id
 
-    raise ValueError(
-        "Client ID must be provided via --client-id or OKTA_CLIENT_ID env var"
-    )
+    raise ValueError("Client ID must be provided via --client-id or OKTA_CLIENT_ID env var")
 
 
 def _get_client_secret() -> str:
@@ -161,10 +155,7 @@ def _decode_token(access_token: str) -> dict[str, str]:
         Dictionary of decoded token claims
     """
     try:
-        claims = jwt.decode(
-            access_token,
-            options={"verify_signature": False}
-        )
+        claims = jwt.decode(access_token, options={"verify_signature": False})
         return claims
     except Exception as e:
         logger.warning(f"Failed to decode token: {e}")
@@ -195,11 +186,12 @@ def _display_decoded_token(claims: dict[str, str]) -> None:
     print(f"Groups:           {claims.get('groups', [])}")
 
     # Display expiration info
-    if 'exp' in claims and 'iat' in claims:
+    if "exp" in claims and "iat" in claims:
         from datetime import datetime
-        exp_time = datetime.fromtimestamp(claims['exp'])
-        iat_time = datetime.fromtimestamp(claims['iat'])
-        lifetime_hours = (claims['exp'] - claims['iat']) / 3600
+
+        exp_time = datetime.fromtimestamp(claims["exp"])
+        iat_time = datetime.fromtimestamp(claims["iat"])
+        lifetime_hours = (claims["exp"] - claims["iat"]) / 3600
         print(f"\nIssued at:        {iat_time} UTC")
         print(f"Expires at:       {exp_time} UTC")
         print(f"Lifetime:         {lifetime_hours:.1f} hours")
@@ -224,7 +216,7 @@ def _save_token_to_file(token_data: dict[str, str]) -> str:
 
     try:
         # Write token data as JSON
-        with os.fdopen(fd, 'w') as f:
+        with os.fdopen(fd, "w") as f:
             json.dump(token_data, f, indent=2)
 
         # Ensure file has restrictive permissions

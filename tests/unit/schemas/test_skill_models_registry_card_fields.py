@@ -1,17 +1,18 @@
 """Unit tests for Registry Card fields added to SkillCard and SkillInfo."""
 
-import pytest
-from datetime import datetime, UTC
-from pydantic import HttpUrl
+from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
+from pydantic import HttpUrl
+
+from registry.schemas.registry_card import LifecycleStatus
 from registry.schemas.skill_models import (
     SkillCard,
     SkillInfo,
-    SkillTier1_Metadata,
     SkillRegistrationRequest,
+    SkillTier1_Metadata,
 )
-from registry.schemas.registry_card import LifecycleStatus
 
 
 @pytest.mark.unit

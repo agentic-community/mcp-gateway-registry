@@ -57,3 +57,8 @@ output "bastion_ssh_command" {
   description = "SSH command to connect to the bastion host"
   value       = var.bastion_enabled ? "ssh -i <your-key.pem> ec2-user@${aws_instance.bastion[0].public_ip}" : "Bastion not enabled"
 }
+
+output "aws_region" {
+  description = "AWS region of deployment"
+  value       = var.aws_region
+}

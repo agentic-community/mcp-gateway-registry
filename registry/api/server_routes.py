@@ -738,9 +738,7 @@ async def register_service(
     await health_service.broadcast_health_update(path)
 
     # Security scanning if enabled (non-blocking — scan is non-fatal, don't block response)
-    asyncio.create_task(
-        _perform_security_scan_on_registration(path, proxy_pass_url, server_entry)
-    )
+    asyncio.create_task(_perform_security_scan_on_registration(path, proxy_pass_url, server_entry))
 
     logger.info(
         f"New service registered: '{name}' at path '{path}' by user '{user_context['username']}'"
@@ -2472,6 +2470,7 @@ async def register_service_api(
     # Add provider information
     if provider_organization or provider_url:
         from registry.schemas.agent_models import AgentProvider
+
         server_entry["provider"] = AgentProvider(
             organization=provider_organization,
             url=provider_url,
@@ -2481,8 +2480,9 @@ async def register_service_api(
     if source_created_at:
         try:
             from datetime import datetime
+
             # Validate ISO format
-            datetime.fromisoformat(source_created_at.replace('Z', '+00:00'))
+            datetime.fromisoformat(source_created_at.replace("Z", "+00:00"))
             server_entry["source_created_at"] = source_created_at
         except ValueError:
             logger.warning(f"Invalid source_created_at format: {source_created_at}")
@@ -2490,7 +2490,8 @@ async def register_service_api(
     if source_updated_at:
         try:
             from datetime import datetime
-            datetime.fromisoformat(source_updated_at.replace('Z', '+00:00'))
+
+            datetime.fromisoformat(source_updated_at.replace("Z", "+00:00"))
             server_entry["source_updated_at"] = source_updated_at
         except ValueError:
             logger.warning(f"Invalid source_updated_at format: {source_updated_at}")
@@ -2586,9 +2587,7 @@ async def register_service_api(
 
         # Security scanning if enabled (non-blocking — scan is non-fatal, don't block response)
         asyncio.create_task(
-            _perform_security_scan_on_registration(
-                path, proxy_pass_url, server_entry, headers_list
-            )
+            _perform_security_scan_on_registration(path, proxy_pass_url, server_entry, headers_list)
         )
 
         # Trigger async tasks for health check and FAISS sync

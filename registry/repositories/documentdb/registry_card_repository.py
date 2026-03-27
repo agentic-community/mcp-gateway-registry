@@ -23,14 +23,12 @@ class DocumentDBRegistryCardRepository(RegistryCardRepositoryBase):
             f"{self._collection_name}"
         )
 
-
     async def _get_collection(self) -> AsyncIOMotorCollection:
         """Get DocumentDB collection (lazy initialization)."""
         if self._collection is None:
             db = await get_documentdb_client()
             self._collection = db[self._collection_name]
         return self._collection
-
 
     async def get(self) -> RegistryCard | None:
         """Retrieve the Registry Card."""
@@ -52,7 +50,6 @@ class DocumentDBRegistryCardRepository(RegistryCardRepositoryBase):
         except Exception as e:
             logger.error(f"Error getting registry card: {e}", exc_info=True)
             return None
-
 
     async def save(
         self,
@@ -85,7 +82,6 @@ class DocumentDBRegistryCardRepository(RegistryCardRepositoryBase):
         except Exception as e:
             logger.error(f"Error saving registry card: {e}", exc_info=True)
             raise
-
 
     async def exists(self) -> bool:
         """Check if Registry Card exists."""

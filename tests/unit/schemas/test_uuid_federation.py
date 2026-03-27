@@ -1,10 +1,9 @@
 """Unit tests for UUID field preservation from federated registries."""
 
-import pytest
 from uuid import UUID
-from pydantic import HttpUrl
 
-from registry.schemas.registry_card import RegistryCard
+import pytest
+
 from registry.core.schemas import ServerInfo
 from registry.schemas.agent_models import AgentCard
 from registry.schemas.skill_models import SkillCard

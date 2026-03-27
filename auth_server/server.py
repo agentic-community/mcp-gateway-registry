@@ -2645,8 +2645,7 @@ async def oauth2_callback(
                         or id_token_claims.get("email")
                         or id_token_claims.get("sub"),
                         "email": id_token_claims.get("email"),
-                        "name": id_token_claims.get("name")
-                        or id_token_claims.get("given_name"),
+                        "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
                         "groups": id_token_claims.get("groups", []),
                     }
                     logger.info(f"User extracted from Okta ID token: {mapped_user}")
@@ -2884,9 +2883,7 @@ async def oauth2_logout(
             }
             if id_token_hint:
                 logout_params["id_token_hint"] = id_token_hint
-            logger.debug(
-                f"Keycloak logout params built: has_id_token_hint={bool(id_token_hint)}"
-            )
+            logger.debug(f"Keycloak logout params built: has_id_token_hint={bool(id_token_hint)}")
         elif "login.microsoftonline.com" in logout_url or "entra" in provider.lower():
             # Entra ID logout parameters
             logout_params = {
@@ -2894,9 +2891,7 @@ async def oauth2_logout(
             }
             if id_token_hint:
                 logout_params["id_token_hint"] = id_token_hint
-            logger.debug(
-                f"Entra ID logout params built: has_id_token_hint={bool(id_token_hint)}"
-            )
+            logger.debug(f"Entra ID logout params built: has_id_token_hint={bool(id_token_hint)}")
         elif "okta" in provider.lower() or ".okta.com" in logout_url:
             # Okta logout parameters
             logout_params = {
@@ -2904,9 +2899,7 @@ async def oauth2_logout(
             }
             if id_token_hint:
                 logout_params["id_token_hint"] = id_token_hint
-            logger.debug(
-                f"Okta logout params built: has_id_token_hint={bool(id_token_hint)}"
-            )
+            logger.debug(f"Okta logout params built: has_id_token_hint={bool(id_token_hint)}")
         else:
             # Cognito logout parameters (no id_token_hint support)
             logout_params = {

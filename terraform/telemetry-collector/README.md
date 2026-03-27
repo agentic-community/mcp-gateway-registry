@@ -14,79 +14,132 @@ Privacy-first serverless telemetry collector that receives anonymous usage data 
 - **Secrets Manager** - Secure credential storage
 
 **Key Features:**
-- ✅ Always returns 204 (no information leakage)
-- ✅ Hash-based rate limiting (no IP storage)
-- ✅ VPC-secured DocumentDB
-- ✅ Fail-silent design (never blocks clients)
-- ✅ TLS encryption everywhere
+- Always returns 204 (no information leakage)
+- Hash-based rate limiting (no IP storage)
+- VPC-secured DocumentDB
+- Fail-silent design (never blocks clients)
+- TLS encryption everywhere
+
+## Architecture
+
+```
+                          Registry Instances
+                          (worldwide deployments)
+                                  |
+                                  | HTTPS POST /v1/collect
+                                  | (startup + heartbeat events)
+                                  v
+                    +----------------------------+
+                    |    API Gateway HTTP API     |
+                    |  (throttle: 50 req/s burst) |
+                    |  (CORS: restricted origins) |
+                    +----------------------------+
+                                  |
+                                  | AWS_PROXY integration
+                                  v
+  +----------------------------------------------------------------+
+  |                         AWS VPC (10.0.0.0/16)                  |
+  |                                                                |
+  |  +------------------+     +------------------+                 |
+  |  | Public Subnet    |     | Public Subnet    |   (2 AZs)      |
+  |  | (10.0.0.0/24)    |     | (10.0.1.0/24)    |                |
+  |  |                  |     |                  |                 |
+  |  | +- NAT Gateway --+     +-- NAT Gateway -+ |                |
+  |  +--|---------------+     +----------------|--+                |
+  |     |                                      |                   |
+  |     v                                      v                   |
+  |  +------------------+     +------------------+                 |
+  |  | Private Subnet   |     | Private Subnet   |   (2 AZs)      |
+  |  | (10.0.10.0/24)   |     | (10.0.11.0/24)   |                |
+  |  |                  |     |                  |                 |
+  |  |  +------------+  |     |  +------------+  |                 |
+  |  |  |   Lambda   |  |     |  | DocumentDB |  |                |
+  |  |  |  Function  |--+-----+->|  Cluster   |  |                |
+  |  |  +------------+  |     |  | (TLS only) |  |                |
+  |  |       |          |     |  +------------+  |                 |
+  |  +-------|----------+     +------------------+                 |
+  |          |                                                     |
+  +----------|-----------------------------------------------------+
+             |
+             | (via NAT Gateway)
+             v
+  +---------------------+    +---------------------+
+  |      DynamoDB       |    |   Secrets Manager    |
+  |  (rate limiting)    |    |  (DocumentDB creds)  |
+  |                     |    |                      |
+  |  ip_hash -> counter |    |  username / password |
+  |  TTL auto-cleanup   |    |  database name       |
+  +---------------------+    +---------------------+
+
+  Request Flow:
+  ---------------------------------------------------------------
+  1. Registry sends HTTPS POST to API Gateway
+  2. API Gateway invokes Lambda (AWS_PROXY)
+  3. Lambda hashes source IP (SHA-256, never stored)
+  4. Lambda checks DynamoDB rate limit (10 req/min per IP)
+  5. Lambda validates payload (Pydantic schema)
+  6. Lambda fetches DocumentDB creds from Secrets Manager
+  7. Lambda stores event in DocumentDB (TLS connection)
+  8. Lambda returns 204 (always, regardless of outcome)
+
+  Optional Bastion Host:
+  ---------------------------------------------------------------
+  When bastion_enabled = true, a t2.micro EC2 instance is
+  created in a public subnet with SSH access for direct
+  DocumentDB queries via mongosh.
+```
 
 ## Prerequisites
 
-### AWS Requirements
 - AWS CLI v2 configured with credentials
 - Terraform >= 1.0
-- AWS account with permissions for:
-  - VPC, EC2 (NAT Gateway)
-  - Lambda, API Gateway
-  - DocumentDB
-  - DynamoDB
-  - Secrets Manager
-  - CloudWatch Logs
+- Python 3.12+ and pip (for Lambda packaging)
+- mongosh (optional, for DocumentDB index setup)
 
-### Local Requirements
 ```bash
-# Install Terraform
-brew install terraform  # macOS
-# or
-sudo apt-get install terraform  # Linux
-
-# Verify AWS CLI
+# Verify prerequisites
 aws sts get-caller-identity
-
-# Verify Terraform
 terraform version
+python3 --version
 ```
 
-## Cost Estimates
+## Quick Start (Automated)
 
-### Testing Account (~$85-90/month)
-- Lambda: Free tier (1M invocations/month)
-- API Gateway HTTP API: ~$1/month
-- DynamoDB: Free tier (25GB storage)
-- Secrets Manager: $0.40/month
-- CloudWatch Logs: ~$0.50/month
-- DocumentDB (db.t3.medium): ~$50/month
-- NAT Gateway (2 AZs): ~$32/month
-- Data transfer: ~$1/month
-
-### Production Account (~$195-200/month)
-- Lambda: ~$0.20/month
-- API Gateway HTTP API: ~$0.10/month
-- DynamoDB: ~$1.25/month
-- Secrets Manager: $0.40/month
-- CloudWatch Logs: ~$0.50/month
-- DocumentDB (db.r5.large): ~$160/month
-- NAT Gateway (2 AZs): ~$32/month
-- Data transfer: ~$1/month
-
-**Note:** DocumentDB costs are significantly higher than MongoDB Atlas M0 (free), but provide AWS-native integration and VPC security.
-
-## Deployment
-
-### Step 1: Clone Repository
+The `deploy.sh` script handles everything end-to-end:
 
 ```bash
-git clone https://github.com/agentic-community/mcp-gateway-registry.git
-cd mcp-gateway-registry/terraform/telemetry-collector
+cd terraform/telemetry-collector
+./deploy.sh testing    # ~$85-90/month
+# or
+./deploy.sh production # ~$195-200/month
 ```
 
-### Step 2: Configure Variables
+**What it does:**
+1. Checks prerequisites (AWS CLI, Terraform)
+2. Creates `terraform.tfvars` from template
+3. Builds Lambda deployment package
+4. Deploys all infrastructure (~15-20 minutes)
+5. Configures DocumentDB indexes automatically
+6. Tests with curl
+7. Saves deployment info to `deployment-info.txt`
+
+After deployment, integrate with the registry:
 
 ```bash
-# Copy example configuration
+export MCP_TELEMETRY_ENDPOINT=https://[your-id].execute-api.us-east-1.amazonaws.com/v1/collect
+cd ../..
+uv run python -m registry
+```
+
+## Manual Deployment (Step by Step)
+
+### Step 1: Configure Variables
+
+```bash
+cd terraform/telemetry-collector
+
+# Copy example configuration and edit
 cp terraform.tfvars.example terraform.tfvars
-
-# Edit configuration
 vi terraform.tfvars
 ```
 
@@ -99,23 +152,149 @@ documentdb_instance_class = "db.t3.medium"  # or "db.r5.large"
 
 **Optional variables (production):**
 ```hcl
+cors_allowed_origins = ["https://mcpgateway.io", "https://app.mcpgateway.io"]
 custom_domain = "telemetry.mcpgateway.io"
 route53_zone_id = "Z1234567890ABC"
 alarm_email = "alerts@example.com"
 ```
 
+**Bastion host setup (optional, for direct DocumentDB access):**
+
+To enable the bastion host, you need an SSH key pair and your public IP:
+
+```bash
+# Generate an SSH key pair (if you don't have one)
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "bastion-telemetry"
+
+# Get your public key
+cat ~/.ssh/id_ed25519.pub
+
+# Get your public IP
+curl -s ifconfig.me
+```
+
+Then set these in `terraform.tfvars`:
+```hcl
+bastion_enabled       = true
+bastion_public_key    = "ssh-ed25519 AAAA... your-key-here"
+bastion_allowed_cidrs = ["YOUR_PUBLIC_IP/32"]  # e.g. ["203.0.113.42/32"]
+```
+
+After deployment, set up the bastion helper scripts:
+```bash
+# Run the setup script (copies connect.sh, query.sh, and config to bastion)
+./bastion-scripts/setup-bastion.sh
+
+# Or do it manually with SCP:
+BASTION_IP=$(terraform output -raw bastion_public_ip)
+DOCDB_ENDPOINT=$(terraform output -raw documentdb_endpoint)
+SECRET_ARN=$(terraform output -raw documentdb_secret_arn)
+
+# Create config file with terraform output values
+cat > /tmp/bastion.env <<EOF
+DOCDB_ENDPOINT="$DOCDB_ENDPOINT"
+SECRET_ARN="$SECRET_ARN"
+AWS_REGION="$(terraform output -raw aws_region)"
+EOF
+
+# Copy scripts and config to bastion
+scp -i ~/.ssh/id_ed25519 \
+    /tmp/bastion.env \
+    bastion-scripts/connect.sh \
+    bastion-scripts/query.sh \
+    ec2-user@$BASTION_IP:~/
+
+# Make executable
+ssh -i ~/.ssh/id_ed25519 ec2-user@$BASTION_IP 'chmod +x ~/connect.sh ~/query.sh'
+```
+
+Then SSH in and use the helper scripts:
+```bash
+ssh -i ~/.ssh/id_ed25519 ec2-user@$BASTION_IP
+
+# On the bastion:
+./connect.sh   # Interactive mongosh session to DocumentDB
+./query.sh     # Quick summary of telemetry data
+```
+
+Common DocumentDB queries (run inside `./connect.sh`):
+```javascript
+// Switch to telemetry database
+use telemetry;
+
+// Count all events
+db.startup_events.countDocuments();
+db.heartbeat_events.countDocuments();
+
+// View recent startup events
+db.startup_events.find().sort({_id: -1}).limit(10).pretty();
+
+// View recent heartbeat events
+db.heartbeat_events.find().sort({_id: -1}).limit(10).pretty();
+
+// Breakdown by registry version
+db.startup_events.aggregate([
+  {$group: {_id: "$v", count: {$sum: 1}}},
+  {$sort: {count: -1}}
+]);
+
+// Breakdown by storage backend
+db.startup_events.aggregate([
+  {$group: {_id: "$storage", count: {$sum: 1}}},
+  {$sort: {count: -1}}
+]);
+
+// Breakdown by OS
+db.startup_events.aggregate([
+  {$group: {_id: "$os", count: {$sum: 1}}},
+  {$sort: {count: -1}}
+]);
+
+// Find events from a specific instance
+db.startup_events.find({instance_id: "YOUR_INSTANCE_ID"}).pretty();
+
+// Events received in the last 24 hours
+db.startup_events.find({
+  received_at: {$gte: new Date(Date.now() - 24*60*60*1000)}
+}).pretty();
+
+// Heartbeat stats: top instances by uptime
+db.heartbeat_events.find({}, {
+  instance_id: 1, uptime_hours: 1, servers_count: 1, agents_count: 1, _id: 0
+}).sort({uptime_hours: -1}).limit(10);
+```
+
+### Step 2: Build Lambda Deployment Package
+
+The Lambda function requires `pymongo` and `pydantic` bundled into a zip:
+
+```bash
+# Install dependencies into a temp directory
+pip install -t /tmp/lambda-package pymongo pydantic boto3
+
+# Copy Lambda source code
+cp lambda/collector/index.py /tmp/lambda-package/
+cp lambda/collector/schemas.py /tmp/lambda-package/
+
+# Create the zip
+cd /tmp/lambda-package
+zip -r /path/to/terraform/telemetry-collector/lambda_function.zip .
+
+# Return to terraform directory
+cd /path/to/terraform/telemetry-collector
+```
+
+**Note:** `boto3` is already available in the Lambda runtime but included for local testing. The zip must be named `lambda_function.zip` (or match `lambda_package_path` in your tfvars).
+
 ### Step 3: Deploy Infrastructure
 
 ```bash
-# Initialize Terraform
 terraform init
-
-# Preview changes
 terraform plan
-
-# Deploy (takes ~15-20 minutes due to DocumentDB cluster creation)
 terraform apply
 ```
+
+Deployment takes ~15-20 minutes (mostly DocumentDB cluster creation).
 
 **Expected output:**
 ```
@@ -177,15 +356,28 @@ db.startup_events.getIndexes();
 db.heartbeat_events.getIndexes();
 ```
 
+## Testing vs Production
+
+| Aspect | Testing | Production |
+|--------|---------|------------|
+| DocumentDB instance | db.t3.medium (~$50/mo) | db.r5.large (~$160/mo) |
+| DocumentDB snapshot on destroy | Skipped | Final snapshot created |
+| DynamoDB point-in-time recovery | Off | On |
+| CloudWatch alarms | Not created | 4 alarms (errors, throttles, duration, 5xx) |
+| Estimated total cost | ~$85-90/month | ~$195-200/month |
+
+**Cost breakdown:**
+- DocumentDB: ~$50-160/month (largest cost)
+- NAT Gateway (2 AZs): ~$32/month
+- Lambda, API Gateway, DynamoDB, Secrets Manager, CloudWatch: ~$3/month
+
 ## Testing
 
 ### Manual Testing with curl
 
 ```bash
-# Get collector URL
 COLLECTOR_URL=$(terraform output -raw collector_url)
 
-# Test startup event
 curl -X POST $COLLECTOR_URL \
   -H "Content-Type: application/json" \
   -d '{
@@ -210,7 +402,6 @@ curl -X POST $COLLECTOR_URL \
 ### Integration Testing with Registry
 
 ```bash
-# In registry repository
 export MCP_TELEMETRY_ENDPOINT=$COLLECTOR_URL
 uv run python -m registry
 
@@ -244,6 +435,9 @@ aws logs tail /aws/lambda/telemetry-collector --follow
 
 # API Gateway logs
 aws logs tail /aws/apigateway/telemetry-collector --follow
+
+# Recent events only
+aws logs tail /aws/lambda/telemetry-collector --since 5m
 ```
 
 ### CloudWatch Metrics
@@ -261,85 +455,26 @@ Alarms are automatically created when `deployment_stage = "production"` and `ala
 - Lambda duration (> 10 seconds average)
 - API Gateway 5xx errors (> 10 in 5 minutes)
 
-## Troubleshooting
-
-### Issue: Lambda cannot connect to DocumentDB
-
-**Symptoms:**
-- CloudWatch logs show "Failed to connect to DocumentDB"
-- Timeout errors
-
-**Solution:**
-1. Verify Lambda is in correct VPC and subnets:
-   ```bash
-   aws lambda get-function-configuration --function-name telemetry-collector | jq '.VpcConfig'
-   ```
-
-2. Verify security groups allow traffic:
-   ```bash
-   # DocumentDB security group should allow port 27017 from Lambda SG
-   aws ec2 describe-security-groups --filters Name=group-name,Values=telemetry-collector-*
-   ```
-
-3. Verify DocumentDB is running:
-   ```bash
-   aws docdb describe-db-clusters --db-cluster-identifier telemetry-collector
-   ```
-
-### Issue: Rate limiting not working
-
-**Symptoms:**
-- More than 10 requests per minute from same IP are accepted
-
-**Solution:**
-1. Check DynamoDB table exists:
-   ```bash
-   aws dynamodb describe-table --table-name telemetry-collector-rate-limit
-   ```
-
-2. Check TTL is enabled:
-   ```bash
-   aws dynamodb describe-time-to-live --table-name telemetry-collector-rate-limit
-   ```
-
-3. Check IAM permissions for Lambda to access DynamoDB
-
-### Issue: Always returns 204 even for valid events
-
-**This is expected behavior!** The collector always returns 204 for privacy (no information leakage).
-
-To verify events are being stored:
-1. Check CloudWatch logs for "Stored startup event"
-2. Query DocumentDB directly to verify documents are inserted
-
-### Issue: High costs
-
-**DocumentDB is expensive!** If cost is a concern:
-
-1. **Testing:** Use smallest instance (db.t3.medium)
-2. **Production:** Consider:
-   - MongoDB Atlas M0 (free) instead of DocumentDB
-   - Reduce NAT Gateway count to 1 (less redundancy)
-   - Reduce CloudWatch log retention (default: 30 days)
-
-## Updating the Collector
-
-### Update Lambda Function Code
+### Query Telemetry Data
 
 ```bash
-# Make code changes in lambda/collector/
-cd terraform/telemetry-collector
+DOCDB_ENDPOINT=$(terraform output -raw documentdb_endpoint)
 
-# Terraform will detect changes and redeploy
-terraform apply
-```
+# Get password
+aws secretsmanager get-secret-value \
+  --secret-id telemetry-collector-docdb \
+  --query SecretString --output text | jq -r '.password'
 
-### Update Infrastructure
+# Connect and query
+mongosh --host $DOCDB_ENDPOINT \
+  --username telemetry_admin \
+  --tls \
+  --tlsCAFile global-bundle.pem
 
-```bash
-# Edit Terraform files
-# Apply changes
-terraform apply
+use telemetry;
+db.startup_events.find().count();
+db.startup_events.find({"v": "1.0.16"});
+db.heartbeat_events.find({"search_backend": "documentdb"});
 ```
 
 ## Production Deployment
@@ -374,14 +509,105 @@ deployment_stage = "production"
 
 **Note:** You'll receive an SNS subscription confirmation email. Click the link to activate alarms.
 
+## Updating the Collector
+
+### Update Lambda Function Code
+
+```bash
+# Make code changes in lambda/collector/
+# Rebuild the zip package (see Step 2 above)
+terraform apply
+```
+
+### Update Infrastructure
+
+```bash
+# Edit Terraform files
+terraform apply
+```
+
+## Troubleshooting
+
+### Lambda cannot connect to DocumentDB
+
+**Symptoms:** CloudWatch logs show "Failed to connect to DocumentDB" or timeout errors.
+
+**Solution:**
+1. Verify Lambda is in correct VPC and subnets:
+   ```bash
+   aws lambda get-function-configuration --function-name telemetry-collector | jq '.VpcConfig'
+   ```
+2. Verify security groups allow traffic:
+   ```bash
+   aws ec2 describe-security-groups --filters Name=group-name,Values=telemetry-collector-*
+   ```
+3. Verify DocumentDB is running:
+   ```bash
+   aws docdb describe-db-clusters --db-cluster-identifier telemetry-collector
+   ```
+
+### Rate limiting not working
+
+**Symptoms:** More than 10 requests per minute from same IP are accepted.
+
+**Solution:**
+1. Check DynamoDB table exists:
+   ```bash
+   aws dynamodb describe-table --table-name telemetry-collector-rate-limit
+   ```
+2. Check TTL is enabled:
+   ```bash
+   aws dynamodb describe-time-to-live --table-name telemetry-collector-rate-limit
+   ```
+
+### Always returns 204 even for valid events
+
+**This is expected behavior.** The collector always returns 204 for privacy (no information leakage).
+
+To verify events are being stored:
+1. Check CloudWatch logs for "Stored startup event"
+2. Query DocumentDB directly to verify documents are inserted
+
+### Script fails at prerequisites check
+
+- Install AWS CLI: `brew install awscli` (macOS) or `sudo apt-get install awscli` (Linux)
+- Configure AWS: `aws configure`
+- Install Terraform: `brew install terraform` (macOS) or see https://developer.hashicorp.com/terraform/install
+
+### High costs
+
+DocumentDB is the largest cost item. To minimize:
+- Use smallest instance (`db.t3.medium`) for testing
+- Destroy when not actively using: `./destroy.sh`
+- Consider MongoDB Atlas M0 (free) as an alternative for non-production use
+
+## Files Reference
+
+**Source files:**
+- `lambda/collector/index.py` - Lambda handler code
+- `lambda/collector/schemas.py` - Pydantic validation schemas
+- `lambda/collector/requirements.txt` - Python dependencies
+
+**Terraform files:**
+- `*.tf` - Infrastructure definitions
+- `variables.tf` - All configurable variables
+- `terraform.tfvars.example` - Example configuration (copy to `terraform.tfvars`)
+
+**Generated files (not committed):**
+- `lambda_function.zip` - Lambda deployment package
+- `terraform.tfvars` - Your deployment configuration
+- `terraform.tfstate` - Terraform state (DO NOT DELETE)
+- `deployment-info.txt` - Collector URL, endpoints, test commands
+- `global-bundle.pem` - DocumentDB CA certificate
+
 ## Cleanup
 
 ```bash
-# Destroy all resources (irreversible!)
-terraform destroy
-
-# Note: DocumentDB snapshots are retained for production deployments
+cd terraform/telemetry-collector
+./destroy.sh
 ```
+
+**Warning:** This deletes ALL telemetry data. Cannot be undone. Production deployments retain a final DocumentDB snapshot.
 
 ## Security Considerations
 
@@ -391,6 +617,7 @@ terraform destroy
 4. **Secrets Manager:** Credentials are encrypted at rest
 5. **IAM Least Privilege:** Lambda has minimal required permissions
 6. **Always 204:** No error messages leak system information
+7. **CORS Restricted:** Only configured origins can submit telemetry via browser
 
 ## Support
 

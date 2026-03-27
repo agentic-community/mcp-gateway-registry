@@ -16,11 +16,11 @@ All recommendations incorporated:
 import logging
 from datetime import UTC, datetime
 from enum import Enum
-from uuid import UUID, uuid4
 from typing import (
     Any,
     Literal,
 )
+from uuid import UUID, uuid4
 
 from pydantic import (
     BaseModel,

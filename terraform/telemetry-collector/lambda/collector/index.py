@@ -22,7 +22,6 @@ import boto3
 import pymongo
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
-
 from schemas import HeartbeatEvent, StartupEvent
 
 # Configure logging
@@ -40,10 +39,11 @@ def _init_aws_clients():
         dynamodb = boto3.resource("dynamodb")
         secretsmanager = boto3.client("secretsmanager")
 
-# Environment variables
-RATE_LIMIT_TABLE = os.environ.get("RATE_LIMIT_TABLE", "test-rate-limit-table")
-DOCUMENTDB_SECRET_ARN = os.environ.get("DOCUMENTDB_SECRET_ARN", "test-secret-arn")
-DOCUMENTDB_ENDPOINT = os.environ.get("DOCUMENTDB_ENDPOINT", "test-endpoint:27017")
+
+# Environment variables (required — Lambda will fail fast if misconfigured)
+RATE_LIMIT_TABLE = os.environ["RATE_LIMIT_TABLE"]
+DOCUMENTDB_SECRET_ARN = os.environ["DOCUMENTDB_SECRET_ARN"]
+DOCUMENTDB_ENDPOINT = os.environ["DOCUMENTDB_ENDPOINT"]
 
 # Rate limiting constants
 RATE_LIMIT_WINDOW_SECONDS = 60
@@ -218,7 +218,9 @@ def lambda_handler(event: dict, context: dict) -> dict:
         elif event_type == "heartbeat":
             try:
                 validated = HeartbeatEvent(**payload)
-                logger.info(f"Validated heartbeat event: v={validated.v} servers={validated.servers_count}")
+                logger.info(
+                    f"Validated heartbeat event: v={validated.v} servers={validated.servers_count}"
+                )
             except ValidationError as e:
                 logger.error(f"Heartbeat validation failed: {e}")
                 return {"statusCode": 204}

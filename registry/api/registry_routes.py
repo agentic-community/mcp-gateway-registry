@@ -9,10 +9,10 @@ Spec: https://raw.githubusercontent.com/modelcontextprotocol/registry/refs/heads
 """
 
 import logging
+from datetime import UTC, datetime
 from typing import Annotated
 from urllib.parse import unquote
 
-from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth.dependencies import nginx_proxied_auth
@@ -320,11 +320,12 @@ async def _auto_initialize_registry_card():
 
     if card is None:
         # Auto-initialize from config defaults
+        import random
         from uuid import uuid4
+
         from registry.core.config import settings
         from registry.schemas.registry_card import RegistryContact
         from registry.version import __version__
-        import random
 
         logger.info("Registry card not found, auto-initializing from config")
 
@@ -356,7 +357,9 @@ async def _auto_initialize_registry_card():
         # Remove git suffix if present (e.g., "1.0.17-6-gf5c000c3-main" -> "1.0.17")
         version_parts = version_str.split("-")[0]
         federation_api_version = version_parts
-        logger.info(f"Using federation API version: {federation_api_version} (from app version: {__version__})")
+        logger.info(
+            f"Using federation API version: {federation_api_version} (from app version: {__version__})"
+        )
 
         contact = None
         if settings.registry_contact_email or settings.registry_contact_url:
@@ -371,32 +374,46 @@ async def _auto_initialize_registry_card():
 
         if settings.auth_provider == "okta":
             import os
+
             okta_domain = os.getenv("OKTA_DOMAIN")
             okta_auth_server_id = os.getenv("OKTA_AUTH_SERVER_ID", "default")
             if okta_domain:
                 oauth2_issuer = f"https://{okta_domain}/oauth2/{okta_auth_server_id}"
-                oauth2_token_endpoint = f"https://{okta_domain}/oauth2/{okta_auth_server_id}/v1/token"
+                oauth2_token_endpoint = (
+                    f"https://{okta_domain}/oauth2/{okta_auth_server_id}/v1/token"
+                )
         elif settings.auth_provider == "keycloak":
             import os
+
             keycloak_external_url = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8080")
             keycloak_realm = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
             oauth2_issuer = f"{keycloak_external_url}/realms/{keycloak_realm}"
-            oauth2_token_endpoint = f"{keycloak_external_url}/realms/{keycloak_realm}/protocol/openid-connect/token"
+            oauth2_token_endpoint = (
+                f"{keycloak_external_url}/realms/{keycloak_realm}/protocol/openid-connect/token"
+            )
         elif settings.auth_provider == "entra":
             import os
+
             entra_tenant_id = os.getenv("ENTRA_TENANT_ID")
             if entra_tenant_id:
                 oauth2_issuer = f"https://login.microsoftonline.com/{entra_tenant_id}/v2.0"
-                oauth2_token_endpoint = f"https://login.microsoftonline.com/{entra_tenant_id}/oauth2/v2.0/token"
+                oauth2_token_endpoint = (
+                    f"https://login.microsoftonline.com/{entra_tenant_id}/oauth2/v2.0/token"
+                )
         elif settings.auth_provider == "cognito":
             import os
+
             cognito_user_pool_id = os.getenv("COGNITO_USER_POOL_ID")
             cognito_domain = os.getenv("COGNITO_DOMAIN")
             aws_region = os.getenv("AWS_REGION", "us-east-1")
             if cognito_user_pool_id:
-                oauth2_issuer = f"https://cognito-idp.{aws_region}.amazonaws.com/{cognito_user_pool_id}"
+                oauth2_issuer = (
+                    f"https://cognito-idp.{aws_region}.amazonaws.com/{cognito_user_pool_id}"
+                )
             if cognito_domain:
-                oauth2_token_endpoint = f"https://{cognito_domain}.auth.{aws_region}.amazoncognito.com/oauth2/token"
+                oauth2_token_endpoint = (
+                    f"https://{cognito_domain}.auth.{aws_region}.amazoncognito.com/oauth2/token"
+                )
 
         from registry.schemas.registry_card import RegistryAuthConfig
 
@@ -479,8 +496,8 @@ async def update_registry_card(
     operation = "update" if existing else "create"
 
     # Handle nested contact fields from frontend (flat) to backend (nested)
-    from registry.schemas.registry_card import RegistryContact
     from registry.core.config import settings
+    from registry.schemas.registry_card import RegistryContact
 
     if existing:
         # Update existing card
@@ -501,8 +518,9 @@ async def update_registry_card(
                 card_data["contact"] = None
 
             # Remove flat fields
-            request_cleaned = {k: v for k, v in request.items()
-                              if k not in ["contact_email", "contact_url"]}
+            request_cleaned = {
+                k: v for k, v in request.items() if k not in ["contact_email", "contact_url"]
+            }
             card_data.update(request_cleaned)
         else:
             card_data.update(request)
@@ -618,8 +636,9 @@ async def patch_registry_card(
             card_data["contact"] = None
 
         # Remove flat fields from request before updating
-        request_cleaned = {k: v for k, v in request.items()
-                          if k not in ["contact_email", "contact_url"]}
+        request_cleaned = {
+            k: v for k, v in request.items() if k not in ["contact_email", "contact_url"]
+        }
         card_data.update(request_cleaned)
     else:
         card_data.update(request)
@@ -655,5 +674,3 @@ async def patch_registry_card(
         "message": "Registry card updated successfully",
         "registry_card": saved_dict,
     }
-
-

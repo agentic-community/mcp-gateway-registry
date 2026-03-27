@@ -61,7 +61,7 @@ class OktaProvider(AuthProvider):
         self.m2m_client_secret = m2m_client_secret or client_secret
 
         # Validate Okta domain format (security: warn on non-standard domains)
-        standard_okta_pattern = r'^[a-zA-Z0-9-]+\.(okta\.com|oktapreview\.com|okta-emea\.com)$'
+        standard_okta_pattern = r"^[a-zA-Z0-9-]+\.(okta\.com|oktapreview\.com|okta-emea\.com)$"
         if not re.match(standard_okta_pattern, self.okta_domain):
             logger.warning(
                 f"Non-standard Okta domain: {self.okta_domain}. "
@@ -122,11 +122,8 @@ class OktaProvider(AuthProvider):
 
             # First check if this is a self-signed token from our auth server
             try:
-                unverified_claims = jwt.decode(
-                    token,
-                    options={"verify_signature": False}
-                )
-                if unverified_claims.get('iss') == JWT_ISSUER:
+                unverified_claims = jwt.decode(token, options={"verify_signature": False})
+                if unverified_claims.get("iss") == JWT_ISSUER:
                     logger.debug("Token appears to be self-signed, validating...")
                     return self._validate_self_signed_token(token)
             except Exception as e:
@@ -137,16 +134,17 @@ class OktaProvider(AuthProvider):
 
             # Decode token header to get key ID
             unverified_header = jwt.get_unverified_header(token)
-            kid = unverified_header.get('kid')
+            kid = unverified_header.get("kid")
 
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
 
             # Find matching key
             signing_key = None
-            for key in jwks.get('keys', []):
-                if key.get('kid') == kid:
+            for key in jwks.get("keys", []):
+                if key.get("kid") == kid:
                     from jwt import PyJWK
+
                     signing_key = PyJWK(key).key
                     break
 
@@ -160,14 +158,11 @@ class OktaProvider(AuthProvider):
 
             # For custom authorization servers, M2M tokens use API identifier as audience
             # Decode without audience validation first to check token type
-            unverified_claims = jwt.decode(
-                token,
-                options={"verify_signature": False}
-            )
+            unverified_claims = jwt.decode(token, options={"verify_signature": False})
 
             # Check if this is an M2M token (has cid but audience is not client_id)
-            is_m2m_token = 'cid' in unverified_claims
-            aud_claim = unverified_claims.get('aud', '')
+            is_m2m_token = "cid" in unverified_claims
+            aud_claim = unverified_claims.get("aud", "")
             aud_is_client_id = aud_claim in valid_audiences
 
             # For M2M tokens with custom auth server, skip audience validation
@@ -178,44 +173,41 @@ class OktaProvider(AuthProvider):
             claims = jwt.decode(
                 token,
                 signing_key,
-                algorithms=['RS256'],
+                algorithms=["RS256"],
                 issuer=self.issuer,
                 audience=valid_audiences if verify_audience else None,
                 options={
                     "verify_exp": True,
                     "verify_iat": True,
                     "verify_aud": verify_audience,
-                }
+                },
             )
 
-            logger.debug(
-                f"Token validation successful for user: "
-                f"{claims.get('sub', 'unknown')}"
-            )
+            logger.debug(f"Token validation successful for user: {claims.get('sub', 'unknown')}")
 
             # Extract and validate groups claim (must be list of strings)
-            groups = claims.get('groups', [])
+            groups = claims.get("groups", [])
             if not isinstance(groups, list):
                 groups = [groups] if groups else []
             if not all(isinstance(g, str) for g in groups):
                 raise ValueError("Invalid groups claim format: must contain only strings")
 
             # Extract scopes - Okta uses 'scp' for scopes in access tokens
-            scope_claim = claims.get('scp') or claims.get('scope', '')
+            scope_claim = claims.get("scp") or claims.get("scope", "")
             if isinstance(scope_claim, list):
                 scopes = scope_claim
             else:
                 scopes = scope_claim.split() if scope_claim else []
 
             return {
-                'valid': True,
-                'username': claims.get('sub', claims.get('preferred_username', '')),
-                'email': claims.get('email', ''),
-                'groups': groups,
-                'scopes': scopes,
-                'client_id': claims.get('cid', self.client_id),
-                'method': 'okta',
-                'data': claims,
+                "valid": True,
+                "username": claims.get("sub", claims.get("preferred_username", "")),
+                "email": claims.get("email", ""),
+                "groups": groups,
+                "scopes": scopes,
+                "client_id": claims.get("cid", self.client_id),
+                "method": "okta",
+                "data": claims,
             }
 
         except jwt.ExpiredSignatureError:
@@ -227,7 +219,7 @@ class OktaProvider(AuthProvider):
         except Exception as e:
             logger.error(f"Okta token validation error: {e}")
             raise ValueError(f"Token validation failed: {e}")
-            
+
     def _validate_self_signed_token(self, token: str) -> dict[str, Any]:
         """Validate a self-signed JWT token generated by our auth server.
 
@@ -258,21 +250,21 @@ class OktaProvider(AuthProvider):
             )
 
             # Check token_use claim
-            token_use = claims.get('token_use')
-            if token_use != 'access':  # nosec B105 - OAuth2 token type validation per RFC 6749
+            token_use = claims.get("token_use")
+            if token_use != "access":  # nosec B105 - OAuth2 token type validation per RFC 6749
                 raise ValueError(f"Invalid token_use: {token_use}")
 
             # Extract scopes from claims
             scopes = []
-            if 'scope' in claims:
-                scope_value = claims['scope']
+            if "scope" in claims:
+                scope_value = claims["scope"]
                 if isinstance(scope_value, str):
                     scopes = scope_value.split() if scope_value else []
                 elif isinstance(scope_value, list):
                     scopes = scope_value
 
             # Extract groups from claims
-            groups = claims.get('groups', [])
+            groups = claims.get("groups", [])
             if isinstance(groups, str):
                 groups = [groups]
 
@@ -282,16 +274,16 @@ class OktaProvider(AuthProvider):
             )
 
             return {
-                'valid': True,
-                'method': 'self_signed',
-                'data': claims,
-                'client_id': claims.get('client_id', 'user-generated'),
-                'username': claims.get('sub', ''),
-                'email': claims.get('email', ''),
-                'expires_at': claims.get('exp'),
-                'scopes': scopes,
-                'groups': groups,
-                'token_type': 'user_generated',
+                "valid": True,
+                "method": "self_signed",
+                "data": claims,
+                "client_id": claims.get("client_id", "user-generated"),
+                "username": claims.get("sub", ""),
+                "email": claims.get("email", ""),
+                "expires_at": claims.get("exp"),
+                "scopes": scopes,
+                "groups": groups,
+                "token_type": "user_generated",
             }
 
         except jwt.ExpiredSignatureError:
@@ -320,8 +312,7 @@ class OktaProvider(AuthProvider):
         current_time = time.time()
 
         # Check if cache is still valid
-        if (self._jwks_cache and
-                (current_time - self._jwks_cache_time) < self._jwks_cache_ttl):
+        if self._jwks_cache and (current_time - self._jwks_cache_time) < self._jwks_cache_ttl:
             logger.debug("Using cached JWKS")
             return self._jwks_cache
 
@@ -376,15 +367,15 @@ class OktaProvider(AuthProvider):
         try:
             logger.debug("Exchanging authorization code for token")
             data = {
-                'grant_type': 'authorization_code',
-                'code': code,
-                'client_id': self.client_id,
-                'client_secret': self.client_secret,
-                'redirect_uri': redirect_uri,
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "redirect_uri": redirect_uri,
             }
             headers = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'application/json',
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
             }
             response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
             response.raise_for_status()
@@ -409,7 +400,7 @@ class OktaProvider(AuthProvider):
         """
         try:
             logger.debug("Fetching user info from Okta")
-            headers = {'Authorization': f'Bearer {access_token}'}
+            headers = {"Authorization": f"Bearer {access_token}"}
             response = requests.get(self.userinfo_url, headers=headers, timeout=10)
             response.raise_for_status()
             user_info = response.json()
@@ -432,11 +423,11 @@ class OktaProvider(AuthProvider):
         """
         logger.debug(f"Generating auth URL with redirect_uri: {redirect_uri}")
         params = {
-            'client_id': self.client_id,
-            'response_type': 'code',
-            'scope': scope or 'openid email profile groups',
-            'redirect_uri': redirect_uri,
-            'state': state,
+            "client_id": self.client_id,
+            "response_type": "code",
+            "scope": scope or "openid email profile groups",
+            "redirect_uri": redirect_uri,
+            "state": state,
         }
         auth_url = f"{self.auth_url}?{urlencode(params)}"
         logger.debug(f"Generated auth URL: {auth_url}")
@@ -454,8 +445,8 @@ class OktaProvider(AuthProvider):
         logger.debug(f"Generating logout URL with redirect_uri: {redirect_uri}")
 
         params = {
-            'client_id': self.client_id,
-            'post_logout_redirect_uri': redirect_uri,
+            "client_id": self.client_id,
+            "post_logout_redirect_uri": redirect_uri,
         }
 
         logout_url = f"{self.logout_url}?{urlencode(params)}"
@@ -479,15 +470,15 @@ class OktaProvider(AuthProvider):
             logger.debug("Refreshing access token")
 
             data = {
-                'grant_type': 'refresh_token',
-                'refresh_token': refresh_token,
-                'client_id': self.client_id,
-                'client_secret': self.client_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
             }
 
             headers = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'application/json',
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
             }
 
             response = requests.post(
@@ -546,14 +537,14 @@ class OktaProvider(AuthProvider):
         try:
             logger.debug("Requesting M2M token using client credentials")
             data = {
-                'grant_type': 'client_credentials',
-                'client_id': client_id or self.m2m_client_id,
-                'client_secret': client_secret or self.m2m_client_secret,
-                'scope': scope or 'openid',
+                "grant_type": "client_credentials",
+                "client_id": client_id or self.m2m_client_id,
+                "client_secret": client_secret or self.m2m_client_secret,
+                "scope": scope or "openid",
             }
             headers = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'application/json',
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
             }
             response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
             response.raise_for_status()
@@ -571,15 +562,15 @@ class OktaProvider(AuthProvider):
             Dictionary containing provider configuration and endpoints
         """
         return {
-            'provider_type': 'okta',
-            'okta_domain': self.okta_domain,
-            'client_id': self.client_id,
-            'endpoints': {
-                'auth': self.auth_url,
-                'token': self.token_url,
-                'userinfo': self.userinfo_url,
-                'jwks': self.jwks_url,
-                'logout': self.logout_url,
+            "provider_type": "okta",
+            "okta_domain": self.okta_domain,
+            "client_id": self.client_id,
+            "endpoints": {
+                "auth": self.auth_url,
+                "token": self.token_url,
+                "userinfo": self.userinfo_url,
+                "jwks": self.jwks_url,
+                "logout": self.logout_url,
             },
-            'issuer': self.issuer,
+            "issuer": self.issuer,
         }

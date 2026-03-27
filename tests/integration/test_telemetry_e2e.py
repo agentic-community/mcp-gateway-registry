@@ -203,9 +203,19 @@ class TestDefaultState:
             payload = await _build_startup_payload()
 
         required_fields = {
-            "event", "v", "py", "os", "arch",
-            "mode", "registry_mode", "storage", "auth", "federation",
-            "search_queries_total", "ts",
+            "event",
+            "schema_version",
+            "v",
+            "py",
+            "os",
+            "arch",
+            "mode",
+            "registry_mode",
+            "storage",
+            "auth",
+            "federation",
+            "search_queries_total",
+            "ts",
         }
         assert required_fields.issubset(payload.keys())
         assert payload["event"] == "startup"
@@ -263,10 +273,18 @@ class TestOptIn:
             payload = await _build_heartbeat_payload()
 
         required_fields = {
-            "event", "v",
-            "servers_count", "agents_count", "skills_count", "peers_count",
-            "search_backend", "embeddings_provider", "uptime_hours",
-            "search_queries_total", "ts",
+            "event",
+            "schema_version",
+            "v",
+            "servers_count",
+            "agents_count",
+            "skills_count",
+            "peers_count",
+            "search_backend",
+            "embeddings_provider",
+            "uptime_hours",
+            "search_queries_total",
+            "ts",
         }
         assert required_fields.issubset(payload.keys())
         assert payload["event"] == "heartbeat"
@@ -475,7 +493,9 @@ class TestDebugMode:
             from registry.core.telemetry import _send_telemetry
 
             with caplog.at_level(logging.INFO, logger="registry.core.telemetry"):
-                await _send_telemetry({"event": "heartbeat", "schema_version": "1", "servers_count": 42})
+                await _send_telemetry(
+                    {"event": "heartbeat", "schema_version": "1", "servers_count": 42}
+                )
 
         assert "heartbeat" in caplog.text
         assert "42" in caplog.text
@@ -487,7 +507,10 @@ class TestDebugMode:
 
 
 @pytest.mark.live
-@pytest.mark.skip(reason="Requires live AWS infrastructure — run manually with: pytest -m live --no-cov")
+@pytest.mark.skip(
+    reason="Requires live AWS infrastructure — run manually with: pytest -m live --no-cov"
+)
 class TestLiveCollector:
     """Live tests against the deployed AWS collector. See DEMO-GUIDE.md."""
+
     pass

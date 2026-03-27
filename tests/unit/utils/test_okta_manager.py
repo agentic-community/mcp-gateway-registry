@@ -61,19 +61,43 @@ class TestOktaUserManagement:
         from registry.utils.okta_manager import list_okta_users
 
         page1_users = [
-            {"id": f"u{i}", "profile": {"login": f"u{i}@t.com", "email": f"u{i}@t.com", "firstName": "F", "lastName": "L"}, "status": "ACTIVE", "created": "2026-01-01"}
+            {
+                "id": f"u{i}",
+                "profile": {
+                    "login": f"u{i}@t.com",
+                    "email": f"u{i}@t.com",
+                    "firstName": "F",
+                    "lastName": "L",
+                },
+                "status": "ACTIVE",
+                "created": "2026-01-01",
+            }
             for i in range(3)
         ]
         page2_users = [
-            {"id": "u99", "profile": {"login": "u99@t.com", "email": "u99@t.com", "firstName": "F", "lastName": "L"}, "status": "ACTIVE", "created": "2026-01-01"}
+            {
+                "id": "u99",
+                "profile": {
+                    "login": "u99@t.com",
+                    "email": "u99@t.com",
+                    "firstName": "F",
+                    "lastName": "L",
+                },
+                "status": "ACTIVE",
+                "created": "2026-01-01",
+            }
         ]
 
-        resp1 = _make_response(page1_users, links={"next": {"url": "https://dev-123.okta.com/api/v1/users?after=abc"}})
+        resp1 = _make_response(
+            page1_users, links={"next": {"url": "https://dev-123.okta.com/api/v1/users?after=abc"}}
+        )
         resp2 = _make_response(page2_users)
         groups_resp = _make_response([{"profile": {"name": "users"}}])
 
         mock_client = _make_async_client()
-        mock_client.get = AsyncMock(side_effect=[resp1, resp2, groups_resp, groups_resp, groups_resp, groups_resp])
+        mock_client.get = AsyncMock(
+            side_effect=[resp1, resp2, groups_resp, groups_resp, groups_resp, groups_resp]
+        )
 
         with patch("registry.utils.okta_manager.httpx.AsyncClient", return_value=mock_client):
             result = await list_okta_users(include_groups=True)
@@ -87,8 +111,12 @@ class TestOktaUserManagement:
         from registry.utils.okta_manager import create_okta_human_user
 
         mock_client = _make_async_client()
-        mock_client.post = AsyncMock(return_value=_make_response({"id": "u1", "profile": {"login": "new@t.com"}}))
-        mock_client.get = AsyncMock(return_value=_make_response([{"id": "g1", "profile": {"name": "devs"}}]))
+        mock_client.post = AsyncMock(
+            return_value=_make_response({"id": "u1", "profile": {"login": "new@t.com"}})
+        )
+        mock_client.get = AsyncMock(
+            return_value=_make_response([{"id": "g1", "profile": {"name": "devs"}}])
+        )
         mock_client.put = AsyncMock()
 
         with patch("registry.utils.okta_manager.httpx.AsyncClient", return_value=mock_client):
@@ -121,7 +149,9 @@ class TestOktaUserManagement:
         """HTTP 429 raises ValueError with Retry-After."""
         from registry.utils.okta_manager import _check_rate_limit
 
-        resp = _make_response(None, status_code=429, headers={"Retry-After": "30", "X-Rate-Limit-Remaining": "0"})
+        resp = _make_response(
+            None, status_code=429, headers={"Retry-After": "30", "X-Rate-Limit-Remaining": "0"}
+        )
 
         with pytest.raises(ValueError, match="Retry after 30 seconds"):
             _check_rate_limit(resp)
@@ -143,8 +173,16 @@ class TestOktaGroupManagement:
         from registry.utils.okta_manager import list_okta_groups
 
         api_groups = [
-            {"id": "g1", "profile": {"name": "admins", "description": "Admin group"}, "type": "OKTA_GROUP"},
-            {"id": "g2", "profile": {"name": "users", "description": "User group"}, "type": "OKTA_GROUP"},
+            {
+                "id": "g1",
+                "profile": {"name": "admins", "description": "Admin group"},
+                "type": "OKTA_GROUP",
+            },
+            {
+                "id": "g2",
+                "profile": {"name": "users", "description": "User group"},
+                "type": "OKTA_GROUP",
+            },
         ]
 
         mock_client = _make_async_client()
@@ -167,7 +205,9 @@ class TestOktaGroupManagement:
         from registry.utils.okta_manager import create_okta_group
 
         mock_client = _make_async_client()
-        mock_client.post = AsyncMock(return_value=_make_response({"id": "g-new", "profile": {"name": "new-group"}}))
+        mock_client.post = AsyncMock(
+            return_value=_make_response({"id": "g-new", "profile": {"name": "new-group"}})
+        )
 
         with patch("registry.utils.okta_manager.httpx.AsyncClient", return_value=mock_client):
             result = await create_okta_group("new-group", "A new group")
@@ -182,7 +222,9 @@ class TestOktaGroupManagement:
         from registry.utils.okta_manager import delete_okta_group
 
         mock_client = _make_async_client()
-        mock_client.get = AsyncMock(return_value=_make_response([{"id": "g1", "profile": {"name": "target"}}]))
+        mock_client.get = AsyncMock(
+            return_value=_make_response([{"id": "g1", "profile": {"name": "target"}}])
+        )
         mock_client.delete = AsyncMock(return_value=_make_response(None))
 
         with patch("registry.utils.okta_manager.httpx.AsyncClient", return_value=mock_client):

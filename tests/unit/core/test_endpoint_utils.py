@@ -383,7 +383,10 @@ class TestProductionUrlPatterns:
         assert get_endpoint_url("http://mcpgw-server:8003/") == "http://mcpgw-server:8003/mcp"
 
         # Pattern 3
-        assert get_endpoint_url("https://docs.mcp.cloudflare.com/mcp") == "https://docs.mcp.cloudflare.com/mcp"
+        assert (
+            get_endpoint_url("https://docs.mcp.cloudflare.com/mcp")
+            == "https://docs.mcp.cloudflare.com/mcp"
+        )
 
         # Only Pattern 4 has different behavior (this is the fix)
         assert get_endpoint_url("https://hydrata.com/mcp/") == "https://hydrata.com/mcp/"

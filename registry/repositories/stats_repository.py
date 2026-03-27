@@ -10,6 +10,7 @@ MongoDB storage uses the mcp_stats_{namespace} collection.
 File-based storage uses {data_dir}/.stats.json.
 """
 
+import fcntl
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -63,13 +64,15 @@ async def _increment_mongodb() -> None:
     # Ensure document exists
     await collection.update_one(
         {"_id": "counters"},
-        {"$setOnInsert": {
-            "hourly": {"semantic_search_ctr": 0},
-            "daily": {"semantic_search_ctr": 0},
-            "forever": {"semantic_search_ctr": 0},
-            "hourly_reset_at": now,
-            "daily_reset_at": now,
-        }},
+        {
+            "$setOnInsert": {
+                "hourly": {"semantic_search_ctr": 0},
+                "daily": {"semantic_search_ctr": 0},
+                "forever": {"semantic_search_ctr": 0},
+                "hourly_reset_at": now,
+                "daily_reset_at": now,
+            }
+        },
         upsert=True,
     )
 
@@ -100,11 +103,13 @@ async def _increment_mongodb() -> None:
     # Atomic increment on all three windows
     await collection.update_one(
         {"_id": "counters"},
-        {"$inc": {
-            "hourly.semantic_search_ctr": 1,
-            "daily.semantic_search_ctr": 1,
-            "forever.semantic_search_ctr": 1,
-        }},
+        {
+            "$inc": {
+                "hourly.semantic_search_ctr": 1,
+                "daily.semantic_search_ctr": 1,
+                "forever.semantic_search_ctr": 1,
+            }
+        },
     )
 
 
@@ -149,39 +154,60 @@ def _write_file_stats(stats: dict) -> None:
 
 
 def _increment_file() -> None:
-    """Increment counter in file-based storage with staleness reset."""
-    stats = _read_file_stats()
-    now = datetime.now(UTC)
+    """Increment counter in file-based storage with staleness reset.
 
-    # Check hourly staleness
-    hourly_reset = stats.get("hourly_reset_at", "")
-    if hourly_reset:
+    Uses file locking (fcntl.flock) to prevent lost updates from
+    concurrent processes.
+    """
+    stats_file = _get_stats_file()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Open file for read+write, create if missing
+    with open(stats_file, "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
         try:
-            reset_time = datetime.fromisoformat(hourly_reset.replace("Z", "+00:00"))
-            if (now - reset_time) > timedelta(hours=1):
-                stats["hourly"] = {"semantic_search_ctr": 0}
-                stats["hourly_reset_at"] = now.isoformat()
-        except (ValueError, TypeError):
-            stats["hourly_reset_at"] = now.isoformat()
+            f.seek(0)
+            content = f.read()
+            stats = json.loads(content) if content.strip() else _read_file_stats()
 
-    # Check daily staleness
-    daily_reset = stats.get("daily_reset_at", "")
-    if daily_reset:
-        try:
-            reset_time = datetime.fromisoformat(daily_reset.replace("Z", "+00:00"))
-            if (now - reset_time) > timedelta(hours=24):
-                stats["daily"] = {"semantic_search_ctr": 0}
-                stats["daily_reset_at"] = now.isoformat()
-        except (ValueError, TypeError):
-            stats["daily_reset_at"] = now.isoformat()
+            now = datetime.now(UTC)
 
-    # Increment all three
-    for window in ("hourly", "daily", "forever"):
-        if window not in stats:
-            stats[window] = {"semantic_search_ctr": 0}
-        stats[window]["semantic_search_ctr"] = stats[window].get("semantic_search_ctr", 0) + 1
+            # Check hourly staleness
+            hourly_reset = stats.get("hourly_reset_at", "")
+            if hourly_reset:
+                try:
+                    reset_time = datetime.fromisoformat(hourly_reset.replace("Z", "+00:00"))
+                    if (now - reset_time) > timedelta(hours=1):
+                        stats["hourly"] = {"semantic_search_ctr": 0}
+                        stats["hourly_reset_at"] = now.isoformat()
+                except (ValueError, TypeError):
+                    stats["hourly_reset_at"] = now.isoformat()
 
-    _write_file_stats(stats)
+            # Check daily staleness
+            daily_reset = stats.get("daily_reset_at", "")
+            if daily_reset:
+                try:
+                    reset_time = datetime.fromisoformat(daily_reset.replace("Z", "+00:00"))
+                    if (now - reset_time) > timedelta(hours=24):
+                        stats["daily"] = {"semantic_search_ctr": 0}
+                        stats["daily_reset_at"] = now.isoformat()
+                except (ValueError, TypeError):
+                    stats["daily_reset_at"] = now.isoformat()
+
+            # Increment all three
+            for window in ("hourly", "daily", "forever"):
+                if window not in stats:
+                    stats[window] = {"semantic_search_ctr": 0}
+                stats[window]["semantic_search_ctr"] = (
+                    stats[window].get("semantic_search_ctr", 0) + 1
+                )
+
+            # Write back while holding lock
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(stats, default=str))
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def _get_count_file() -> int:

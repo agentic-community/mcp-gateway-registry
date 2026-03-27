@@ -648,9 +648,7 @@ def test_health_service_enabled_status_consistency(health_service):
         "is_enabled": True,
         "num_tools": 5,
     }
-    health_data = health_service._get_service_health_data_fast(
-        service_path, server_info_enabled
-    )
+    health_data = health_service._get_service_health_data_fast(service_path, server_info_enabled)
 
     # Should NOT return "disabled" status for enabled service
     assert health_data["status"] != "disabled"
@@ -662,9 +660,7 @@ def test_health_service_enabled_status_consistency(health_service):
         "is_enabled": False,
         "num_tools": 5,
     }
-    health_data = health_service._get_service_health_data_fast(
-        service_path, server_info_disabled
-    )
+    health_data = health_service._get_service_health_data_fast(service_path, server_info_disabled)
 
     # Should return "disabled" status
     assert health_data["status"] == "disabled"
@@ -674,9 +670,7 @@ def test_health_service_enabled_status_consistency(health_service):
         "server_name": "test-server",
         "num_tools": 5,
     }
-    health_data = health_service._get_service_health_data_fast(
-        service_path, server_info_missing
-    )
+    health_data = health_service._get_service_health_data_fast(service_path, server_info_missing)
 
     # Should default to disabled when is_enabled is missing
     assert health_data["status"] == "disabled"

@@ -3,9 +3,9 @@
 import asyncio
 import logging
 from datetime import (
+    UTC,
     datetime,
     timedelta,
-    timezone,
 )
 
 import httpx
@@ -58,7 +58,7 @@ def _check_circuit_breaker() -> bool:
     global _circuit_open_until
     if _circuit_open_until is None:
         return True
-    if datetime.now(timezone.utc) > _circuit_open_until:
+    if datetime.now(UTC) > _circuit_open_until:
         _circuit_open_until = None
         logger.info("ANS circuit breaker reset -- resuming API calls")
         return True
@@ -70,9 +70,7 @@ def _record_failure() -> None:
     global _consecutive_failures, _circuit_open_until
     _consecutive_failures += 1
     if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
-        _circuit_open_until = datetime.now(timezone.utc) + timedelta(
-            seconds=CIRCUIT_BREAKER_RESET_SECONDS
-        )
+        _circuit_open_until = datetime.now(UTC) + timedelta(seconds=CIRCUIT_BREAKER_RESET_SECONDS)
         logger.warning(
             f"ANS circuit breaker OPEN after {_consecutive_failures} failures. "
             f"Pausing API calls for {CIRCUIT_BREAKER_RESET_SECONDS} seconds."
@@ -130,7 +128,7 @@ def _extract_metadata(
     Returns:
         Structured ANS metadata
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     status = _determine_status(ans_data)
 
     cert_data = ans_data.get("certificate", {})
@@ -218,9 +216,7 @@ async def _resolve_ans_id(
             for agent in data.get("agents", []):
                 if agent.get("ansName") == ans_agent_id:
                     agent_uuid = agent.get("agentId")
-                    logger.info(
-                        f"Resolved ANS name '{ans_agent_id}' to UUID '{agent_uuid}'"
-                    )
+                    logger.info(f"Resolved ANS name '{ans_agent_id}' to UUID '{agent_uuid}'")
                     return agent_uuid
 
             # Search remaining pages if needed
@@ -238,9 +234,7 @@ async def _resolve_ans_id(
                 for agent in page_data.get("agents", []):
                     if agent.get("ansName") == ans_agent_id:
                         agent_uuid = agent.get("agentId")
-                        logger.info(
-                            f"Resolved ANS name '{ans_agent_id}' to UUID '{agent_uuid}'"
-                        )
+                        logger.info(f"Resolved ANS name '{ans_agent_id}' to UUID '{agent_uuid}'")
                         return agent_uuid
 
                 offset += 100
@@ -305,16 +299,14 @@ async def verify_ans_agent(
         except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
             last_exception = e
             if attempt < MAX_RETRIES - 1:
-                delay = RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                delay = RETRY_BASE_DELAY_SECONDS * (2**attempt)
                 logger.warning(
                     f"ANS API attempt {attempt + 1}/{MAX_RETRIES} failed for "
                     f"{ans_agent_id}: {e}. Retrying in {delay}s..."
                 )
                 await asyncio.sleep(delay)
             else:
-                logger.error(
-                    f"ANS API failed after {MAX_RETRIES} attempts for {ans_agent_id}: {e}"
-                )
+                logger.error(f"ANS API failed after {MAX_RETRIES} attempts for {ans_agent_id}: {e}")
 
     _record_failure()
     raise last_exception

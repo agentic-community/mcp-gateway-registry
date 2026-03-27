@@ -427,9 +427,7 @@ async def get_statistics(
                 {"$match": base_match},
                 {
                     "$group": {
-                        "_id": {
-                            "$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}
-                        },
+                        "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}},
                         "count": {"$sum": 1},
                     }
                 },
@@ -455,9 +453,7 @@ async def get_statistics(
                     "$group": {
                         "_id": "$_id.user",
                         "total": {"$sum": "$count"},
-                        "operations": {
-                            "$push": {"name": "$_id.op", "count": "$count"}
-                        },
+                        "operations": {"$push": {"name": "$_id.op", "count": "$count"}},
                     }
                 },
                 {"$sort": {"total": -1}},
@@ -513,9 +509,7 @@ async def get_statistics(
         if r.get("_id")
     ]
 
-    activity_timeline = [
-        TimeSeriesBucket(period=r["_id"], count=r["count"]) for r in timeline_raw
-    ]
+    activity_timeline = [TimeSeriesBucket(period=r["_id"], count=r["count"]) for r in timeline_raw]
 
     status_dist = StatusDistribution()
     if stream == "mcp_access":
@@ -542,7 +536,9 @@ async def get_statistics(
             continue
         ops = []
         for op in (r.get("operations") or [])[:5]:
-            op_name = op.get("name") or op.get("_id", {}).get("op") if isinstance(op, dict) else None
+            op_name = (
+                op.get("name") or op.get("_id", {}).get("op") if isinstance(op, dict) else None
+            )
             op_count = op.get("count", 0) if isinstance(op, dict) else 0
             if op_name:
                 ops.append(UsageSummaryItem(name=str(op_name), count=op_count))
@@ -555,9 +551,7 @@ async def get_statistics(
         )
 
     elapsed = time.time() - start_time
-    logger.info(
-        f"Audit statistics computed in {elapsed:.2f}s (stream={stream}, days={days})"
-    )
+    logger.info(f"Audit statistics computed in {elapsed:.2f}s (stream={stream}, days={days})")
 
     return AuditStatisticsResponse(
         total_events=total_events,
