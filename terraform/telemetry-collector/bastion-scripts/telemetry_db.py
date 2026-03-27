@@ -25,6 +25,12 @@ import os
 import subprocess
 import sys
 import time
+from typing import (
+    Dict,
+    List,
+    Optional,
+    Tuple,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,7 +125,7 @@ ALL_COLUMNS = [
 # ---------------------------------------------------------------------------
 
 
-def _load_bastion_env() -> dict[str, str]:
+def _load_bastion_env() -> Dict[str, str]:
     """Load connection variables from ~/bastion.env.
 
     Returns:
@@ -153,7 +159,7 @@ def _load_bastion_env() -> dict[str, str]:
 def _get_credentials(
     secret_arn: str,
     aws_region: str,
-) -> dict[str, str]:
+) -> Dict[str, str]:
     """Fetch DocumentDB credentials from AWS Secrets Manager.
 
     Args:
@@ -207,7 +213,7 @@ def _run_mongosh(
     database: str,
     eval_script: str,
     timeout: int = 120,
-) -> str | None:
+) -> Optional[str]:
     """Run a mongosh eval command and return stdout.
 
     Args:
@@ -288,7 +294,7 @@ def _fetch_documents(
     password: str,
     database: str,
     collection: str,
-) -> list[dict]:
+) -> List[dict]:
     """Fetch all documents from a DocumentDB collection.
 
     Args:
@@ -362,8 +368,8 @@ def _delete_documents(
 
 
 def _write_csv(
-    documents: list[dict],
-    columns: list[str],
+    documents: List[dict],
+    columns: List[str],
     output_path: str,
 ) -> int:
     """Write documents to a CSV file.
@@ -394,7 +400,7 @@ def _write_csv(
 
 def _resolve_collections(
     collection_arg: str,
-) -> list[str]:
+) -> List[str]:
     """Resolve the --collection argument to a list of collection names.
 
     Args:
@@ -408,7 +414,7 @@ def _resolve_collections(
     return [collection_arg]
 
 
-def _connect(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, str]]:
+def _connect(args: argparse.Namespace) -> Tuple[Dict[str, str], Dict[str, str]]:
     """Load bastion env and fetch credentials.
 
     Args:
