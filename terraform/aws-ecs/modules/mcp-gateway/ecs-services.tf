@@ -761,6 +761,19 @@ module "ecs_service_registry" {
           name  = "MAX_TOKENS_PER_USER_PER_HOUR"
           value = tostring(var.max_tokens_per_user_per_hour)
         },
+        # Telemetry configuration
+        {
+          name  = "MCP_TELEMETRY_DISABLED"
+          value = var.mcp_telemetry_disabled
+        },
+        {
+          name  = "MCP_TELEMETRY_OPT_IN"
+          value = var.mcp_telemetry_opt_in
+        },
+        {
+          name  = "TELEMETRY_DEBUG"
+          value = var.telemetry_debug
+        },
         # Metrics pipeline (only wired when observability is enabled)
         {
           name  = "METRICS_SERVICE_URL"

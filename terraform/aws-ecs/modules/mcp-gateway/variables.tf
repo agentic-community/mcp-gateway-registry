@@ -781,3 +781,22 @@ variable "otel_exporter_otlp_metrics_temporality_preference" {
   type        = string
   default     = "cumulative"
 }
+
+# Telemetry configuration
+variable "mcp_telemetry_disabled" {
+  description = "Disable anonymous startup telemetry. Set to '1' to opt out."
+  type        = string
+  default     = ""
+}
+
+variable "mcp_telemetry_opt_in" {
+  description = "Enable opt-in daily heartbeat telemetry. Set to '1' to enable."
+  type        = string
+  default     = ""
+}
+
+variable "telemetry_debug" {
+  description = "Enable telemetry debug mode (logs payload instead of sending). Set to 'true' to enable."
+  type        = string
+  default     = "false"
+}

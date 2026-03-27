@@ -523,3 +523,27 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # otel_otlp_endpoint           = ""
 # otel_exporter_otlp_headers   = ""
 # otel_exporter_otlp_metrics_temporality_preference = "cumulative"
+
+# ============================================================================
+# TELEMETRY CONFIGURATION (Anonymous Usage Telemetry)
+# ============================================================================
+
+# Anonymous startup telemetry is ON by default. It sends a single event at
+# registry startup with version, OS, architecture, cloud provider, compute
+# platform, storage backend, and aggregate search query counts. No PII is
+# collected. All requests are HMAC-signed to prevent endpoint abuse.
+#
+# See docs/TELEMETRY.md for full details on what is collected.
+
+# Disable anonymous startup telemetry entirely
+# Set to "1" to opt out
+# mcp_telemetry_disabled = ""
+
+# Enable daily heartbeat telemetry (opt-in, default OFF)
+# Sends aggregate counts (servers, agents, skills, peers, uptime) once per day
+# Set to "1" to opt in
+# mcp_telemetry_opt_in = ""
+
+# Debug mode: log telemetry payload to stdout instead of sending
+# Useful for verifying what data would be sent
+# telemetry_debug = "false"
