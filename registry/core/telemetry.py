@@ -605,6 +605,65 @@ async def stop_heartbeat_scheduler() -> None:
         _telemetry_scheduler = None
 
 
+async def send_forced_heartbeat() -> dict:
+    """
+    Force-send a heartbeat event immediately, bypassing the 24-hour lock.
+
+    Called from admin API endpoint. Respects telemetry enabled/disabled setting
+    but skips the distributed lock so the event is always sent.
+
+    Returns:
+        Dict with status and optional payload summary.
+    """
+    if not _is_telemetry_enabled():
+        return {"status": "disabled", "message": "Telemetry is disabled"}
+
+    try:
+        payload = await _build_heartbeat_payload()
+        await _send_telemetry(payload)
+        return {
+            "status": "sent",
+            "event": "heartbeat",
+            "servers_count": payload.get("servers_count", 0),
+            "agents_count": payload.get("agents_count", 0),
+            "skills_count": payload.get("skills_count", 0),
+            "peers_count": payload.get("peers_count", 0),
+            "ts": payload.get("ts"),
+        }
+    except Exception as e:
+        logger.error(f"[telemetry] Forced heartbeat failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+async def send_forced_startup() -> dict:
+    """
+    Force-send a startup event immediately, bypassing the 60-second lock.
+
+    Called from admin API endpoint. Respects telemetry enabled/disabled setting
+    but skips the distributed lock so the event is always sent.
+
+    Returns:
+        Dict with status and optional payload summary.
+    """
+    if not _is_telemetry_enabled():
+        return {"status": "disabled", "message": "Telemetry is disabled"}
+
+    try:
+        payload = await _build_startup_payload()
+        await _send_telemetry(payload)
+        return {
+            "status": "sent",
+            "event": "startup",
+            "v": payload.get("v"),
+            "storage": payload.get("storage"),
+            "mode": payload.get("mode"),
+            "ts": payload.get("ts"),
+        }
+    except Exception as e:
+        logger.error(f"[telemetry] Forced startup ping failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 class TelemetryScheduler:
     """
     Background scheduler for daily heartbeat telemetry.

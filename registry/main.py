@@ -31,6 +31,7 @@ from registry.api.federation_routes import router as federation_router
 from registry.api.internal_routes import router as internal_router
 from registry.api.management_routes import router as management_router
 from registry.api.peer_management_routes import router as peer_management_router
+from registry.api.registry_management_routes import router as registry_management_router
 from registry.api.registry_routes import router as registry_router
 from registry.api.search_routes import router as search_router
 from registry.api.server_routes import router as servers_router
@@ -632,6 +633,7 @@ app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring
 app.include_router(federation_export_router)
 app.include_router(peer_management_router)
 app.include_router(audit_router, prefix="/api", tags=["Audit Logs"])
+app.include_router(registry_management_router, prefix="/api")
 
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])

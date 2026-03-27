@@ -3943,6 +3943,52 @@ class RegistryClient:
         return result
 
 
+    def force_heartbeat(self) -> dict[str, Any]:
+        """Force an immediate heartbeat telemetry event (admin only).
+
+        Bypasses the 24-hour lock and sends a heartbeat event immediately.
+
+        Returns:
+            Dict with status and payload summary.
+
+        Raises:
+            requests.HTTPError: If not authorized (403) or telemetry disabled (409)
+        """
+        logger.info("Forcing heartbeat telemetry event")
+
+        response = self._make_request(
+            method="POST",
+            endpoint="/api/registry-management/telemetry/heartbeat",
+        )
+
+        result = response.json()
+        logger.info(f"Heartbeat result: {result.get('status')}")
+        return result
+
+
+    def force_startup_ping(self) -> dict[str, Any]:
+        """Force an immediate startup telemetry event (admin only).
+
+        Bypasses the 60-second lock and sends a startup ping immediately.
+
+        Returns:
+            Dict with status and payload summary.
+
+        Raises:
+            requests.HTTPError: If not authorized (403) or telemetry disabled (409)
+        """
+        logger.info("Forcing startup telemetry event")
+
+        response = self._make_request(
+            method="POST",
+            endpoint="/api/registry-management/telemetry/startup",
+        )
+
+        result = response.json()
+        logger.info(f"Startup ping result: {result.get('status')}")
+        return result
+
+
 def _format_tool_result(
     tool: ToolSearchResult,
 ) -> dict[str, Any]:

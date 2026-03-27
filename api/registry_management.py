@@ -4143,6 +4143,62 @@ def cmd_registry_card_update(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_telemetry_heartbeat(args: argparse.Namespace) -> int:
+    """Force an immediate heartbeat telemetry event.
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        result = client.force_heartbeat()
+
+        print(json.dumps(result, indent=2))
+
+        if result.get("status") == "sent":
+            logger.info("Heartbeat sent successfully")
+            return 0
+        else:
+            logger.warning(f"Heartbeat status: {result.get('status')}")
+            return 1
+
+    except Exception as e:
+        logger.error(f"Force heartbeat failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_telemetry_startup(args: argparse.Namespace) -> int:
+    """Force an immediate startup telemetry event.
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        result = client.force_startup_ping()
+
+        print(json.dumps(result, indent=2))
+
+        if result.get("status") == "sent":
+            logger.info("Startup ping sent successfully")
+            return 0
+        else:
+            logger.warning(f"Startup ping status: {result.get('status')}")
+            return 1
+
+    except Exception as e:
+        logger.error(f"Force startup ping failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     """
     Main entry point for the CLI.
@@ -5041,6 +5097,16 @@ Examples:
     registry_card_update_parser.add_argument("--contact-email", help="Contact email address")
     registry_card_update_parser.add_argument("--contact-url", help="Contact URL")
 
+    # Telemetry management commands
+    subparsers.add_parser(
+        "telemetry-heartbeat",
+        help="Force an immediate heartbeat telemetry event (admin only)",
+    )
+    subparsers.add_parser(
+        "telemetry-startup",
+        help="Force an immediate startup telemetry event (admin only)",
+    )
+
     args = parser.parse_args()
 
     # Enable debug logging if requested
@@ -5148,6 +5214,9 @@ Examples:
         "registry-card-get": cmd_registry_card_get,
         "registry-card-discover": cmd_registry_card_discover,
         "registry-card-update": cmd_registry_card_update,
+        # Telemetry management commands
+        "telemetry-heartbeat": cmd_telemetry_heartbeat,
+        "telemetry-startup": cmd_telemetry_startup,
     }
 
     handler = command_handlers.get(args.command)
