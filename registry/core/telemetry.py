@@ -10,6 +10,8 @@ Privacy-first design:
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -28,6 +30,12 @@ logger = logging.getLogger(__name__)
 # Telemetry constants
 STARTUP_LOCK_INTERVAL_SECONDS = 60  # Don't send startup ping more than once per minute
 HEARTBEAT_INTERVAL_HOURS = 24  # Send heartbeat once per day
+
+# HMAC signing key for telemetry requests.
+# This is NOT a secret — it's embedded in open-source code. Its purpose is to
+# raise the bar against casual abuse (random curl requests) by requiring
+# callers to compute a valid HMAC signature over the request body.
+TELEMETRY_SIGNING_KEY = "mcp-registry-telemetry-v1-a7f3b9c2e1d4"
 HEARTBEAT_LOCK_INTERVAL_SECONDS = HEARTBEAT_INTERVAL_HOURS * 3600
 TELEMETRY_TIMEOUT_SECONDS = 5  # HTTP request timeout
 
@@ -98,6 +106,22 @@ def _detect_compute_platform() -> str:
         pass
 
     return "unknown"
+
+
+def _compute_signature(body: bytes) -> str:
+    """Compute HMAC-SHA256 signature for a telemetry request body.
+
+    Args:
+        body: The JSON-encoded request body as bytes.
+
+    Returns:
+        Hex-encoded HMAC-SHA256 signature string.
+    """
+    return hmac.new(
+        TELEMETRY_SIGNING_KEY.encode(),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
 
 
 async def _get_registry_id() -> str | None:
@@ -387,6 +411,10 @@ async def _send_telemetry(payload: dict) -> None:
         logger.info(f"[telemetry] Debug mode - payload:\n{json.dumps(payload, indent=2)}")
         return
 
+    # Serialize payload and compute HMAC signature
+    body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    signature = _compute_signature(body)
+
     # Send telemetry with retry logic
     max_retries = 1  # Single retry
     retry_delay = 1.0  # 1 second delay
@@ -396,8 +424,11 @@ async def _send_telemetry(payload: dict) -> None:
             async with httpx.AsyncClient(timeout=TELEMETRY_TIMEOUT_SECONDS) as client:
                 response = await client.post(
                     settings.telemetry_endpoint,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Telemetry-Signature": signature,
+                    },
                 )
 
                 if response.status_code in (200, 204):

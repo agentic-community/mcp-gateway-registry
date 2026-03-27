@@ -12,6 +12,7 @@ Architecture:
 """
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -27,6 +28,11 @@ from schemas import HeartbeatEvent, StartupEvent
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# HMAC signing key — must match the key in registry/core/telemetry.py.
+# This is NOT a secret. It prevents casual abuse (random curl requests)
+# by requiring callers to compute a valid HMAC over the request body.
+TELEMETRY_SIGNING_KEY = "mcp-registry-telemetry-v1-a7f3b9c2e1d4"
 
 # AWS clients (lazy-init for testability without credentials)
 dynamodb = None
@@ -103,6 +109,28 @@ def _get_database():
     logger.info("Connected to DocumentDB")
 
     return _mongo_database
+
+
+def _verify_signature(body: str, signature: str) -> bool:
+    """Verify HMAC-SHA256 signature of the request body.
+
+    Args:
+        body: The raw request body string.
+        signature: The hex-encoded HMAC signature from the header.
+
+    Returns:
+        True if the signature is valid, False otherwise.
+    """
+    if not signature:
+        return False
+
+    expected = hmac.new(
+        TELEMETRY_SIGNING_KEY.encode(),
+        body.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(expected, signature)
 
 
 def _hash_ip(ip: str) -> str:
@@ -192,6 +220,14 @@ def lambda_handler(event: dict, context: dict) -> dict:
         # Rate limit by hashed IP
         source_ip = event.get("requestContext", {}).get("http", {}).get("sourceIp", "unknown")
         if not _check_rate_limit(_hash_ip(source_ip)):
+            return {"statusCode": 204}
+
+        # Verify HMAC signature (reject unsigned or forged requests)
+        headers = event.get("headers", {})
+        signature = headers.get("x-telemetry-signature", "")
+        raw_body = event.get("body", "")
+        if not _verify_signature(raw_body, signature):
+            logger.warning(f"Invalid or missing signature from {_hash_ip(source_ip)[:8]}...")
             return {"statusCode": 204}
 
         # Parse body
