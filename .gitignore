@@ -422,3 +422,4 @@ verify-telemetry-test.sh
 watch-collector-logs.sh
 NEXT-STEPS-TELEMETRY.md
 .env.telemetry-test
+registry_metrics.csv
