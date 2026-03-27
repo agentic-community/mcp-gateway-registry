@@ -10,30 +10,44 @@ The MCP Gateway Registry collects anonymous usage telemetry to understand adopti
 
 Sent once at startup:
 
-- **Version**: Registry version (e.g., "1.0.16")
-- **Python Version**: Python runtime (e.g., "3.12")
-- **OS**: Operating system (linux, darwin, windows)
-- **Architecture**: CPU architecture (x86_64, arm64, aarch64)
-- **Deployment Mode**: with-gateway or registry-only
-- **Registry Mode**: full, skills-only, mcp-servers-only, agents-only
-- **Storage Backend**: file, documentdb, mongodb-ce
-- **Auth Provider**: cognito, keycloak, entra, github, google
-- **Federation**: Whether federation is enabled (true/false)
-- **Timestamp**: Event timestamp
+| Field | Example | Description |
+|-------|---------|-------------|
+| `registry_id` | `c546a650-...` | Registry Card UUID (public, not PII) |
+| `v` | `1.0.16` | Registry version |
+| `py` | `3.12` | Python version (major.minor) |
+| `os` | `linux` | Operating system (linux, darwin, windows) |
+| `arch` | `x86_64` | CPU architecture |
+| `cloud` | `aws` | Cloud provider (aws, gcp, azure, unknown) |
+| `compute` | `ecs` | Compute platform (ecs, eks, kubernetes, docker, ec2, unknown) |
+| `mode` | `with-gateway` | Deployment mode |
+| `registry_mode` | `full` | Registry operating mode |
+| `storage` | `documentdb` | Storage backend (file, documentdb, mongodb-ce) |
+| `auth` | `keycloak` | Auth provider |
+| `federation` | `true` | Whether federation is enabled |
+| `search_queries_total` | `150` | Lifetime semantic search query count |
+| `search_queries_24h` | `12` | Search queries in the last 24 hours |
+| `search_queries_1h` | `3` | Search queries in the last hour |
+| `ts` | `2026-03-18T00:00:00Z` | ISO 8601 timestamp |
 
 ### Tier 2: Daily Heartbeat (Opt-In, Default OFF)
 
-Sent daily when explicitly enabled:
+Sent daily when explicitly enabled. Includes all Tier 1 fields plus:
 
-- **Version**: Registry version
-- **Server Count**: Number of registered MCP servers
-- **Agent Count**: Number of registered A2A agents
-- **Skill Count**: Number of registered skills
-- **Peer Count**: Number of federation peers
-- **Search Backend**: faiss or documentdb
-- **Embeddings Provider**: sentence-transformers, litellm, or bedrock
-- **Uptime**: Hours since server started
-- **Timestamp**: Event timestamp
+| Field | Example | Description |
+|-------|---------|-------------|
+| `servers_count` | `15` | Number of registered MCP servers |
+| `agents_count` | `8` | Number of registered A2A agents |
+| `skills_count` | `23` | Number of registered skills |
+| `peers_count` | `2` | Number of federation peers |
+| `search_backend` | `documentdb` | Search backend (faiss or documentdb) |
+| `embeddings_provider` | `sentence-transformers` | Embeddings provider |
+| `uptime_hours` | `48` | Hours since server started |
+
+## Request Signing (HMAC)
+
+All telemetry requests are signed with HMAC-SHA256 to prevent unauthorized use of the collector endpoint. The registry computes a signature over the JSON request body and sends it in the `X-Telemetry-Signature` HTTP header. The server-side Lambda collector verifies this signature before processing any event.
+
+This is not a secret-based authentication mechanism -- the signing key is embedded in the open-source code. Its purpose is to raise the bar against casual abuse (e.g., random `curl` requests to the endpoint). Combined with IP-based rate limiting and strict Pydantic schema validation, this makes endpoint abuse impractical.
 
 ## What is NOT Collected
 
@@ -53,6 +67,7 @@ When telemetry is enabled (the default), you will see this banner at startup:
 ==============================================================================
 [telemetry] Anonymous usage telemetry is ON
 [telemetry] No PII is collected (no IPs, hostnames, or user data)
+[telemetry] Endpoint: https://m3ijrhd020.execute-api.us-east-1.amazonaws.com/v1/collect
 [telemetry] To disable: set MCP_TELEMETRY_DISABLED=1
 [telemetry] Details: https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/TELEMETRY.md
 ==============================================================================
@@ -190,11 +205,14 @@ See `terraform/telemetry-collector/README.md` for detailed cost breakdown.
 
 ### Security Features
 
-- ✅ **No IP Logging**: Source IPs are hashed (SHA-256) for rate limiting only
-- ✅ **VPC Isolated**: DocumentDB not accessible from internet
-- ✅ **TLS Everywhere**: All connections encrypted
-- ✅ **Always Returns 204**: No information leakage
-- ✅ **IAM Least Privilege**: Minimal Lambda permissions
+- **No IP Logging**: Source IPs are hashed (SHA-256) for rate limiting only
+- **HMAC Signed**: Requests signed with HMAC-SHA256 to reject unauthorized callers
+- **Rate Limited**: DynamoDB-based per-IP rate limiting (10 requests/minute)
+- **Schema Validated**: Strict Pydantic validation rejects malformed payloads
+- **VPC Isolated**: DocumentDB not accessible from internet
+- **TLS Everywhere**: All connections encrypted
+- **Always Returns 204**: No information leakage (same response for valid, invalid, or rejected)
+- **IAM Least Privilege**: Minimal Lambda permissions
 
 ### Querying Your Data
 
