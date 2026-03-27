@@ -192,6 +192,15 @@ services:
       - OTEL_OTLP_ENDPOINT=${OTEL_OTLP_ENDPOINT:-}
       - OTEL_OTLP_EXPORT_INTERVAL_MS=${OTEL_OTLP_EXPORT_INTERVAL_MS:-30000}
       - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE:-cumulative}
+      # Telemetry Configuration
+      # Opt-out:  set MCP_TELEMETRY_DISABLED=1  to disable all telemetry
+      # Opt-in:   set MCP_TELEMETRY_OPT_IN=1    for daily heartbeat with aggregate counts
+      # Endpoint: set TELEMETRY_ENDPOINT=<url>   to use a self-hosted collector
+      # Debug:    set TELEMETRY_DEBUG=true        to log payloads without sending
+      - MCP_TELEMETRY_DISABLED=${MCP_TELEMETRY_DISABLED:-}
+      - MCP_TELEMETRY_OPT_IN=${MCP_TELEMETRY_OPT_IN:-}
+      - TELEMETRY_ENDPOINT=${TELEMETRY_ENDPOINT:-}
+      - TELEMETRY_DEBUG=${TELEMETRY_DEBUG:-}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
