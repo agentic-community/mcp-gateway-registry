@@ -167,17 +167,23 @@ def _get_credentials(
             check=True,
             timeout=30,
         )
-        secret = json.loads(result.stdout.strip())
+        # Parse secret and extract only needed fields — never log raw output
+        parsed = json.loads(result.stdout.strip())
+        username = parsed["username"]
+        password = parsed["password"]
+        database = parsed.get("database", "telemetry")
+        # Clear raw secret from memory
+        del parsed
         return {
-            "username": secret["username"],
-            "password": secret["password"],
-            "database": secret.get("database", "telemetry"),
+            "username": username,
+            "password": password,
+            "database": database,
         }
     except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to get secret: {e.stderr}")
+        logger.error("Failed to get secret from Secrets Manager (check ARN and permissions)")
         sys.exit(1)
     except (json.JSONDecodeError, KeyError) as e:
-        logger.error(f"Failed to parse secret: {e}")
+        logger.error("Failed to parse secret (unexpected format)")
         sys.exit(1)
 
 
@@ -224,8 +230,8 @@ def _fetch_documents(
             check=True,
             timeout=120,
         )
-    except subprocess.CalledProcessError as e:
-        logger.error(f"mongosh failed for {collection}: {e.stderr}")
+    except subprocess.CalledProcessError:
+        logger.error(f"mongosh failed for {collection} (check connection and credentials)")
         return []
     except subprocess.TimeoutExpired:
         logger.error(f"mongosh timed out for {collection}")
@@ -316,7 +322,7 @@ Examples:
 
     # Get credentials
     creds = _get_credentials(env["SECRET_ARN"], env["AWS_REGION"])
-    logger.info(f"Database: {creds['database']}, User: {creds['username']}")
+    logger.info(f"Database: {creds['database']}, User: {creds['username'][:3]}***")
 
     start_time = time.time()
     all_documents = []
