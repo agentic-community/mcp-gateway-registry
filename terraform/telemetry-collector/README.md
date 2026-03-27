@@ -513,16 +513,39 @@ deployment_stage = "production"
 
 ### Update Lambda Function Code
 
+When you change files in `lambda/collector/`, you must rebuild the zip, run terraform
+apply, AND force Lambda to pick up the new code. Terraform may not detect zip content
+changes if the file path and size are similar.
+
 ```bash
-# Make code changes in lambda/collector/
-# Rebuild the zip package (see Step 2 above)
-terraform apply
+cd terraform/telemetry-collector
+
+# Step 1: Rebuild the zip package (see Step 2 in Deployment above)
+cd lambda/collector && pip install -r requirements.txt -t . && cd ../..
+zip -r lambda_function.zip lambda/collector/
+
+# Step 2: Apply terraform (updates infrastructure and zip hash)
+terraform apply -auto-approve
+
+# Step 3: Force Lambda to use the new code
+# Terraform may cache the old zip hash — this ensures the update takes effect
+aws lambda update-function-code \
+  --function-name telemetry-collector \
+  --zip-file fileb://lambda_function.zip \
+  --region $(terraform output -raw aws_region)
+
+# Step 4: Verify the update
+aws logs tail /aws/lambda/telemetry-collector --since 1m --region $(terraform output -raw aws_region)
 ```
+
+**Why Step 3 is needed:** Terraform tracks the zip file by its `filebase64sha256` hash.
+If the hash in the state file matches the new zip (e.g., due to caching), Terraform
+skips the Lambda update. The AWS CLI command forces the code update regardless.
 
 ### Update Infrastructure
 
 ```bash
-# Edit Terraform files
+# Edit Terraform files (.tf)
 terraform apply
 ```
 

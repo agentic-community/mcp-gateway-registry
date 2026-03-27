@@ -45,6 +45,19 @@ We never collect any personally identifiable information (PII):
 - ❌ Query content, agent card content, skill code
 - ❌ Any data that could identify a person or organization
 
+## Startup Banner
+
+When telemetry is enabled (the default), you will see this banner at startup:
+
+```
+==============================================================================
+[telemetry] Anonymous usage telemetry is ON
+[telemetry] No PII is collected (no IPs, hostnames, or user data)
+[telemetry] To disable: set MCP_TELEMETRY_DISABLED=1
+[telemetry] Details: https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/TELEMETRY.md
+==============================================================================
+```
+
 ## How to Opt-Out
 
 ### Method 1: Environment Variable (Recommended)
@@ -216,6 +229,5 @@ See `terraform/telemetry-collector/README.md` for:
 
 For more information or questions about telemetry:
 
-- **Privacy Policy**: https://mcpgateway.io/privacy
-- **GitHub Issue**: https://github.com/agentic-community/mcp-gateway-registry/issues/557
-- **Documentation**: https://mcpgateway.io/telemetry
+- **GitHub Issue**: https://github.com/agentic-community/mcp-gateway-registry/issues/558
+- **Telemetry Source Code**: https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/telemetry.py

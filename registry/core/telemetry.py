@@ -32,6 +32,93 @@ HEARTBEAT_LOCK_INTERVAL_SECONDS = HEARTBEAT_INTERVAL_HOURS * 3600
 TELEMETRY_TIMEOUT_SECONDS = 5  # HTTP request timeout
 
 
+def _detect_cloud_provider() -> str:
+    """Detect the cloud provider where the registry is running.
+
+    Returns:
+        One of: aws, gcp, azure, or unknown
+    """
+    # AWS: check for AWS-specific env vars or DMI data
+    if os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION"):
+        return "aws"
+    try:
+        with open("/sys/devices/virtual/dmi/id/board_asset_tag") as f:
+            if f.read().strip().startswith("i-"):
+                return "aws"
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    # GCP: check for GCP-specific env vars
+    if os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCLOUD_PROJECT"):
+        return "gcp"
+    try:
+        with open("/sys/devices/virtual/dmi/id/product_name") as f:
+            if "Google" in f.read():
+                return "gcp"
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    # Azure: check for Azure-specific env vars
+    if os.getenv("WEBSITE_INSTANCE_ID") or os.getenv("AZURE_CLIENT_ID"):
+        return "azure"
+    try:
+        with open("/sys/devices/virtual/dmi/id/sys_vendor") as f:
+            if "Microsoft" in f.read():
+                return "azure"
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    return "unknown"
+
+
+def _detect_compute_platform() -> str:
+    """Detect the compute platform where the registry is running.
+
+    Returns:
+        One of: ecs, eks, kubernetes, docker, ec2, vm, or unknown
+    """
+    # ECS: AWS sets these env vars in ECS task containers
+    if os.getenv("ECS_CONTAINER_METADATA_URI_V4") or os.getenv("ECS_CONTAINER_METADATA_URI"):
+        return "ecs"
+
+    # EKS / Kubernetes: k8s injects this env var into every pod
+    if os.getenv("KUBERNETES_SERVICE_HOST"):
+        return "kubernetes"
+
+    # Docker (local): /.dockerenv exists in Docker containers
+    if os.path.exists("/.dockerenv"):
+        return "docker"
+
+    # EC2: check for AWS hypervisor UUID
+    try:
+        with open("/sys/devices/virtual/dmi/id/board_asset_tag") as f:
+            if f.read().strip().startswith("i-"):
+                return "ec2"
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    return "unknown"
+
+
+async def _get_registry_id() -> str | None:
+    """Get the registry ID from the registry card.
+
+    Returns:
+        Registry card UUID string, or None if not initialized.
+    """
+    try:
+        from registry.repositories.factory import get_registry_card_repository
+
+        repo = get_registry_card_repository()
+        card = await repo.get()
+        if card and card.id:
+            return str(card.id)
+    except Exception as e:
+        logger.warning(f"[telemetry] Failed to get registry ID: {e}")
+
+    return None
+
+
 def _is_telemetry_enabled() -> bool:
     """Check if telemetry is enabled (respects MCP_TELEMETRY_DISABLED env var)."""
     # Environment variable override takes precedence
@@ -178,14 +265,18 @@ async def _build_startup_payload() -> dict:
     from registry.repositories.stats_repository import get_search_count
 
     search_queries_total = await get_search_count()
+    registry_id = await _get_registry_id()
 
     return {
         "event": "startup",
         "schema_version": "1",
+        "registry_id": registry_id,
         "v": __version__,
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
         "os": platform.system().lower(),  # linux, darwin, windows
         "arch": platform.machine(),  # x86_64, arm64, aarch64
+        "cloud": _detect_cloud_provider(),  # aws, gcp, azure, unknown
+        "compute": _detect_compute_platform(),  # ecs, eks, kubernetes, docker, ec2, unknown
         "mode": settings.deployment_mode.value,  # with-gateway, registry-only
         "registry_mode": settings.registry_mode.value,  # full, skills-only, etc.
         "storage": settings.storage_backend,  # file, documentdb, mongodb-ce
@@ -254,11 +345,15 @@ async def _build_heartbeat_payload() -> dict:
     )
 
     search_queries_total = await get_search_count()
+    registry_id = await _get_registry_id()
 
     return {
         "event": "heartbeat",
         "schema_version": "1",
+        "registry_id": registry_id,
         "v": __version__,
+        "cloud": _detect_cloud_provider(),
+        "compute": _detect_compute_platform(),
         "servers_count": servers_count,
         "agents_count": agents_count,
         "skills_count": skills_count,
@@ -284,13 +379,6 @@ async def _send_telemetry(payload: dict) -> None:
     Args:
         payload: Telemetry event payload (startup or heartbeat)
     """
-    # Add instance ID to payload
-    try:
-        instance_id = await _get_or_create_instance_id()
-        payload["instance_id"] = instance_id
-    except Exception as e:
-        logger.warning(f"Failed to get instance ID: {e}")
-        # Continue without instance ID (collector will still accept it)
 
     # Debug mode: log payload instead of sending
     if settings.telemetry_debug:
@@ -311,7 +399,7 @@ async def _send_telemetry(payload: dict) -> None:
                 )
 
                 if response.status_code in (200, 204):
-                    logger.debug(f"[telemetry] {payload['event']} event sent successfully")
+                    logger.info(f"[telemetry] {payload['event']} event sent successfully")
 
                     # Track success in Datadog
                     from registry.core.metrics import telemetry_sends_total
@@ -334,7 +422,7 @@ async def _send_telemetry(payload: dict) -> None:
                     ).inc()
 
         except httpx.TimeoutException:
-            logger.debug(f"[telemetry] Request timed out (attempt {attempt + 1}/{max_retries + 1})")
+            logger.info(f"[telemetry] Request timed out (attempt {attempt + 1}/{max_retries + 1})")
 
             # Track timeout in Datadog
             from registry.core.metrics import telemetry_sends_total
@@ -344,7 +432,7 @@ async def _send_telemetry(payload: dict) -> None:
             ).inc()
 
         except Exception as e:
-            logger.debug(
+            logger.info(
                 f"[telemetry] Failed to send (attempt {attempt + 1}/{max_retries + 1}): {e}"
             )
 
@@ -427,17 +515,23 @@ async def send_startup_ping() -> None:
         return
 
     # Log conspicuous disclosure
+    logger.info("=" * 78)
+    logger.info("[telemetry] Anonymous usage telemetry is ON")
+    logger.info("[telemetry] No PII is collected (no IPs, hostnames, or user data)")
+    logger.info(f"[telemetry] Endpoint: {settings.telemetry_endpoint}")
+    logger.info("[telemetry] To disable: set MCP_TELEMETRY_DISABLED=1")
     logger.info(
-        "[telemetry] Anonymous usage telemetry is ON. To disable: set MCP_TELEMETRY_DISABLED=1"
+        "[telemetry] Details: https://github.com/agentic-community/"
+        "mcp-gateway-registry/blob/main/docs/TELEMETRY.md"
     )
-    logger.info("[telemetry] Details: https://mcpgateway.io/telemetry")
+    logger.info("=" * 78)
 
     try:
         # Acquire lock (60-second interval)
         lock_acquired = await _acquire_telemetry_lock("startup", STARTUP_LOCK_INTERVAL_SECONDS)
 
         if not lock_acquired:
-            logger.debug("[telemetry] Startup ping already sent recently by another replica")
+            logger.info("[telemetry] Startup ping already sent recently by another replica")
             return
 
         # Build and send payload
@@ -457,7 +551,7 @@ async def start_heartbeat_scheduler() -> None:
     global _telemetry_scheduler
 
     if not _is_opt_in_enabled():
-        logger.debug("[telemetry] Heartbeat scheduler not enabled (opt-in required)")
+        logger.info("[telemetry] Heartbeat scheduler not enabled (opt-in required)")
         return
 
     if _telemetry_scheduler is not None:
@@ -530,7 +624,7 @@ class TelemetryScheduler:
         lock_acquired = await _acquire_telemetry_lock("heartbeat", HEARTBEAT_LOCK_INTERVAL_SECONDS)
 
         if not lock_acquired:
-            logger.debug("[telemetry] Heartbeat already sent recently by another replica")
+            logger.info("[telemetry] Heartbeat already sent recently by another replica")
             return
 
         # Build and send payload

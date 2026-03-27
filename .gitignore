@@ -402,6 +402,15 @@ terraform/telemetry-collector/lambda/collector/pydantic_core/
 terraform/telemetry-collector/lambda/collector/annotated_types/
 terraform/telemetry-collector/lambda/collector/typing_inspection/
 terraform/telemetry-collector/lambda/collector/typing_extensions.py
+terraform/telemetry-collector/lambda/collector/boto3/
+terraform/telemetry-collector/lambda/collector/botocore/
+terraform/telemetry-collector/lambda/collector/dateutil/
+terraform/telemetry-collector/lambda/collector/jmespath/
+terraform/telemetry-collector/lambda/collector/s3transfer/
+terraform/telemetry-collector/lambda/collector/urllib3/
+terraform/telemetry-collector/lambda/collector/bin/
+terraform/telemetry-collector/lambda/collector/six.py
+terraform/telemetry-collector/lambda/collector/*.dist-info/
 terraform/telemetry-collector/lambda/index-setup/*.dist-info/
 terraform/telemetry-collector/lambda/index-setup/bson/
 terraform/telemetry-collector/lambda/index-setup/pymongo/

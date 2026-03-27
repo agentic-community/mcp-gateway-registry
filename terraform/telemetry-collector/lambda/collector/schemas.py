@@ -22,11 +22,21 @@ class StartupEvent(BaseModel):
     """
 
     event: str = Field(..., pattern="^startup$")
-    instance_id: str = Field(..., min_length=36, max_length=36)  # UUID v4
+    registry_id: str | None = Field(default=None, max_length=36, description="Registry card UUID")
     v: str = Field(..., min_length=1, max_length=50, description="Registry version")
     py: str = Field(..., pattern=r"^\d+\.\d+$", description="Python version (major.minor)")
     os: str = Field(..., pattern="^(linux|darwin|windows)$", description="Operating system")
     arch: str = Field(..., min_length=1, max_length=20, description="CPU architecture")
+    cloud: str = Field(
+        default="unknown",
+        pattern="^(aws|gcp|azure|unknown)$",
+        description="Cloud provider",
+    )
+    compute: str = Field(
+        default="unknown",
+        pattern="^(ecs|eks|kubernetes|docker|ec2|vm|unknown)$",
+        description="Compute platform",
+    )
     mode: str = Field(
         ...,
         pattern="^(with-gateway|registry-only)$",
@@ -63,11 +73,13 @@ class StartupEvent(BaseModel):
         json_schema_extra={
             "example": {
                 "event": "startup",
-                "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "registry_id": "c546a650-8af9-4721-9efb-7df221b2a0d9",
                 "v": "1.0.16",
                 "py": "3.12",
                 "os": "linux",
                 "arch": "x86_64",
+                "cloud": "aws",
+                "compute": "ecs",
                 "mode": "with-gateway",
                 "registry_mode": "full",
                 "storage": "documentdb",
@@ -91,8 +103,18 @@ class HeartbeatEvent(BaseModel):
     """
 
     event: str = Field(..., pattern="^heartbeat$")
-    instance_id: str = Field(..., min_length=36, max_length=36)  # UUID v4
+    registry_id: str | None = Field(default=None, max_length=36, description="Registry card UUID")
     v: str = Field(..., min_length=1, max_length=50, description="Registry version")
+    cloud: str = Field(
+        default="unknown",
+        pattern="^(aws|gcp|azure|unknown)$",
+        description="Cloud provider",
+    )
+    compute: str = Field(
+        default="unknown",
+        pattern="^(ecs|eks|kubernetes|docker|ec2|vm|unknown)$",
+        description="Compute platform",
+    )
     servers_count: int = Field(..., ge=0, description="Number of registered MCP servers")
     agents_count: int = Field(..., ge=0, description="Number of registered agents")
     skills_count: int = Field(..., ge=0, description="Number of registered skills")
@@ -129,8 +151,10 @@ class HeartbeatEvent(BaseModel):
         json_schema_extra={
             "example": {
                 "event": "heartbeat",
-                "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "registry_id": "c546a650-8af9-4721-9efb-7df221b2a0d9",
                 "v": "1.0.16",
+                "cloud": "aws",
+                "compute": "ecs",
                 "servers_count": 15,
                 "agents_count": 8,
                 "skills_count": 23,

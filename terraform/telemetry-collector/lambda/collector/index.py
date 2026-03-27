@@ -51,7 +51,7 @@ RATE_LIMIT_MAX_REQUESTS = 10
 
 # Globals for connection pooling (reused across warm Lambda invocations)
 _mongo_client: pymongo.MongoClient | None = None
-_mongo_database: pymongo.database.Database | None = None
+_mongo_database = None  # pymongo Database instance
 _credentials: dict | None = None
 
 
@@ -73,7 +73,7 @@ def _get_credentials() -> dict:
         raise
 
 
-def _get_database() -> pymongo.database.Database:
+def _get_database():
     """Get DocumentDB database client (singleton, reused across invocations)."""
     global _mongo_client, _mongo_database
 
@@ -89,8 +89,9 @@ def _get_database() -> pymongo.database.Database:
         f"mongodb://{username}:{password}@"
         f"{DOCUMENTDB_ENDPOINT}/{db_name}?"
         f"authMechanism=SCRAM-SHA-1&authSource=admin"
-        f"&tls=true&retryWrites=false"
-        f"&connectTimeoutMS=5000&serverSelectionTimeoutMS=5000"
+        f"&tls=true&tlsAllowInvalidCertificates=true&retryWrites=false"
+        f"&directConnection=true"
+        f"&connectTimeoutMS=10000&serverSelectionTimeoutMS=10000"
     )
 
     logger.info(f"Connecting to DocumentDB at {DOCUMENTDB_ENDPOINT}")
@@ -176,7 +177,7 @@ def _store_event(event_type: str, payload: dict) -> None:
 
     result = collection.insert_one(document)
     logger.info(
-        f"Stored {event_type} event: instance_id={payload.get('instance_id', 'unknown')[:8]}... "
+        f"Stored {event_type} event: registry_id={payload.get('registry_id', 'unknown')} "
         f"doc_id={result.inserted_id}"
     )
 

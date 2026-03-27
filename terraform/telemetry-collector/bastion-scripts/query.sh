@@ -26,13 +26,13 @@ mongosh "mongodb://$USERNAME@$DOCDB_ENDPOINT:27017/$DATABASE" \
     print("=== Startup Events ===");
     print("Total:", db.startup_events.countDocuments());
     print("Last 5:");
-    db.startup_events.find({}, {instance_id:1, v:1, os:1, storage:1, ts:1, _id:0})
+    db.startup_events.find({}, {_id:0})
       .sort({_id:-1}).limit(5).forEach(printjson);
 
     print("\n=== Heartbeat Events ===");
     print("Total:", db.heartbeat_events.countDocuments());
     print("Last 5:");
-    db.heartbeat_events.find({}, {instance_id:1, v:1, uptime_hours:1, servers_count:1, ts:1, _id:0})
+    db.heartbeat_events.find({}, {_id:0})
       .sort({_id:-1}).limit(5).forEach(printjson);
 
     print("\n=== Storage Backend Breakdown ===");

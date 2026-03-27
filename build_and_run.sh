@@ -629,7 +629,6 @@ if [[ "$COMPOSE_CMD" == "podman compose" ]]; then
     log "  - Financial Info MCP: http://localhost:8001"
     log "  - Real Server Fake Tools MCP: http://localhost:8002"
     log "  - MCP Gateway MCP: http://localhost:8003"
-    log "  - Atlassian MCP: http://localhost:8005"
 else
     log "Services are available at:"
     log "  - Main interface: http://localhost or https://localhost"
@@ -639,7 +638,6 @@ else
     log "  - Financial Info MCP: http://localhost:8001"
     log "  - Real Server Fake Tools MCP: http://localhost:8002"
     log "  - MCP Gateway MCP: http://localhost:8003"
-    log "  - Atlassian MCP: http://localhost:8005"
 fi
 log ""
 log "To view logs for all services: $COMPOSE_CMD $COMPOSE_FILES logs -f"

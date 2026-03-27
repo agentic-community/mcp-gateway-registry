@@ -1,7 +1,7 @@
 # AWS Lambda dependencies for telemetry collector
 
 # Sync MongoDB driver
-pymongo>=4.6.0
+pymongo>=4.6.0,<4.8.0
 
 # Data validation
 pydantic>=2.5.0
