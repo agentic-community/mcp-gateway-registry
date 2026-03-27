@@ -200,4 +200,5 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-html>=4.1.1",
     "pytest-json-report>=1.5.0",
+    "pytest-xdist>=3.8.0",
 ]

@@ -2008,6 +2008,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-html" },
     { name = "pytest-json-report" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -2087,6 +2088,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-html", specifier = ">=4.1.1" },
     { name = "pytest-json-report", specifier = ">=1.5.0" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
 ]
 
 [[package]]
