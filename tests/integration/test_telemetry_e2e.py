@@ -190,18 +190,25 @@ class TestDefaultState:
         """Startup payload contains all required schema fields."""
         monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
 
-        with patch("registry.core.telemetry.settings", _mock_settings()):
+        with (
+            patch("registry.core.telemetry.settings", _mock_settings()),
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+        ):
             from registry.core.telemetry import _build_startup_payload
 
-            payload = _build_startup_payload()
+            payload = await _build_startup_payload()
 
         required_fields = {
-            "event", "schema_version", "v", "py", "os", "arch",
-            "mode", "registry_mode", "storage", "auth", "federation", "ts",
+            "event", "v", "py", "os", "arch",
+            "mode", "registry_mode", "storage", "auth", "federation",
+            "search_queries_total", "ts",
         }
         assert required_fields.issubset(payload.keys())
         assert payload["event"] == "startup"
-        assert payload["schema_version"] == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -245,19 +252,24 @@ class TestOptIn:
                 "registry.repositories.factory.get_peer_federation_repository",
                 return_value=repo,
             ),
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
         ):
             from registry.core.telemetry import _build_heartbeat_payload
 
             payload = await _build_heartbeat_payload()
 
         required_fields = {
-            "event", "schema_version", "v",
+            "event", "v",
             "servers_count", "agents_count", "skills_count", "peers_count",
-            "search_backend", "embeddings_provider", "uptime_hours", "ts",
+            "search_backend", "embeddings_provider", "uptime_hours",
+            "search_queries_total", "ts",
         }
         assert required_fields.issubset(payload.keys())
         assert payload["event"] == "heartbeat"
-        assert payload["schema_version"] == "1"
         assert isinstance(payload["servers_count"], int)
         assert isinstance(payload["agents_count"], int)
         assert isinstance(payload["uptime_hours"], int)
@@ -275,6 +287,11 @@ class TestOptIn:
             patch(
                 "registry.repositories.factory.get_peer_federation_repository",
                 return_value=repo,
+            ),
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
             ),
         ):
             from registry.core.telemetry import _build_heartbeat_payload
@@ -299,6 +316,11 @@ class TestOptIn:
             patch(
                 "registry.repositories.factory.get_peer_federation_repository",
                 return_value=repo,
+            ),
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
             ),
         ):
             from registry.core.telemetry import _build_heartbeat_payload
@@ -341,6 +363,11 @@ class TestOptIn:
                 "registry.repositories.factory.get_peer_federation_repository",
                 return_value=repo,
             ),
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
         ):
             from registry.core.telemetry import (
                 send_startup_ping,
@@ -350,7 +377,7 @@ class TestOptIn:
 
             await send_startup_ping()
             await start_heartbeat_scheduler()
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
             await stop_heartbeat_scheduler()
 
         assert "startup" in events_sent
@@ -390,6 +417,11 @@ class TestOptIn:
             patch(
                 "registry.repositories.factory.get_peer_federation_repository",
                 return_value=repo,
+            ),
+            patch(
+                "registry.repositories.stats_repository.get_search_count",
+                new_callable=AsyncMock,
+                return_value=0,
             ),
         ):
             from registry.core.telemetry import TelemetryScheduler
