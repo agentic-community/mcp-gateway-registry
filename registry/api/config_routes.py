@@ -27,7 +27,7 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 # ---------------------------------------------------------------------------
-# Configuration group definitions — 14 groups, ordered 1-14
+# Configuration group definitions — 15 groups, ordered 1-15
 # Groups may contain optional "subgroups" for nested display (e.g. Identity Providers)
 # Each field tuple: (settings_attr_name, display_label, is_sensitive)
 # ---------------------------------------------------------------------------
@@ -231,6 +231,16 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("otel_otlp_endpoint", "OTLP Endpoint", False),
             ("otel_otlp_export_interval_ms", "Export Interval (ms)", False),
             ("otel_exporter_otlp_metrics_temporality_preference", "Metrics Temporality", False),
+        ],
+    },
+    "telemetry": {
+        "title": "Telemetry",
+        "order": 15,
+        "fields": [
+            ("telemetry_enabled", "Telemetry Enabled", False),
+            ("telemetry_opt_in", "Telemetry Opt-In (Daily Heartbeat)", False),
+            ("telemetry_debug", "Debug Mode", False),
+            ("telemetry_endpoint", "Collector Endpoint", False),
         ],
     },
 }
