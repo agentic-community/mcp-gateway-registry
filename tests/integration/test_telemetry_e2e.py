@@ -193,9 +193,9 @@ class TestDefaultState:
         with (
             patch("registry.core.telemetry.settings", _mock_settings()),
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             from registry.core.telemetry import _build_startup_payload
@@ -263,9 +263,9 @@ class TestOptIn:
                 return_value=repo,
             ),
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             from registry.core.telemetry import _build_heartbeat_payload
@@ -307,9 +307,9 @@ class TestOptIn:
                 return_value=repo,
             ),
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             from registry.core.telemetry import _build_heartbeat_payload
@@ -336,9 +336,9 @@ class TestOptIn:
                 return_value=repo,
             ),
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             from registry.core.telemetry import _build_heartbeat_payload
@@ -382,9 +382,9 @@ class TestOptIn:
                 return_value=repo,
             ),
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             from registry.core.telemetry import (
@@ -437,9 +437,9 @@ class TestOptIn:
                 return_value=repo,
             ),
             patch(
-                "registry.repositories.stats_repository.get_search_count",
+                "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
             from registry.core.telemetry import TelemetryScheduler

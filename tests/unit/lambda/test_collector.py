@@ -271,14 +271,16 @@ class TestLambdaHandler:
     """Test Lambda handler function."""
 
     @patch("index._store_event")
+    @patch("index._verify_signature", return_value=True)
     @patch("index._check_rate_limit")
     @patch("index._hash_ip")
-    def test_valid_startup_event(self, mock_hash, mock_rate, mock_store):
+    def test_valid_startup_event(self, mock_hash, mock_rate, mock_verify, mock_store):
         mock_hash.return_value = "abc123"
         mock_rate.return_value = True
 
         event = {
             "requestContext": {"http": {"sourceIp": "1.2.3.4"}},
+            "headers": {"x-telemetry-signature": "valid"},
             "body": json.dumps(
                 {
                     "event": "startup",
@@ -303,14 +305,16 @@ class TestLambdaHandler:
         mock_store.assert_called_once()
 
     @patch("index._store_event")
+    @patch("index._verify_signature", return_value=True)
     @patch("index._check_rate_limit")
     @patch("index._hash_ip")
-    def test_valid_heartbeat_event(self, mock_hash, mock_rate, mock_store):
+    def test_valid_heartbeat_event(self, mock_hash, mock_rate, mock_verify, mock_store):
         mock_hash.return_value = "abc123"
         mock_rate.return_value = True
 
         event = {
             "requestContext": {"http": {"sourceIp": "1.2.3.4"}},
+            "headers": {"x-telemetry-signature": "valid"},
             "body": json.dumps(
                 {
                     "event": "heartbeat",
@@ -371,11 +375,13 @@ class TestLambdaHandler:
         assert lambda_handler(event, {})["statusCode"] == 204
 
     @patch("index._store_event", side_effect=Exception("DB down"))
+    @patch("index._verify_signature", return_value=True)
     @patch("index._check_rate_limit", return_value=True)
     @patch("index._hash_ip", return_value="abc123")
-    def test_storage_failure_returns_204(self, mock_hash, mock_rate, mock_store):
+    def test_storage_failure_returns_204(self, mock_hash, mock_rate, mock_verify, mock_store):
         event = {
             "requestContext": {"http": {"sourceIp": "1.2.3.4"}},
+            "headers": {"x-telemetry-signature": "valid"},
             "body": json.dumps(
                 {
                     "event": "startup",
