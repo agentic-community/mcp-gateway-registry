@@ -129,6 +129,8 @@ Interactive terminal interface for chatting with AI models and discovering MCP t
 
 ## What's New
 
+- **Anonymous Usage Telemetry** - Privacy-first telemetry to track registry adoption patterns. Sends only non-sensitive deployment metadata (version, OS, storage backend, auth provider) -- no PII, no hostnames, no user data. Opt-out by default (startup ping is ON, set `MCP_TELEMETRY_DISABLED=1` to disable). Opt-in daily heartbeat with aggregate counts (server/agent/skill totals). HMAC-signed requests, IP-hashed rate limiting, strict schema validation, and fail-silent design ensure zero impact on registry operation. Admin API to force heartbeat/startup events on demand. [Telemetry Documentation](docs/TELEMETRY.md)
+
 - **Agent Name Service (ANS) Integration** - Adds PKI-based trust verification for registered agents and MCP servers through GoDaddy's [Agent Name Service](https://www.godaddy.com/ans). Agent owners link their ANS Agent ID to their registry entry, and the registry verifies the identity via the ANS API, displaying a clickable trust badge on agent cards and semantic search results. A background scheduler re-verifies all linked identities every 6 hours with circuit breaker protection. Supports verified, expired, and revoked status tracking with admin endpoints for manual sync, metrics, and health checks. [Design and Operations Guide](docs/design/ans-integration.md) | [Demo Video](https://app.vidcast.io/share/c2240a78-8899-46ad-9375-6fb0cc1345f3?playerMode=vidcast)
 
 - **Registry Card for Federation Discovery** - As registries increasingly need to discover and communicate with each other, we've implemented the Registry Card specification—a standardized discovery document accessible via `/.well-known/registry-card`. This provides essential metadata including authentication endpoints, capabilities, and contact information for any registry instance. Enhanced server, agent, and skills cards with richer metadata enable better federation workflows. [Registry Card Configuration Guide](docs/federation-operational-guide.md#registry-card-configuration)
@@ -705,6 +707,24 @@ echo 'ASOR_ACCESS_TOKEN=your_token' >> .env
 ### Deployment Options
 
 **Cloud Platforms:** Amazon EC2, Amazon EKS
+
+---
+
+## Telemetry
+
+The registry collects **anonymous, non-sensitive** usage telemetry to help us understand adoption patterns and improve the product. This is an **opt-out** feature -- by default, a single startup ping is sent containing only deployment metadata.
+
+**What is sent (Tier 1 -- default ON):** Registry version, Python version, OS, CPU architecture, cloud provider, storage backend, auth provider, and deployment mode. No IP addresses, hostnames, file paths, user data, or any PII.
+
+**What is NOT sent by default (Tier 2 -- opt-in):** Aggregate counts (number of servers, agents, skills, peers), search backend, embeddings provider, and uptime. Enable with `MCP_TELEMETRY_OPT_IN=1`.
+
+**To opt out completely:**
+
+```bash
+export MCP_TELEMETRY_DISABLED=1
+```
+
+All requests are HMAC-signed, rate-limited, and schema-validated. Telemetry is fail-silent and never impacts registry operation. Full details in the [Telemetry Documentation](docs/TELEMETRY.md).
 
 ---
 
