@@ -23,7 +23,7 @@ class StartupEvent(BaseModel):
 
     event: str = Field(..., pattern="^startup$")
     registry_id: str | None = Field(default=None, max_length=36, description="Registry card UUID")
-    v: str = Field(..., min_length=1, max_length=50, description="Registry version")
+    v: str = Field(..., min_length=1, max_length=200, description="Registry version")
     py: str = Field(..., pattern=r"^\d+\.\d+$", description="Python version (major.minor)")
     os: str = Field(..., pattern="^(linux|darwin|windows)$", description="Operating system")
     arch: str = Field(..., min_length=1, max_length=20, description="CPU architecture")
@@ -113,7 +113,7 @@ class HeartbeatEvent(BaseModel):
 
     event: str = Field(..., pattern="^heartbeat$")
     registry_id: str | None = Field(default=None, max_length=36, description="Registry card UUID")
-    v: str = Field(..., min_length=1, max_length=50, description="Registry version")
+    v: str = Field(..., min_length=1, max_length=200, description="Registry version")
     cloud: str = Field(
         default="unknown",
         pattern="^(aws|gcp|azure|unknown)$",
