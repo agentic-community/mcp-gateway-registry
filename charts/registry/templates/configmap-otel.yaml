@@ -19,4 +19,13 @@ data:
   {{- if .Values.app.otelExporterOtlpMetricsTemporalityPreference }}
   OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: {{ .Values.app.otelExporterOtlpMetricsTemporalityPreference | quote }}
   {{- end }}
-  
+  {{- if .Values.app.mcpTelemetryDisabled }}
+  MCP_TELEMETRY_DISABLED: {{ .Values.app.mcpTelemetryDisabled | quote }}
+  {{- end }}
+  {{- if .Values.app.mcpTelemetryOptIn }}
+  MCP_TELEMETRY_OPT_IN: {{ .Values.app.mcpTelemetryOptIn | quote }}
+  {{- end }}
+  {{- if .Values.app.telemetryDebug }}
+  MCP_TELEMETRY_DEBUG: {{ .Values.app.telemetryDebug | quote }}
+  {{- end }}
+

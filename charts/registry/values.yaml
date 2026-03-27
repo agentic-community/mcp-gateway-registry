@@ -36,6 +36,12 @@ app:
   otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
   otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
 
+  # Telemetry configuration
+  # Anonymous usage telemetry (opt-out: set mcpTelemetryDisabled to true to disable)
+  mcpTelemetryDisabled: false  # Set to true to disable all telemetry
+  mcpTelemetryOptIn: false  # Set to true to enable daily heartbeat with aggregate counts
+  telemetryDebug: false  # Set to true to log payloads instead of sending
+
   # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
   deploymentMode: with-gateway
 
