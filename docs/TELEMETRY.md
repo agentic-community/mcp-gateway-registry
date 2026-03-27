@@ -258,24 +258,76 @@ See `terraform/telemetry-collector/README.md` for detailed cost breakdown.
 - **Always Returns 204**: No information leakage (same response for valid, invalid, or rejected)
 - **IAM Least Privilege**: Minimal Lambda permissions
 
-### Querying Your Data
+### Bastion Host Scripts
 
-Connect to DocumentDB to analyze telemetry:
+The bastion host provides scripts for querying and managing telemetry data in DocumentDB. Scripts are located in `terraform/telemetry-collector/bastion-scripts/` and should be copied to the bastion home directory.
+
+#### Interactive Shell (connect.sh)
+
+Open an interactive mongosh session against DocumentDB:
 
 ```bash
-# Get DocumentDB endpoint
-DOCDB_ENDPOINT=$(terraform output -raw documentdb_endpoint)
+~/connect.sh
+```
 
-# Get credentials
-aws secretsmanager get-secret-value --secret-id telemetry-collector-docdb
+#### Quick Summary (query.sh)
 
-# Connect with mongosh
-mongosh --host $DOCDB_ENDPOINT --username telemetry_admin --tls --tlsCAFile global-bundle.pem
+Print a summary of telemetry collections (counts, last 5 events, storage backend breakdown):
 
-# Query telemetry
-use telemetry;
-db.startup_events.find({"v": "1.0.16"}).count();
-db.heartbeat_events.find({"search_backend": "documentdb"});
+```bash
+~/query.sh
+```
+
+#### Export to CSV (telemetry_db.py export)
+
+Dump telemetry data to a CSV file:
+
+```bash
+# Export all collections to registry_metrics.csv
+python3 ~/telemetry_db.py export
+
+# Export to a custom path
+python3 ~/telemetry_db.py export --output /tmp/metrics.csv
+
+# Export only startup events
+python3 ~/telemetry_db.py export --collection startup_events
+
+# Export only heartbeat events
+python3 ~/telemetry_db.py export --collection heartbeat_events
+```
+
+#### Purge Data (telemetry_db.py purge)
+
+Delete all telemetry data from DocumentDB (with interactive confirmation):
+
+```bash
+# Purge all collections (prompts for confirmation)
+python3 ~/telemetry_db.py purge
+
+# Purge only startup events
+python3 ~/telemetry_db.py purge --collection startup_events
+
+# Purge only heartbeat events
+python3 ~/telemetry_db.py purge --collection heartbeat_events
+
+# Skip confirmation prompt
+python3 ~/telemetry_db.py purge --confirm
+```
+
+#### Deploying Scripts to Bastion
+
+Copy scripts to the bastion host after initial setup:
+
+```bash
+BASTION_IP=$(terraform output -raw bastion_public_ip)
+
+scp -i ~/.ssh/id_ed25519 \
+    bastion-scripts/connect.sh \
+    bastion-scripts/query.sh \
+    bastion-scripts/telemetry_db.py \
+    ec2-user@$BASTION_IP:~/
+
+ssh -i ~/.ssh/id_ed25519 ec2-user@$BASTION_IP 'chmod +x ~/connect.sh ~/query.sh'
 ```
 
 ### Full Documentation
