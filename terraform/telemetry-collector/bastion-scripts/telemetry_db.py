@@ -427,7 +427,7 @@ def _connect(args: argparse.Namespace) -> Tuple[Dict[str, str], Dict[str, str]]:
     logger.info(f"DocumentDB endpoint: {env['DOCDB_ENDPOINT']}")
 
     creds = _get_credentials(env["SECRET_ARN"], env["AWS_REGION"])
-    logger.info(f"Database: {creds['database']}")
+    logger.info("Using configured database for telemetry DocumentDB connection")
 
     return env, creds
 
