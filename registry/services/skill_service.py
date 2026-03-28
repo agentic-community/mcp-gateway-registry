@@ -31,6 +31,8 @@ from ..repositories.interfaces import (
     SkillRepositoryBase,
 )
 from ..schemas.skill_models import (
+    ContentIntegrity,
+    FileHash,
     SkillCard,
     SkillInfo,
     SkillMetadata,
@@ -165,13 +167,173 @@ def _is_safe_url(
         return False
 
 
+def _build_fetch_headers(
+    url: str,
+    auth_scheme: str = "none",
+    auth_credential: str | None = None,
+    auth_header_name: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Build fetch URL and auth headers for a SKILL.md request.
+
+    Returns (fetch_url, headers) tuple.  The URL is returned unchanged;
+    platform-specific modules may override to translate web URLs to
+    authenticated API endpoints.
+    """
+    headers: dict[str, str] = {}
+    fetch_url = url
+
+    if auth_scheme == "none" or not auth_credential:
+        return fetch_url, headers
+
+    if auth_scheme == "bearer":
+        header_name = auth_header_name or "Authorization"
+        headers[header_name] = f"Bearer {auth_credential}"
+    elif auth_scheme == "api_key":
+        header_name = auth_header_name or "PRIVATE-TOKEN"
+        headers[header_name] = auth_credential
+
+    return fetch_url, headers
+
+
+_RESOURCE_TYPE_MAP: dict[str, str] = {
+    "references": "reference",
+    "scripts": "script",
+    "agents": "agent",
+    "assets": "asset",
+}
+
+_LANG_BY_EXT: dict[str, str] = {
+    ".py": "python",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".md": "markdown",
+    ".json": "json",
+}
+
+
+def _resolve_tree_api(
+    skill_md_url: str,
+) -> tuple[str, str, str, str] | None:
+    """Resolve a tree/directory listing API endpoint for a skill URL.
+
+    Returns (tree_api_url, encoded_project, ref, skill_dir) or None
+    when no hosting-platform provider handles the URL.  Override or
+    extend this function to add support for specific Git platforms.
+
+    .. note::
+       **This is intentionally a stub.**  The default implementation
+       always returns ``None``, which means :func:`_discover_skill_resources`
+       will not find any companion files until a deployment provides a
+       platform-specific implementation (e.g. GitHub Trees API, GitLab
+       Repository Tree, Bitbucket source listing).
+
+       Multi-file resource support is fully wired through the rest of the
+       stack (manifest storage, ``/content?resource=...`` serving, drift
+       detection); only the discovery step is gated on this hook.
+       Replace this function — or monkey-patch it from a deployment
+       module — with a provider that returns the tuple described above
+       to enable resource discovery for your hosting platform.
+    """
+    return None
+
+
+async def _discover_skill_resources(
+    skill_md_url: str,
+    auth_scheme: str = "none",
+    auth_credential: str | None = None,
+    auth_header_name: str | None = None,
+) -> "SkillResourceManifest | None":
+    """Discover companion resource files in the skill directory.
+
+    Calls the hosting platform's tree/directory listing API to find files
+    alongside SKILL.md and classifies them into the resource manifest.
+    Returns None when the platform is not recognised or on any failure.
+    """
+    from ..schemas.skill_models import SkillResource, SkillResourceManifest
+
+    tree_info = _resolve_tree_api(skill_md_url)
+    if not tree_info:
+        logger.debug("Cannot derive tree API URL from %s — skipping resource discovery", skill_md_url)
+        return None
+
+    tree_url, _encoded_project, _ref, skill_dir = tree_info
+    skill_dir_prefix = skill_dir + "/" if skill_dir else ""
+    _, headers = _build_fetch_headers(tree_url, auth_scheme, auth_credential, auth_header_name)
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(tree_url, headers=headers)
+            if resp.status_code >= 400:
+                logger.warning("Resource discovery failed: HTTP %s for %s", resp.status_code, tree_url)
+                return None
+            items = resp.json()
+    except Exception as e:
+        logger.warning("Resource discovery error for %s: %s", tree_url, e)
+        return None
+
+    if not isinstance(items, list):
+        return None
+
+    manifest = SkillResourceManifest()
+    for item in items:
+        if item.get("type") != "blob":
+            continue
+        path = item.get("path", "")
+        name = item.get("name", "")
+        if name.upper() == "SKILL.MD" or name.upper() == "README.MD" or name.upper() == "LICENSE.TXT":
+            continue
+
+        parts = path.split("/")
+        if len(parts) < 2:
+            continue
+        subdir = parts[-2]  # immediate parent directory
+        resource_type = _RESOURCE_TYPE_MAP.get(subdir)
+        if not resource_type:
+            continue
+
+        ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        relative_path = path[len(skill_dir_prefix):] if path.startswith(skill_dir_prefix) else path
+
+        resource = SkillResource(
+            path=relative_path,
+            type=resource_type,
+            size_bytes=item.get("size", 0),
+            language=_LANG_BY_EXT.get(ext),
+        )
+
+        bucket = getattr(manifest, f"{resource_type}s" if resource_type != "reference" else "references", None)
+        if bucket is not None:
+            bucket.append(resource)
+
+    total = len(manifest.references) + len(manifest.scripts) + len(manifest.agents) + len(manifest.assets)
+    if total == 0:
+        return None
+
+    logger.info(
+        "Discovered %d resources: %d references, %d scripts, %d agents, %d assets",
+        total, len(manifest.references), len(manifest.scripts),
+        len(manifest.agents), len(manifest.assets),
+    )
+    return manifest
+
+
 async def _validate_skill_md_url(
     url: str,
+    auth_scheme: str = "none",
+    auth_credential: str | None = None,
+    auth_header_name: str | None = None,
 ) -> dict[str, Any]:
     """Validate SKILL.md URL is accessible and get content hash.
 
     Args:
         url: URL to SKILL.md file
+        auth_scheme: Authentication scheme (none, bearer, api_key)
+        auth_credential: Plaintext credential for URL validation
+        auth_header_name: Custom header name for the credential
 
     Returns:
         Dict with validation result and content hash
@@ -179,22 +341,26 @@ async def _validate_skill_md_url(
     Raises:
         SkillUrlValidationError: If URL is not accessible or fails SSRF check
     """
-    # SSRF protection: validate URL before making request
     if not _is_safe_url(url):
         raise SkillUrlValidationError(
             url, "URL failed SSRF validation - private/internal addresses are not allowed"
         )
 
+    fetch_url, fetch_headers = _build_fetch_headers(
+        url, auth_scheme, auth_credential, auth_header_name
+    )
+
     try:
         async with httpx.AsyncClient() as client:
-            headers = await _github_auth.get_auth_headers(str(url))
+            github_headers = await _github_auth.get_auth_headers(str(url))
+            merged_headers = {**fetch_headers, **github_headers}
             response = await client.get(
-                str(url), headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
+                fetch_url, headers=merged_headers, follow_redirects=True,
+                timeout=URL_VALIDATION_TIMEOUT,
             )
 
-            # SSRF protection: validate final URL after redirects
             final_url = str(response.url)
-            if final_url != str(url) and not _is_safe_url(final_url):
+            if final_url != fetch_url and not _is_safe_url(final_url):
                 logger.warning(
                     f"SSRF protection: Blocked redirect from {url} to unsafe URL {final_url}"
                 )
@@ -203,7 +369,6 @@ async def _validate_skill_md_url(
             if response.status_code >= 400:
                 raise SkillUrlValidationError(url, f"HTTP {response.status_code}")
 
-            # Generate content hash for versioning
             content_hash = hashlib.sha256(response.content).hexdigest()[:16]
 
             return {
@@ -411,11 +576,17 @@ async def _parse_skill_md_content(
 
 async def _check_skill_health(
     url: str,
+    auth_scheme: str = "none",
+    auth_credential_encrypted: str | None = None,
+    auth_header_name: str | None = None,
 ) -> dict[str, Any]:
     """Check skill health by performing HEAD request to SKILL.md URL.
 
     Args:
         url: URL to SKILL.md file
+        auth_scheme: Auth scheme for private repos
+        auth_credential_encrypted: Encrypted credential
+        auth_header_name: Custom header name
 
     Returns:
         Dict with health status
@@ -433,11 +604,24 @@ async def _check_skill_health(
             "response_time_ms": 0,
         }
 
+    # Build auth headers for private repos
+    credential = None
+    if auth_scheme != "none" and auth_credential_encrypted:
+        from ..utils.credential_encryption import decrypt_credential
+
+        credential = decrypt_credential(auth_credential_encrypted)
+
+    fetch_url, fetch_headers = _build_fetch_headers(
+        url, auth_scheme, credential, auth_header_name
+    )
+
     try:
         async with httpx.AsyncClient() as client:
-            headers = await _github_auth.get_auth_headers(str(url))
+            github_headers = await _github_auth.get_auth_headers(str(url))
+            merged_headers = {**fetch_headers, **github_headers}
             response = await client.head(
-                str(url), headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
+                fetch_url, headers=merged_headers,
+                follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT,
             )
 
             # SSRF protection: validate final URL after redirects
@@ -475,6 +659,70 @@ async def _check_skill_health(
         }
 
 
+async def _compute_content_integrity(
+    skill_md_url: str,
+    resource_manifest: "SkillResourceManifest | None",
+    auth_scheme: str = "none",
+    auth_credential: str | None = None,
+    auth_header_name: str | None = None,
+) -> ContentIntegrity | None:
+    """Compute SHA-256 hashes for SKILL.md and all companion resources.
+
+    Returns a ContentIntegrity record with per-file hashes and a composite
+    hash, or None if the SKILL.md cannot be fetched.
+    """
+    file_hashes: list[FileHash] = []
+
+    async def _hash_url(url: str, rel_path: str) -> FileHash | None:
+        fetch_url, fetch_headers = _build_fetch_headers(
+            url, auth_scheme, auth_credential, auth_header_name,
+        )
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    fetch_url, headers=fetch_headers,
+                    follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT,
+                )
+                if resp.status_code >= 400:
+                    logger.warning("Integrity fetch failed for %s: HTTP %s", rel_path, resp.status_code)
+                    return None
+                digest = hashlib.sha256(resp.content).hexdigest()
+                return FileHash(path=rel_path, sha256=digest, size_bytes=len(resp.content))
+        except httpx.RequestError as e:
+            logger.warning("Integrity fetch error for %s: %s", rel_path, e)
+            return None
+
+    skill_md_hash = await _hash_url(skill_md_url, "SKILL.md")
+    if not skill_md_hash:
+        return None
+    file_hashes.append(skill_md_hash)
+
+    if resource_manifest:
+        from ..utils.url_utils import derive_resource_url
+
+        all_resources = (
+            resource_manifest.references
+            + resource_manifest.scripts
+            + resource_manifest.agents
+            + resource_manifest.assets
+        )
+        for res in all_resources:
+            res_url = derive_resource_url(skill_md_url, res.path)
+            fh = await _hash_url(res_url, res.path)
+            if fh:
+                file_hashes.append(fh)
+
+    sorted_entries = sorted(file_hashes, key=lambda h: h.path)
+    composite_input = "".join(f"{h.path}:{h.sha256}" for h in sorted_entries)
+    composite_hash = hashlib.sha256(composite_input.encode()).hexdigest()
+
+    return ContentIntegrity(
+        composite_hash=composite_hash,
+        file_hashes=file_hashes,
+        computed_at=datetime.now(UTC),
+    )
+
+
 def _build_skill_card(
     request: SkillRegistrationRequest,
     path: str,
@@ -482,6 +730,8 @@ def _build_skill_card(
     content_version: str | None,
     content_updated_at: datetime | None,
     skill_md_raw_url: str | None = None,
+    resource_manifest: "SkillResourceManifest | None" = None,
+    content_integrity: ContentIntegrity | None = None,
 ) -> SkillCard:
     """Build SkillCard from registration request.
 
@@ -492,6 +742,7 @@ def _build_skill_card(
         content_version: Content hash
         content_updated_at: Content update timestamp
         skill_md_raw_url: Raw URL for fetching SKILL.md content
+        resource_manifest: Discovered companion resource files
 
     Returns:
         SkillCard instance
@@ -512,6 +763,18 @@ def _build_skill_card(
             else {},
         )
 
+    # Encrypt credential if provided
+    auth_credential_encrypted = None
+    credential_updated_at = None
+    if (
+        getattr(request, "auth_credential", None)
+        and getattr(request, "auth_scheme", "none") != "none"
+    ):
+        from ..utils.credential_encryption import encrypt_credential
+
+        auth_credential_encrypted = encrypt_credential(request.auth_credential)
+        credential_updated_at = datetime.now(UTC)
+
     return SkillCard(
         path=path,
         name=request.name,
@@ -531,8 +794,14 @@ def _build_skill_card(
         owner=owner,
         is_enabled=True,
         status=request.status,
+        auth_scheme=getattr(request, "auth_scheme", "none"),
+        auth_credential_encrypted=auth_credential_encrypted,
+        auth_header_name=getattr(request, "auth_header_name", None),
+        credential_updated_at=credential_updated_at,
+        resource_manifest=resource_manifest,
         content_version=content_version,
         content_updated_at=content_updated_at,
+        content_integrity=content_integrity,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -592,9 +861,39 @@ class SkillService:
         content_updated_at = None
 
         if validate_url:
-            validation = await _validate_skill_md_url(raw_url)
+            validation = await _validate_skill_md_url(
+                raw_url,
+                auth_scheme=getattr(request, "auth_scheme", "none"),
+                auth_credential=getattr(request, "auth_credential", None),
+                auth_header_name=getattr(request, "auth_header_name", None),
+            )
             content_version = validation["content_version"]
             content_updated_at = validation["content_updated_at"]
+
+        # Discover companion resource files (non-fatal)
+        resource_manifest = None
+        try:
+            resource_manifest = await _discover_skill_resources(
+                raw_url,
+                auth_scheme=getattr(request, "auth_scheme", "none"),
+                auth_credential=getattr(request, "auth_credential", None),
+                auth_header_name=getattr(request, "auth_header_name", None),
+            )
+        except Exception as e:
+            logger.warning("Resource discovery failed for %s: %s", request.name, e)
+
+        # Compute content integrity (SKILL.md + all resources)
+        content_integrity = None
+        try:
+            content_integrity = await _compute_content_integrity(
+                raw_url,
+                resource_manifest,
+                auth_scheme=getattr(request, "auth_scheme", "none"),
+                auth_credential=getattr(request, "auth_credential", None),
+                auth_header_name=getattr(request, "auth_header_name", None),
+            )
+        except Exception as e:
+            logger.warning("Content integrity computation failed for %s: %s", request.name, e)
 
         # Build SkillCard
         skill = _build_skill_card(
@@ -604,6 +903,8 @@ class SkillService:
             content_version=content_version,
             content_updated_at=content_updated_at,
             skill_md_raw_url=raw_url,
+            resource_manifest=resource_manifest,
+            content_integrity=content_integrity,
         )
 
         # Save to repository
@@ -874,7 +1175,12 @@ class SkillService:
 
         # Use raw URL for health check (more reliable, returns actual content)
         url = skill.skill_md_raw_url or skill.skill_md_url
-        result = await _check_skill_health(str(url))
+        result = await _check_skill_health(
+            str(url),
+            auth_scheme=getattr(skill, "auth_scheme", "none"),
+            auth_credential_encrypted=getattr(skill, "auth_credential_encrypted", None),
+            auth_header_name=getattr(skill, "auth_header_name", None),
+        )
 
         # Persist health status to database
         health_status = "healthy" if result.get("healthy") else "unhealthy"

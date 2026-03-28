@@ -37,8 +37,12 @@ class SkillInfo(BaseModel):
     path: str = Field(..., description="Skill path")
     name: str | None = Field(None, description="Name of the skill")
     description: str | None = Field(None, description="Skill description")
+    skill_md_url: str | None = Field(None, description="URL to the SKILL.md file")
+    skill_md_raw_url: str | None = Field(None, description="Raw URL for fetching SKILL.md content")
     tags: list[str] = Field(default_factory=list, description="Skill tags")
+    target_agents: list[str] = Field(default_factory=list, description="Target agent platforms")
     created_at: str | None = Field(None, description="Creation timestamp")
+
 
 
 class ToolSearchResult(BaseModel):

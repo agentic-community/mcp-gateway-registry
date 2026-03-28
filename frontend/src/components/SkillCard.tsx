@@ -216,11 +216,11 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
       setSkillMdContent(response.data.content);
     } catch (error: any) {
       console.error('Failed to fetch SKILL.md content:', error);
-      if (onShowToast) {
-        onShowToast(
-          error.response?.data?.detail || 'Failed to load SKILL.md content',
-          'error'
-        );
+      const detail = error.response?.data?.detail;
+      if (error.response?.status === 409 && detail) {
+        setSkillMdContent(`> **Content Drift Detected**\n>\n> ${detail}\n>\n> Re-register this skill to update the integrity baseline and re-enable it.`);
+      } else if (onShowToast) {
+        onShowToast(detail || 'Failed to load SKILL.md content', 'error');
       }
     } finally {
       setLoadingDetails(false);
@@ -458,7 +458,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 <span
                   key={tag}
                   className={`px-2 py-1 text-xs font-medium rounded ${
-                    tag === 'security-pending'
+                    tag === 'security-pending' || tag === 'content-drifted'
                       ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-700'
                       : 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
                   }`}
@@ -555,6 +555,16 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                   {skill.is_enabled ? 'Enabled' : 'Disabled'}
                 </span>
+                {!skill.is_enabled && skill.tags?.includes('content-drifted') && (
+                  <span className="text-xs text-red-600 dark:text-red-400 font-medium" title="Skill content changed since registration. Re-register to update the baseline.">
+                    — content drifted
+                  </span>
+                )}
+                {!skill.is_enabled && skill.tags?.includes('security-pending') && !skill.tags?.includes('content-drifted') && (
+                  <span className="text-xs text-red-600 dark:text-red-400 font-medium">
+                    — security review pending
+                  </span>
+                )}
               </div>
 
               <div className="w-px h-4 bg-amber-200 dark:bg-amber-600" />

@@ -2674,26 +2674,30 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
         # Determine the OAuth2 callback URI based on the request origin
         # This is critical for dual-mode (CloudFront + custom domain) deployments
         # The callback_uri MUST match exactly between authorization and token exchange
-        host = request.headers.get("host", "localhost:8888")
-        # Check CloudFront header first, then X-Forwarded-Proto for HTTPS detection
-        cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "").lower()
-        forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
-        scheme = (
-            "https"
-            if cloudfront_proto == "https"
-            or forwarded_proto == "https"
-            or request.url.scheme == "https"
-            else "http"
-        )
-        logger.info(
-            f"OAuth2 login - host: {host}, x-cloudfront-forwarded-proto: {cloudfront_proto}, x-forwarded-proto: {forwarded_proto}, scheme: {scheme}"
-        )
-
-        # Special case for localhost to include port
-        if "localhost" in host and ":" not in host:
-            auth_server_url = f"{scheme}://localhost:8888{ROOT_PATH}"
+        auth_server_external_url = os.environ.get("AUTH_SERVER_EXTERNAL_URL", "").rstrip("/")
+        if auth_server_external_url:
+            auth_server_url = f"{auth_server_external_url}{ROOT_PATH}"
+            scheme = "https" if auth_server_external_url.startswith("https") else "http"
+            logger.info(f"OAuth2 login - using AUTH_SERVER_EXTERNAL_URL: {auth_server_url}")
         else:
-            auth_server_url = f"{scheme}://{host}{ROOT_PATH}"
+            host = request.headers.get("host", "localhost:8888")
+            cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "").lower()
+            forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
+            scheme = (
+                "https"
+                if cloudfront_proto == "https"
+                or forwarded_proto == "https"
+                or request.url.scheme == "https"
+                else "http"
+            )
+            logger.info(
+                f"OAuth2 login - host: {host}, x-cloudfront-forwarded-proto: {cloudfront_proto}, x-forwarded-proto: {forwarded_proto}, scheme: {scheme}"
+            )
+
+            if "localhost" in host and ":" not in host:
+                auth_server_url = f"{scheme}://localhost:8888{ROOT_PATH}"
+            else:
+                auth_server_url = f"{scheme}://{host}{ROOT_PATH}"
 
         callback_uri = f"{auth_server_url}/oauth2/callback/{provider}"
         logger.info(f"OAuth2 callback URI (from request host): {callback_uri}")

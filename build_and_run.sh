@@ -140,6 +140,12 @@ if [ "$USE_DHI" = true ]; then
     log "Ensure you have authenticated: docker login dhi.io"
 fi
 
+OVERRIDE_FILE="docker-compose.override.yml"
+if [ -f "$OVERRIDE_FILE" ]; then
+    COMPOSE_FILES="$COMPOSE_FILES -f $OVERRIDE_FILE"
+    log "Applying local overrides from $OVERRIDE_FILE"
+fi
+
 if [ "$USE_PREBUILT" = true ]; then
     log "Using pre-built container images for fast deployment"
     log "Will pull latest images from container registry during startup..."
@@ -570,7 +576,7 @@ else
 fi
 
 # Check auth service
-if curl -f http://localhost:8888/health &>/dev/null; then
+if curl -f http://localhost:18888/health &>/dev/null; then
     log "Auth service is healthy"
 else
     log "WARNING: Auth service may still be starting up..."

@@ -21,6 +21,14 @@ class TestGetSkillContentAuth:
         mock_skill.skill_md_raw_url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
         mock_skill.skill_md_url = "https://github.com/o/r/blob/main/SKILL.md"
         mock_skill.skill_md_content = None  # Force httpx path, not inline content
+        # Drift-detection guard in get_skill_content() reads .content_integrity;
+        # MagicMock's default truthy attribute would otherwise trigger 409.
+        mock_skill.content_integrity = None
+        mock_skill.resource_manifest = None
+        mock_skill.tags = []
+        mock_skill.auth_scheme = "none"
+        mock_skill.auth_credential_encrypted = None
+        mock_skill.auth_header_name = None
 
         mock_service = AsyncMock()
         mock_service.get_skill.return_value = mock_skill

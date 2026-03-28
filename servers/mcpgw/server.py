@@ -3,38 +3,132 @@
 This MCP server provides tools to interact with the MCP Gateway Registry API.
 It acts as a thin protocol adapter, translating MCP tool calls into registry HTTP requests.
 
-All tools require bearer token authentication via the Authorization header.
+Supports two auth modes:
+  - OAuth (OAuthProxy + Keycloak): set OIDC_ENABLED=true and provide Keycloak env vars.
+    Exposes /.well-known/oauth-protected-resource for MCP clients (Cursor, VS Code).
+  - Legacy bearer token: pass a Keycloak JWT via Authorization header directly.
 """
 
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
 from fastmcp import Context, FastMCP
 from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Get registry URL from environment (used inside Docker containers)
-# This is the internal registry URL that mcpgw uses to communicate with the registry
-# Example: http://registry:7860 (Docker), http://registry.namespace.svc.cluster.local:8000 (K8s)
 REGISTRY_URL = os.getenv("REGISTRY_BASE_URL", "http://localhost")
 
-# Input validation constants
 MAX_QUERY_LENGTH: int = 500
 MIN_TOP_N: int = 1
 MAX_TOP_N: int = 50
 
 logger.info(f"Registry URL: {REGISTRY_URL}")
 
-# Initialize FastMCP server
-mcp = FastMCP("mcpgw")
+# ---------------------------------------------------------------------------
+# OAuth configuration (optional – enable via OIDC_ENABLED=true)
+# ---------------------------------------------------------------------------
+OIDC_ENABLED = os.getenv("OIDC_ENABLED", "").lower() in ("true", "1", "yes")
+
+KEYCLOAK_INTERNAL_URL = os.getenv("KEYCLOAK_INTERNAL_URL", "http://keycloak:8080")
+KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:18080")
+KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
+OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "mcp-gateway-web")
+OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET", "")
+M2M_CLIENT_ID = os.getenv("M2M_CLIENT_ID", "mcp-gateway-m2m")
+M2M_CLIENT_SECRET = os.getenv("M2M_CLIENT_SECRET", "")
+MCPGW_BASE_URL = os.getenv("MCPGW_BASE_URL", "http://localhost:18003")
+REGISTRY_API_TOKEN = os.getenv("REGISTRY_API_TOKEN", "")
+
+
+class _M2MTokenManager:
+    """Fetches and caches a Keycloak M2M token via client_credentials grant."""
+
+    def __init__(self, token_url: str, client_id: str, client_secret: str) -> None:
+        self._token_url = token_url
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._token: str | None = None
+        self._expires_at: float = 0
+
+    async def get_token(self) -> str:
+        if self._token and time.monotonic() < self._expires_at - 60:
+            return self._token
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                self._token_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            self._token = data["access_token"]
+            self._expires_at = time.monotonic() + data.get("expires_in", 300)
+            logger.info("Obtained fresh M2M token (expires_in=%s)", data.get("expires_in"))
+            return self._token
+
+
+_auth_provider = None
+_m2m_manager: _M2MTokenManager | None = None
+_realm_path = f"/realms/{KEYCLOAK_REALM}/protocol/openid-connect"
+
+if M2M_CLIENT_ID and M2M_CLIENT_SECRET:
+    _m2m_manager = _M2MTokenManager(
+        token_url=f"{KEYCLOAK_INTERNAL_URL}{_realm_path}/token",
+        client_id=M2M_CLIENT_ID,
+        client_secret=M2M_CLIENT_SECRET,
+    )
+    logger.info("M2M token manager enabled (client=%s)", M2M_CLIENT_ID)
+
+if OIDC_ENABLED:
+    from fastmcp.server.auth.oauth_proxy import OAuthProxy
+    from fastmcp.server.auth.providers.jwt import JWTVerifier
+
+    _auth_provider = OAuthProxy(
+        upstream_authorization_endpoint=f"{KEYCLOAK_EXTERNAL_URL}{_realm_path}/auth",
+        upstream_token_endpoint=f"{KEYCLOAK_INTERNAL_URL}{_realm_path}/token",
+        upstream_revocation_endpoint=f"{KEYCLOAK_INTERNAL_URL}{_realm_path}/revoke",
+        upstream_client_id=OIDC_CLIENT_ID,
+        upstream_client_secret=OIDC_CLIENT_SECRET,
+        token_verifier=JWTVerifier(
+            jwks_uri=f"{KEYCLOAK_INTERNAL_URL}{_realm_path}/certs",
+            issuer=f"{KEYCLOAK_EXTERNAL_URL}/realms/{KEYCLOAK_REALM}",
+        ),
+        base_url=MCPGW_BASE_URL,
+        allowed_client_redirect_uris=[
+            "http://localhost:*",
+            "http://127.0.0.1:*",
+            "cursor://anysphere.cursor-mcp/*",
+            "vscode://anysphere.cursor-mcp/*",
+        ],
+        require_authorization_consent=False,
+    )
+    logger.info("OAuth enabled (OAuthProxy → Keycloak %s, realm=%s)", KEYCLOAK_EXTERNAL_URL, KEYCLOAK_REALM)
+else:
+    logger.info("OAuth disabled – using bearer-token passthrough with M2M for registry calls")
+
+mcp = FastMCP("mcpgw", auth=_auth_provider)
+
+if _auth_provider:
+    from starlette.responses import RedirectResponse
+
+    @mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+    async def _redirect_protected_resource(_):  # noqa: ANN001
+        """Redirect root well-known to the MCP-prefixed path (FastMCP path-prefix workaround)."""
+        return RedirectResponse(
+            url="/.well-known/oauth-protected-resource/mcp", status_code=302
+        )
 
 
 def _validate_top_n(top_n: int) -> int:
@@ -76,52 +170,44 @@ def _validate_query(query: str) -> str:
 
 
 def _extract_bearer_token(ctx: Context | None) -> str:
-    """Extract bearer token from FastMCP context via Starlette Request.
+    """Extract bearer token from FastMCP context (legacy / no-OAuth mode).
 
     Supports both standard Authorization header and MCP Gateway's X-Authorization header.
-
-    Args:
-        ctx: FastMCP context containing request information
-
-    Returns:
-        Bearer token string
-
-    Raises:
-        ValueError: If token cannot be extracted or is missing
     """
     if not ctx:
         raise ValueError("Authentication required: Context is None")
 
     try:
-        # Access the Starlette Request object from request_context
         if hasattr(ctx, "request_context") and ctx.request_context:
             request = ctx.request_context.request
             if request and hasattr(request, "headers"):
-                # Try standard Authorization header first (case-insensitive)
                 auth_header = request.headers.get("authorization")
-
-                # If not found, try MCP Gateway's X-Authorization header
                 if not auth_header:
                     auth_header = request.headers.get("x-authorization")
-
                 if auth_header and auth_header.lower().startswith("bearer "):
-                    token = auth_header.split(" ", 1)[1]
-                    logger.debug(f"Successfully extracted token (length: {len(token)})")
-                    return token
-
-                raise ValueError(
-                    "Authorization or X-Authorization header not found or not a Bearer token"
-                )
-            else:
-                raise ValueError("Request object or headers not found in request_context")
-        else:
-            raise ValueError("request_context not available in Context")
-
+                    return auth_header.split(" ", 1)[1]
+                raise ValueError("Bearer token not found in Authorization or X-Authorization header")
+            raise ValueError("Request object or headers not found in request_context")
+        raise ValueError("request_context not available in Context")
     except ValueError:
         raise
     except Exception as e:
         logger.error(f"Failed to extract token: {e}", exc_info=True)
         raise ValueError(f"Failed to extract bearer token: {e}") from e
+
+
+async def _get_registry_headers(ctx: Context | None) -> dict[str, str]:
+    """Return headers for internal registry API calls.
+
+    Priority: static API token > M2M service token > caller bearer token.
+    """
+    if REGISTRY_API_TOKEN:
+        return {"Authorization": f"Bearer {REGISTRY_API_TOKEN}"}
+    if _m2m_manager:
+        token = await _m2m_manager.get_token()
+        return {"X-Authorization": f"Bearer {token}"}
+    token = _extract_bearer_token(ctx)
+    return {"X-Authorization": f"Bearer {token}"}
 
 
 @mcp.tool()
@@ -135,16 +221,13 @@ async def list_services(ctx: Context | None = None) -> dict[str, Any]:
     logger.info("list_services called")
 
     try:
-        token = _extract_bearer_token(ctx)
-        # Use X-Authorization header for internal registry API calls
-        headers = {"X-Authorization": f"Bearer {token}"}
+        headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(f"{REGISTRY_URL}/api/servers", headers=headers)
             response.raise_for_status()
             data = response.json()
 
-        # Parse response
         if isinstance(data, dict) and "servers" in data:
             servers = data["servers"]
         elif isinstance(data, list):
@@ -152,7 +235,6 @@ async def list_services(ctx: Context | None = None) -> dict[str, Any]:
         else:
             servers = []
 
-        # Validate and convert to ServerInfo models
         services = []
         for s in servers:
             try:
@@ -205,9 +287,7 @@ async def list_agents(ctx: Context | None = None) -> dict[str, Any]:
     logger.info("list_agents called")
 
     try:
-        token = _extract_bearer_token(ctx)
-        # Use X-Authorization header for internal registry API calls
-        headers = {"X-Authorization": f"Bearer {token}"}
+        headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(f"{REGISTRY_URL}/api/agents", headers=headers)
@@ -260,9 +340,7 @@ async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
     logger.info("list_skills called")
 
     try:
-        token = _extract_bearer_token(ctx)
-        # Use X-Authorization header for internal registry API calls
-        headers = {"X-Authorization": f"Bearer {token}"}
+        headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(f"{REGISTRY_URL}/api/skills", headers=headers)
@@ -304,6 +382,79 @@ async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
         }
 
 
+
+@mcp.tool()
+async def get_skill_content(
+    skill_name: str,
+    resource_path: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """
+    Fetch skill content from the registry.
+
+    Without resource_path: returns the full SKILL.md markdown and resource manifest.
+    With resource_path: returns the content of a companion file (reference doc,
+    script, agent config, etc.) validated against the stored manifest.
+
+    Use this after list_skills or intelligent_tool_finder to retrieve the
+    complete workflow instructions for a skill, or to read companion resources
+    listed in the manifest.
+
+    Args:
+        skill_name: Name of the skill (e.g. "gerrit-workflow")
+        resource_path: Optional relative path to a companion resource
+                       (e.g. "references/architecture.md")
+
+    Returns:
+        Dictionary containing the skill name, content, source URL, and status
+    """
+    logger.info(
+        "get_skill_content called: skill_name=%s resource_path=%s",
+        skill_name,
+        resource_path,
+    )
+
+    if not skill_name or not skill_name.strip():
+        return {"error": "skill_name cannot be empty", "status": "failed"}
+
+    skill_name = skill_name.strip()
+
+    try:
+        headers = await _get_registry_headers(ctx)
+        url = f"{REGISTRY_URL}/api/skills/{skill_name}/content"
+        params: dict[str, str] = {}
+        if resource_path:
+            params["resource"] = resource_path
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+        result: dict[str, Any] = {
+            "skill_name": skill_name,
+            "source_url": data.get("url", ""),
+            "content": data.get("content", ""),
+            "status": "success",
+        }
+        if resource_path:
+            result["resource_path"] = data.get("path", resource_path)
+            result["resource_type"] = data.get("type", "")
+        else:
+            manifest = data.get("resource_manifest")
+            if manifest:
+                result["resources"] = manifest
+        return result
+
+    except httpx.HTTPStatusError as e:
+        logger.error("HTTP error fetching skill content: %s", e.response.status_code)
+        return {"skill_name": skill_name, "error": f"HTTP {e.response.status_code}", "status": "failed"}
+    except Exception as e:
+        logger.error("Failed to get skill content: %s", e)
+        return {"skill_name": skill_name, "error": str(e), "status": "failed"}
+
+
+
 @mcp.tool()
 async def intelligent_tool_finder(
     query: str,
@@ -323,12 +474,9 @@ async def intelligent_tool_finder(
     logger.info(f"intelligent_tool_finder called: query={query}, top_n={top_n}")
 
     try:
-        # Validate inputs
         query = _validate_query(query)
         top_n = _validate_top_n(top_n)
-        token = _extract_bearer_token(ctx)
-        # Use X-Authorization header for internal registry API calls
-        headers = {"X-Authorization": f"Bearer {token}"}
+        headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -412,9 +560,7 @@ async def healthcheck(ctx: Context | None = None) -> dict[str, Any]:
     logger.info("healthcheck called")
 
     try:
-        token = _extract_bearer_token(ctx)
-        # Use X-Authorization header for internal registry API calls
-        headers = {"X-Authorization": f"Bearer {token}"}
+        headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(f"{REGISTRY_URL}/api/servers/health", headers=headers)

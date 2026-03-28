@@ -252,3 +252,17 @@ def extract_repository_url(
     base_hostname = _map_to_base_hostname(hostname_lower)
 
     return f"https://{base_hostname}/{owner}/{repo}"
+
+
+def derive_resource_url(skill_md_url: str, resource_path: str) -> str:
+    """Derive a resource URL by replacing the filename in a SKILL.md URL.
+
+    Works by stripping the filename from the base URL and appending the
+    requested resource path.
+    """
+    if "/SKILL.md" in skill_md_url:
+        base = skill_md_url.rsplit("/SKILL.md", 1)[0]
+        return f"{base}/{resource_path}"
+
+    base = skill_md_url.rsplit("/", 1)[0]
+    return f"{base}/{resource_path}"

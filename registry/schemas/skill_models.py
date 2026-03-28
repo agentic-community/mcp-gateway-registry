@@ -10,7 +10,6 @@ All recommendations incorporated:
 - Progressive disclosure tier models
 - Owner field for access control
 - Content versioning fields
-- Registry Card fields (status, source timestamps, external_tags) for federation
 """
 
 import logging
@@ -88,10 +87,50 @@ class SkillResource(BaseModel):
     """Reference to a skill resource file."""
 
     path: str = Field(..., description="Relative path from skill root")
-    type: Literal["script", "reference", "asset"] = Field(...)
+    type: Literal["script", "reference", "asset", "agent"] = Field(...)
     size_bytes: int = Field(default=0)
     description: str | None = None
     language: str | None = Field(None, description="Programming language for scripts")
+
+
+class SkillResourceManifest(BaseModel):
+    """Manifest of available resources for a skill."""
+
+    scripts: list[SkillResource] = Field(default_factory=list)
+    references: list[SkillResource] = Field(default_factory=list)
+    assets: list[SkillResource] = Field(default_factory=list)
+    agents: list[SkillResource] = Field(default_factory=list)
+
+
+class FileHash(BaseModel):
+    """SHA-256 hash for a single file in the skill directory."""
+
+    path: str = Field(..., description="Relative path (e.g. 'SKILL.md' or 'references/arch.md')")
+    sha256: str = Field(..., description="Full SHA-256 hex digest of the file content")
+    size_bytes: int = Field(default=0, description="File size at hash time")
+
+
+class ContentIntegrity(BaseModel):
+    """Content integrity record computed at registration or refresh.
+
+    Stores per-file SHA-256 hashes and a composite hash derived from all
+    individual hashes, enabling drift detection without re-fetching content.
+    """
+
+    composite_hash: str = Field(
+        ..., description="SHA-256 of the sorted, concatenated per-file hashes"
+    )
+    file_hashes: list[FileHash] = Field(default_factory=list)
+    computed_at: datetime = Field(default_factory=_utc_now)
+    drift_detected: bool = Field(
+        default=False, description="True when a drift check found content differs from this baseline"
+    )
+    last_drift_check: datetime | None = Field(
+        None, description="When drift was last checked"
+    )
+    drifted_files: list[str] = Field(
+        default_factory=list, description="Paths of files that changed since baseline"
+    )
 
 
 class SkillCard(BaseModel):
@@ -168,6 +207,31 @@ class SkillCard(BaseModel):
     )
     owner: str | None = Field(None, description="Owner email/username for private visibility")
 
+    # Source authentication (for private Git repos)
+    # Literal keeps the wire-format strings compatible with existing clients
+    # while rejecting unsupported schemes at validation time.  Adding a new
+    # scheme requires updating both this list and SkillRegistrationRequest.
+    auth_scheme: Literal["none", "bearer", "api_key"] = Field(
+        default="none",
+        description="Auth scheme for fetching SKILL.md: none, bearer, api_key",
+    )
+    auth_credential_encrypted: str | None = Field(
+        None,
+        description="Encrypted credential for SKILL.md fetching",
+    )
+    auth_header_name: str | None = Field(
+        None,
+        description="Custom header name for credential (default: Authorization for bearer, PRIVATE-TOKEN for api_key)",
+    )
+    credential_updated_at: datetime | None = Field(
+        None, description="When the credential was last updated"
+    )
+
+    # Resource manifest (companion files: references, scripts, agents, assets)
+    resource_manifest: SkillResourceManifest | None = Field(
+        None, description="Manifest of companion resource files discovered in the skill directory"
+    )
+
     # State
     is_enabled: bool = Field(default=True, description="Whether the skill is enabled")
     registry_name: str = Field(default="local", description="Registry this skill belongs to")
@@ -187,6 +251,11 @@ class SkillCard(BaseModel):
     content_version: str | None = Field(None, description="Hash of SKILL.md for cache validation")
     content_updated_at: datetime | None = Field(
         None, description="When SKILL.md content was last updated"
+    )
+
+    # Content integrity (full hash of SKILL.md + all resources)
+    content_integrity: ContentIntegrity | None = Field(
+        None, description="Per-file hashes and composite hash for drift detection"
     )
 
     # Timestamps
@@ -308,6 +377,18 @@ class SkillRegistrationRequest(BaseModel):
         default="draft",
         description="Lifecycle status (default: draft). Allowed: active, deprecated, draft, beta",
     )
+    auth_scheme: Literal["none", "bearer", "api_key"] = Field(
+        default="none",
+        description="Auth scheme for fetching SKILL.md from private repos: none, bearer, api_key",
+    )
+    auth_credential: str | None = Field(
+        None,
+        description="Credential (token/key) for fetching SKILL.md; encrypted before storage, never persisted in plaintext",
+    )
+    auth_header_name: str | None = Field(
+        None,
+        description="Custom header name (default: Authorization for bearer, PRIVATE-TOKEN for api_key)",
+    )
 
     @field_validator("name")
     @classmethod
@@ -379,14 +460,6 @@ class SkillTier3_Resources(BaseModel):
     """Tier 3: Loaded on-demand."""
 
     available_resources: list[SkillResource] = Field(default_factory=list)
-
-
-class SkillResourceManifest(BaseModel):
-    """Manifest of available resources for a skill."""
-
-    scripts: list[SkillResource] = Field(default_factory=list)
-    references: list[SkillResource] = Field(default_factory=list)
-    assets: list[SkillResource] = Field(default_factory=list)
 
 
 class ToolValidationResult(BaseModel):

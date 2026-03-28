@@ -68,6 +68,7 @@ class SkillScannerService:
         skill_content_path: str | None = None,
         analyzers: str | None = None,
         timeout: int | None = None,
+        headers: dict[str, str] | None = None,
     ) -> SkillSecurityScanResult:
         """
         Scan a skill for security vulnerabilities.
@@ -78,6 +79,7 @@ class SkillScannerService:
             skill_content_path: Local path to skill content (for local scanning)
             analyzers: Comma-separated list of analyzers
             timeout: Scan timeout in seconds
+            headers: Optional HTTP headers for authenticated SKILL.md downloads
 
         Returns:
             SkillSecurityScanResult containing scan results
@@ -99,6 +101,7 @@ class SkillScannerService:
                 skill_content_path=skill_content_path,
                 analyzers=analyzers,
                 timeout=timeout,
+                headers=headers,
             )
 
             is_safe, critical, high, medium, low = self._analyze_scan_results(raw_output)
@@ -150,6 +153,7 @@ class SkillScannerService:
         skill_content_path: str | None = None,
         analyzers: str = "static",
         timeout: int = 120,
+        headers: dict[str, str] | None = None,
     ) -> dict:
         """
         Run skill-scanner command and return raw output.
@@ -162,6 +166,7 @@ class SkillScannerService:
             skill_content_path: Local path to skill content
             analyzers: Comma-separated list of analyzers
             timeout: Scan timeout in seconds
+            headers: Optional HTTP headers for authenticated downloads
 
         Returns:
             Dict containing parsed scan results
@@ -176,7 +181,7 @@ class SkillScannerService:
         if skill_content_path:
             target = skill_content_path
         elif skill_md_url:
-            target = self._download_skill_content(skill_md_url)
+            target = self._download_skill_content(skill_md_url, headers=headers)
         else:
             raise ValueError("Either skill_content_path or skill_md_url must be provided")
 
@@ -226,12 +231,18 @@ class SkillScannerService:
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Skill scanner failed: {e.stderr}") from e
 
-    def _download_skill_content(self, skill_md_url: str) -> str:
+    def _download_skill_content(
+        self, skill_md_url: str, headers: dict[str, str] | None = None
+    ) -> str:
         """
         Download skill content for scanning.
 
+        Mirrors the MCP server scanner pattern: accepts optional headers
+        for authenticated endpoints (e.g., private Git repos).
+
         Args:
             skill_md_url: URL to SKILL.md file
+            headers: Optional HTTP headers for authentication
 
         Returns:
             Path to temporary directory containing downloaded skill content
@@ -244,7 +255,9 @@ class SkillScannerService:
         temp_dir = tempfile.mkdtemp(prefix="skill_scan_")
         skill_md_path = Path(temp_dir) / "SKILL.md"
 
-        response = httpx.get(skill_md_url, follow_redirects=True, timeout=30.0)
+        response = httpx.get(
+            skill_md_url, headers=headers or {}, follow_redirects=True, timeout=30.0
+        )
         response.raise_for_status()
         skill_md_path.write_text(response.text)
 

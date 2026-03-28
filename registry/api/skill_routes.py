@@ -7,11 +7,12 @@ All recommendations implemented:
 - Path normalization via dependency
 - Domain-specific exception handling
 - Discovery endpoint for coding assistants
-- Resource listing endpoints
+- Resource content served via the /content endpoint
 """
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import (
     Annotated,
     Any,
@@ -50,6 +51,8 @@ from ..schemas.skill_models import (
 )
 from ..services.github_auth import github_auth_provider as _github_auth
 from ..services.skill_service import (
+    _build_fetch_headers,
+    _discover_skill_resources,
     _is_safe_url,
     get_skill_service,
 )
@@ -74,6 +77,8 @@ class RatingRequest(BaseModel):
 
 
 router = APIRouter(prefix="/skills", tags=["skills"])
+
+_SKILL_CARD_EXCLUDE = {"auth_credential_encrypted"}
 
 
 # Dependency for normalized path
@@ -358,6 +363,54 @@ async def search_skills(
     }
 
 
+@router.get("/{skill_path:path}/integrity", summary="Get content integrity status")
+async def get_integrity_status(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    skill_path: str = Path(..., description="Skill path or name"),
+) -> dict:
+    """Return the stored content integrity record for a skill.
+
+    This is a read-only view of the baseline hashes and drift state
+    that were computed at registration and updated on every content fetch.
+    No external requests are made.
+    """
+    normalized_path = normalize_skill_path(skill_path)
+    service = get_skill_service()
+    skill = await service.get_skill(normalized_path)
+
+    if not skill:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Skill not found: {normalized_path}",
+        )
+
+    if not _user_can_access_skill(skill, user_context):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    integrity = skill.content_integrity
+    if not integrity:
+        return {
+            "path": normalized_path,
+            "has_baseline": False,
+            "message": "No integrity baseline. Re-register the skill to compute one.",
+        }
+
+    return {
+        "path": normalized_path,
+        "has_baseline": True,
+        "composite_hash": integrity.composite_hash,
+        "computed_at": integrity.computed_at.isoformat() if integrity.computed_at else None,
+        "drift_detected": integrity.drift_detected,
+        "last_drift_check": integrity.last_drift_check.isoformat() if integrity.last_drift_check else None,
+        "drifted_files": integrity.drifted_files,
+        "file_count": len(integrity.file_hashes),
+        "files": [
+            {"path": fh.path, "sha256": fh.sha256, "size_bytes": fh.size_bytes}
+            for fh in integrity.file_hashes
+        ],
+    }
+
+
 @router.get("/{skill_path:path}/health", summary="Check skill health")
 async def check_skill_health(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
@@ -379,15 +432,24 @@ async def check_skill_health(
     }
 
 
+MAX_RESOURCE_SIZE = 512 * 1024  # 512 KB
+
+
 @router.get("/{skill_path:path}/content", summary="Get SKILL.md content")
 async def get_skill_content(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     skill_path: str = Path(..., description="Skill path or name"),
+    resource: str | None = Query(
+        None,
+        description="Optional relative path to a companion resource file. "
+        "When omitted, returns SKILL.md content.",
+    ),
 ) -> dict:
-    """Fetch SKILL.md content from the raw URL.
+    """Fetch skill content.
 
-    This endpoint proxies the SKILL.md content to avoid CORS issues
-    when the frontend tries to fetch from GitHub directly.
+    Without ``resource``: returns SKILL.md markdown and the resource manifest.
+    With ``resource``: returns the content of the specified companion file
+    (validated against the stored manifest to prevent path traversal).
     """
     normalized_path = normalize_skill_path(skill_path)
     service = get_skill_service()
@@ -399,9 +461,21 @@ async def get_skill_content(
             detail=f"Skill not found: {normalized_path}",
         )
 
-    # Check visibility
     if not _user_can_access_skill(skill, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if (
+        skill.content_integrity
+        and skill.content_integrity.drift_detected
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Content drift detected for {normalized_path}. "
+                f"Drifted files: {', '.join(skill.content_integrity.drifted_files)}. "
+                "The skill has been disabled. Re-register to update the baseline."
+            ),
+        )
 
     # For federated skills with inline content, serve directly from DB
     if skill.skill_md_content:
@@ -411,7 +485,6 @@ async def get_skill_content(
             "path": normalized_path,
         }
 
-    # Fetch content from raw URL
     raw_url = skill.skill_md_raw_url or skill.skill_md_url
     if not raw_url:
         raise HTTPException(
@@ -419,49 +492,56 @@ async def get_skill_content(
             detail="No SKILL.md URL configured for this skill",
         )
 
-    # SSRF protection: validate URL before making request
-    if not _is_safe_url(str(raw_url)):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="URL failed SSRF validation - private/internal addresses are not allowed",
-        )
-
-    try:
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            headers = await _github_auth.get_auth_headers(str(raw_url))
-            response = await client.get(
-                str(raw_url), headers=headers, follow_redirects=True, timeout=30.0
+    if resource is not None:
+        manifest = skill.resource_manifest
+        if not manifest:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No resource manifest available for this skill",
+            )
+        all_resources = manifest.references + manifest.scripts + manifest.agents + manifest.assets
+        matched = [r for r in all_resources if r.path == resource]
+        if not matched:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Resource '{resource}' not found in manifest",
             )
 
-            # SSRF protection: validate final URL after redirects
-            final_url = str(response.url)
-            if final_url != str(raw_url) and not _is_safe_url(final_url):
-                logger.warning(
-                    f"SSRF protection: Blocked redirect from {raw_url} to unsafe URL {final_url}"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Redirect to unsafe URL blocked: {final_url}",
-                )
+        from ..utils.url_utils import derive_resource_url
 
-            if response.status_code >= 400:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Failed to fetch SKILL.md: HTTP {response.status_code}",
-                )
-
-            return {
-                "content": response.text,
-                "url": str(raw_url),
-            }
-    except httpx.RequestError as e:
-        logger.error(f"Failed to fetch SKILL.md from {raw_url}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch SKILL.md: {e}",
+        resource_url = derive_resource_url(str(raw_url), resource)
+        response = await _fetch_authenticated_content(
+            resource_url, skill, max_size=MAX_RESOURCE_SIZE,
         )
+
+        drift_task = asyncio.create_task(
+            _check_drift_inline(service, normalized_path, skill, resource, response.content)
+        )
+        drift_task.add_done_callback(_log_task_exception)
+
+        return {
+            "content": response.text,
+            "path": resource,
+            "type": matched[0].type,
+            "url": resource_url,
+        }
+
+    response = await _fetch_authenticated_content(str(raw_url), skill)
+
+    drift_task = asyncio.create_task(
+        _check_drift_inline(service, normalized_path, skill, "SKILL.md", response.content)
+    )
+    drift_task.add_done_callback(_log_task_exception)
+
+    result: dict[str, Any] = {
+        "content": response.text,
+        "url": str(raw_url),
+    }
+    if skill.resource_manifest:
+        result["resource_manifest"] = skill.resource_manifest.model_dump()
+    if skill.content_integrity:
+        result["drift_detected"] = skill.content_integrity.drift_detected
+    return result
 
 
 @router.get(
@@ -609,7 +689,67 @@ async def rescan_skill(
         )
 
 
-@router.get("/{skill_path:path}", response_model=SkillCard, summary="Get a skill by path")
+
+@router.post(
+    "/{skill_path:path}/refresh-resources",
+    response_model=dict,
+    summary="Refresh skill resource manifest",
+)
+async def refresh_skill_resources(
+    http_request: Request,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    skill_path: str = Path(..., description="Skill path or name"),
+) -> dict:
+    """Re-discover companion resource files and update the stored manifest.
+
+    Useful when new files have been added to the skill's repository directory
+    without re-registering the skill.
+    """
+    normalized_path = normalize_skill_path(skill_path)
+    service = get_skill_service()
+    skill = await service.get_skill(normalized_path)
+
+    if not skill:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+
+    if not _user_can_modify_skill(skill, user_context):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    set_audit_action(
+        http_request,
+        "refresh_resources",
+        "skill",
+        resource_id=normalized_path,
+        description=f"Refresh resource manifest for {normalized_path}",
+    )
+
+    raw_url = str(skill.skill_md_raw_url or skill.skill_md_url)
+    auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
+
+    manifest = await _discover_skill_resources(
+        raw_url,
+        auth_scheme=auth_scheme,
+        auth_credential=credential,
+        auth_header_name=auth_header_name,
+    )
+
+    updates = {"resource_manifest": manifest.model_dump() if manifest else None}
+    await service.update_skill(normalized_path, updates)
+
+    total = 0
+    if manifest:
+        total = len(manifest.references) + len(manifest.scripts) + len(manifest.agents) + len(manifest.assets)
+
+    return {
+        "path": normalized_path,
+        "resources_discovered": total,
+        "resource_manifest": manifest.model_dump() if manifest else None,
+    }
+
+
+@router.get("/{skill_path:path}", response_model=SkillCard, response_model_exclude=_SKILL_CARD_EXCLUDE, summary="Get a skill by path")
 async def get_skill(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     skill_path: str = Path(..., description="Skill path or name"),
@@ -634,6 +774,7 @@ async def get_skill(
 @router.post(
     "",
     response_model=SkillCard,
+    response_model_exclude=_SKILL_CARD_EXCLUDE,
     status_code=status.HTTP_201_CREATED,
     summary="Register a new skill",
 )
@@ -678,8 +819,11 @@ async def register_skill(
         skill = await service.register_skill(request=request, owner=owner, validate_url=True)
         logger.info(f"Registered skill: {skill.name} by {owner}")
 
-        # Perform security scan on registration (non-blocking on failure)
-        await _perform_skill_security_scan_on_registration(skill, service)
+        # Security scanning if enabled (non-blocking — mirrors server registration pattern)
+        scan_task = asyncio.create_task(
+            _perform_skill_security_scan_on_registration(skill, service)
+        )
+        scan_task.add_done_callback(_log_task_exception)
 
         asyncio.create_task(
             send_registration_webhook(
@@ -707,7 +851,7 @@ async def register_skill(
         )
 
 
-@router.put("/{skill_path:path}", response_model=SkillCard, summary="Update a skill")
+@router.put("/{skill_path:path}", response_model=SkillCard, response_model_exclude=_SKILL_CARD_EXCLUDE, summary="Update a skill")
 async def update_skill(
     http_request: Request,
     request: SkillRegistrationRequest,
@@ -766,6 +910,19 @@ async def update_skill(
             version=raw_meta.get("version"),
             extra={k: v for k, v in raw_meta.items() if k not in ("author", "version")},
         ).model_dump(mode="json")
+
+    # Encrypt credential if provided on update
+    auth_credential = updates.pop("auth_credential", None)
+    auth_scheme = updates.get("auth_scheme", existing.auth_scheme)
+    if auth_credential and auth_scheme != "none":
+        from ..utils.credential_encryption import encrypt_credential
+
+        updates["auth_credential_encrypted"] = encrypt_credential(auth_credential)
+        updates["credential_updated_at"] = datetime.now(UTC).isoformat()
+    elif auth_scheme == "none":
+        updates["auth_credential_encrypted"] = None
+        updates["auth_header_name"] = None
+        updates["credential_updated_at"] = None
 
     updated = await service.update_skill(normalized_path, updates)
 
@@ -925,6 +1082,101 @@ async def rate_skill(
 # Helper functions
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Done-callback that surfaces unhandled exceptions from background tasks.
+
+    Without this, exceptions raised inside ``asyncio.create_task(...)``
+    fire-and-forget calls are only visible when the garbage collector
+    finalises the task, which is too late for production debugging.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Background task failed: %s", exc, exc_info=exc)
+
+
+def _decrypt_skill_auth(
+    skill: SkillCard,
+) -> tuple[str, str | None, str | None]:
+    """Extract and decrypt authentication details from a skill.
+
+    Returns (auth_scheme, plaintext_credential_or_none, auth_header_name).
+    """
+    auth_scheme = getattr(skill, "auth_scheme", "none")
+    encrypted_cred = getattr(skill, "auth_credential_encrypted", None)
+    credential = None
+    if auth_scheme != "none" and encrypted_cred:
+        from ..utils.credential_encryption import decrypt_credential
+
+        credential = decrypt_credential(encrypted_cred)
+    return auth_scheme, credential, getattr(skill, "auth_header_name", None)
+
+
+async def _fetch_authenticated_content(
+    url: str,
+    skill: SkillCard,
+    *,
+    max_size: int | None = None,
+    timeout: float = 30.0,
+) -> "httpx.Response":
+    """Fetch content from a URL using the skill's encrypted credentials.
+
+    Handles SSRF validation, credential decryption, header building,
+    and redirect safety checks. Raises HTTPException on failure.
+    """
+    import httpx as _httpx
+
+    if not _is_safe_url(url):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="URL failed SSRF validation - private/internal addresses are not allowed",
+        )
+
+    auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
+    fetch_url, fetch_headers = _build_fetch_headers(url, auth_scheme, credential, auth_header_name)
+
+    # Merge in GitHub App / token auth headers so public-repo fetches
+    # benefit from the higher rate-limit ceiling.  Per-skill credentials
+    # take precedence on key collisions because they are explicitly
+    # configured for this skill's source.
+    github_headers = await _github_auth.get_auth_headers(fetch_url)
+    merged_headers = {**github_headers, **fetch_headers}
+
+    try:
+        async with _httpx.AsyncClient() as client:
+            response = await client.get(
+                fetch_url, headers=merged_headers, follow_redirects=True, timeout=timeout,
+            )
+
+            final_url = str(response.url)
+            if final_url != fetch_url and not _is_safe_url(final_url):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Redirect to unsafe URL blocked: {final_url}",
+                )
+
+            if response.status_code >= 400:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to fetch content: HTTP {response.status_code}",
+                )
+
+            if max_size and len(response.content) > max_size:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"Content exceeds {max_size // 1024} KB limit",
+                )
+
+            return response
+    except _httpx.RequestError as e:
+        logger.error("Failed to fetch from %s: %s", url, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch content: {e}",
+        )
+
+
 def _user_can_access_skill(
     skill: SkillCard,
     user_context: dict,
@@ -963,8 +1215,14 @@ async def _perform_skill_security_scan_on_registration(
     skill: SkillCard,
     service,
 ) -> None:
-    """
-    Perform security scan on skill registration.
+    """Perform security scan on newly registered skill.
+
+    Mirrors the MCP server registration scan pattern:
+    - Builds auth headers from the skill's encrypted credential
+    - Passes headers to the scanner for authenticated downloads
+    - Adds security-pending tag if scan fails
+    - Disables skill if configured and scan fails
+    - All scan failures are non-fatal and logged but not raised.
 
     Args:
         skill: The registered skill card
@@ -981,9 +1239,18 @@ async def _perform_skill_security_scan_on_registration(
     logger.info(f"Performing security scan for skill: {skill.path}")
 
     try:
+        raw_url = str(skill.skill_md_raw_url or skill.skill_md_url)
+        auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
+        fetch_headers: dict[str, str] = {}
+        if credential:
+            raw_url, fetch_headers = _build_fetch_headers(
+                raw_url, auth_scheme, credential, auth_header_name,
+            )
+
         result = await skill_scanner_service.scan_skill(
             skill_path=skill.path,
-            skill_md_url=str(skill.skill_md_raw_url or skill.skill_md_url),
+            skill_md_url=raw_url,
+            headers=fetch_headers or None,
         )
 
         if not result.is_safe and config.block_unsafe_skills:
@@ -1008,3 +1275,84 @@ async def _perform_skill_security_scan_on_registration(
                     )
             except Exception as tag_err:
                 logger.error(f"Failed to add security-pending tag: {tag_err}")
+
+
+async def _check_drift_inline(
+    service: "SkillService",
+    skill_path: str,
+    skill: SkillCard,
+    file_path: str,
+    content_bytes: bytes,
+) -> None:
+    """Compare fetched content against the stored integrity baseline.
+
+    Runs as a fire-and-forget background task so it never blocks the
+    content response.  Updates the DB only when a change is detected
+    (or when a previously-drifted file returns to its baseline).
+    """
+    import hashlib
+    from datetime import UTC, datetime
+
+    integrity = skill.content_integrity
+    if not integrity or not integrity.file_hashes:
+        return
+
+    baseline = {fh.path: fh.sha256 for fh in integrity.file_hashes}
+    expected = baseline.get(file_path)
+    if expected is None:
+        return
+
+    actual = hashlib.sha256(content_bytes).hexdigest()
+    file_drifted = actual != expected
+
+    previously_drifted = file_path in (integrity.drifted_files or [])
+    now = datetime.now(UTC).isoformat()
+
+    try:
+        # Fast path: drift state for this file did not change.  Persist
+        # only the last-checked timestamp in a single update so we still
+        # have an audit trail of the verification.
+        if file_drifted == previously_drifted:
+            await service.update_skill(
+                skill_path,
+                {"content_integrity.last_drift_check": now},
+            )
+            return
+
+        current_drifted = list(integrity.drifted_files or [])
+        if file_drifted and file_path not in current_drifted:
+            current_drifted.append(file_path)
+        elif not file_drifted and file_path in current_drifted:
+            current_drifted.remove(file_path)
+
+        # Batch all field-level changes (integrity state + tags) into a
+        # single update_skill() call.  This halves DB round-trips and
+        # avoids interleaving where another task could observe a
+        # half-applied state.  Enable/disable is a separate persistence
+        # path (set_state vs update) and must remain its own call.
+        current_tags = list(skill.tags or [])
+        drift_tag = "content-drifted"
+        if current_drifted and drift_tag not in current_tags:
+            current_tags.append(drift_tag)
+        elif not current_drifted and drift_tag in current_tags:
+            current_tags.remove(drift_tag)
+
+        combined_updates: dict[str, Any] = {
+            "content_integrity.drift_detected": bool(current_drifted),
+            "content_integrity.last_drift_check": now,
+            "content_integrity.drifted_files": current_drifted,
+            "tags": current_tags,
+        }
+        await service.update_skill(skill_path, combined_updates)
+
+        if current_drifted:
+            await service.toggle_skill(skill_path, enabled=False)
+            logger.warning(
+                "Drift detected for %s in skill %s — skill disabled",
+                file_path, skill_path,
+            )
+        else:
+            await service.toggle_skill(skill_path, enabled=True)
+            logger.info("Drift cleared for skill %s — skill re-enabled", skill_path)
+    except Exception:
+        logger.debug("Failed to persist drift state for %s", skill_path, exc_info=True)

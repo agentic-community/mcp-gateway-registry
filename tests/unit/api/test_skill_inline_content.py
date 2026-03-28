@@ -74,6 +74,11 @@ def _make_mock_skill(
     mock.owner = owner
     mock.allowed_groups = []
     mock.tags = []
+    # Drift-detection guard in get_skill_content() reads .content_integrity;
+    # MagicMock's auto-attributes are truthy, which would trigger 409 Conflict.
+    # Tests that exercise drift behaviour should override this explicitly.
+    mock.content_integrity = None
+    mock.resource_manifest = None
     return mock
 
 
