@@ -25,11 +25,13 @@ from fastapi.staticfiles import StaticFiles
 
 from registry.api.agent_routes import router as agent_router
 from registry.api.ans_routes import router as ans_router
+from registry.api.auth0_m2m_routes import router as auth0_m2m_router
 from registry.api.config_routes import router as config_router
 from registry.api.federation_export_routes import router as federation_export_router
 from registry.api.federation_routes import router as federation_router
 from registry.api.internal_routes import router as internal_router
 from registry.api.management_routes import router as management_router
+from registry.api.okta_m2m_routes import router as okta_m2m_router
 from registry.api.peer_management_routes import router as peer_management_router
 from registry.api.registry_management_routes import router as registry_management_router
 from registry.api.registry_routes import router as registry_router
@@ -634,6 +636,10 @@ app.include_router(federation_export_router)
 app.include_router(peer_management_router)
 app.include_router(audit_router, prefix="/api", tags=["Audit Logs"])
 app.include_router(registry_management_router, prefix="/api")
+
+# Register IdP M2M management routers (Okta and Auth0)
+app.include_router(okta_m2m_router, prefix="/api", tags=["Okta M2M"])
+app.include_router(auth0_m2m_router, prefix="/api", tags=["Auth0 M2M"])
 
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])
