@@ -497,6 +497,67 @@ variable "okta_auth_server_id" {
 }
 
 # =============================================================================
+# AUTH0 CONFIGURATION
+# =============================================================================
+
+variable "auth0_enabled" {
+  description = "Enable Auth0 as authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "auth0_domain" {
+  description = "Auth0 domain (e.g., your-tenant.us.auth0.com)"
+  type        = string
+  default     = ""
+}
+
+variable "auth0_client_id" {
+  description = "Auth0 Web Application (client) ID"
+  type        = string
+  default     = ""
+}
+
+variable "auth0_client_secret" {
+  description = "Auth0 Client Secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "auth0_audience" {
+  description = "Auth0 API Audience (optional - for API access tokens)"
+  type        = string
+  default     = ""
+}
+
+variable "auth0_groups_claim" {
+  description = "Auth0 custom claim for group memberships (must be namespaced URI)"
+  type        = string
+  default     = "https://mcp-gateway/groups"
+}
+
+variable "auth0_m2m_client_id" {
+  description = "Auth0 M2M Client ID (for IAM Management - user/role administration)"
+  type        = string
+  default     = ""
+}
+
+variable "auth0_m2m_client_secret" {
+  description = "Auth0 M2M Client Secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "auth0_management_api_token" {
+  description = "Auth0 Management API Token (alternative to M2M credentials)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# =============================================================================
 # OAUTH TOKEN STORAGE CONFIGURATION
 # =============================================================================
 

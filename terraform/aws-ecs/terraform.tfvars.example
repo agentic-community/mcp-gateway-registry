@@ -456,6 +456,52 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # okta_auth_server_id = "your-auth-server-id"
 
 # ============================================================================
+# AUTH0 CONFIGURATION (Alternative to Keycloak)
+# ============================================================================
+
+# Set auth0_enabled = true to use Auth0 instead of Keycloak
+# When enabled, AUTH_PROVIDER is automatically set to "auth0"
+# IMPORTANT: Set entra_enabled and okta_enabled = false (or omit) when using Auth0
+
+# Enable Auth0 authentication (default: false, uses Keycloak)
+# auth0_enabled = true
+
+# Auth0 domain (e.g., your-tenant.us.auth0.com)
+# Get from: Auth0 Dashboard → Applications → Your App → Settings
+# auth0_domain = "your-tenant.us.auth0.com"
+
+# Auth0 Application (client) ID
+# Get from: Auth0 Dashboard → Applications → Your App → Settings
+# auth0_client_id = "your-client-id"
+
+# Auth0 Client Secret
+# Get from: Auth0 Dashboard → Applications → Your App → Settings
+# auth0_client_secret = "your-client-secret"
+
+# Auth0 API Audience (optional - for API access tokens)
+# This is the API Identifier from Auth0 Dashboard → APIs
+# auth0_audience = "https://your-api-identifier"
+
+# Auth0 Groups Claim (custom claim for group memberships)
+# Must match the namespace used in your Auth0 Action
+# Default: https://mcp-gateway/groups
+# auth0_groups_claim = "https://mcp-gateway/groups"
+
+# Auth0 M2M Client ID (REQUIRED for IAM Management - user/role administration)
+# Create an M2M application in Auth0 with Auth0 Management API permissions
+# Get from: Auth0 Dashboard → Applications → Create Application → Machine to Machine
+# auth0_m2m_client_id = "your-m2m-client-id"
+
+# Auth0 M2M Client Secret (REQUIRED for IAM Management)
+# auth0_m2m_client_secret = "your-m2m-client-secret"
+
+# Auth0 Management API Token (alternative to M2M credentials)
+# You can use a static Management API token instead of M2M client credentials
+# Generate in Auth0 Dashboard → Applications → APIs → Auth0 Management API → API Explorer
+# WARNING: Static tokens expire after 24 hours - M2M credentials recommended for production
+# auth0_management_api_token = "your-management-api-token"
+
+# ============================================================================
 # DEPLOYMENT MODE CONFIGURATION
 # ============================================================================
 

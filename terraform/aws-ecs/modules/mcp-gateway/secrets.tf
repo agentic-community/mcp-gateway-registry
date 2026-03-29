@@ -266,6 +266,56 @@ resource "aws_secretsmanager_secret_version" "okta_api_token" {
 }
 
 
+# =============================================================================
+# AUTH0 SECRETS
+# =============================================================================
+
+# Auth0 client secret (for OAuth authentication)
+resource "aws_secretsmanager_secret" "auth0_client_secret" {
+  count = var.auth0_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-auth0-client-secret-"
+  description             = "Auth0 client secret for OAuth authentication"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "auth0_client_secret" {
+  count = var.auth0_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.auth0_client_secret[0].id
+  secret_string = var.auth0_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+
+# Auth0 M2M client secret (for IAM Management operations)
+resource "aws_secretsmanager_secret" "auth0_m2m_client_secret" {
+  count = var.auth0_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-auth0-m2m-client-secret-"
+  description             = "Auth0 M2M client secret for IAM Management operations"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "auth0_m2m_client_secret" {
+  count = var.auth0_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.auth0_m2m_client_secret[0].id
+  secret_string = var.auth0_m2m_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+
 # Metrics API key (for metrics-service authentication)
 resource "random_password" "metrics_api_key" {
   count   = var.enable_observability ? 1 : 0

@@ -107,7 +107,7 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default"))
+          value = var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default")))
         },
         {
           name  = "KEYCLOAK_URL"
@@ -161,6 +161,34 @@ module "ecs_service_auth" {
         {
           name  = "OKTA_AUTH_SERVER_ID"
           value = var.okta_auth_server_id
+        },
+        {
+          name  = "AUTH0_DOMAIN"
+          value = var.auth0_domain
+        },
+        {
+          name  = "AUTH0_CLIENT_ID"
+          value = var.auth0_client_id
+        },
+        {
+          name  = "AUTH0_AUDIENCE"
+          value = var.auth0_audience
+        },
+        {
+          name  = "AUTH0_GROUPS_CLAIM"
+          value = var.auth0_groups_claim
+        },
+        {
+          name  = "AUTH0_M2M_CLIENT_ID"
+          value = var.auth0_m2m_client_id
+        },
+        {
+          name  = "AUTH0_MANAGEMENT_API_TOKEN"
+          value = var.auth0_management_api_token
+        },
+        {
+          name  = "AUTH0_ENABLED"
+          value = tostring(var.auth0_enabled)
         },
         {
           name  = "SCOPES_CONFIG_PATH"
@@ -319,6 +347,16 @@ module "ecs_service_auth" {
           {
             name      = "OKTA_API_TOKEN"
             valueFrom = aws_secretsmanager_secret.okta_api_token[0].arn
+          }
+        ] : [],
+        var.auth0_enabled ? [
+          {
+            name      = "AUTH0_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.auth0_client_secret[0].arn
+          },
+          {
+            name      = "AUTH0_M2M_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.auth0_m2m_client_secret[0].arn
           }
         ] : [],
         var.enable_observability ? [
@@ -538,7 +576,7 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default"))
+          value = var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default")))
         },
         {
           name  = "ENTRA_ENABLED"
@@ -572,6 +610,34 @@ module "ecs_service_registry" {
         {
           name  = "OKTA_AUTH_SERVER_ID"
           value = var.okta_auth_server_id
+        },
+        {
+          name  = "AUTH0_ENABLED"
+          value = tostring(var.auth0_enabled)
+        },
+        {
+          name  = "AUTH0_DOMAIN"
+          value = var.auth0_domain
+        },
+        {
+          name  = "AUTH0_CLIENT_ID"
+          value = var.auth0_client_id
+        },
+        {
+          name  = "AUTH0_AUDIENCE"
+          value = var.auth0_audience
+        },
+        {
+          name  = "AUTH0_GROUPS_CLAIM"
+          value = var.auth0_groups_claim
+        },
+        {
+          name  = "AUTH0_M2M_CLIENT_ID"
+          value = var.auth0_m2m_client_id
+        },
+        {
+          name  = "AUTH0_MANAGEMENT_API_TOKEN"
+          value = var.auth0_management_api_token
         },
         {
           name  = "AWS_REGION"
@@ -838,6 +904,16 @@ module "ecs_service_registry" {
           {
             name      = "OKTA_API_TOKEN"
             valueFrom = aws_secretsmanager_secret.okta_api_token[0].arn
+          }
+        ] : [],
+        var.auth0_enabled ? [
+          {
+            name      = "AUTH0_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.auth0_client_secret[0].arn
+          },
+          {
+            name      = "AUTH0_M2M_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.auth0_m2m_client_secret[0].arn
           }
         ] : [],
         var.enable_observability ? [

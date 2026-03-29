@@ -30,9 +30,9 @@ app:
   registryId: # Unique identifier for this registry instance (optional)
 
 # Authentication Provider Configuration
-# Choose ONE provider: keycloak, entra, or okta
+# Choose ONE provider: keycloak, entra, okta, or auth0
 authProvider:
-  # Provider type: "keycloak", "entra", or "okta"
+  # Provider type: "keycloak", "entra", "okta", or "auth0"
   type: keycloak
 
 # Keycloak integration (used when authProvider.type = "keycloak")
@@ -55,6 +55,17 @@ okta:
   m2mClientSecret: ""  # Optional: defaults to clientSecret
   apiToken: ""  # Optional: required for IAM operations
   authServerId: ""  # Optional: uses default Org Authorization Server if not set
+
+# Auth0 integration (used when authProvider.type = "auth0")
+auth0:
+  domain: ""  # e.g., your-tenant.us.auth0.com
+  clientId: ""
+  clientSecret: ""
+  audience: ""  # Optional: API audience for M2M tokens
+  groupsClaim: "https://mcp-gateway/groups"  # Custom namespaced claim for groups
+  m2mClientId: ""  # Required for IAM Management (user/role administration)
+  m2mClientSecret: ""  # Required for IAM Management
+  managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
 
 # Service configuration
 service:

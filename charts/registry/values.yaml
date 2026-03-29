@@ -83,6 +83,17 @@ okta:
   apiToken: ""  # Optional: required for IAM operations
   authServerId: ""  # Optional: uses default Org Authorization Server if not set
 
+# Auth0 integration (used when authProvider.type = "auth0" in standalone deployment)
+auth0:
+  domain: ""  # e.g., your-tenant.us.auth0.com
+  clientId: ""
+  clientSecret: ""
+  audience: ""  # Optional: API audience for M2M tokens
+  groupsClaim: "https://mcp-gateway/groups"  # Custom namespaced claim for groups
+  m2mClientId: ""  # Required for IAM Management (user/role administration)
+  m2mClientSecret: ""  # Required for IAM Management
+  managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
+
 # Service configuration
 service:
   type: ClusterIP
