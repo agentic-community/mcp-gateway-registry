@@ -197,7 +197,6 @@ async def create_auth0_human_user(
 
     user_data: dict[str, Any] = {
         "email": email,
-        "username": username,
         "given_name": first_name,
         "family_name": last_name,
         "name": f"{first_name} {last_name}",
