@@ -1551,10 +1551,10 @@ async def validate_request(request: Request):
                     logger.error(f"Error processing request payload for tool extraction: {e}")
 
         # Validate scope-based access if we have server/tool information
-        # For providers that use groups (Keycloak, Entra ID, Cognito, Okta), map groups to scopes
+        # For providers that use groups (Keycloak, Entra ID, Cognito, Okta, Auth0), map groups to scopes
         user_groups = validation_result.get("groups", [])
         auth_method = validation_result.get("method", "")
-        if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta"]:
+        if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0"]:
             # Map IdP groups to scopes using the group mappings (query DocumentDB)
             user_scopes = await map_groups_to_scopes(user_groups)
             logger.info(f"Mapped {auth_method} groups {user_groups} to scopes: {user_scopes}")

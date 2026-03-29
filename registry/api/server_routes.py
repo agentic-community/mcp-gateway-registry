@@ -2232,15 +2232,24 @@ async def generate_user_token(
                         "token_type": token_data.get("token_type", "Bearer"),  # nosec B105 - OAuth2 standard token type per RFC 6750
                         "scope": token_data.get("scope", ""),
                     },
-                    "keycloak_url": getattr(settings, "keycloak_url", None)
-                    or "http://keycloak:8080",
-                    "realm": getattr(settings, "keycloak_realm", None) or "mcp-gateway",
                     "client_id": "user-generated",
                     # Legacy fields for backward compatibility
                     "token_data": token_data,
                     "user_scopes": user_context["scopes"],
                     "requested_scopes": requested_scopes or user_context["scopes"],
                 }
+
+                # Add provider-specific metadata
+                auth_provider = getattr(settings, "auth_provider", "").lower()
+                if auth_provider == "keycloak":
+                    formatted_response["keycloak_url"] = getattr(settings, "keycloak_url", None) or "http://keycloak:8080"
+                    formatted_response["realm"] = getattr(settings, "keycloak_realm", None) or "mcp-gateway"
+                elif auth_provider == "auth0":
+                    formatted_response["auth0_domain"] = getattr(settings, "auth0_domain", None)
+                elif auth_provider == "cognito":
+                    formatted_response["cognito_user_pool_id"] = getattr(settings, "cognito_user_pool_id", None)
+                elif auth_provider == "entra":
+                    formatted_response["entra_tenant_id"] = getattr(settings, "entra_tenant_id", None)
 
                 return formatted_response
             else:

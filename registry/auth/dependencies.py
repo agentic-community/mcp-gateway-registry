@@ -544,10 +544,12 @@ async def nginx_proxied_auth(
             "keycloak",
             "entra",
             "cognito",
+            "okta",
+            "auth0",
             "network-trusted",
             "federation-static",
         ]:
-            # User authenticated via OAuth2 JWT (Keycloak, Entra ID, or Cognito)
+            # User authenticated via OAuth2 JWT (Keycloak, Entra ID, Cognito, Okta, or Auth0)
             # Scopes already contain mapped permissions
             # Check if user has admin scopes
             if (

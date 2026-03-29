@@ -455,6 +455,101 @@ class OktaIAMManager:
         return await update_okta_group(group_name_or_id=group_name, description=description)
 
 
+class Auth0IAMManager:
+    """Auth0 IAM manager implementation."""
+
+    async def list_users(
+        self, search: str | None = None, max_results: int = 500, include_groups: bool = True
+    ) -> list[dict[str, Any]]:
+        """List users from Auth0."""
+        from .auth0_manager import list_auth0_users
+
+        return await list_auth0_users(
+            search=search, max_results=max_results, include_groups=include_groups
+        )
+
+    async def create_human_user(
+        self,
+        username: str,
+        email: str,
+        first_name: str,
+        last_name: str,
+        groups: list[str],
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a human user in Auth0."""
+        from .auth0_manager import create_auth0_human_user
+
+        return await create_auth0_human_user(
+            username=username,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            groups=groups,
+            password=password,
+        )
+
+    async def delete_user(self, username: str) -> bool:
+        """Delete a user from Auth0."""
+        from .auth0_manager import delete_auth0_user
+
+        return await delete_auth0_user(username_or_id=username)
+
+    async def list_groups(self) -> list[dict[str, Any]]:
+        """List all roles (groups) from Auth0."""
+        from .auth0_manager import list_auth0_groups
+
+        return await list_auth0_groups()
+
+    async def create_group(self, group_name: str, description: str = "") -> dict[str, Any]:
+        """Create a role (group) in Auth0."""
+        from .auth0_manager import create_auth0_group
+
+        return await create_auth0_group(group_name=group_name, description=description)
+
+    async def delete_group(self, group_name: str) -> bool:
+        """Delete a role (group) from Auth0."""
+        from .auth0_manager import delete_auth0_group
+
+        return await delete_auth0_group(group_name_or_id=group_name)
+
+    async def group_exists(self, group_name: str) -> bool:
+        """Check if a role (group) exists in Auth0."""
+        from .auth0_manager import list_auth0_groups
+
+        try:
+            groups = await list_auth0_groups()
+            return any(g.get("name", "").lower() == group_name.lower() for g in groups)
+        except Exception:
+            return False
+
+    async def create_service_account(
+        self, client_id: str, groups: list[str], description: str | None = None
+    ) -> dict[str, Any]:
+        """Create an M2M application (service account) in Auth0."""
+        from .auth0_manager import create_auth0_service_account
+
+        return await create_auth0_service_account(
+            client_id_name=client_id, group_names=groups, description=description
+        )
+
+    async def update_user_groups(self, username: str, groups: list[str]) -> dict[str, Any]:
+        """Update role (group) memberships for an Auth0 user."""
+        from .auth0_manager import update_auth0_user_groups
+
+        return await update_auth0_user_groups(username_or_id=username, groups=groups)
+
+    async def update_group(
+        self,
+        group_name: str,
+        description: str = "",
+    ) -> dict[str, Any]:
+        """Update a role's (group's) properties in Auth0."""
+        from .auth0_manager import update_auth0_group
+
+        return await update_auth0_group(group_name_or_id=group_name, description=description)
+
+
 def get_iam_manager() -> IAMManager:
     """
     Factory function to get the appropriate IAM manager based on AUTH_PROVIDER.
@@ -475,6 +570,10 @@ def get_iam_manager() -> IAMManager:
     elif provider == "okta":
         logger.debug("Using Okta IAM manager")
         return OktaIAMManager()
+
+    elif provider == "auth0":
+        logger.debug("Using Auth0 IAM manager")
+        return Auth0IAMManager()
 
     else:
         logger.warning(f"Unknown AUTH_PROVIDER '{provider}', defaulting to Keycloak")
