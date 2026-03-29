@@ -565,6 +565,67 @@ variable "okta_auth_server_id" {
   default     = ""
 }
 
+# =============================================================================
+# AUTH0 CONFIGURATION
+# =============================================================================
+
+variable "auth0_enabled" {
+  description = "Enable Auth0 as authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "auth0_domain" {
+  description = "Auth0 domain (e.g., your-tenant.us.auth0.com)"
+  type        = string
+  default     = ""
+}
+
+variable "auth0_client_id" {
+  description = "Auth0 Application (client) ID"
+  type        = string
+  default     = ""
+}
+
+variable "auth0_client_secret" {
+  description = "Auth0 Client Secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "auth0_audience" {
+  description = "Auth0 API audience for M2M tokens"
+  type        = string
+  default     = ""
+}
+
+variable "auth0_groups_claim" {
+  description = "Custom namespaced claim for groups in Auth0 tokens"
+  type        = string
+  default     = "https://mcp-gateway/groups"
+}
+
+variable "auth0_m2m_client_id" {
+  description = "Auth0 M2M client ID for IAM Management operations"
+  type        = string
+  default     = ""
+}
+
+variable "auth0_m2m_client_secret" {
+  description = "Auth0 M2M client secret for IAM Management operations"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "auth0_management_api_token" {
+  description = "Auth0 Management API token (alternative to M2M credentials, expires after 24h)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "registry_static_token_auth_enabled" {
   description = "Enable static token auth for Registry API (IdP-independent access using REGISTRY_API_TOKEN)"
   type        = bool

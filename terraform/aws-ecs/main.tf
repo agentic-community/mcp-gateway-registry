@@ -140,6 +140,17 @@ module "mcp_gateway" {
   okta_api_token         = var.okta_api_token
   okta_auth_server_id    = var.okta_auth_server_id
 
+  # Auth0 configuration
+  auth0_enabled                = var.auth0_enabled
+  auth0_domain                 = var.auth0_domain
+  auth0_client_id              = var.auth0_client_id
+  auth0_client_secret          = var.auth0_client_secret
+  auth0_audience               = var.auth0_audience
+  auth0_groups_claim           = var.auth0_groups_claim
+  auth0_m2m_client_id          = var.auth0_m2m_client_id
+  auth0_m2m_client_secret      = var.auth0_m2m_client_secret
+  auth0_management_api_token   = var.auth0_management_api_token
+
   # OAuth token storage
   oauth_store_tokens_in_session = var.oauth_store_tokens_in_session
 
