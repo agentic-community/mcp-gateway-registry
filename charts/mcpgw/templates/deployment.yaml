@@ -43,7 +43,7 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           envFrom:
             - secretRef:
-                name: {{ .Values.app.envSecretName }}
+                name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if .Values.global.sharedSecretName }}
             - secretRef:
                 name: {{ .Values.global.sharedSecretName }}

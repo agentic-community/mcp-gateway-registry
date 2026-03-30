@@ -18,3 +18,4 @@ mongodb:
   username: my-user
   use_tls: false
   storage_backend: mongodb-ce
+  existingSecret: ""  # If set, use this existing secret instead of creating one

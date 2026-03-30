@@ -12,7 +12,7 @@ spec:
           command: ['sh', '-c']
           envFrom:
             - secretRef:
-                name: mongo-credentials
+                name: {{ .Values.mongodb.existingSecret | default "mongo-credentials" }}
           args:
             - |
               echo "Installing pymongo..."
@@ -33,7 +33,7 @@ spec:
           ]
           envFrom:
             - secretRef:
-                name: mongo-credentials
+                name: {{ .Values.mongodb.existingSecret | default "mongo-credentials" }}
           volumeMounts:
             - mountPath: /app/script.py
               name: script

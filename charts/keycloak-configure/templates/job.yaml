@@ -12,7 +12,7 @@ spec:
           command: ["/bin/bash", "/app/script.sh"]
           envFrom:
             - secretRef:
-                name: keycloak-configure-secret
+                name: {{ .Values.keycloak.existingSecret | default "keycloak-configure-secret" }}
           env:
             - valueFrom:
                 secretKeyRef:

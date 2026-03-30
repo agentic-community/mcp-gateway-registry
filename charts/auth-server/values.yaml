@@ -10,6 +10,7 @@ app:
   name: auth-server
   replicas: 1
   envSecretName: auth-server-secret
+  existingSecret: ""  # If set, use this existing secret instead of creating one
 
   # External URLs
   externalUrl: http://localhost:8888

@@ -2,6 +2,7 @@
 keycloak:
   adminUser: user
   realm: mcp-gateway
+  existingSecret: ""  # If set, use this existing secret instead of creating one
 
 # Auth server configuration
 authServer:

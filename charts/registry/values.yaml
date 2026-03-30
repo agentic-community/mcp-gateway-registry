@@ -10,6 +10,7 @@ app:
   name: registry
   replicas: 1
   envSecretName: registry-secret
+  existingSecret: ""  # If set, use this existing secret instead of creating one
 
   # External URLs
   authServerUrl: http://localhost:8888
