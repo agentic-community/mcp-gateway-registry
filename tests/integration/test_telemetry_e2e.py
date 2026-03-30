@@ -359,6 +359,14 @@ class TestOptIn:
 
         repo = _mock_repo_factory()
 
+        fake_heartbeat_payload = {
+            "event": "heartbeat",
+            "version": "test",
+            "servers_count": 0,
+            "agents_count": 0,
+            "skills_count": 0,
+        }
+
         with (
             patch("registry.core.telemetry.settings", _mock_settings(telemetry_opt_in=True)),
             patch("registry.core.telemetry._send_telemetry", side_effect=fake_send),
@@ -386,6 +394,10 @@ class TestOptIn:
                 new_callable=AsyncMock,
                 return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
+            patch(
+                "registry.core.telemetry._build_heartbeat_payload",
+                new=AsyncMock(return_value=fake_heartbeat_payload),
+            ),
         ):
             from registry.core.telemetry import (
                 send_startup_ping,
@@ -395,7 +407,8 @@ class TestOptIn:
 
             await send_startup_ping()
             await start_heartbeat_scheduler()
-            await asyncio.sleep(0.5)
+            # Give the background task time to run
+            await asyncio.sleep(1.0)
             await stop_heartbeat_scheduler()
 
         assert "startup" in events_sent
