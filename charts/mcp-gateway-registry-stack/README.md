@@ -434,3 +434,49 @@ kubectl patch deployment registry -n MYNAMESPACE --type='json' -p='[
 - **`maxSkew: 1`**: Ensures pods are distributed as evenly as possible (difference between zones/nodes is at most 1)
 - **`whenUnsatisfiable: ScheduleAnyway`**: Uses soft constraints that prefer even distribution but won't block
   scheduling if perfect distribution isn't possible. Change to `DoNotSchedule` for strict enforcement
+
+## Using Existing Secrets
+
+By default, the stack chart creates and manages Kubernetes Secrets for all components. For production environments
+using external secret management (e.g., AWS Secrets Manager with External Secrets Operator, HashiCorp Vault), you
+can reference pre-existing secrets instead.
+
+### Stack-Level Existing Secrets
+
+| Value | Default Secret Name | Description |
+|-------|---------------------|-------------|
+| `global.existingSharedSecret` | `shared-secret` | SECRET_KEY and federation tokens shared by auth-server and registry |
+| `global.existingOauthProviderSecret` | `oauth-provider-secret` | Auth provider credentials (Keycloak/Entra/Okta) |
+| `global.existingMongoCredentialsSecret` | `mongo-credentials` | MongoDB connection credentials used by auth-server and registry |
+| `mongodb.existingPasswordSecret` | `my-user-password` | MongoDB operator user password |
+
+### Per-Service Existing Secrets
+
+When deploying individual charts (not the stack), each chart supports its own existing secret:
+
+| Chart | Value | Default Secret Name |
+|-------|-------|---------------------|
+| auth-server | `app.existingSecret` | `auth-server-secret` |
+| registry | `app.existingSecret` | `registry-secret` |
+| mcpgw | `app.existingSecret` | `mcpgw-secret` |
+| keycloak-configure | `keycloak.existingSecret` | `keycloak-configure-secret` |
+| mongodb-configure | `mongodb.existingSecret` | `mongo-credentials` |
+
+### Example: Using External Secrets
+
+```bash
+# Deploy stack using pre-existing secrets
+helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
+  --set global.domain=agents.domain.example \
+  --set global.existingSharedSecret=my-shared-secret \
+  --set global.existingOauthProviderSecret=my-oauth-secret \
+  --set global.existingMongoCredentialsSecret=my-mongo-creds \
+  --set mongodb.existingPasswordSecret=my-mongo-password
+```
+
+When an existing secret is specified:
+
+1. The chart skips creating the corresponding managed Secret resource
+2. Deployments and jobs reference the specified secret name instead
+3. The existing secret must contain the same keys the chart-managed secret would have created
+

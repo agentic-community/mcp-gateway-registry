@@ -21,6 +21,13 @@ global:
   # Both auth-server and registry reference this secret for Keycloak/Entra configuration
   oauthProviderSecretName: "oauth-provider-secret"
 
+  # Existing secret references - set these to use pre-existing secrets instead of chart-managed ones.
+  # When set, the chart skips creating the corresponding managed Secret resource.
+  # The existing secret must contain the same keys the chart would have created.
+  existingSharedSecret: ""          # If set, skip creating shared-secret and use this name instead
+  existingOauthProviderSecret: ""   # If set, skip creating oauth-provider-secret and use this name instead
+  existingMongoCredentialsSecret: "" # If set, use this name instead of mongo-credentials in deployments
+
   # Federation configuration - shared between registry and auth-server
   federation:
     staticTokenAuthEnabled: false # If not provided, defaults to false
@@ -69,6 +76,7 @@ mongodb:
   user: &mongoUser my-user # username for MongoDB
   password: &mongoPassword CHANGEME # Set the password for the MongoDB user
   database: &mongoDatabase mcp_registry
+  existingPasswordSecret: "" # If set, skip creating my-user-password secret and use this name instead
 
 # Keycloak configuration
 # Set create: true to deploy Keycloak as part of this stack

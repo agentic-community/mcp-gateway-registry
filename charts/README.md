@@ -167,6 +167,7 @@ helm install mcp-stack ./charts/mcp-gateway-registry-stack \
 - **Secret Keys**: Change default secret keys in production - they should match across all services
 - **Resources**: Adjust CPU/memory based on your requirements
 - **Ingress**: Configure ingress settings for your environment
+- **Existing Secrets**: All charts support referencing pre-existing Kubernetes secrets instead of having Helm manage them. See the [stack chart README](mcp-gateway-registry-stack/README.md#using-existing-secrets) for details.
 
 ### Domain Configuration
 

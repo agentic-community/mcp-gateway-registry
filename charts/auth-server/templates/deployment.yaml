@@ -54,14 +54,14 @@ spec:
                 name: keycloak-client-secret
             {{- end }}
             - secretRef:
-                name: mongo-credentials
+                name: {{ .Values.global.existingMongoCredentialsSecret | default "mongo-credentials" }}
             {{- if .Values.global.sharedSecretName }}
             - secretRef:
-                name: {{ .Values.global.sharedSecretName }}
+                name: {{ .Values.global.existingSharedSecret | default .Values.global.sharedSecretName }}
             {{- end }}
             {{- if .Values.global.oauthProviderSecretName }}
             - secretRef:
-                name: {{ .Values.global.oauthProviderSecretName }}
+                name: {{ .Values.global.existingOauthProviderSecret | default .Values.global.oauthProviderSecretName }}
             {{- end }}
           livenessProbe:
             httpGet:

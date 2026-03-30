@@ -15,7 +15,7 @@ spec:
     - name: {{ .Values.mongodb.user }}
       db: admin
       passwordSecretRef:
-        name: my-user-password
+        name: {{ .Values.mongodb.existingPasswordSecret | default "my-user-password" }}
       roles:
         - name: clusterAdmin
           db: admin

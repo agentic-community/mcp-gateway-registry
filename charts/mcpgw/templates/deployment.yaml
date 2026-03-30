@@ -46,7 +46,7 @@ spec:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if .Values.global.sharedSecretName }}
             - secretRef:
-                name: {{ .Values.global.sharedSecretName }}
+                name: {{ .Values.global.existingSharedSecret | default .Values.global.sharedSecretName }}
             {{- end }}
           env:
             - name: HOST
