@@ -360,7 +360,7 @@ docker-compose logs --tail=50 registry
 
 ## Machine-to-Machine (M2M) Authentication
 
-M2M authentication allows non-human clients (CLI tools, scripts, cron jobs) to authenticate and access the registry API programmatically.
+M2M authentication allows non-human clients (CLI tools, scripts, cron jobs) to authenticate and access the registry API programmatically using OAuth2 client credentials flow.
 
 ### When to Use M2M
 
@@ -368,58 +368,208 @@ M2M authentication allows non-human clients (CLI tools, scripts, cron jobs) to a
 - Automated scripts (CI/CD pipelines)
 - Service-to-service authentication
 - Cron jobs that sync or update registry data
+- Federation between registry instances
+
+### How M2M Authentication Works
+
+1. An M2M application requests an access token from Auth0 using client credentials
+2. Auth0 validates the credentials and returns a JWT access token
+3. The client sends the token in the `Authorization: Bearer` header to the registry API
+4. The registry validates the token against Auth0's JWKS endpoint
+5. The registry looks up the client's groups from MongoDB (since M2M tokens do not contain group claims from Auth0 Actions)
+
+**Important:** M2M tokens do NOT go through Auth0's Post Login Actions, so group claims like `https://mcp-gateway/groups` are not included in the JWT. The registry resolves groups by looking up the client ID in the `idp_m2m_clients` MongoDB collection. You must sync M2M clients and assign groups via the registry's IAM API.
 
 ### M2M Setup
 
-#### 1. Create an API in Auth0
+#### Step 1: Identify the API Audience
 
-1. Navigate to **Applications > APIs** in Auth0 Dashboard
-2. Click **Create API**
+The `AUTH0_AUDIENCE` is the identifier of the API your M2M client will request tokens for. For the MCP Gateway Registry, you can use:
+
+- **Auth0 Management API** (default): `https://your-tenant.auth0.com/api/v2/`
+- **Custom API**: Create your own API identifier (see "Create a Custom API" below)
+
+The audience value must match exactly between:
+- The `AUTH0_AUDIENCE` environment variable in your registry deployment
+- The `audience` parameter in your token request
+
+#### Step 2: Create an M2M Application in Auth0
+
+1. Log in to the **Auth0 Dashboard** (https://manage.auth0.com)
+2. Navigate to **Applications > Applications** in the left sidebar
+3. Click **+ Create Application** (top right)
+4. Configure the application:
+   - **Name**: Give it a descriptive name (e.g., `Registry CLI Client`, `CI/CD Pipeline`)
+   - **Application Type**: Select **Machine to Machine Applications**
+5. Click **Create**
+6. On the next screen, you will be asked to authorize the application for an API:
+   - Select the API matching your `AUTH0_AUDIENCE` (e.g., **Auth0 Management API**)
+   - Select the required scopes/permissions (e.g., `read:clients` for basic access)
+   - Click **Authorize**
+7. You will be taken to the application's **Settings** tab
+8. Copy the **Client ID** and **Client Secret** -- you will need these to generate tokens
+
+#### Step 3: Authorize the M2M Application for the API
+
+This is a critical step that is often missed. Each M2M application must be explicitly authorized to request tokens for a specific API.
+
+**If you skipped authorization during creation, or need to authorize for a different API:**
+
+1. Navigate to **Applications > APIs** in the left sidebar
+2. Click on the API you want to authorize against (e.g., **Auth0 Management API**)
+3. Click the **Machine to Machine Applications** tab (also called **Application Access**)
+4. You will see a list of all M2M applications in your tenant
+5. Find your application in the list
+6. **Toggle the switch ON** next to the application name to authorize it
+7. After toggling ON, a permissions dropdown appears
+8. Select the scopes/permissions the application needs:
+   - For basic registry API access: `read:clients` is sufficient
+   - For management operations: add `read:users`, `read:roles`, etc.
+9. Click **Update** to save
+
+**If the toggle is OFF**, the M2M application will receive an `access_denied` error when requesting tokens for that API audience.
+
+#### Step 4: (Optional) Create a Custom API
+
+If you prefer a dedicated API for registry access instead of using the Auth0 Management API:
+
+1. Navigate to **Applications > APIs** in the left sidebar
+2. Click **+ Create API** (top right)
 3. Configure the API:
    - **Name**: `MCP Registry API`
-   - **Identifier**: `https://api.your-domain.com` (this becomes `AUTH0_AUDIENCE`)
+   - **Identifier**: `https://api.your-domain.com` (this becomes your `AUTH0_AUDIENCE`)
    - **Signing Algorithm**: `RS256`
 4. Click **Create**
+5. Go to the **Machine to Machine Applications** tab
+6. Authorize your M2M applications as described in Step 3
 
-#### 2. Create an M2M Application
+#### Step 5: Configure Environment Variables
 
-1. Navigate to **Applications > Applications**
-2. Click **Create Application**
-3. Configure:
-   - **Name**: `Registry M2M Client`
-   - **Application Type**: Select **Machine to Machine Applications**
-4. Select the API you just created (`MCP Registry API`)
-5. Click **Authorize**
-6. Copy the **Client ID** and **Client Secret**
-
-#### 3. Configure M2M Environment Variables
-
-Add these to your `.env` file:
+Add the following to your `.env` file:
 
 ```bash
-AUTH0_AUDIENCE=https://api.your-domain.com
+# Auth0 domain (no https:// prefix)
+AUTH0_DOMAIN=your-tenant.us.auth0.com
+
+# API audience - must match the API identifier in Auth0
+# Use Management API URL or your custom API identifier
+AUTH0_AUDIENCE=https://your-tenant.us.auth0.com/api/v2/
+
+# M2M client credentials (for the registry's own Management API access)
 AUTH0_M2M_CLIENT_ID=your-m2m-client-id
 AUTH0_M2M_CLIENT_SECRET=your-m2m-client-secret
 ```
 
-#### 4. Test M2M Authentication
+For Terraform deployments, set in `terraform.tfvars`:
+
+```hcl
+auth0_audience          = "https://your-tenant.us.auth0.com/api/v2/"
+auth0_m2m_client_id     = "your-m2m-client-id"
+auth0_m2m_client_secret = "your-m2m-client-secret"
+```
+
+#### Step 6: Generate an M2M Token
+
+**Option A: Using the helper script (recommended)**
 
 ```bash
-# Get M2M access token
+python3 credentials-provider/auth0/get_m2m_token.py \
+  --auth0-domain your-tenant.us.auth0.com \
+  --client-id YOUR_CLIENT_ID \
+  --client-secret YOUR_CLIENT_SECRET \
+  --audience "https://your-tenant.us.auth0.com/api/v2/" \
+  --output-file /tmp/m2m_token.json
+```
+
+**Option B: Using curl**
+
+```bash
 curl --request POST \
-  --url https://your-tenant.auth0.com/oauth/token \
+  --url https://your-tenant.us.auth0.com/oauth/token \
   --header 'content-type: application/json' \
   --data '{
-    "client_id": "your-m2m-client-id",
-    "client_secret": "your-m2m-client-secret",
-    "audience": "https://api.your-domain.com",
+    "client_id": "YOUR_CLIENT_ID",
+    "client_secret": "YOUR_CLIENT_SECRET",
+    "audience": "https://your-tenant.us.auth0.com/api/v2/",
     "grant_type": "client_credentials"
   }'
+```
 
-# Use the token to access the registry API
-curl -H "Authorization: Bearer <access_token>" \
+The response contains an `access_token` field with your JWT bearer token.
+
+#### Step 7: Test M2M Token with the Registry API
+
+```bash
+# Using the registry management CLI tool
+python3 api/registry_management.py \
+  --registry-url https://your-registry-domain.com \
+  --token-file /tmp/m2m_token.json \
+  --action list-servers
+
+# Or using curl directly
+TOKEN=$(cat /tmp/m2m_token.json | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+curl -H "Authorization: Bearer $TOKEN" \
   https://your-registry-domain.com/api/servers
 ```
+
+#### Step 8: Assign Groups to M2M Clients
+
+Since M2M tokens do not include group claims from Auth0 Actions, you must manage groups for M2M clients through the registry's IAM API:
+
+1. **Sync M2M clients** from Auth0 to the registry database:
+   ```bash
+   curl -X POST \
+     -H "Authorization: Bearer $ADMIN_TOKEN" \
+     https://your-registry-domain.com/api/iam/auth0/m2m/sync
+   ```
+
+2. **List synced M2M clients:**
+   ```bash
+   curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+     https://your-registry-domain.com/api/iam/auth0/m2m/clients
+   ```
+
+3. **Assign groups to an M2M client:**
+   ```bash
+   curl -X PATCH \
+     -H "Authorization: Bearer $ADMIN_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"groups": ["registry-admins", "registry-users"]}' \
+     https://your-registry-domain.com/api/iam/auth0/m2m/clients/CLIENT_ID/groups
+   ```
+
+The registry will use these stored groups when validating API requests from M2M clients.
+
+### M2M Troubleshooting
+
+#### "access_denied" Error When Requesting Token
+
+**Cause:** The M2M application is not authorized for the requested API audience.
+
+**Fix:**
+1. Go to **Applications > APIs** in Auth0 Dashboard
+2. Click on the API matching your audience
+3. Click the **Machine to Machine Applications** tab
+4. Find your application and **toggle the switch ON**
+5. Select the required scopes and click **Update**
+
+#### "Audience doesn't match" Error from Registry
+
+**Cause:** The `AUTH0_AUDIENCE` in your `.env` does not match the audience in the token.
+
+**Fix:**
+1. Check what audience is in your token: `echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool | grep aud`
+2. Set `AUTH0_AUDIENCE` in `.env` to match exactly
+3. Restart the registry: `docker-compose restart registry auth-server`
+
+#### M2M Client Has No Permissions (403 Forbidden)
+
+**Cause:** The M2M client has no groups assigned in the registry database.
+
+**Fix:**
+1. Sync M2M clients: `POST /api/iam/auth0/m2m/sync`
+2. Assign groups: `PATCH /api/iam/auth0/m2m/clients/{client_id}/groups`
+3. Verify groups: `GET /api/iam/auth0/m2m/clients/{client_id}/groups`
 
 ---
 
@@ -744,5 +894,11 @@ Use this checklist to verify your Auth0 integration is complete:
 - [ ] Login tested successfully
 - [ ] User groups appear correctly in registry
 - [ ] Admin permissions verified (if applicable)
+- [ ] M2M application created (Machine to Machine type)
+- [ ] M2M application authorized for the correct API audience
+- [ ] `AUTH0_AUDIENCE` configured in `.env` and deployment configs
+- [ ] M2M token generation tested successfully
+- [ ] M2M clients synced to registry database
+- [ ] Groups assigned to M2M clients in registry
 
 Once all items are checked, your Auth0 integration is complete!

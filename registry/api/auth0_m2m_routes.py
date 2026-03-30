@@ -8,9 +8,9 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from registry.core.auth import nginx_proxied_auth
-from registry.core.database import get_db
-from registry.models.idp_m2m_client import (
+from registry.auth.dependencies import nginx_proxied_auth
+from registry.repositories.documentdb.client import get_documentdb_client
+from registry.schemas.idp_m2m_client import (
     IdPM2MClient,
     IdPM2MClientUpdate,
 )
@@ -68,7 +68,6 @@ def _require_admin(user_context: dict | None) -> None:
 async def sync_auth0_m2m_clients(
     request: Auth0SyncRequest = Auth0SyncRequest(),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-    db=Depends(get_db),
 ):
     """Sync M2M clients from Auth0 to MongoDB (admin only).
 
@@ -78,7 +77,7 @@ async def sync_auth0_m2m_clients(
     Args:
         request: Sync request parameters
         user_context: Authenticated user context
-        db: Database connection
+
 
     Returns:
         Sync statistics including number of clients added/updated
@@ -88,6 +87,7 @@ async def sync_auth0_m2m_clients(
     """
     _require_admin(user_context)
 
+    db = await get_documentdb_client()
     auth0_sync = get_auth0_m2m_sync(db)
     if not auth0_sync:
         raise HTTPException(
@@ -110,7 +110,6 @@ async def sync_auth0_m2m_clients(
 @router.get("/iam/auth0/m2m/clients", response_model=list[IdPM2MClient])
 async def list_auth0_m2m_clients(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-    db=Depends(get_db),
 ):
     """List all Auth0 M2M clients from MongoDB.
 
@@ -119,7 +118,7 @@ async def list_auth0_m2m_clients(
 
     Args:
         user_context: Authenticated user context
-        db: Database connection
+
 
     Returns:
         List of Auth0 M2M clients
@@ -130,6 +129,7 @@ async def list_auth0_m2m_clients(
     if not user_context:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    db = await get_documentdb_client()
     auth0_sync = get_auth0_m2m_sync(db)
     if not auth0_sync:
         # Return empty list if Auth0 not configured
@@ -151,14 +151,13 @@ async def list_auth0_m2m_clients(
 async def get_client_groups(
     client_id: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-    db=Depends(get_db),
 ):
     """Get groups for a specific Auth0 M2M client.
 
     Args:
         client_id: Auth0 client ID
         user_context: Authenticated user context
-        db: Database connection
+
 
     Returns:
         List of group names
@@ -169,6 +168,7 @@ async def get_client_groups(
     if not user_context:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    db = await get_documentdb_client()
     auth0_sync = get_auth0_m2m_sync(db)
     if not auth0_sync:
         return []
@@ -190,7 +190,6 @@ async def update_client_groups(
     client_id: str,
     payload: IdPM2MClientUpdate,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
-    db=Depends(get_db),
 ):
     """Update groups for an Auth0 M2M client (admin only).
 
@@ -200,7 +199,7 @@ async def update_client_groups(
         client_id: Auth0 client ID
         payload: Update payload with new groups
         user_context: Authenticated user context
-        db: Database connection
+
 
     Returns:
         Success message
@@ -210,6 +209,7 @@ async def update_client_groups(
     """
     _require_admin(user_context)
 
+    db = await get_documentdb_client()
     auth0_sync = get_auth0_m2m_sync(db)
     if not auth0_sync:
         raise HTTPException(
