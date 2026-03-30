@@ -124,11 +124,14 @@ def _compute_signature(body: bytes) -> str:
     ).hexdigest()
 
 
-async def _get_registry_id() -> str | None:
-    """Get the registry ID from the registry card.
+async def _get_registry_id() -> str:
+    """Get the registry ID for telemetry events.
+
+    Tries the registry card UUID first. Falls back to the persistent
+    telemetry instance_id if the card hasn't been created yet.
 
     Returns:
-        Registry card UUID string, or None if not initialized.
+        Registry card UUID or telemetry instance_id (never None).
     """
     try:
         from registry.repositories.factory import get_registry_card_repository
@@ -138,9 +141,11 @@ async def _get_registry_id() -> str | None:
         if card and card.id:
             return str(card.id)
     except Exception as e:
-        logger.warning(f"[telemetry] Failed to get registry ID: {e}")
+        logger.warning(f"[telemetry] Failed to get registry card ID: {e}")
 
-    return None
+    # Fallback: use the persistent telemetry instance_id
+    logger.debug("[telemetry] Registry card not found, using telemetry instance_id")
+    return await _get_or_create_instance_id()
 
 
 def _is_telemetry_enabled() -> bool:

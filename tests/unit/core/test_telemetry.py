@@ -17,6 +17,7 @@ from registry.core.telemetry import (
     _build_heartbeat_payload,
     _build_startup_payload,
     _get_or_create_instance_id,
+    _get_registry_id,
     _initialize_telemetry_collection,
     _is_opt_in_enabled,
     _is_telemetry_enabled,
@@ -74,6 +75,85 @@ class TestTelemetryEnabled:
         assert _is_opt_in_enabled() is False
 
 
+class TestGetRegistryIdFallback:
+    """Tests for _get_registry_id fallback to instance_id."""
+
+    @pytest.mark.asyncio
+    async def test_returns_card_id_when_available(self):
+        """Registry card UUID takes precedence over instance_id."""
+        mock_card = MagicMock()
+        mock_card.id = "card-uuid-1234"
+
+        mock_repo = MagicMock()
+        mock_repo.get = AsyncMock(return_value=mock_card)
+
+        with patch(
+            "registry.repositories.factory.get_registry_card_repository",
+            return_value=mock_repo,
+        ):
+            result = await _get_registry_id()
+            assert result == "card-uuid-1234"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_instance_id_when_no_card(self):
+        """Falls back to telemetry instance_id when card is None."""
+        mock_repo = MagicMock()
+        mock_repo.get = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "registry.repositories.factory.get_registry_card_repository",
+                return_value=mock_repo,
+            ),
+            patch(
+                "registry.core.telemetry._get_or_create_instance_id",
+                new_callable=AsyncMock,
+                return_value="instance-uuid-5678",
+            ),
+        ):
+            result = await _get_registry_id()
+            assert result == "instance-uuid-5678"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_exception(self):
+        """Falls back to instance_id when card repo throws."""
+        with (
+            patch(
+                "registry.repositories.factory.get_registry_card_repository",
+                side_effect=Exception("DB error"),
+            ),
+            patch(
+                "registry.core.telemetry._get_or_create_instance_id",
+                new_callable=AsyncMock,
+                return_value="instance-uuid-fallback",
+            ),
+        ):
+            result = await _get_registry_id()
+            assert result == "instance-uuid-fallback"
+
+    @pytest.mark.asyncio
+    async def test_never_returns_none(self):
+        """Verify _get_registry_id never returns None."""
+        mock_repo = MagicMock()
+        mock_repo.get = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "registry.repositories.factory.get_registry_card_repository",
+                return_value=mock_repo,
+            ),
+            patch(
+                "registry.core.telemetry._get_or_create_instance_id",
+                new_callable=AsyncMock,
+                return_value="some-uuid",
+            ),
+        ):
+            result = await _get_registry_id()
+            assert result is not None
+            assert isinstance(result, str)
+            assert len(result) > 0
+
+
 class TestPayloadBuilding:
     """Tests for payload construction."""
 
@@ -121,6 +201,11 @@ class TestPayloadBuilding:
                 "registry.repositories.stats_repository.get_search_counts",
                 new_callable=AsyncMock,
                 return_value={"total": 0, "last_24h": 0, "last_1h": 0},
+            ),
+            patch(
+                "registry.core.telemetry._get_registry_id",
+                new_callable=AsyncMock,
+                return_value="test-registry-id",
             ),
         ):
             mock_settings.deployment_mode.value = "with-gateway"
