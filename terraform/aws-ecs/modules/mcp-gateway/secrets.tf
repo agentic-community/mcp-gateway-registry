@@ -271,6 +271,7 @@ resource "aws_secretsmanager_secret_version" "okta_api_token" {
 # =============================================================================
 
 # Auth0 client secret (for OAuth authentication)
+# checkov:skip=CKV_AWS_149: Rotation managed externally in Auth0 dashboard, not applicable for IdP client secrets
 resource "aws_secretsmanager_secret" "auth0_client_secret" {
   count = var.auth0_enabled ? 1 : 0
 
@@ -294,6 +295,7 @@ resource "aws_secretsmanager_secret_version" "auth0_client_secret" {
 
 
 # Auth0 M2M client secret (for IAM Management operations)
+# checkov:skip=CKV_AWS_149: Rotation managed externally in Auth0 dashboard, not applicable for IdP client secrets
 resource "aws_secretsmanager_secret" "auth0_m2m_client_secret" {
   count = var.auth0_enabled ? 1 : 0
 
