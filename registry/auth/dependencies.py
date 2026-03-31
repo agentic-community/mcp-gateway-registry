@@ -315,6 +315,9 @@ async def user_has_wildcard_access(user_scopes: list[str]) -> bool:
     A user has wildcard access if any of their scopes includes server: '*'.
     This is determined dynamically from the scopes configuration, not hardcoded group names.
 
+    Note: This function checks server access only. It is NOT used to determine
+    admin status. See _user_is_admin() for admin determination.
+
     Args:
         user_scopes: List of user's scopes
 
@@ -325,6 +328,54 @@ async def user_has_wildcard_access(user_scopes: list[str]) -> bool:
         servers = await get_servers_for_scope(scope)
         if "*" in servers:
             logger.debug(f"User scope '{scope}' grants wildcard access to all servers")
+            return True
+
+    return False
+
+
+# Prefixes for mutating (management) UI-Scopes actions.
+# Any action starting with these prefixes is a management action.
+# A user with any such action for "all" resources is considered an admin.
+# Read-only prefixes (list_, get_, health_check_) are NOT included.
+#
+# SECURITY BOUNDARY: Changes to this tuple affect who is considered an admin.
+# Reference: scripts/registry-admins.json for the complete admin permissions set.
+_ADMIN_ACTION_PREFIXES: tuple[str, ...] = (
+    "register_",
+    "modify_",
+    "toggle_",
+    "delete_",
+    "publish_",
+    "create_",
+)
+
+
+def _user_is_admin(
+    ui_permissions: dict[str, list[str]],
+) -> bool:
+    """Check if user has admin privileges based on UI-Scopes management actions.
+
+    Admin status is determined by whether the user has any mutating
+    (write/delete) UI-Scopes action with wildcard ("all") access.
+    This decouples admin status from server: '*' wildcard access, allowing
+    consumer roles to access all servers without gaining admin privileges.
+
+    Mutating actions are identified by prefix: register_, modify_, toggle_,
+    delete_, publish_, create_. Read-only actions (list_, get_, health_check_)
+    do not grant admin status.
+
+    See GitHub issue #663 for the motivation behind this design.
+
+    Args:
+        ui_permissions: Dict mapping UI actions to lists of allowed resources.
+            Example: {'list_service': ['all'], 'register_service': ['all']}
+
+    Returns:
+        True if user has admin-level management permissions, False otherwise.
+    """
+    for action, resources in ui_permissions.items():
+        if action.startswith(_ADMIN_ACTION_PREFIXES) and "all" in resources:
+            logger.debug(f"Admin check: action '{action}' with 'all' grants admin status")
             return True
 
     return False
@@ -474,7 +525,7 @@ async def enhanced_auth(
         "accessible_agents": accessible_agents,
         "ui_permissions": ui_permissions,
         "can_modify_servers": can_modify,
-        "is_admin": await user_has_wildcard_access(scopes),
+        "is_admin": _user_is_admin(ui_permissions),
     }
 
     # Set user context on request state for audit logging middleware
@@ -609,7 +660,7 @@ async def nginx_proxied_auth(
             # Check modification permissions
             can_modify = user_can_modify_servers(groups, scopes)
 
-            is_admin = await user_has_wildcard_access(scopes)
+            is_admin = _user_is_admin(ui_permissions)
 
         user_context = {
             "username": username,

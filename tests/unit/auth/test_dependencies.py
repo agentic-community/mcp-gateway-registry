@@ -21,6 +21,7 @@ from fastapi import HTTPException, Request
 from itsdangerous import SignatureExpired, URLSafeTimedSerializer
 
 from registry.auth.dependencies import (
+    _user_is_admin,
     api_auth,
     create_session_cookie,
     enhanced_auth,
@@ -1350,3 +1351,146 @@ class TestNetworkTrustedAuthMethod:
         assert "mcp-registry-admin" in context["groups"]
         assert "mcp-servers-unrestricted/read" in context["scopes"]
         assert "mcp-servers-unrestricted/execute" in context["scopes"]
+
+
+# =============================================================================
+# TEST: _user_is_admin (issue #663)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.auth
+class TestUserIsAdmin:
+    """Tests for _user_is_admin function.
+
+    Verifies that admin status is derived from mutating UI-Scopes actions
+    (register_, modify_, toggle_, delete_, publish_, create_) with 'all'
+    resources, NOT from server: '*' wildcard access.
+
+    See GitHub issue #663.
+    """
+
+    @pytest.mark.parametrize("action", [
+        "register_service",
+        "modify_service",
+        "toggle_service",
+        "delete_service",
+        "publish_agent",
+        "modify_agent",
+        "delete_agent",
+        "create_virtual_server",
+        "modify_virtual_server",
+        "delete_virtual_server",
+    ])
+    def test_admin_with_mutating_action_all(self, action: str):
+        """User with any mutating action for [all] is admin."""
+        # Arrange
+        ui_permissions = {action: ["all"], "list_service": ["all"]}
+
+        # Act
+        result = _user_is_admin(ui_permissions)
+
+        # Assert
+        assert result is True
+
+    def test_not_admin_with_only_read_actions(self):
+        """Consumer with only read-only permissions is not admin (issue #663 core fix)."""
+        # Arrange
+        ui_permissions = {
+            "list_service": ["all"],
+            "health_check_service": ["all"],
+            "list_agents": ["all"],
+            "get_agent": ["all"],
+            "list_virtual_server": ["all"],
+        }
+
+        # Act
+        result = _user_is_admin(ui_permissions)
+
+        # Assert
+        assert result is False
+
+    def test_not_admin_with_specific_server_modify(self):
+        """User with modify_service for specific servers only is not admin."""
+        # Arrange
+        ui_permissions = {"modify_service": ["server1", "server2"]}
+
+        # Act
+        result = _user_is_admin(ui_permissions)
+
+        # Assert
+        assert result is False
+
+    def test_not_admin_empty_permissions(self):
+        """User with no UI permissions is not admin."""
+        # Arrange / Act
+        result = _user_is_admin({})
+
+        # Assert
+        assert result is False
+
+    def test_full_admin_permissions_match_registry_admins_json(self):
+        """Full admin role (matching scripts/registry-admins.json) is admin."""
+        # Arrange
+        ui_permissions = {
+            "list_agents": ["all"],
+            "get_agent": ["all"],
+            "publish_agent": ["all"],
+            "modify_agent": ["all"],
+            "delete_agent": ["all"],
+            "list_service": ["all"],
+            "register_service": ["all"],
+            "health_check_service": ["all"],
+            "toggle_service": ["all"],
+            "modify_service": ["all"],
+            "delete_service": ["all"],
+            "list_virtual_server": ["all"],
+            "create_virtual_server": ["all"],
+            "modify_virtual_server": ["all"],
+            "delete_virtual_server": ["all"],
+        }
+
+        # Act
+        result = _user_is_admin(ui_permissions)
+
+        # Assert
+        assert result is True
+
+    def test_consumer_with_wildcard_server_not_admin(self):
+        """Issue #663: server: '*' in scopes should NOT trigger is_admin.
+
+        A consumer role with server: '*' but only read-only UI-Scopes
+        must not be treated as admin.
+        """
+        # Arrange - consumer has only read-only UI-Scopes
+        ui_permissions = {
+            "list_service": ["all"],
+            "health_check_service": ["all"],
+            "list_agents": ["all"],
+            "get_agent": ["all"],
+        }
+
+        # Act - even though the user's scopes contain server: '*',
+        # _user_is_admin only checks ui_permissions, not server access
+        result = _user_is_admin(ui_permissions)
+
+        # Assert
+        assert result is False
+
+    @pytest.mark.parametrize("action", [
+        "list_service",
+        "get_agent",
+        "health_check_service",
+        "list_agents",
+        "list_virtual_server",
+    ])
+    def test_read_only_actions_never_grant_admin(self, action: str):
+        """Read-only actions with 'all' do not grant admin status."""
+        # Arrange
+        ui_permissions = {action: ["all"]}
+
+        # Act
+        result = _user_is_admin(ui_permissions)
+
+        # Assert
+        assert result is False
