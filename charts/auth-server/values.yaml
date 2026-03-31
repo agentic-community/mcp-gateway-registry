@@ -45,6 +45,8 @@ keycloak:
 entra:
   clientId: ""
   clientSecret: ""
+  clientSecretExistingSecret: ""  # If set, read ENTRA_CLIENT_SECRET from this K8s secret instead of clientSecret
+  clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET"  # Key within the existing secret
   tenantId: ""
 
 # Okta integration (used when authProvider.type = "okta")
@@ -52,9 +54,15 @@ okta:
   domain: ""  # e.g., dev-123456.okta.com
   clientId: ""
   clientSecret: ""
+  clientSecretExistingSecret: ""  # If set, read OKTA_CLIENT_SECRET from this K8s secret
+  clientSecretExistingSecretKey: "OKTA_CLIENT_SECRET"
   m2mClientId: ""  # Optional: defaults to clientId
   m2mClientSecret: ""  # Optional: defaults to clientSecret
+  m2mClientSecretExistingSecret: ""  # If set, read OKTA_M2M_CLIENT_SECRET from this K8s secret
+  m2mClientSecretExistingSecretKey: "OKTA_M2M_CLIENT_SECRET"
   apiToken: ""  # Optional: required for IAM operations
+  apiTokenExistingSecret: ""  # If set, read OKTA_API_TOKEN from this K8s secret
+  apiTokenExistingSecretKey: "OKTA_API_TOKEN"
   authServerId: ""  # Optional: uses default Org Authorization Server if not set
 
 # Auth0 integration (used when authProvider.type = "auth0")
@@ -62,11 +70,17 @@ auth0:
   domain: ""  # e.g., your-tenant.us.auth0.com
   clientId: ""
   clientSecret: ""
+  clientSecretExistingSecret: ""  # If set, read AUTH0_CLIENT_SECRET from this K8s secret
+  clientSecretExistingSecretKey: "AUTH0_CLIENT_SECRET"
   audience: ""  # Optional: API audience for M2M tokens
   groupsClaim: "https://mcp-gateway/groups"  # Custom namespaced claim for groups
   m2mClientId: ""  # Required for IAM Management (user/role administration)
   m2mClientSecret: ""  # Required for IAM Management
+  m2mClientSecretExistingSecret: ""  # If set, read AUTH0_M2M_CLIENT_SECRET from this K8s secret
+  m2mClientSecretExistingSecretKey: "AUTH0_M2M_CLIENT_SECRET"
   managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
+  managementApiTokenExistingSecret: ""  # If set, read AUTH0_MANAGEMENT_API_TOKEN from this K8s secret
+  managementApiTokenExistingSecretKey: "AUTH0_MANAGEMENT_API_TOKEN"
 
 # Service configuration
 service:

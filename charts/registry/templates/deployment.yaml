@@ -76,6 +76,69 @@ spec:
                   name: {{ .Release.Name }}-keycloak
                   key: admin-password
             {{- end }}
+            {{- if .Values.entra.clientSecretExistingSecret }}
+            - name: ENTRA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.entra.clientSecretExistingSecret }}
+                  key: {{ .Values.entra.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.okta.clientSecretExistingSecret }}
+            - name: OKTA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.okta.clientSecretExistingSecret }}
+                  key: {{ .Values.okta.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.okta.m2mClientSecretExistingSecret }}
+            - name: OKTA_M2M_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.okta.m2mClientSecretExistingSecret }}
+                  key: {{ .Values.okta.m2mClientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.okta.apiTokenExistingSecret }}
+            - name: OKTA_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.okta.apiTokenExistingSecret }}
+                  key: {{ .Values.okta.apiTokenExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.auth0.clientSecretExistingSecret }}
+            - name: AUTH0_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth0.clientSecretExistingSecret }}
+                  key: {{ .Values.auth0.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.auth0.m2mClientSecretExistingSecret }}
+            - name: AUTH0_M2M_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth0.m2mClientSecretExistingSecret }}
+                  key: {{ .Values.auth0.m2mClientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.auth0.managementApiTokenExistingSecret }}
+            - name: AUTH0_MANAGEMENT_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth0.managementApiTokenExistingSecret }}
+                  key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.ans.apiKeyExistingSecret }}
+            - name: ANS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ans.apiKeyExistingSecret }}
+                  key: {{ .Values.ans.apiKeyExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.ans.apiSecretExistingSecret }}
+            - name: ANS_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ans.apiSecretExistingSecret }}
+                  key: {{ .Values.ans.apiSecretExistingSecretKey }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health

@@ -27,6 +27,8 @@ app:
   embeddingsModelName: all-MiniLM-L6-v2
   embeddingsModelDimensions: "384"
   embeddingsApiKey: ""
+  embeddingsApiKeyExistingSecret: ""  # If set, read EMBEDDINGS_API_KEY from this K8s secret instead of embeddingsApiKey
+  embeddingsApiKeyExistingSecretKey: "EMBEDDINGS_API_KEY"  # Key within the existing secret
   embeddingsApiBase: ""
   embeddingsAwsRegion: us-east-1
 

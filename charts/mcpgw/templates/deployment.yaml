@@ -51,6 +51,13 @@ spec:
           env:
             - name: HOST
               value: 0.0.0.0
+            {{- if .Values.app.embeddingsApiKeyExistingSecret }}
+            - name: EMBEDDINGS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.embeddingsApiKeyExistingSecret }}
+                  key: {{ .Values.app.embeddingsApiKeyExistingSecretKey }}
+            {{- end }}
           livenessProbe:
             tcpSocket:
               port: 8000

@@ -63,6 +63,59 @@ spec:
             - secretRef:
                 name: {{ .Values.global.existingOauthProviderSecret | default .Values.global.oauthProviderSecretName }}
             {{- end }}
+          {{- $hasPerKeySecret := or .Values.entra.clientSecretExistingSecret .Values.okta.clientSecretExistingSecret .Values.okta.m2mClientSecretExistingSecret .Values.okta.apiTokenExistingSecret .Values.auth0.clientSecretExistingSecret .Values.auth0.m2mClientSecretExistingSecret .Values.auth0.managementApiTokenExistingSecret }}
+          {{- if $hasPerKeySecret }}
+          env:
+            {{- if .Values.entra.clientSecretExistingSecret }}
+            - name: ENTRA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.entra.clientSecretExistingSecret }}
+                  key: {{ .Values.entra.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.okta.clientSecretExistingSecret }}
+            - name: OKTA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.okta.clientSecretExistingSecret }}
+                  key: {{ .Values.okta.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.okta.m2mClientSecretExistingSecret }}
+            - name: OKTA_M2M_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.okta.m2mClientSecretExistingSecret }}
+                  key: {{ .Values.okta.m2mClientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.okta.apiTokenExistingSecret }}
+            - name: OKTA_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.okta.apiTokenExistingSecret }}
+                  key: {{ .Values.okta.apiTokenExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.auth0.clientSecretExistingSecret }}
+            - name: AUTH0_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth0.clientSecretExistingSecret }}
+                  key: {{ .Values.auth0.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.auth0.m2mClientSecretExistingSecret }}
+            - name: AUTH0_M2M_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth0.m2mClientSecretExistingSecret }}
+                  key: {{ .Values.auth0.m2mClientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.auth0.managementApiTokenExistingSecret }}
+            - name: AUTH0_MANAGEMENT_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth0.managementApiTokenExistingSecret }}
+                  key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
+            {{- end }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /health
