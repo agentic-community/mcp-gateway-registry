@@ -1,0 +1,123 @@
+{
+  "protocolVersion": "1.0",
+  "name": "Strale",
+  "description": "Trust and quality infrastructure for AI agents. 250+ quality-scored capabilities for validation, compliance, enrichment, and Web3 — each with dual-profile quality scores and audit trails.",
+  "url": "https://api.strale.io/a2a",
+  "path": "/strale",
+  "version": "0.2.3",
+  "capabilities": {
+    "streaming": false
+  },
+  "defaultInputModes": ["text/plain", "application/json"],
+  "defaultOutputModes": ["application/json"],
+  "tags": [
+    "compliance",
+    "validation",
+    "company-data",
+    "sanctions",
+    "kyb",
+    "web3",
+    "trust",
+    "enrichment"
+  ],
+  "visibility": "public",
+  "status": "active",
+  "trustLevel": "community",
+  "license": "MIT",
+  "isEnabled": true,
+  "provider": {
+    "organization": "Strale",
+    "url": "https://strale.dev"
+  },
+  "securitySchemes": {
+    "bearer_auth": {
+      "type": "http",
+      "scheme": "bearer",
+      "description": "Strale API key (starts with sk_live_). Get one at https://strale.dev/signup."
+    }
+  },
+  "security": [{"bearer_auth": []}],
+  "preferredTransport": "JSONRPC",
+  "metadata": {
+    "agent_card_url": "https://api.strale.io/.well-known/agent-card.json",
+    "capabilities_count": 250,
+    "solutions_count": 88,
+    "free_tier_available": true,
+    "countries_covered": 27,
+    "quality_scoring": "Dual-profile SQS 0-100"
+  },
+  "skills": [
+    {
+      "id": "validate_iban",
+      "name": "Validate IBAN",
+      "description": "Validate international bank account numbers with checksum verification, bank identification, and country detection.",
+      "tags": ["validation", "finance", "iban", "free"],
+      "examples": ["Validate IBAN DE89370400440532013000"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "company_lookup",
+      "name": "Company Lookup",
+      "description": "Look up company registration data from official registries across 27 countries.",
+      "tags": ["company-data", "kyb", "registry"],
+      "examples": ["Look up Swedish company 5591674668", "Find UK company Revolut"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "sanctions_screening",
+      "name": "Sanctions Screening",
+      "description": "Screen individuals and entities against OFAC, EU, UN, and UK sanctions lists.",
+      "tags": ["compliance", "sanctions", "aml"],
+      "examples": ["Screen Acme Corp for sanctions"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "pep_check",
+      "name": "PEP Check",
+      "description": "Screen individuals against Politically Exposed Persons databases.",
+      "tags": ["compliance", "pep", "kyc"],
+      "examples": ["Check if Anders Andersson is a PEP"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "validate_vat",
+      "name": "Validate VAT",
+      "description": "Validate European VAT numbers via VIES with company name and address lookup.",
+      "tags": ["validation", "tax", "vat"],
+      "examples": ["Validate VAT number SE556703748501"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "web_extract",
+      "name": "Web Data Extraction",
+      "description": "Extract structured data from web pages, convert URLs to markdown, take screenshots.",
+      "tags": ["extraction", "web", "scraping"],
+      "examples": ["Convert https://example.com to markdown"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "domain_intelligence",
+      "name": "Domain Intelligence",
+      "description": "WHOIS lookup, DNS records, SSL certificate analysis, domain reputation scoring.",
+      "tags": ["domain", "security", "dns"],
+      "examples": ["Check domain reputation for example.com"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "web3_risk",
+      "name": "Web3 Risk Analysis",
+      "description": "Wallet risk scoring, token honeypot detection, DeFi protocol intelligence, ENS resolution.",
+      "tags": ["web3", "defi", "risk", "blockchain"],
+      "examples": ["Score wallet risk for 0x1234...", "Check if token contract is a honeypot"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    }
+  ]
+}

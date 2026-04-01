@@ -1,0 +1,197 @@
+{
+  "server_name": "Strale",
+  "description": "Trust and quality infrastructure for AI agents. 250+ quality-scored capabilities for IBAN validation, company registry lookups across 27 countries, sanctions and PEP screening, web scraping, lead enrichment, and Web3 risk analysis. Each capability is continuously tested with a dual-profile quality score and returns structured JSON with data provenance and audit trails. Free tier available — 5 capabilities work without an API key.",
+  "path": "/strale",
+  "proxy_pass_url": "https://api.strale.io/mcp",
+  "supported_transports": ["streamable-http"],
+  "tags": [
+    "validation",
+    "compliance",
+    "enrichment",
+    "kyb",
+    "sanctions",
+    "web3",
+    "trust",
+    "audit-trail",
+    "iban",
+    "vat",
+    "domain",
+    "email",
+    "company-data",
+    "quality-scored"
+  ],
+  "auth_scheme": "bearer",
+  "headers": [{"Authorization": "Bearer $STRALE_API_KEY"}],
+  "num_tools": 8,
+  "is_python": false,
+  "license": "MIT",
+  "version": "v0.2.3",
+  "status": "active",
+  "visibility": "public",
+  "provider_organization": "Strale",
+  "provider_url": "https://strale.dev",
+  "metadata": {
+    "capabilities_count": 250,
+    "solutions_count": 88,
+    "free_tier": "email-validate, iban-validate, dns-lookup, url-to-markdown, json-repair",
+    "pricing": "EUR 0.02 to EUR 1.00 per call, prepaid wallet",
+    "trial_credits": "EUR 2.00 on signup, no card required",
+    "quality_scoring": "Dual-profile SQS 0-100 (Quality Profile + Reliability Profile)",
+    "countries_covered": 27,
+    "transport": "Streamable HTTP (JSON-RPC)"
+  },
+  "tool_list": [
+    {
+      "name": "strale_search",
+      "parsed_description": {
+        "main": "Search 250+ capabilities and bundled solutions by keyword or category. Covers compliance, validation, company registries, domain intelligence, Web3, and more. Free — no API key needed.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search keyword (e.g., 'sanctions', 'IBAN', 'company data')"
+          },
+          "category": {
+            "type": "string",
+            "description": "Filter by category: compliance, validation, data-extraction, developer-tools, web3, security"
+          },
+          "offset": {
+            "type": "number",
+            "description": "Number of results to skip for pagination"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "strale_execute",
+      "parsed_description": {
+        "main": "Run any of 250+ capabilities by slug. Validate IBANs, look up companies, screen against sanctions lists, extract data from URLs, and more. Returns structured JSON with quality score and data provenance.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "Capability slug from strale_search results (e.g., 'iban-validate', 'swedish-company-data')"
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Input parameters matching the capability's required fields"
+          },
+          "max_price_cents": {
+            "type": "number",
+            "description": "Maximum price in EUR cents. Default: 200. Execution fails if capability costs more."
+          }
+        },
+        "required": ["slug", "inputs"]
+      }
+    },
+    {
+      "name": "strale_trust_profile",
+      "parsed_description": {
+        "main": "Check if a capability is reliable before calling it. Returns SQS quality score (0-100), Quality grade, Reliability grade, execution guidance, and 30-day test history.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "Capability or solution slug"
+          },
+          "type": {
+            "type": "string",
+            "description": "Whether this is a 'capability' or 'solution'. Default: 'capability'."
+          }
+        },
+        "required": ["slug"]
+      }
+    },
+    {
+      "name": "strale_balance",
+      "parsed_description": {
+        "main": "Check current wallet balance in EUR. Requires an API key.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "strale_ping",
+      "parsed_description": {
+        "main": "Health check. Returns server status, tool count, and capability count.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "strale_getting_started",
+      "parsed_description": {
+        "main": "Returns 5 free capabilities with example inputs, plus setup steps for full access to 250+ paid capabilities.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "strale_methodology",
+      "parsed_description": {
+        "main": "Explains Strale's dual-profile quality scoring model, the SQS matrix, execution guidance, test infrastructure, and current limitations.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "strale_transaction",
+      "parsed_description": {
+        "main": "Retrieve a past execution record by transaction ID. Returns inputs, outputs, latency, price, provenance, and success/failure status.",
+        "args": null,
+        "returns": null,
+        "raises": null
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "description": "Transaction ID from a strale_execute call"
+          }
+        },
+        "required": ["transaction_id"]
+      }
+    }
+  ]
+}
