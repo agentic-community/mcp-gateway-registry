@@ -84,9 +84,30 @@ Then generate the deployment distribution chart:
 
 This produces a single faceted PNG with 6 subplots: Cloud Provider, Compute Platform, Storage Backend, Auth Provider, Version Type, and Deployment Mode. Each subplot shows counts and percentages.
 
-### Step 6: Generate the Usage Report
+### Step 6: Run Telemetry Analysis
 
-Read the downloaded CSV and the captured export output. Generate a markdown report with the following sections:
+Run the analysis script to compute all distributions, instance timelines, and metrics. This produces two files:
+- `tables-YYYY-MM-DD.md` -- pre-formatted markdown tables ready to embed in the report
+- `metrics-YYYY-MM-DD.json` -- raw computed metrics as JSON
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
+  --csv OUTPUT_DIR/registry_metrics.csv \
+  --output-dir OUTPUT_DIR \
+  --date YYYY-MM-DD
+```
+
+### Step 7: Generate the Usage Report
+
+Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the report. Add narrative sections (Executive Summary, Architecture Patterns, Recommendations) around the data tables. The tables file contains:
+
+- Key Metrics table
+- Identified and Unidentified instance tables
+- Cloud, Compute, Architecture, Storage, Auth distribution tables
+- Version Adoption table
+- Feature Adoption table
+- Search Usage table
+- Per-instance daily timelines (with servers, agents, skills, search queries)
 
 #### Report Structure
 
@@ -150,7 +171,7 @@ Identify 3-5 distinct deployment patterns from the data (e.g., "Dev Setup", "AWS
 
 Save the report to `OUTPUT_DIR/ai-registry-usage-report-YYYY-MM-DD.md`.
 
-### Step 7: Generate Self-Contained HTML
+### Step 8: Generate Self-Contained HTML
 
 Convert the markdown report to a single self-contained HTML file using pandoc. The chart PNG is base64-embedded so the HTML works standalone. Run from the OUTPUT_DIR so relative image paths resolve:
 
@@ -167,7 +188,7 @@ The `report-style.css` file in the skill directory provides a clean, professiona
 which pandoc >/dev/null || sudo apt-get install -y pandoc
 ```
 
-### Step 8: Present Results
+### Step 9: Present Results
 
 After generating the report:
 1. Display the Executive Summary and Key Metrics directly in the conversation
