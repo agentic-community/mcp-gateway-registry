@@ -10,6 +10,7 @@ Based on: docs/design/a2a-protocol-integration.md
 
 import logging
 import re
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -103,12 +104,14 @@ def _validate_skills(
 
 
 def _validate_security_schemes(
-    security_schemes: dict[str, SecurityScheme],
+    security_schemes: dict[str, SecurityScheme | dict[str, Any]],
 ) -> list[str]:
     """
     Validate security schemes configuration.
 
     Ensures schemes are properly configured with required fields.
+    Supports both standard A2A SecurityScheme objects and alternative
+    formats like Bedrock AgentCore httpAuthSecurityScheme dicts.
 
     Args:
         security_schemes: Dictionary of security schemes to validate
@@ -125,6 +128,11 @@ def _validate_security_schemes(
     for scheme_name, scheme in security_schemes.items():
         if not scheme_name:
             errors.append("Security scheme name cannot be empty")
+
+        # Raw dicts (e.g. Bedrock AgentCore httpAuthSecurityScheme format)
+        # are accepted without further field-level validation
+        if isinstance(scheme, dict):
+            continue
 
         if not scheme.type:
             errors.append(f"Scheme '{scheme_name}': type is required")

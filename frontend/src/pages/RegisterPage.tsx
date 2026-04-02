@@ -99,6 +99,10 @@ interface AgentFormData {
   ans_agent_id: string;
   source_created_at: string;
   source_updated_at: string;
+  skills: Record<string, unknown>[];
+  default_input_modes: string[];
+  default_output_modes: string[];
+  security_schemes: Record<string, unknown> | null;
 }
 
 
@@ -147,6 +151,10 @@ const initialAgentForm: AgentFormData = {
   ans_agent_id: '',
   source_created_at: '',
   source_updated_at: '',
+  skills: [],
+  default_input_modes: [],
+  default_output_modes: [],
+  security_schemes: null,
 };
 
 
@@ -310,13 +318,24 @@ const RegisterPage: React.FC = () => {
             }
           };
 
+          // Extract URL: top-level "url" or from "supportedInterfaces[0].url"
+          const agentUrl = parsed.url
+            || parsed.supportedInterfaces?.[0]?.url
+            || '';
+
+          // Extract protocol version from top-level or supportedInterfaces
+          const protoVersion = parsed.protocol_version
+            || parsed.protocolVersion
+            || parsed.supportedInterfaces?.[0]?.protocolVersion
+            || '';
+
           setAgentForm(prev => ({
             ...prev,
             name: parsed.name || prev.name,
             description: parsed.description || prev.description,
-            url: parsed.url || prev.url,
+            url: agentUrl || prev.url,
             path: parsed.path || prev.path,
-            protocol_version: parsed.protocol_version || parsed.protocolVersion || prev.protocol_version,
+            protocol_version: protoVersion || prev.protocol_version,
             version: parsed.version || prev.version,
             tags: Array.isArray(parsed.tags) ? parsed.tags.join(',') : (parsed.tags || prev.tags),
             capabilities: parsed.capabilities ? JSON.stringify(parsed.capabilities) : prev.capabilities,
@@ -329,6 +348,10 @@ const RegisterPage: React.FC = () => {
             ans_agent_id: parsed.ans_agent_id || prev.ans_agent_id,
             source_created_at: toDatetimeLocal(parsed.source_created_at) || prev.source_created_at,
             source_updated_at: toDatetimeLocal(parsed.source_updated_at) || prev.source_updated_at,
+            skills: Array.isArray(parsed.skills) ? parsed.skills : prev.skills,
+            default_input_modes: parsed.defaultInputModes || parsed.default_input_modes || prev.default_input_modes,
+            default_output_modes: parsed.defaultOutputModes || parsed.default_output_modes || prev.default_output_modes,
+            security_schemes: parsed.securitySchemes || parsed.security_schemes || prev.security_schemes,
           }));
         }
 
@@ -440,6 +463,10 @@ const RegisterPage: React.FC = () => {
         source_created_at: agentForm.source_created_at || undefined,
         source_updated_at: agentForm.source_updated_at || undefined,
         ans_agent_id: agentForm.ans_agent_id || undefined,
+        skills: agentForm.skills.length > 0 ? agentForm.skills : undefined,
+        defaultInputModes: agentForm.default_input_modes.length > 0 ? agentForm.default_input_modes : undefined,
+        defaultOutputModes: agentForm.default_output_modes.length > 0 ? agentForm.default_output_modes : undefined,
+        securitySchemes: agentForm.security_schemes || undefined,
       };
 
       await axios.post('/api/agents/register', payload, {

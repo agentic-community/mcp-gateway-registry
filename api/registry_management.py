@@ -268,6 +268,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _serialize_security_schemes(
+    schemes: dict[str, Any],
+) -> dict[str, Any]:
+    """Serialize security schemes to plain dicts for JSON output.
+
+    Handles both SecurityScheme Pydantic objects and raw dicts
+    (e.g. Bedrock AgentCore httpAuthSecurityScheme format).
+
+    Args:
+        schemes: Dictionary of security scheme name to scheme data
+
+    Returns:
+        Dictionary safe for json.dumps
+    """
+    result: dict[str, Any] = {}
+    for name, scheme in schemes.items():
+        if isinstance(scheme, dict):
+            result[name] = scheme
+        elif hasattr(scheme, "model_dump"):
+            result[name] = scheme.model_dump(exclude_none=True)
+        else:
+            result[name] = scheme
+    return result
+
+
 def _get_registry_url(cli_value: str | None = None) -> str:
     """
     Get registry URL from command-line argument or environment variable.
@@ -1678,6 +1703,9 @@ def cmd_agent_get(args: argparse.Namespace) -> int:
             "skills": [
                 {"name": skill.name, "description": skill.description} for skill in agent.skills
             ],
+            "security_schemes": _serialize_security_schemes(agent.security_schemes),
+            "default_input_modes": agent.default_input_modes,
+            "default_output_modes": agent.default_output_modes,
         }
         if agent.ans_metadata:
             output["ans_metadata"] = agent.ans_metadata

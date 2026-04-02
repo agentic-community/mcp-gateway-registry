@@ -143,6 +143,10 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
 
+            # Work around Starlette BaseHTTPMiddleware bug with 204 responses
+            if response.status_code == 204:
+                response = Response(status_code=204, headers=dict(response.headers))
+
             # Determine success based on response status
             success = 200 <= response.status_code < 400
 

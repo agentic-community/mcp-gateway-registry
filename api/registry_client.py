@@ -397,7 +397,7 @@ class AgentRegistration(BaseModel):
     documentation_url: str | None = Field(
         None, alias="documentationUrl", description="Documentation URL"
     )
-    security_schemes: dict[str, SecurityScheme] = Field(
+    security_schemes: dict[str, SecurityScheme | dict[str, Any]] = Field(
         default_factory=dict,
         alias="securitySchemes",
         description="Supported authentication methods",
@@ -545,7 +545,7 @@ class AgentDetail(BaseModel):
     documentation_url: str | None = Field(
         None, alias="documentationUrl", description="Documentation URL"
     )
-    security_schemes: dict[str, SecurityScheme] = Field(
+    security_schemes: dict[str, SecurityScheme | dict[str, Any]] = Field(
         default_factory=dict,
         alias="securitySchemes",
         description="Supported authentication methods",

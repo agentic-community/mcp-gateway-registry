@@ -34,6 +34,56 @@ class RatingRequest(BaseModel):
 templates = Jinja2Templates(directory=settings.templates_dir)
 
 
+def _build_scan_headers_from_credentials(
+    server_info: dict,
+) -> str | None:
+    """Build headers JSON for the security scanner from stored server credentials.
+
+    Decrypts the stored credential and formats it as a JSON headers string
+    that the scanner's _extract_bearer_token_from_headers() expects.
+
+    Args:
+        server_info: Server info dict with include_credentials=True.
+
+    Returns:
+        JSON string with X-Authorization header, or None if no credentials.
+    """
+    auth_scheme = server_info.get("auth_scheme", "none")
+    encrypted_credential = server_info.get("auth_credential_encrypted")
+
+    if auth_scheme == "none" or not encrypted_credential:
+        return None
+
+    from ..utils.credential_encryption import decrypt_credential
+
+    credential = decrypt_credential(encrypted_credential)
+    if not credential:
+        logger.warning(
+            f"Could not decrypt credential for '{server_info.get('path', 'unknown')}'. "
+            f"Security scan will proceed without auth."
+        )
+        return None
+
+    if auth_scheme == "bearer":
+        header_name = server_info.get("auth_header_name", "Authorization")
+        headers_dict = {"X-Authorization": f"Bearer {credential}"}
+        logger.info(
+            f"Passing bearer token to security scanner for "
+            f"'{server_info.get('path', 'unknown')}'"
+        )
+        return json.dumps(headers_dict)
+    elif auth_scheme == "api_key":
+        header_name = server_info.get("auth_header_name", "X-API-Key")
+        headers_dict = {"X-Authorization": f"Bearer {credential}"}
+        logger.info(
+            f"Passing API key as bearer token to security scanner for "
+            f"'{server_info.get('path', 'unknown')}'"
+        )
+        return json.dumps(headers_dict)
+
+    return None
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -67,6 +117,10 @@ async def _perform_security_scan_on_registration(
         headers_json = None
         if headers_list:
             headers_json = json.dumps(headers_list)
+
+        # If no explicit headers, try to build from stored credentials
+        if not headers_json:
+            headers_json = _build_scan_headers_from_credentials(server_entry)
 
         # Run the security scan
         scan_result = await security_scanner_service.scan_server(
@@ -3814,8 +3868,10 @@ async def rescan_server(
     if not path.startswith("/"):
         path = "/" + path
 
-    # Check if server exists
-    server_info = await server_service.get_server_info(path)
+    # Check if server exists (include credentials for authenticated scans)
+    server_info = await server_service.get_server_info(
+        path, include_credentials=True
+    )
     if not server_info:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -3830,6 +3886,9 @@ async def rescan_server(
             detail=f"Server '{path}' does not have a proxy_pass_url configured",
         )
 
+    # Build auth headers for the scanner if server has stored credentials
+    headers_json = _build_scan_headers_from_credentials(server_info)
+
     logger.info(
         f"Manual security scan requested by user '{user_context.get('username')}' "
         f"for server '{path}' at URL '{server_url}'"
@@ -3842,7 +3901,7 @@ async def rescan_server(
             server_path=path,
             analyzers=None,
             api_key=None,
-            headers=None,
+            headers=headers_json,
             timeout=None,
             mcp_endpoint=server_info.get("mcp_endpoint"),
         )

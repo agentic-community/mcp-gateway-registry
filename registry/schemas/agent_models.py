@@ -153,7 +153,7 @@ def _validate_url_format(
 
 def _validate_security_references(
     security: list[dict[str, list[str]]] | None,
-    security_schemes: dict[str, "SecurityScheme"],
+    security_schemes: dict[str, "SecurityScheme | dict[str, Any]"],
 ) -> list[dict[str, list[str]]] | None:
     """
     Validate that security references exist in security_schemes.
@@ -427,7 +427,7 @@ class AgentCard(BaseModel):
         alias="documentationUrl",
         description="Documentation URL",
     )
-    security_schemes: dict[str, SecurityScheme] = Field(
+    security_schemes: dict[str, SecurityScheme | dict[str, Any]] = Field(
         default_factory=dict,
         alias="securitySchemes",
         description="Supported authentication methods",
@@ -877,6 +877,16 @@ class AgentRegistrationRequest(BaseModel):
     external_tags: str | list[str] | None = Field(
         None,
         description="Comma-separated tags or list of tags from external/source system",
+    )
+    default_input_modes: list[str] | None = Field(
+        None,
+        alias="defaultInputModes",
+        description="Supported input MIME types (e.g., ['text', 'text/plain'])",
+    )
+    default_output_modes: list[str] | None = Field(
+        None,
+        alias="defaultOutputModes",
+        description="Supported output MIME types (e.g., ['text', 'text/plain'])",
     )
     ans_agent_id: str | None = Field(
         default=None,

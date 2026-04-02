@@ -426,6 +426,13 @@ async def register_agent(
     try:
         from ..utils.agent_validator import agent_validator
 
+        # Build optional kwargs for fields that have defaults on AgentCard
+        optional_card_kwargs: dict[str, Any] = {}
+        if request.default_input_modes:
+            optional_card_kwargs["default_input_modes"] = request.default_input_modes
+        if request.default_output_modes:
+            optional_card_kwargs["default_output_modes"] = request.default_output_modes
+
         agent_card = AgentCard(
             protocol_version=request.protocol_version,
             name=request.name,
@@ -445,6 +452,7 @@ async def register_agent(
             source_created_at=source_created_dt,
             source_updated_at=source_updated_dt,
             external_tags=external_tag_list,
+            **optional_card_kwargs,
         )
 
         validation_result = await agent_validator.validate_agent_card(
@@ -719,7 +727,7 @@ async def check_agent_health(
             if response.status_code == 200:
                 status_label = "healthy"
                 detail = None
-                logger.info(f"Agent health check for {path} succeeded on {url}")
+                logger.info(f"Agent health check for {path} succeeded via GET on {url}")
                 break
 
             detail = f"Agent responded with HTTP {response.status_code}"
@@ -734,6 +742,32 @@ async def check_agent_health(
         except Exception as exc:
             detail = f"Unexpected health check error on {url}: {exc}"
             logger.debug(f"Agent health check for {path} unexpected error on {url}: {exc}")
+
+    # Fallback: if GET-based checks failed, try HEAD on the base URL.
+    # A non-connection-error response (even 401/403) means the server is reachable.
+    if status_label == "unhealthy":
+        logger.info(f"Agent {path} GET checks failed, falling back to HEAD ping on {base_url}")
+        try:
+            start_time = datetime.now(UTC)
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                response = await client.head(base_url)
+            status_code = response.status_code
+            response_time_ms = int((datetime.now(UTC) - start_time).total_seconds() * 1000)
+            health_check_url = base_url
+
+            # Any HTTP response means the server is reachable
+            status_label = "healthy"
+            detail = f"Reachable via HEAD (HTTP {response.status_code})"
+            logger.info(
+                f"Agent health check for {path} succeeded via HEAD ping "
+                f"(HTTP {response.status_code})"
+            )
+        except httpx.TimeoutException:
+            logger.debug(f"Agent {path} HEAD ping timed out on {base_url}")
+        except httpx.HTTPError as exc:
+            logger.debug(f"Agent {path} HEAD ping failed on {base_url}: {exc}")
+        except Exception as exc:
+            logger.debug(f"Agent {path} HEAD ping unexpected error on {base_url}: {exc}")
 
     last_checked = datetime.now(UTC)
     last_checked_iso = last_checked.isoformat()
@@ -1160,6 +1194,13 @@ async def update_agent(
     tag_list = [tag.strip() for tag in request.tags.split(",") if tag.strip()]
 
     try:
+        # Build optional kwargs for fields that have defaults on AgentCard
+        update_optional_kwargs: dict[str, Any] = {}
+        if request.default_input_modes:
+            update_optional_kwargs["default_input_modes"] = request.default_input_modes
+        if request.default_output_modes:
+            update_optional_kwargs["default_output_modes"] = request.default_output_modes
+
         updated_agent = AgentCard(
             protocol_version=request.protocol_version,
             name=request.name,
@@ -1178,6 +1219,7 @@ async def update_agent(
             registered_at=existing_agent.registered_at,
             is_enabled=existing_agent.is_enabled,
             num_stars=existing_agent.num_stars,
+            **update_optional_kwargs,
         )
 
         from ..utils.agent_validator import agent_validator

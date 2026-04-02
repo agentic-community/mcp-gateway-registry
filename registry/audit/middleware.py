@@ -274,6 +274,13 @@ class AuditMiddleware(BaseHTTPMiddleware):
         # Process the request
         response = await call_next(request)
 
+        # Work around Starlette BaseHTTPMiddleware bug: call_next wraps
+        # the response in a StreamingResponse which can send body bytes
+        # for 204 No Content, causing "Response content longer than
+        # Content-Length" errors.  Return a plain Response instead.
+        if response.status_code == 204:
+            response = Response(status_code=204, headers=dict(response.headers))
+
         # Calculate duration
         duration_ms = (time.perf_counter() - start_time) * 1000
 
