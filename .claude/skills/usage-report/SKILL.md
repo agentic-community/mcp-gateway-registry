@@ -66,20 +66,42 @@ scp -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 \
   OUTPUT_DIR/registry_metrics.csv
 ```
 
-### Step 5: Generate the Usage Report
+### Step 5: Install Python Dependencies and Generate Charts
+
+First, ensure matplotlib and seaborn are available on the system Python:
+
+```bash
+/usr/bin/python3 -c "import matplotlib, seaborn" 2>/dev/null || pip install --break-system-packages matplotlib seaborn
+```
+
+Then generate the deployment distribution chart:
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_charts.py \
+  --csv OUTPUT_DIR/registry_metrics.csv \
+  --output OUTPUT_DIR/deployment-distribution-YYYY-MM-DD.png
+```
+
+This produces a single faceted PNG with 6 subplots: Cloud Provider, Compute Platform, Storage Backend, Auth Provider, Version Type, and Deployment Mode. Each subplot shows counts and percentages.
+
+### Step 6: Generate the Usage Report
 
 Read the downloaded CSV and the captured export output. Generate a markdown report with the following sections:
 
 #### Report Structure
 
 ```markdown
-# MCP Gateway Registry -- Usage Report
+# AI Registry -- Usage Report
 
 *Report Date: YYYY-MM-DD*
 *Data Source: Telemetry Collector (DocumentDB)*
 *Collection Period: [earliest ts] to [latest ts]*
 
 ---
+
+## Deployment Distribution
+
+![Deployment Distribution](deployment-distribution-YYYY-MM-DD.png)
 
 ## Executive Summary
 - Total events, unique instances, collection period, key highlights
@@ -126,13 +148,30 @@ Identify 3-5 distinct deployment patterns from the data (e.g., "Dev Setup", "AWS
 3-5 actionable insights based on the data.
 ```
 
-Save the report to `OUTPUT_DIR/usage-report-YYYY-MM-DD.md`.
+Save the report to `OUTPUT_DIR/ai-registry-usage-report-YYYY-MM-DD.md`.
 
-### Step 6: Present Results
+### Step 7: Generate Self-Contained HTML
+
+Convert the markdown report to a single self-contained HTML file using pandoc. The chart PNG is base64-embedded so the HTML works standalone. Run from the OUTPUT_DIR so relative image paths resolve:
+
+```bash
+cd OUTPUT_DIR && pandoc ai-registry-usage-report-YYYY-MM-DD.md \
+  -o ai-registry-usage-report-YYYY-MM-DD.html \
+  --embed-resources --standalone \
+  --css=.claude/skills/usage-report/report-style.css \
+  --metadata title="AI Registry - Usage Report YYYY-MM-DD"
+```
+
+The `report-style.css` file in the skill directory provides a clean, professional layout. Pandoc must be installed:
+```bash
+which pandoc >/dev/null || sudo apt-get install -y pandoc
+```
+
+### Step 8: Present Results
 
 After generating the report:
 1. Display the Executive Summary and Key Metrics directly in the conversation
-2. Tell the user the full report path and CSV path
+2. Tell the user the full report path, HTML path, and CSV path
 3. Highlight the most interesting findings
 
 ## Error Handling
@@ -149,9 +188,11 @@ User: /usage-report
 
 Output:
 ```
-Executive Summary: 52 startup events from ~6 unique registry instances over 3 days...
+Executive Summary: 68 startup events from ~7 unique registry instances over 4 days...
 
-Full report: .scratchpad/usage-reports/usage-report-2026-03-30.md
+Full report: .scratchpad/usage-reports/ai-registry-usage-report-2026-03-31.md
+HTML report: .scratchpad/usage-reports/ai-registry-usage-report-2026-03-31.html
+Chart: .scratchpad/usage-reports/deployment-distribution-2026-03-31.png
 CSV data: .scratchpad/usage-reports/registry_metrics.csv
 ```
 
@@ -159,4 +200,4 @@ CSV data: .scratchpad/usage-reports/registry_metrics.csv
 User: /usage-report /tmp/reports
 ```
 
-Output saved to `/tmp/reports/usage-report-2026-03-30.md` and `/tmp/reports/registry_metrics.csv`.
+Output saved to `/tmp/reports/`.
