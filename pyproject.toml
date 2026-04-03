@@ -52,7 +52,7 @@ dependencies = [
     "motor>=3.3.0",
     "pymongo>=4.6.0",
     "dnspython>=2.4.0",
-    "litellm==1.82.4",
+    "litellm==1.83.0",
     "cryptography>=46.0.3",
     "prometheus-client>=0.20.0",
 ]
