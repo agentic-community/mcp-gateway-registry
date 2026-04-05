@@ -31,6 +31,15 @@ interface AgentDetailsModalProps {
  * - Field reference documentation
  * - Loading states handled by parent DetailsModal
  */
+const getAgentCardUrl = (agentUrl: string): string | null => {
+  try {
+    const origin = new URL(agentUrl).origin;
+    return `${origin}/.well-known/agent-card.json`;
+  } catch {
+    return null;
+  }
+};
+
 const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
   agent,
   isOpen,
@@ -69,6 +78,26 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
             security schemes, and configuration details.
           </p>
         </div>
+
+        {/* A2A Agent Card URL for A2A agents */}
+        {fullDetails?.supported_protocol === 'a2a' && fullDetails?.url && (() => {
+          const cardUrl = getAgentCardUrl(fullDetails.url);
+          return cardUrl ? (
+            <div className="bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800 rounded-lg p-3 mt-2">
+              <p className="text-sm text-cyan-800 dark:text-cyan-200">
+                <span className="font-medium">A2A Agent Card:</span>{' '}
+                <a
+                  href={cardUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-cyan-600 dark:text-cyan-400 hover:underline break-all"
+                >
+                  {cardUrl}
+                </a>
+              </p>
+            </div>
+          ) : null;
+        })()}
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">

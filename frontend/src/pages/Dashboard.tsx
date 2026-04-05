@@ -60,6 +60,7 @@ interface Agent {
   version?: string;
   visibility?: 'public' | 'private' | 'group-restricted';
   trust_level?: 'community' | 'verified' | 'trusted' | 'unverified';
+  supported_protocol?: string | null;
   enabled: boolean;
   tags?: string[];
   last_checked_time?: string;
@@ -254,6 +255,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     version: '',
     visibility: 'private' as 'public' | 'private' | 'group-restricted',
     trust_level: 'community' as 'community' | 'verified' | 'trusted' | 'unverified',
+    supported_protocol: 'other' as 'a2a' | 'other',
     tags: [] as string[],
     skillsJson: '[]',
   });
@@ -370,8 +372,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
       usersCount: a.usersCount,
       url: '',  // Will be populated if needed
       version: '',
-      visibility: 'public',
-      trust_level: 'community',
+      visibility: (a.visibility || 'public') as 'public' | 'private' | 'group-restricted',
+      trust_level: (a.trust_level || 'community') as 'community' | 'verified' | 'trusted' | 'unverified',
+      supported_protocol: a.supported_protocol || null,
       sync_metadata: a.sync_metadata,
       ans_metadata: a.ans_metadata,
       registered_by: a.registered_by,
@@ -913,6 +916,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         version: fullAgent.version || agent.version || '1.0.0',
         visibility: fullAgent.visibility || agent.visibility || 'private',
         trust_level: fullAgent.trust_level || agent.trust_level || 'community',
+        supported_protocol: (fullAgent.supported_protocol || agent.supported_protocol || 'other') as 'a2a' | 'other',
         tags: fullAgent.tags || agent.tags || [],
         skillsJson: fullAgent.skills && fullAgent.skills.length > 0
           ? JSON.stringify(fullAgent.skills, null, 2)
@@ -929,6 +933,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         version: agent.version || '1.0.0',
         visibility: agent.visibility || 'private',
         trust_level: agent.trust_level || 'community',
+        supported_protocol: (agent.supported_protocol || 'other') as 'a2a' | 'other',
         tags: agent.tags || [],
         skillsJson: '[]',
       });
@@ -1033,6 +1038,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         url: editAgentForm.url,
         version: editAgentForm.version,
         visibility: editAgentForm.visibility,
+        trustLevel: editAgentForm.trust_level,
+        supportedProtocol: editAgentForm.supported_protocol,
         tags: editAgentForm.tags,
         skills: parsedSkills,
       };
@@ -1740,13 +1747,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
           </div>
         )}
 
-      {/* A2A Agents Section - Grouped by Registry */}
+      {/* Agents Section - Grouped by Registry */}
       {registryConfig?.features.agents !== false &&
         (viewFilter === 'all' || viewFilter === 'agents') && (
           <div className="mb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                A2A Agents
+                Agents
               </h2>
 
               {/* Registry Quick Navigation for Agents - Only show if there are multiple registries */}
@@ -2323,7 +2330,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
                     : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
               >
-                A2A Agents
+                Agents
               </button>
             )}
             {registryConfig?.features.skills !== false && (
@@ -2387,7 +2394,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
               className="btn-primary flex items-center space-x-2 flex-shrink-0"
             >
               <PlusIcon className="h-4 w-4" />
-              <span>Register Server</span>
+              <span>Register</span>
             </button>
 
             <button
@@ -2887,6 +2894,20 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
                   <option value="community">Community</option>
                   <option value="verified">Verified</option>
                   <option value="trusted">Trusted</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                  Supported Protocol
+                </label>
+                <select
+                  value={editAgentForm.supported_protocol}
+                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, supported_protocol: e.target.value as 'a2a' | 'other' }))}
+                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
+                >
+                  <option value="a2a">A2A</option>
+                  <option value="other">Other</option>
                 </select>
               </div>
 

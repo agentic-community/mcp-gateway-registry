@@ -1706,6 +1706,7 @@ def cmd_agent_get(args: argparse.Namespace) -> int:
             "security_schemes": _serialize_security_schemes(agent.security_schemes),
             "default_input_modes": agent.default_input_modes,
             "default_output_modes": agent.default_output_modes,
+            "supported_protocol": agent.supported_protocol,
         }
         if agent.ans_metadata:
             output["ans_metadata"] = agent.ans_metadata

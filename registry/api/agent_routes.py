@@ -448,6 +448,8 @@ async def register_agent(
             tags=tag_list,
             license=request.license,
             visibility=request.visibility,
+            trust_level=request.trust_level,
+            supported_protocol=request.supported_protocol,
             registered_by=user_context["username"],
             source_created_at=source_created_dt,
             source_updated_at=source_updated_dt,
@@ -649,6 +651,8 @@ async def list_agents(
                 last_health_check=agent.last_health_check.isoformat()
                 if agent.last_health_check
                 else None,
+                visibility=getattr(agent, "visibility", "public"),
+                supported_protocol=getattr(agent, "supported_protocol", None),
             )
             filtered_agents.append(agent_info)
 
@@ -1215,6 +1219,8 @@ async def update_agent(
             tags=tag_list,
             license=request.license,
             visibility=request.visibility,
+            trust_level=request.trust_level,
+            supported_protocol=request.supported_protocol,
             registered_by=existing_agent.registered_by,
             registered_at=existing_agent.registered_at,
             is_enabled=existing_agent.is_enabled,
@@ -1417,6 +1423,17 @@ async def discover_agents_by_skills(
 
         relevance_score = 0.6 * skill_match_score + 0.2 * tag_match_score + 0.2 * trust_boost
 
+        # Extract streaming capability -- check capabilities dict first, fall back to
+        # top-level field for agents registered before the capabilities dict change
+        streaming = (
+            agent.capabilities.get("streaming", False)
+            if agent.capabilities
+            else getattr(agent, "streaming", False)
+        )
+
+        # Extract provider organization name (provider is AgentProvider object)
+        provider_name = agent.provider.organization if agent.provider else None
+
         agent_info = AgentInfo(
             name=agent.name,
             description=agent.description,
@@ -1427,9 +1444,11 @@ async def discover_agents_by_skills(
             num_skills=len(agent.skills),
             num_stars=agent.num_stars,
             is_enabled=True,
-            provider=agent.provider,
-            streaming=agent.streaming,
+            provider=provider_name,
+            streaming=streaming,
             trust_level=agent.trust_level,
+            visibility=getattr(agent, "visibility", "public"),
+            supported_protocol=getattr(agent, "supported_protocol", None),
         )
 
         matched_agents.append(

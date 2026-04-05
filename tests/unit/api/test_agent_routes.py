@@ -474,6 +474,7 @@ class TestRegisterAgent:
             "url": "http://localhost:9000/new-agent",
             "version": "1.0",
             "tags": "test,new",
+            "supportedProtocol": "a2a",
         }
 
         with (
@@ -514,6 +515,7 @@ class TestRegisterAgent:
             "url": "http://localhost:9000/test-agent",
             "version": "1.0",
             "tags": "test",
+            "supportedProtocol": "a2a",
         }
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
@@ -536,6 +538,7 @@ class TestRegisterAgent:
             "url": "http://localhost:9000/invalid",
             "version": "1.0",
             "tags": "test",
+            "supportedProtocol": "a2a",
         }
 
         with (
@@ -567,6 +570,7 @@ class TestRegisterAgent:
             "url": "http://localhost:9000/unauthorized",
             "version": "1.0",
             "tags": "test",
+            "supportedProtocol": "a2a",
         }
 
         # Act
@@ -1027,6 +1031,7 @@ class TestUpdateAgent:
             "url": "http://localhost:9000/updated-agent",
             "version": "2.0",
             "tags": "updated,test",
+            "supportedProtocol": "a2a",
         }
 
         with (
@@ -1065,6 +1070,7 @@ class TestUpdateAgent:
             "url": "http://localhost:9000/updated",
             "version": "2.0",
             "tags": "test",
+            "supportedProtocol": "a2a",
         }
 
         with (

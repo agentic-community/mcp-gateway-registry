@@ -496,8 +496,8 @@ class AgentCard(BaseModel):
 
     # Access control
     visibility: str = Field(
-        "internal",
-        description="public, group-restricted, or internal (default for security)",
+        "public",
+        description="public, group-restricted, or internal",
     )
     allowed_groups: list[str] = Field(
         default_factory=list,
@@ -518,7 +518,7 @@ class AgentCard(BaseModel):
         description="JWS signature for card integrity",
     )
     trust_level: str = Field(
-        "unverified",
+        "community",
         alias="trustLevel",
         description="unverified, community, verified, trusted",
     )
@@ -561,6 +561,11 @@ class AgentCard(BaseModel):
         default_factory=list,
         description="Tags from external/source system",
         alias="externalTags",
+    )
+    supported_protocol: str | None = Field(
+        default=None,
+        alias="supportedProtocol",
+        description="Agent protocol: 'a2a' for A2A protocol agents, 'other' for non-A2A agents",
     )
 
     model_config = ConfigDict(
@@ -727,9 +732,18 @@ class AgentInfo(BaseModel):
         description="Supports streaming responses",
     )
     trust_level: str = Field(
-        "unverified",
+        "community",
         alias="trustLevel",
         description="unverified, community, verified, trusted",
+    )
+    visibility: str = Field(
+        "public",
+        description="public, group-restricted, or internal",
+    )
+    supported_protocol: str | None = Field(
+        default=None,
+        alias="supportedProtocol",
+        description="Agent protocol: 'a2a' or 'other'",
     )
     sync_metadata: dict[str, Any] | None = Field(
         default=None,
@@ -858,8 +872,13 @@ class AgentRegistrationRequest(BaseModel):
         description="License information",
     )
     visibility: str = Field(
-        default="internal",
-        description="Visibility: public, group-restricted, or internal (default)",
+        default="public",
+        description="Visibility: public, group-restricted, or internal (default: public)",
+    )
+    trust_level: str = Field(
+        default="community",
+        alias="trustLevel",
+        description="Trust level: unverified, community, verified, trusted (default: community)",
     )
 
     status: LifecycleStatus = Field(
@@ -892,6 +911,12 @@ class AgentRegistrationRequest(BaseModel):
         default=None,
         description="Optional ANS Agent ID to link during registration",
     )
+    supported_protocol: str = Field(
+        ...,
+        alias="supportedProtocol",
+        description="Agent protocol: 'a2a' for A2A protocol agents, 'other' for non-A2A agents",
+    )
+
     model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("tags", mode="before")
@@ -939,3 +964,32 @@ class AgentRegistrationRequest(BaseModel):
     ) -> str:
         """Validate protocol version format."""
         return _validate_protocol_version(v)
+
+    @field_validator("supported_protocol")
+    @classmethod
+    def _validate_supported_protocol(
+        cls,
+        v: str,
+    ) -> str:
+        """Validate and normalize supported_protocol to lowercase."""
+        v = v.lower()
+        valid_values = ["a2a", "other"]
+        if v not in valid_values:
+            raise ValueError(
+                f"supported_protocol must be one of: {', '.join(valid_values)}"
+            )
+        return v
+
+    @field_validator("trust_level")
+    @classmethod
+    def _validate_trust_level_request(
+        cls,
+        v: str,
+    ) -> str:
+        """Validate trust_level value."""
+        valid_values = ["unverified", "community", "verified", "trusted"]
+        if v not in valid_values:
+            raise ValueError(
+                f"trust_level must be one of: {', '.join(valid_values)}"
+            )
+        return v

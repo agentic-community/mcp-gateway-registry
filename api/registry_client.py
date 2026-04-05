@@ -470,6 +470,9 @@ class AgentCard(BaseModel):
     external_tags: list[str] = Field(
         default_factory=list, alias="externalTags", description="Tags from external source"
     )
+    supported_protocol: str | None = Field(
+        None, alias="supportedProtocol", description="Agent protocol: 'a2a' or 'other'"
+    )
 
     class Config:
         populate_by_name = True  # Allow both snake_case and camelCase on input
@@ -583,7 +586,7 @@ class AgentDetail(BaseModel):
     allowed_groups: list[str] = Field(
         default_factory=list, alias="allowedGroups", description="Groups with access"
     )
-    trust_level: str = Field("unverified", alias="trustLevel", description="Trust level")
+    trust_level: str = Field("community", alias="trustLevel", description="Trust level")
     ans_metadata: dict[str, Any] | None = Field(
         default=None,
         alias="ansMetadata",
@@ -601,6 +604,9 @@ class AgentDetail(BaseModel):
     )
     external_tags: list[str] = Field(
         default_factory=list, alias="externalTags", description="Tags from external source"
+    )
+    supported_protocol: str | None = Field(
+        None, alias="supportedProtocol", description="Agent protocol: 'a2a' or 'other'"
     )
 
     class Config:

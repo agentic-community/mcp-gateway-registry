@@ -70,6 +70,8 @@ export interface Agent {
   lifecycle_status?: 'active' | 'deprecated' | 'draft' | 'beta';
   source_created_at?: string;
   source_updated_at?: string;
+  // Supported protocol (e.g., 'a2a', 'mcp')
+  supported_protocol?: string | null;
 }
 
 /**
@@ -383,10 +385,16 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                         ASOR
                       </span>
                     )}
-                    {/* A2A protocol badge */}
+                    {/* A2A tag badge (for AgentCore imported agents) */}
                     {agent.tags?.includes('a2a') && (
                       <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 dark:from-emerald-900/30 dark:to-teal-900/30 dark:text-emerald-300 rounded-full flex-shrink-0 border border-emerald-200 dark:border-emerald-600">
                         A2A
+                      </span>
+                    )}
+                    {/* Supported Protocol Badge */}
+                    {agent.supported_protocol === 'a2a' && !agent.tags?.includes('a2a') && (
+                      <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded border border-cyan-200 dark:border-cyan-700">
+                        A2A Protocol
                       </span>
                     )}
                     {agent.trust_level && (

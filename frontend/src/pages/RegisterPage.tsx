@@ -103,6 +103,8 @@ interface AgentFormData {
   default_input_modes: string[];
   default_output_modes: string[];
   security_schemes: Record<string, unknown> | null;
+  supported_protocol: string;
+  trust_level: string;
 }
 
 
@@ -155,6 +157,8 @@ const initialAgentForm: AgentFormData = {
   default_input_modes: [],
   default_output_modes: [],
   security_schemes: null,
+  supported_protocol: 'other',
+  trust_level: 'community',
 };
 
 
@@ -352,6 +356,7 @@ const RegisterPage: React.FC = () => {
             default_input_modes: parsed.defaultInputModes || parsed.default_input_modes || prev.default_input_modes,
             default_output_modes: parsed.defaultOutputModes || parsed.default_output_modes || prev.default_output_modes,
             security_schemes: parsed.securitySchemes || parsed.security_schemes || prev.security_schemes,
+            supported_protocol: parsed.supportedProtocol || parsed.supported_protocol || prev.supported_protocol,
           }));
         }
 
@@ -467,6 +472,8 @@ const RegisterPage: React.FC = () => {
         defaultInputModes: agentForm.default_input_modes.length > 0 ? agentForm.default_input_modes : undefined,
         defaultOutputModes: agentForm.default_output_modes.length > 0 ? agentForm.default_output_modes : undefined,
         securitySchemes: agentForm.security_schemes || undefined,
+        supportedProtocol: agentForm.supported_protocol,
+        trustLevel: agentForm.trust_level,
       };
 
       await axios.post('/api/agents/register', payload, {
@@ -851,6 +858,40 @@ const RegisterPage: React.FC = () => {
           {errors.description && <p className={errorClass}>{errors.description}</p>}
         </div>
 
+        {/* Supported Protocol */}
+        <div className="md:col-span-2">
+          <label className={labelClass}>
+            Supported Protocol <span className="text-red-500">*</span>
+          </label>
+          <div className="flex items-center gap-4 mt-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={agentForm.supported_protocol === 'a2a'}
+                onChange={(e) => setAgentForm(prev => ({
+                  ...prev,
+                  supported_protocol: e.target.checked ? 'a2a' : 'other'
+                }))}
+                className="h-4 w-4 rounded border-gray-300 text-cyan-600
+                           focus:ring-cyan-500 dark:border-gray-600
+                           dark:bg-gray-700"
+              />
+              <span className="text-sm text-gray-700 dark:text-gray-300">
+                This agent supports the A2A protocol
+              </span>
+            </label>
+          </div>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Check if this agent implements the
+            <a href="https://a2a-protocol.org/latest/specification/"
+               target="_blank" rel="noopener noreferrer"
+               className="text-cyan-600 hover:underline ml-1">
+              A2A (Agent-to-Agent) protocol
+            </a>.
+            The A2A agent card schema is used for all agents as a standardized representation.
+          </p>
+        </div>
+
         {/* Optional Fields */}
         <div className="md:col-span-2 mt-4">
           <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
@@ -903,6 +944,21 @@ const RegisterPage: React.FC = () => {
             <option value="public">Public</option>
             <option value="private">Private</option>
             <option value="group-restricted">Group Restricted</option>
+          </select>
+        </div>
+
+        {/* Trust Level */}
+        <div>
+          <label className={labelClass}>Trust Level</label>
+          <select
+            value={agentForm.trust_level}
+            onChange={(e) => setAgentForm(prev => ({ ...prev, trust_level: e.target.value }))}
+            className={inputClass}
+          >
+            <option value="community">Community</option>
+            <option value="unverified">Unverified</option>
+            <option value="verified">Verified</option>
+            <option value="trusted">Trusted</option>
           </select>
         </div>
 

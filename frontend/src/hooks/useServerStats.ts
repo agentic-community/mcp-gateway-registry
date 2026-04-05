@@ -51,6 +51,9 @@ interface Server {
     last_verified?: string;
   };
   registered_by?: string | null;
+  trust_level?: string;
+  visibility?: string;
+  supported_protocol?: string | null;
 }
 
 interface ServerStats {
@@ -219,6 +222,9 @@ export const useServerStats = (): UseServerStatsReturn => {
           sync_metadata: agentInfo.sync_metadata,
           ans_metadata: agentInfo.ans_metadata || agentInfo.ansMetadata,
           registered_by: agentInfo.registered_by || agentInfo.registeredBy || null,
+          trust_level: agentInfo.trust_level || agentInfo.trustLevel || 'community',
+          visibility: agentInfo.visibility || 'public',
+          supported_protocol: agentInfo.supported_protocol || agentInfo.supportedProtocol || null,
         };
         
         console.log(`🔄 Transformed agent ${transformed.name}:`, {
