@@ -89,6 +89,10 @@ class InternalServiceRegistration(BaseModel):
     )
     source_updated_at: str | None = Field(None, description="Last update timestamp (ISO format)")
     external_tags: list[str] | None = Field(None, description="Tags from external/source system")
+    auth_credential: str | None = Field(
+        None,
+        description="Plaintext auth credential (Bearer token or API key). Encrypted before storage.",
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 

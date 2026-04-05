@@ -234,6 +234,7 @@ registry/data/
 logs/
 token_refresher.pid
 token_refresher.log
+token_refresh_manifest.json
 .mcp.json
 
 # Secrets and API keys - never commit these!

@@ -727,9 +727,12 @@ class TestCheckAgentHealth:
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.is_agent_enabled.return_value = True
 
-            # Mock httpx timeout
+            # Mock httpx timeout for both GET (health URLs) and HEAD (fallback)
             mock_client_instance = AsyncMock()
             mock_client_instance.__aenter__.return_value.get = AsyncMock(
+                side_effect=httpx.TimeoutException("Timeout")
+            )
+            mock_client_instance.__aenter__.return_value.head = AsyncMock(
                 side_effect=httpx.TimeoutException("Timeout")
             )
             mock_httpx_client.return_value = mock_client_instance

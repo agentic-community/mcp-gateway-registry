@@ -1,7 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import {
-  CpuChipIcon,
   StarIcon,
   ArrowPathIcon,
   PencilIcon,
@@ -384,6 +383,12 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                         ASOR
                       </span>
                     )}
+                    {/* A2A protocol badge */}
+                    {agent.tags?.includes('a2a') && (
+                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 dark:from-emerald-900/30 dark:to-teal-900/30 dark:text-emerald-300 rounded-full flex-shrink-0 border border-emerald-200 dark:border-emerald-600">
+                        A2A
+                      </span>
+                    )}
                     {agent.trust_level && (
                       <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex-shrink-0 flex items-center gap-1 ${getTrustLevelColor()}`}>
                         {getTrustLevelIcon()}
@@ -523,31 +528,20 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
 
             {/* Stats */}
             <div className="px-5 pb-4">
-              <div className="grid grid-cols-2 gap-4">
-                <StarRatingWidget
-                  resourceType="agents"
-                  path={agent.path}
-                  initialRating={agent.rating || 0}
-                  initialCount={agent.rating_details?.length || 0}
-                  authToken={authToken}
-                  onShowToast={onShowToast}
-                  onRatingUpdate={(newRating) => {
-                    // Update local agent rating when user submits rating
-                    if (onAgentUpdate) {
-                      onAgentUpdate(agent.path, { rating: newRating });
-                    }
-                  }}
-                />
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-cyan-50 dark:bg-cyan-900/30 rounded">
-                    <CpuChipIcon className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900 dark:text-white">{agent.usersCount || 0}</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">Users</div>
-                  </div>
-                </div>
-              </div>
+              <StarRatingWidget
+                resourceType="agents"
+                path={agent.path}
+                initialRating={agent.rating || 0}
+                initialCount={agent.rating_details?.length || 0}
+                authToken={authToken}
+                onShowToast={onShowToast}
+                onRatingUpdate={(newRating) => {
+                  // Update local agent rating when user submits rating
+                  if (onAgentUpdate) {
+                    onAgentUpdate(agent.path, { rating: newRating });
+                  }
+                }}
+              />
             </div>
 
             {/* Footer */}

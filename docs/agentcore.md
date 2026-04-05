@@ -1,239 +1,362 @@
-# Integrating Amazon Bedrock AgentCore Gateways
+# Registering Amazon Bedrock AgentCore Assets
 
-This guide demonstrates how to register and use an Amazon Bedrock AgentCore Gateway as an MCP server through the MCP Gateway Registry.
+This guide covers how to register AgentCore Gateways and Agent Runtimes in the MCP Gateway Registry. There are two approaches: bulk auto-registration (scan an entire AWS account) or per-server manual registration (one resource at a time).
 
-## Overview
+## Two Ways to Register AgentCore Assets
 
-[Amazon Bedrock AgentCore Gateway](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html) provides an easy and secure way for developers to build, deploy, discover, and connect to tools at scale. AI agents need tools to perform real-world tasks—from querying databases to sending messages to analyzing documents.
+| Approach | Best For | Token Management |
+|----------|----------|-----------------|
+| **Method 1: Bulk Scanner** | Discovering and registering all resources in an AWS account at once | Automated via `token_refresher.py` |
+| **Method 2: Per-Server Registration** | Registering individual gateways or agents manually (same as any other MCP server/agent) | Manual token generation |
 
-This guide uses the [Customer Support Assistant](https://github.com/awslabs/amazon-bedrock-agentcore-samples/tree/main/02-use-cases/customer-support-assistant) example from the `amazon-bedrock-agentcore-samples` repository to demonstrate how to register and use an AgentCore Gateway as an MCP server through the MCP Gateway Registry.
+---
 
-### Architecture Overview
+## Method 1: Bulk Scanner (Auto-Registration)
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          Integration Flow                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
+The AgentCore scanner CLI automates the discovery and registration of all AgentCore Gateways and Agent Runtimes in your AWS account. Instead of manually creating JSON configuration files for each resource, the CLI scans your account, builds registrations, and writes a token refresh manifest -- all in one command. A separate token refresher process then keeps egress tokens up to date.
 
-                                                   ┌──────────────────────────┐
-                                                   │   AWS Cloud              │
-                                                   │                          │
-  ┌──────────────┐        ┌──────────────────┐     │  ┌────────────────────┐  │
-  │              │        │                  │     │  │  Amazon Bedrock    │  │
-  │  AI Agent    │───────▶│  MCP Gateway &   │──────▶│  AgentCore Gateway │  │
-  │  (Claude)    │        │  Registry        │     │  │                    │  │
-  │              │        │  localhost:7860  │     │  │  Customer Support  │  │
-  └──────────────┘        └──────────────────┘     │  │  MCP Server        │  │
-                                   │               │  │                    │  │
-                                   │               │  │  - Warranty Tool   │  │
-                                   │               │  │  - Customer Tool   │  │
-                                   │               │  │  - Knowledge Base  │  │
-                                   │               │  └────────────────────┘  │
-                          ┌────────▼────────┐      │            │             │
-                          │                 │      │            │             │
-                          │  Authentication │      │    ┌───────▼──────────┐  │
-                          │  - Cognito Token│◀─────────│    Cognito User  │  │
-                          │  - Passthrough  │      │    │  Pool (OAuth)    │  │
-                          │                 │      │    └──────────────────┘  │
-                          └─────────────────┘      │                          │
-                                                   └──────────────────────────┘
+The scanner and token refresher work with any OIDC-compliant identity provider -- Cognito, Auth0, Okta, Entra ID, Keycloak, or any custom provider. The IdP is auto-detected from the OIDC discovery URL in each gateway's configuration.
 
-Flow:
-1. AI Agent sends request to MCP Gateway Registry
-2. Gateway routes to registered AgentCore Gateway MCP server
-3. AgentCore Gateway authenticates via Cognito (token passthrough)
-4. Tools execute (warranty lookup, customer profile, knowledge base query)
-5. Response flows back through Gateway to AI Agent
-```
+> **Prerequisites:** Before using auto-registration, complete the setup steps in the [Auto-Registration Prerequisites Guide](agentcore-auto-registration-prerequisites.md).
 
-## Prerequisites
-
-- AWS Account with Amazon Bedrock AgentCore access
-- EC2 instance (recommended) - See [Complete Setup Guide](complete-setup-guide.md) for EC2 configuration details
-  - Alternatively, you can run on macOS - See [macOS Setup Guide](macos-setup-guide.md)
-  - Optional: For direct desktop access to EC2 instead of port forwarding, see [Remote Desktop Setup](remote-desktop-setup.md)
-- Docker and Docker Compose installed
-- Python 3.11+ with `uv` package manager
-- Git
-
-## Step 1: Set Up the MCP Gateway Registry
-
-### 1.1 Deploy the Registry
-
-Deploy the registry using pre-built containers. See [README - Option A: Pre-built Images](../README.md#option-a-pre-built-images-instant-setup) for detailed instructions.
+### Step 1: Scan and Register
 
 ```bash
-# Create workspace directory
-mkdir -p ${HOME}/workspace
-cd ${HOME}/workspace
+# Discover resources without registering (preview)
+uv run python -m cli.agentcore sync --dry-run
 
-# Clone the repository
-git clone https://github.com/agentic-community/mcp-gateway-registry.git
-cd mcp-gateway-registry
+# Register all gateways and runtimes
+uv run python -m cli.agentcore sync
 
-# Copy environment file
-cp .env.example .env
+# Overwrite existing registrations (update metadata if changed)
+uv run python -m cli.agentcore sync --overwrite
 
-# Configure environment (see Complete Setup Guide for details)
-export DOCKERHUB_ORG=mcpgateway
-
-# Deploy with pre-built images
-./build_and_run.sh --prebuilt
+# List discovered resources without registering
+uv run python -m cli.agentcore list
 ```
 
-Follow the [Complete Setup Guide - Initial Environment Configuration](complete-setup-guide.md#initial-environment-configuration) for detailed configuration steps including Keycloak initialization and agent account creation.
+The sync command:
+1. Discovers all READY gateways and runtimes via AWS Bedrock AgentCore API
+2. Registers each gateway as an MCP Server and each runtime as an MCP Server (protocol=MCP) or A2A Agent (protocol=HTTP/A2A)
+3. Writes `token_refresh_manifest.json` listing all CUSTOM_JWT gateways that need token refresh
 
-### 1.2 Verify Registry is Running
+> **Note:** Agents imported from runtimes are registered with an empty skills array. To add skills after import, use the agent edit dialog in the UI or the `PUT /api/agents/{path}` API endpoint.
 
-Open your browser and navigate to:
-```
-http://localhost:7860
-```
+### Step 2: Configure Client Secrets (for CUSTOM_JWT Gateways)
 
-You should see the MCP Gateway Registry UI with the list of registered services.
-
-## Step 2: Set Up Your AgentCore Gateway
-
-### 2.1 Deploy the Customer Support Assistant
-
-Clone the Amazon Bedrock AgentCore samples repository and follow the setup instructions:
+CUSTOM_JWT gateways need OAuth2 client secrets to generate egress tokens. Add them to your `.env` file:
 
 ```bash
-# Navigate to workspace directory
-cd ${HOME}/workspace
+# Per-client secret (highest priority) -- use the client_id from allowed_clients
+OAUTH_CLIENT_SECRET_49ujl0b9ser72gnp6q1ph9v6vs=your-secret-here
 
-# Clone the AgentCore samples repository
-git clone https://github.com/awslabs/amazon-bedrock-agentcore-samples.git
-cd amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant
+# Or vendor-level secrets (shared across all gateways for that IdP)
+AUTH0_CLIENT_SECRET=your-auth0-secret
+OKTA_CLIENT_SECRET=your-okta-secret
+ENTRA_CLIENT_SECRET=your-entra-secret
+KEYCLOAK_CLIENT_SECRET=your-keycloak-secret
 ```
 
-Follow the instructions in the [Customer Support Assistant README](https://github.com/awslabs/amazon-bedrock-agentcore-samples/tree/main/02-use-cases/customer-support-assistant) to deploy the AgentCore gateway in your AWS account. You can do this in a separate terminal on the same EC2 machine.
+**Cognito gateways need no configuration** -- the token refresher auto-retrieves client secrets via the AWS API (`describe_user_pool_client`).
 
-This will create:
-- Amazon Bedrock AgentCore Gateway
-- Cognito User Pool for authentication
-- Lambda functions for warranty status and customer profile lookup
-- Knowledge base integration
+Secret resolution priority:
+1. Per-client env var: `OAUTH_CLIENT_SECRET_<client_id>`
+2. Cognito auto-retrieval via AWS API (Cognito only)
+3. Vendor-specific env var: `AUTH0_CLIENT_SECRET`, etc.
 
-**Important:** During deployment, save the following configuration values that will be printed in the output:
+### Step 3: Run Token Refresher
+
+The token refresher reads the manifest, resolves secrets, fetches OAuth2 tokens, PATCHes them into the registry, and triggers a security rescan for each updated server (enabled by default, requires admin privileges on the registry token):
 
 ```bash
-cd ${HOME}/workspace/
+# One-time refresh
+uv run python -m cli.agentcore.token_refresher \
+    --manifest token_refresh_manifest.json \
+    --registry-url https://registry.example.com \
+    --token-file .token
 
-# Create a file to store AgentCore authentication parameters
-cat > .agentcore-params << 'EOF'
-# AgentCore Gateway Authentication Parameters
-COGNITO_TOKEN_URL="<YOUR_COGNITO_TOKEN_URL>"  # Example: https://us-east-1XXXXXXXX.auth.us-east-1.amazoncognito.com/oauth2/token
-CLIENT_ID="<YOUR_CLIENT_ID>"                   # Example: 7kqi2l0n47mnfmhfapsf29ch4h
-CLIENT_SECRET="<YOUR_CLIENT_SECRET>"           # Get from AWS Cognito Console
-SCOPE="<YOUR_SCOPE>"                           # Example: default-m2m-resource-server-XXXXXXXX/read
-EOF
+# Continuous mode (sidecar -- refreshes every 45 minutes)
+uv run python -m cli.agentcore.token_refresher \
+    --manifest token_refresh_manifest.json \
+    --registry-url https://registry.example.com \
+    --token-file .token \
+    --loop --interval 2700
 ```
 
-**To find your Client Secret:**
-1. Go to AWS Cognito Console
-2. Find the User Pool with prefix `customersupport-`
-3. Navigate to App Integration → App clients
-4. Click on your app client
-5. View and copy the Client Secret
-
-### 2.2 Verify AgentCore Gateway is Working
-
-After deployment, test the gateway directly using the test script:
+Or set up a cron job:
 
 ```bash
-cd ${HOME}/workspace/amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant
-python test/test_gateway.py --prompt "Check warranty with serial number MNO33333333"
+# Refresh every 45 minutes (tokens typically expire in 60 min)
+*/45 * * * * cd /app && uv run python -m cli.agentcore.token_refresher \
+    --manifest token_refresh_manifest.json \
+    --registry-url https://registry.example.com \
+    --token-file .token \
+    >> /var/log/token-refresher.log 2>&1
 ```
 
-If successful, you should see output showing the gateway endpoint and warranty lookup results with tool execution details.
+### Scanner CLI Reference
 
-## Step 3: Register the AgentCore Gateway with MCP Registry
+#### Sync -- Discover and Register
 
-### 3.1 Create Gateway Configuration File
+```bash
+# Basic sync
+uv run python -m cli.agentcore sync
 
-Create a file named `gateway-config.json` in your AgentCore project directory with the following content:
+# Dry-run preview
+uv run python -m cli.agentcore sync --dry-run
+
+# Overwrite existing registrations
+uv run python -m cli.agentcore sync --overwrite
+
+# Register only gateways (skip runtimes)
+uv run python -m cli.agentcore sync --gateways-only
+
+# Register only runtimes (skip gateways)
+uv run python -m cli.agentcore sync --runtimes-only
+
+# Also register individual mcpServer gateway targets as separate MCP Servers
+uv run python -m cli.agentcore sync --include-mcp-targets
+
+# Set visibility for registered resources
+uv run python -m cli.agentcore sync --visibility public
+
+# JSON output for CI/CD pipelines
+uv run python -m cli.agentcore sync --output json
+
+# Specify region and registry URL
+uv run python -m cli.agentcore sync --region us-west-2 --registry-url https://registry.example.com
+
+# Custom token file and timeout
+uv run python -m cli.agentcore sync --token-file .token --timeout 60
+
+# Enable debug logging
+uv run python -m cli.agentcore sync --debug
+```
+
+#### List -- Discover and Display
+
+```bash
+# List all discovered resources
+uv run python -m cli.agentcore list
+
+# List only gateways
+uv run python -m cli.agentcore list --gateways-only
+
+# List only runtimes
+uv run python -m cli.agentcore list --runtimes-only
+
+# JSON output
+uv run python -m cli.agentcore list --output json
+
+# Specify region
+uv run python -m cli.agentcore list --region eu-west-1
+```
+
+#### Token Refresher
+
+```bash
+# One-time refresh
+uv run python -m cli.agentcore.token_refresher \
+    --manifest token_refresh_manifest.json \
+    --registry-url https://registry.example.com \
+    --token-file .token
+
+# With per-client env vars
+OAUTH_CLIENT_SECRET_49ujl0b9ser72gnp6q1ph9v6vs=secret \
+    uv run python -m cli.agentcore.token_refresher \
+    --manifest token_refresh_manifest.json \
+    --registry-url https://registry.example.com \
+    --token-file .token
+
+# With vendor-level env vars
+AUTH0_CLIENT_SECRET=xxx OKTA_CLIENT_SECRET=yyy \
+    uv run python -m cli.agentcore.token_refresher \
+    --manifest token_refresh_manifest.json \
+    --registry-url https://registry.example.com \
+    --token-file .token
+
+# Continuous mode (sidecar)
+uv run python -m cli.agentcore.token_refresher \
+    --manifest token_refresh_manifest.json \
+    --registry-url https://registry.example.com \
+    --token-file .token \
+    --loop --interval 2700
+
+# Enable debug logging
+uv run python -m cli.agentcore.token_refresher \
+    --manifest token_refresh_manifest.json \
+    --token-file .token \
+    --debug
+```
+
+### Scanner CLI Arguments
+
+| Argument | Subcommand | Default | Description |
+|----------|------------|---------|-------------|
+| `--region` | sync, list | `AWS_REGION` env or `us-east-1` | AWS region to scan |
+| `--registry-url` | sync, list | `REGISTRY_URL` env or `http://localhost` | Registry base URL |
+| `--token-file` | sync, list | `REGISTRY_TOKEN_FILE` env or `.token` | Path to registry auth token file |
+| `--timeout` | sync, list | `30` | AWS API call timeout in seconds |
+| `--gateways-only` | sync, list | `false` | Only process gateways |
+| `--runtimes-only` | sync, list | `false` | Only process runtimes |
+| `--output` | sync, list | `text` | Output format: `text` or `json` |
+| `--accounts` | sync, list | `AGENTCORE_ACCOUNTS` env or empty | Comma-separated AWS account IDs for cross-account scanning |
+| `--assume-role-name` | sync, list | `AGENTCORE_ASSUME_ROLE_NAME` env or `AgentCoreSyncRole` | IAM role name to assume in each target account |
+| `--debug` | sync, list | `false` | Enable DEBUG logging |
+| `--dry-run` | sync | `false` | Preview without registering |
+| `--overwrite` | sync | `false` | Overwrite existing registrations |
+| `--visibility` | sync | `internal` | Registration visibility: `public`, `internal`, `group-restricted` |
+| `--include-mcp-targets` | sync | `false` | Register mcpServer gateway targets as separate MCP Servers |
+| `--manifest` | sync | `token_refresh_manifest.json` | Output path for token refresh manifest |
+
+### Token Refresher Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--manifest` | `token_refresh_manifest.json` | Path to manifest file |
+| `--registry-url` | `REGISTRY_URL` env or `http://localhost` | Registry base URL |
+| `--token-file` | `REGISTRY_TOKEN_FILE` env or `.token` | Registry auth token file |
+| `--loop` | `false` | Run continuously |
+| `--interval` | `2700` (45 min) | Refresh interval in seconds |
+| `--scan` / `--no-scan` | `--scan` (enabled) | Trigger security rescan after each credential update. Requires admin privileges on the registry token. Use `--no-scan` to disable. |
+| `--debug` | `false` | Enable DEBUG logging |
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AWS_REGION` | `us-east-1` | AWS region to scan |
+| `REGISTRY_URL` | `http://localhost` | MCP Gateway Registry URL |
+| `REGISTRY_TOKEN_FILE` | `.token` | Path to registry auth token |
+| `OAUTH_CLIENT_SECRET_<client_id>` | -- | Per-client OAuth2 secret (highest priority) |
+| `AUTH0_CLIENT_SECRET` | -- | Client secret for Auth0 gateways |
+| `OKTA_CLIENT_SECRET` | -- | Client secret for Okta gateways |
+| `ENTRA_CLIENT_SECRET` | -- | Client secret for Entra gateways |
+| `KEYCLOAK_CLIENT_SECRET` | -- | Client secret for Keycloak gateways |
+| `AGENTCORE_ACCOUNTS` | -- | Comma-separated AWS account IDs for cross-account scanning |
+| `AGENTCORE_ASSUME_ROLE_NAME` | `AgentCoreSyncRole` | IAM role name to assume in each target account |
+
+### Cross-Account Scanning
+
+The CLI can scan multiple AWS accounts in a single run. It assumes an IAM role in each target account to discover and register resources.
+
+```bash
+# Scan two accounts
+uv run python -m cli.agentcore sync --accounts 111111111111,222222222222
+
+# Scan with a custom role name
+uv run python -m cli.agentcore sync --accounts 111111111111,222222222222 --assume-role-name MyCrossAccountRole
+
+# List resources across accounts
+uv run python -m cli.agentcore list --accounts 111111111111,222222222222
+
+# Or use environment variables
+export AGENTCORE_ACCOUNTS=111111111111,222222222222
+export AGENTCORE_ASSUME_ROLE_NAME=AgentCoreSyncRole
+uv run python -m cli.agentcore sync
+```
+
+How it works:
+
+1. The CLI parses the `--accounts` flag (or `AGENTCORE_ACCOUNTS` env var) into a list of account IDs.
+2. For each account, it calls `sts:AssumeRole` on `arn:aws:iam::{account_id}:role/{role_name}` to obtain temporary credentials.
+3. A boto3 session is created with those temporary credentials and passed to the scanner and registration builder.
+4. Discovery and registration proceed as normal, scoped to each account's resources.
+5. If `--accounts` is not provided, the CLI scans only the current account (default behavior).
+
+If `AssumeRole` fails for any account, the CLI stops and reports the error.
+
+Each target account needs an IAM role that trusts the caller's account and has AgentCore discovery permissions. See the [Cross-Account IAM Prerequisites](agentcore-auto-registration-prerequisites.md#cross-account-scanning) for setup details.
+
+### Troubleshooting Auto-Registration
+
+#### `AccessDeniedException` during discovery
+
+The IAM user or role lacks required permissions. Attach the discovery policy from the [prerequisites guide](agentcore-auto-registration-prerequisites.md#iam-permissions-for-discovery).
+
+#### "Already registered - skipping (use --overwrite)"
+
+The resource is already registered in the registry. Use `--overwrite` to update the existing registration with current metadata.
+
+#### Token refresher returns HTTP 500
+
+If the token refresher logs `HTTP 500 from nginx -- registry token may be expired`, regenerate the registry auth token and retry:
+
+```bash
+# Regenerate the registry ingress token
+python credentials-provider/oauth/ingress_oauth.py
+
+# Retry token refresh
+uv run python -m cli.agentcore.token_refresher --manifest token_refresh_manifest.json --token-file .token
+```
+
+#### Token file not found
+
+The registry auth token file (default: `.token`) does not exist. Generate it with:
+
+```bash
+python credentials-provider/oauth/ingress_oauth.py
+```
+
+#### Dry-run shows resources but sync registers nothing
+
+In `--dry-run` mode, the CLI performs discovery but does not register. Remove the `--dry-run` flag to perform actual registration.
+
+#### Timeout errors on AWS API calls
+
+Increase the timeout with `--timeout 60` (or higher). The default is 30 seconds.
+
+---
+
+## Method 2: Per-Server Manual Registration
+
+For registering individual AgentCore gateways or agents one at a time, use the same registration process as any other MCP server or agent in the registry. This is no different from how you register any MCP server or A2A agent -- you create a JSON configuration file and use the service management CLI.
+
+This approach is useful when:
+- You want to register a single gateway without scanning the entire account
+- You need custom configuration (specific tool lists, descriptions, tags)
+- You are integrating a specific AgentCore sample (e.g., Customer Support Assistant)
+
+### How It Works
+
+1. **Create a JSON config file** describing the gateway or agent (path, proxy URL, auth scheme, tags, tool list)
+2. **Register with the CLI**: `./cli/service_mgmt.sh add gateway-config.json`
+3. **Provide a JWT token** when calling the gateway -- the IdP does not matter, just provide a valid bearer token at call time via `--token-file`
+4. **Refresh the token** when it expires -- how you obtain the token is up to you (curl, SDK, script)
+
+The identity provider is irrelevant for manual registration. The registry uses passthrough authentication for `auth_provider: "bedrock-agentcore"` -- it forwards the bearer token to the AgentCore gateway, which validates it against whatever IdP is configured.
+
+### Example JSON Configuration
 
 ```json
 {
   "server_name": "customer-support-assistant",
-  "description": "Amazon Bedrock AgentCore Gateway for customer support operations with warranty lookup and knowledge base",
+  "description": "Amazon Bedrock AgentCore Gateway for customer support operations",
   "path": "/customer-support-assistant",
   "proxy_pass_url": "https://<YOUR-GATEWAY-ID>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp/",
   "auth_provider": "bedrock-agentcore",
-  "auth_type": "oauth",
-  "supported_transports": [
-    "streamable-http"
-  ],
-  "tags": [
-    "bedrock",
-    "agentcore",
-    "customer-support",
-    "warranty",
-    "knowledge-base"
-  ],
+  "auth_scheme": "bearer",
+  "supported_transports": ["streamable-http"],
+  "tags": ["bedrock", "agentcore", "customer-support"],
   "headers": [
     {
       "Authorization": "Bearer $CUSTOMER_SUPPORT_AUTH_TOKEN"
     }
   ],
   "num_tools": 2,
-  "num_stars": 0,
   "is_python": false,
-  "license": "Apache-2.0",
   "tool_list": [
     {
       "name": "LambdaUsingSDK___check_warranty_status",
       "parsed_description": {
-        "main": "Check the warranty status of a product using its serial number and optionally verify via email",
-        "args": null,
-        "returns": null,
-        "raises": null
+        "main": "Check the warranty status of a product using its serial number"
       },
       "schema": {
         "type": "object",
         "properties": {
-          "serial_number": {
-            "type": "string",
-            "description": "Product serial number to check warranty status"
-          },
-          "customer_email": {
-            "type": "string",
-            "description": "Optional customer email for verification"
-          }
+          "serial_number": {"type": "string", "description": "Product serial number"}
         },
-        "required": [
-          "serial_number"
-        ]
-      }
-    },
-    {
-      "name": "LambdaUsingSDK___get_customer_profile",
-      "parsed_description": {
-        "main": "Retrieve customer profile using customer ID, email, or phone number",
-        "args": null,
-        "returns": null,
-        "raises": null
-      },
-      "schema": {
-        "type": "object",
-        "properties": {
-          "customer_id": {
-            "type": "string",
-            "description": "Unique customer identifier"
-          },
-          "email": {
-            "type": "string",
-            "description": "Customer email address"
-          },
-          "phone": {
-            "type": "string",
-            "description": "Customer phone number"
-          }
-        },
-        "required": [
-          "customer_id"
-        ]
+        "required": ["serial_number"]
       }
     }
   ]
@@ -242,317 +365,57 @@ Create a file named `gateway-config.json` in your AgentCore project directory wi
 
 **Key Configuration Parameters:**
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `path` | `/customer-support-assistant` | The URL path where this service will be accessible through the registry. The registry will automatically format this to `/customer-support-assistant/` (with trailing slash) for bedrock-agentcore services. |
-| `proxy_pass_url` | `https://<YOUR-GATEWAY-ID>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp/` | The backend AgentCore Gateway URL. The registry will automatically remove the `/mcp/` suffix and ensure it ends with just `/` for bedrock-agentcore services. Replace `<YOUR-GATEWAY-ID>` with your actual Gateway ID from the deployment output. |
-| `auth_provider` | `bedrock-agentcore` | **Critical:** This tells the registry to use passthrough authentication - the Cognito token will be passed directly to the AgentCore Gateway without validation by the registry's auth server. |
-| `auth_type` | `oauth` | Specifies OAuth authentication flow |
-| `server_name` | `customer-support-assistant` | Display name for the service in the registry UI |
-| `tags` | `["bedrock", "agentcore", "customer-support", ...]` | Searchable tags used by the `intelligent_tool_finder` for hybrid search (combines semantic search with tag-based filtering). AI agents can discover tools by category using these tags. |
-| `tool_list` | Array of tool definitions | Defines the available tools/functions with their schemas, descriptions, and parameters. Each tool includes a name, parsed description, and JSON schema for arguments. This metadata enables the registry to catalog and expose tools for dynamic discovery by AI agents. |
+| Parameter | Description |
+|-----------|-------------|
+| `path` | URL path where this service is accessible through the registry |
+| `proxy_pass_url` | Backend AgentCore Gateway URL. Replace `<YOUR-GATEWAY-ID>` with your actual Gateway ID |
+| `auth_provider` | Set to `bedrock-agentcore` for passthrough authentication -- the registry forwards the bearer token without validating it |
+| `tags` | Searchable tags used by `intelligent_tool_finder` for hybrid search (semantic + tag-based) |
+| `tool_list` | Tool definitions with names, descriptions, and JSON schemas. Enables the registry to catalog tools for dynamic discovery by AI agents |
 
-**Important Notes:**
-- The `auth_provider: "bedrock-agentcore"` field enables passthrough authentication, which means:
-  - The registry does not validate the Cognito access token
-  - The token is passed directly to the AgentCore Gateway
-  - The AgentCore Gateway validates the token with its own Cognito User Pool
-- Replace `<YOUR-GATEWAY-ID>` with your actual AgentCore Gateway ID (shown in deployment output)
-
-### 3.2 Register the Gateway
-
-Navigate to your `mcp-gateway-registry` directory and run:
+### Register and Call
 
 ```bash
-cd ${HOME}/workspace/mcp-gateway-registry
-source .venv/bin/activate
+# Register the gateway
+./cli/service_mgmt.sh add gateway-config.json
 
-# Register the AgentCore gateway
-./cli/service_mgmt.sh add ${HOME}/workspace/amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant/gateway-config.json
-```
-
-### 3.3 Verify Registration
-
-#### Via UI
-
-1. Open http://localhost:7860 in your browser
-2. You should see "customer-support-assistant" in the services list
-3. The health status should show as "healthy"
-
-**Screenshot:**
-![AgentCore Gateway Registration](img/mcpgw-ac-1.png)
-
-#### Via Command Line
-
-**Note:** Refresh credentials first since Keycloak access tokens have a 5-minute TTL by default:
-
-```bash
-# Refresh authentication credentials
-./credentials-provider/generate_creds.sh
-
-# List services and filter for customer-support-assistant
-uv run cli/mcp_client.py \
-  --url http://localhost/mcpgw/mcp \
-  call --tool list_services \
-  --args '{}' \
-  2>/dev/null | \
-tail -n +2 | \
-jq '.content[0].text | fromjson | .services[] | select(.server_name == "customer-support-assistant")'
-```
-
-Look for the customer-support-assistant entry in the output.
-
-## Step 4: Test the Registered Gateway
-
-### 4.1 Refresh Authentication Credentials
-
-Generate fresh ingress credentials for the registry. **Note:** Keycloak access tokens have a 5-minute TTL by default, so you'll need to refresh credentials before testing:
-
-```bash
-./credentials-provider/generate_creds.sh
-```
-
-### 4.2 Generate Cognito Access Token for AgentCore Gateway
-
-Before calling the AgentCore gateway, you need to obtain an access token from Cognito. Load the parameters you saved earlier and generate the token:
-
-```bash
-cd ${HOME}/workspace/.agentcore-params
-
-# Load AgentCore authentication parameters
-source .agentcore-params
-
-# Request access token from Cognito
-response=$(curl -s -X POST "$COGNITO_TOKEN_URL" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials" \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" \
-  -d "scope=$SCOPE")
-
-# Extract and save the access token
-echo "$response" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])" > .cognito_access_token
-
-echo "Access token saved to .cognito_access_token"
-```
-
-**Note:** Cognito access tokens have a default validity of **1 hour**. You'll need to regenerate the token if it expires.
-
-### 4.3 Call the AgentCore Gateway Through the Registry
-
-Now you can call the AgentCore gateway tools through the MCP Gateway Registry:
-
-```bash
+# Call a tool through the registry (provide a valid JWT from any IdP)
 uv run cli/mcp_client.py \
   --url http://localhost/customer-support-assistant/mcp \
-  --token-file ${HOME}/workspace/amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant/.cognito_access_token \
+  --token-file .cognito_access_token \
   call --tool LambdaUsingSDK___check_warranty_status \
   --args '{"serial_number":"MNO33333333"}'
 ```
 
-**Expected Output:**
+### When to Choose Each Method
 
-```json
-✓ Token file authentication successful (${HOME}/workspace/amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant/.cognito_access_token)
-{
-  "isError": false,
-  "content": [
-    {
-      "type": "text",
-      "text": "{\"statusCode\":200,\"body\":\"🛡️ Warranty Status Information\\n===============================\\n📱 Product: Gaming Console Pro\\n🔢 Serial Number: MNO33333333\\n👤 Customer: Unknown\\n📅 Purchase Date: 2023-11-25\\n⏰ Warranty End Date: 2024-11-25\\n📋 Warranty Type: Gaming Warranty\\n🔍 Status: ❌ Expired\\n\\n📆 Expired 317 days ago\\n\\n🔧 Coverage Details:\\n   Controller issues, overheating protection, and hard drive replacement covered\\n\\n❌ Your warranty has expired.\\n   Extended warranty options may be available.\\n   Contact support for repair service pricing.\"}"
-    }
-  ]
-}
-```
+| | Method 1: Bulk Scanner | Method 2: Manual Registration |
+|---|---|---|
+| **Discovery** | Automatic (scans AWS account) | Manual (you provide the config) |
+| **Token refresh** | Automated (`token_refresher.py`) | Manual (you manage token lifecycle) |
+| **Customization** | Standard metadata from AWS API; skills must be added manually after import | Full control (tool lists, descriptions, tags, skills) |
+| **Scale** | All gateways/runtimes at once | One resource at a time |
+| **IdP** | Auto-detected from discovery URL | Any -- just provide a valid JWT |
 
-### 4.4 Test Customer Profile Lookup
-
-```bash
-uv run cli/mcp_client.py \
-  --url http://localhost/customer-support-assistant/ \
-  --token-file ${HOME}/workspace/amazon-bedrock-agentcore-samples/02-use-cases/customer-support-assistant/.cognito_access_token \
-  call --tool LambdaUsingSDK___get_customer_profile \
-  --args '{"customer_id":"CUST001"}'
-```
-
-**Expected Output:**
-
-```json
-✓ Token file authentication successful (.cognito_access_token)
-{
-  "isError": false,
-  "content": [
-    {
-      "type": "text",
-      "text": "{\"statusCode\":200,\"body\":\"👤 Customer Profile Information: 👤 Customer Profile Information\\n===============================\\n🆔 Customer ID: CUST001\\n👤 Name: John Smith\\n💎 Tier: Premium\\n\\n📞 Contact Information:\\n   📧 Email: john.smith@email.com\\n   📱 Phone: +1-555-0101\\n   🏠 Address: 123 Main Street, New York, NY, 10001, USA\\n\\n📊 Account Details:\\n   📅 Registration Date: 2022-11-20\\n   🎂 Date of Birth: 1985-03-15\\n   ⏱️ Customer Since: 2 years, 10 months\\n\\n💼 Purchase History:\\n   🛒 Total Purchases: 3\\n   💰 Lifetime Value: $2,850.00\\n   🎯 Average Order: $950.00\\n\\n🎧 Support Information:\\n   📞 Support Cases: 2\\n   💬 Communication Preferences: Email, SMS\\n\\n📝 Account Notes:\\n   VIP customer, prefers email communication\\n\\n🌟 Premium Benefits:\\n   • Priority customer support\\n   • Extended warranty coverage\\n   • Free expedited shipping\\n   • Exclusive product access\\n\\n💡 Support Recommendations:\\n   💎 High-value customer - prioritize satisfaction\\n   🎉 Loyal customer - consider loyalty rewards\\n\\n⚡ Quick Actions Available:\\n   • Check warranty status for customer products\\n   • View purchase history and invoices\\n   • Update contact information or preferences\\n   • Create new support case\\n   • Send promotional offers (if opted in)\"}"
-    }
-  ]
-}
-```
-
-## How It Works
-
-### Dual Authentication Flow
-
-The integration uses **two separate authentication layers**:
-
-#### Ingress Authentication (Gateway Access Control)
-- **Purpose**: Verifies the AI agent has permission to access the MCP Gateway Registry itself
-- **Identity Provider**: Keycloak (MCP Gateway's IdP)
-- **Token**: Keycloak JWT access token (5-minute TTL by default)
-- **Validation**: Performed by the MCP Gateway's Auth Server
-- **Scope**: Controls which services and tools the agent can access through the gateway
-
-#### Egress Authentication (AgentCore Access Control)
-- **Purpose**: Verifies the request has permission to call the AgentCore Gateway
-- **Identity Provider**: Amazon Cognito (AgentCore's IdP)
-- **Token**: Cognito JWT access token (1-hour TTL by default)
-- **Validation**: Performed by the AgentCore Gateway itself
-- **Scope**: Controls access to AgentCore tools and resources
-
-### Authentication Sequence
-
-```mermaid
-sequenceDiagram
-    participant Agent as AI Agent
-    participant Keycloak as Keycloak<br/>(Ingress IdP)
-    participant Gateway as MCP Gateway<br/>& Auth Server
-    participant AgentCore as AgentCore Gateway<br/>(Customer Support)
-    participant Cognito as Amazon Cognito<br/>(Egress IdP)
-
-    Note over Agent,Cognito: Setup Phase
-
-    rect rgb(240, 248, 255)
-        Note over Agent,Keycloak: 1. Ingress Authentication
-        Agent->>Keycloak: 1a. Request access token<br/>(client credentials)
-        Keycloak->>Agent: 1b. Keycloak JWT token<br/>(5-min TTL)
-    end
-
-    rect rgb(255, 248, 220)
-        Note over Agent,Cognito: 2. Egress Authentication
-        Agent->>Cognito: 2a. Request access token<br/>(client credentials)
-        Cognito->>Agent: 2b. Cognito JWT token<br/>(1-hour TTL)
-        Agent->>Agent: 2c. Save to .cognito_access_token
-    end
-
-    Note over Agent,Cognito: Runtime Phase - MCP Protocol Flow
-
-    rect rgb(255, 240, 245)
-        Note over Agent,Gateway: 3. Initialize MCP Session
-        Agent->>Gateway: 3a. POST /initialize<br/>X-Authorization: Bearer [Keycloak JWT]<br/>Authorization: Bearer [Cognito JWT]
-
-        Gateway->>Keycloak: 3b. Validate ingress token
-        Keycloak->>Gateway: 3c. Token valid ✓
-
-        Gateway->>Gateway: 3d. Check auth_provider=bedrock-agentcore<br/>→ Use passthrough mode
-
-        Note right of Gateway: Gateway does NOT<br/>validate Cognito token
-
-        Gateway->>AgentCore: 3e. Forward initialize request<br/>Authorization: Bearer [Cognito JWT]
-
-        AgentCore->>Cognito: 3f. Validate egress token
-        Cognito->>AgentCore: 3g. Token valid ✓
-
-        AgentCore->>Gateway: 3h. Return capabilities
-        Gateway->>Agent: 3i. Session initialized ✓
-    end
-
-    rect rgb(240, 255, 240)
-        Note over Agent,AgentCore: 4. Discover Tools
-        Agent->>Gateway: 4a. POST /tools/list<br/>X-Authorization: Bearer [Keycloak JWT]<br/>Authorization: Bearer [Cognito JWT]
-
-        Gateway->>AgentCore: 4b. Forward tools/list<br/>Authorization: Bearer [Cognito JWT]
-
-        AgentCore->>Gateway: 4c. Return tool list<br/>[LambdaUsingSDK___check_warranty_status,<br/>LambdaUsingSDK___get_customer_profile]
-
-        Gateway->>Agent: 4d. Available tools returned
-    end
-
-    rect rgb(255, 250, 240)
-        Note over Agent,AgentCore: 5. Call Tool
-        Agent->>Gateway: 5a. POST /tools/call<br/>Tool: LambdaUsingSDK___get_customer_profile<br/>Args: {customer_id: "CUST001"}<br/>X-Authorization: Bearer [Keycloak JWT]<br/>Authorization: Bearer [Cognito JWT]
-
-        Gateway->>AgentCore: 5b. Forward tool call<br/>Authorization: Bearer [Cognito JWT]
-
-        AgentCore->>AgentCore: 5c. Execute Lambda function<br/>get_customer_profile("CUST001")
-
-        AgentCore->>Gateway: 5d. Return customer profile<br/>{name: "John Smith", tier: "Premium", ...}
-
-        Gateway->>Agent: 5e. Tool response returned
-    end
-```
-
-### Key Points
-
-**Ingress Authentication (Keycloak)**
-- Validates AI agent's access to the MCP Gateway Registry
-- Checked by the MCP Gateway's Auth Server
-- Required for all gateway requests
-- Token refresh: `./credentials-provider/generate_creds.sh`
-
-**Egress Authentication (Cognito)**
-- Validates access to the AgentCore Gateway
-- **Passthrough mode**: Gateway does NOT validate this token
-- Validated by the AgentCore Gateway itself
-- Token refresh: Re-run the curl command in Section 4.2
-
-**Why Two Tokens?**
-- **Security in depth**: Both layers must authenticate successfully
-- **Separation of concerns**: Gateway controls access to its services; AgentCore controls access to its tools
-- **Flexibility**: Each layer can use its own IdP and policies
-
-
-## Next Steps
-
-### 1. Configure Fine-Grained Access Control (FGAC)
-
-Set up access controls so the customer-support-assistant service is only accessible to users in specific groups:
-
-```bash
-# Create a new group/scope for customer support users
-cd ${HOME}/workspace/mcp-gateway-registry
-
-# Add the group and assign users
-# See the complete end-to-end example in the Service Management Guide
-```
-
-**Learn More:** Follow the [Service Management Guide - Complete Example: LOB1 Services Group](service-management.md#complete-example-lob1-line-of-business-1-services-group) for detailed instructions on:
-- Creating groups and scopes
-- Assigning users to groups
-- Configuring service-level access control
-- Testing access permissions
-
-### 2. Additional Integration Options
-
-- **Add more AgentCore gateways** to your registry following this same process
-- **Integrate with Claude Desktop** or other MCP clients for AI-powered interactions
-- **Browse registered services** through the registry UI at http://localhost:7860
-- **Monitor usage and metrics** through Grafana dashboards at http://localhost:3000 - See [Observability Guide](OBSERVABILITY.md)
+---
 
 ## Troubleshooting
 
 ### 404 Not Found Error
 
-If you get a 404 error, verify:
+Verify:
 1. Service is registered: `uv run cli/mcp_client.py --url http://localhost/mcpgw/mcp call --tool list_services --args '{}'`
-2. Path matches: Use `/customer-support-assistant/` (with trailing slash)
+2. Path matches (use trailing slash for bedrock-agentcore services)
 3. Health status is healthy in the UI
 
 ### 401 Authentication Error
 
-If you get a 401 error:
-1. Refresh your Cognito access token
+1. Refresh your egress access token (regenerate from your IdP)
 2. Verify token file path is correct
-3. Check token hasn't expired
+3. Check token has not expired (TTL varies by IdP)
 
 ### Service Not Showing as Healthy
 
-1. Verify AgentCore gateway is accessible from registry container
+1. Verify AgentCore gateway is accessible from the registry container
 2. Check network connectivity
 3. Review registry logs: `docker logs mcp-gateway-registry-registry-1`
-
-## Additional Resources
-
-- [Amazon Bedrock AgentCore Samples](https://github.com/awslabs/amazon-bedrock-agentcore-samples)
-- [MCP Gateway Registry Documentation](../README.md)
-- [Service Management Guide](service-management.md)

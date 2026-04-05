@@ -249,13 +249,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
   const [editAgentForm, setEditAgentForm] = useState({
     name: '',
     path: '',
+    url: '',
     description: '',
     version: '',
     visibility: 'private' as 'public' | 'private' | 'group-restricted',
     trust_level: 'community' as 'community' | 'verified' | 'trusted' | 'unverified',
-    tags: [] as string[]
+    tags: [] as string[],
+    skillsJson: '[]',
   });
   const [editAgentLoading, setEditAgentLoading] = useState(false);
+  const [skillsJsonError, setSkillsJsonError] = useState<string | null>(null);
 
   // Skill state management
   const [showSkillModal, setShowSkillModal] = useState(false);
@@ -890,19 +893,47 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
   }, []);
 
   const handleEditAgent = useCallback(async (agent: Agent) => {
-    // For now, just populate the form with existing data
-    // In the future, we might fetch additional details from an API
     setEditingAgent(agent);
-    setEditAgentForm({
-      name: agent.name,
-      path: agent.path,
-      description: agent.description || '',
-      version: agent.version || '1.0.0',
-      visibility: agent.visibility || 'private',
-      trust_level: agent.trust_level || 'community',
-      tags: agent.tags || []
-    });
-  }, []);
+    setSkillsJsonError(null);
+
+    // Fetch full agent details to get skills and url
+    try {
+      const headers = agentApiToken ? { Authorization: `Bearer ${agentApiToken}` } : undefined;
+      const response = await axios.get(
+        `/api/agents${agent.path}`,
+        headers ? { headers } : undefined
+      );
+      const fullAgent = response.data;
+
+      setEditAgentForm({
+        name: fullAgent.name || agent.name,
+        path: fullAgent.path || agent.path,
+        url: fullAgent.url || '',
+        description: fullAgent.description || agent.description || '',
+        version: fullAgent.version || agent.version || '1.0.0',
+        visibility: fullAgent.visibility || agent.visibility || 'private',
+        trust_level: fullAgent.trust_level || agent.trust_level || 'community',
+        tags: fullAgent.tags || agent.tags || [],
+        skillsJson: fullAgent.skills && fullAgent.skills.length > 0
+          ? JSON.stringify(fullAgent.skills, null, 2)
+          : '[]',
+      });
+    } catch (error) {
+      console.error('Failed to fetch agent details for editing:', error);
+      // Fall back to basic data from the card
+      setEditAgentForm({
+        name: agent.name,
+        path: agent.path,
+        url: '',
+        description: agent.description || '',
+        version: agent.version || '1.0.0',
+        visibility: agent.visibility || 'private',
+        trust_level: agent.trust_level || 'community',
+        tags: agent.tags || [],
+        skillsJson: '[]',
+      });
+    }
+  }, [agentApiToken]);
 
   const handleCloseEdit = () => {
     setEditingServer(null);
@@ -972,34 +1003,67 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
   const handleSaveEditAgent = async () => {
     if (editAgentLoading || !editingAgent) return;
 
+    // Validate skills JSON before sending
+    let parsedSkills: any[] = [];
+    try {
+      parsedSkills = JSON.parse(editAgentForm.skillsJson);
+      if (!Array.isArray(parsedSkills)) {
+        setSkillsJsonError('Skills must be a JSON array');
+        return;
+      }
+      setSkillsJsonError(null);
+    } catch {
+      setSkillsJsonError('Invalid JSON format');
+      return;
+    }
+
     try {
       setEditAgentLoading(true);
 
-      // TODO: Implement agent edit endpoint when backend is ready
-      // For now, just show a message
-      showToast('Agent editing is not yet implemented', 'error');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (agentApiToken) {
+        headers['Authorization'] = `Bearer ${agentApiToken}`;
+      }
 
-      // When backend is ready, uncomment and implement:
-      // const formData = new FormData();
-      // formData.append('name', editAgentForm.name);
-      // formData.append('description', editAgentForm.description);
-      // formData.append('version', editAgentForm.version);
-      // formData.append('visibility', editAgentForm.visibility);
-      // formData.append('trust_level', editAgentForm.trust_level);
-      // formData.append('tags', editAgentForm.tags.join(','));
-      //
-      // await axios.post(`/api/agents${editingAgent.path}/edit`, formData, {
-      //   headers: {
-      //     'Content-Type': 'application/x-www-form-urlencoded',
-      //   },
-      // });
-      //
-      // await fetchAgents();
-      // setEditingAgent(null);
-      // showToast('Agent updated successfully!', 'success');
+      const payload = {
+        name: editAgentForm.name,
+        description: editAgentForm.description,
+        url: editAgentForm.url,
+        version: editAgentForm.version,
+        visibility: editAgentForm.visibility,
+        tags: editAgentForm.tags,
+        skills: parsedSkills,
+      };
+
+      await axios.put(
+        `/api/agents${editingAgent.path}`,
+        payload,
+        { headers },
+      );
+
+      // Trigger security rescan after successful update
+      try {
+        await axios.post(
+          `/api/agents${editingAgent.path}/rescan`,
+          undefined,
+          agentApiToken ? { headers: { Authorization: `Bearer ${agentApiToken}` } } : undefined,
+        );
+      } catch {
+        // Rescan failure is non-blocking (may lack admin privileges)
+      }
+
+      // Refresh the agents list
+      await refreshData();
+
+      setEditingAgent(null);
+      showToast('Agent updated successfully!', 'success');
     } catch (error: any) {
       console.error('Failed to update agent:', error);
-      showToast(error.response?.data?.detail || 'Failed to update agent', 'error');
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'object' ? detail.message || JSON.stringify(detail) : detail || 'Failed to update agent';
+      showToast(message, 'error');
     } finally {
       setEditAgentLoading(false);
     }
@@ -2837,6 +2901,32 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
                   className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
                   placeholder="tag1,tag2,tag3"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                  Skills (JSON array)
+                </label>
+                <textarea
+                  value={editAgentForm.skillsJson}
+                  onChange={(e) => {
+                    setEditAgentForm(prev => ({ ...prev, skillsJson: e.target.value }));
+                    setSkillsJsonError(null);
+                  }}
+                  className={`block w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-xs focus:ring-cyan-500 focus:border-cyan-500 ${
+                    skillsJsonError
+                      ? 'border-red-500 dark:border-red-400'
+                      : 'border-gray-300 dark:border-gray-600'
+                  }`}
+                  rows={8}
+                  placeholder='[{"id": "skill-1", "name": "My Skill", "description": "What this skill does"}]'
+                />
+                {skillsJsonError && (
+                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">{skillsJsonError}</p>
+                )}
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Each skill needs at least: id, name, description. Saving triggers a security rescan.
+                </p>
               </div>
 
               <div>

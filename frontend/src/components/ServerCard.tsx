@@ -409,8 +409,8 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
         <div className="p-5 pb-4">
           <div className="flex items-start justify-between mb-4">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-3">
-                <h3 className="text-lg font-bold text-gray-900 dark:text-white truncate">
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white truncate min-w-[120px]">
                   {server.name}
                 </h3>
                 {server.lifecycle_status && (
