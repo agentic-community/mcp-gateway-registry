@@ -1335,7 +1335,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
 
       if (editingSkill) {
         // Update existing skill
-        await axios.put(`/api/skills${editingSkill.path}`, payload);
+        const skillPath = editingSkill.path.replace(/^\/skills\//, '');
+        await axios.put(`/api/skills/${skillPath}`, payload);
         showToast('Skill updated successfully!', 'success');
         notifyDataChanged();
       } else {
