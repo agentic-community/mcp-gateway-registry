@@ -101,11 +101,11 @@ This platform serves as a comprehensive, unified registry supporting:
 
 Key distinction: **Unlike separate point solutions, this unified registry eliminates the need to maintain separate MCP server and agent systems**, providing a single control plane for agent orchestration, MCP server access, and agent-to-agent communication.
 
-## MCP Servers & Agents Registry
+## MCP Servers, Agents and Skills Registry
 
 Watch how MCP Servers, A2A Agents, and External Registries work together for dynamic tool discovery:
 
-https://github.com/user-attachments/assets/f539f784-17f5-4658-99b3-d664bd5cecaa
+https://github.com/user-attachments/assets/97c640db-f78b-4a6c-9662-894f975f66e2
 
 ---
 
