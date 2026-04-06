@@ -833,6 +833,7 @@ async def internal_register_service(
     supported_transports: Annotated[str | None, Form()] = None,
     headers: Annotated[str | None, Form()] = None,
     tool_list_json: Annotated[str | None, Form()] = None,
+    metadata: Annotated[str | None, Form()] = None,
     visibility: Annotated[str, Form()] = "public",
     allowed_groups: Annotated[str | None, Form()] = None,
 ):
@@ -945,6 +946,14 @@ async def internal_register_service(
         server_entry["headers"] = headers_list
     if auth_header_name:
         server_entry["auth_header_name"] = auth_header_name
+    if metadata:
+        try:
+            server_entry["metadata"] = json.loads(metadata) if isinstance(metadata, str) else metadata
+        except json.JSONDecodeError:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid metadata", "reason": "metadata must be valid JSON"},
+            )
 
     # Encrypt credential before storage (if provided)
     if auth_credential and auth_scheme != "none":
