@@ -14,35 +14,15 @@ jest.mock('../../hooks/useSemanticSearch', () => ({
   useSemanticSearch: () => mockSemanticSearch,
 }));
 
-// Mock child components to simplify testing
-jest.mock('../ServerCard', () => {
-  const MockServerCard = (props) => (
-    <div data-testid={`server-card-${props.server.path}`}>
-      {props.server.name}
+// Mock DiscoverListRow to simplify testing
+jest.mock('../DiscoverListRow', () => {
+  const MockListRow = (props) => (
+    <div data-testid={`list-row-${props.type}-${props.item.path}`}>
+      {props.item.name}
     </div>
   );
-  MockServerCard.displayName = 'ServerCard';
-  return MockServerCard;
-});
-
-jest.mock('../AgentCard', () => {
-  const MockAgentCard = (props) => (
-    <div data-testid={`agent-card-${props.agent.path}`}>
-      {props.agent.name}
-    </div>
-  );
-  MockAgentCard.displayName = 'AgentCard';
-  return MockAgentCard;
-});
-
-jest.mock('../SkillCard', () => {
-  const MockSkillCard = (props) => (
-    <div data-testid={`skill-card-${props.skill.path}`}>
-      {props.skill.name}
-    </div>
-  );
-  MockSkillCard.displayName = 'SkillCard';
-  return MockSkillCard;
+  MockListRow.displayName = 'DiscoverListRow';
+  return MockListRow;
 });
 
 jest.mock('../SemanticSearchResults', () => {
@@ -114,7 +94,6 @@ describe('DiscoverTab', () => {
     const input = screen.getByPlaceholderText(/search servers/i);
     fireEvent.change(input, { target: { value: 'test' } });
 
-    // Title should still be visible (keyword filtering, not semantic)
     expect(
       screen.getByText('Discover MCP Servers, Agents & Skills')
     ).toBeInTheDocument();
@@ -161,7 +140,7 @@ describe('DiscoverTab', () => {
     expect(screen.getByText('Skills')).toBeInTheDocument();
   });
 
-  test('renders full-size cards for each item type', () => {
+  test('renders list rows for each item type', () => {
     render(
       <DiscoverTab
         {...defaultProps}
@@ -186,10 +165,10 @@ describe('DiscoverTab', () => {
       />
     );
 
-    expect(screen.getByTestId('server-card-/airegistry-tools/')).toBeInTheDocument();
-    expect(screen.getByTestId('server-card-/cloudflare-docs/')).toBeInTheDocument();
-    expect(screen.getByTestId('agent-card-/test-agent/')).toBeInTheDocument();
-    expect(screen.getByTestId('skill-card-/code-review/')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-server-/airegistry-tools/')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-server-/cloudflare-docs/')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-agent-/test-agent/')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-skill-/code-review/')).toBeInTheDocument();
   });
 
   test('sorts servers by rating descending, alphabetical tiebreaker', () => {
@@ -214,11 +193,10 @@ describe('DiscoverTab', () => {
 
     render(<DiscoverTab {...defaultProps} servers={servers} />);
 
-    // AI Registry Tools always first, then Alpha (5), Gamma (5), Beta (3)
-    expect(screen.getByTestId('server-card-/airegistry-tools/')).toBeInTheDocument();
-    expect(screen.getByTestId('server-card-/alpha/')).toBeInTheDocument();
-    expect(screen.getByTestId('server-card-/gamma/')).toBeInTheDocument();
-    expect(screen.getByTestId('server-card-/beta/')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-server-/airegistry-tools/')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-server-/alpha/')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-server-/gamma/')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-server-/beta/')).toBeInTheDocument();
   });
 
   test('excludes disabled items from featured', () => {
@@ -250,16 +228,13 @@ describe('DiscoverTab', () => {
       />
     );
 
-    // All visible initially
     expect(screen.getByText('AI Registry tools')).toBeInTheDocument();
     expect(screen.getByText('Cloudflare Docs')).toBeInTheDocument();
     expect(screen.getByText('Test Agent')).toBeInTheDocument();
 
-    // Type keyword
     const input = screen.getByPlaceholderText(/search servers/i);
     fireEvent.change(input, { target: { value: 'cloud' } });
 
-    // Only Cloudflare matches
     expect(screen.queryByText('AI Registry tools')).not.toBeInTheDocument();
     expect(screen.getByText('Cloudflare Docs')).toBeInTheDocument();
     expect(screen.queryByText('Test Agent')).not.toBeInTheDocument();
@@ -308,16 +283,13 @@ describe('DiscoverTab', () => {
 
     const input = screen.getByPlaceholderText(/search servers/i);
 
-    // Activate semantic search
     fireEvent.change(input, { target: { value: 'test query' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(screen.getByTestId('semantic-search-results')).toBeInTheDocument();
 
-    // Click clear button
     const clearButton = screen.getByRole('button');
     fireEvent.click(clearButton);
 
-    // Should be back to featured cards
     expect(screen.queryByTestId('semantic-search-results')).not.toBeInTheDocument();
     expect(screen.getByText('AI Registry tools')).toBeInTheDocument();
   });
@@ -335,16 +307,13 @@ describe('DiscoverTab', () => {
 
     const input = screen.getByPlaceholderText(/search servers/i);
 
-    // Activate semantic search
     fireEvent.change(input, { target: { value: 'cloud' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(screen.getByTestId('semantic-search-results')).toBeInTheDocument();
 
-    // Backspace (modify search text) should exit semantic mode
     fireEvent.change(input, { target: { value: 'clou' } });
     expect(screen.queryByTestId('semantic-search-results')).not.toBeInTheDocument();
 
-    // Should show keyword-filtered cards instead
     expect(screen.queryByText('AI Registry tools')).not.toBeInTheDocument();
     expect(screen.getByText('Cloudflare Docs')).toBeInTheDocument();
   });
@@ -356,7 +325,6 @@ describe('DiscoverTab', () => {
     fireEvent.change(input, { target: { value: 'a' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    // Should NOT show semantic results
     expect(screen.queryByTestId('semantic-search-results')).not.toBeInTheDocument();
   });
 
@@ -372,7 +340,6 @@ describe('DiscoverTab', () => {
 
     expect(screen.getByText('AI Registry tools')).toBeInTheDocument();
     expect(screen.getByText('My Skill')).toBeInTheDocument();
-    // No agents section header
     expect(screen.queryByText('Agents')).not.toBeInTheDocument();
   });
 });

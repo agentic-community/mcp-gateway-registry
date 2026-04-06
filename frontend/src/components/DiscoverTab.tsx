@@ -2,10 +2,8 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useSemanticSearch } from '../hooks/useSemanticSearch';
 import SemanticSearchResults from './SemanticSearchResults';
-import ServerCard from './ServerCard';
+import DiscoverListRow from './DiscoverListRow';
 import type { Server } from './ServerCard';
-import AgentCard from './AgentCard';
-import SkillCard from './SkillCard';
 import type { Skill } from '../types/skill';
 
 
@@ -282,81 +280,63 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
               {/* Servers section */}
               {featuredServers.length > 0 && (
                 <div>
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     MCP Servers
                   </h2>
-                  <div
-                    className="grid gap-4"
-                    style={{
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))',
-                    }}
-                  >
-                    {featuredServers.map(server => (
-                      <ServerCard
-                        key={server.path}
-                        server={server}
-                        onToggle={onServerToggle}
-                        onEdit={onServerEdit}
-                        onDelete={onServerDelete}
-                        onShowToast={onShowToast}
-                        authToken={authToken}
-                      />
-                    ))}
-                  </div>
+                  {featuredServers.map(server => (
+                    <DiscoverListRow
+                      key={server.path}
+                      type="server"
+                      item={server}
+                      onToggle={onServerToggle}
+                      onEdit={onServerEdit}
+                      onDelete={onServerDelete}
+                      onShowToast={onShowToast}
+                      authToken={authToken}
+                    />
+                  ))}
                 </div>
               )}
 
               {/* Agents section */}
               {featuredAgents.length > 0 && (
                 <div>
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     Agents
                   </h2>
-                  <div
-                    className="grid gap-4"
-                    style={{
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))',
-                    }}
-                  >
-                    {featuredAgents.map(agent => (
-                      <AgentCard
-                        key={agent.path}
-                        agent={agent as any}
-                        onToggle={onAgentToggle}
-                        onEdit={onAgentEdit}
-                        onDelete={onAgentDelete}
-                        onShowToast={onShowToast}
-                        authToken={authToken}
-                      />
-                    ))}
-                  </div>
+                  {featuredAgents.map(agent => (
+                    <DiscoverListRow
+                      key={agent.path}
+                      type="agent"
+                      item={agent}
+                      onToggle={onAgentToggle}
+                      onEdit={onAgentEdit}
+                      onDelete={onAgentDelete}
+                      onShowToast={onShowToast}
+                      authToken={authToken}
+                    />
+                  ))}
                 </div>
               )}
 
               {/* Skills section */}
               {featuredSkills.length > 0 && (
                 <div>
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     Skills
                   </h2>
-                  <div
-                    className="grid gap-4"
-                    style={{
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))',
-                    }}
-                  >
-                    {featuredSkills.map(skill => (
-                      <SkillCard
-                        key={skill.path}
-                        skill={skill}
-                        onToggle={onSkillToggle}
-                        onEdit={onSkillEdit}
-                        onDelete={onSkillDelete}
-                        onShowToast={onShowToast}
-                        authToken={authToken}
-                      />
-                    ))}
-                  </div>
+                  {featuredSkills.map(skill => (
+                    <DiscoverListRow
+                      key={skill.path}
+                      type="skill"
+                      item={skill}
+                      onToggle={onSkillToggle}
+                      onEdit={onSkillEdit}
+                      onDelete={onSkillDelete}
+                      onShowToast={onShowToast}
+                      authToken={authToken}
+                    />
+                  ))}
                 </div>
               )}
             </div>
