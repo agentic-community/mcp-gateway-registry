@@ -2214,11 +2214,21 @@ def cmd_skill_register(args: argparse.Namespace) -> int:
         Exit code (0 for success, 1 for failure)
     """
     try:
+        # Parse metadata JSON if provided
+        metadata = None
+        if hasattr(args, "metadata") and args.metadata:
+            metadata = json.loads(args.metadata)
+
         request = SkillRegistrationRequest(
             name=args.name,
             skill_md_url=args.url,
             description=args.description if hasattr(args, "description") else None,
+            version=args.version if hasattr(args, "version") else None,
             tags=args.tags.split(",") if hasattr(args, "tags") and args.tags else [],
+            target_agents=args.target_agents.split(",")
+            if hasattr(args, "target_agents") and args.target_agents
+            else [],
+            metadata=metadata,
             visibility=args.visibility if hasattr(args, "visibility") else "public",
         )
 
@@ -4650,7 +4660,14 @@ Examples:
     )
     skill_register_parser.add_argument("--url", required=True, help="URL to SKILL.md file")
     skill_register_parser.add_argument("--description", help="Skill description")
+    skill_register_parser.add_argument("--version", help="Skill version (e.g., 1.0.0)")
     skill_register_parser.add_argument("--tags", help="Comma-separated tags")
+    skill_register_parser.add_argument(
+        "--target-agents", help="Comma-separated target coding assistants (e.g., claude-code,cursor)"
+    )
+    skill_register_parser.add_argument(
+        "--metadata", help='Custom metadata as JSON string (e.g., \'{"category": "data-processing"}\')'
+    )
     skill_register_parser.add_argument(
         "--visibility",
         choices=["public", "private", "group"],

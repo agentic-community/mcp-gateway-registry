@@ -1260,7 +1260,15 @@ class SkillRegistrationRequest(BaseModel):
     name: str = Field(..., description="Skill name (lowercase alphanumeric with hyphens)")
     skill_md_url: str = Field(..., description="URL to SKILL.md file")
     description: str | None = Field(None, description="Skill description")
+    repository_url: str | None = Field(None, description="Repository URL")
+    version: str | None = Field(None, description="Skill version (e.g., 1.0.0)")
     tags: list[str] = Field(default_factory=list, description="Tags for categorization")
+    target_agents: list[str] = Field(
+        default_factory=list, description="Target coding assistants (e.g., claude-code, cursor)"
+    )
+    metadata: dict[str, Any] | None = Field(
+        None, description="Custom metadata key-value pairs for search and organization"
+    )
     visibility: str = Field(default="public", description="Visibility: public, private, group")
     allowed_groups: list[str] = Field(
         default_factory=list, description="Groups for group visibility"
@@ -1281,6 +1289,8 @@ class SkillCard(BaseModel):
     visibility: str = Field(default="public", description="Visibility level")
     is_enabled: bool = Field(default=True, description="Whether skill is enabled")
     tags: list[str] = Field(default_factory=list, description="Tags")
+    target_agents: list[str] = Field(default_factory=list, description="Target coding assistants")
+    metadata: dict[str, Any] | None = Field(None, description="Skill metadata (author, version, extra)")
     owner: str | None = Field(None, description="Skill owner")
     registry_name: str | None = Field(None, description="Source registry")
     num_stars: float = Field(default=0, description="Average rating")
