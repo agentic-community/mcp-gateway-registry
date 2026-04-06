@@ -10,6 +10,7 @@ import {
   CpuChipIcon,
   SparklesIcon,
   Square3Stack3DIcon,
+  GlobeAltIcon,
 } from '@heroicons/react/24/outline';
 import ServerCard from './ServerCard';
 import type { Server } from './ServerCard';
@@ -82,6 +83,26 @@ function _getTypeBadge(type: ItemType) {
 
 
 /**
+ * Get the source registry name for a server or agent, if it comes from
+ * a federated peer or an external registry.
+ */
+function _getServerRegistrySource(server: Server): string | null {
+  // Federated peer registry
+  if (server.sync_metadata?.is_federated && server.sync_metadata?.source_peer_id) {
+    return server.sync_metadata.source_peer_id;
+  }
+  // External registry identified by tags
+  const tags = server.tags || [];
+  const externalTags = ['anthropic-registry', 'workday-asor', 'asor', 'federated'];
+  const match = tags.find(t => externalTags.includes(t));
+  if (match) {
+    return match;
+  }
+  return null;
+}
+
+
+/**
  * Extract display fields from any item type in a uniform way.
  */
 function _extractDisplayFields(
@@ -97,10 +118,14 @@ function _extractDisplayFields(
       rating: _getAverageRating(vs.rating_details),
       ratingCount: vs.rating_details?.length || 0,
       toolCount: vs.tool_count || 0,
+      registrySource: null as string | null,
     };
   }
   if (type === 'skill') {
     const skill = item as Skill;
+    const source = skill.registry_name && skill.registry_name !== 'local'
+      ? skill.registry_name
+      : null;
     return {
       name: skill.name,
       description: skill.description || '',
@@ -108,6 +133,7 @@ function _extractDisplayFields(
       rating: skill.num_stars || 0,
       ratingCount: 0,
       toolCount: 0,
+      registrySource: source,
     };
   }
   // server or agent
@@ -119,6 +145,7 @@ function _extractDisplayFields(
     rating: _getAverageRating(server.rating_details),
     ratingCount: server.rating_details?.length || 0,
     toolCount: (server as any).num_tools || 0,
+    registrySource: _getServerRegistrySource(server),
   };
 }
 
@@ -158,6 +185,15 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
           <TypeIcon className="h-3 w-3" />
           {badge.label}
         </span>
+
+        {/* Registry source label */}
+        {fields.registrySource && (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded
+            text-[11px] font-medium bg-purple-500/15 text-purple-300 flex-shrink-0">
+            <GlobeAltIcon className="h-3 w-3" />
+            {fields.registrySource}
+          </span>
+        )}
 
         {/* Name */}
         <span className="text-sm font-semibold text-gray-100 whitespace-nowrap flex-shrink-0">
