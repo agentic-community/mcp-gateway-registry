@@ -405,6 +405,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             text_parts.append(tool.get("name", ""))
             text_parts.append(tool.get("description", ""))
 
+        # Include custom metadata key-value pairs in embedding text
+        metadata = server_info.get("metadata", {})
+        if isinstance(metadata, dict) and metadata:
+            for key, value in metadata.items():
+                text_parts.append(f"{key}: {value}")
+
         text_for_embedding = " ".join(filter(None, text_parts))
 
         try:

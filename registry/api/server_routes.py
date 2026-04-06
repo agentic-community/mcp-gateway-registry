@@ -1560,6 +1560,15 @@ async def edit_server_submit(
     is_enabled = await server_service.is_service_enabled(service_path)
     await faiss_service.add_or_update_service(service_path, updated_server_entry, is_enabled)
 
+    # Update DocumentDB search embeddings
+    try:
+        from ..repositories.factory import get_search_repository
+
+        search_repo = get_search_repository()
+        await search_repo.index_server(service_path, updated_server_entry, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for '{service_path}': {e}")
+
     # Regenerate Nginx configuration
     enabled_servers = {}
 
