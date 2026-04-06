@@ -2,8 +2,10 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useSemanticSearch } from '../hooks/useSemanticSearch';
 import SemanticSearchResults from './SemanticSearchResults';
-import DiscoverCard from './DiscoverCard';
+import ServerCard from './ServerCard';
 import type { Server } from './ServerCard';
+import AgentCard from './AgentCard';
+import SkillCard from './SkillCard';
 import type { Skill } from '../types/skill';
 
 
@@ -108,14 +110,14 @@ function _getFeaturedItems(
   const enabledSkills = skills.filter(s => s.is_enabled);
 
   // Apply keyword filter if present
-  const filterFn = keywordFilter.length > 0;
-  const filteredServers = filterFn
+  const hasFilter = keywordFilter.length > 0;
+  const filteredServers = hasFilter
     ? enabledServers.filter(s => _matchesKeyword(s, keywordFilter))
     : enabledServers;
-  const filteredAgents = filterFn
+  const filteredAgents = hasFilter
     ? enabledAgents.filter(a => _matchesKeyword(a, keywordFilter))
     : enabledAgents;
-  const filteredSkills = filterFn
+  const filteredSkills = hasFilter
     ? enabledSkills.filter(s => _matchesKeyword({
         name: s.name,
         description: s.description,
@@ -148,6 +150,15 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
   agents,
   skills,
   loading,
+  onServerToggle,
+  onServerEdit,
+  onServerDelete,
+  onAgentToggle,
+  onAgentEdit,
+  onAgentDelete,
+  onSkillToggle,
+  onSkillEdit,
+  onSkillDelete,
   onShowToast,
   authToken,
 }) => {
@@ -249,7 +260,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
           />
         </div>
       ) : (
-        /* Featured Cards Grid */
+        /* Featured Cards */
         <div className="w-full max-w-5xl mx-auto px-4 mt-2 overflow-y-auto">
           {loading ? (
             <div className="text-center text-gray-500 dark:text-gray-400 py-8">
@@ -262,19 +273,28 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                 : 'No items registered yet. Register your first MCP server, agent, or skill!'}
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-6">
               {/* Servers section */}
               {featuredServers.length > 0 && (
                 <div>
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
                     MCP Servers
                   </h2>
-                  <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  <div
+                    className="grid gap-4"
+                    style={{
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))',
+                    }}
+                  >
                     {featuredServers.map(server => (
-                      <DiscoverCard
+                      <ServerCard
                         key={server.path}
-                        type="server"
-                        item={server}
+                        server={server}
+                        onToggle={onServerToggle}
+                        onEdit={onServerEdit}
+                        onDelete={onServerDelete}
+                        onShowToast={onShowToast}
+                        authToken={authToken}
                       />
                     ))}
                   </div>
@@ -284,15 +304,24 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
               {/* Agents section */}
               {featuredAgents.length > 0 && (
                 <div>
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
                     Agents
                   </h2>
-                  <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  <div
+                    className="grid gap-4"
+                    style={{
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))',
+                    }}
+                  >
                     {featuredAgents.map(agent => (
-                      <DiscoverCard
+                      <AgentCard
                         key={agent.path}
-                        type="agent"
-                        item={agent}
+                        agent={agent as any}
+                        onToggle={onAgentToggle}
+                        onEdit={onAgentEdit}
+                        onDelete={onAgentDelete}
+                        onShowToast={onShowToast}
+                        authToken={authToken}
                       />
                     ))}
                   </div>
@@ -302,15 +331,24 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
               {/* Skills section */}
               {featuredSkills.length > 0 && (
                 <div>
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
                     Skills
                   </h2>
-                  <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  <div
+                    className="grid gap-4"
+                    style={{
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))',
+                    }}
+                  >
                     {featuredSkills.map(skill => (
-                      <DiscoverCard
+                      <SkillCard
                         key={skill.path}
-                        type="skill"
-                        item={skill}
+                        skill={skill}
+                        onToggle={onSkillToggle}
+                        onEdit={onSkillEdit}
+                        onDelete={onSkillDelete}
+                        onShowToast={onShowToast}
+                        authToken={authToken}
                       />
                     ))}
                   </div>

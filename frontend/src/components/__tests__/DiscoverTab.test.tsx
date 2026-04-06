@@ -14,15 +14,35 @@ jest.mock('../../hooks/useSemanticSearch', () => ({
   useSemanticSearch: () => mockSemanticSearch,
 }));
 
-// Mock DiscoverCard to simplify testing
-jest.mock('../DiscoverCard', () => {
-  const MockCard = (props) => (
-    <div data-testid={`discover-card-${props.type}-${props.item.path}`}>
-      {props.item.name}
+// Mock child components to simplify testing
+jest.mock('../ServerCard', () => {
+  const MockServerCard = (props) => (
+    <div data-testid={`server-card-${props.server.path}`}>
+      {props.server.name}
     </div>
   );
-  MockCard.displayName = 'DiscoverCard';
-  return MockCard;
+  MockServerCard.displayName = 'ServerCard';
+  return MockServerCard;
+});
+
+jest.mock('../AgentCard', () => {
+  const MockAgentCard = (props) => (
+    <div data-testid={`agent-card-${props.agent.path}`}>
+      {props.agent.name}
+    </div>
+  );
+  MockAgentCard.displayName = 'AgentCard';
+  return MockAgentCard;
+});
+
+jest.mock('../SkillCard', () => {
+  const MockSkillCard = (props) => (
+    <div data-testid={`skill-card-${props.skill.path}`}>
+      {props.skill.name}
+    </div>
+  );
+  MockSkillCard.displayName = 'SkillCard';
+  return MockSkillCard;
 });
 
 jest.mock('../SemanticSearchResults', () => {
@@ -88,7 +108,7 @@ describe('DiscoverTab', () => {
     ).toBeInTheDocument();
   });
 
-  test('title stays visible during keyword search (no translateY)', () => {
+  test('title stays visible during keyword search', () => {
     render(<DiscoverTab {...defaultProps} />);
 
     const input = screen.getByPlaceholderText(/search servers/i);
@@ -141,7 +161,7 @@ describe('DiscoverTab', () => {
     expect(screen.getByText('Skills')).toBeInTheDocument();
   });
 
-  test('renders compact DiscoverCard for each item type', () => {
+  test('renders full-size cards for each item type', () => {
     render(
       <DiscoverTab
         {...defaultProps}
@@ -166,10 +186,10 @@ describe('DiscoverTab', () => {
       />
     );
 
-    expect(screen.getByTestId('discover-card-server-/airegistry-tools/')).toBeInTheDocument();
-    expect(screen.getByTestId('discover-card-server-/cloudflare-docs/')).toBeInTheDocument();
-    expect(screen.getByTestId('discover-card-agent-/test-agent/')).toBeInTheDocument();
-    expect(screen.getByTestId('discover-card-skill-/code-review/')).toBeInTheDocument();
+    expect(screen.getByTestId('server-card-/airegistry-tools/')).toBeInTheDocument();
+    expect(screen.getByTestId('server-card-/cloudflare-docs/')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-card-/test-agent/')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-card-/code-review/')).toBeInTheDocument();
   });
 
   test('sorts servers by rating descending, alphabetical tiebreaker', () => {
@@ -195,10 +215,10 @@ describe('DiscoverTab', () => {
     render(<DiscoverTab {...defaultProps} servers={servers} />);
 
     // AI Registry Tools always first, then Alpha (5), Gamma (5), Beta (3)
-    expect(screen.getByTestId('discover-card-server-/airegistry-tools/')).toBeInTheDocument();
-    expect(screen.getByTestId('discover-card-server-/alpha/')).toBeInTheDocument();
-    expect(screen.getByTestId('discover-card-server-/gamma/')).toBeInTheDocument();
-    expect(screen.getByTestId('discover-card-server-/beta/')).toBeInTheDocument();
+    expect(screen.getByTestId('server-card-/airegistry-tools/')).toBeInTheDocument();
+    expect(screen.getByTestId('server-card-/alpha/')).toBeInTheDocument();
+    expect(screen.getByTestId('server-card-/gamma/')).toBeInTheDocument();
+    expect(screen.getByTestId('server-card-/beta/')).toBeInTheDocument();
   });
 
   test('excludes disabled items from featured', () => {
