@@ -1,5 +1,5 @@
 <div align="center">
-<img src="registry/static/mcp_gateway_horizontal_white_logo.png" alt="MCP Gateway & Registry Logo" width="100%">
+<img src="docs/img/mcp_gateway_horizontal_white_logo.png" alt="MCP Gateway & Registry Logo" width="100%">
 
 **Unified Agent & MCP Server Registry – Gateway for AI Development Tools**
 
