@@ -104,8 +104,29 @@ def _tokens_match_text(
 
 
 # Maximum possible text_boost sum for lexical scoring normalization
-# path(5.0) + name(3.0) + description(2.0) + tag(1.5) + tool(1.0) = 12.5
-MAX_LEXICAL_BOOST: float = 12.5
+# path(5.0) + name(3.0) + description(2.0) + tag(1.5) + metadata(1.0) + tool(1.0) = 13.5
+MAX_LEXICAL_BOOST: float = 13.5
+
+
+def _flatten_metadata_to_text(metadata: dict[str, Any]) -> str:
+    """Flatten a metadata dict into a searchable text string.
+
+    Handles nested lists and dicts by joining their string values.
+    Example: {"team": "myteam", "langs": ["python", "go"]}
+    becomes: "team myteam langs python go"
+    """
+    if not isinstance(metadata, dict) or not metadata:
+        return ""
+    parts = []
+    for key, value in metadata.items():
+        parts.append(str(key))
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif isinstance(value, dict):
+            parts.extend(str(v) for v in value.values())
+        else:
+            parts.append(str(value))
+    return " ".join(parts)
 
 
 def _build_keyword_match_filter(
@@ -428,6 +449,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         text_for_embedding = " ".join(filter(None, text_parts))
 
+        # Flatten metadata into a searchable text field for keyword matching
+        metadata_text = _flatten_metadata_to_text(metadata)
+
         try:
             model = await self._get_embedding_model()
             embedding = model.encode([text_for_embedding])[0].tolist()
@@ -438,11 +462,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 e,
             )
             embedding = []
-
-        # Flatten metadata into a searchable text field for keyword matching
-        metadata_text = ""
-        if isinstance(metadata, dict) and metadata:
-            metadata_text = " ".join(f"{k} {v}" for k, v in metadata.items())
 
         doc = {
             "_id": path,
@@ -519,10 +538,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         # Flatten agent metadata for keyword search
         agent_metadata = getattr(agent_card, "metadata", None) or {}
-        if isinstance(agent_metadata, dict) and agent_metadata:
-            agent_metadata_text = " ".join(f"{k} {v}" for k, v in agent_metadata.items())
-        else:
-            agent_metadata_text = ""
+        agent_metadata_text = _flatten_metadata_to_text(agent_metadata)
 
         doc = {
             "_id": path,
