@@ -591,7 +591,7 @@ async def update_skill(
     if not _user_can_modify_skill(existing, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    updates = request.model_dump(exclude_unset=True)
+    updates = request.model_dump(exclude_unset=True, mode="json")
     updated = await service.update_skill(normalized_path, updates)
 
     if not updated:
