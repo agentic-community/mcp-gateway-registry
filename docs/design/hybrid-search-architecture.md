@@ -224,11 +224,11 @@ Search returns grouped results (top 3 per entity type):
 - Skill name
 - Skill description
 - Tags (prefixed with "Tags: ")
-- Metadata text (author, version, registry name)
+- Metadata text (author, version, custom extra key-value pairs)
 
 **Stored document fields:**
 - `path`, `name`, `description`, `tags`, `is_enabled`
-- `metadata_text` (author, version, registry_name for keyword search)
+- `metadata_text` (author, version, flattened `extra` dict, registry_name for keyword search)
 - `embedding` vector
 - `metadata` (skill metadata for reference)
 
@@ -311,7 +311,7 @@ Metadata sources per entity type:
 |----------------|-----------------|
 | MCP Server     | `server_info.get("metadata", {})` |
 | A2A Agent      | `agent_card.get("metadata", {})` |
-| Agent Skill    | Author, version, registry_name |
+| Agent Skill    | Author, version, `extra` dict (custom key-value pairs), registry_name |
 | Virtual Server | `created_by` field |
 
 ## Backend Implementations
