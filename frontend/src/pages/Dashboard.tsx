@@ -2446,7 +2446,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
               servers={filteredServers}
               agents={filteredAgents}
               skills={skills}
-              loading={loading || skillsLoading}
+              virtualServers={virtualServers}
+              externalServers={externalServers}
+              externalAgents={externalAgents}
+              loading={loading || skillsLoading || virtualServersLoading}
               onServerToggle={handleToggleServer}
               onServerEdit={handleEditServer}
               onServerDelete={handleDeleteServer}
@@ -2456,6 +2459,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
               onSkillToggle={handleToggleSkill}
               onSkillEdit={handleEditSkill}
               onSkillDelete={handleDeleteSkill}
+              onVirtualServerToggle={handleToggleVirtualServer}
+              onVirtualServerEdit={handleEditVirtualServer}
+              onVirtualServerDelete={handleDeleteVirtualServer}
               onShowToast={showToast}
               authToken={agentApiToken}
             />

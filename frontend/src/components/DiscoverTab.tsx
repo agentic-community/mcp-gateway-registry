@@ -5,21 +5,23 @@ import SemanticSearchResults from './SemanticSearchResults';
 import DiscoverListRow from './DiscoverListRow';
 import type { Server } from './ServerCard';
 import type { Skill } from '../types/skill';
+import type { VirtualServerInfo } from '../types/virtualServer';
 
 
 // Path for the built-in AI Registry Tools server
 const AI_REGISTRY_TOOLS_PATH = '/airegistry-tools/';
 
 // Maximum featured items per category
-const MAX_SERVERS = 4;
-const MAX_AGENTS = 4;
-const MAX_SKILLS = 4;
+const MAX_FEATURED = 4;
 
 
 interface DiscoverTabProps {
   servers: Server[];
   agents: Server[];
   skills: Skill[];
+  virtualServers: VirtualServerInfo[];
+  externalServers: Server[];
+  externalAgents: Server[];
   loading: boolean;
   onServerToggle: (path: string, enabled: boolean) => void;
   onServerEdit?: (server: Server) => void;
@@ -30,6 +32,9 @@ interface DiscoverTabProps {
   onSkillToggle: (path: string, enabled: boolean) => void;
   onSkillEdit?: (skill: Skill) => void;
   onSkillDelete?: (path: string) => void;
+  onVirtualServerToggle: (path: string, enabled: boolean) => void;
+  onVirtualServerEdit?: (vs: VirtualServerInfo) => void;
+  onVirtualServerDelete?: (path: string) => void;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
   authToken?: string | null;
 }
@@ -74,6 +79,18 @@ function _sortSkillsByStars(skills: Skill[]): Skill[] {
 
 
 /**
+ * Sort virtual servers by rating then name.
+ */
+function _sortVirtualServersByRating(vs: VirtualServerInfo[]): VirtualServerInfo[] {
+  return [...vs].sort((a, b) => {
+    const ratingDiff = _getAverageRating(b.rating_details) - _getAverageRating(a.rating_details);
+    if (ratingDiff !== 0) return ratingDiff;
+    return a.server_name.localeCompare(b.server_name);
+  });
+}
+
+
+/**
  * Check if an item matches a keyword search query.
  * Searches name, description, path, and tags.
  */
@@ -92,6 +109,23 @@ function _matchesKeyword(
 
 
 /**
+ * Check if a virtual server matches a keyword search query.
+ */
+function _virtualServerMatchesKeyword(
+  vs: VirtualServerInfo,
+  query: string
+): boolean {
+  const q = query.toLowerCase();
+  return (
+    vs.server_name.toLowerCase().includes(q) ||
+    (vs.description || '').toLowerCase().includes(q) ||
+    vs.path.toLowerCase().includes(q) ||
+    (vs.tags || []).some(tag => tag.toLowerCase().includes(q))
+  );
+}
+
+
+/**
  * Get featured items for the Discover landing page.
  * AI Registry Tools always first among servers if it exists.
  * Returns sorted, enabled items up to the max per category.
@@ -100,15 +134,22 @@ function _getFeaturedItems(
   servers: Server[],
   agents: Server[],
   skills: Skill[],
+  virtualServers: VirtualServerInfo[],
+  externalServers: Server[],
+  externalAgents: Server[],
   keywordFilter: string
 ) {
   // Filter enabled items
   const enabledServers = servers.filter(s => s.enabled);
   const enabledAgents = agents.filter(a => a.enabled);
   const enabledSkills = skills.filter(s => s.is_enabled);
+  const enabledVirtual = virtualServers.filter(vs => vs.is_enabled);
+  const enabledExtServers = externalServers.filter(s => s.enabled);
+  const enabledExtAgents = externalAgents.filter(a => a.enabled);
 
   // Apply keyword filter if present
   const hasFilter = keywordFilter.length > 0;
+
   const filteredServers = hasFilter
     ? enabledServers.filter(s => _matchesKeyword(s, keywordFilter))
     : enabledServers;
@@ -117,12 +158,18 @@ function _getFeaturedItems(
     : enabledAgents;
   const filteredSkills = hasFilter
     ? enabledSkills.filter(s => _matchesKeyword({
-        name: s.name,
-        description: s.description,
-        path: s.path,
-        tags: s.tags,
+        name: s.name, description: s.description, path: s.path, tags: s.tags,
       }, keywordFilter))
     : enabledSkills;
+  const filteredVirtual = hasFilter
+    ? enabledVirtual.filter(vs => _virtualServerMatchesKeyword(vs, keywordFilter))
+    : enabledVirtual;
+  const filteredExtServers = hasFilter
+    ? enabledExtServers.filter(s => _matchesKeyword(s, keywordFilter))
+    : enabledExtServers;
+  const filteredExtAgents = hasFilter
+    ? enabledExtAgents.filter(a => _matchesKeyword(a, keywordFilter))
+    : enabledExtAgents;
 
   // Sort and pick top items
   // AI Registry Tools goes first if it's in the filtered list
@@ -134,12 +181,22 @@ function _getFeaturedItems(
   if (aiRegistryTools) {
     featuredServers.push(aiRegistryTools);
   }
-  featuredServers.push(...sortedOther.slice(0, MAX_SERVERS - featuredServers.length));
+  featuredServers.push(...sortedOther.slice(0, MAX_FEATURED - featuredServers.length));
 
-  const featuredAgents = _sortServersByRating(filteredAgents).slice(0, MAX_AGENTS);
-  const featuredSkills = _sortSkillsByStars(filteredSkills).slice(0, MAX_SKILLS);
+  const featuredAgents = _sortServersByRating(filteredAgents).slice(0, MAX_FEATURED);
+  const featuredSkills = _sortSkillsByStars(filteredSkills).slice(0, MAX_FEATURED);
+  const featuredVirtual = _sortVirtualServersByRating(filteredVirtual).slice(0, MAX_FEATURED);
+  const featuredExtServers = _sortServersByRating(filteredExtServers).slice(0, MAX_FEATURED);
+  const featuredExtAgents = _sortServersByRating(filteredExtAgents).slice(0, MAX_FEATURED);
 
-  return { featuredServers, featuredAgents, featuredSkills };
+  return {
+    featuredServers,
+    featuredAgents,
+    featuredSkills,
+    featuredVirtual,
+    featuredExtServers,
+    featuredExtAgents,
+  };
 }
 
 
@@ -147,6 +204,9 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
   servers,
   agents,
   skills,
+  virtualServers,
+  externalServers,
+  externalAgents,
   loading,
   onServerToggle,
   onServerEdit,
@@ -157,6 +217,9 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
   onSkillToggle,
   onSkillEdit,
   onSkillDelete,
+  onVirtualServerToggle,
+  onVirtualServerEdit,
+  onVirtualServerDelete,
   onShowToast,
   authToken,
 }) => {
@@ -175,12 +238,25 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
   const isSemanticActive = committedQuery.length >= 2;
 
   // Compute featured items with keyword filtering
-  const { featuredServers, featuredAgents, featuredSkills } = useMemo(
-    () => _getFeaturedItems(servers, agents, skills, isSemanticActive ? '' : searchTerm),
-    [servers, agents, skills, searchTerm, isSemanticActive]
+  const {
+    featuredServers,
+    featuredAgents,
+    featuredSkills,
+    featuredVirtual,
+    featuredExtServers,
+    featuredExtAgents,
+  } = useMemo(
+    () => _getFeaturedItems(
+      servers, agents, skills, virtualServers,
+      externalServers, externalAgents,
+      isSemanticActive ? '' : searchTerm
+    ),
+    [servers, agents, skills, virtualServers, externalServers, externalAgents, searchTerm, isSemanticActive]
   );
 
-  const totalFeatured = featuredServers.length + featuredAgents.length + featuredSkills.length;
+  const totalFeatured = featuredServers.length + featuredAgents.length +
+    featuredSkills.length + featuredVirtual.length +
+    featuredExtServers.length + featuredExtAgents.length;
 
   const handleSemanticSearch = useCallback(() => {
     if (searchTerm.trim().length >= 2) {
@@ -263,7 +339,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
           />
         </div>
       ) : (
-        /* Featured Cards */
+        /* Featured List Rows */
         <div className="relative flex-1 min-h-0">
         <div className="w-full max-w-5xl mx-auto px-4 mt-2 h-full overflow-y-auto discover-scroll">
           {loading ? (
@@ -277,8 +353,8 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                 : 'No items registered yet. Register your first MCP server, agent, or skill!'}
             </div>
           ) : (
-            <div className="space-y-6">
-              {/* Servers section */}
+            <div className="space-y-4">
+              {/* MCP Servers section */}
               {featuredServers.length > 0 && (
                 <div>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
@@ -292,6 +368,27 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                       onToggle={onServerToggle}
                       onEdit={onServerEdit}
                       onDelete={onServerDelete}
+                      onShowToast={onShowToast}
+                      authToken={authToken}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* Virtual MCP Servers section */}
+              {featuredVirtual.length > 0 && (
+                <div>
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                    Virtual MCP Servers
+                  </h2>
+                  {featuredVirtual.map(vs => (
+                    <DiscoverListRow
+                      key={vs.path}
+                      type="virtual"
+                      item={vs}
+                      onToggle={onVirtualServerToggle}
+                      onEdit={onVirtualServerEdit}
+                      onDelete={onVirtualServerDelete}
                       onShowToast={onShowToast}
                       authToken={authToken}
                     />
@@ -340,6 +437,51 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   ))}
                 </div>
               )}
+
+              {/* External Servers section */}
+              {featuredExtServers.length > 0 && (
+                <div>
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                    External Registry Servers
+                  </h2>
+                  {featuredExtServers.map(server => (
+                    <DiscoverListRow
+                      key={server.path}
+                      type="server"
+                      item={server}
+                      onToggle={onServerToggle}
+                      onEdit={onServerEdit}
+                      onDelete={onServerDelete}
+                      onShowToast={onShowToast}
+                      authToken={authToken}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* External Agents section */}
+              {featuredExtAgents.length > 0 && (
+                <div>
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                    External Registry Agents
+                  </h2>
+                  {featuredExtAgents.map(agent => (
+                    <DiscoverListRow
+                      key={agent.path}
+                      type="agent"
+                      item={agent}
+                      onToggle={onAgentToggle}
+                      onEdit={onAgentEdit}
+                      onDelete={onAgentDelete}
+                      onShowToast={onShowToast}
+                      authToken={authToken}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* Bottom padding so fade gradient doesn't cover last row */}
+              <div className="h-8" />
             </div>
           )}
         </div>

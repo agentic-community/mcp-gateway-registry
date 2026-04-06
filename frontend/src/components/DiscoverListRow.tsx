@@ -9,17 +9,23 @@ import {
   ServerIcon,
   CpuChipIcon,
   SparklesIcon,
+  Square3Stack3DIcon,
 } from '@heroicons/react/24/outline';
 import ServerCard from './ServerCard';
 import type { Server } from './ServerCard';
 import AgentCard from './AgentCard';
 import SkillCard from './SkillCard';
 import type { Skill } from '../types/skill';
+import VirtualServerCard from './VirtualServerCard';
+import type { VirtualServerInfo } from '../types/virtualServer';
+
+
+type ItemType = 'server' | 'agent' | 'skill' | 'virtual';
 
 
 interface DiscoverListRowProps {
-  type: 'server' | 'agent' | 'skill';
-  item: Server | Skill;
+  type: ItemType;
+  item: Server | Skill | VirtualServerInfo;
   onToggle: (path: string, enabled: boolean) => void;
   onEdit?: (item: any) => void;
   onDelete?: (path: string) => any;
@@ -45,12 +51,19 @@ function _getAverageRating(
 /**
  * Get type badge styling by item type.
  */
-function _getTypeBadge(type: 'server' | 'agent' | 'skill') {
+function _getTypeBadge(type: ItemType) {
   if (type === 'server') {
     return {
       bg: 'bg-indigo-500/15 text-indigo-300',
       icon: ServerIcon,
       label: 'Server',
+    };
+  }
+  if (type === 'virtual') {
+    return {
+      bg: 'bg-teal-500/15 text-teal-300',
+      icon: Square3Stack3DIcon,
+      label: 'Virtual',
     };
   }
   if (type === 'agent') {
@@ -68,6 +81,48 @@ function _getTypeBadge(type: 'server' | 'agent' | 'skill') {
 }
 
 
+/**
+ * Extract display fields from any item type in a uniform way.
+ */
+function _extractDisplayFields(
+  type: ItemType,
+  item: Server | Skill | VirtualServerInfo
+) {
+  if (type === 'virtual') {
+    const vs = item as VirtualServerInfo;
+    return {
+      name: vs.server_name,
+      description: vs.description || '',
+      tags: vs.tags || [],
+      rating: _getAverageRating(vs.rating_details),
+      ratingCount: vs.rating_details?.length || 0,
+      toolCount: vs.tool_count || 0,
+    };
+  }
+  if (type === 'skill') {
+    const skill = item as Skill;
+    return {
+      name: skill.name,
+      description: skill.description || '',
+      tags: skill.tags || [],
+      rating: skill.num_stars || 0,
+      ratingCount: 0,
+      toolCount: 0,
+    };
+  }
+  // server or agent
+  const server = item as Server;
+  return {
+    name: server.name,
+    description: (server as any).description || '',
+    tags: (server as any).tags || [],
+    rating: _getAverageRating(server.rating_details),
+    ratingCount: server.rating_details?.length || 0,
+    toolCount: (server as any).num_tools || 0,
+  };
+}
+
+
 const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
   type,
   item,
@@ -81,24 +136,7 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
 
   const badge = _getTypeBadge(type);
   const TypeIcon = badge.icon;
-
-  const name = item.name;
-  const description = (item as any).description || '';
-  const tags: string[] = (item as any).tags || [];
-
-  // Rating
-  let rating = 0;
-  let ratingCount = 0;
-  if (type === 'skill') {
-    rating = (item as Skill).num_stars || 0;
-  } else {
-    const server = item as Server;
-    rating = _getAverageRating(server.rating_details);
-    ratingCount = server.rating_details?.length || 0;
-  }
-
-  // Tool count for servers/agents
-  const toolCount = type !== 'skill' ? (item as any).num_tools || 0 : 0;
+  const fields = _extractDisplayFields(type, item);
 
   return (
     <div className="mb-1.5">
@@ -123,23 +161,23 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
 
         {/* Name */}
         <span className="text-sm font-semibold text-gray-100 whitespace-nowrap flex-shrink-0">
-          {name}
+          {fields.name}
         </span>
 
         {/* Separator */}
-        {description && (
+        {fields.description && (
           <span className="text-gray-600 flex-shrink-0">&middot;</span>
         )}
 
         {/* Description */}
         <span className="text-sm text-gray-400 whitespace-nowrap overflow-hidden text-ellipsis flex-1 min-w-0">
-          {description}
+          {fields.description}
         </span>
 
         {/* Tags (up to 2) */}
-        {tags.length > 0 && (
+        {fields.tags.length > 0 && (
           <div className="hidden sm:flex items-center gap-1 flex-shrink-0">
-            {tags.slice(0, 2).map((tag: string) => (
+            {fields.tags.slice(0, 2).map((tag: string) => (
               <span
                 key={tag}
                 className="px-1.5 py-0.5 rounded text-[11px] bg-gray-700/60 text-gray-400"
@@ -147,27 +185,27 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
                 #{tag}
               </span>
             ))}
-            {tags.length > 2 && (
-              <span className="text-[11px] text-gray-500">+{tags.length - 2}</span>
+            {fields.tags.length > 2 && (
+              <span className="text-[11px] text-gray-500">+{fields.tags.length - 2}</span>
             )}
           </div>
         )}
 
         {/* Tool count */}
-        {toolCount > 0 && (
+        {fields.toolCount > 0 && (
           <span className="hidden md:inline-flex items-center gap-1 text-xs text-blue-400 flex-shrink-0">
             <WrenchScrewdriverIcon className="h-3 w-3" />
-            {toolCount}
+            {fields.toolCount}
           </span>
         )}
 
         {/* Rating */}
-        {rating > 0 && (
+        {fields.rating > 0 && (
           <span className="inline-flex items-center gap-1 text-xs text-yellow-400 flex-shrink-0">
             <StarIcon className="h-3 w-3" />
-            {rating.toFixed(1)}
-            {ratingCount > 0 && (
-              <span className="text-gray-500">({ratingCount})</span>
+            {fields.rating.toFixed(1)}
+            {fields.ratingCount > 0 && (
+              <span className="text-gray-500">({fields.ratingCount})</span>
             )}
           </span>
         )}
@@ -210,6 +248,17 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
               onEdit={onEdit}
               onDelete={onDelete}
               onShowToast={onShowToast}
+              authToken={authToken}
+            />
+          )}
+          {type === 'virtual' && (
+            <VirtualServerCard
+              virtualServer={item as VirtualServerInfo}
+              canModify={true}
+              onToggle={onToggle}
+              onEdit={onEdit as any}
+              onDelete={onDelete as any}
+              onShowToast={onShowToast as any}
               authToken={authToken}
             />
           )}
