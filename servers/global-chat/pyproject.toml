@@ -1,0 +1,15 @@
+[project]
+name = "global-chat-mcp"
+version = "0.1.0"
+description = "MCP server for cross-protocol AI agent discovery via Global Chat"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastmcp>=2.0.0",
+    "pydantic>=2.11.3",
+    "httpx>=0.28.0",
+]
+
+[tool.uv]
+# Local-only project - never resolve from PyPI
+package = false
