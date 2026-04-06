@@ -109,6 +109,34 @@ function _matchesKeyword(
 
 
 /**
+ * Build the summary text showing counts per category.
+ * e.g. "4 servers, 2 virtual, 3 agents, 1 skill, 2 external"
+ */
+function _buildSummaryText(
+  servers: number,
+  virtual: number,
+  agents: number,
+  skills: number,
+  external: number,
+  searchTerm: string
+): string {
+  const parts: string[] = [];
+  if (servers > 0) parts.push(`${servers} server${servers !== 1 ? 's' : ''}`);
+  if (virtual > 0) parts.push(`${virtual} virtual`);
+  if (agents > 0) parts.push(`${agents} agent${agents !== 1 ? 's' : ''}`);
+  if (skills > 0) parts.push(`${skills} skill${skills !== 1 ? 's' : ''}`);
+  if (external > 0) parts.push(`${external} external`);
+
+  if (parts.length === 0) {
+    return searchTerm ? 'No matches' : 'No items registered';
+  }
+
+  const prefix = searchTerm ? 'Showing ' : '';
+  return prefix + parts.join(', ');
+}
+
+
+/**
  * Check if a virtual server matches a keyword search query.
  */
 function _virtualServerMatchesKeyword(
@@ -315,10 +343,20 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
           )}
         </div>
 
-        {/* Hint text */}
-        {searchTerm && !isSemanticActive && (
-          <p className="text-xs text-gray-500 mt-1 text-center">
-            Press Enter for semantic search
+        {/* Summary counts + hint */}
+        {!isSemanticActive && (
+          <p className="text-xs text-gray-500 dark:text-gray-500 mt-1.5 text-center italic">
+            {_buildSummaryText(
+              featuredServers.length, featuredVirtual.length,
+              featuredAgents.length, featuredSkills.length,
+              featuredExtServers.length + featuredExtAgents.length,
+              searchTerm
+            )}
+            {searchTerm && (
+              <span className="text-gray-600 dark:text-gray-600">
+                {' '}&middot; press Enter for semantic search
+              </span>
+            )}
           </p>
         )}
       </div>
