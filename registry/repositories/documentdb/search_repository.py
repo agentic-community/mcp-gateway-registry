@@ -911,6 +911,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "tags": 1,
                     "tools": 1,
                     "metadata": 1,
+                    "metadata_text": 1,
                     "is_enabled": 1,
                     "embedding": 1,
                 },
@@ -955,6 +956,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 # Check if any token matches any tag
                 if tags and any(_tokens_match_text(query_tokens, tag) for tag in tags):
                     text_boost += 1.5
+
+                # Check metadata_text match
+                metadata_text = doc.get("metadata_text", "")
+                if metadata_text and _tokens_match_text(query_tokens, metadata_text):
+                    text_boost += 1.0
 
                 # Check if any token matches any tool name or description
                 for tool in tools:
