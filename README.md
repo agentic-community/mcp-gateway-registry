@@ -803,10 +803,11 @@ Our development roadmap is organized into weekly milestones with clear deliverab
 
 | Milestone | Due Date | Progress | Status | Key Issues |
 |-----------|----------|----------|--------|------------|
-| **March 2026 Week 2** | 2026-03-12 | 0% (0/5) | 🚧 In Progress | **Open:** [#611 - Network-trusted auth token generation](https://github.com/agentic-community/mcp-gateway-registry/issues/611), [#605 - AgentCore Auto-Registration](https://github.com/agentic-community/mcp-gateway-registry/issues/605), [#559 - Server-side telemetry](https://github.com/agentic-community/mcp-gateway-registry/issues/559), [#558 - Client-side telemetry](https://github.com/agentic-community/mcp-gateway-registry/issues/558), [#557 - Anonymous telemetry](https://github.com/agentic-community/mcp-gateway-registry/issues/557) |
-| **March 2026 Week 3** | 2026-03-19 | 0% (0/2) | 📅 Planned | **Open:** [#614 - MCP OAuth 2.1 Authorization Spec](https://github.com/agentic-community/mcp-gateway-registry/issues/614), [#500 - Logout path-based routing fix](https://github.com/agentic-community/mcp-gateway-registry/issues/500) |
-| **March 2026 Week 4** | 2026-03-26 | 0% (0/3) | 📅 Planned | **Open:** [#556 - AI Gateway Rebrand](https://github.com/agentic-community/mcp-gateway-registry/issues/556), [#502 - Federation Protocol Spec](https://github.com/agentic-community/mcp-gateway-registry/issues/502), [#469 - Keycloak Secrets Manager](https://github.com/agentic-community/mcp-gateway-registry/issues/469) |
-| **Parking Lot** | — | 0% (0/11) | 🗂️ Backlog | 11 open issues awaiting prioritization |
+| **April 2026 Week 1** | 2026-04-05 | 50% (1/2) | 🚧 In Progress | **Closed:** [#738 - Normalize visibility values](https://github.com/agentic-community/mcp-gateway-registry/issues/738) **Open:** [#739 - Discover tab landing page](https://github.com/agentic-community/mcp-gateway-registry/issues/739) |
+| **April 2026 Week 2** | 2026-04-12 | 50% (1/2) | 🚧 In Progress | **Closed:** [#605 - AgentCore Auto-Registration](https://github.com/agentic-community/mcp-gateway-registry/issues/605) **Open:** [#611 - Network-trusted auth token generation](https://github.com/agentic-community/mcp-gateway-registry/issues/611) |
+| **April 2026 Week 3** | 2026-04-19 | 0% (0/2) | 📅 Planned | **Open:** [#614 - MCP OAuth 2.1 Authorization Spec](https://github.com/agentic-community/mcp-gateway-registry/issues/614), [#500 - Logout path-based routing fix](https://github.com/agentic-community/mcp-gateway-registry/issues/500) |
+| **April 2026 Week 4** | 2026-04-26 | 0% (0/6) | 📅 Planned | **Open:** [#665 - Agent-to-Agent Knowledge Sharing](https://github.com/agentic-community/mcp-gateway-registry/issues/665), [#666 - Context Hub MVP](https://github.com/agentic-community/mcp-gateway-registry/issues/666), [#667 - Demo agent for Context Hub](https://github.com/agentic-community/mcp-gateway-registry/issues/667), [#556 - AI Gateway Rebrand](https://github.com/agentic-community/mcp-gateway-registry/issues/556), [#502 - Federation Protocol Spec](https://github.com/agentic-community/mcp-gateway-registry/issues/502), [#469 - Keycloak Secrets Manager](https://github.com/agentic-community/mcp-gateway-registry/issues/469) |
+| **Parking Lot** | -- | 0% (0/13) | 🗂️ Backlog | 13 open issues awaiting prioritization |
 
 **Status Legend:** 🚧 In Progress • 📅 Planned • 🗂️ Backlog • ✅ Complete
 
@@ -816,17 +817,26 @@ Our development roadmap is organized into weekly milestones with clear deliverab
 
 The following major features span multiple milestones and represent significant architectural improvements:
 
-- **[#605 - AgentCore Auto-Registration](https://github.com/agentic-community/mcp-gateway-registry/issues/605)** 🚧 **IN PROGRESS** (March 2026 Week 2)
-  Automated discovery and registration of Bedrock AgentCore gateways with credential management integration.
+- **[#739 - Discover Tab Landing Page](https://github.com/agentic-community/mcp-gateway-registry/issues/739)** 🚧 **IN PROGRESS** (April 2026 Week 1)
+  Add a Discover tab as the default landing page with Google-style search experience for finding servers, agents, and skills.
 
-- **[#641 - Okta Identity Provider](https://github.com/agentic-community/mcp-gateway-registry/issues/641)** 🚧 **IN PROGRESS**
-  Add Okta as an identity provider option alongside Keycloak, Entra ID, Auth0, GitHub, and Google OAuth2.
+- **[#665 - Agent-to-Agent Knowledge Sharing](https://github.com/agentic-community/mcp-gateway-registry/issues/665)** 📅 **PLANNED** (April 2026 Week 4)
+  Enable agents to share and discover knowledge through the AI Registry, forming a collaborative knowledge network.
 
-- **[#614 - MCP OAuth 2.1 Authorization Spec](https://github.com/agentic-community/mcp-gateway-registry/issues/614)** 📅 **PLANNED** (March 2026 Week 3)
+- **[#666 - Context Hub MVP](https://github.com/agentic-community/mcp-gateway-registry/issues/666)** 📅 **PLANNED** (April 2026 Week 4)
+  Implement Context Hub with card creation, search, and auto-discovery for agent knowledge management.
+
+- **[#614 - MCP OAuth 2.1 Authorization Spec](https://github.com/agentic-community/mcp-gateway-registry/issues/614)** 📅 **PLANNED** (April 2026 Week 3)
   Implement RFC 9728 Protected Resource Metadata with native IDE support for MCP OAuth 2.1 authorization.
 
-- **[#556 - AI Gateway & Registry Rebrand](https://github.com/agentic-community/mcp-gateway-registry/issues/556)** 📅 **PLANNED** (March 2026 Week 4)
+- **[#556 - AI Gateway & Registry Rebrand](https://github.com/agentic-community/mcp-gateway-registry/issues/556)** 📅 **PLANNED** (April 2026 Week 4)
   Rename "MCP Gateway Registry" to "AI Gateway & Registry" to reflect expanded support for agents and tools beyond MCP.
+
+- **[#605 - AgentCore Auto-Registration](https://github.com/agentic-community/mcp-gateway-registry/issues/605)** ✅ **COMPLETED** (April 2026)
+  Automated discovery and registration of Bedrock AgentCore gateways with credential management integration. Full `cli/agentcore/` module with boto3 discovery, registration, token refresh, and security scheme support.
+
+- **[#641 - Okta Identity Provider](https://github.com/agentic-community/mcp-gateway-registry/issues/641)** ✅ **COMPLETED**
+  Added Okta as an identity provider option alongside Keycloak, Entra ID, Auth0, GitHub, and Google OAuth2.
 
 - **[#557-559 - Observability & Telemetry Suite](https://github.com/agentic-community/mcp-gateway-registry/issues/557)** ✅ **COMPLETED**
   Comprehensive telemetry infrastructure with server-side collector ([#674](https://github.com/agentic-community/mcp-gateway-registry/pull/674)), client-side instrumentation ([#659](https://github.com/agentic-community/mcp-gateway-registry/pull/659)), and end-to-end enhancements ([#702](https://github.com/agentic-community/mcp-gateway-registry/pull/702)). [Telemetry docs](docs/TELEMETRY.md).
@@ -848,7 +858,16 @@ The following major features span multiple milestones and represent significant 
 
 ---
 
-#### Recently Completed (February-March 2026)
+#### Recently Completed (February-April 2026)
+
+- **[#738 - Normalize Visibility Values](https://github.com/agentic-community/mcp-gateway-registry/issues/738)** ✅ **COMPLETED** (April 2026)
+  Accept both 'private' and 'internal' visibility values, canonicalize to 'private' across agents, servers, and skills.
+
+- **[#737 - Supported Protocol Field](https://github.com/agentic-community/mcp-gateway-registry/pull/737)** ✅ **COMPLETED** (April 2026)
+  Added `supported_protocol` field to distinguish A2A agents, updated `trust_level`/`visibility` defaults, with backfill script and 31 new unit tests.
+
+- **[#728 - AgentCore Security Schemes](https://github.com/agentic-community/mcp-gateway-registry/pull/728)** ✅ **COMPLETED** (April 2026)
+  Support Bedrock AgentCore `httpAuthSecurityScheme` format, HEAD fallback for auth-protected health checks, and field pass-through for frontend JSON upload.
 
 - **[#650 - Semgrep Security Findings](https://github.com/agentic-community/mcp-gateway-registry/issues/650)** ✅ **COMPLETED** (March 2026)
   Fixed SQL injection vulnerability with allowlist validation and hardened Docker Compose security (CIS Docker Benchmark 4.6). Added security_opt and cap_drop to all services, reducing findings by 86%.
