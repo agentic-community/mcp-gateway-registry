@@ -129,6 +129,7 @@ def _build_keyword_match_filter(
             {"tags": {"$regex": token_regex, "$options": "i"}},
             {"tools.name": {"$regex": token_regex, "$options": "i"}},
             {"tools.description": {"$regex": token_regex, "$options": "i"}},
+            {"metadata_text": {"$regex": token_regex, "$options": "i"}},
         ]
     }
     if entity_types:
@@ -142,7 +143,7 @@ def _build_text_boost_stage(
     """Build the $addFields stage for text boost calculation.
 
     Computes text_boost by matching query tokens against document fields:
-    path (+5.0), name (+3.0), description (+2.0), tags (+1.5), tools (+1.0).
+    path (+5.0), name (+3.0), description (+2.0), tags (+1.5), metadata (+1.0), tools (+1.0).
 
     Args:
         token_regex: Regex pattern combining query tokens with OR
@@ -220,6 +221,20 @@ def _build_text_boost_stage(
                                 ]
                             },
                             1.5,
+                            0.0,
+                        ]
+                    },
+                    # Metadata match: +1.0
+                    {
+                        "$cond": [
+                            {
+                                "$regexMatch": {
+                                    "input": {"$ifNull": ["$metadata_text", ""]},
+                                    "regex": token_regex,
+                                    "options": "i",
+                                }
+                            },
+                            1.0,
                             0.0,
                         ]
                     },
@@ -424,6 +439,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
             embedding = []
 
+        # Flatten metadata into a searchable text field for keyword matching
+        metadata_text = ""
+        if isinstance(metadata, dict) and metadata:
+            metadata_text = " ".join(f"{k} {v}" for k, v in metadata.items())
+
         doc = {
             "_id": path,
             "entity_type": "mcp_server",
@@ -431,6 +451,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "name": server_info.get("server_name", ""),
             "description": server_info.get("description", ""),
             "tags": server_info.get("tags", []),
+            "metadata_text": metadata_text,
             "is_enabled": is_enabled,
             "text_for_embedding": text_for_embedding,
             "embedding": embedding,
@@ -496,6 +517,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
             embedding = []
 
+        # Flatten agent metadata for keyword search
+        agent_metadata = getattr(agent_card, "metadata", None) or {}
+        if isinstance(agent_metadata, dict) and agent_metadata:
+            agent_metadata_text = " ".join(f"{k} {v}" for k, v in agent_metadata.items())
+        else:
+            agent_metadata_text = ""
+
         doc = {
             "_id": path,
             "entity_type": "a2a_agent",
@@ -503,6 +531,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "name": agent_card.name,
             "description": agent_card.description or "",
             "tags": agent_card.tags or [],
+            "metadata_text": agent_metadata_text,
             "is_enabled": is_enabled,
             "text_for_embedding": text_for_embedding,
             "embedding": embedding,
@@ -570,6 +599,16 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if hasattr(visibility_value, "value"):
             visibility_value = visibility_value.value
 
+        # Flatten skill metadata for keyword search
+        skill_metadata_parts = []
+        if skill.metadata and skill.metadata.author:
+            skill_metadata_parts.append(f"author {skill.metadata.author}")
+        if skill.metadata and skill.metadata.version:
+            skill_metadata_parts.append(f"version {skill.metadata.version}")
+        if skill.registry_name:
+            skill_metadata_parts.append(f"registry {skill.registry_name}")
+        skill_metadata_text = " ".join(skill_metadata_parts)
+
         # Build search document
         search_doc = {
             "_id": path,
@@ -578,6 +617,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "name": skill.name,
             "description": skill.description,
             "tags": skill.tags or [],
+            "metadata_text": skill_metadata_text,
             "is_enabled": is_enabled,
             "visibility": visibility_value,
             "allowed_groups": skill.allowed_groups or [],
@@ -699,6 +739,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
             embedding = []
 
+        # Flatten virtual server metadata for keyword search
+        vs_metadata_parts = []
+        if virtual_server.created_by:
+            vs_metadata_parts.append(f"created_by {virtual_server.created_by}")
+        vs_metadata_text = " ".join(vs_metadata_parts)
+
         # Build search document
         search_doc = {
             "_id": path,
@@ -707,6 +753,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "name": virtual_server.server_name,
             "description": virtual_server.description or "",
             "tags": virtual_server.tags or [],
+            "metadata_text": vs_metadata_text,
             "is_enabled": is_enabled,
             "text_for_embedding": text_for_embedding,
             "embedding": embedding,
