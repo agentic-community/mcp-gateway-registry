@@ -1404,6 +1404,7 @@ async def edit_server_form(
 
 @router.post("/edit/{service_path:path}")
 async def edit_server_submit(
+    request: Request,
     service_path: str,
     name: Annotated[str, Form()],
     proxy_pass_url: Annotated[str, Form()],
@@ -1562,7 +1563,11 @@ async def edit_server_submit(
 
     logger.info(f"Server '{name}' ({service_path}) updated by user '{user_context['username']}'")
 
-    # Redirect back to the main page
+    # Return JSON for API clients (React SPA), redirect for browser form submissions
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept:
+        return {"status": "ok", "message": f"Server '{name}' updated successfully"}
+
     return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
 

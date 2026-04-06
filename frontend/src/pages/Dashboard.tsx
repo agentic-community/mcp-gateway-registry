@@ -988,8 +988,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
       // Use the correct edit endpoint with the server path
       await axios.post(`/api/edit${editingServer.path}`, formData, {
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
         },
+        maxRedirects: 0,
       });
 
       // Refresh server list
