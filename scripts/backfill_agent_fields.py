@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 MONGODB_URI = "mongodb://localhost:27017"
 DB_NAME = "mcp_registry"
 AGENTS_COLLECTION = "mcp_agents_default"
-SERVERS_COLLECTION = "mcp_servers"
+SERVERS_COLLECTION = "mcp_servers_default"
 
 
 def _backfill_supported_protocol(
