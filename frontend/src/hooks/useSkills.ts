@@ -47,6 +47,7 @@ export const useSkills = (): UseSkillsReturn => {
         target_agents: skillInfo.target_agents || [],
         allowed_tools: skillInfo.allowed_tools || [],
         requirements: skillInfo.requirements || [],
+        metadata: skillInfo.metadata || null,
         num_stars: skillInfo.num_stars || 0,
         health_status: skillInfo.health_status || 'unknown',
         last_checked_time: skillInfo.last_checked_time,

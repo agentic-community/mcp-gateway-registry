@@ -42,12 +42,36 @@ def _skill_to_document(
     return doc
 
 
+def _normalize_metadata(
+    metadata: Any,
+) -> dict[str, Any] | None:
+    """Normalize metadata to SkillMetadata-compatible dict.
+
+    Handles legacy flat dicts (e.g., {category: 'x'}) by wrapping
+    them into the SkillMetadata structure with an 'extra' field.
+    """
+    if not metadata or not isinstance(metadata, dict):
+        return None
+
+    # Already in SkillMetadata format (has 'extra' key)
+    if "extra" in metadata:
+        return metadata
+
+    # Legacy flat dict — wrap into SkillMetadata structure
+    return {
+        "author": metadata.pop("author", None),
+        "version": metadata.pop("version", None),
+        "extra": metadata,
+    }
+
+
 def _document_to_skill(
     doc: dict[str, Any],
 ) -> SkillCard:
     """Convert MongoDB document to SkillCard."""
     doc_copy = dict(doc)
     doc_copy.pop("_id", None)
+    doc_copy["metadata"] = _normalize_metadata(doc_copy.get("metadata"))
     return SkillCard(**doc_copy)
 
 

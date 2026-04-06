@@ -38,6 +38,7 @@ from ..exceptions import (
 from ..schemas.skill_models import (
     DiscoveryResponse,
     SkillCard,
+    SkillMetadata,
     SkillRegistrationRequest,
     SkillTier1_Metadata,
     ToggleStateRequest,
@@ -592,6 +593,16 @@ async def update_skill(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     updates = request.model_dump(exclude_unset=True, mode="json")
+
+    # Convert raw metadata dict to SkillMetadata structure for consistent storage
+    if "metadata" in updates and updates["metadata"] is not None:
+        raw_meta = updates["metadata"]
+        updates["metadata"] = SkillMetadata(
+            author=raw_meta.get("author"),
+            version=raw_meta.get("version"),
+            extra={k: v for k, v in raw_meta.items() if k not in ("author", "version")},
+        ).model_dump(mode="json")
+
     updated = await service.update_skill(normalized_path, updates)
 
     if not updated:

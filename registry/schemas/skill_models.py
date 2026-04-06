@@ -248,6 +248,7 @@ class SkillInfo(BaseModel):
     tags: list[str] = Field(default_factory=list)
     author: str | None = None
     version: str | None = None
+    metadata: SkillMetadata | None = None
     compatibility: str | None = None
     target_agents: list[str] = Field(default_factory=list)
     is_enabled: bool = True

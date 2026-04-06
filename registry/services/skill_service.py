@@ -660,6 +660,7 @@ class SkillService:
                 tags=s.tags,
                 author=s.metadata.author if s.metadata else None,
                 version=s.metadata.version if s.metadata else None,
+                metadata=s.metadata,
                 compatibility=s.compatibility,
                 target_agents=s.target_agents,
                 is_enabled=s.is_enabled,
