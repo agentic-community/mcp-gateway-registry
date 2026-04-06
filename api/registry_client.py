@@ -444,6 +444,9 @@ class AgentRegistration(BaseModel):
     trust_level: str = Field(
         "unverified", alias="trustLevel", description="unverified, community, verified, trusted"
     )
+    supported_protocol: str | None = Field(
+        None, alias="supportedProtocol", description="Agent protocol: a2a or other"
+    )
 
     class Config:
         populate_by_name = True  # Allow both snake_case and camelCase on input

@@ -1540,10 +1540,13 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
         # Provider is now a dict object per A2A spec {organization, url}
         # No conversion needed - pass it through as-is
 
-        # Convert visibility string to enum if present
+        # Normalize and convert visibility string to enum if present
         if "visibility" in config:
+            # Normalize legacy aliases: "internal" -> "private", "group" -> "group-restricted"
+            _visibility_aliases = {"internal": "private", "group": "group-restricted"}
+            normalized = _visibility_aliases.get(config["visibility"].lower(), config["visibility"].lower())
             try:
-                config["visibility"] = AgentVisibility(config["visibility"].lower())
+                config["visibility"] = AgentVisibility(normalized)
             except ValueError:
                 logger.warning(f"Unknown visibility '{config['visibility']}', using 'public'")
                 config["visibility"] = AgentVisibility.PUBLIC
@@ -1591,6 +1594,10 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
             "tags",
             "visibility",
             "license",
+            "supported_protocol",
+            "supportedProtocol",
+            "trust_level",
+            "trustLevel",
         }
         config = {k: v for k, v in config.items() if k in valid_fields}
 
@@ -1768,10 +1775,13 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
                 logger.warning(f"Unknown provider '{config['provider']}', using 'custom'")
                 config["provider"] = AgentProvider.CUSTOM
 
-        # Convert visibility string to enum if present
+        # Normalize and convert visibility string to enum if present
         if "visibility" in config:
+            # Normalize legacy aliases: "internal" -> "private", "group" -> "group-restricted"
+            _visibility_aliases = {"internal": "private", "group": "group-restricted"}
+            normalized = _visibility_aliases.get(config["visibility"].lower(), config["visibility"].lower())
             try:
-                config["visibility"] = AgentVisibility(config["visibility"].lower())
+                config["visibility"] = AgentVisibility(normalized)
             except ValueError:
                 logger.warning(f"Unknown visibility '{config['visibility']}', using 'public'")
                 config["visibility"] = AgentVisibility.PUBLIC
@@ -1808,6 +1818,10 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
             "tags",
             "visibility",
             "license",
+            "supported_protocol",
+            "supportedProtocol",
+            "trust_level",
+            "trustLevel",
         }
         config = {k: v for k, v in config.items() if k in valid_fields}
 
