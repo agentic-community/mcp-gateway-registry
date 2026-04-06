@@ -473,6 +473,8 @@ async def get_servers_json(
                     "registered_at": server_info.get("registered_at"),
                     "updated_at": server_info.get("updated_at"),
                     "ans_metadata": server_info.get("ans_metadata"),
+                    "num_stars": server_info.get("num_stars", 0),
+                    "rating_details": server_info.get("rating_details", []),
                 }
             )
 

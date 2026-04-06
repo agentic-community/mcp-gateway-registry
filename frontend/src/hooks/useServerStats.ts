@@ -177,7 +177,8 @@ export const useServerStats = (): UseServerStatsReturn => {
           tags: serverInfo.tags || [],
           last_checked_time: serverInfo.last_checked_iso,  // Fixed field mapping
           usersCount: 0, // Not available in backend
-          rating: 0,
+          rating: serverInfo.num_stars || 0,
+          rating_details: serverInfo.rating_details || [],
           status: mapHealthStatus(serverInfo.health_status || 'unknown'),
           num_tools: serverInfo.num_tools || 0,
           type: 'server' as const,

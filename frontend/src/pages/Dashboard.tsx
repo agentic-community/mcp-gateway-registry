@@ -18,6 +18,7 @@ import {
   UpdateVirtualServerRequest,
 } from '../types/virtualServer';
 import VirtualServerForm from '../components/VirtualServerForm';
+import DiscoverTab from '../components/DiscoverTab';
 import axios from 'axios';
 
 
@@ -198,7 +199,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
   const [agentApiToken, setAgentApiToken] = useState<string | null>(null);
 
   // View filter state
-  const [viewFilter, setViewFilter] = useState<'all' | 'servers' | 'agents' | 'skills' | 'virtual' | 'external'>('all');
+  const [viewFilter, setViewFilter] = useState<'all' | 'discover' | 'servers' | 'agents' | 'skills' | 'virtual' | 'external'>('discover');
 
   // Collapsible state for registry groups (tracks which groups are expanded)
   // Key is registry name: 'local' or peer registry ID like 'peer-registry-lob-1'
@@ -2281,6 +2282,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
           {/* View Filter Tabs - conditionally show based on registry mode */}
           {/* Calculate if multiple features are enabled to determine if "All" tab is needed */}
           <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+            <button
+              onClick={() => handleChangeViewFilter('discover')}
+              className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
+                viewFilter === 'discover'
+                  ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+              }`}
+            >
+              Discover
+            </button>
 {/* Only show "All" tab if more than one feature is enabled */}
             {[
               registryConfig?.features.mcp_servers !== false,
@@ -2359,6 +2370,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
             )}
           </div>
 
+          {viewFilter !== 'discover' && (
+          <>
           {/* Search Bar and Refresh Button */}
           <div className="flex gap-4 items-center">
             <div className="relative flex-1">
@@ -2441,41 +2454,65 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
               Press Enter to run semantic search; typing filters locally.
             </p>
           </div>
+          </>
+          )}
         </div>
 
         {/* Scrollable Content Area */}
         <div className="flex-1 overflow-y-auto min-h-0 space-y-10">
-          {semanticSectionVisible ? (
+          {viewFilter === 'discover' ? (
+            <DiscoverTab
+              servers={filteredServers}
+              agents={filteredAgents}
+              skills={skills}
+              loading={loading || skillsLoading}
+              onServerToggle={handleToggleServer}
+              onServerEdit={handleEditServer}
+              onServerDelete={handleDeleteServer}
+              onAgentToggle={handleToggleAgent}
+              onAgentEdit={handleEditAgent}
+              onAgentDelete={handleDeleteAgent}
+              onSkillToggle={handleToggleSkill}
+              onSkillEdit={handleEditSkill}
+              onSkillDelete={handleDeleteSkill}
+              onShowToast={showToast}
+              authToken={agentApiToken}
+            />
+          ) : (
             <>
-              <SemanticSearchResults
-                query={semanticDisplayQuery}
-                loading={semanticLoading}
-                error={semanticError}
-                servers={semanticServers}
-                tools={semanticTools}
-                agents={semanticAgents}
-                skills={semanticSkills}
-                virtualServers={semanticVirtualServers}
-              />
+              {semanticSectionVisible ? (
+                <>
+                  <SemanticSearchResults
+                    query={semanticDisplayQuery}
+                    loading={semanticLoading}
+                    error={semanticError}
+                    servers={semanticServers}
+                    tools={semanticTools}
+                    agents={semanticAgents}
+                    skills={semanticSkills}
+                    virtualServers={semanticVirtualServers}
+                  />
 
-              {shouldShowFallbackGrid && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-base font-semibold text-gray-900 dark:text-gray-200">
-                      Keyword search fallback
-                    </h4>
-                    {semanticError && (
-                      <span className="text-xs font-medium text-red-500">
-                        Showing local matches because semantic search is unavailable
-                      </span>
-                    )}
-                  </div>
-                  {renderDashboardCollections()}
-                </div>
+                  {shouldShowFallbackGrid && (
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-base font-semibold text-gray-900 dark:text-gray-200">
+                          Keyword search fallback
+                        </h4>
+                        {semanticError && (
+                          <span className="text-xs font-medium text-red-500">
+                            Showing local matches because semantic search is unavailable
+                          </span>
+                        )}
+                      </div>
+                      {renderDashboardCollections()}
+                    </div>
+                  )}
+                </>
+              ) : (
+                renderDashboardCollections()
               )}
             </>
-          ) : (
-            renderDashboardCollections()
           )}
         </div>
 
