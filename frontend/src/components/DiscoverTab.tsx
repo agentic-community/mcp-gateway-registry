@@ -216,7 +216,12 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
               focus:border-indigo-500 dark:focus:border-indigo-400
               shadow-sm hover:shadow-md transition-shadow"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              if (committedQuery) {
+                setCommittedQuery('');
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();

@@ -322,6 +322,33 @@ describe('DiscoverTab', () => {
     expect(screen.getByText('AI Registry tools')).toBeInTheDocument();
   });
 
+  test('backspacing exits semantic mode and shows keyword-filtered results', () => {
+    render(
+      <DiscoverTab
+        {...defaultProps}
+        servers={[
+          makeServer({ name: 'AI Registry tools', path: '/airegistry-tools/' }),
+          makeServer({ name: 'Cloudflare Docs', path: '/cloudflare-docs/' }),
+        ]}
+      />
+    );
+
+    const input = screen.getByPlaceholderText(/search servers/i);
+
+    // Activate semantic search
+    fireEvent.change(input, { target: { value: 'cloud' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByTestId('semantic-search-results')).toBeInTheDocument();
+
+    // Backspace (modify search text) should exit semantic mode
+    fireEvent.change(input, { target: { value: 'clou' } });
+    expect(screen.queryByTestId('semantic-search-results')).not.toBeInTheDocument();
+
+    // Should show keyword-filtered cards instead
+    expect(screen.queryByText('AI Registry tools')).not.toBeInTheDocument();
+    expect(screen.getByText('Cloudflare Docs')).toBeInTheDocument();
+  });
+
   test('does not trigger semantic search for queries shorter than 2 characters', () => {
     render(<DiscoverTab {...defaultProps} />);
 
