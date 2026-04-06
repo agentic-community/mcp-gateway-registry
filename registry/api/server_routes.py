@@ -1429,7 +1429,7 @@ async def edit_server_submit(
     auth_scheme: Annotated[str, Form()] = "none",
     auth_credential: Annotated[str | None, Form()] = None,
     auth_header_name: Annotated[str | None, Form()] = None,
-    _csrf: Annotated[None, Depends(verify_csrf_token)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Handle server edit form submission (requires modify_service UI permission)."""
     from ..auth.dependencies import user_has_ui_permission_for_service

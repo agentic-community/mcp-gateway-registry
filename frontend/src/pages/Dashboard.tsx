@@ -960,37 +960,37 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     try {
       setEditLoading(true);
 
-      const formData = new FormData();
-      formData.append('name', editForm.name);
-      formData.append('description', editForm.description);
-      formData.append('proxy_pass_url', editForm.proxyPass);
-      formData.append('tags', editForm.tags.join(','));
-      formData.append('license', editForm.license);
-      formData.append('num_tools', editForm.num_tools.toString());
+      const params = new URLSearchParams();
+      params.append('name', editForm.name);
+      params.append('description', editForm.description);
+      params.append('proxy_pass_url', editForm.proxyPass);
+      params.append('tags', editForm.tags.join(','));
+      params.append('license', editForm.license);
+      params.append('num_tools', editForm.num_tools.toString());
       if (editForm.mcp_endpoint) {
-        formData.append('mcp_endpoint', editForm.mcp_endpoint);
+        params.append('mcp_endpoint', editForm.mcp_endpoint);
       }
       if (editForm.metadata) {
-        formData.append('metadata', editForm.metadata);
+        params.append('metadata', editForm.metadata);
       }
       if (editForm.auth_scheme !== 'none') {
-        formData.append('auth_scheme', editForm.auth_scheme);
+        params.append('auth_scheme', editForm.auth_scheme);
         if (editForm.auth_credential) {
-          formData.append('auth_credential', editForm.auth_credential);
+          params.append('auth_credential', editForm.auth_credential);
         }
         if (editForm.auth_scheme === 'api_key' && editForm.auth_header_name) {
-          formData.append('auth_header_name', editForm.auth_header_name);
+          params.append('auth_header_name', editForm.auth_header_name);
         }
       } else {
-        formData.append('auth_scheme', 'none');
+        params.append('auth_scheme', 'none');
       }
 
       // Use the correct edit endpoint with the server path
-      await axios.post(`/api/edit${editingServer.path}`, formData, {
+      await axios.post(`/api/edit${editingServer.path}`, params, {
         headers: {
           'Accept': 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
         },
-        maxRedirects: 0,
       });
 
       // Refresh server list
