@@ -109,29 +109,52 @@ function _matchesKeyword(
 
 
 /**
+ * Build a count fragment like "4 servers".
+ */
+function _countFragment(
+  count: number,
+  label: string
+): string {
+  const plural = count !== 1 ? 's' : '';
+  return `${count} ${label}${plural}`;
+}
+
+
+/**
  * Build the summary text showing counts per category.
- * e.g. "4 servers, 2 virtual, 3 agents, 1 skill, 2 external"
+ * Default: "18 servers, 2 virtual, 8 agents, 4 skills, 3 external"
+ * Searching: "3 servers" (only matched counts, no totals)
  */
 function _buildSummaryText(
-  servers: number,
-  virtual: number,
-  agents: number,
-  skills: number,
-  external: number,
-  searchTerm: string
+  totals: { servers: number; virtual: number; agents: number; skills: number; external: number },
+  matched: { servers: number; virtual: number; agents: number; skills: number; external: number },
+  isSearching: boolean
 ): string {
   const parts: string[] = [];
-  if (servers > 0) parts.push(`${servers} server${servers !== 1 ? 's' : ''}`);
-  if (virtual > 0) parts.push(`${virtual} virtual`);
-  if (agents > 0) parts.push(`${agents} agent${agents !== 1 ? 's' : ''}`);
-  if (skills > 0) parts.push(`${skills} skill${skills !== 1 ? 's' : ''}`);
-  if (external > 0) parts.push(`${external} external`);
 
-  if (parts.length === 0) {
-    return searchTerm ? 'No matches' : 'No items registered';
+  // When searching, only show categories that have matches
+  // When not searching, show all categories that have items
+  const categories = [
+    { total: totals.servers, match: matched.servers, label: 'server' },
+    { total: totals.virtual, match: matched.virtual, label: 'virtual' },
+    { total: totals.agents, match: matched.agents, label: 'agent' },
+    { total: totals.skills, match: matched.skills, label: 'skill' },
+    { total: totals.external, match: matched.external, label: 'external' },
+  ];
+
+  for (const cat of categories) {
+    if (isSearching && cat.match > 0) {
+      parts.push(_countFragment(cat.match, cat.label));
+    } else if (!isSearching && cat.total > 0) {
+      parts.push(_countFragment(cat.total, cat.label));
+    }
   }
 
-  const prefix = searchTerm ? 'Showing ' : '';
+  if (parts.length === 0) {
+    return isSearching ? 'No matches' : 'No items registered';
+  }
+
+  const prefix = isSearching ? 'Showing ' : '';
   return prefix + parts.join(', ');
 }
 
@@ -224,6 +247,20 @@ function _getFeaturedItems(
     featuredVirtual,
     featuredExtServers,
     featuredExtAgents,
+    // Total enabled counts (before keyword filter + before MAX_FEATURED cap)
+    totalServers: enabledServers.length,
+    totalVirtual: enabledVirtual.length,
+    totalAgents: enabledAgents.length,
+    totalSkills: enabledSkills.length,
+    totalExternal: enabledExtServers.length + enabledExtAgents.length,
+    // Filtered counts (after keyword filter, before MAX_FEATURED cap)
+    matchedServers: filteredServers.length,
+    matchedVirtual: filteredVirtual.length,
+    matchedAgents: filteredAgents.length,
+    matchedSkills: filteredSkills.length,
+    matchedExternal: filteredExtServers.length + filteredExtAgents.length,
+    matchedExtServers: filteredExtServers.length,
+    matchedExtAgents: filteredExtAgents.length,
   };
 }
 
@@ -273,6 +310,9 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
     featuredVirtual,
     featuredExtServers,
     featuredExtAgents,
+    totalServers, totalVirtual, totalAgents, totalSkills, totalExternal,
+    matchedServers, matchedVirtual, matchedAgents, matchedSkills, matchedExternal,
+    matchedExtServers, matchedExtAgents,
   } = useMemo(
     () => _getFeaturedItems(
       servers, agents, skills, virtualServers,
@@ -347,10 +387,9 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
         {!isSemanticActive && (
           <p className="text-xs text-gray-500 dark:text-gray-500 mt-1.5 text-center italic">
             {_buildSummaryText(
-              featuredServers.length, featuredVirtual.length,
-              featuredAgents.length, featuredSkills.length,
-              featuredExtServers.length + featuredExtAgents.length,
-              searchTerm
+              { servers: totalServers, virtual: totalVirtual, agents: totalAgents, skills: totalSkills, external: totalExternal },
+              { servers: matchedServers, virtual: matchedVirtual, agents: matchedAgents, skills: matchedSkills, external: matchedExternal },
+              searchTerm.length > 0
             )}
             {searchTerm && (
               <span className="text-gray-600 dark:text-gray-600">
@@ -397,6 +436,11 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                 <div>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     MCP Servers
+                    {matchedServers > featuredServers.length && (
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                        (showing {featuredServers.length} of {matchedServers})
+                      </span>
+                    )}
                   </h2>
                   {featuredServers.map(server => (
                     <DiscoverListRow
@@ -418,6 +462,11 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                 <div>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     Virtual MCP Servers
+                    {matchedVirtual > featuredVirtual.length && (
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                        (showing {featuredVirtual.length} of {matchedVirtual})
+                      </span>
+                    )}
                   </h2>
                   {featuredVirtual.map(vs => (
                     <DiscoverListRow
@@ -439,6 +488,11 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                 <div>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     Agents
+                    {matchedAgents > featuredAgents.length && (
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                        (showing {featuredAgents.length} of {matchedAgents})
+                      </span>
+                    )}
                   </h2>
                   {featuredAgents.map(agent => (
                     <DiscoverListRow
@@ -460,6 +514,11 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                 <div>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     Skills
+                    {matchedSkills > featuredSkills.length && (
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                        (showing {featuredSkills.length} of {matchedSkills})
+                      </span>
+                    )}
                   </h2>
                   {featuredSkills.map(skill => (
                     <DiscoverListRow
@@ -481,6 +540,11 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                 <div>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     External Registry Servers
+                    {matchedExtServers > featuredExtServers.length && (
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                        (showing {featuredExtServers.length} of {matchedExtServers})
+                      </span>
+                    )}
                   </h2>
                   {featuredExtServers.map(server => (
                     <DiscoverListRow
@@ -502,6 +566,11 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                 <div>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     External Registry Agents
+                    {matchedExtAgents > featuredExtAgents.length && (
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                        (showing {featuredExtAgents.length} of {matchedExtAgents})
+                      </span>
+                    )}
                   </h2>
                   {featuredExtAgents.map(agent => (
                     <DiscoverListRow
