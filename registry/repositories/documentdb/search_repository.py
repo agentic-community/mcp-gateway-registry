@@ -596,6 +596,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if skill.metadata and skill.metadata.author:
             text_parts.append(f"Author: {skill.metadata.author}")
 
+        if skill.metadata and skill.metadata.extra:
+            extra_text = _flatten_metadata_to_text(skill.metadata.extra)
+            if extra_text:
+                text_parts.append(extra_text)
+
         text_for_embedding = " ".join(filter(None, text_parts))
 
         # Generate embedding
@@ -621,6 +626,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             skill_metadata_parts.append(f"author {skill.metadata.author}")
         if skill.metadata and skill.metadata.version:
             skill_metadata_parts.append(f"version {skill.metadata.version}")
+        if skill.metadata and skill.metadata.extra:
+            extra_text = _flatten_metadata_to_text(skill.metadata.extra)
+            if extra_text:
+                skill_metadata_parts.append(extra_text)
         if skill.registry_name:
             skill_metadata_parts.append(f"registry {skill.registry_name}")
         skill_metadata_text = " ".join(skill_metadata_parts)
