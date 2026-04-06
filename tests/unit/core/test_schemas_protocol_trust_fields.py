@@ -141,9 +141,9 @@ class TestAgentCardBackwardCompat:
         assert agent.trust_level == "unverified"
 
     def test_old_agent_with_internal_visibility_still_valid(self):
-        """Old agents with 'internal' visibility still load correctly."""
+        """Old agents with 'internal' visibility load correctly as 'private'."""
         agent = _build_minimal_agent_card(visibility="internal")
-        assert agent.visibility == "internal"
+        assert agent.visibility == "private"
 
 
 # ---------------------------------------------------------------------------

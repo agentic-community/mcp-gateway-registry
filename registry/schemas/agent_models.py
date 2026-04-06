@@ -607,11 +607,14 @@ class AgentCard(BaseModel):
         cls,
         v: str,
     ) -> str:
-        """Validate visibility value."""
-        valid_values = ["public", "group-restricted", "internal"]
-        if v not in valid_values:
-            raise ValueError(f"Visibility must be one of: {', '.join(valid_values)}")
-        return v
+        """Validate and normalize visibility value.
+
+        Accepts "internal" as alias for "private" and "group" as alias
+        for "group-restricted" for backward compatibility.
+        """
+        from registry.utils.visibility import validate_visibility
+
+        return validate_visibility(v)
 
     @field_validator("trust_level")
     @classmethod
@@ -873,7 +876,7 @@ class AgentRegistrationRequest(BaseModel):
     )
     visibility: str = Field(
         default="public",
-        description="Visibility: public, group-restricted, or internal (default: public)",
+        description="Visibility: public, private, or group-restricted (default: public). 'internal' accepted as alias for 'private'.",
     )
     trust_level: str = Field(
         default="community",
@@ -979,6 +982,21 @@ class AgentRegistrationRequest(BaseModel):
                 f"supported_protocol must be one of: {', '.join(valid_values)}"
             )
         return v
+
+    @field_validator("visibility")
+    @classmethod
+    def _validate_visibility_request(
+        cls,
+        v: str,
+    ) -> str:
+        """Validate and normalize visibility value.
+
+        Accepts "internal" as alias for "private" and "group" as alias
+        for "group-restricted" for backward compatibility.
+        """
+        from registry.utils.visibility import validate_visibility
+
+        return validate_visibility(v)
 
     @field_validator("trust_level")
     @classmethod

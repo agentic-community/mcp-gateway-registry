@@ -108,7 +108,7 @@ class ServerInfo(BaseModel):
     # Federation and access control fields
     visibility: str = Field(
         default="public",
-        description="Federation visibility: public (shared with all peers), group-restricted (shared with allowed_groups only), or internal (never shared)",
+        description="Federation visibility: public (shared with all peers), group-restricted (shared with allowed_groups only), or private (never shared). 'internal' is accepted as an alias for 'private'.",
     )
     allowed_groups: list[str] = Field(
         default_factory=list, description="Groups with access when visibility is group-restricted"
@@ -169,11 +169,14 @@ class ServerInfo(BaseModel):
         cls,
         v: str,
     ) -> str:
-        """Validate visibility value."""
-        valid_values = ["public", "group-restricted", "internal"]
-        if v not in valid_values:
-            raise ValueError(f"Visibility must be one of: {', '.join(valid_values)}")
-        return v
+        """Validate and normalize visibility value.
+
+        Accepts "internal" as alias for "private" and "group" as alias
+        for "group-restricted" for backward compatibility.
+        """
+        from registry.utils.visibility import validate_visibility
+
+        return validate_visibility(v)
 
     @model_validator(mode="after")
     def _populate_provider_default(self) -> "ServerInfo":
@@ -256,7 +259,7 @@ class ServiceRegistrationRequest(BaseModel):
     )
     visibility: str = Field(
         default="public",
-        description="Federation visibility: public (shared with all peers), group-restricted (shared with allowed_groups only), or internal (never shared)",
+        description="Federation visibility: public (shared with all peers), group-restricted (shared with allowed_groups only), or private (never shared). 'internal' is accepted as an alias for 'private'.",
     )
     allowed_groups: list[str] = Field(
         default_factory=list, description="Groups with access when visibility is group-restricted"

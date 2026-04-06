@@ -171,7 +171,7 @@ def _filter_by_visibility(
     - Federated items (synced from another peer): NEVER included (chain prevention)
     - visibility=public: Always included (default if not specified)
     - visibility=group-restricted: Include only if peer is in allowed_groups
-    - visibility=internal: NEVER included
+    - visibility=private: NEVER included (also matches legacy "internal")
 
     Args:
         items: List of items (dict or object) to filter
@@ -195,8 +195,8 @@ def _filter_by_visibility(
         # Default to "public" if visibility not specified (backwards compatibility)
         visibility = _get_item_attr(item, "visibility", "public")
 
-        # Never export internal items
-        if visibility == "internal":
+        # Never export private items (also handles legacy "internal" via normalization)
+        if visibility in ("private", "internal"):
             continue
 
         # Always export public items
@@ -655,7 +655,7 @@ async def export_security_scans(
         # Check visibility
         visibility = server_data.get("visibility", "public")
 
-        if visibility == "internal":
+        if visibility in ("private", "internal"):
             continue
 
         if visibility == "public":

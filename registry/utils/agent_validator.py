@@ -263,7 +263,9 @@ def _validate_agent_card(
         if not re.match(r"^\d+\.\d+(\.\d+)?$", agent_card.protocol_version):
             errors.append("Protocol version must be in format X.Y or X.Y.Z")
 
-    if agent_card.visibility not in ["public", "private", "group-restricted"]:
+    from registry.utils.visibility import VALID_VISIBILITY_VALUES
+
+    if agent_card.visibility not in VALID_VISIBILITY_VALUES:
         errors.append(f"Invalid visibility: {agent_card.visibility}")
 
     if agent_card.trust_level not in [

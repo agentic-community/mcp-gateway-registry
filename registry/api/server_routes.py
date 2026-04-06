@@ -639,12 +639,17 @@ async def register_service(
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-    # Validate visibility value
-    valid_visibility = ["public", "group-restricted", "internal"]
-    if visibility not in valid_visibility:
+    # Validate and normalize visibility value
+    from registry.utils.visibility import (
+        VALID_VISIBILITY_VALUES,
+        _normalize_visibility,
+    )
+
+    visibility = _normalize_visibility(visibility)
+    if visibility not in VALID_VISIBILITY_VALUES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid visibility value. Must be one of: {', '.join(valid_visibility)}",
+            detail=f"Invalid visibility value. Must be one of: {', '.join(VALID_VISIBILITY_VALUES)}",
         )
 
     # Process allowed_groups (comma-separated string to list)
@@ -892,10 +897,15 @@ async def internal_register_service(
     if allowed_groups:
         allowed_groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
 
-    # Validate visibility value
-    valid_visibility = ["public", "group-restricted", "internal"]
-    if visibility not in valid_visibility:
-        visibility = "public"  # Default to public for internal registration
+    # Validate and normalize visibility value
+    from registry.utils.visibility import (
+        VALID_VISIBILITY_VALUES,
+        _normalize_visibility,
+    )
+
+    visibility = _normalize_visibility(visibility)
+    if visibility not in VALID_VISIBILITY_VALUES:
+        visibility = "public"  # Default to public for unrecognized values
 
     # Validate auth_scheme
     if auth_scheme not in VALID_AUTH_SCHEMES:
@@ -1452,12 +1462,17 @@ async def edit_server_submit(
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-    # Validate visibility value
-    valid_visibility = ["public", "group-restricted", "internal"]
-    if visibility not in valid_visibility:
+    # Validate and normalize visibility value
+    from registry.utils.visibility import (
+        VALID_VISIBILITY_VALUES,
+        _normalize_visibility,
+    )
+
+    visibility = _normalize_visibility(visibility)
+    if visibility not in VALID_VISIBILITY_VALUES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid visibility value. Must be one of: {', '.join(valid_visibility)}",
+            detail=f"Invalid visibility value. Must be one of: {', '.join(VALID_VISIBILITY_VALUES)}",
         )
 
     # Process allowed_groups (comma-separated string to list)

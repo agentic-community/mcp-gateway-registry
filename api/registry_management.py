@@ -4503,7 +4503,7 @@ Examples:
         "--enabled-only", action="store_true", help="Show only enabled agents"
     )
     agent_list_parser.add_argument(
-        "--visibility", choices=["public", "private", "internal"], help="Filter by visibility level"
+        "--visibility", choices=["public", "private", "group-restricted"], help="Filter by visibility level"
     )
     agent_list_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 

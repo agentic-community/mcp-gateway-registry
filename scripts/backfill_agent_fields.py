@@ -1,4 +1,4 @@
-"""One-time backfill: normalize supported_protocol and trust_level on existing agents."""
+"""One-time backfill: normalize supported_protocol, trust_level, and visibility on existing agents and servers."""
 
 import logging
 
@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 MONGODB_URI = "mongodb://localhost:27017"
 DB_NAME = "mcp_registry"
-COLLECTION = "mcp_agents_default"
+AGENTS_COLLECTION = "mcp_agents_default"
+SERVERS_COLLECTION = "mcp_servers"
 
 
 def _backfill_supported_protocol(
@@ -43,26 +44,38 @@ def _backfill_trust_level(
 
 def _backfill_visibility(
     collection,
+    collection_name: str = "agents",
 ) -> None:
-    """Update visibility from 'internal' to 'public' for consistency."""
+    """Normalize visibility from 'internal' to 'private' for consistency.
+
+    The canonical value is 'private'. Legacy documents may have 'internal'
+    which is now treated as an alias.
+    """
     result = collection.update_many(
         {"visibility": "internal"},
-        {"$set": {"visibility": "public"}},
+        {"$set": {"visibility": "private"}},
     )
     logger.info(
-        f"visibility backfill: {result.modified_count} agents updated"
+        f"visibility backfill ({collection_name}): {result.modified_count} documents updated (internal -> private)"
     )
 
 
 def backfill_agent_fields() -> None:
-    """Run all backfill operations."""
+    """Run all backfill operations on agents and servers."""
     client = MongoClient(MONGODB_URI, directConnection=True)
     db = client[DB_NAME]
-    collection = db[COLLECTION]
 
-    _backfill_supported_protocol(collection)
-    _backfill_trust_level(collection)
-    _backfill_visibility(collection)
+    # Backfill agents collection
+    agents = db[AGENTS_COLLECTION]
+    logger.info(f"Backfilling agents collection: {AGENTS_COLLECTION}")
+    _backfill_supported_protocol(agents)
+    _backfill_trust_level(agents)
+    _backfill_visibility(agents, collection_name="agents")
+
+    # Backfill servers collection
+    servers = db[SERVERS_COLLECTION]
+    logger.info(f"Backfilling servers collection: {SERVERS_COLLECTION}")
+    _backfill_visibility(servers, collection_name="servers")
 
     logger.info("Backfill complete")
 
