@@ -274,7 +274,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     version: '',
     visibility: 'public' as 'public' | 'private' | 'group',
     tags: '',  // Raw string, parsed on save
-    target_agents: ''  // Raw string, parsed on save
+    target_agents: '',  // Raw string, parsed on save
+    metadata: '',  // JSON string for custom metadata
   });
   const [skillFormLoading, setSkillFormLoading] = useState(false);
   const [showDeleteSkillConfirm, setShowDeleteSkillConfirm] = useState<string | null>(null);
@@ -1235,7 +1236,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         version: skill.version || '',
         visibility: skill.visibility || 'public',
         tags: (skill.tags || []).join(', '),
-        target_agents: (skill.target_agents || []).join(', ')
+        target_agents: (skill.target_agents || []).join(', '),
+        metadata: skill.metadata?.extra ? JSON.stringify(skill.metadata.extra, null, 2) : ''
       });
     } else {
       // Create mode - reset form
@@ -1249,7 +1251,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         version: '',
         visibility: 'public',
         tags: '',
-        target_agents: ''
+        target_agents: '',
+        metadata: ''
       });
     }
     setShowSkillModal(true);
@@ -1306,6 +1309,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
       const parseTags = (str: string): string[] =>
         str.split(',').map(t => t.trim()).filter(t => t.length > 0);
 
+      // Parse optional metadata JSON
+      let parsedMetadata: Record<string, any> | undefined = undefined;
+      if (skillForm.metadata.trim()) {
+        try {
+          parsedMetadata = JSON.parse(skillForm.metadata);
+        } catch {
+          showToast('Invalid JSON in metadata field', 'error');
+          setSkillFormLoading(false);
+          return;
+        }
+      }
+
       const payload = {
         name: skillForm.name,
         description: skillForm.description,
@@ -1314,7 +1329,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         version: skillForm.version || undefined,
         visibility: skillForm.visibility,
         tags: parseTags(skillForm.tags),
-        target_agents: parseTags(skillForm.target_agents)
+        target_agents: parseTags(skillForm.target_agents),
+        metadata: parsedMetadata
       };
 
       if (editingSkill) {
@@ -3192,6 +3208,22 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
                 />
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   Comma-separated list of compatible coding assistants
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                  Custom Metadata (JSON, optional)
+                </label>
+                <textarea
+                  value={skillForm.metadata}
+                  onChange={(e) => setSkillForm(prev => ({ ...prev, metadata: e.target.value }))}
+                  rows={4}
+                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500 font-mono text-sm"
+                  placeholder='{"category": "data-processing", "framework": "langchain"}'
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Key-value pairs in JSON format for searchable custom metadata
                 </p>
               </div>
 

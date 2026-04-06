@@ -26,6 +26,16 @@ export interface SkillRequirement {
 /**
  * Skill interface representing an Agent Skill.
  */
+/**
+ * Skill metadata with author, version, and custom key-value pairs.
+ */
+export interface SkillMetadata {
+  author?: string | null;
+  version?: string | null;
+  extra?: Record<string, any>;
+}
+
+
 export interface Skill {
   name: string;
   path: string;
@@ -42,6 +52,7 @@ export interface Skill {
   target_agents?: string[];
   allowed_tools?: AllowedTool[];
   requirements?: SkillRequirement[];
+  metadata?: SkillMetadata | null;
   num_stars?: number;
   health_status?: 'healthy' | 'unhealthy' | 'unknown';
   last_checked_time?: string;
