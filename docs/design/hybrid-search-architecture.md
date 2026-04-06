@@ -29,7 +29,8 @@ The registry implements hybrid search that combines semantic (vector) search wit
            |  Vector Search   |               |  Keyword Match    |
            |  (Cosine Sim)    |               |  (Regex on path,  |
            |                  |               |   name, desc,     |
-           |                  |               |   tags, tools)    |
+           |                  |               |   tags, metadata, |
+           |                  |               |   tools)          |
            +--------+---------+               +---------+---------+
                     |                                   |
                     | semantic_score                    | text_boost
@@ -85,7 +86,7 @@ When a search query arrives:
 - Minimum `k=50` ensures small collections are fully covered
 
 **Keyword Search (Lexical)**
-- Regex matching on path, name, description, tags, and tool names/descriptions
+- Regex matching on path, name, description, tags, metadata_text, and tool names/descriptions
 - Catches explicit references that semantic search might miss
 - Runs as separate query due to DocumentDB limitations (no `$unionWith` support)
 - Each query keyword is matched independently using case-insensitive regex
@@ -111,6 +112,7 @@ Text boost values (cumulative per keyword match):
 | Name           | +3.0        |
 | Description    | +2.0        |
 | Tags           | +1.5        |
+| Metadata       | +1.0        |
 | Tool (each)    | +1.0        |
 
 ### 4. Score-Before-Filter Pattern
@@ -179,16 +181,17 @@ Search returns grouped results (top 3 per entity type):
 - Server name
 - Server description
 - Tags (prefixed with "Tags: ")
+- Metadata text (flattened key-value pairs from server metadata)
 - Tool names (each tool's name)
 - Tool descriptions (each tool's description)
 
 **What's NOT included in the embedding:**
 - Tool inputSchema (JSON schema is stored but not embedded)
 - Server path
-- Server metadata
 
 **Stored document fields:**
 - `path`, `name`, `description`, `tags`, `is_enabled`
+- `metadata_text` (flattened metadata for keyword search)
 - `tools[]` array with `name`, `description`, `inputSchema` per tool
 - `embedding` vector
 - `metadata` (full server info for reference)
@@ -200,19 +203,34 @@ Search returns grouped results (top 3 per entity type):
 - Agent description
 - Tags (prefixed with "Tags: ")
 - Capabilities (prefixed with "Capabilities: ")
+- Metadata text (flattened key-value pairs from agent card metadata)
 - Skill names (each skill's name)
 - Skill descriptions (each skill's description)
 
 **What's NOT included in the embedding:**
 - Agent path
-- Agent card metadata (stored but not embedded)
 - Skill IDs, tags, and examples
 
 **Stored document fields:**
 - `path`, `name`, `description`, `tags`, `is_enabled`
+- `metadata_text` (flattened metadata for keyword search)
 - `capabilities[]` array
 - `embedding` vector
 - `metadata` (full agent card for reference)
+
+### Agent Skills
+
+**What's included in the embedding:**
+- Skill name
+- Skill description
+- Tags (prefixed with "Tags: ")
+- Metadata text (author, version, registry name)
+
+**Stored document fields:**
+- `path`, `name`, `description`, `tags`, `is_enabled`
+- `metadata_text` (author, version, registry_name for keyword search)
+- `embedding` vector
+- `metadata` (skill metadata for reference)
 
 ### Tools
 
@@ -241,6 +259,7 @@ Virtual MCP Servers are indexed in the unified `mcp_embeddings_{dimensions}` col
 **Stored document fields:**
 - `path`, `name`, `description`, `tags`, `is_enabled`
 - `entity_type`: `"virtual_server"`
+- `metadata_text` (created_by for keyword search)
 - `tools[]` array with `name` (alias or original) per tool mapping
 - `embedding` vector
 - `metadata` object containing:
@@ -269,6 +288,31 @@ Virtual MCP Servers are indexed in the unified `mcp_embeddings_{dimensions}` col
   ]
 }
 ```
+
+## Metadata in Search
+
+Custom metadata from servers, agents, skills, and virtual servers is included in both semantic embeddings and keyword search. Metadata is flattened to a text string using `_flatten_metadata_to_text()`:
+
+- Each key name is included as a token
+- Scalar values are converted to strings
+- List values have each item converted to a string
+- Nested dict values have each value converted to a string
+
+For example, a server with metadata `{"source": "agentcore-sync", "region": "us-east-1"}` produces the metadata text: `source agentcore-sync region us-east-1`.
+
+This flattened text is:
+1. Appended to `text_for_embedding` so semantic search captures metadata meaning
+2. Stored in `metadata_text` field for keyword/regex matching
+3. Matched in the `$or` keyword filter alongside path, name, description, tags, and tools
+4. Scored with +1.0 text boost when matched in the `_build_text_boost_stage` pipeline
+
+Metadata sources per entity type:
+| Entity Type    | Metadata Source |
+|----------------|-----------------|
+| MCP Server     | `server_info.get("metadata", {})` |
+| A2A Agent      | `agent_card.get("metadata", {})` |
+| Agent Skill    | Author, version, registry_name |
+| Virtual Server | `created_by` field |
 
 ## Backend Implementations
 
@@ -326,7 +370,8 @@ When the embedding model is unavailable (misconfigured, network issues, API key 
                        |  MongoDB Aggregation  |
                        |  $regexMatch on path, |
                        |  name, description,   |
-                       |  tags, tools          |
+                       |  tags, metadata,      |
+                       |  tools                |
                        +-----------+-----------+
                                    |
                                    v
@@ -347,7 +392,7 @@ When the embedding model is unavailable (misconfigured, network issues, API key 
 
 ### Scoring in Lexical-Only Mode
 
-In lexical-only mode, the text boost score is normalized to a 0-1 range using a fixed denominator (`MAX_LEXICAL_BOOST = 12.5`):
+In lexical-only mode, the text boost score is normalized to a 0-1 range using a fixed denominator (`MAX_LEXICAL_BOOST = 13.5`):
 
 ```
 relevance_score = text_boost / MAX_LEXICAL_BOOST
@@ -361,6 +406,7 @@ The same boost weights from hybrid mode apply:
 | Name           | +3.0        |
 | Description    | +2.0        |
 | Tags           | +1.5        |
+| Metadata       | +1.0        |
 | Tool (each)    | +1.0        |
 
 ### Recovery
