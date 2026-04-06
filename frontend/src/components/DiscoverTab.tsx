@@ -264,7 +264,8 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
         </div>
       ) : (
         /* Featured Cards */
-        <div className="w-full max-w-5xl mx-auto px-4 mt-2 overflow-y-auto">
+        <div className="relative flex-1 min-h-0">
+        <div className="w-full max-w-5xl mx-auto px-4 mt-2 h-full overflow-y-auto discover-scroll">
           {loading ? (
             <div className="text-center text-gray-500 dark:text-gray-400 py-8">
               Loading featured items...
@@ -341,6 +342,11 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
               )}
             </div>
           )}
+        </div>
+        {/* Fade gradient at bottom to hint more content */}
+        <div className="absolute bottom-0 left-0 right-0 h-12
+          bg-gradient-to-t from-gray-900/80 to-transparent
+          pointer-events-none" />
         </div>
       )}
     </div>

@@ -63,4 +63,29 @@
   .animate-slide-in-top {
     animation: slide-in-top 0.3s ease-out;
   }
+
+  /* Thin auto-hiding scrollbar for Discover tab */
+  .discover-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .discover-scroll:hover {
+    scrollbar-color: rgba(100, 100, 140, 0.3) transparent;
+  }
+  .discover-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .discover-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .discover-scroll::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+  }
+  .discover-scroll:hover::-webkit-scrollbar-thumb {
+    background: rgba(100, 100, 140, 0.3);
+  }
+  .discover-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 100, 140, 0.5);
+  }
 } 
