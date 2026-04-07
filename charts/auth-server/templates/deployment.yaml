@@ -63,8 +63,6 @@ spec:
             - secretRef:
                 name: {{ .Values.global.existingOauthProviderSecret | default .Values.global.oauthProviderSecretName }}
             {{- end }}
-          {{- $hasPerKeySecret := or .Values.entra.clientSecretExistingSecret .Values.okta.clientSecretExistingSecret .Values.okta.m2mClientSecretExistingSecret .Values.okta.apiTokenExistingSecret .Values.auth0.clientSecretExistingSecret .Values.auth0.m2mClientSecretExistingSecret .Values.auth0.managementApiTokenExistingSecret }}
-          {{- if $hasPerKeySecret }}
           env:
             {{- if .Values.entra.clientSecretExistingSecret }}
             - name: ENTRA_CLIENT_SECRET
@@ -115,7 +113,6 @@ spec:
                   name: {{ .Values.auth0.managementApiTokenExistingSecret }}
                   key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
             {{- end }}
-          {{- end }}
           livenessProbe:
             httpGet:
               path: /health

@@ -1,3 +1,4 @@
+{{- $existingSecret := .Values.mongodb.existingSecret | default .Values.global.existingMongoCredentialsSecret }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -12,7 +13,7 @@ spec:
           command: ['sh', '-c']
           envFrom:
             - secretRef:
-                name: {{ .Values.mongodb.existingSecret | default "mongo-credentials" }}
+                name: {{ $existingSecret | default "mongo-credentials" }}
           args:
             - |
               echo "Installing pymongo..."
@@ -33,7 +34,7 @@ spec:
           ]
           envFrom:
             - secretRef:
-                name: {{ .Values.mongodb.existingSecret | default "mongo-credentials" }}
+                name: {{ $existingSecret | default "mongo-credentials" }}
           volumeMounts:
             - mountPath: /app/script.py
               name: script
