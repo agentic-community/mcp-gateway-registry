@@ -1225,6 +1225,11 @@ async def update_agent(
             registered_at=existing_agent.registered_at,
             is_enabled=existing_agent.is_enabled,
             num_stars=existing_agent.num_stars,
+            ans_metadata=existing_agent.ans_metadata,
+            health_status=existing_agent.health_status,
+            last_health_check=existing_agent.last_health_check,
+            rating_details=existing_agent.rating_details,
+            sync_metadata=existing_agent.sync_metadata,
             **update_optional_kwargs,
         )
 
