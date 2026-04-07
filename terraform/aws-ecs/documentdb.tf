@@ -152,9 +152,12 @@ resource "aws_kms_key" "documentdb" {
             "aws:PrincipalAccount" = data.aws_caller_identity.current.account_id
           }
           StringLike = {
-            "aws:PrincipalArn" = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*task-exec*",
-               "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/mcp-gateway-v2-*"
-             ]
+            "aws:PrincipalArn" = [
+              # ECS task execution roles (e.g., mcp-gateway-task-exec-role)
+              "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*task-exec*",
+              # ECS task roles for v2 deployments (e.g., mcp-gateway-v2-registry-task-role)
+              "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/mcp-gateway-v2-*",
+            ]
           }
         }
       },
