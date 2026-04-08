@@ -201,4 +201,5 @@ dev = [
     "pytest-html>=4.1.1",
     "pytest-json-report>=1.5.0",
     "pytest-xdist>=3.8.0",
+    "qrcode[pil]>=8.2",
 ]
