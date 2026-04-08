@@ -2981,10 +2981,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
                   onChange={(e) => setEditAgentForm(prev => ({ ...prev, metadata: e.target.value }))}
                   rows={4}
                   className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500 font-mono text-sm"
-                  placeholder='{"needs_history": false, "icon_name": "Quiz", "recursion_limit": 50}'
+                  placeholder='{"team": "platform", "owner": "alice@example.com", "cost_center": "CC-1001"}'
                 />
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Key-value pairs in JSON format for custom agent metadata
+                  Custom key-value pairs for organization, compliance, or integration purposes
                 </p>
               </div>
 

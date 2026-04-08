@@ -945,10 +945,10 @@ const RegisterPage: React.FC = () => {
             rows={3}
             value={agentForm.metadata}
             onChange={(e) => setAgentForm(prev => ({ ...prev, metadata: e.target.value }))}
-            placeholder='{"needs_history": false, "icon_name": "Quiz", "recursion_limit": 50}'
+            placeholder='{"team": "platform", "owner": "alice@example.com", "cost_center": "CC-1001"}'
           />
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Key-value pairs in JSON format for custom agent metadata
+            Custom key-value pairs for organization, compliance, or integration purposes
           </p>
         </div>
 
