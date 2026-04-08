@@ -49,6 +49,7 @@ class OktaM2MSync:
         self.okta_domain = okta_domain.replace("https://", "").rstrip("/")
         self.okta_api_token = okta_api_token
         self.collection = db["okta_m2m_clients"]
+        self.idp_collection = db["idp_m2m_clients"]
 
         logger.info(f"Initialized Okta M2M sync for domain: {self.okta_domain}")
 
@@ -195,6 +196,27 @@ class OktaM2MSync:
                         added_count += 1
                         logger.info(f"Added new client: {client_id}")
 
+                    # Also sync to generic idp_m2m_clients collection for groups enrichment
+                    idp_doc = {
+                        "client_id": client_id,
+                        "name": app.get("label", client_id),
+                        "description": client_doc.get("description"),
+                        "groups": groups,
+                        "enabled": client_doc["enabled"],
+                        "provider": "okta",
+                        "idp_app_id": app.get("id"),
+                        "updated_at": datetime.utcnow(),
+                    }
+
+                    existing_idp = await self.idp_collection.find_one({"client_id": client_id})
+                    if existing_idp:
+                        await self.idp_collection.update_one(
+                            {"client_id": client_id}, {"$set": idp_doc}
+                        )
+                    else:
+                        idp_doc["created_at"] = datetime.utcnow()
+                        await self.idp_collection.insert_one(idp_doc)
+
                 except Exception as e:
                     error_msg = f"Failed to process app {app.get('label')}: {e}"
                     logger.error(error_msg)
@@ -274,6 +296,17 @@ class OktaM2MSync:
             True if updated, False if client not found
         """
         result = await self.collection.update_one(
+            {"client_id": client_id},
+            {
+                "$set": {
+                    "groups": groups,
+                    "updated_at": datetime.utcnow(),
+                }
+            },
+        )
+
+        # Also update in generic idp_m2m_clients collection
+        await self.idp_collection.update_one(
             {"client_id": client_id},
             {
                 "$set": {
