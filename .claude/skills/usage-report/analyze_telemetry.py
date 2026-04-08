@@ -4,9 +4,13 @@ Reads registry_metrics.csv, computes all distributions, instance
 timelines, search stats, and version adoption. Writes a JSON file
 with raw metrics and a markdown file with pre-formatted tables
 ready to embed in the usage report.
+
+Supports comparison with a previous metrics JSON to produce an
+executive summary with deltas at the top of the report.
 """
 import argparse
 import csv
+import glob
 import json
 import logging
 import os
@@ -100,6 +104,177 @@ def _md_distribution_table(
         lines.append(f"| {value} | {count} | {pct} |")
 
     lines.append("")
+    return "\n".join(lines)
+
+
+def _find_previous_metrics(
+    output_dir: str,
+    current_date: str,
+) -> str | None:
+    """Find the most recent metrics JSON file before the current date.
+
+    Scans the output directory for metrics-YYYY-MM-DD.json files and
+    returns the path to the most recent one that predates current_date.
+    """
+    pattern = os.path.join(output_dir, "metrics-*.json")
+    candidates = glob.glob(pattern)
+
+    # Extract date from filename and filter
+    valid = []
+    for path in candidates:
+        basename = os.path.basename(path)
+        # Extract date portion: metrics-YYYY-MM-DD.json
+        date_part = basename.replace("metrics-", "").replace(".json", "")
+        if len(date_part) == 10 and date_part < current_date:
+            valid.append((date_part, path))
+
+    if not valid:
+        logger.info("No previous metrics file found for comparison")
+        return None
+
+    valid.sort(key=lambda x: x[0], reverse=True)
+    selected = valid[0]
+    logger.info(f"Found previous metrics: {selected[1]} (date: {selected[0]})")
+    return selected[1]
+
+
+def _load_previous_metrics(
+    path: str,
+) -> dict | None:
+    """Load a previous metrics JSON file."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        logger.info(f"Loaded previous metrics from {path}")
+        return data
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Failed to load previous metrics: {e}")
+        return None
+
+
+def _compute_delta(
+    current: int | float,
+    previous: int | float,
+) -> str:
+    """Compute a delta string like '+5 (+25%)' or '-3 (-10%)'."""
+    diff = current - previous
+    if previous == 0:
+        if diff == 0:
+            return "no change"
+        return f"+{diff}" if diff > 0 else f"{diff}"
+
+    pct = diff / previous * 100
+    sign = "+" if diff > 0 else ""
+    return f"{sign}{diff} ({sign}{pct:.0f}%)"
+
+
+def _compute_per_cloud_unique_installs(
+    rows: list[dict[str, str]],
+) -> dict[str, int]:
+    """Compute unique registry_id count per cloud provider."""
+    cloud_ids = defaultdict(set)
+    for row in rows:
+        rid = row.get("registry_id", "").strip()
+        if not rid:
+            continue
+        cloud = row.get("cloud") or "unknown"
+        cloud_ids[cloud].add(rid)
+
+    return {cloud: len(ids) for cloud, ids in sorted(cloud_ids.items())}
+
+
+def _build_exec_summary_md(
+    current_metrics: dict,
+    previous_metrics: dict | None,
+    current_cloud_installs: dict[str, int],
+    previous_cloud_installs: dict[str, int] | None,
+) -> str:
+    """Build the executive summary markdown section with comparison."""
+    lines = []
+    lines.append("## Executive Summary")
+    lines.append("")
+
+    curr = current_metrics
+    lines.append(
+        f"This report covers **{curr['total_events']} events** "
+        f"from **{curr['identified_instances']} unique identified registry instances** "
+        f"over the period {curr['earliest_ts'][:10]} to {curr['latest_ts'][:10]}."
+    )
+    lines.append("")
+
+    if previous_metrics is None:
+        lines.append("*No previous report available for comparison.*")
+        lines.append("")
+        # Still show per-cloud installs
+        lines.append("### Unique Registry Installs by Cloud Provider")
+        lines.append("")
+        lines.append("| Cloud Provider | Unique Installs |")
+        lines.append("|----------------|-----------------|")
+        for cloud, count in current_cloud_installs.items():
+            lines.append(f"| {cloud} | {count} |")
+        lines.append("")
+        return "\n".join(lines)
+
+    prev = previous_metrics.get("key_metrics", {})
+    prev_date = previous_metrics.get("report_date", "unknown")
+
+    lines.append(f"### Comparison with Previous Report ({prev_date})")
+    lines.append("")
+    lines.append("| Metric | Previous | Current | Change |")
+    lines.append("|--------|----------|---------|--------|")
+
+    # Key metric comparisons
+    comparisons = [
+        ("Total Events", "total_events"),
+        ("Startup Events", "startup_events"),
+        ("Heartbeat Events", "heartbeat_events"),
+        ("Unique Instances (identified)", "identified_instances"),
+        ("Events with null registry_id", "null_registry_id_count"),
+    ]
+    for label, key in comparisons:
+        prev_val = prev.get(key, 0)
+        curr_val = curr.get(key, 0)
+        delta = _compute_delta(curr_val, prev_val)
+        lines.append(f"| {label} | {prev_val} | {curr_val} | {delta} |")
+
+    lines.append("")
+
+    # Per-cloud unique installs comparison
+    lines.append("### Unique Registry Installs by Cloud Provider")
+    lines.append("")
+    if previous_cloud_installs:
+        lines.append("| Cloud Provider | Previous | Current | Change |")
+        lines.append("|----------------|----------|---------|--------|")
+        all_clouds = sorted(
+            set(list(current_cloud_installs.keys()) + list(previous_cloud_installs.keys()))
+        )
+        for cloud in all_clouds:
+            prev_count = previous_cloud_installs.get(cloud, 0)
+            curr_count = current_cloud_installs.get(cloud, 0)
+            delta = _compute_delta(curr_count, prev_count)
+            lines.append(f"| {cloud} | {prev_count} | {curr_count} | {delta} |")
+    else:
+        lines.append("| Cloud Provider | Unique Installs |")
+        lines.append("|----------------|-----------------|")
+        for cloud, count in current_cloud_installs.items():
+            lines.append(f"| {cloud} | {count} |")
+    lines.append("")
+
+    # Distribution shift highlights
+    prev_dists = previous_metrics.get("distributions", {})
+    curr_cloud = current_cloud_installs
+    prev_cloud_dist = prev_dists.get("cloud", {})
+
+    # Highlight new cloud providers
+    prev_clouds = set(prev_cloud_dist.keys()) if prev_cloud_dist else set()
+    curr_clouds = set(current_cloud_installs.keys())
+    new_clouds = curr_clouds - prev_clouds
+    if new_clouds:
+        lines.append(
+            f"**New cloud providers**: {', '.join(sorted(new_clouds))}"
+        )
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -207,6 +382,11 @@ def _compute_instance_table(
             _safe_int(e.get("search_queries_total", "")) for e in events
         )
 
+        # Sum total search queries across all events
+        total_search = sum(
+            _safe_int(e.get("search_queries_total", "")) for e in events
+        )
+
         first_ts = events[0].get("ts", "")[:10]
         latest_ts = events[-1].get("ts", "")[:10]
 
@@ -226,6 +406,7 @@ def _compute_instance_table(
             "max_agents": max_agents,
             "max_skills": max_skills,
             "max_search_queries": max_search,
+            "total_search_queries": total_search,
             "first_seen": first_ts,
             "latest_seen": latest_ts,
         })
@@ -265,6 +446,9 @@ def _compute_unidentified_profiles(
         max_search = max(
             _safe_int(e.get("search_queries_total", "")) for e in events
         )
+        total_search = sum(
+            _safe_int(e.get("search_queries_total", "")) for e in events
+        )
 
         events.sort(key=lambda r: r.get("ts", ""))
         first_ts = events[0].get("ts", "")[:10]
@@ -282,6 +466,7 @@ def _compute_unidentified_profiles(
             "max_agents": max_agents,
             "max_skills": max_skills,
             "max_search_queries": max_search,
+            "total_search_queries": total_search,
             "first_seen": first_ts,
             "latest_seen": latest_ts,
         })
@@ -464,10 +649,16 @@ def _build_markdown_tables(
     search: dict,
     features: list[dict],
     rows: list[dict[str, str]],
+    exec_summary_md: str | None = None,
 ) -> str:
     """Build all markdown tables as a single string."""
     total = metrics["total_events"]
     lines = []
+
+    # Executive Summary (at the top if available)
+    if exec_summary_md:
+        lines.append(exec_summary_md)
+        lines.append("")
 
     # Key Metrics
     lines.append("## Key Metrics")
@@ -500,12 +691,12 @@ def _build_markdown_tables(
     lines.append(
         "| Registry ID | Cloud | Compute | Storage | Auth "
         "| Federation | Arch | Servers | Agents | Skills "
-        "| Search | Events | First Seen |"
+        "| Search (Max) | Search (Total) | Events | First Seen |"
     )
     lines.append(
         "|-------------|-------|---------|---------|------"
         "|------------|------|---------|--------|--------"
-        "|--------|--------|------------|"
+        "|--------------|----------------|--------|------------|"
     )
     for inst in instances:
         fed = "Yes" if inst["federation"] else "No"
@@ -521,6 +712,7 @@ def _build_markdown_tables(
             f"| {inst['max_agents']} "
             f"| {inst['max_skills']} "
             f"| {inst['max_search_queries']} "
+            f"| {inst['total_search_queries']} "
             f"| {inst['events']} "
             f"| {inst['first_seen']} |"
         )
@@ -532,12 +724,12 @@ def _build_markdown_tables(
     lines.append(
         "| Cloud | Compute | Arch | Storage | Auth "
         "| Mode | Servers | Agents | Skills "
-        "| Search | Events | Period |"
+        "| Search (Max) | Search (Total) | Events | Period |"
     )
     lines.append(
         "|-------|---------|------|---------|------"
         "|------|---------|--------|--------"
-        "|--------|--------|--------|"
+        "|--------------|----------------|--------|--------|"
     )
     for prof in unidentified:
         period = prof["first_seen"]
@@ -554,6 +746,7 @@ def _build_markdown_tables(
             f"| {prof['max_agents']} "
             f"| {prof['max_skills']} "
             f"| {prof['max_search_queries']} "
+            f"| {prof['total_search_queries']} "
             f"| {prof['events']} "
             f"| {period} |"
         )
@@ -720,6 +913,14 @@ def main() -> None:
         default=None,
         help="Report date (YYYY-MM-DD). Defaults to today.",
     )
+    parser.add_argument(
+        "--previous-metrics",
+        default=None,
+        help=(
+            "Path to previous metrics JSON for comparison. "
+            "If not provided, auto-detects the most recent one in output-dir."
+        ),
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.csv):
@@ -740,16 +941,41 @@ def main() -> None:
     versions = _compute_version_table(rows)
     search = _compute_search_stats(rows)
     features = _compute_feature_adoption(rows)
+    cloud_installs = _compute_per_cloud_unique_installs(rows)
+
+    # Load previous metrics for comparison
+    prev_metrics_path = args.previous_metrics
+    if not prev_metrics_path:
+        prev_metrics_path = _find_previous_metrics(args.output_dir, date_str)
+
+    previous_metrics = None
+    previous_cloud_installs = None
+    if prev_metrics_path:
+        previous_metrics = _load_previous_metrics(prev_metrics_path)
+        if previous_metrics:
+            previous_cloud_installs = previous_metrics.get(
+                "per_cloud_unique_installs", None
+            )
+
+    # Build executive summary
+    exec_summary_md = _build_exec_summary_md(
+        metrics,
+        previous_metrics,
+        cloud_installs,
+        previous_cloud_installs,
+    )
 
     md_content = _build_markdown_tables(
         metrics, distributions, instances, unidentified,
         versions, search, features, rows,
+        exec_summary_md=exec_summary_md,
     )
 
     # Build JSON with all computed data
     metrics_json = {
         "report_date": date_str,
         "key_metrics": metrics,
+        "per_cloud_unique_installs": cloud_installs,
         "distributions": {
             k: dict(v.most_common()) for k, v in distributions.items()
         },

@@ -84,17 +84,43 @@ Then generate the deployment distribution chart:
 
 This produces a single faceted PNG with 6 subplots: Cloud Provider, Compute Platform, Storage Backend, Auth Provider, Version Type, and Deployment Mode. Each subplot shows counts and percentages.
 
+### Step 5b: Generate Timeseries Chart
+
+Generate a timeseries chart showing unique registry installs per cloud provider over time. This reads ALL CSV files in the output directory to build a complete historical view:
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_timeseries_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output OUTPUT_DIR/registry-installs-timeseries-YYYY-MM-DD.png
+```
+
+This produces a PNG with two subplots:
+- **Cumulative Unique Registry Installs** -- running total of unique registry_ids per cloud provider
+- **Daily Active Registry Installs** -- unique registry_ids seen each day per cloud provider
+
 ### Step 6: Run Telemetry Analysis
 
 Run the analysis script to compute all distributions, instance timelines, and metrics. This produces two files:
-- `tables-YYYY-MM-DD.md` -- pre-formatted markdown tables ready to embed in the report
-- `metrics-YYYY-MM-DD.json` -- raw computed metrics as JSON
+- `tables-YYYY-MM-DD.md` -- pre-formatted markdown tables ready to embed in the report (with executive summary comparison at the top)
+- `metrics-YYYY-MM-DD.json` -- raw computed metrics as JSON (includes `per_cloud_unique_installs`)
+
+The script automatically finds the most recent previous `metrics-*.json` file in the output directory and generates an executive summary with deltas at the top of the tables file. You can also specify a previous metrics file explicitly:
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
   --csv OUTPUT_DIR/registry_metrics.csv \
   --output-dir OUTPUT_DIR \
   --date YYYY-MM-DD
+```
+
+Or with an explicit previous metrics file:
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
+  --csv OUTPUT_DIR/registry_metrics.csv \
+  --output-dir OUTPUT_DIR \
+  --date YYYY-MM-DD \
+  --previous-metrics OUTPUT_DIR/metrics-PREVIOUS-DATE.json
 ```
 
 ### Step 7: Generate the Usage Report
@@ -120,12 +146,18 @@ Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the
 
 ---
 
+## Executive Summary
+- Comparison with previous report (auto-detected from most recent metrics JSON)
+- Deltas for total events, unique instances, heartbeat events, null registry_id count
+- Per-cloud-provider unique registry installs comparison table
+
 ## Deployment Distribution
 
 ![Deployment Distribution](deployment-distribution-YYYY-MM-DD.png)
 
-## Executive Summary
-- Total events, unique instances, collection period, key highlights
+## Registry Installs Timeseries
+
+![Registry Installs Timeseries](registry-installs-timeseries-YYYY-MM-DD.png)
 
 ## Key Metrics
 | Metric | Value |
@@ -191,9 +223,9 @@ which pandoc >/dev/null || sudo apt-get install -y pandoc
 ### Step 9: Present Results
 
 After generating the report:
-1. Display the Executive Summary and Key Metrics directly in the conversation
-2. Tell the user the full report path, HTML path, and CSV path
-3. Highlight the most interesting findings
+1. Display the Executive Summary (with comparison deltas) and Key Metrics directly in the conversation
+2. Tell the user the full report path, HTML path, CSV path, and chart paths
+3. Highlight the most interesting findings and notable changes from the previous report
 
 ## Error Handling
 
@@ -210,10 +242,13 @@ User: /usage-report
 Output:
 ```
 Executive Summary: 68 startup events from ~7 unique registry instances over 4 days...
+Compared to previous report (2026-03-30): +12 events (+21%), +2 new instances (+40%)
 
 Full report: .scratchpad/usage-reports/ai-registry-usage-report-2026-03-31.md
 HTML report: .scratchpad/usage-reports/ai-registry-usage-report-2026-03-31.html
-Chart: .scratchpad/usage-reports/deployment-distribution-2026-03-31.png
+Charts:
+  - .scratchpad/usage-reports/deployment-distribution-2026-03-31.png
+  - .scratchpad/usage-reports/registry-installs-timeseries-2026-03-31.png
 CSV data: .scratchpad/usage-reports/registry_metrics.csv
 ```
 
