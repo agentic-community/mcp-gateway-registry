@@ -1586,6 +1586,7 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
             "url",
             "version",
             "capabilities",
+            "metadata",
             "default_input_modes",
             "default_output_modes",
             "provider",
@@ -1717,6 +1718,10 @@ def cmd_agent_get(args: argparse.Namespace) -> int:
         }
         if agent.ans_metadata:
             output["ans_metadata"] = agent.ans_metadata
+        if agent.metadata:
+            output["metadata"] = agent.metadata
+        if agent.capabilities:
+            output["capabilities"] = agent.capabilities
         print(json.dumps(output, indent=2))
         return 0
 
@@ -1812,6 +1817,8 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
             "path",
             "url",
             "version",
+            "capabilities",
+            "metadata",
             "provider",
             "security_schemes",
             "skills",

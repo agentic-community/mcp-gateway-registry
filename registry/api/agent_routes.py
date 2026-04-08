@@ -432,6 +432,14 @@ async def register_agent(
             optional_card_kwargs["default_input_modes"] = request.default_input_modes
         if request.default_output_modes:
             optional_card_kwargs["default_output_modes"] = request.default_output_modes
+        if request.metadata:
+            optional_card_kwargs["metadata"] = request.metadata
+        # Build capabilities: merge explicit capabilities dict with streaming bool
+        capabilities = dict(request.capabilities) if request.capabilities else {}
+        if request.streaming and "streaming" not in capabilities:
+            capabilities["streaming"] = request.streaming
+        if capabilities:
+            optional_card_kwargs["capabilities"] = capabilities
 
         agent_card = AgentCard(
             protocol_version=request.protocol_version,
@@ -444,7 +452,6 @@ async def register_agent(
             provider=provider_obj,
             security_schemes=request.security_schemes or {},
             skills=request.skills or [],
-            streaming=request.streaming,
             tags=tag_list,
             license=request.license,
             visibility=request.visibility,
@@ -653,6 +660,7 @@ async def list_agents(
                 else None,
                 visibility=getattr(agent, "visibility", "public"),
                 supported_protocol=getattr(agent, "supported_protocol", None),
+                metadata=agent.metadata if agent.metadata else {},
             )
             filtered_agents.append(agent_info)
 
@@ -1215,7 +1223,6 @@ async def update_agent(
             provider=request.provider,
             security_schemes=request.security_schemes or {},
             skills=request.skills or [],
-            streaming=request.streaming,
             tags=tag_list,
             license=request.license,
             visibility=request.visibility,
@@ -1225,6 +1232,8 @@ async def update_agent(
             registered_at=existing_agent.registered_at,
             is_enabled=existing_agent.is_enabled,
             num_stars=existing_agent.num_stars,
+            metadata=request.metadata if request.metadata else existing_agent.metadata,
+            capabilities=request.capabilities if request.capabilities else existing_agent.capabilities,
             ans_metadata=existing_agent.ans_metadata,
             health_status=existing_agent.health_status,
             last_health_check=existing_agent.last_health_check,
@@ -1454,6 +1463,7 @@ async def discover_agents_by_skills(
             trust_level=agent.trust_level,
             visibility=getattr(agent, "visibility", "public"),
             supported_protocol=getattr(agent, "supported_protocol", None),
+            metadata=agent.metadata if agent.metadata else {},
         )
 
         matched_agents.append(

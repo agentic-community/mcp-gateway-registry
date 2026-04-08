@@ -259,6 +259,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     supported_protocol: 'other' as 'a2a' | 'other',
     tags: [] as string[],
     skillsJson: '[]',
+    metadata: '',
   });
   const [editAgentLoading, setEditAgentLoading] = useState(false);
   const [skillsJsonError, setSkillsJsonError] = useState<string | null>(null);
@@ -923,6 +924,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         skillsJson: fullAgent.skills && fullAgent.skills.length > 0
           ? JSON.stringify(fullAgent.skills, null, 2)
           : '[]',
+        metadata: fullAgent.metadata && Object.keys(fullAgent.metadata).length > 0
+          ? JSON.stringify(fullAgent.metadata, null, 2)
+          : '',
       });
     } catch (error) {
       console.error('Failed to fetch agent details for editing:', error);
@@ -938,6 +942,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         supported_protocol: (agent.supported_protocol || 'other') as 'a2a' | 'other',
         tags: agent.tags || [],
         skillsJson: '[]',
+        metadata: '',
       });
     }
   }, [agentApiToken]);
@@ -1045,6 +1050,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         supportedProtocol: editAgentForm.supported_protocol,
         tags: editAgentForm.tags,
         skills: parsedSkills,
+        ...(editAgentForm.metadata.trim() ? { metadata: JSON.parse(editAgentForm.metadata) } : {}),
       };
 
       await axios.put(
@@ -2964,6 +2970,22 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
                   className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
                   placeholder="tag1,tag2,tag3"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                  Custom Metadata (JSON, optional)
+                </label>
+                <textarea
+                  value={editAgentForm.metadata}
+                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, metadata: e.target.value }))}
+                  rows={4}
+                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500 font-mono text-sm"
+                  placeholder='{"needs_history": false, "icon_name": "Quiz", "recursion_limit": 50}'
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Key-value pairs in JSON format for custom agent metadata
+                </p>
               </div>
 
               <div>

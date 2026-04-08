@@ -105,6 +105,7 @@ interface AgentFormData {
   security_schemes: Record<string, unknown> | null;
   supported_protocol: string;
   trust_level: string;
+  metadata: string;
 }
 
 
@@ -159,6 +160,7 @@ const initialAgentForm: AgentFormData = {
   security_schemes: null,
   supported_protocol: 'other',
   trust_level: 'community',
+  metadata: '',
 };
 
 
@@ -343,6 +345,7 @@ const RegisterPage: React.FC = () => {
             version: parsed.version || prev.version,
             tags: Array.isArray(parsed.tags) ? parsed.tags.join(',') : (parsed.tags || prev.tags),
             capabilities: parsed.capabilities ? JSON.stringify(parsed.capabilities) : prev.capabilities,
+            metadata: parsed.metadata ? JSON.stringify(parsed.metadata, null, 2) : prev.metadata,
             visibility: parsed.visibility || prev.visibility,
             repository_url: parsed.repository_url || parsed.repositoryUrl || prev.repository_url,
             streaming: parsed.streaming || parsed.capabilities?.streaming || prev.streaming,
@@ -474,6 +477,7 @@ const RegisterPage: React.FC = () => {
         securitySchemes: agentForm.security_schemes || undefined,
         supportedProtocol: agentForm.supported_protocol,
         trustLevel: agentForm.trust_level,
+        ...(agentForm.metadata.trim() ? { metadata: JSON.parse(agentForm.metadata) } : {}),
       };
 
       await axios.post('/api/agents/register', payload, {
@@ -932,6 +936,20 @@ const RegisterPage: React.FC = () => {
             placeholder="ai, assistant, nlp"
           />
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Comma-separated list</p>
+        </div>
+
+        <div className="md:col-span-2">
+          <label className={labelClass}>Custom Metadata (JSON, optional)</label>
+          <textarea
+            className={inputClass}
+            rows={3}
+            value={agentForm.metadata}
+            onChange={(e) => setAgentForm(prev => ({ ...prev, metadata: e.target.value }))}
+            placeholder='{"needs_history": false, "icon_name": "Quiz", "recursion_limit": 50}'
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Key-value pairs in JSON format for custom agent metadata
+          </p>
         </div>
 
         <div>

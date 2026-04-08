@@ -807,6 +807,10 @@ class AgentInfo(BaseModel):
         alias="lastHealthCheck",
         description="Timestamp of last health check (ISO format)",
     )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata key-value pairs",
+    )
 
     model_config = ConfigDict(
         populate_by_name=True  # Allow both snake_case and camelCase on input
@@ -918,6 +922,14 @@ class AgentRegistrationRequest(BaseModel):
         ...,
         alias="supportedProtocol",
         description="Agent protocol: 'a2a' for A2A protocol agents, 'other' for non-A2A agents",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata key-value pairs",
+    )
+    capabilities: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Agent capabilities (e.g., streaming, push_notifications)",
     )
 
     model_config = ConfigDict(populate_by_name=True)
