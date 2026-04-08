@@ -98,9 +98,11 @@ keycloak:
 
   auth:
     adminUser: *keycloakAdmin
-    # Don't set adminPassword - let it auto-generate
+    existingSecret: '{{ .Release.Name }}-keycloak'
 
   postgresql:
+    auth:
+      existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
     image:
       registry: public.ecr.aws
 
