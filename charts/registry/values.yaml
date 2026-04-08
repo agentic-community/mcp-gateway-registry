@@ -2,7 +2,7 @@
 global:
   image:
     repository: public.ecr.aws/p3v1o3c6/registry
-    tag: 1.0.17
+    tag: 1.0.18
     pullPolicy: IfNotPresent
 
 # Application configuration
