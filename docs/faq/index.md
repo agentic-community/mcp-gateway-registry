@@ -2,6 +2,25 @@
 
 Common questions and answers about the MCP Gateway Registry.
 
+## Getting Started
+
+- [What is MCP and why do I need a gateway?](what-is-mcp-and-gateway.md)
+
+## Tool and Agent Discovery
+
+- [How do I discover available MCP tools for my AI agent?](discovering-mcp-tools.md)
+- [How do I handle tool discovery when I don't know what tools are available?](agent-autonomous-tool-discovery.md)
+- [What filtering options are available for agents in the registry?](filtering-agents-by-tags-and-fields.md)
+
+## Connecting and Integration
+
+- [How do I connect my agent to multiple MCP servers through the gateway?](connecting-multiple-mcp-servers.md)
+- [How do I test my agent's integration with the MCP Gateway locally?](local-testing-agent-integration.md)
+
+## Operations and Monitoring
+
+- [How do I monitor the health of MCP servers?](monitoring-server-health.md)
+
 ## Access Control and Visibility
 
 - [How do I restrict which MCP servers a user can see based on their Entra ID group?](restrict-server-visibility-by-entra-group.md)

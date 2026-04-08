@@ -2464,14 +2464,14 @@ Before submitting code, verify:
 - [Service Management](docs/service-management.md) - Server lifecycle and operations
 - [Token Refresh Service](docs/token-refresh-service.md) - Automated token refresh and lifecycle management
 - [Observability Guide](docs/OBSERVABILITY.md) - Metrics, monitoring, and OpenTelemetry setup
-- [Troubleshooting Guide](docs/FAQ.md) - Common issues and solutions
+- [Troubleshooting Guide](docs/faq/index.md) - Common issues and solutions
 - [Architectural Decision](docs/design/architectural-decision-reverse-proxy-vs-application-layer-gateway.md) - Reverse proxy vs application layer gateway
 - [Registry Auth Architecture](docs/registry-auth-architecture.md) - Internal authentication mechanisms
 
 ### 14.2. Community & Support
 
 **Getting Help:**
-- [FAQ & Troubleshooting](docs/FAQ.md) - Common questions and solutions
+- [FAQ & Troubleshooting](docs/faq/index.md) - Common questions and solutions
 - [GitHub Issues](https://github.com/agentic-community/mcp-gateway-registry/issues) - Bug reports and feature requests
 - [GitHub Discussions](https://github.com/agentic-community/mcp-gateway-registry/discussions) - Community support and ideas
 

@@ -776,7 +776,7 @@ All requests are HMAC-signed, rate-limited, and schema-validated. Telemetry is f
 | | | [Fine-Grained Access Control](docs/scopes.md)<br/>Permission management and security |
 | | | [Dynamic Tool Discovery](docs/dynamic-tool-discovery.md)<br/>Autonomous agent capabilities |
 | | | [Deployment Guide](docs/installation.md)<br/>Complete setup for deployment environments |
-| | | [Troubleshooting Guide](docs/FAQ.md)<br/>Common issues and solutions |
+| | | [Troubleshooting Guide](docs/faq/index.md)<br/>Common issues and solutions |
 
 ---
 

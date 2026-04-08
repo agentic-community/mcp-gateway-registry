@@ -101,7 +101,7 @@ nav:
     - Complete Setup Guide: complete-setup-guide.md
     - Installation: installation.md
     - Configuration: configuration.md
-    - FAQ: FAQ.md
+    - FAQ: faq/index.md
   - Authentication & Security:
     - Authentication Guide: auth.md
     - IAM Settings UI: iam-settings-ui.md

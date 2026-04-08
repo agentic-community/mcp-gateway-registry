@@ -251,14 +251,14 @@ Accelerate development workflows with integrated tooling:
 | [Installation Guide](installation.md)<br/>Complete setup instructions for EC2 and EKS | [Authentication Guide](auth.md)<br/>OAuth and identity provider integration | [API Reference](registry_api.md)<br/>Programmatic registry management |
 | [Configuration Reference](configuration.md)<br/>Environment variables and settings | [Amazon Cognito Setup](cognito.md)<br/>Step-by-step IdP configuration | [Dynamic Tool Discovery](dynamic-tool-discovery.md)<br/>Autonomous agent capabilities |
 | | [Fine-Grained Access Control](scopes.md)<br/>Permission management and security | [Deployment Guide](installation.md)<br/>Complete setup for deployment environments |
-| | [Security Scanner](security-scanner.md)<br/>MCP server supply chain security | [Troubleshooting Guide](FAQ.md)<br/>Common issues and solutions |
+| | [Security Scanner](security-scanner.md)<br/>MCP server supply chain security | [Troubleshooting Guide](faq/index.md)<br/>Common issues and solutions |
 
 ---
 
 ## Community & Support
 
 **Getting Help**
-- [FAQ & Troubleshooting](FAQ.md) - Common questions and solutions
+- [FAQ & Troubleshooting](faq/index.md) - Common questions and solutions
 - [GitHub Issues](https://github.com/agentic-community/mcp-gateway-registry/issues) - Bug reports and feature requests
 - [GitHub Discussions](https://github.com/agentic-community/mcp-gateway-registry/discussions) - Community support and ideas
 

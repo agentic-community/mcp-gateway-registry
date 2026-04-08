@@ -44,7 +44,7 @@ mkdocs build
 - `registry_api.md` - API reference
 - `dynamic-tool-discovery.md` - AI agent tool discovery
 - `ai-coding-assistants-setup.md` - IDE integration guide
-- `FAQ.md` - Frequently asked questions
+- `faq/index.md` - Frequently asked questions
 
 ## Deployment
 

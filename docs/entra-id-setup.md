@@ -994,4 +994,4 @@ After completing the setup:
 For more information, see:
 - [Complete Setup Guide](./complete-setup-guide.md)
 - [Observability Documentation](./OBSERVABILITY.md)
-- [FAQ](./FAQ.md)
+- [FAQ](./faq/index.md)
