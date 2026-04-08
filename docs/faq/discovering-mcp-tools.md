@@ -10,7 +10,7 @@ You can discover tools in several ways:
    )
    ```
 
-2. **Web Interface**: Browse available tools at `http://your-gateway-url:7860` after authentication.
+2. **Web Interface**: Browse available tools at `https://your-gateway-url` after authentication.
 
 3. **Direct MCP Connection**: Connect to the registry MCP server at `/mcpgw/sse` and use standard MCP `tools/list` calls.
 

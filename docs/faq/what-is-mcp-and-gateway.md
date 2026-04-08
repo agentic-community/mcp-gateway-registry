@@ -21,7 +21,7 @@ They are complementary components:
 - **Purpose**: Service discovery and management
 - **Features**: Web UI, server registration, health monitoring, tool catalog
 - **Users**: Platform administrators, developers
-- **Access**: Web browser at `:7860`
+- **Access**: Web browser at port 80 (HTTP) or 443 (HTTPS) via nginx reverse proxy
 
 **Gateway**:
 - **Purpose**: Secure proxy for MCP protocol traffic

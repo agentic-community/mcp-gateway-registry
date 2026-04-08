@@ -22,7 +22,7 @@ Follow these steps:
    python agent.py --message "test message"
    ```
 
-3. **Access the web interface** at `http://localhost:7860` to verify server registration and tool availability.
+3. **Access the web interface** at `http://localhost` to verify server registration and tool availability.
 
 ## Related Documentation
 
