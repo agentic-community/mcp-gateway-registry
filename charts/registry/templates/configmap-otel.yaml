@@ -28,4 +28,7 @@ data:
   {{- if .Values.app.telemetryDebug }}
   MCP_TELEMETRY_DEBUG: {{ .Values.app.telemetryDebug | quote }}
   {{- end }}
+  {{- if .Values.app.disableAiRegistryToolsServer }}
+  DISABLE_AI_REGISTRY_TOOLS_SERVER: {{ .Values.app.disableAiRegistryToolsServer | quote }}
+  {{- end }}
 

@@ -211,6 +211,7 @@ services:
       - MCP_TELEMETRY_DISABLED=${MCP_TELEMETRY_DISABLED:-}
       - MCP_TELEMETRY_OPT_IN=${MCP_TELEMETRY_OPT_IN:-}
       - TELEMETRY_DEBUG=${TELEMETRY_DEBUG:-false}
+      - DISABLE_AI_REGISTRY_TOOLS_SERVER=${DISABLE_AI_REGISTRY_TOOLS_SERVER:-false}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)

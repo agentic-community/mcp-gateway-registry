@@ -51,6 +51,9 @@ app:
   mcpTelemetryOptIn: false  # Set to true to enable daily heartbeat with aggregate counts
   telemetryDebug: false  # Set to true to log payloads instead of sending
 
+  # Demo server configuration
+  disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
+
   # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
   deploymentMode: with-gateway
 

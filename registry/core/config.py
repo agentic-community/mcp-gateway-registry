@@ -331,6 +331,12 @@ class Settings(BaseSettings):
         description="Log telemetry payloads instead of sending (for debugging)",
     )
 
+    # Demo server configuration
+    disable_ai_registry_tools_server: bool = Field(
+        default=False,
+        description="Disable auto-registration of the built-in airegistry-tools server on startup. Set DISABLE_AI_REGISTRY_TOOLS_SERVER=true to opt out.",
+    )
+
     @property
     def nginx_updates_enabled(self) -> bool:
         """Check if nginx updates should be performed."""

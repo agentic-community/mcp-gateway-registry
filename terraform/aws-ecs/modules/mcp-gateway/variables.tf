@@ -867,3 +867,9 @@ variable "telemetry_debug" {
   type        = string
   default     = "false"
 }
+
+variable "disable_ai_registry_tools_server" {
+  description = "Disable auto-registration of the built-in airegistry-tools server on startup. Set to 'true' for GitOps/production deployments."
+  type        = string
+  default     = "false"
+}

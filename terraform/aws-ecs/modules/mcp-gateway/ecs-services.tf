@@ -848,6 +848,11 @@ module "ecs_service_registry" {
           name  = "TELEMETRY_DEBUG"
           value = var.telemetry_debug
         },
+        # Demo server configuration
+        {
+          name  = "DISABLE_AI_REGISTRY_TOOLS_SERVER"
+          value = var.disable_ai_registry_tools_server
+        },
         # Metrics pipeline (only wired when observability is enabled)
         {
           name  = "METRICS_SERVICE_URL"

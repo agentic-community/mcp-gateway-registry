@@ -440,10 +440,14 @@ async def lifespan(app: FastAPI):
             logger.info("ANS sync scheduler started")
 
         # Initialize built-in demo servers (airegistry-tools)
-        # This ensures the registry management tools are always available
-        from registry.services.demo_servers_init import initialize_demo_servers
+        # Skipped when DISABLE_AI_REGISTRY_TOOLS_SERVER=true (e.g. GitOps/production deployments)
+        if not settings.disable_ai_registry_tools_server:
+            logger.info("Initializing demo servers...")
+            from registry.services.demo_servers_init import initialize_demo_servers
 
-        await initialize_demo_servers()
+            await initialize_demo_servers()
+        else:
+            logger.info("Demo server auto-registration disabled (DISABLE_AI_REGISTRY_TOOLS_SERVER=true)")
 
         # Always generate nginx configuration at startup to ensure placeholders are replaced
         # In registry-only mode, generate base config without MCP server location blocks

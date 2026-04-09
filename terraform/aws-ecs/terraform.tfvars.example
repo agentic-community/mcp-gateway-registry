@@ -600,3 +600,13 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # Debug mode: log telemetry payload to stdout instead of sending
 # Useful for verifying what data would be sent
 # telemetry_debug = "false"
+
+# ============================================================================
+# DEMO SERVER CONFIGURATION (Issue #764)
+# ============================================================================
+# Disable built-in airegistry-tools server auto-registration.
+# Set to "true" for production/GitOps deployments that control all server
+# registrations through a pipeline. Default: "false" (demo server registers on startup).
+# Note: this flag prevents new registrations only; it does not remove the server
+# if it was already registered in a previous run.
+# disable_ai_registry_tools_server = "false"
