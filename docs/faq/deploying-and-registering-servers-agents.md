@@ -7,9 +7,9 @@ MCP servers and agents are built and deployed **out of band** -- the MCP Gateway
 You can build MCP servers using any MCP-compatible framework and deploy them on any infrastructure:
 
 **Frameworks:**
-- [FastMCP](https://github.com/jlowin/fastmcp) -- Python framework for building MCP servers
+- [FastMCP](https://github.com/PrefectHQ/fastmcp) -- Python framework for building MCP servers
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) -- Official TypeScript SDK
-- Any framework that implements the [MCP specification](https://spec.modelcontextprotocol.io/)
+- Any framework that implements the [MCP specification](https://modelcontextprotocol.io/specification)
 
 **Deployment options:**
 - [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/) -- managed runtime for MCP servers
@@ -25,10 +25,10 @@ Your deployed server needs to expose an MCP-compatible endpoint (typically `/mcp
 Similarly, agents are built using any agent framework and deployed independently:
 
 **Frameworks:**
-- [Google A2A Python SDK](https://github.com/google-a2a/a2a-python) -- reference implementation for A2A protocol
+- [A2A Python SDK](https://github.com/a2aproject/a2a-python) -- reference implementation for A2A protocol
 - [LangGraph](https://github.com/langchain-ai/langgraph) with A2A adapter
 - [CrewAI](https://github.com/crewAIInc/crewAI) -- multi-agent orchestration
-- Any framework that exposes an [A2A-compatible agent card](https://google.github.io/A2A/) at `/.well-known/agent-card.json`
+- Any framework that exposes an [A2A-compatible agent card](https://a2a-protocol.org/) at `/.well-known/agent-card.json`
 
 **Deployment options:**
 - [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/) -- managed runtime for A2A agents
