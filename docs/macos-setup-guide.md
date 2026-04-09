@@ -95,6 +95,10 @@ ls -la
 
 ### Setup Python Virtual Environment
 ```bash
+# Enable native TLS for enterprise Macs with corporate proxies/custom CA certificates
+# (harmless on personal Macs -- uses macOS system certificate store)
+export UV_NATIVE_TLS=true
+
 # Create and activate Python virtual environment
 uv sync
 source .venv/bin/activate

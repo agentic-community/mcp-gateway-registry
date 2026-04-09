@@ -312,6 +312,12 @@ Log: `{ 4, "Environment File Setup", DONE, ".env created and configured" }`
 
 **Announce:** "Installing Python dependencies via `uv sync`..."
 
+First, enable native TLS so that `uv` uses the macOS system certificate store. This is required on enterprise Macs with corporate proxies or custom CA certificates, and is harmless on personal Macs.
+
+```bash
+export UV_NATIVE_TLS=true
+```
+
 ```bash
 cd "${INSTALL_DIR}"
 uv sync
@@ -915,6 +921,12 @@ KEYCLOAK_CONTAINER=$(docker ps --format "{{.Names}}" | grep keycloak | grep -v d
 2. Re-run Phase 9 SSL fix
 3. Verify Keycloak is responding: `curl -s http://localhost:8080/realms/master`
 4. Retry Phase 10
+
+### TLS certificate errors with uv
+On enterprise Macs with corporate proxies or custom CA certificates, `uv` may fail with TLS errors. The setup already sets `export UV_NATIVE_TLS=true` in Phase 5, but if the error occurs in a later shell session, re-export it:
+```bash
+export UV_NATIVE_TLS=true
+```
 
 ### Cloudflare registration fails
 1. Verify services are healthy: `docker compose ps`

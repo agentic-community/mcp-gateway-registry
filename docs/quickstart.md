@@ -67,6 +67,7 @@ cd mcp-gateway-registry
 cp .env.example .env
 
 # Setup Python virtual environment
+# (Enterprise Macs: export UV_NATIVE_TLS=true if you hit TLS certificate errors)
 uv sync
 source .venv/bin/activate
 ```
