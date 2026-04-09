@@ -65,9 +65,16 @@ These skills produce JSON files that can be uploaded through the UI or used with
 
 ### Option 3: Register programmatically via API
 
-Use the [Registry Management CLI](../../api/registry_management.py) to register from the command line:
+Use the [Registry Management CLI](../../api/registry_management.py) to register from the command line.
+
+To get a token, click the **"Get JWT Token"** button in the top-left corner of the registry UI, then click **"Copy JSON"** and save it to a `.token` file:
 
 ```bash
+# Create .token file with the copied JSON from the registry UI
+cat > .token << 'EOF'
+<paste the copied JSON here>
+EOF
+
 # Register an MCP server from a JSON config file
 uv run python api/registry_management.py \
     --registry-url https://your-registry-url \
