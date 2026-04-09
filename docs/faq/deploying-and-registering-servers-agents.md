@@ -70,13 +70,13 @@ Use the [Registry Management CLI](../../api/registry_management.py) to register 
 ```bash
 # Register an MCP server from a JSON config file
 uv run python api/registry_management.py \
-    --registry-url http://localhost \
+    --registry-url https://your-registry-url \
     --token-file .token \
     register --config my-server-card.json
 
 # Register an A2A agent from a JSON config file
 uv run python api/registry_management.py \
-    --registry-url http://localhost \
+    --registry-url https://your-registry-url \
     --token-file .token \
     agent-register --config my-agent-card.json
 ```
