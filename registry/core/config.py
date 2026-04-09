@@ -253,6 +253,12 @@ class Settings(BaseSettings):
         description="Microsoft Entra ID admin group ID",
     )
 
+    # IdP Group Filtering (applies to all identity providers)
+    idp_group_filter_prefix: str = Field(
+        default="",
+        description="Comma-separated prefixes to filter IdP groups in IAM > Groups page",
+    )
+
     # ANS Integration
     ans_integration_enabled: bool = Field(
         default=False,

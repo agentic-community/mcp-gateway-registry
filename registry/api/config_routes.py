@@ -76,7 +76,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
     "identity_providers": {
         "title": "Identity Providers",
         "order": 4,
-        "fields": [],
+        "fields": [
+            ("idp_group_filter_prefix", "Group Filter Prefixes (comma-separated)", False),
+        ],
         "subgroups": [
             {
                 "id": "keycloak",
