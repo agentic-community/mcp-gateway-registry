@@ -1051,8 +1051,8 @@ class PeerFederationService:
                     logger.warning(f"Agent not found for orphan marking: {item_path}")
                     return False
 
-                # get_agent_info returns a dict
-                agent_dict = existing_agent
+                # get_agent_info returns an AgentCard Pydantic model, convert to dict
+                agent_dict = existing_agent.model_dump()
 
                 # Update sync_metadata
                 sync_metadata = agent_dict.get("sync_metadata") or {}
@@ -1195,8 +1195,8 @@ class PeerFederationService:
                     logger.warning(f"Agent not found for local override: {item_path}")
                     return False
 
-                # get_agent_info returns a dict
-                agent_dict = existing_agent
+                # get_agent_info returns an AgentCard Pydantic model, convert to dict
+                agent_dict = existing_agent.model_dump()
 
                 # Update sync_metadata
                 sync_metadata = agent_dict.get("sync_metadata") or {}
@@ -1440,8 +1440,8 @@ class PeerFederationService:
 
                     if existing_agent:
                         # Check if locally overridden - if so, skip update
-                        # get_agent_info returns a dict
-                        if self.is_locally_overridden(existing_agent):
+                        # get_agent_info returns an AgentCard, convert to dict for is_locally_overridden
+                        if self.is_locally_overridden(existing_agent.model_dump()):
                             logger.debug(
                                 f"Skipping update for locally overridden agent: {prefixed_path}"
                             )
