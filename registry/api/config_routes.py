@@ -27,7 +27,7 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 # ---------------------------------------------------------------------------
-# Configuration group definitions — 15 groups, ordered 1-15
+# Configuration group definitions — 16 groups, ordered 1-16
 # Groups may contain optional "subgroups" for nested display (e.g. Identity Providers)
 # Each field tuple: (settings_attr_name, display_label, is_sensitive)
 # ---------------------------------------------------------------------------
@@ -243,6 +243,13 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("telemetry_opt_in", "Telemetry Opt-In (Daily Heartbeat)", False),
             ("telemetry_debug", "Debug Mode", False),
             ("telemetry_endpoint", "Collector Endpoint", False),
+        ],
+    },
+    "demo_server": {
+        "title": "Demo Server Configuration",
+        "order": 16,
+        "fields": [
+            ("disable_ai_registry_tools_server", "Disable AI Registry Tools Server", False),
         ],
     },
 }
