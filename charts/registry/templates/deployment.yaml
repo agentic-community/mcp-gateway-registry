@@ -83,10 +83,6 @@ spec:
                   name: {{ .Values.entra.clientSecretExistingSecret }}
                   key: {{ .Values.entra.clientSecretExistingSecretKey }}
             {{- end }}
-            {{- if .Values.idpGroupFilterPrefix }}
-            - name: IDP_GROUP_FILTER_PREFIX
-              value: {{ .Values.idpGroupFilterPrefix | quote }}
-            {{- end }}
             {{- if .Values.okta.clientSecretExistingSecret }}
             - name: OKTA_CLIENT_SECRET
               valueFrom:
