@@ -5,6 +5,7 @@ Common questions and answers about the MCP Gateway Registry.
 ## Getting Started
 
 - [What is MCP and why do I need a gateway?](what-is-mcp-and-gateway.md)
+- [How do I deploy and register MCP servers and agents?](deploying-and-registering-servers-agents.md)
 
 ## Tool and Agent Discovery
 
