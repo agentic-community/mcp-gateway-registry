@@ -768,6 +768,7 @@ async def sync_federation(
             )
             from ..services.agent_service import agent_service
             from ..services.federation.agentcore_client import AgentCoreFederationClient
+            from ..services.server_service import server_service
             from ..services.skill_service import get_skill_service
 
             agentcore_client = AgentCoreFederationClient(
@@ -825,7 +826,8 @@ async def sync_federation(
                     try:
                         skill_card = SkillCard(**skill_data)
                         await skill_repo.create(skill_card)
-                    except Exception:
+                    except Exception as create_err:
+                        logger.debug(f"Skill create failed for {skill_path}, trying update: {create_err}")
                         update_fields = {
                             k: v for k, v in skill_data.items()
                             if k not in ("path", "id", "created_at")

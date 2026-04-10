@@ -3298,6 +3298,22 @@ def cmd_federation_sync(args: argparse.Namespace) -> int:
                 for agent in results["asor"].get("agents", []):
                     print(f"    - {agent}")
 
+            if results.get("agentcore", {}).get("count", 0) > 0:
+                agentcore = results["agentcore"]
+                print(f"\n  AWS Agent Registry ({agentcore['count']}):")
+                if agentcore.get("servers"):
+                    print(f"    Servers ({len(agentcore['servers'])}):")
+                    for server in agentcore["servers"]:
+                        print(f"      - {server}")
+                if agentcore.get("agents"):
+                    print(f"    Agents ({len(agentcore['agents'])}):")
+                    for agent in agentcore["agents"]:
+                        print(f"      - {agent}")
+                if agentcore.get("skills"):
+                    print(f"    Skills ({len(agentcore['skills'])}):")
+                    for skill in agentcore["skills"]:
+                        print(f"      - {skill}")
+
         return 0
 
     except Exception as e:

@@ -20,6 +20,7 @@ import IAMGroups from '../components/IAMGroups';
 import IAMUsers from '../components/IAMUsers';
 import IAMM2M from '../components/IAMM2M';
 import RegistryCardSettings from '../components/RegistryCardSettings';
+import ExternalRegistries from '../components/ExternalRegistries';
 import { useAuth } from '../contexts/AuthContext';
 import { canAccessSettings } from '../utils/permissions';
 
@@ -81,6 +82,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     icon: <GlobeAltIcon className="h-5 w-5" />,
     items: [
       { id: 'peers', label: 'Peers', path: '/settings/federation/peers' },
+      { id: 'external-registries', label: 'External Registries', path: '/settings/federation/external-registries' },
     ],
   },
   {
@@ -236,6 +238,11 @@ const SettingsPage: React.FC = () => {
     // Registry > Card
     if (path === '/settings/registry/card' || path === '/settings/registry') {
       return <RegistryCardSettings onShowToast={showToast} />;
+    }
+
+    // Federation > External Registries
+    if (path === '/settings/federation/external-registries') {
+      return <ExternalRegistries onShowToast={showToast} />;
     }
 
     // Federation > Peers list

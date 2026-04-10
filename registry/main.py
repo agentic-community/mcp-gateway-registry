@@ -293,8 +293,9 @@ async def _sync_agentcore_on_startup(
                 await skill_repo.create(skill_card)
                 skill_count += 1
                 synced_paths["skills"].add(skill_path)
-            except Exception:
+            except Exception as create_err:
                 # Skill already exists -- update instead
+                logger.debug(f"Skill create failed for {skill_path}, trying update: {create_err}")
                 update_fields = {
                     k: v for k, v in skill_data.items()
                     if k not in ("path", "id", "created_at")

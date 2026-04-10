@@ -415,7 +415,7 @@ class TestTransformSkillsRecord:
         assert result["name"] == "my-skill"
         assert result["path"] == "/skills/agentcore-my-skill"
         assert result["skill_md_content"] == "# My Skill\n\nDo something useful."
-        assert result["skill_md_url"] == "https://my-registry.com/api/skills/skills/agentcore-my-skill/content"
+        assert result["skill_md_url"] == "https://my-registry.com/api/skills/agentcore-my-skill/content"
         assert result["target_agents"] == ["claude-code"]
         assert result["registry_name"] == AGENTCORE_SOURCE
         assert result["is_read_only"] is True

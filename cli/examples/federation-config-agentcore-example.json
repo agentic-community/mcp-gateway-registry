@@ -1,9 +1,13 @@
 {
-  "anthropic": {
-    "enabled": false,
+"anthropic": {
+    "enabled": true,
     "endpoint": "https://registry.modelcontextprotocol.io",
-    "sync_on_startup": false,
-    "servers": []
+    "sync_on_startup": true,
+    "servers": [
+      {"name": "com.hydrata/hydrata-mcp-server"},
+      {"name": "io.github.OneNicolas/mcp-service-public"},
+      {"name": "ai.exa/exa"}
+    ]
   },
   "asor": {
     "enabled": false,
@@ -20,7 +24,7 @@
     "max_concurrent_fetches": 5,
     "registries": [
       {
-        "registry_id": "registry_njv8x",
+        "registry_id": "arn:aws:bedrock-agentcore:us-east-1:015469603702:registry/rCu9kFIgrbNOpEsF",
         "aws_account_id": "015469603702",
         "aws_region": "us-east-1",
         "descriptor_types": ["MCP", "A2A", "CUSTOM", "AGENT_SKILLS"],

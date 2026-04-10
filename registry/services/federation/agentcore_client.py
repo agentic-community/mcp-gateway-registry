@@ -82,7 +82,7 @@ def _sanitize_path_segment(
     Returns:
         Sanitized path-safe string
     """
-    return name.replace("/", "-").replace(" ", "-").lower().strip("-")
+    return name.replace("/", "-").replace(" ", "-").replace("_", "-").lower().strip("-")
 
 
 def _extract_transport_info(
@@ -741,6 +741,10 @@ class AgentCoreFederationClient:
             f"registry-{registry_id[:12]}",
         ]
 
+        # Extract AWS timestamps (datetime objects from boto3)
+        created_at = record.get("createdAt")
+        updated_at = record.get("lastUpdatedAt")
+
         return {
             "source": AGENTCORE_SOURCE,
             "server_name": record_name,
@@ -756,6 +760,8 @@ class AgentCoreFederationClient:
                 "agentcore_registry_id": registry_id,
                 "agentcore_record_id": record_id,
                 "descriptor_type": "MCP",
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
             },
             "cached_at": datetime.now(UTC).isoformat(),
             "is_read_only": True,
@@ -810,6 +816,10 @@ class AgentCoreFederationClient:
             f"registry-{registry_id[:12]}",
         ]
 
+        # Extract AWS timestamps (datetime objects from boto3)
+        created_at = record.get("createdAt")
+        updated_at = record.get("lastUpdatedAt")
+
         return {
             "source": AGENTCORE_SOURCE,
             "name": agent_name,
@@ -833,6 +843,8 @@ class AgentCoreFederationClient:
                 "agentcore_registry_id": registry_id,
                 "agentcore_record_id": record_id,
                 "descriptor_type": "A2A",
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
             },
             "cached_at": datetime.now(UTC).isoformat(),
         }
@@ -889,17 +901,34 @@ class AgentCoreFederationClient:
             f"registry-{registry_id[:12]}",
         ]
 
+        # Map custom provider to AgentProvider format (needs organization + url)
+        raw_provider = custom_content.get("provider")
+        provider_data = None
+        if isinstance(raw_provider, dict):
+            org = raw_provider.get("organization") or raw_provider.get("name", "")
+            provider_url = raw_provider.get("url", "")
+            if org and provider_url:
+                provider_data = {"organization": org, "url": provider_url}
+
+        # Extract AWS timestamps (datetime objects from boto3)
+        created_at = record.get("createdAt")
+        updated_at = record.get("lastUpdatedAt")
+
+        # Extract record ARN and status for CUSTOM card display
+        record_arn = record.get("recordArn", "")
+        record_status = record.get("status", "")
+
         return {
             "source": AGENTCORE_SOURCE,
             "name": record_name,
-            "description": description,
+            "description": description or "Custom protocol record",
             "url": agent_url,
             "path": agent_path,
             "version": version,
             "protocol_version": "1.0",
             "capabilities": custom_content.get("capabilities", {}),
             "skills": [],
-            "provider": custom_content.get("provider"),
+            "provider": provider_data,
             "security_schemes": {},
             "default_input_modes": ["text/plain"],
             "default_output_modes": ["text/plain"],
@@ -914,6 +943,10 @@ class AgentCoreFederationClient:
                 "descriptor_type": "CUSTOM",
                 "custom_content": custom_content,
                 "original_url": original_url,
+                "record_arn": record_arn,
+                "record_status": record_status,
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
             },
             "cached_at": datetime.now(UTC).isoformat(),
         }
@@ -942,6 +975,9 @@ class AgentCoreFederationClient:
         description = record.get("description", "")
         version = record.get("recordVersion", "1.0.0")
 
+        # Sanitize name for SkillCard: lowercase alphanumeric and hyphens only
+        sanitized_name = record_name.replace("_", "-").replace(" ", "-").lower().strip("-")
+
         # Parse skill descriptors
         skills_desc = descriptors.get("agentSkills", {})
         skill_md_content = skills_desc.get("skillMd", {}).get("inlineContent", "")
@@ -956,7 +992,7 @@ class AgentCoreFederationClient:
         # Build self-referencing URL for skill_md_url
         from registry.core.config import settings
 
-        skill_md_url = f"{settings.registry_url}/api/skills{skill_path}/content"
+        skill_md_url = f"{settings.registry_url}/api/skills/agentcore-{path_segment}/content"
 
         # Extract fields from skill definition
         if not description:
@@ -973,9 +1009,13 @@ class AgentCoreFederationClient:
             f"registry-{registry_id[:12]}",
         ]
 
+        # Extract AWS timestamps (datetime objects from boto3)
+        created_at = record.get("createdAt")
+        updated_at = record.get("lastUpdatedAt")
+
         return {
             "source": AGENTCORE_SOURCE,
-            "name": record_name,
+            "name": sanitized_name,
             "description": description,
             "skill_md_url": skill_md_url,
             "skill_md_content": skill_md_content,
@@ -993,6 +1033,8 @@ class AgentCoreFederationClient:
                 "agentcore_record_id": record_id,
                 "descriptor_type": "AGENT_SKILLS",
                 "skill_definition": skill_def_content,
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
             },
             "cached_at": datetime.now(UTC).isoformat(),
         }
