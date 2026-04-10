@@ -602,15 +602,10 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # telemetry_debug = "false"
 
 # ============================================================================
-# AWS AGENT REGISTRY FEDERATION CONFIGURATION (optional)
+# AWS AGENT REGISTRY FEDERATION (optional)
 # ============================================================================
-# Federates servers, agents, and skills from AWS Agent Registry
-# (bedrock-agentcore-control API).
-#
-# Required IAM permissions on the ECS task role:
-#   - bedrock-agentcore:ListRegistries
-#   - bedrock-agentcore:ListRegistryRecords
-#   - bedrock-agentcore:GetRegistryRecord
+# Registry IDs and sync details are managed via /api/federation/config API.
+# These are global flags only.
 
 # Enable AWS Agent Registry federation (default: false)
 # agentcore_federation_enabled = false
@@ -620,19 +615,6 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 
 # Sync AWS Agent Registry records on startup (default: false)
 # agentcore_sync_on_startup = false
-
-# Sync interval in minutes (default: 60)
-# agentcore_sync_interval_minutes = 60
-
-# Sync timeout in seconds (default: 300 = 5 minutes)
-# agentcore_sync_timeout_seconds = 300
-
-# Max concurrent API calls for parallel record fetching (default: 5)
-# agentcore_max_concurrent_fetches = 5
-
-# Comma-separated list of AWS Agent Registry IDs to sync from
-# Example: "reg-abc123,reg-def456"
-# agentcore_registry_ids = ""
 
 # ============================================================================
 # DEMO SERVER CONFIGURATION (Issue #764)

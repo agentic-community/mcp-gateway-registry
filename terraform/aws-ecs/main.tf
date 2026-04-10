@@ -167,13 +167,9 @@ module "mcp_gateway" {
   federation_encryption_key            = var.federation_encryption_key
 
   # AWS Agent Registry federation configuration
-  agentcore_federation_enabled     = var.agentcore_federation_enabled
-  agentcore_aws_region             = var.agentcore_aws_region
-  agentcore_sync_on_startup        = var.agentcore_sync_on_startup
-  agentcore_sync_interval_minutes  = var.agentcore_sync_interval_minutes
-  agentcore_sync_timeout_seconds   = var.agentcore_sync_timeout_seconds
-  agentcore_max_concurrent_fetches = var.agentcore_max_concurrent_fetches
-  agentcore_registry_ids           = var.agentcore_registry_ids
+  agentcore_federation_enabled = var.agentcore_federation_enabled
+  agentcore_aws_region         = var.agentcore_aws_region
+  agentcore_sync_on_startup    = var.agentcore_sync_on_startup
 
   # ANS (Agent Name Service) configuration
   ans_integration_enabled            = var.ans_integration_enabled

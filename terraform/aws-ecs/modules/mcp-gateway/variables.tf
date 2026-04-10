@@ -703,30 +703,6 @@ variable "agentcore_sync_on_startup" {
   default     = false
 }
 
-variable "agentcore_sync_interval_minutes" {
-  description = "Sync interval in minutes for AWS Agent Registry."
-  type        = number
-  default     = 60
-}
-
-variable "agentcore_sync_timeout_seconds" {
-  description = "Sync timeout in seconds for AWS Agent Registry."
-  type        = number
-  default     = 300
-}
-
-variable "agentcore_max_concurrent_fetches" {
-  description = "Max concurrent API calls for parallel record fetching."
-  type        = number
-  default     = 5
-}
-
-variable "agentcore_registry_ids" {
-  description = "Comma-separated list of AWS Agent Registry IDs to sync from."
-  type        = string
-  default     = ""
-}
-
 # =============================================================================
 # ANS (AGENT NAMING SERVICE) CONFIGURATION
 # =============================================================================
