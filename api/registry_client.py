@@ -131,6 +131,27 @@ class ServerDetail(BaseModel):
     external_tags: list[str] = Field(default_factory=list, description="Tags from external source")
 
 
+class ServerDetailResponse(BaseModel):
+    """Response model for single server retrieval via GET /api/servers/{path}."""
+
+    server_name: str = Field(default="", description="Server display name")
+    description: str = Field(default="", description="Server description")
+    path: str = Field(..., description="Server path (e.g., /my-server)")
+    proxy_pass_url: str | None = Field(None, description="Backend URL")
+    tags: list[str] = Field(default_factory=list, description="Server tags")
+    num_tools: int = Field(default=0, description="Number of tools")
+    tool_list: list[dict[str, Any]] = Field(default_factory=list, description="Tool definitions")
+    is_enabled: bool = Field(default=False, description="Whether server is enabled")
+    health_status: str | None = Field(None, description="Health status")
+    transport: str | None = Field(None, description="Transport type")
+    version: str | None = Field(None, description="Server version")
+    versions: list[dict[str, Any]] | None = Field(None, description="Version list")
+    license: str = Field(default="N/A", description="License")
+    registered_by: str | None = Field(None, description="Who registered")
+
+    model_config = ConfigDict(extra="allow")
+
+
 class ServerListResponse(BaseModel):
     """Server list response model."""
 
@@ -2436,6 +2457,30 @@ class RegistryClient:
 
         result = RatingResponse(**response.json())
         logger.info(f"Server '{path}' rated successfully. New average: {result.average_rating:.2f}")
+        return result
+
+    def get_server(
+        self,
+        path: str,
+    ) -> ServerDetailResponse:
+        """
+        Get detailed information about a specific server.
+
+        Args:
+            path: Server path (e.g., /my-server)
+
+        Returns:
+            Server detail response
+
+        Raises:
+            requests.HTTPError: If server not found (404) or unauthorized (403)
+        """
+        logger.info(f"Getting server details: {path}")
+
+        response = self._make_request(method="GET", endpoint=f"/api/servers{path}")
+
+        result = ServerDetailResponse(**response.json())
+        logger.info(f"Retrieved server details: {path}")
         return result
 
     def get_server_rating(self, path: str) -> RatingInfoResponse:

@@ -1072,6 +1072,44 @@ def cmd_describe_group(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_server_get(args: argparse.Namespace) -> int:
+    """
+    Get detailed information about a specific server.
+
+    Args:
+        args: Command arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        server = client.get_server(args.path)
+
+        logger.info(f"Retrieved server: {server.server_name}")
+        output = {
+            "server_name": server.server_name,
+            "path": server.path,
+            "description": server.description,
+            "proxy_pass_url": server.proxy_pass_url,
+            "tags": server.tags,
+            "num_tools": server.num_tools,
+            "tool_list": server.tool_list,
+            "is_enabled": server.is_enabled,
+            "health_status": server.health_status,
+            "transport": server.transport,
+            "version": server.version,
+            "versions": server.versions,
+            "license": server.license,
+        }
+        print(json.dumps(output, indent=2, default=str))
+        return 0
+
+    except Exception as e:
+        logger.error(f"Get server failed: {e}")
+        return 1
+
+
 def cmd_server_rate(args: argparse.Namespace) -> int:
     """
     Rate a server (1-5 stars).
@@ -4412,6 +4450,12 @@ Examples:
         "--json", action="store_true", help="Output raw JSON response"
     )
 
+    # Server get command
+    server_get_parser = subparsers.add_parser("server-get", help="Get details of a specific server")
+    server_get_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /my-server)"
+    )
+
     # Server rate command
     server_rate_parser = subparsers.add_parser("server-rate", help="Rate a server (1-5 stars)")
     server_rate_parser.add_argument(
@@ -5199,6 +5243,7 @@ Examples:
         "import-group": cmd_import_group,
         "list-groups": cmd_list_groups,
         "describe-group": cmd_describe_group,
+        "server-get": cmd_server_get,
         "server-rate": cmd_server_rate,
         "server-rating": cmd_server_rating,
         "security-scan": cmd_security_scan,

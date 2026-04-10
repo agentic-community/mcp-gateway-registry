@@ -15,7 +15,7 @@ from ..auth.csrf import generate_csrf_token, verify_csrf_token, verify_csrf_toke
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..constants import VALID_AUTH_SCHEMES
-from ..core.config import settings
+from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
@@ -4112,3 +4112,76 @@ async def get_server_versions(
 
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+# IMPORTANT: This catch-all route must remain AFTER all /servers/{path}/... suffixed routes
+@router.get("/servers/{path:path}")
+async def get_server(
+    request: Request,
+    path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """
+    Get detailed information about a single MCP server.
+
+    Returns the server card including tools, versions, and health status.
+    Mirrors the GET /api/agents/{path} endpoint pattern.
+
+    **Authentication:** JWT Bearer token (via nginx X-User header)
+
+    **Path parameter:**
+    - `path`: Server path (e.g., /my-server)
+
+    **Response:**
+    - `200 OK`: Server details
+    - `403 Forbidden`: User lacks access
+    - `404 Not Found`: Server not found
+
+    **Example:**
+    ```bash
+    curl -X GET https://registry.example.com/api/servers/my-server \\
+      -H "Authorization: Bearer $JWT_TOKEN"
+    ```
+    """
+    set_audit_action(
+        request,
+        "read",
+        "server",
+        resource_id=path,
+        description=f"Read server {path}",
+    )
+
+    # Normalize path — add leading slash if missing
+    if not path.startswith("/"):
+        path = "/" + path
+
+    # Look up server
+    server_info = await server_service.get_server_info(path)
+    if not server_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}'",
+        )
+
+    # Access control — admin users bypass checks
+    if not user_context.get("is_admin"):
+        accessible_servers = user_context.get("accessible_servers", [])
+        has_access = await server_service.user_can_access_server_path(
+            path, accessible_servers
+        )
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
+
+    # Strip proxy_pass_url for non-admin users in with-gateway mode.
+    # In registry-only mode, users need the URL to connect directly.
+    if not user_context.get("is_admin"):
+        if settings.deployment_mode != DeploymentMode.REGISTRY_ONLY:
+            server_info.pop("proxy_pass_url", None)
+
+    return JSONResponse(
+        status_code=200,
+        content=json.loads(json.dumps(server_info, default=str)),
+    )

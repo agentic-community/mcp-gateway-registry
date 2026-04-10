@@ -27,7 +27,7 @@ This document provides a comprehensive overview of all 49 API endpoints availabl
 | Anthropic Registry API v0 (Servers) | 3 | JWT Bearer Token | Standard MCP server discovery via Anthropic API spec |
 | Internal Server Management (UI) | 10 | Session Cookie | Dashboard and service management |
 | Internal Server Management (Admin) | 12 | HTTP Basic Auth | Administrative operations and group management |
-| JWT Server Management | 10 | JWT Bearer Token | Programmatic server registration, auth credentials, and management |
+| JWT Server Management | 11 | JWT Bearer Token | Programmatic server registration, auth credentials, and management |
 | Authentication & Login | 7 | OAuth2 + Session | User authentication and provider management |
 | Health Monitoring | 3 | Session Cookie / None | Real-time health updates and statistics |
 | Discovery | 1 | None (Public) | Public MCP server discovery |
@@ -976,6 +976,34 @@ curl -X POST https://registry.example.com/api/servers/groups/add \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -F "server_name=myservice" \
   -F "group_names=admin,developers"
+```
+
+---
+
+#### 11. Get Single Server
+
+**Endpoint:** `GET /api/servers/{path:path}`
+
+**Purpose:** Get detailed information about a single MCP server by path. Mirrors the `GET /api/agents/{path}` endpoint pattern.
+
+**Path Parameter:**
+- `path` - Server path (e.g., `/my-server`)
+
+**Response:** `200 OK` with server details including tools, versions, health status
+
+**Notes:**
+- `proxy_pass_url` is stripped for non-admin users in with-gateway deployment mode
+- In registry-only deployment mode, `proxy_pass_url` is included for all users (needed to connect directly)
+- Credentials are never included in the response
+
+**Error Codes:**
+- `403 Forbidden` - User lacks access to this server
+- `404 Not Found` - Server not found at the given path
+
+**Example:**
+```bash
+curl -X GET https://registry.example.com/api/servers/my-server \
+  -H "Authorization: Bearer $JWT_TOKEN"
 ```
 
 ---

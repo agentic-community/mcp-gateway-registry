@@ -2428,6 +2428,133 @@
         ]
       }
     },
+    "/api/servers/{path}": {
+      "get": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Get Server",
+        "description": "Get detailed information about a single MCP server.\n\nReturns the server card including tools, versions, and health status.\nMirrors the GET /api/agents/{path} endpoint pattern.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n\n**Path parameter:**\n- `path`: Server path (e.g., /my-server)\n\n**Response:**\n- `200 OK`: Server details\n- `403 Forbidden`: User lacks access\n- `404 Not Found`: Server not found",
+        "operationId": "get_server_api_servers__path__get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "server_name": {
+                      "type": "string",
+                      "description": "Server display name"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Server description"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Server path"
+                    },
+                    "proxy_pass_url": {
+                      "type": "string",
+                      "description": "Backend URL (only in registry-only mode for non-admin users)",
+                      "nullable": true
+                    },
+                    "tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Server tags"
+                    },
+                    "num_tools": {
+                      "type": "integer",
+                      "description": "Number of tools"
+                    },
+                    "tool_list": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Tool definitions"
+                    },
+                    "is_enabled": {
+                      "type": "boolean",
+                      "description": "Whether server is enabled"
+                    },
+                    "health_status": {
+                      "type": "string",
+                      "description": "Health status",
+                      "nullable": true
+                    },
+                    "transport": {
+                      "type": "string",
+                      "description": "Transport type",
+                      "nullable": true
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "Server version",
+                      "nullable": true
+                    },
+                    "versions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Version list",
+                      "nullable": true
+                    },
+                    "license": {
+                      "type": "string",
+                      "description": "License"
+                    },
+                    "registered_by": {
+                      "type": "string",
+                      "description": "Who registered the server",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "User lacks access to this server"
+          },
+          "404": {
+            "description": "Server not found at the given path"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/agents/{path}/ans/link": {
       "post": {
         "tags": [
