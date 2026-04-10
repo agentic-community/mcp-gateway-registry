@@ -295,6 +295,14 @@ async def get_skill_content(
     if not _user_can_access_skill(skill, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
+    # For federated skills with inline content, serve directly from DB
+    if skill.skill_md_content:
+        return {
+            "content": skill.skill_md_content,
+            "source": "inline",
+            "path": normalized_path,
+        }
+
     # Fetch content from raw URL
     raw_url = skill.skill_md_raw_url or skill.skill_md_url
     if not raw_url:

@@ -127,6 +127,10 @@ class SkillCard(BaseModel):
         None,
         description="Raw URL for fetching SKILL.md content (auto-translated from skill_md_url)",
     )
+    skill_md_content: str | None = Field(
+        None,
+        description="Inline SKILL.md content for federated skills (stored in DB instead of URL fetch)",
+    )
     repository_url: HttpUrl | None = Field(
         None, description="URL to the git repository containing the skill"
     )

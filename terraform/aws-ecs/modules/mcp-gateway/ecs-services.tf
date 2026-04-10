@@ -775,6 +775,35 @@ module "ecs_service_registry" {
           name  = "FEDERATION_ENCRYPTION_KEY"
           value = var.federation_encryption_key
         },
+        # AWS Agent Registry federation configuration
+        {
+          name  = "AGENTCORE_FEDERATION_ENABLED"
+          value = tostring(var.agentcore_federation_enabled)
+        },
+        {
+          name  = "AGENTCORE_AWS_REGION"
+          value = var.agentcore_aws_region
+        },
+        {
+          name  = "AGENTCORE_SYNC_ON_STARTUP"
+          value = tostring(var.agentcore_sync_on_startup)
+        },
+        {
+          name  = "AGENTCORE_SYNC_INTERVAL_MINUTES"
+          value = tostring(var.agentcore_sync_interval_minutes)
+        },
+        {
+          name  = "AGENTCORE_SYNC_TIMEOUT_SECONDS"
+          value = tostring(var.agentcore_sync_timeout_seconds)
+        },
+        {
+          name  = "AGENTCORE_MAX_CONCURRENT_FETCHES"
+          value = tostring(var.agentcore_max_concurrent_fetches)
+        },
+        {
+          name  = "AGENTCORE_REGISTRY_IDS"
+          value = var.agentcore_registry_ids
+        },
         {
           name  = "ANS_INTEGRATION_ENABLED"
           value = tostring(var.ans_integration_enabled)
