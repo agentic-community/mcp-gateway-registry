@@ -28,4 +28,5 @@ Common questions and answers about the MCP Gateway Registry.
 
 ## Authentication and API Access
 
+- [How do I register and manage MCP servers that require authentication?](registering-auth-protected-servers.md)
 - [Can I use an Entra ID token to call the registry API instead of the UI-generated token?](use-entra-token-for-registry-api.md)

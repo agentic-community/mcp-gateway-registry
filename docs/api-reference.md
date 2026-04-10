@@ -9,12 +9,13 @@ This document provides a comprehensive overview of all 49 API endpoints availabl
 3. [A2A Agent Management APIs](#a2a-agent-management-apis)
 4. [Anthropic MCP Registry API v0](#anthropic-mcp-registry-api-v0)
 5. [Internal Server Management APIs](#internal-server-management-apis)
-6. [Authentication & Login APIs](#authentication--login-apis)
-7. [Health Monitoring APIs](#health-monitoring-apis)
-8. [Discovery & Well-Known Endpoints](#discovery--well-known-endpoints)
-9. [Utility Endpoints](#utility-endpoints)
-10. [Response Codes & Error Handling](#response-codes--error-handling)
-11. [OpenAPI Specifications](#openapi-specifications)
+6. [JWT Server Management API](#jwt-server-management-api)
+7. [Authentication & Login APIs](#authentication--login-apis)
+8. [Health Monitoring APIs](#health-monitoring-apis)
+9. [Discovery & Well-Known Endpoints](#discovery--well-known-endpoints)
+10. [Utility Endpoints](#utility-endpoints)
+11. [Response Codes & Error Handling](#response-codes--error-handling)
+12. [OpenAPI Specifications](#openapi-specifications)
 
 ---
 
@@ -26,6 +27,7 @@ This document provides a comprehensive overview of all 49 API endpoints availabl
 | Anthropic Registry API v0 (Servers) | 3 | JWT Bearer Token | Standard MCP server discovery via Anthropic API spec |
 | Internal Server Management (UI) | 10 | Session Cookie | Dashboard and service management |
 | Internal Server Management (Admin) | 12 | HTTP Basic Auth | Administrative operations and group management |
+| JWT Server Management | 10 | JWT Bearer Token | Programmatic server registration, auth credentials, and management |
 | Authentication & Login | 7 | OAuth2 + Session | User authentication and provider management |
 | Health Monitoring | 3 | Session Cookie / None | Real-time health updates and statistics |
 | Discovery | 1 | None (Public) | Public MCP server discovery |
@@ -771,6 +773,210 @@ This section implements the official [Anthropic MCP Registry API specification](
 **Error Codes:**
 - `403 Forbidden` - Non-admin user
 - `500 Internal Server Error` - Configuration error
+
+---
+
+## JWT Server Management API
+
+Modern JWT-authenticated endpoints for programmatic server management. These are the external API equivalents of the internal UI endpoints.
+
+**File:** `registry/api/server_routes.py`
+**Route Prefix:** `/api`
+**Authentication:** JWT Bearer Token (nginx_proxied_auth)
+
+#### 1. Register Server
+
+**Endpoint:** `POST /api/servers/register`
+
+**Purpose:** Register an MCP server with optional backend authentication credentials
+
+**Request body (form data):**
+- `name` (required): Service name
+- `description` (required): Service description
+- `path` (required): Service path (e.g., `/myservice`)
+- `proxy_pass_url` (required): Backend URL (e.g., `http://localhost:8000`)
+- `tags` (optional): Comma-separated tags
+- `auth_scheme` (optional): Backend auth scheme -- `none` (default), `bearer`, or `api_key`
+- `auth_credential` (optional): Plaintext credential (encrypted before storage)
+- `auth_header_name` (optional): Custom header name (default: `Authorization` for bearer, `X-API-Key` for api_key)
+- `tool_list_json` (optional): JSON array of MCP tool definitions (for manual tool registration)
+- `supported_transports` (optional): JSON array of transports
+- `headers` (optional): JSON object of custom headers
+- `mcp_endpoint` (optional): Custom MCP endpoint URL
+- `sse_endpoint` (optional): Custom SSE endpoint URL
+- `version` (optional): Server version (e.g., `v1.0.0`)
+- `status` (optional): Lifecycle status (`active`, `deprecated`, `draft`, `beta`)
+- `provider_organization` (optional): Provider organization name
+- `provider_url` (optional): Provider URL
+
+**Response:** `201 Created`
+
+**Error Codes:**
+- `400 Bad Request` - Invalid input data
+- `401 Unauthorized` - Missing or invalid JWT token
+- `409 Conflict` - Server already exists with same version
+- `500 Internal Server Error` - Server error
+
+**Example:**
+```bash
+# Register a server behind Bearer token auth
+curl -X POST https://registry.example.com/api/servers/register \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -F "name=My Protected Server" \
+  -F "description=An MCP server behind Bearer auth" \
+  -F "path=/my-protected-server" \
+  -F "proxy_pass_url=http://my-server:8000" \
+  -F "auth_scheme=bearer" \
+  -F "auth_credential=backend-server-token"
+```
+
+---
+
+#### 2. Update Server
+
+**Endpoint:** `PUT /api/servers/{server_path:path}`
+
+**Purpose:** Update an existing server's details
+
+**Path Parameter:**
+- `server_path` - Server path (e.g., `/my-server`)
+
+**Request body (form data):** Same fields as register
+
+**Response:** `200 OK` with updated server details
+
+**Error Codes:**
+- `404 Not Found` - Server not found
+
+---
+
+#### 3. Update Auth Credential
+
+**Endpoint:** `PATCH /api/servers/{server_path:path}/auth-credential`
+
+**Purpose:** Update or rotate the authentication credential for a registered server without re-registering
+
+**Path Parameter:**
+- `server_path` - Server path (e.g., `/my-server`)
+
+**Request body (JSON):**
+- `auth_scheme` (required): `none`, `bearer`, or `api_key`
+- `auth_credential` (optional): New credential. Required if auth_scheme is not `none`.
+- `auth_header_name` (optional): Custom header name. Default: `X-API-Key` for api_key.
+
+**Response:** `200 OK`
+
+**Error Codes:**
+- `400 Bad Request` - Invalid auth_scheme or missing credential
+- `404 Not Found` - Server not found
+
+**Example:**
+```bash
+# Rotate a Bearer token
+curl -X PATCH https://registry.example.com/api/servers/my-server/auth-credential \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"auth_scheme": "bearer", "auth_credential": "new-token"}'
+```
+
+---
+
+#### 4. Delete Server
+
+**Endpoint:** `DELETE /api/servers/{server_path:path}`
+
+**Purpose:** Remove a registered server
+
+**Path Parameter:**
+- `server_path` - Server path
+
+**Response:** `200 OK`
+
+**Error Codes:**
+- `404 Not Found` - Server not found
+
+**Example:**
+```bash
+curl -X DELETE https://registry.example.com/api/servers/my-server \
+  -H "Authorization: Bearer $JWT_TOKEN"
+```
+
+---
+
+#### 5. Toggle Server
+
+**Endpoint:** `POST /api/servers/toggle`
+
+**Purpose:** Enable or disable a server
+
+**Request body (form data):**
+- `path` (required): Service path
+- `new_state` (required): `true` (enabled) or `false` (disabled)
+
+**Response:** `200 OK` with updated status
+
+---
+
+#### 6. Get Health Status
+
+**Endpoint:** `GET /api/servers/health`
+
+**Purpose:** Get health status for all registered servers
+
+**Response:** `200 OK` with health data for all servers
+
+---
+
+#### 7. Get Server Rating
+
+**Endpoint:** `GET /api/servers/{server_path:path}/rating`
+
+**Purpose:** Get the rating for a server
+
+**Response:** `200 OK` with rating data
+
+---
+
+#### 8. Submit Server Rating
+
+**Endpoint:** `POST /api/servers/{server_path:path}/rating`
+
+**Purpose:** Submit a rating for a server
+
+**Request body (JSON):**
+- `rating` (required): Rating value (1-5)
+- `comment` (optional): Review comment
+
+**Response:** `201 Created`
+
+---
+
+#### 9. List Server Versions
+
+**Endpoint:** `GET /api/servers/{server_path:path}/versions`
+
+**Purpose:** List all versions for a server
+
+**Response:** `200 OK` with versions array
+
+---
+
+#### 10. Group Management
+
+**Add to groups:** `POST /api/servers/groups/add`
+**Remove from groups:** `POST /api/servers/groups/remove`
+
+**Request body (form data):**
+- `server_name` (required): Service name
+- `group_names` (required): Comma-separated group names
+
+**Example:**
+```bash
+curl -X POST https://registry.example.com/api/servers/groups/add \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -F "server_name=myservice" \
+  -F "group_names=admin,developers"
+```
 
 ---
 
