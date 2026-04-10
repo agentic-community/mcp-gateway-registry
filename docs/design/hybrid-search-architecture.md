@@ -46,12 +46,20 @@ The registry implements hybrid search that combines semantic (vector) search wit
                                      |
                                      v
                           +---------------------+
+                          |  Result Distribution|
+                          |  Global ranking     |
+                          |  with competitive   |
+                          |  soft caps (60%)    |
+                          |  up to max_results  |
+                          +----------+----------+
+                                     |
+                                     v
+                          +---------------------+
                           |  Result Grouping    |
-                          |  - servers (top 3)  |
-                          |  - agents (top 3)   |
+                          |  - servers          |
+                          |  - agents           |
                           |  - virtual_servers  |
-                          |    (top 3)          |
-                          |  - skills (top 3)   |
+                          |  - skills           |
                           +----------+----------+
                                      |
                                      v
@@ -59,7 +67,7 @@ The registry implements hybrid search that combines semantic (vector) search wit
                           |  Tool Extraction    |
                           |  Extract matching   |
                           |  tools from servers |
-                          |  -> tools[] (top 3) |
+                          |  -> tools[]         |
                           +---------------------+
 ```
 
@@ -117,15 +125,15 @@ Text boost values (cumulative per keyword match):
 
 ### 4. Score-Before-Filter Pattern
 
-All candidate results are scored before applying the top-3-per-entity-type filter. This ensures the highest-scoring documents are selected:
+All candidate results are scored before applying the distribution filter. This ensures the highest-scoring documents are selected:
 
 1. Vector search returns candidates (up to `k` results)
 2. Keyword search returns additional matches (merged by highest boost per document)
 3. Every candidate receives a hybrid score (vector + text boost)
 4. All candidates are sorted by hybrid score descending
-5. Top 3 per entity type (servers, agents, tools) are selected from the sorted list
+5. The `_distribute_results()` function selects up to `max_results` items using global ranking with competitive soft caps (see [Result Distribution](#result-distribution) below)
 
-This prevents lower-scoring documents from consuming a top-3 slot before higher-scoring documents are evaluated.
+This prevents lower-scoring documents from consuming a slot before higher-scoring documents are evaluated.
 
 ### 5. Diagnostic Logging
 
@@ -136,9 +144,121 @@ Score for 'Context7' (type=mcp_server): vector=0.3412, normalized_vector=0.6706,
   text_boost=8.0, boost_contrib=0.8000, final=1.0000
 ```
 
-### 6. Result Structure
+### 6. Result Distribution
 
-Search returns grouped results (top 3 per entity type):
+The `max_results` parameter (range 1-50, default 10) controls how many total results are returned. Results are distributed across entity types using **global ranking with competitive soft caps**.
+
+#### Algorithm
+
+The `_distribute_results()` function in `search_repository.py` implements a two-pass approach:
+
+**Pass 1 -- Pick with soft caps:**
+1. Sort all scored candidates by `relevance_score` descending (all entity types on the same 0-1 scale)
+2. Walk the sorted list, picking items up to `max_results`
+3. If a type reaches its soft cap (`ceil(max_results * 0.6)`), check whether other entity types still have results remaining below in the ranking
+4. If other types are waiting: skip this item (enforce cap for diversity)
+5. If no other types remain: lift the cap (no point leaving slots empty)
+
+**Pass 2 -- Backfill:**
+6. If pass 1 didn't fill all `max_results` slots (because some items were skipped), backfill from the skipped items in score order
+
+#### Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `SOFT_CAP_RATIO` | `0.6` | No single entity type can claim more than 60% of slots when other types are competing |
+| Tool extraction limit | `max(3, ceil(max_results * 0.6))` | Scales tool extraction with `max_results`, minimum 3 for backward compatibility |
+| Pipeline candidate limit | `max(max_results * 3, 50)` | Fetch enough candidates for global ranking |
+
+#### Examples
+
+**Example 1: Only servers exist (max_results=10)**
+
+A registry with 20 MCP servers and no agents, tools, or skills.
+
+```
+Candidates (sorted by relevance_score):
+  S(0.95), S(0.93), S(0.91), S(0.89), S(0.87), S(0.85),
+  S(0.83), S(0.81), S(0.79), S(0.77), S(0.75), ...
+
+soft_cap = ceil(10 * 0.6) = 6
+
+Pass 1:
+  Pick S(0.95) ... S(0.85) -> 6 servers (cap reached)
+  S(0.83): cap hit, check remaining types -> only mcp_server left
+           -> no competition, cap lifted
+  Pick S(0.83) ... S(0.77) -> 4 more servers
+
+Result: 10 servers (no artificial limit when only one type exists)
+```
+
+**Example 2: Mixed types (max_results=10)**
+
+A registry with servers, agents, and tools.
+
+```
+Candidates (sorted by relevance_score):
+  S(0.95), S(0.93), S(0.91), A(0.88), S(0.87), T(0.85),
+  S(0.83), A(0.80), S(0.78), T(0.75), A(0.72), S(0.70)
+
+soft_cap = ceil(10 * 0.6) = 6
+
+Pass 1:
+  Pick S(0.95), S(0.93), S(0.91)          -> 3 servers
+  Pick A(0.88)                              -> 1 agent
+  Pick S(0.87), T(0.85), S(0.83), A(0.80) -> 2 more servers, 1 tool, 1 agent
+  Pick S(0.78)                              -> 6th server (cap reached)
+  T(0.75): pick                             -> 2nd tool
+  A(0.72): pick                             -> 10th total (done)
+
+Result: 6 servers, 3 agents, 1 tool = 10 total
+  (diverse results, highest relevance wins, cap prevents server dominance)
+```
+
+**Example 3: Small max_results (max_results=5)**
+
+```
+soft_cap = ceil(5 * 0.6) = 3
+
+With mixed types, the dominant type gets at most 3 slots,
+leaving 2 for other types. Similar diversity to the previous
+default behavior of 3 per type.
+```
+
+**Example 4: Large max_results with one dominant type (max_results=50)**
+
+A registry with 40 servers, 3 agents, and 2 tools.
+
+```
+soft_cap = ceil(50 * 0.6) = 30
+
+Pass 1:
+  Servers fill 30 slots (cap reached while agents/tools still available)
+  3 agents and 2 tools fill 5 slots
+  Cap lifted for servers (no more agents/tools)
+  12 more servers fill remaining slots
+
+Result: 42 servers, 3 agents, 2 tools = 47 total
+  (all available entities returned, servers got the rest)
+```
+
+#### Backward Compatibility
+
+With the default `max_results=10`, the soft cap is 6. In a typical registry with multiple entity types, results look similar to the previous 3-per-type behavior: the dominant type gets 5-6 results, others share the rest. The key difference is that `max_results=50` now actually returns up to 50 results instead of being capped at 15 (3 per type * 5 types).
+
+#### Applies to All Search Paths
+
+The same `_distribute_results()` function is used by all three search code paths:
+
+| Search Path | When Used | Integration |
+|-------------|-----------|-------------|
+| Hybrid (DocumentDB) | Production with vector index | Scored tuples fed directly to `_distribute_results()` |
+| Client-side (MongoDB CE) | Local dev without vector search | Dict results converted to tuples, then distributed |
+| Lexical-only | When embedding model unavailable | Scores computed from `text_boost / MAX_LEXICAL_BOOST`, then distributed |
+
+### 7. Result Structure
+
+Search returns grouped results (up to `max_results` total, distributed across entity types):
 
 ```json
 {
@@ -426,8 +546,8 @@ The `efSearch` setting is configured in `registry/core/config.py` as `vector_sea
 
 ## Performance Considerations
 
-1. **Result Limiting**: Top 3 per entity type to reduce payload size
-2. **Score-Before-Filter**: All candidates scored and sorted before applying top-3 filter
+1. **Result Distribution**: Global ranking with competitive soft caps limits results to `max_results` (default 10, max 50). The distribution algorithm is O(n) where n is the candidate set size (at most 150 documents).
+2. **Score-Before-Filter**: All candidates scored and sorted before applying the distribution filter
 3. **Index Reuse**: HNSW index parameters (m=16, efConstruction=128) optimized for recall
 4. **efSearch Tuning**: Set to 100 for near-exact recall in typical deployments
 5. **Embedding Caching**: Lazy-loaded model with singleton pattern
