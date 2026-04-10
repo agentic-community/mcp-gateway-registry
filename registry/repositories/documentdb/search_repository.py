@@ -1,6 +1,7 @@
 """DocumentDB-based repository for hybrid search (text + vector)."""
 
 import logging
+import math
 import re
 from typing import Any
 
@@ -106,6 +107,105 @@ def _tokens_match_text(
 # Maximum possible text_boost sum for lexical scoring normalization
 # path(5.0) + name(3.0) + description(2.0) + tag(1.5) + metadata(1.0) + tool(1.0) = 13.5
 MAX_LEXICAL_BOOST: float = 13.5
+
+# Maximum fraction of max_results any single entity type can claim
+# when other entity types have results competing for slots.
+# 0.6 means no type gets more than 60% of total unless no competition.
+SOFT_CAP_RATIO: float = 0.6
+
+
+def _tool_extraction_limit(
+    max_results: int,
+) -> int:
+    """Calculate the maximum number of tools to extract from server matching_tools.
+
+    Uses the soft cap ratio but never goes below 3 for backward compatibility.
+
+    Args:
+        max_results: The max_results parameter from the search request.
+
+    Returns:
+        Maximum number of tools to extract.
+    """
+    return max(3, math.ceil(max_results * SOFT_CAP_RATIO))
+
+
+def _distribute_results(
+    scored_results: list[tuple[dict, float]],
+    max_results: int,
+) -> list[tuple[dict, float]]:
+    """Select top results with competitive soft caps per entity type.
+
+    Picks the top max_results items by relevance_score. A soft cap prevents
+    any single entity type from taking more than 60% of slots -- but the cap
+    is only enforced when other entity types have results waiting below in
+    the ranking. If no other types remain, the cap is lifted.
+
+    Uses a two-pass approach:
+    1. First pass: pick items respecting soft caps
+    2. Backfill pass: if we haven't reached max_results, fill remaining
+       slots from skipped items (highest score first)
+
+    Args:
+        scored_results: List of (doc, relevance_score) tuples, sorted by
+            relevance_score descending.
+        max_results: Maximum number of results to return.
+
+    Returns:
+        Filtered list of (doc, relevance_score) tuples, length <= max_results.
+    """
+    if not scored_results or max_results <= 0:
+        return []
+
+    soft_cap = max(1, math.ceil(max_results * SOFT_CAP_RATIO))
+    type_counts: dict[str, int] = {}
+    selected: list[tuple[dict, float]] = []
+    skipped: list[tuple[dict, float]] = []
+
+    # Pre-compute which entity types exist at each position onward.
+    # remaining_types[i] = set of entity types present in scored_results[i:]
+    total = len(scored_results)
+    remaining_types: list[set[str]] = [set() for _ in range(total + 1)]
+    for i in range(total - 1, -1, -1):
+        entity_type = scored_results[i][0].get("entity_type", "")
+        remaining_types[i] = remaining_types[i + 1] | {entity_type}
+
+    # Pass 1: pick items respecting soft caps
+    for i, (doc, score) in enumerate(scored_results):
+        if len(selected) >= max_results:
+            break
+
+        entity_type = doc.get("entity_type", "")
+        current_count = type_counts.get(entity_type, 0)
+
+        if current_count >= soft_cap:
+            # Check if other types still have results after this position
+            types_after = remaining_types[i + 1] - {entity_type}
+            if types_after:
+                skipped.append((doc, score))
+                continue  # Other types waiting -- enforce cap
+            # No competition -- allow this type to fill remaining slots
+
+        selected.append((doc, score))
+        type_counts[entity_type] = current_count + 1
+
+    # Pass 2: backfill from skipped items if we haven't reached max_results
+    # Skipped items are already in descending score order
+    for doc, score in skipped:
+        if len(selected) >= max_results:
+            break
+        selected.append((doc, score))
+
+    logger.debug(
+        "Search distribution: max_results=%d, soft_cap=%d, "
+        "selected=%d, per_type=%s",
+        max_results,
+        soft_cap,
+        len(selected),
+        dict(type_counts),
+    )
+
+    return selected
 
 
 def _flatten_metadata_to_text(metadata: dict[str, Any]) -> str:
@@ -853,7 +953,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         for doc in results:
             doc["text_boost"] = MAX_LEXICAL_BOOST
             doc["matching_tools"] = []
-        return self._format_lexical_results(results)
+        return self._format_lexical_results(results, max_results)
 
     async def get_all_tags(self) -> list[str]:
         """Return a sorted list of all unique tags across all indexed entities."""
@@ -1037,27 +1137,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # Sort by relevance score (descending)
             scored_docs.sort(key=lambda x: x["relevance_score"], reverse=True)
 
-            # Separate by entity type and take top 3 of each
-            servers = []
-            agents = []
-            tools = []
-            skills = []
-            virtual_servers = []
-
-            for item in scored_docs:
-                doc = item["doc"]
-                entity_type = doc.get("entity_type")
-
-                if entity_type == "mcp_server" and len(servers) < 3:
-                    servers.append(item)
-                elif entity_type == "a2a_agent" and len(agents) < 3:
-                    agents.append(item)
-                elif entity_type == "mcp_tool" and len(tools) < 3:
-                    tools.append(item)
-                elif entity_type == "skill" and len(skills) < 3:
-                    skills.append(item)
-                elif entity_type == "virtual_server" and len(virtual_servers) < 3:
-                    virtual_servers.append(item)
+            # Convert to (doc, score) tuples and distribute with soft caps
+            scored_tuples = [
+                (item["doc"], item["relevance_score"]) for item in scored_docs
+            ]
+            selected = _distribute_results(scored_tuples, max_results)
 
             # Format results to match the API contract
             grouped_results = {
@@ -1069,145 +1153,138 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             }
 
             tool_count = 0
-            for item in servers:
-                doc = item["doc"]
-                relevance_score = item["relevance_score"]
-                matching_tools = doc.get("_matching_tools", [])
-                server_metadata = doc.get("metadata", {})
+            tool_limit = _tool_extraction_limit(max_results)
 
-                result_entry = {
-                    "entity_type": "mcp_server",
-                    "path": doc.get("path"),
-                    "server_name": doc.get("name"),
-                    "description": doc.get("description"),
-                    "tags": doc.get("tags", []),
-                    "num_tools": server_metadata.get("num_tools", 0),
-                    "is_enabled": doc.get("is_enabled", False),
-                    "relevance_score": relevance_score,
-                    "match_context": doc.get("description"),
-                    "matching_tools": matching_tools,
-                    "proxy_pass_url": server_metadata.get("proxy_pass_url"),
-                    "mcp_endpoint": server_metadata.get("mcp_endpoint"),
-                    "sse_endpoint": server_metadata.get("sse_endpoint"),
-                    "supported_transports": server_metadata.get("supported_transports", []),
-                }
-                grouped_results["servers"].append(result_entry)
+            for doc, relevance_score in selected:
+                entity_type = doc.get("entity_type")
 
-                # Also add matching tools to the top-level tools array
-                # Build a lookup map from tool name to inputSchema from original tools
-                original_tools = doc.get("tools", [])
-                tool_schema_map = {
-                    t.get("name", ""): t.get("inputSchema", {}) for t in original_tools
-                }
+                if entity_type == "mcp_server":
+                    matching_tools = doc.get("_matching_tools", [])
+                    server_metadata = doc.get("metadata", {})
 
-                server_path = doc.get("path", "")
-                server_name = doc.get("name", "")
-                for tool in matching_tools:
-                    if tool_count >= 3:
-                        break
-                    tool_name = tool.get("tool_name", "")
-                    grouped_results["tools"].append(
-                        {
-                            "entity_type": "tool",
-                            "server_path": server_path,
-                            "server_name": server_name,
-                            "tool_name": tool_name,
-                            "description": tool.get("description", ""),
-                            "inputSchema": tool_schema_map.get(tool_name, {}),
-                            "relevance_score": tool.get("relevance_score", relevance_score),
-                            "match_context": tool.get("match_context", ""),
-                        }
-                    )
-                    tool_count += 1
+                    result_entry = {
+                        "entity_type": "mcp_server",
+                        "path": doc.get("path"),
+                        "server_name": doc.get("name"),
+                        "description": doc.get("description"),
+                        "tags": doc.get("tags", []),
+                        "num_tools": server_metadata.get("num_tools", 0),
+                        "is_enabled": doc.get("is_enabled", False),
+                        "relevance_score": relevance_score,
+                        "match_context": doc.get("description"),
+                        "matching_tools": matching_tools,
+                        "proxy_pass_url": server_metadata.get("proxy_pass_url"),
+                        "mcp_endpoint": server_metadata.get("mcp_endpoint"),
+                        "sse_endpoint": server_metadata.get("sse_endpoint"),
+                        "supported_transports": server_metadata.get("supported_transports", []),
+                    }
+                    grouped_results["servers"].append(result_entry)
 
-            for item in agents:
-                doc = item["doc"]
-                relevance_score = item["relevance_score"]
-                metadata = doc.get("metadata", {})
+                    # Also add matching tools to the top-level tools array
+                    original_tools = doc.get("tools", [])
+                    tool_schema_map = {
+                        t.get("name", ""): t.get("inputSchema", {}) for t in original_tools
+                    }
 
-                result_entry = {
-                    "entity_type": "a2a_agent",
-                    "path": doc.get("path"),
-                    "agent_name": doc.get("name"),
-                    "description": doc.get("description"),
-                    "tags": doc.get("tags", []),
-                    "skills": metadata.get("skills", []),
-                    "visibility": metadata.get("visibility", "public"),
-                    "trust_level": metadata.get("trust_level"),
-                    "is_enabled": doc.get("is_enabled", False),
-                    "relevance_score": relevance_score,
-                    "match_context": doc.get("description"),
-                    "agent_card": metadata.get("agent_card", {}),
-                }
-                grouped_results["agents"].append(result_entry)
+                    server_path = doc.get("path", "")
+                    server_name = doc.get("name", "")
+                    for tool in matching_tools:
+                        if tool_count >= tool_limit:
+                            break
+                        tool_name = tool.get("tool_name", "")
+                        grouped_results["tools"].append(
+                            {
+                                "entity_type": "tool",
+                                "server_path": server_path,
+                                "server_name": server_name,
+                                "tool_name": tool_name,
+                                "description": tool.get("description", ""),
+                                "inputSchema": tool_schema_map.get(tool_name, {}),
+                                "relevance_score": tool.get("relevance_score", relevance_score),
+                                "match_context": tool.get("match_context", ""),
+                            }
+                        )
+                        tool_count += 1
 
-            for item in tools:
-                doc = item["doc"]
-                relevance_score = item["relevance_score"]
+                elif entity_type == "a2a_agent":
+                    metadata = doc.get("metadata", {})
+                    result_entry = {
+                        "entity_type": "a2a_agent",
+                        "path": doc.get("path"),
+                        "agent_name": doc.get("name"),
+                        "description": doc.get("description"),
+                        "tags": doc.get("tags", []),
+                        "skills": metadata.get("skills", []),
+                        "visibility": metadata.get("visibility", "public"),
+                        "trust_level": metadata.get("trust_level"),
+                        "is_enabled": doc.get("is_enabled", False),
+                        "relevance_score": relevance_score,
+                        "match_context": doc.get("description"),
+                        "agent_card": metadata.get("agent_card", {}),
+                    }
+                    grouped_results["agents"].append(result_entry)
 
-                result_entry = {
-                    "entity_type": "mcp_tool",
-                    "path": doc.get("path"),
-                    "tool_name": doc.get("name"),
-                    "description": doc.get("description"),
-                    "inputSchema": doc.get("inputSchema", {}),
-                    "relevance_score": relevance_score,
-                    "match_context": doc.get("description"),
-                }
-                grouped_results["tools"].append(result_entry)
+                elif entity_type == "mcp_tool":
+                    result_entry = {
+                        "entity_type": "mcp_tool",
+                        "path": doc.get("path"),
+                        "tool_name": doc.get("name"),
+                        "description": doc.get("description"),
+                        "inputSchema": doc.get("inputSchema", {}),
+                        "relevance_score": relevance_score,
+                        "match_context": doc.get("description"),
+                    }
+                    grouped_results["tools"].append(result_entry)
 
-            for item in skills:
-                doc = item["doc"]
-                relevance_score = item["relevance_score"]
-                metadata = doc.get("metadata", {})
+                elif entity_type == "skill":
+                    metadata = doc.get("metadata", {})
+                    result_entry = {
+                        "entity_type": "skill",
+                        "path": doc.get("path"),
+                        "skill_name": doc.get("name"),
+                        "description": doc.get("description"),
+                        "tags": doc.get("tags", []),
+                        "skill_md_url": metadata.get("skill_md_url"),
+                        "version": metadata.get("version"),
+                        "author": metadata.get("author"),
+                        "visibility": doc.get("visibility", "public"),
+                        "owner": doc.get("owner"),
+                        "is_enabled": doc.get("is_enabled", False),
+                        "relevance_score": relevance_score,
+                        "match_context": doc.get("description"),
+                    }
+                    grouped_results["skills"].append(result_entry)
 
-                result_entry = {
-                    "entity_type": "skill",
-                    "path": doc.get("path"),
-                    "skill_name": doc.get("name"),
-                    "description": doc.get("description"),
-                    "tags": doc.get("tags", []),
-                    "skill_md_url": metadata.get("skill_md_url"),
-                    "version": metadata.get("version"),
-                    "author": metadata.get("author"),
-                    "visibility": doc.get("visibility", "public"),
-                    "owner": doc.get("owner"),
-                    "is_enabled": doc.get("is_enabled", False),
-                    "relevance_score": relevance_score,
-                    "match_context": doc.get("description"),
-                }
-                grouped_results["skills"].append(result_entry)
-
-            for item in virtual_servers:
-                doc = item["doc"]
-                relevance_score = item["relevance_score"]
-                metadata = doc.get("metadata", {})
-                matching_tools = doc.get("_matching_tools", [])
-
-                result_entry = {
-                    "entity_type": "virtual_server",
-                    "path": doc.get("path"),
-                    "server_name": doc.get("name"),
-                    "description": doc.get("description"),
-                    "tags": doc.get("tags", []),
-                    "num_tools": metadata.get("num_tools", 0),
-                    "backend_count": metadata.get("backend_count", 0),
-                    "backend_paths": metadata.get("backend_paths", []),
-                    "is_enabled": doc.get("is_enabled", False),
-                    "relevance_score": relevance_score,
-                    "match_context": doc.get("description"),
-                    "matching_tools": matching_tools,
-                }
-                grouped_results["virtual_servers"].append(result_entry)
+                elif entity_type == "virtual_server":
+                    metadata = doc.get("metadata", {})
+                    matching_tools = doc.get("_matching_tools", [])
+                    result_entry = {
+                        "entity_type": "virtual_server",
+                        "path": doc.get("path"),
+                        "server_name": doc.get("name"),
+                        "description": doc.get("description"),
+                        "tags": doc.get("tags", []),
+                        "num_tools": metadata.get("num_tools", 0),
+                        "backend_count": metadata.get("backend_count", 0),
+                        "backend_paths": metadata.get("backend_paths", []),
+                        "is_enabled": doc.get("is_enabled", False),
+                        "relevance_score": relevance_score,
+                        "match_context": doc.get("description"),
+                        "matching_tools": matching_tools,
+                    }
+                    grouped_results["virtual_servers"].append(result_entry)
 
             logger.info(
-                f"Client-side search returned "
-                f"{len(grouped_results['servers'])} servers, "
-                f"{len(grouped_results['tools'])} tools, "
-                f"{len(grouped_results['agents'])} agents, "
-                f"{len(grouped_results['skills'])} skills, "
-                f"{len(grouped_results['virtual_servers'])} virtual_servers "
-                f"from {len(all_docs)} total documents (top 3 per type)"
+                "Client-side search returned "
+                "%d servers, %d tools, %d agents, %d skills, "
+                "%d virtual_servers from %d total documents (max_results=%d)",
+                len(grouped_results["servers"]),
+                len(grouped_results["tools"]),
+                len(grouped_results["agents"]),
+                len(grouped_results["skills"]),
+                len(grouped_results["virtual_servers"]),
+                len(all_docs),
+                max_results,
             )
 
             return grouped_results
@@ -1262,13 +1339,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             {"$match": keyword_match_filter},
             text_boost_stage,
             {"$sort": {"text_boost": -1}},
-            {"$limit": max_results},
+            {"$limit": max(max_results * 3, 50)},
         ]
 
         cursor = collection.aggregate(pipeline)
-        results = await cursor.to_list(length=max_results)
+        results = await cursor.to_list(length=max(max_results * 3, 50))
 
-        grouped_results = self._format_lexical_results(results)
+        grouped_results = self._format_lexical_results(results, max_results)
 
         logger.info(
             "Lexical-only search for '%s' returned %d servers, %d tools, %d agents",
@@ -1283,17 +1360,31 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
     def _format_lexical_results(
         self,
         results: list[dict],
+        max_results: int = 10,
     ) -> dict[str, list[dict[str, Any]]]:
         """Format lexical search results into grouped response.
 
         Uses fixed-denominator normalization for relevance scoring.
+        Applies global ranking with competitive soft caps via _distribute_results().
 
         Args:
             results: Raw MongoDB documents with text_boost field
+            max_results: Maximum number of results to return
 
         Returns:
             Grouped search results dict with servers, tools, agents lists
         """
+        # Score results and sort by relevance before distributing
+        scored_tuples: list[tuple[dict, float]] = []
+        for doc in results:
+            text_boost = doc.get("text_boost", 0.0)
+            relevance_score = min(1.0, text_boost / MAX_LEXICAL_BOOST)
+            scored_tuples.append((doc, relevance_score))
+
+        scored_tuples.sort(key=lambda x: x[1], reverse=True)
+        selected = _distribute_results(scored_tuples, max_results)
+
+        # Group selected results by entity type
         grouped_results = {
             "servers": [],
             "tools": [],
@@ -1301,18 +1392,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "skills": [],
             "virtual_servers": [],
         }
-        server_count = 0
-        agent_count = 0
         tool_count = 0
-        skill_count = 0
-        virtual_server_count = 0
+        tool_limit = _tool_extraction_limit(max_results)
 
-        for doc in results:
+        for doc, relevance_score in selected:
             entity_type = doc.get("entity_type")
-            text_boost = doc.get("text_boost", 0.0)
-            relevance_score = min(1.0, text_boost / MAX_LEXICAL_BOOST)
 
-            if entity_type == "mcp_server" and server_count < 3:
+            if entity_type == "mcp_server":
                 matching_tools = doc.get("matching_tools", [])
                 server_metadata = doc.get("metadata", {})
                 result_entry = {
@@ -1332,7 +1418,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "supported_transports": server_metadata.get("supported_transports", []),
                 }
                 grouped_results["servers"].append(result_entry)
-                server_count += 1
 
                 # Add matching tools to top-level tools array
                 original_tools = doc.get("tools", [])
@@ -1342,7 +1427,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 server_path = doc.get("path", "")
                 server_name = doc.get("name", "")
                 for tool in matching_tools:
-                    if tool_count >= 3:
+                    if tool_count >= tool_limit:
                         break
                     tool_name = tool.get("tool_name", "")
                     grouped_results["tools"].append(
@@ -1359,7 +1444,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     )
                     tool_count += 1
 
-            elif entity_type == "a2a_agent" and agent_count < 3:
+            elif entity_type == "a2a_agent":
                 metadata = doc.get("metadata", {})
                 result_entry = {
                     "entity_type": "a2a_agent",
@@ -1376,9 +1461,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "agent_card": metadata.get("agent_card", {}),
                 }
                 grouped_results["agents"].append(result_entry)
-                agent_count += 1
 
-            elif entity_type == "mcp_tool" and tool_count < 3:
+            elif entity_type == "mcp_tool":
                 result_entry = {
                     "entity_type": "mcp_tool",
                     "path": doc.get("path"),
@@ -1389,9 +1473,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "match_context": doc.get("description"),
                 }
                 grouped_results["tools"].append(result_entry)
-                tool_count += 1
 
-            elif entity_type == "skill" and skill_count < 3:
+            elif entity_type == "skill":
                 metadata = doc.get("metadata", {})
                 result_entry = {
                     "entity_type": "skill",
@@ -1409,9 +1492,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "match_context": doc.get("description"),
                 }
                 grouped_results["skills"].append(result_entry)
-                skill_count += 1
 
-            elif entity_type == "virtual_server" and virtual_server_count < 3:
+            elif entity_type == "virtual_server":
                 metadata = doc.get("metadata", {})
                 matching_tools = doc.get("matching_tools", [])
                 result_entry = {
@@ -1429,7 +1511,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "matching_tools": matching_tools,
                 }
                 grouped_results["virtual_servers"].append(result_entry)
-                virtual_server_count += 1
 
         return grouped_results
 
@@ -1521,11 +1602,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # Sort by text boost (descending), keeping vector search order as secondary
             pipeline.append({"$sort": {"text_boost": -1}})
 
-            # Limit to requested number of results
-            pipeline.append({"$limit": max_results})
+            # Fetch more candidates than max_results to allow for global ranking.
+            # The _distribute_results() function will pick the top max_results.
+            candidate_limit = max(max_results * 3, 50)
+            pipeline.append({"$limit": candidate_limit})
 
             cursor = collection.aggregate(pipeline)
-            results = await cursor.to_list(length=max_results)
+            results = await cursor.to_list(length=candidate_limit)
 
             # Log vector search results for diagnosis
             logger.info(
@@ -1669,10 +1752,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
                 scored_results.append((doc, relevance_score))
 
-            # Sort by hybrid score descending so top-3 picks the best
+            # Sort by hybrid score descending
             scored_results.sort(key=lambda x: x[1], reverse=True)
 
-            # Group results: top 3 per entity type
+            # Distribute results using global ranking with soft caps
+            selected_results = _distribute_results(scored_results, max_results)
+
+            # Group selected results by entity type for the response
             grouped_results = {
                 "servers": [],
                 "tools": [],
@@ -1680,26 +1766,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 "skills": [],
                 "virtual_servers": [],
             }
-            server_count = 0
-            agent_count = 0
             tool_count = 0
-            skill_count = 0
-            virtual_server_count = 0
+            tool_limit = _tool_extraction_limit(max_results)
 
-            for doc, relevance_score in scored_results:
+            for doc, relevance_score in selected_results:
                 entity_type = doc.get("entity_type")
-
-                # Skip if we already have 3 of this type
-                if entity_type == "mcp_server" and server_count >= 3:
-                    continue
-                elif entity_type == "a2a_agent" and agent_count >= 3:
-                    continue
-                elif entity_type == "mcp_tool" and tool_count >= 3:
-                    continue
-                elif entity_type == "skill" and skill_count >= 3:
-                    continue
-                elif entity_type == "virtual_server" and virtual_server_count >= 3:
-                    continue
 
                 if entity_type == "mcp_server":
                     matching_tools = doc.get("matching_tools", [])
@@ -1722,10 +1793,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "supported_transports": server_metadata.get("supported_transports", []),
                     }
                     grouped_results["servers"].append(result_entry)
-                    server_count += 1
 
                     # Also add matching tools to the top-level tools array
-                    # Build a lookup map from tool name to inputSchema from original tools
                     original_tools = doc.get("tools", [])
                     tool_schema_map = {
                         t.get("name", ""): t.get("inputSchema", {}) for t in original_tools
@@ -1734,7 +1803,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     server_path = doc.get("path", "")
                     server_name = doc.get("name", "")
                     for tool in matching_tools:
-                        if tool_count >= 3:
+                        if tool_count >= tool_limit:
                             break
                         tool_name = tool.get("tool_name", "")
                         grouped_results["tools"].append(
@@ -1769,7 +1838,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "sync_metadata": metadata.get("sync_metadata"),
                     }
                     grouped_results["agents"].append(result_entry)
-                    agent_count += 1
 
                 elif entity_type == "mcp_tool":
                     result_entry = {
@@ -1782,7 +1850,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "match_context": doc.get("description"),
                     }
                     grouped_results["tools"].append(result_entry)
-                    tool_count += 1
 
                 elif entity_type == "skill":
                     metadata = doc.get("metadata", {})
@@ -1802,7 +1869,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "match_context": doc.get("description"),
                     }
                     grouped_results["skills"].append(result_entry)
-                    skill_count += 1
 
                 elif entity_type == "virtual_server":
                     metadata = doc.get("metadata", {})
@@ -1822,7 +1888,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "matching_tools": matching_tools,
                     }
                     grouped_results["virtual_servers"].append(result_entry)
-                    virtual_server_count += 1
 
             # Sort each group by relevance_score (descending) to ensure highest matches
             # appear first. This is needed because the DB sorts by text_boost only,
@@ -1836,12 +1901,16 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
 
             logger.info(
-                f"Hybrid search for '{query}' returned "
-                f"{len(grouped_results['servers'])} servers, "
-                f"{len(grouped_results['tools'])} tools, "
-                f"{len(grouped_results['agents'])} agents, "
-                f"{len(grouped_results['skills'])} skills, "
-                f"{len(grouped_results['virtual_servers'])} virtual_servers (top 3 per type)"
+                "Hybrid search for '%s' returned "
+                "%d servers, %d tools, %d agents, %d skills, "
+                "%d virtual_servers (max_results=%d)",
+                query,
+                len(grouped_results["servers"]),
+                len(grouped_results["tools"]),
+                len(grouped_results["agents"]),
+                len(grouped_results["skills"]),
+                len(grouped_results["virtual_servers"]),
+                max_results,
             )
 
             return grouped_results
