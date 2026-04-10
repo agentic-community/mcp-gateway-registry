@@ -580,7 +580,7 @@ async def sync_federation(
 
     Args:
         config_id: Configuration ID to use for sync (default: "default")
-        source: Optional source filter ("anthropic" or "asor"). If None, syncs all enabled sources.
+        source: Optional source filter ("anthropic", "asor", or "agentcore"). If None, syncs all enabled sources.
         user_context: Authenticated user context
         repo: Federation config repository
 
@@ -622,7 +622,11 @@ async def sync_federation(
         from ..services.federation.anthropic_client import AnthropicFederationClient
         from ..services.federation.asor_client import AsorFederationClient
 
-        results = {"anthropic": {"servers": [], "count": 0}, "asor": {"agents": [], "count": 0}}
+        results: dict[str, Any] = {
+            "anthropic": {"servers": [], "count": 0},
+            "asor": {"agents": [], "count": 0},
+            "agentcore": {"servers": [], "agents": [], "skills": [], "count": 0},
+        }
 
         # Sync Anthropic servers if enabled and requested
         if (source is None or source == "anthropic") and config.anthropic.enabled:
@@ -752,6 +756,98 @@ async def sync_federation(
             results["asor"]["count"] = len(results["asor"]["agents"])
             logger.info(f"Synced {results['asor']['count']} agents from ASOR")
 
+        # Sync AgentCore records if enabled and requested
+        if (source is None or source == "agentcore") and config.agentcore.enabled:
+            logger.info("Syncing from AWS Agent Registry...")
+
+            from ..schemas.agent_models import AgentCard
+            from ..schemas.skill_models import SkillCard
+            from ..repositories.factory import (
+                get_agent_repository,
+                get_skill_repository,
+            )
+            from ..services.agent_service import agent_service
+            from ..services.federation.agentcore_client import AgentCoreFederationClient
+            from ..services.skill_service import get_skill_service
+
+            agentcore_client = AgentCoreFederationClient(
+                aws_region=config.agentcore.aws_region
+            )
+            records = agentcore_client.fetch_all_records(
+                registry_configs=config.agentcore.registries,
+                sync_timeout_seconds=config.agentcore.sync_timeout_seconds,
+                max_concurrent_fetches=config.agentcore.max_concurrent_fetches,
+            )
+
+            # Register servers (MCP records)
+            for srv in records["servers"]:
+                try:
+                    srv_path = srv.get("path")
+                    if not srv_path:
+                        continue
+                    if "id" not in srv or not srv["id"]:
+                        srv["id"] = str(uuid4())
+
+                    result = await server_service.register_server(srv)
+                    if not result["success"]:
+                        if "id" not in srv or not srv["id"]:
+                            srv["id"] = str(uuid4())
+                        await server_service.update_server(srv_path, srv)
+
+                    await server_service.toggle_service(srv_path, True)
+                    results["agentcore"]["servers"].append(srv.get("server_name", srv_path))
+                except Exception as e:
+                    logger.error(f"Failed to sync AgentCore server {srv.get('server_name', 'unknown')}: {e}")
+
+            # Register agents (A2A + CUSTOM records)
+            for agent_data in records["agents"]:
+                try:
+                    agent_path = agent_data.get("path")
+                    if not agent_path:
+                        continue
+                    try:
+                        agent_card = AgentCard(**agent_data)
+                        await agent_service.register_agent(agent_card)
+                    except ValueError:
+                        await agent_service.update_agent(agent_path, agent_data)
+                    results["agentcore"]["agents"].append(agent_data.get("name", agent_path))
+                except Exception as e:
+                    logger.error(f"Failed to sync AgentCore agent {agent_data.get('name', 'unknown')}: {e}")
+
+            # Register skills (AGENT_SKILLS records)
+            skill_service = get_skill_service()
+            skill_repo = get_skill_repository()
+            for skill_data in records["skills"]:
+                try:
+                    skill_path = skill_data.get("path")
+                    if not skill_path:
+                        continue
+                    try:
+                        skill_card = SkillCard(**skill_data)
+                        await skill_repo.create(skill_card)
+                    except Exception:
+                        update_fields = {
+                            k: v for k, v in skill_data.items()
+                            if k not in ("path", "id", "created_at")
+                        }
+                        await skill_repo.update(skill_path, update_fields)
+                    results["agentcore"]["skills"].append(skill_data.get("name", skill_path))
+                except Exception as e:
+                    logger.error(f"Failed to sync AgentCore skill {skill_data.get('name', 'unknown')}: {e}")
+
+            agentcore_total = (
+                len(results["agentcore"]["servers"])
+                + len(results["agentcore"]["agents"])
+                + len(results["agentcore"]["skills"])
+            )
+            results["agentcore"]["count"] = agentcore_total
+            logger.info(
+                f"Synced from AWS Agent Registry: "
+                f"{len(results['agentcore']['servers'])} servers, "
+                f"{len(results['agentcore']['agents'])} agents, "
+                f"{len(results['agentcore']['skills'])} skills"
+            )
+
         # Reconcile: remove stale federated servers after sync
         reconciliation_result = None
         try:
@@ -779,7 +875,7 @@ async def sync_federation(
             "message": "Federation sync completed",
             "config_id": config_id,
             "results": results,
-            "total_synced": results["anthropic"]["count"] + results["asor"]["count"],
+            "total_synced": results["anthropic"]["count"] + results["asor"]["count"] + results["agentcore"]["count"],
             "reconciliation": reconciliation_result,
         }
 

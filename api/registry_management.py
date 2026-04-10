@@ -4984,8 +4984,8 @@ Examples:
     )
     federation_sync_parser.add_argument(
         "--source",
-        choices=["anthropic", "asor"],
-        help="Optional source filter (anthropic or asor). Syncs all enabled sources if not specified.",
+        choices=["anthropic", "asor", "agentcore"],
+        help="Optional source filter (anthropic, asor, or agentcore). Syncs all enabled sources if not specified.",
     )
     federation_sync_parser.add_argument(
         "--json", action="store_true", help="Output raw JSON instead of formatted text"
