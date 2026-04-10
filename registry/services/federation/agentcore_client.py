@@ -157,10 +157,137 @@ class AgentCoreFederationClient:
         self._last_sync_record_count: int = 0
         self._last_sync_error: str | None = None
 
+        # Cache for per-registry clients (keyed by cache key)
+        self._registry_clients: dict[str, Any] = {}
+
         logger.info(
             f"AgentCoreFederationClient initialized "
             f"(region={aws_region}, timeout={timeout_seconds}s, retries={retry_attempts})"
         )
+
+    def _get_client_for_registry(
+        self,
+        reg_config: AgentCoreRegistryConfig,
+    ) -> Any:
+        """Get a boto3 client for the given registry config.
+
+        Returns the default client when the registry uses the same region
+        and no cross-account role. Creates a region-specific or cross-account
+        client via STS AssumeRole when needed.
+
+        Args:
+            reg_config: Registry configuration (may include aws_region, assume_role_arn)
+
+        Returns:
+            boto3 bedrock-agentcore-control client
+        """
+        registry_region = reg_config.aws_region or self.aws_region
+        has_custom_region = registry_region != self.aws_region
+        has_role = bool(reg_config.assume_role_arn)
+
+        # Same region, no role assumption -> use default client
+        if not has_custom_region and not has_role:
+            return self._client
+
+        # Build cache key from region + role
+        cache_key = f"{registry_region}:{reg_config.assume_role_arn or 'default'}"
+        if cache_key in self._registry_clients:
+            return self._registry_clients[cache_key]
+
+        return self._create_registry_client(
+            reg_config=reg_config,
+            registry_region=registry_region,
+            cache_key=cache_key,
+        )
+
+    def _create_registry_client(
+        self,
+        reg_config: AgentCoreRegistryConfig,
+        registry_region: str,
+        cache_key: str,
+    ) -> Any:
+        """Create a boto3 client for cross-account or cross-region access.
+
+        Args:
+            reg_config: Registry configuration
+            registry_region: Resolved AWS region for this registry
+            cache_key: Cache key for storing the created client
+
+        Returns:
+            boto3 bedrock-agentcore-control client
+        """
+        boto_config = BotoConfig(
+            region_name=registry_region,
+            read_timeout=self.timeout_seconds,
+            retries={"max_attempts": self.retry_attempts, "mode": "adaptive"},
+        )
+
+        if reg_config.assume_role_arn:
+            logger.info(
+                f"Assuming role {reg_config.assume_role_arn} for registry "
+                f"{reg_config.registry_id} (region={registry_region})"
+            )
+            client = self._create_cross_account_client(
+                role_arn=reg_config.assume_role_arn,
+                registry_id=reg_config.registry_id,
+                registry_region=registry_region,
+                boto_config=boto_config,
+            )
+        else:
+            # Different region, same account
+            logger.info(
+                f"Creating region-specific client for registry "
+                f"{reg_config.registry_id} (region={registry_region})"
+            )
+            client = boto3.client(
+                "bedrock-agentcore-control",
+                config=boto_config,
+            )
+
+        self._registry_clients[cache_key] = client
+        return client
+
+    def _create_cross_account_client(
+        self,
+        role_arn: str,
+        registry_id: str,
+        registry_region: str,
+        boto_config: BotoConfig,
+    ) -> Any:
+        """Create a boto3 client using STS AssumeRole for cross-account access.
+
+        Args:
+            role_arn: IAM role ARN to assume
+            registry_id: Registry ID (for session name)
+            registry_region: AWS region for the target registry
+            boto_config: Boto3 client config
+
+        Returns:
+            boto3 bedrock-agentcore-control client with assumed role credentials
+        """
+        try:
+            sts_client = boto3.client("sts", region_name=registry_region)
+            assumed = sts_client.assume_role(
+                RoleArn=role_arn,
+                RoleSessionName=f"agentcore-federation-{registry_id[:20]}",
+                DurationSeconds=3600,
+            )
+
+            credentials = assumed["Credentials"]
+            cross_account_client = boto3.client(
+                "bedrock-agentcore-control",
+                config=boto_config,
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+            )
+
+            logger.info(f"Cross-account client created for role {role_arn}")
+            return cross_account_client
+
+        except (ClientError, BotoCoreError) as e:
+            logger.error(f"Failed to assume role {role_arn}: {e}")
+            raise
 
     def get_health_status(self) -> dict[str, Any]:
         """Return health indicator for AWS Agent Registry federation.
@@ -397,32 +524,44 @@ class AgentCoreFederationClient:
         """
         registry_id = reg_config.registry_id
         status_filter = reg_config.sync_status_filter
-        logger.info(f"Fetching records from AWS Agent Registry: {registry_id}")
+        account_info = f" (account={reg_config.aws_account_id})" if reg_config.aws_account_id else ""
+        logger.info(f"Fetching records from AWS Agent Registry: {registry_id}{account_info}")
 
-        # List all records (filtering by status)
-        record_summaries = self.list_registry_records(
-            registry_id=registry_id,
-            status=status_filter,
-        )
+        # Swap to cross-account client if needed
+        original_client = self._client
+        try:
+            self._client = self._get_client_for_registry(reg_config)
+        except (ClientError, BotoCoreError) as e:
+            logger.error(f"Skipping registry {registry_id}: failed to get client: {e}")
+            return
 
-        # Filter to configured descriptor types
-        filtered_summaries = [
-            s for s in record_summaries
-            if s.get("descriptorType", "") in reg_config.descriptor_types
-        ]
+        try:
+            record_summaries = self.list_registry_records(
+                registry_id=registry_id,
+                status=status_filter,
+            )
 
-        skipped = len(record_summaries) - len(filtered_summaries)
-        if skipped > 0:
-            logger.debug(f"Skipped {skipped} records with non-configured descriptor types")
+            # Filter to configured descriptor types
+            filtered_summaries = [
+                s for s in record_summaries
+                if s.get("descriptorType", "") in reg_config.descriptor_types
+            ]
 
-        # Fetch full details in parallel
-        timeout_remaining = sync_timeout_seconds - (time.monotonic() - start_time)
-        fetched_records = self._fetch_records_parallel(
-            registry_id=registry_id,
-            summaries=filtered_summaries,
-            max_workers=max_concurrent_fetches,
-            timeout_remaining=timeout_remaining,
-        )
+            skipped = len(record_summaries) - len(filtered_summaries)
+            if skipped > 0:
+                logger.debug(f"Skipped {skipped} records with non-configured descriptor types")
+
+            # Fetch full details in parallel
+            timeout_remaining = sync_timeout_seconds - (time.monotonic() - start_time)
+            fetched_records = self._fetch_records_parallel(
+                registry_id=registry_id,
+                summaries=filtered_summaries,
+                max_workers=max_concurrent_fetches,
+                timeout_remaining=timeout_remaining,
+            )
+        finally:
+            # Restore original client
+            self._client = original_client
 
         # Transform and route to correct bucket
         for full_record in fetched_records:

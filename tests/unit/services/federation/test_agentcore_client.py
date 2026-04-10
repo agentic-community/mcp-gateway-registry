@@ -553,6 +553,131 @@ class TestHealthStatus:
 
 
 # ---------------------------------------------------------------------------
+# Cross-account client tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetClientForRegistry:
+    """Tests for _get_client_for_registry (cross-account/cross-region)."""
+
+    def test_same_account_same_region_returns_default(self, client):
+        """When no role or custom region, return the default client."""
+        from registry.schemas.federation_schema import AgentCoreRegistryConfig
+
+        config = AgentCoreRegistryConfig(registry_id="reg-123")
+        result = client._get_client_for_registry(config)
+        assert result is client._client
+
+    def test_same_region_explicit_returns_default(self, client):
+        """Explicitly setting aws_region to same as client still returns default."""
+        from registry.schemas.federation_schema import AgentCoreRegistryConfig
+
+        config = AgentCoreRegistryConfig(
+            registry_id="reg-123",
+            aws_region="us-east-1",
+        )
+        result = client._get_client_for_registry(config)
+        assert result is client._client
+
+    def test_different_region_creates_new_client(self, client):
+        """Different aws_region should create a region-specific client."""
+        from registry.schemas.federation_schema import AgentCoreRegistryConfig
+
+        mock_regional_client = MagicMock()
+        with patch("registry.services.federation.agentcore_client.boto3") as mock_b3:
+            mock_b3.client.return_value = mock_regional_client
+
+            config = AgentCoreRegistryConfig(
+                registry_id="reg-eu",
+                aws_region="eu-west-1",
+            )
+            result = client._get_client_for_registry(config)
+
+        assert result is mock_regional_client
+
+    def test_cross_account_calls_sts_assume_role(self, client):
+        """When assume_role_arn is set, STS AssumeRole should be called."""
+        from registry.schemas.federation_schema import AgentCoreRegistryConfig
+
+        mock_sts = MagicMock()
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "AKIA_TEMP",
+                "SecretAccessKey": "secret_temp",
+                "SessionToken": "token_temp",
+            }
+        }
+
+        mock_cross_client = MagicMock()
+
+        with patch("registry.services.federation.agentcore_client.boto3") as mock_b3:
+            mock_b3.client.side_effect = lambda service, **kwargs: (
+                mock_sts if service == "sts" else mock_cross_client
+            )
+
+            config = AgentCoreRegistryConfig(
+                registry_id="reg-cross",
+                aws_account_id="123456789012",
+                assume_role_arn="arn:aws:iam::123456789012:role/ReadRole",
+            )
+            result = client._get_client_for_registry(config)
+
+        assert result is mock_cross_client
+        mock_sts.assume_role.assert_called_once()
+        call_kwargs = mock_sts.assume_role.call_args[1]
+        assert call_kwargs["RoleArn"] == "arn:aws:iam::123456789012:role/ReadRole"
+
+    def test_cross_account_with_custom_region(self, client):
+        """Role assumption should use the per-registry region."""
+        from registry.schemas.federation_schema import AgentCoreRegistryConfig
+
+        mock_sts = MagicMock()
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "AK",
+                "SecretAccessKey": "SK",
+                "SessionToken": "ST",
+            }
+        }
+        mock_cross_client = MagicMock()
+
+        with patch("registry.services.federation.agentcore_client.boto3") as mock_b3:
+            mock_b3.client.side_effect = lambda service, **kwargs: (
+                mock_sts if service == "sts" else mock_cross_client
+            )
+
+            config = AgentCoreRegistryConfig(
+                registry_id="reg-eu-cross",
+                aws_account_id="999888777666",
+                aws_region="eu-west-1",
+                assume_role_arn="arn:aws:iam::999888777666:role/EuRole",
+            )
+            result = client._get_client_for_registry(config)
+
+        assert result is mock_cross_client
+        # STS client should be created in the registry's region
+        sts_call = mock_b3.client.call_args_list[0]
+        assert sts_call[0][0] == "sts"
+        assert sts_call[1]["region_name"] == "eu-west-1"
+
+    def test_client_is_cached_by_region_and_role(self, client):
+        """Second call with same region+role should return cached client."""
+        from registry.schemas.federation_schema import AgentCoreRegistryConfig
+
+        mock_cached = MagicMock()
+        cache_key = "eu-west-1:arn:aws:iam::111111111111:role/CachedRole"
+        client._registry_clients[cache_key] = mock_cached
+
+        config = AgentCoreRegistryConfig(
+            registry_id="reg-cached",
+            aws_region="eu-west-1",
+            assume_role_arn="arn:aws:iam::111111111111:role/CachedRole",
+        )
+        result = client._get_client_for_registry(config)
+        assert result is mock_cached
+
+
+# ---------------------------------------------------------------------------
 # Compatibility interface tests
 # ---------------------------------------------------------------------------
 

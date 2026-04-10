@@ -1,0 +1,31 @@
+{
+  "anthropic": {
+    "enabled": false,
+    "endpoint": "https://registry.modelcontextprotocol.io",
+    "sync_on_startup": false,
+    "servers": []
+  },
+  "asor": {
+    "enabled": false,
+    "endpoint": "",
+    "auth_env_var": "ASOR_ACCESS_TOKEN",
+    "sync_on_startup": false,
+    "agents": []
+  },
+  "agentcore": {
+    "enabled": true,
+    "sync_on_startup": true,
+    "sync_interval_minutes": 60,
+    "sync_timeout_seconds": 300,
+    "max_concurrent_fetches": 5,
+    "registries": [
+      {
+        "registry_id": "registry_njv8x",
+        "aws_account_id": "015469603702",
+        "aws_region": "us-east-1",
+        "descriptor_types": ["MCP", "A2A", "CUSTOM", "AGENT_SKILLS"],
+        "sync_status_filter": "APPROVED"
+      }
+    ]
+  }
+}

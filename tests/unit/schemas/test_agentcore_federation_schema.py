@@ -78,6 +78,62 @@ class TestAgentCoreRegistryConfig:
         with pytest.raises(Exception):
             AgentCoreRegistryConfig()
 
+    def test_default_aws_account_id_is_none(self):
+        """Default aws_account_id should be None (same-account)."""
+        config = AgentCoreRegistryConfig(registry_id="test-reg")
+        assert config.aws_account_id is None
+
+    def test_custom_aws_account_id(self):
+        """aws_account_id should accept a custom value."""
+        config = AgentCoreRegistryConfig(
+            registry_id="test-reg",
+            aws_account_id="123456789012",
+        )
+        assert config.aws_account_id == "123456789012"
+
+    def test_default_registry_aws_region_is_none(self):
+        """Default aws_region should be None (inherits from parent config)."""
+        config = AgentCoreRegistryConfig(registry_id="test-reg")
+        assert config.aws_region is None
+
+    def test_custom_registry_aws_region(self):
+        """Per-registry aws_region should override parent."""
+        config = AgentCoreRegistryConfig(
+            registry_id="test-reg",
+            aws_region="eu-west-1",
+        )
+        assert config.aws_region == "eu-west-1"
+
+    def test_default_assume_role_arn_is_none(self):
+        """Default assume_role_arn should be None."""
+        config = AgentCoreRegistryConfig(registry_id="test-reg")
+        assert config.assume_role_arn is None
+
+    def test_custom_assume_role_arn(self):
+        """assume_role_arn should accept a custom IAM role ARN."""
+        config = AgentCoreRegistryConfig(
+            registry_id="test-reg",
+            aws_account_id="123456789012",
+            assume_role_arn="arn:aws:iam::123456789012:role/AgentCoreReadOnly",
+        )
+        assert config.assume_role_arn == "arn:aws:iam::123456789012:role/AgentCoreReadOnly"
+
+    def test_cross_account_config_all_fields(self):
+        """Cross-account config should set account, region, role, and registry."""
+        config = AgentCoreRegistryConfig(
+            registry_id="reg-cross-001",
+            aws_account_id="987654321098",
+            aws_region="eu-west-1",
+            assume_role_arn="arn:aws:iam::987654321098:role/FederationRole",
+            descriptor_types=["MCP"],
+            sync_status_filter="APPROVED",
+        )
+        assert config.registry_id == "reg-cross-001"
+        assert config.aws_account_id == "987654321098"
+        assert config.aws_region == "eu-west-1"
+        assert config.assume_role_arn == "arn:aws:iam::987654321098:role/FederationRole"
+        assert config.descriptor_types == ["MCP"]
+
 
 # =============================================================================
 # AgentCoreFederationConfig Tests

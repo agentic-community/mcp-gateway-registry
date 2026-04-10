@@ -35,9 +35,17 @@ class AsorFederationConfig(BaseModel):
 
 
 class AgentCoreRegistryConfig(BaseModel):
-    """Configuration for a single AWS Agent Registry to sync from."""
+    """Configuration for a single AWS Agent Registry to sync from.
+
+    For cross-account or cross-region access, provide aws_account_id,
+    assume_role_arn, and/or aws_region per registry. The gateway assumes
+    the IAM role via STS to read from the remote registry.
+    """
 
     registry_id: str
+    aws_account_id: str | None = None
+    aws_region: str | None = None
+    assume_role_arn: str | None = None
     descriptor_types: list[str] = Field(
         default_factory=lambda: ["MCP", "A2A", "CUSTOM", "AGENT_SKILLS"]
     )
