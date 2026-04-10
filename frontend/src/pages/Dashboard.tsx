@@ -458,7 +458,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     error: semanticError
   } = useSemanticSearch(committedQuery, {
     minLength: 2,
-    maxResults: 12,
+    maxResults: 10,
     enabled: semanticEnabled,
     tags: selectedTags.length > 0 ? selectedTags : undefined,
   });
