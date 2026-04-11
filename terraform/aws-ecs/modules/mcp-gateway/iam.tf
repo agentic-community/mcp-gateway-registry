@@ -84,6 +84,42 @@ resource "aws_iam_policy" "ecs_exec_task_execution" {
   tags = local.common_tags
 }
 
+# IAM policy for Amazon Bedrock AgentCore access (registry federation)
+resource "aws_iam_policy" "bedrock_agentcore_access" {
+  count       = var.aws_registry_federation_enabled ? 1 : 0
+  name_prefix = "${local.name_prefix}-bedrock-agentcore-"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockAgentCoreFullAccess"
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore:*"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "StsAssumeRoleForCrossAccount"
+        Effect = "Allow"
+        Action = [
+          "sts:AssumeRole"
+        ]
+        Resource = "*"
+        Condition = {
+          StringLike = {
+            "iam:ResourceTag/Purpose" = "agentcore-federation"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+
 # IAM policy for ECS Exec - task role
 resource "aws_iam_policy" "ecs_exec_task" {
   name_prefix = "${local.name_prefix}-ecs-exec-task-"

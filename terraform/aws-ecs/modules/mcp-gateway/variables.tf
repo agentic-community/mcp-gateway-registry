@@ -691,18 +691,6 @@ variable "aws_registry_federation_enabled" {
   default     = false
 }
 
-variable "aws_registry_region" {
-  description = "AWS region for Agent Registry API calls."
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "aws_registry_sync_on_startup" {
-  description = "Sync AWS Agent Registry records on startup."
-  type        = bool
-  default     = false
-}
-
 # =============================================================================
 # ANS (AGENT NAMING SERVICE) CONFIGURATION
 # =============================================================================

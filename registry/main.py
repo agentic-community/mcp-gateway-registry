@@ -340,6 +340,40 @@ async def _sync_agentcore_on_startup(
         )
 
 
+async def _apply_aws_registry_env_vars() -> None:
+    """Apply AWS_REGISTRY_FEDERATION_ENABLED env var to the federation config.
+
+    When the env var is set (e.g. via ECS task definition or .env),
+    it overrides the aws_registry.enabled flag in the MongoDB federation
+    config document. Creates the config document if it does not exist.
+
+    Other aws_registry settings (region, sync_on_startup, registries)
+    are managed exclusively via the /api/federation/config API.
+    """
+    from registry.repositories.factory import get_federation_config_repository
+    from registry.schemas.federation_schema import FederationConfig
+
+    env_enabled = os.environ.get("AWS_REGISTRY_FEDERATION_ENABLED", "").lower()
+
+    if not env_enabled:
+        logger.debug("AWS_REGISTRY_FEDERATION_ENABLED not set, skipping env var override")
+        return
+
+    enabled = env_enabled in ("true", "1", "yes")
+    logger.info(f"AWS_REGISTRY_FEDERATION_ENABLED={enabled} (from env var)")
+
+    federation_repo = get_federation_config_repository()
+    config = await federation_repo.get_config("default")
+
+    if config is None:
+        config = FederationConfig()
+
+    config.aws_registry.enabled = enabled
+
+    await federation_repo.save_config(config, "default")
+    logger.info(f"Federation config updated: aws_registry.enabled={enabled}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle management."""
@@ -462,6 +496,15 @@ async def lifespan(app: FastAPI):
 
         logger.info("🔗 Checking federation configuration...")
         from registry.repositories.factory import get_federation_config_repository
+
+        # Apply env var overrides (e.g. from ECS/terraform) before loading config
+        try:
+            await _apply_aws_registry_env_vars()
+        except Exception as e:
+            logger.error(
+                f"Failed to apply AWS Registry env vars (continuing with startup): {e}",
+                exc_info=True,
+            )
 
         try:
             # Load federation config

@@ -608,13 +608,8 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # These are global flags only.
 
 # Enable AWS Registry federation (default: false)
+# Registry IDs, region, sync settings are managed via /api/federation/config API.
 aws_registry_federation_enabled = true
-
-# AWS region for Agent Registry API calls (default: us-east-1)
-aws_registry_region = "us-east-1"
-
-# Sync AWS Registry records on startup (default: false)
-aws_registry_sync_on_startup = true
 
 # ============================================================================
 # DEMO SERVER CONFIGURATION (Issue #764)

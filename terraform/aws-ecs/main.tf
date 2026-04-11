@@ -168,8 +168,6 @@ module "mcp_gateway" {
 
   # AWS Agent Registry federation configuration
   aws_registry_federation_enabled = var.aws_registry_federation_enabled
-  aws_registry_region             = var.aws_registry_region
-  aws_registry_sync_on_startup    = var.aws_registry_sync_on_startup
 
   # ANS (Agent Name Service) configuration
   ans_integration_enabled            = var.ans_integration_enabled
