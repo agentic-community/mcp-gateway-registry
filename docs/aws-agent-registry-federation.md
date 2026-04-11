@@ -108,9 +108,14 @@ curl -X POST https://your-registry.com/api/federation/config/default/aws_registr
 ### Using the CLI
 
 ```bash
-uv run python -m cli.federation add-aws-registry \
-  --registry-id "arn:aws:bedrock-agentcore:us-east-1:123456789012:registry/rCu9kFIgrbNOpEsF" \
-  --region us-east-1
+# Save a federation config with AWS Agent Registry enabled
+uv run python registry_management.py federation-save \
+  --config cli/examples/federation-config-agentcore-example.json
+
+# Or get existing config, edit, and save back
+uv run python registry_management.py federation-get --json > federation-config.json
+# Edit federation-config.json to add registry entries under aws_registry.registries
+uv run python registry_management.py federation-save --config federation-config.json
 ```
 
 ## Step 3: Sync Records
@@ -133,6 +138,16 @@ curl -X POST https://your-registry.com/api/federation/sync?source=aws_registry \
 # Sync all federation sources
 curl -X POST https://your-registry.com/api/federation/sync \
   -H "Authorization: Bearer <token>"
+```
+
+### Manual Sync (CLI)
+
+```bash
+# Sync only AWS Agent Registry source
+uv run python registry_management.py federation-sync --source aws_registry
+
+# Sync all federation sources
+uv run python registry_management.py federation-sync
 ```
 
 ### Automatic Sync on Startup
