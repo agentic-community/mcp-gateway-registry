@@ -1,6 +1,6 @@
 # AWS Agent Registry Federation
 
-This guide covers how to federate MCP servers, A2A agents, and agent skills from [Amazon Bedrock AgentCore](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html) registries into the MCP Gateway Registry. Once federated, AgentCore records appear alongside locally registered assets and can be discovered, searched, and invoked through the gateway.
+This guide covers how to federate MCP servers, A2A agents, and agent skills from [Amazon Bedrock AgentCore](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/registry.html) registries into the MCP Gateway Registry. Once federated, AgentCore records appear alongside locally registered assets and can be discovered, searched, and invoked through the gateway.
 
 ## Overview
 

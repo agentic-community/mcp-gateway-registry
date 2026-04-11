@@ -69,6 +69,10 @@ spec:
               value: {{ .Values.app.deploymentMode | default "with-gateway" | quote }}
             - name: REGISTRY_MODE
               value: {{ .Values.app.registryMode | default "full" | quote }}
+            {{- if .Values.awsRegistry.federationEnabled }}
+            - name: AWS_REGISTRY_FEDERATION_ENABLED
+              value: "true"
+            {{- end }}
             {{- if eq (.Values.global.authProvider.type | default "keycloak") "keycloak" }}
             - name: KEYCLOAK_ADMIN_PASSWORD
               valueFrom:

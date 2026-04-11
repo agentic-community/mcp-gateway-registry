@@ -221,6 +221,10 @@ registry:
     # Demo server configuration
     disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
 
+  # AWS Agent Registry Federation
+  awsRegistry:
+    federationEnabled: false  # Enable AWS Agent Registry federation (overrides MongoDB config on startup)
+
   # ANS (Agent Name Service) Integration
   ans:
     enabled: false  # Enable ANS integration for trust verification
