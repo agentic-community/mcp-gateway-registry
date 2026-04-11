@@ -519,14 +519,14 @@ Output: `token_refresh_manifest.json` (add to `.gitignore`)
 [
   {
     "server_path": "/customersupport-gw",
-    "gateway_arn": "arn:aws:bedrock:us-east-1:015469603702:gateway/gw-abc",
+    "gateway_arn": "arn:aws:bedrock:us-east-1:123456789012:gateway/gw-abc",
     "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pnikLWYzO/.well-known/openid-configuration",
     "allowed_clients": ["7kqi2l0n47mnfmhfapsf29ch4h"],
     "idp_vendor": "cognito"
   },
   {
     "server_path": "/enterprise-gw",
-    "gateway_arn": "arn:aws:bedrock:us-east-1:015469603702:gateway/gw-def",
+    "gateway_arn": "arn:aws:bedrock:us-east-1:123456789012:gateway/gw-def",
     "discovery_url": "https://myorg.okta.com/.well-known/openid-configuration",
     "allowed_clients": ["0oa1234567abcdefg"],
     "idp_vendor": "okta"

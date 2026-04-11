@@ -24,8 +24,8 @@
     "max_concurrent_fetches": 5,
     "registries": [
       {
-        "registry_id": "arn:aws:bedrock-agentcore:us-east-1:015469603702:registry/rCu9kFIgrbNOpEsF",
-        "aws_account_id": "015469603702",
+        "registry_id": "arn:aws:bedrock-agentcore:us-east-1:123456789012:registry/rCu9kFIgrbNOpEsF",
+        "aws_account_id": "123456789012",
         "aws_region": "us-east-1",
         "descriptor_types": ["MCP", "A2A", "CUSTOM", "AGENT_SKILLS"],
         "sync_status_filter": "APPROVED"
