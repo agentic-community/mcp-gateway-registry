@@ -241,7 +241,7 @@ def _build_expected_agentcore_paths(
     Returns:
         Dict with "servers", "agents", "skills" keys containing expected path sets
     """
-    if not config.agentcore.enabled:
+    if not config.aws_registry.enabled:
         return {"servers": set(), "agents": set(), "skills": set()}
 
     return {

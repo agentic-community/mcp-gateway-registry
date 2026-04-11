@@ -16,7 +16,7 @@
     "sync_on_startup": false,
     "agents": []
   },
-  "agentcore": {
+  "aws_registry": {
     "enabled": true,
     "sync_on_startup": true,
     "sync_interval_minutes": 60,

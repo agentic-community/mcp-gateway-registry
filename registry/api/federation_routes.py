@@ -15,7 +15,10 @@ from ..audit import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
 from ..repositories.factory import get_federation_config_repository
 from ..repositories.interfaces import FederationConfigRepositoryBase
-from ..schemas.federation_schema import FederationConfig
+from ..schemas.federation_schema import (
+    AwsRegistryConfig,
+    FederationConfig,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -567,6 +570,312 @@ async def remove_asor_agent(
     }
 
 
+@router.post(
+    "/federation/config/{config_id}/aws_registry/registries",
+    tags=["federation"],
+    summary="Add AWS registry to config",
+)
+async def add_aws_registry(
+    request: Request,
+    config_id: str,
+    registry_config: AwsRegistryConfig,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+) -> dict[str, Any]:
+    """
+    Add a registry to AWS Registry federation configuration.
+
+    Args:
+        config_id: Configuration ID
+        registry_config: AWS registry configuration (JSON body)
+        user_context: Authenticated user context
+        repo: Federation config repository
+
+    Returns:
+        Updated configuration
+    """
+    set_audit_action(
+        request,
+        "create",
+        "federation",
+        resource_id=config_id,
+        description=f"Add AWS registry {registry_config.registry_id}",
+    )
+
+    logger.info(
+        f"User {user_context['username']} adding AWS registry: {registry_config.registry_id}"
+    )
+
+    config = await repo.get_config(config_id)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Federation config '{config_id}' not found",
+        )
+
+    # Check if registry already exists
+    for reg in config.aws_registry.registries:
+        if reg.registry_id == registry_config.registry_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Registry '{registry_config.registry_id}' already exists in configuration",
+            )
+
+    # Add new registry
+    config.aws_registry.registries.append(registry_config)
+
+    # Save updated config
+    saved_config = await repo.save_config(config, config_id)
+
+    return {
+        "message": f"Registry '{registry_config.registry_id}' added to AWS Registry configuration",
+        "config": saved_config.model_dump(),
+    }
+
+
+@router.delete(
+    "/federation/config/{config_id}/aws_registry/registries/{registry_id:path}",
+    tags=["federation"],
+    summary="Remove AWS registry from config",
+)
+async def remove_aws_registry(
+    request: Request,
+    config_id: str,
+    registry_id: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+) -> dict[str, Any]:
+    """
+    Remove a registry from AWS Registry federation configuration.
+
+    Args:
+        config_id: Configuration ID
+        registry_id: Registry ID to remove (e.g., ARN)
+        user_context: Authenticated user context
+        repo: Federation config repository
+
+    Returns:
+        Updated configuration
+    """
+    set_audit_action(
+        request,
+        "delete",
+        "federation",
+        resource_id=config_id,
+        description=f"Remove AWS registry {registry_id}",
+    )
+
+    logger.info(f"User {user_context['username']} removing AWS registry: {registry_id}")
+
+    config = await repo.get_config(config_id)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Federation config '{config_id}' not found",
+        )
+
+    # Find and remove registry
+    original_count = len(config.aws_registry.registries)
+    config.aws_registry.registries = [
+        r for r in config.aws_registry.registries
+        if r.registry_id != registry_id
+    ]
+
+    if len(config.aws_registry.registries) == original_count:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Registry '{registry_id}' not found in configuration",
+        )
+
+    # Save updated config
+    saved_config = await repo.save_config(config, config_id)
+
+    # Deregister all entities synced from this registry
+    cleanup = await _deregister_entities_from_registry(registry_id)
+
+    total = cleanup["servers_count"] + cleanup["agents_count"] + cleanup["skills_count"]
+    message = f"Registry '{registry_id}' removed from AWS Registry configuration"
+    if total > 0:
+        parts = []
+        if cleanup["servers_count"]:
+            parts.append(f"{cleanup['servers_count']} server(s)")
+        if cleanup["agents_count"]:
+            parts.append(f"{cleanup['agents_count']} agent(s)")
+        if cleanup["skills_count"]:
+            parts.append(f"{cleanup['skills_count']} skill(s)")
+        message += f" and {', '.join(parts)} deregistered"
+
+    return {
+        "message": message,
+        "deregistered": cleanup,
+        "config": saved_config.model_dump(),
+    }
+
+
+async def _deregister_entities_from_registry(
+    registry_id: str,
+) -> dict[str, Any]:
+    """
+    Find and remove all servers, agents, and skills synced from a specific AWS registry.
+
+    Matches entities where metadata.agentcore_registry_id equals the given registry_id.
+
+    Args:
+        registry_id: The AWS registry ARN to match
+
+    Returns:
+        Dict with deregistered servers, agents, skills lists and counts
+    """
+    servers = await _deregister_servers_from_registry(registry_id)
+    agents = await _deregister_agents_from_registry(registry_id)
+    skills = await _deregister_skills_from_registry(registry_id)
+
+    return {
+        "servers": servers,
+        "servers_count": len(servers),
+        "agents": agents,
+        "agents_count": len(agents),
+        "skills": skills,
+        "skills_count": len(skills),
+    }
+
+
+async def _deregister_servers_from_registry(
+    registry_id: str,
+) -> list[str]:
+    """
+    Remove all servers synced from a specific AWS registry.
+
+    Args:
+        registry_id: The AWS registry ARN to match
+
+    Returns:
+        List of server paths that were deregistered
+    """
+    from ..repositories.factory import get_server_repository
+    from ..services.server_service import server_service
+
+    server_repo = get_server_repository()
+    all_agentcore_servers = await server_repo.list_by_source("agentcore")
+
+    deregistered = []
+    for path, server_info in all_agentcore_servers.items():
+        metadata = server_info.get("metadata", {})
+        if metadata.get("agentcore_registry_id") == registry_id:
+            try:
+                removed = await server_service.remove_server(path)
+                if removed:
+                    deregistered.append(path)
+                    logger.info(f"Deregistered server {path} from registry {registry_id}")
+            except Exception as e:
+                logger.error(f"Failed to deregister server {path}: {e}")
+
+    logger.info(f"Deregistered {len(deregistered)} server(s) from registry {registry_id}")
+    return deregistered
+
+
+async def _deregister_agents_from_registry(
+    registry_id: str,
+) -> list[str]:
+    """
+    Remove all agents synced from a specific AWS registry.
+
+    Matches agents by:
+    1. metadata.agentcore_registry_id (primary)
+    2. 'agentcore' tag + path starting with /agents/agentcore- (fallback for older records)
+
+    Args:
+        registry_id: The AWS registry ARN to match
+
+    Returns:
+        List of agent paths that were deregistered
+    """
+    from ..repositories.factory import get_agent_repository
+    from ..services.agent_service import agent_service
+
+    agent_repo = get_agent_repository()
+
+    # Primary: query by metadata
+    matching_paths = set()
+    by_metadata = await agent_repo.find_with_filter(
+        {"metadata.agentcore_registry_id": registry_id}
+    )
+    matching_paths.update(by_metadata.keys())
+
+    # Fallback: query by tag + path pattern for older records without metadata
+    by_tag = await agent_repo.find_with_filter(
+        {"tags": "agentcore", "_id": {"$regex": "^/agents/agentcore-"}}
+    )
+    matching_paths.update(by_tag.keys())
+
+    deregistered = []
+    for path in matching_paths:
+        try:
+            removed = await agent_service.remove_agent(path)
+            if removed:
+                deregistered.append(path)
+                logger.info(f"Deregistered agent {path} from registry {registry_id}")
+        except Exception as e:
+            logger.error(f"Failed to deregister agent {path}: {e}")
+
+    logger.info(f"Deregistered {len(deregistered)} agent(s) from registry {registry_id}")
+    return deregistered
+
+
+async def _deregister_skills_from_registry(
+    registry_id: str,
+) -> list[str]:
+    """
+    Remove all skills synced from a specific AWS registry.
+
+    Matches skills by:
+    1. metadata.agentcore_registry_id (newer skills)
+    2. 'agentcore' tag + path starting with /skills/agentcore- (older skills without metadata)
+
+    Args:
+        registry_id: The AWS registry ARN to match
+
+    Returns:
+        List of skill paths that were deregistered
+    """
+    from ..repositories.factory import get_skill_repository
+
+    skill_repo = get_skill_repository()
+    all_skills = await skill_repo.list_all()
+
+    matching_paths = set()
+    for skill in all_skills:
+        meta = skill.metadata or {}
+        extra = meta.extra if hasattr(meta, "extra") else {}
+        meta_dict = meta if isinstance(meta, dict) else {}
+
+        # Match by metadata.agentcore_registry_id
+        if meta_dict.get("agentcore_registry_id") == registry_id:
+            matching_paths.add(skill.path)
+            continue
+        if extra.get("agentcore_registry_id") == registry_id:
+            matching_paths.add(skill.path)
+            continue
+
+        # Fallback: match by 'agentcore' tag + path pattern
+        tags = skill.tags or []
+        if "agentcore" in tags and str(skill.path).startswith("/skills/agentcore-"):
+            matching_paths.add(skill.path)
+
+    deregistered = []
+    for path in matching_paths:
+        try:
+            removed = await skill_repo.delete(path)
+            if removed:
+                deregistered.append(path)
+                logger.info(f"Deregistered skill {path} from registry {registry_id}")
+        except Exception as e:
+            logger.error(f"Failed to deregister skill {path}: {e}")
+
+    logger.info(f"Deregistered {len(deregistered)} skill(s) from registry {registry_id}")
+    return deregistered
+
+
 @router.post("/federation/sync", tags=["federation"], summary="Trigger manual federation sync")
 async def sync_federation(
     request: Request,
@@ -580,7 +889,7 @@ async def sync_federation(
 
     Args:
         config_id: Configuration ID to use for sync (default: "default")
-        source: Optional source filter ("anthropic", "asor", or "agentcore"). If None, syncs all enabled sources.
+        source: Optional source filter ("anthropic", "asor", or "aws_registry"). If None, syncs all enabled sources.
         user_context: Authenticated user context
         repo: Federation config repository
 
@@ -625,7 +934,7 @@ async def sync_federation(
         results: dict[str, Any] = {
             "anthropic": {"servers": [], "count": 0},
             "asor": {"agents": [], "count": 0},
-            "agentcore": {"servers": [], "agents": [], "skills": [], "count": 0},
+            "aws_registry": {"servers": [], "agents": [], "skills": [], "count": 0},
         }
 
         # Sync Anthropic servers if enabled and requested
@@ -757,7 +1066,7 @@ async def sync_federation(
             logger.info(f"Synced {results['asor']['count']} agents from ASOR")
 
         # Sync AgentCore records if enabled and requested
-        if (source is None or source == "agentcore") and config.agentcore.enabled:
+        if (source is None or source == "aws_registry") and config.aws_registry.enabled:
             logger.info("Syncing from AWS Agent Registry...")
 
             from ..schemas.agent_models import AgentCard
@@ -772,12 +1081,12 @@ async def sync_federation(
             from ..services.skill_service import get_skill_service
 
             agentcore_client = AgentCoreFederationClient(
-                aws_region=config.agentcore.aws_region
+                aws_region=config.aws_registry.aws_region
             )
             records = agentcore_client.fetch_all_records(
-                registry_configs=config.agentcore.registries,
-                sync_timeout_seconds=config.agentcore.sync_timeout_seconds,
-                max_concurrent_fetches=config.agentcore.max_concurrent_fetches,
+                registry_configs=config.aws_registry.registries,
+                sync_timeout_seconds=config.aws_registry.sync_timeout_seconds,
+                max_concurrent_fetches=config.aws_registry.max_concurrent_fetches,
             )
 
             # Register servers (MCP records)
@@ -796,7 +1105,7 @@ async def sync_federation(
                         await server_service.update_server(srv_path, srv)
 
                     await server_service.toggle_service(srv_path, True)
-                    results["agentcore"]["servers"].append(srv.get("server_name", srv_path))
+                    results["aws_registry"]["servers"].append(srv.get("server_name", srv_path))
                 except Exception as e:
                     logger.error(f"Failed to sync AgentCore server {srv.get('server_name', 'unknown')}: {e}")
 
@@ -811,7 +1120,7 @@ async def sync_federation(
                         await agent_service.register_agent(agent_card)
                     except ValueError:
                         await agent_service.update_agent(agent_path, agent_data)
-                    results["agentcore"]["agents"].append(agent_data.get("name", agent_path))
+                    results["aws_registry"]["agents"].append(agent_data.get("name", agent_path))
                 except Exception as e:
                     logger.error(f"Failed to sync AgentCore agent {agent_data.get('name', 'unknown')}: {e}")
 
@@ -833,21 +1142,21 @@ async def sync_federation(
                             if k not in ("path", "id", "created_at")
                         }
                         await skill_repo.update(skill_path, update_fields)
-                    results["agentcore"]["skills"].append(skill_data.get("name", skill_path))
+                    results["aws_registry"]["skills"].append(skill_data.get("name", skill_path))
                 except Exception as e:
                     logger.error(f"Failed to sync AgentCore skill {skill_data.get('name', 'unknown')}: {e}")
 
             agentcore_total = (
-                len(results["agentcore"]["servers"])
-                + len(results["agentcore"]["agents"])
-                + len(results["agentcore"]["skills"])
+                len(results["aws_registry"]["servers"])
+                + len(results["aws_registry"]["agents"])
+                + len(results["aws_registry"]["skills"])
             )
-            results["agentcore"]["count"] = agentcore_total
+            results["aws_registry"]["count"] = agentcore_total
             logger.info(
                 f"Synced from AWS Agent Registry: "
-                f"{len(results['agentcore']['servers'])} servers, "
-                f"{len(results['agentcore']['agents'])} agents, "
-                f"{len(results['agentcore']['skills'])} skills"
+                f"{len(results['aws_registry']['servers'])} servers, "
+                f"{len(results['aws_registry']['agents'])} agents, "
+                f"{len(results['aws_registry']['skills'])} skills"
             )
 
         # Reconcile: remove stale federated servers after sync
@@ -877,7 +1186,11 @@ async def sync_federation(
             "message": "Federation sync completed",
             "config_id": config_id,
             "results": results,
-            "total_synced": results["anthropic"]["count"] + results["asor"]["count"] + results["agentcore"]["count"],
+            "total_synced": (
+                results["anthropic"]["count"]
+                + results["asor"]["count"]
+                + results["aws_registry"]["count"]
+            ),
             "reconciliation": reconciliation_result,
         }
 

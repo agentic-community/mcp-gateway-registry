@@ -685,19 +685,19 @@ variable "federation_encryption_key" {
 # AWS AGENT REGISTRY FEDERATION CONFIGURATION
 # =============================================================================
 
-variable "agentcore_federation_enabled" {
+variable "aws_registry_federation_enabled" {
   description = "Enable AWS Agent Registry federation."
   type        = bool
   default     = false
 }
 
-variable "agentcore_aws_region" {
+variable "aws_registry_region" {
   description = "AWS region for Agent Registry API calls."
   type        = string
   default     = "us-east-1"
 }
 
-variable "agentcore_sync_on_startup" {
+variable "aws_registry_sync_on_startup" {
   description = "Sync AWS Agent Registry records on startup."
   type        = bool
   default     = false

@@ -602,19 +602,19 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # telemetry_debug = "false"
 
 # ============================================================================
-# AWS AGENT REGISTRY FEDERATION (optional)
+# AWS REGISTRY FEDERATION (optional)
 # ============================================================================
 # Registry IDs and sync details are managed via /api/federation/config API.
 # These are global flags only.
 
-# Enable AWS Agent Registry federation (default: false)
-# agentcore_federation_enabled = false
+# Enable AWS Registry federation (default: false)
+aws_registry_federation_enabled = true
 
 # AWS region for Agent Registry API calls (default: us-east-1)
-# agentcore_aws_region = "us-east-1"
+aws_registry_region = "us-east-1"
 
-# Sync AWS Agent Registry records on startup (default: false)
-# agentcore_sync_on_startup = false
+# Sync AWS Registry records on startup (default: false)
+aws_registry_sync_on_startup = true
 
 # ============================================================================
 # DEMO SERVER CONFIGURATION (Issue #764)

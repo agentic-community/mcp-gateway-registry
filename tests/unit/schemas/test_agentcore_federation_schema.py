@@ -1,17 +1,18 @@
 """
-Unit tests for AgentCore federation schema models.
+Unit tests for AWS Registry federation schema models.
 
-This module provides tests for the AgentCore federation Pydantic models:
-- AgentCoreRegistryConfig: Configuration for a single AWS Agent Registry
-- AgentCoreFederationConfig: AWS Agent Registry federation configuration
-- FederationConfig: Root federation config with agentcore support
+This module provides tests for the AWS Registry federation Pydantic models:
+- AwsRegistryConfig (aliased as AgentCoreRegistryConfig): Configuration for a single AWS Agent Registry
+- AwsRegistryFederationConfig (aliased as AgentCoreFederationConfig): AWS Agent Registry federation configuration
+- FederationConfig: Root federation config with aws_registry support
 
 Tests cover:
 - Default values for all fields
 - Custom value assignment
-- FederationConfig.agentcore integration
-- is_any_federation_enabled() with agentcore
-- get_enabled_federations() with agentcore
+- FederationConfig.aws_registry integration
+- is_any_federation_enabled() with aws_registry
+- get_enabled_federations() with aws_registry
+- Backward compatibility: old 'agentcore' key in dict input
 """
 
 import pytest
@@ -250,45 +251,53 @@ class TestAgentCoreFederationConfig:
 
 
 @pytest.mark.unit
-class TestFederationConfigAgentCore:
-    """Tests for FederationConfig with agentcore field."""
+class TestFederationConfigAwsRegistry:
+    """Tests for FederationConfig with aws_registry field."""
 
-    def test_default_agentcore_field_exists(self):
-        """FederationConfig should have an agentcore field with defaults."""
+    def test_default_aws_registry_field_exists(self):
+        """FederationConfig should have an aws_registry field with defaults."""
         config = FederationConfig()
-        assert isinstance(config.agentcore, AgentCoreFederationConfig)
-        assert config.agentcore.enabled is False
+        assert isinstance(config.aws_registry, AgentCoreFederationConfig)
+        assert config.aws_registry.enabled is False
 
-    def test_agentcore_custom_config(self):
-        """FederationConfig should accept custom agentcore configuration."""
-        agentcore_config = AgentCoreFederationConfig(
+    def test_aws_registry_custom_config(self):
+        """FederationConfig should accept custom aws_registry configuration."""
+        aws_config = AgentCoreFederationConfig(
             enabled=True,
             aws_region="us-west-2",
             registries=[
                 AgentCoreRegistryConfig(registry_id="my-reg"),
             ],
         )
-        config = FederationConfig(agentcore=agentcore_config)
-        assert config.agentcore.enabled is True
-        assert config.agentcore.aws_region == "us-west-2"
-        assert len(config.agentcore.registries) == 1
+        config = FederationConfig(aws_registry=aws_config)
+        assert config.aws_registry.enabled is True
+        assert config.aws_registry.aws_region == "us-west-2"
+        assert len(config.aws_registry.registries) == 1
+
+    def test_backward_compat_agentcore_key(self):
+        """FederationConfig should accept old 'agentcore' key from MongoDB."""
+        config = FederationConfig(**{
+            "agentcore": {"enabled": True, "aws_region": "eu-west-1"},
+        })
+        assert config.aws_registry.enabled is True
+        assert config.aws_registry.aws_region == "eu-west-1"
 
     def test_is_any_federation_enabled_all_disabled(self):
         """is_any_federation_enabled should return False when all are disabled."""
         config = FederationConfig()
         assert config.is_any_federation_enabled() is False
 
-    def test_is_any_federation_enabled_only_agentcore(self):
-        """is_any_federation_enabled should return True when only agentcore is enabled."""
+    def test_is_any_federation_enabled_only_aws_registry(self):
+        """is_any_federation_enabled should return True when only aws_registry is enabled."""
         config = FederationConfig(
-            agentcore=AgentCoreFederationConfig(enabled=True),
+            aws_registry=AgentCoreFederationConfig(enabled=True),
         )
         assert config.is_any_federation_enabled() is True
 
-    def test_is_any_federation_enabled_agentcore_and_anthropic(self):
+    def test_is_any_federation_enabled_aws_registry_and_anthropic(self):
         """is_any_federation_enabled should return True when multiple are enabled."""
         config = FederationConfig(
-            agentcore=AgentCoreFederationConfig(enabled=True),
+            aws_registry=AgentCoreFederationConfig(enabled=True),
         )
         assert config.anthropic.enabled is False
         assert config.is_any_federation_enabled() is True
@@ -298,32 +307,32 @@ class TestFederationConfigAgentCore:
         config = FederationConfig()
         assert config.get_enabled_federations() == []
 
-    def test_get_enabled_federations_only_agentcore(self):
-        """get_enabled_federations should include 'agentcore' when enabled."""
+    def test_get_enabled_federations_only_aws_registry(self):
+        """get_enabled_federations should include 'aws_registry' when enabled."""
         config = FederationConfig(
-            agentcore=AgentCoreFederationConfig(enabled=True),
+            aws_registry=AgentCoreFederationConfig(enabled=True),
         )
         enabled = config.get_enabled_federations()
-        assert "agentcore" in enabled
+        assert "aws_registry" in enabled
         assert len(enabled) == 1
 
     def test_get_enabled_federations_excludes_disabled(self):
         """get_enabled_federations should not include disabled federations."""
         config = FederationConfig(
-            agentcore=AgentCoreFederationConfig(enabled=False),
+            aws_registry=AgentCoreFederationConfig(enabled=False),
         )
         enabled = config.get_enabled_federations()
-        assert "agentcore" not in enabled
+        assert "aws_registry" not in enabled
 
     def test_get_enabled_federations_multiple_enabled(self):
         """get_enabled_federations should list all enabled federation names."""
         config = FederationConfig(
             anthropic=AnthropicFederationConfig(enabled=True),
             asor=AsorFederationConfig(enabled=True),
-            agentcore=AgentCoreFederationConfig(enabled=True),
+            aws_registry=AgentCoreFederationConfig(enabled=True),
         )
         enabled = config.get_enabled_federations()
         assert "anthropic" in enabled
         assert "asor" in enabled
-        assert "agentcore" in enabled
+        assert "aws_registry" in enabled
         assert len(enabled) == 3

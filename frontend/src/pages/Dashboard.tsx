@@ -412,7 +412,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
   // Tag-to-source mapping: which tag identifies which federation source
   const SOURCE_TAG_MAP: Record<string, string> = {
     'anthropic-registry': 'anthropic',
-    'agentcore': 'agentcore',
+    'agentcore': 'aws_registry',
     'asor': 'asor',
     'workday-asor': 'asor',
   };
@@ -420,7 +420,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
   // Display labels for each source
   const SOURCE_LABELS: Record<string, string> = {
     'anthropic': 'Anthropic',
-    'agentcore': 'AWS Agent Registry',
+    'aws_registry': 'AWS Agent Registry',
     'asor': 'ASOR',
   };
 
@@ -440,9 +440,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         }
       }
     }
-    // If agentcore has content, show it first; otherwise default order
-    const order = sources.has('agentcore')
-      ? ['agentcore', 'anthropic', 'asor']
+    // If AWS Registry has content, show it first; otherwise default order
+    const order = sources.has('aws_registry')
+      ? ['aws_registry', 'anthropic', 'asor']
       : ['anthropic', 'asor'];
     return order.filter(s => sources.has(s));
   }, [externalServers, externalAgents, externalSkills]);

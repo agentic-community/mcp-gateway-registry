@@ -8,7 +8,11 @@ import {
   ServerStackIcon,
   CpuChipIcon,
   SparklesIcon,
+  PlusIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
+import AddRegistryEntryModal, { RegistrySourceType } from './AddRegistryEntryModal';
+import ConfirmModal from './ConfirmModal';
 
 
 /**
@@ -91,7 +95,7 @@ interface AgentCoreConfig {
 interface FederationConfig {
   anthropic: AnthropicConfig;
   asor: AsorConfig;
-  agentcore: AgentCoreConfig;
+  aws_registry: AgentCoreConfig;
 }
 
 
@@ -101,7 +105,7 @@ interface FederationConfig {
 interface SyncResults {
   anthropic: { count: number; servers: string[] };
   asor: { count: number; agents: string[] };
-  agentcore: { count: number; servers: string[]; agents: string[]; skills: string[] };
+  aws_registry: { count: number; servers: string[]; agents: string[]; skills: string[] };
 }
 
 
@@ -149,6 +153,12 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
   const [syncing, setSyncing] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [lastSyncResults, setLastSyncResults] = useState<SyncResults | null>(null);
+  const [addModalSource, setAddModalSource] = useState<RegistrySourceType | null>(null);
+  const [deletingItem, setDeletingItem] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{
+    source: 'aws_registry' | 'anthropic' | 'asor';
+    identifier: string;
+  } | null>(null);
 
   /**
    * Fetch federation config from API.
@@ -215,6 +225,56 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
     }
   };
 
+  /**
+   * Show the confirm modal before deleting an entry.
+   */
+  const handleDeleteEntry = (
+    source: 'aws_registry' | 'anthropic' | 'asor',
+    identifier: string,
+  ) => {
+    setConfirmDelete({ source, identifier });
+  };
+
+  /**
+   * Execute the deletion after user confirms via modal.
+   */
+  const executeDelete = async () => {
+    if (!confirmDelete) return;
+
+    const { source, identifier } = confirmDelete;
+    setDeletingItem(identifier);
+    try {
+      if (source === 'anthropic') {
+        await axios.delete(
+          `/api/federation/config/default/anthropic/servers/${encodeURIComponent(identifier)}`
+        );
+      } else if (source === 'asor') {
+        await axios.delete(
+          `/api/federation/config/default/asor/agents/${encodeURIComponent(identifier)}`
+        );
+      } else if (source === 'aws_registry') {
+        await axios.delete(
+          `/api/federation/config/default/aws_registry/registries/${encodeURIComponent(identifier)}`
+        );
+      }
+      onShowToast(`Removed "${identifier}"`, 'success');
+      fetchConfig();
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || 'Failed to remove entry';
+      onShowToast(detail, 'error');
+    } finally {
+      setDeletingItem(null);
+      setConfirmDelete(null);
+    }
+  };
+
+  /**
+   * Called after successfully adding a new entry via the modal.
+   */
+  const handleAddSuccess = () => {
+    fetchConfig();
+  };
+
   // Loading state
   if (loading) {
     return (
@@ -259,7 +319,7 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
   // Count enabled sources
   const enabledSources: string[] = [];
   if (config.anthropic.enabled) enabledSources.push('anthropic');
-  if (config.agentcore.enabled) enabledSources.push('agentcore');
+  if (config.aws_registry.enabled) enabledSources.push('aws_registry');
   if (config.asor.enabled) enabledSources.push('asor');
 
   return (
@@ -295,14 +355,54 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
       {/* Registry cards */}
       <div className="space-y-4">
         {/* AWS Agent Registry */}
-        {_renderAgentCoreCard(config.agentcore, syncing, lastSyncResults, handleSync)}
+        {_renderAgentCoreCard(
+          config.aws_registry, syncing, lastSyncResults, handleSync,
+          () => setAddModalSource('aws_registry'),
+          (id) => handleDeleteEntry('aws_registry', id),
+          deletingItem,
+        )}
 
         {/* Anthropic */}
-        {_renderAnthropicCard(config.anthropic, syncing, lastSyncResults, handleSync)}
+        {_renderAnthropicCard(
+          config.anthropic, syncing, lastSyncResults, handleSync,
+          () => setAddModalSource('anthropic'),
+          (name) => handleDeleteEntry('anthropic', name),
+          deletingItem,
+        )}
 
         {/* ASOR */}
-        {_renderAsorCard(config.asor, syncing, lastSyncResults, handleSync)}
+        {_renderAsorCard(
+          config.asor, syncing, lastSyncResults, handleSync,
+          () => setAddModalSource('asor'),
+          (id) => handleDeleteEntry('asor', id),
+          deletingItem,
+        )}
       </div>
+
+      {/* Add Entry Modal */}
+      {addModalSource && (
+        <AddRegistryEntryModal
+          isOpen={true}
+          onClose={() => setAddModalSource(null)}
+          sourceType={addModalSource}
+          onSuccess={handleAddSuccess}
+          onShowToast={onShowToast}
+        />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {confirmDelete && (
+        <ConfirmModal
+          isOpen={true}
+          onClose={() => setConfirmDelete(null)}
+          onConfirm={executeDelete}
+          title="Remove Entry"
+          message={`Are you sure you want to remove "${confirmDelete.identifier}"? Any servers, agents, and skills synced from this source will also be deregistered.`}
+          confirmLabel="Remove"
+          isDestructive={true}
+          isLoading={deletingItem !== null}
+        />
+      )}
     </div>
   );
 };
@@ -316,6 +416,9 @@ function _renderAgentCoreCard(
   syncing: string | null,
   lastSyncResults: SyncResults | null,
   onSync: (source: string) => void,
+  onAdd: () => void,
+  onRemove: (registryId: string) => void,
+  deletingItem: string | null,
 ): React.ReactNode {
   return (
     <div className={`border rounded-lg p-5 ${
@@ -351,17 +454,29 @@ function _renderAgentCoreCard(
           </div>
         </div>
         {agentcore.enabled && (
-          <button
-            onClick={() => onSync('agentcore')}
-            disabled={syncing !== null}
-            className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                       border border-gray-300 dark:border-gray-600 text-gray-700
-                       dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                       disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'agentcore' ? 'animate-spin' : ''}`} />
-            {syncing === 'agentcore' ? 'Syncing...' : 'Sync'}
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={onAdd}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
+                         border border-gray-300 dark:border-gray-600 text-gray-700
+                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                         transition-colors"
+            >
+              <PlusIcon className="h-4 w-4 mr-1.5" />
+              Add
+            </button>
+            <button
+              onClick={() => onSync('aws_registry')}
+              disabled={syncing !== null}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
+                         border border-gray-300 dark:border-gray-600 text-gray-700
+                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'aws_registry' ? 'animate-spin' : ''}`} />
+              {syncing === 'aws_registry' ? 'Syncing...' : 'Sync'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -408,8 +523,19 @@ function _renderAgentCoreCard(
                     className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 border border-gray-100
                                dark:border-gray-700"
                   >
-                    <div className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all">
-                      {reg.registry_id}
+                    <div className="flex items-start justify-between">
+                      <div className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all">
+                        {reg.registry_id}
+                      </div>
+                      <button
+                        onClick={() => onRemove(reg.registry_id)}
+                        disabled={deletingItem === reg.registry_id}
+                        className="ml-2 flex-shrink-0 p-0.5 text-gray-400 hover:text-red-500
+                                   dark:hover:text-red-400 disabled:opacity-50 transition-colors"
+                        title="Remove registry"
+                      >
+                        <XMarkIcon className="h-4 w-4" />
+                      </button>
                     </div>
                     <div className="flex flex-wrap gap-2 mt-2">
                       {reg.aws_region && (
@@ -451,24 +577,24 @@ function _renderAgentCoreCard(
           )}
 
           {/* Last sync results */}
-          {lastSyncResults?.agentcore && lastSyncResults.agentcore.count > 0 && (
+          {lastSyncResults?.aws_registry && lastSyncResults.aws_registry.count > 0 && (
             <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border
                             border-green-200 dark:border-green-800">
               <div className="flex items-center space-x-2">
                 <CheckCircleIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
                 <span className="text-sm font-medium text-green-800 dark:text-green-300">
-                  Last sync: {lastSyncResults.agentcore.count} items
+                  Last sync: {lastSyncResults.aws_registry.count} items
                 </span>
               </div>
               <div className="mt-1 text-xs text-green-700 dark:text-green-400">
-                {lastSyncResults.agentcore.servers.length > 0 && (
-                  <span>Servers: {lastSyncResults.agentcore.servers.length} </span>
+                {lastSyncResults.aws_registry.servers.length > 0 && (
+                  <span>Servers: {lastSyncResults.aws_registry.servers.length} </span>
                 )}
-                {lastSyncResults.agentcore.agents.length > 0 && (
-                  <span>Agents: {lastSyncResults.agentcore.agents.length} </span>
+                {lastSyncResults.aws_registry.agents.length > 0 && (
+                  <span>Agents: {lastSyncResults.aws_registry.agents.length} </span>
                 )}
-                {lastSyncResults.agentcore.skills.length > 0 && (
-                  <span>Skills: {lastSyncResults.agentcore.skills.length}</span>
+                {lastSyncResults.aws_registry.skills.length > 0 && (
+                  <span>Skills: {lastSyncResults.aws_registry.skills.length}</span>
                 )}
               </div>
             </div>
@@ -488,6 +614,9 @@ function _renderAnthropicCard(
   syncing: string | null,
   lastSyncResults: SyncResults | null,
   onSync: (source: string) => void,
+  onAdd: () => void,
+  onRemove: (serverName: string) => void,
+  deletingItem: string | null,
 ): React.ReactNode {
   return (
     <div className={`border rounded-lg p-5 ${
@@ -523,17 +652,29 @@ function _renderAnthropicCard(
           </div>
         </div>
         {anthropic.enabled && (
-          <button
-            onClick={() => onSync('anthropic')}
-            disabled={syncing !== null}
-            className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                       border border-gray-300 dark:border-gray-600 text-gray-700
-                       dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                       disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'anthropic' ? 'animate-spin' : ''}`} />
-            {syncing === 'anthropic' ? 'Syncing...' : 'Sync'}
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={onAdd}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
+                         border border-gray-300 dark:border-gray-600 text-gray-700
+                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                         transition-colors"
+            >
+              <PlusIcon className="h-4 w-4 mr-1.5" />
+              Add
+            </button>
+            <button
+              onClick={() => onSync('anthropic')}
+              disabled={syncing !== null}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
+                         border border-gray-300 dark:border-gray-600 text-gray-700
+                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'anthropic' ? 'animate-spin' : ''}`} />
+              {syncing === 'anthropic' ? 'Syncing...' : 'Sync'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -563,6 +704,15 @@ function _renderAnthropicCard(
                   >
                     <ServerStackIcon className="h-3.5 w-3.5 mr-1.5 text-gray-400" />
                     {srv.name}
+                    <button
+                      onClick={() => onRemove(srv.name)}
+                      disabled={deletingItem === srv.name}
+                      className="ml-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400
+                                 disabled:opacity-50 transition-colors"
+                      title="Remove server"
+                    >
+                      <XMarkIcon className="h-3.5 w-3.5" />
+                    </button>
                   </span>
                 ))}
               </div>
@@ -596,6 +746,9 @@ function _renderAsorCard(
   syncing: string | null,
   lastSyncResults: SyncResults | null,
   onSync: (source: string) => void,
+  onAdd: () => void,
+  onRemove: (agentId: string) => void,
+  deletingItem: string | null,
 ): React.ReactNode {
   return (
     <div className={`border rounded-lg p-5 ${
@@ -631,17 +784,29 @@ function _renderAsorCard(
           </div>
         </div>
         {asor.enabled && (
-          <button
-            onClick={() => onSync('asor')}
-            disabled={syncing !== null}
-            className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                       border border-gray-300 dark:border-gray-600 text-gray-700
-                       dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                       disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'asor' ? 'animate-spin' : ''}`} />
-            {syncing === 'asor' ? 'Syncing...' : 'Sync'}
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={onAdd}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
+                         border border-gray-300 dark:border-gray-600 text-gray-700
+                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                         transition-colors"
+            >
+              <PlusIcon className="h-4 w-4 mr-1.5" />
+              Add
+            </button>
+            <button
+              onClick={() => onSync('asor')}
+              disabled={syncing !== null}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
+                         border border-gray-300 dark:border-gray-600 text-gray-700
+                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'asor' ? 'animate-spin' : ''}`} />
+              {syncing === 'asor' ? 'Syncing...' : 'Sync'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -671,6 +836,15 @@ function _renderAsorCard(
                                border border-gray-200 dark:border-gray-600"
                   >
                     {agent.id}
+                    <button
+                      onClick={() => onRemove(agent.id)}
+                      disabled={deletingItem === agent.id}
+                      className="ml-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400
+                                 disabled:opacity-50 transition-colors"
+                      title="Remove agent"
+                    >
+                      <XMarkIcon className="h-3.5 w-3.5" />
+                    </button>
                   </span>
                 ))}
               </div>

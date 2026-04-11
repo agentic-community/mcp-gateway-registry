@@ -213,12 +213,12 @@ async def _sync_agentcore_on_startup(
     logger.info("Syncing from AWS Agent Registry...")
 
     agentcore_client = AgentCoreFederationClient(
-        aws_region=federation_config.agentcore.aws_region
+        aws_region=federation_config.aws_registry.aws_region
     )
     records = agentcore_client.fetch_all_records(
-        registry_configs=federation_config.agentcore.registries,
-        sync_timeout_seconds=federation_config.agentcore.sync_timeout_seconds,
-        max_concurrent_fetches=federation_config.agentcore.max_concurrent_fetches,
+        registry_configs=federation_config.aws_registry.registries,
+        sync_timeout_seconds=federation_config.aws_registry.sync_timeout_seconds,
+        max_concurrent_fetches=federation_config.aws_registry.max_concurrent_fetches,
     )
 
     synced_paths: dict[str, set[str]] = {
@@ -481,8 +481,8 @@ async def lifespan(app: FastAPI):
                     federation_config.asor.enabled
                     and federation_config.asor.sync_on_startup
                 ) or (
-                    federation_config.agentcore.enabled
-                    and federation_config.agentcore.sync_on_startup
+                    federation_config.aws_registry.enabled
+                    and federation_config.aws_registry.sync_on_startup
                 )
 
                 if sync_on_startup:
@@ -576,8 +576,8 @@ async def lifespan(app: FastAPI):
 
                         # AgentCore sync (AWS Agent Registry)
                         if (
-                            federation_config.agentcore.enabled
-                            and federation_config.agentcore.sync_on_startup
+                            federation_config.aws_registry.enabled
+                            and federation_config.aws_registry.sync_on_startup
                         ):
                             try:
                                 await _sync_agentcore_on_startup(

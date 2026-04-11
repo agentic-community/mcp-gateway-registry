@@ -777,16 +777,16 @@ module "ecs_service_registry" {
         },
         # AWS Agent Registry federation configuration
         {
-          name  = "AGENTCORE_FEDERATION_ENABLED"
-          value = tostring(var.agentcore_federation_enabled)
+          name  = "AWS_REGISTRY_FEDERATION_ENABLED"
+          value = tostring(var.aws_registry_federation_enabled)
         },
         {
-          name  = "AGENTCORE_AWS_REGION"
-          value = var.agentcore_aws_region
+          name  = "AWS_REGISTRY_REGION"
+          value = var.aws_registry_region
         },
         {
-          name  = "AGENTCORE_SYNC_ON_STARTUP"
-          value = tostring(var.agentcore_sync_on_startup)
+          name  = "AWS_REGISTRY_SYNC_ON_STARTUP"
+          value = tostring(var.aws_registry_sync_on_startup)
         },
         {
           name  = "ANS_INTEGRATION_ENABLED"

@@ -1,6 +1,8 @@
 """Simplified federation configuration schemas."""
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class AnthropicServerConfig(BaseModel):
@@ -34,7 +36,7 @@ class AsorFederationConfig(BaseModel):
     agents: list[AsorAgentConfig] = Field(default_factory=list)
 
 
-class AgentCoreRegistryConfig(BaseModel):
+class AwsRegistryConfig(BaseModel):
     """Configuration for a single AWS Agent Registry to sync from.
 
     For cross-account or cross-region access, provide aws_account_id,
@@ -52,7 +54,7 @@ class AgentCoreRegistryConfig(BaseModel):
     sync_status_filter: str = "APPROVED"
 
 
-class AgentCoreFederationConfig(BaseModel):
+class AwsRegistryFederationConfig(BaseModel):
     """AWS Agent Registry federation configuration."""
 
     enabled: bool = False
@@ -61,7 +63,7 @@ class AgentCoreFederationConfig(BaseModel):
     sync_interval_minutes: int = 60
     sync_timeout_seconds: int = 300
     max_concurrent_fetches: int = 5
-    registries: list[AgentCoreRegistryConfig] = Field(default_factory=list)
+    registries: list[AwsRegistryConfig] = Field(default_factory=list)
 
 
 class FederationConfig(BaseModel):
@@ -69,11 +71,24 @@ class FederationConfig(BaseModel):
 
     anthropic: AnthropicFederationConfig = Field(default_factory=AnthropicFederationConfig)
     asor: AsorFederationConfig = Field(default_factory=AsorFederationConfig)
-    agentcore: AgentCoreFederationConfig = Field(default_factory=AgentCoreFederationConfig)
+    aws_registry: AwsRegistryFederationConfig = Field(default_factory=AwsRegistryFederationConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_agentcore_key(cls, data: Any) -> Any:
+        """Accept old 'agentcore' key as alias for 'aws_registry'.
+
+        MongoDB documents created before the rename use 'agentcore'.
+        This validator transparently maps the old key so existing
+        documents deserialize without a migration script.
+        """
+        if isinstance(data, dict) and "agentcore" in data and "aws_registry" not in data:
+            data["aws_registry"] = data.pop("agentcore")
+        return data
 
     def is_any_federation_enabled(self) -> bool:
         """Check if any federation is enabled."""
-        return self.anthropic.enabled or self.asor.enabled or self.agentcore.enabled
+        return self.anthropic.enabled or self.asor.enabled or self.aws_registry.enabled
 
     def get_enabled_federations(self) -> list[str]:
         """Get list of enabled federation names."""
@@ -82,9 +97,14 @@ class FederationConfig(BaseModel):
             enabled.append("anthropic")
         if self.asor.enabled:
             enabled.append("asor")
-        if self.agentcore.enabled:
-            enabled.append("agentcore")
+        if self.aws_registry.enabled:
+            enabled.append("aws_registry")
         return enabled
+
+
+# Backward-compatible aliases for the renamed classes
+AgentCoreRegistryConfig = AwsRegistryConfig
+AgentCoreFederationConfig = AwsRegistryFederationConfig
 
 
 # Add missing FederatedServer class for compatibility
