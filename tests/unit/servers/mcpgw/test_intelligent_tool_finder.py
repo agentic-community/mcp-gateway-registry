@@ -114,7 +114,7 @@ async def test_request_payload_uses_correct_field_names():
     assert "max_results" in body
     assert body["max_results"] == 7
     assert "entity_types" in body
-    assert body["entity_types"] == ["mcp_server", "tool"]
+    assert body["entity_types"] == ["mcp_server", "tool", "virtual_server"]
     assert "top_k" not in body
     assert "entity_type" not in body
 
