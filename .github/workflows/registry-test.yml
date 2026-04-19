@@ -64,7 +64,7 @@ jobs:
 
     - name: Run all tests with coverage
       run: |
-        uv run python scripts/test.py coverage -n auto
+        uv run python scripts/test.py coverage -n 8
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
