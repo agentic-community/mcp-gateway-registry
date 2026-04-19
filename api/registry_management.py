@@ -1708,8 +1708,6 @@ def cmd_agent_list(args: argparse.Namespace) -> int:
 
         # Print raw JSON if requested - fetch directly from API to get all fields
         if hasattr(args, "json") and args.json:
-            import json
-
             params: dict[str, str | int] = {"limit": limit, "offset": offset}
             if hasattr(args, "query") and args.query:
                 params["query"] = args.query

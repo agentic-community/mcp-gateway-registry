@@ -1,5 +1,6 @@
 {
   "protocolVersion": "0.3.0",
+  "supportedProtocol": "a2a",
   "name": "Flight Booking Agent",
   "description": "Flight booking and reservation management agent",
   "url": "http://flight-booking-agent:9000/",

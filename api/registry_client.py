@@ -2013,7 +2013,7 @@ class RegistryClient:
         """
         logger.info(f"Registering agent: {agent.path}")
 
-        agent_data = agent.model_dump(exclude_none=True)
+        agent_data = agent.model_dump(exclude_none=True, by_alias=True)
         logger.debug(f"Agent data being sent: {json.dumps(agent_data, indent=2, default=str)}")
 
         response = self._make_request(
@@ -2108,7 +2108,7 @@ class RegistryClient:
         logger.info(f"Updating agent: {path}")
 
         response = self._make_request(
-            method="PUT", endpoint=f"/api/agents{path}", data=agent.model_dump(exclude_none=True)
+            method="PUT", endpoint=f"/api/agents{path}", data=agent.model_dump(exclude_none=True, by_alias=True)
         )
 
         result = AgentDetail(**response.json())

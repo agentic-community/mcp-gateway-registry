@@ -5,7 +5,7 @@ resource "aws_lambda_function" "telemetry_collector" {
   role             = aws_iam_role.lambda_execution.arn
   handler          = "index.lambda_handler"
   source_code_hash = filebase64sha256(var.lambda_package_path)
-  runtime          = "python3.14"
+  runtime          = "python3.13"
   timeout          = 30
   memory_size      = 256
 

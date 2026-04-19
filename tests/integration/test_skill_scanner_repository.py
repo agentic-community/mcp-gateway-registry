@@ -73,4 +73,4 @@ class TestRepositoryCreateRetrieveRoundTrip:
                         f"Mismatch for key '{key}': expected {value!r}, got {retrieved[key]!r}"
                     )
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())

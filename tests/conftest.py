@@ -158,19 +158,6 @@ from registry.core.config import Settings  # noqa: E402
 
 
 @pytest.fixture(scope="session")
-def event_loop_policy():
-    """
-    Configure event loop policy for async tests.
-
-    Returns:
-        Event loop policy instance
-    """
-    import asyncio
-
-    return asyncio.DefaultEventLoopPolicy()
-
-
-@pytest.fixture(scope="session")
 def tmp_test_dir() -> Generator[Path, None, None]:
     """
     Create a temporary directory for test files that persists for the session.

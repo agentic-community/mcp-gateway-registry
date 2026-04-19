@@ -484,6 +484,7 @@ echo -e "${BLUE}[Step 5] Registering agent: ${AGENT_NAME} at ${AGENT_PATH}${NC}"
 cat > "${AGENT_JSON_FILE}" <<EOF
 {
   "protocolVersion": "0.3.0",
+  "supportedProtocol": "a2a",
   "name": "Flight Booking Agent ${TIMESTAMP}",
   "description": "Flight booking and reservation management agent (test)",
   "url": "http://flight-booking-agent:9000/",

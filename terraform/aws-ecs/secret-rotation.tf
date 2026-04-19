@@ -302,7 +302,7 @@ resource "aws_lambda_function" "documentdb_rotation" {
   role             = aws_iam_role.rotation_lambda.arn
   handler          = "index.lambda_handler"
   source_code_hash = data.archive_file.documentdb_rotation.output_base64sha256
-  runtime          = "python3.14"
+  runtime          = "python3.13"
   timeout          = 300
   memory_size      = 256
 
@@ -349,7 +349,7 @@ resource "aws_lambda_function" "rds_rotation" {
   role             = aws_iam_role.rotation_lambda.arn
   handler          = "index.lambda_handler"
   source_code_hash = data.archive_file.rds_rotation.output_base64sha256
-  runtime          = "python3.14"
+  runtime          = "python3.13"
   timeout          = 300
   memory_size      = 256
 
