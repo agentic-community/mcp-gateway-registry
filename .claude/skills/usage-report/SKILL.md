@@ -26,9 +26,11 @@ The skill accepts optional parameters:
 /usage-report [OUTPUT_DIR]
 ```
 
-- **OUTPUT_DIR** - Directory to save the report (default: `.scratchpad/usage-reports/`)
+- **OUTPUT_DIR** - Base directory for reports (default: `.scratchpad/usage-reports/`)
 
 If OUTPUT_DIR is not provided, save to `.scratchpad/usage-reports/`.
+
+All artifacts for a given run are placed in a **dated subfolder**: `OUTPUT_DIR/YYYY-MM-DD/`. This keeps each report self-contained and avoids a flat directory of hundreds of files. Previous metrics and CSV files are discovered by scanning both the base directory and all dated subdirectories.
 
 ## Workflow
 
@@ -58,12 +60,17 @@ ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 \
 
 Capture the full output -- it contains the summary statistics printed by `telemetry_db.py`.
 
-### Step 4: Download the CSV
+### Step 4: Create Dated Subfolder and Download the CSV
+
+Create a dated subfolder for this run's artifacts, then download the CSV into it:
 
 ```bash
+DATE_DIR=OUTPUT_DIR/YYYY-MM-DD
+mkdir -p $DATE_DIR
+
 scp -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 \
   ec2-user@$BASTION_IP:/tmp/registry_metrics.csv \
-  OUTPUT_DIR/registry_metrics.csv
+  $DATE_DIR/registry_metrics.csv
 ```
 
 ### Step 5: Install Python Dependencies and Generate Charts
@@ -74,24 +81,24 @@ First, ensure matplotlib and seaborn are available on the system Python:
 /usr/bin/python3 -c "import matplotlib, seaborn" 2>/dev/null || pip install --break-system-packages matplotlib seaborn
 ```
 
-Then generate the deployment distribution chart:
+Then generate the **instance-based** deployment distribution chart (counts unique registry instances, not events):
 
 ```bash
-/usr/bin/python3 .claude/skills/usage-report/generate_charts.py \
-  --csv OUTPUT_DIR/registry_metrics.csv \
-  --output OUTPUT_DIR/deployment-distribution-YYYY-MM-DD.png
+/usr/bin/python3 .claude/skills/usage-report/generate_instance_distribution_chart.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output $DATE_DIR/instance-distribution-YYYY-MM-DD.png
 ```
 
-This produces a single faceted PNG with 6 subplots: Cloud Provider, Compute Platform, Storage Backend, Auth Provider, Version Type, and Deployment Mode. Each subplot shows counts and percentages.
+This produces a single faceted PNG with 6 subplots: Cloud Provider, Compute Platform, Storage Backend, Auth Provider, Architecture, and Deployment Mode. Each subplot shows unique instance counts and percentages.
 
 ### Step 5b: Generate Timeseries Chart
 
-Generate a timeseries chart showing unique registry installs per cloud provider over time. This reads ALL CSV files in the output directory to build a complete historical view:
+Generate a timeseries chart showing unique registry installs per cloud provider over time. This reads ALL CSV files in the base output directory and dated subdirectories to build a complete historical view:
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/generate_timeseries_chart.py \
   --csv-dir OUTPUT_DIR \
-  --output OUTPUT_DIR/registry-installs-timeseries-YYYY-MM-DD.png
+  --output $DATE_DIR/registry-installs-timeseries-YYYY-MM-DD.png
 ```
 
 This produces a PNG with two subplots:
@@ -104,8 +111,8 @@ Generate a density plot showing the distribution of instance lifetimes (age in d
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/generate_lifetime_chart.py \
-  --metrics OUTPUT_DIR/metrics-YYYY-MM-DD.json \
-  --output OUTPUT_DIR/instance-lifetime-YYYY-MM-DD.png
+  --metrics $DATE_DIR/metrics-YYYY-MM-DD.json \
+  --output $DATE_DIR/instance-lifetime-YYYY-MM-DD.png
 ```
 
 This produces a PNG with two panels:
@@ -120,12 +127,12 @@ Run the analysis script to compute all distributions, instance timelines, and me
 - `tables-YYYY-MM-DD.md` -- pre-formatted markdown tables ready to embed in the report (with executive summary comparison at the top)
 - `metrics-YYYY-MM-DD.json` -- raw computed metrics as JSON (includes `per_cloud_unique_installs`)
 
-The script automatically finds the most recent previous `metrics-*.json` file in the output directory and generates an executive summary with deltas at the top of the tables file. You can also specify a previous metrics file explicitly:
+The script automatically finds the most recent previous `metrics-*.json` file by scanning the base output directory and all dated subdirectories. You can also specify a previous metrics file explicitly:
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
-  --csv OUTPUT_DIR/registry_metrics.csv \
-  --output-dir OUTPUT_DIR \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output-dir $DATE_DIR \
   --date YYYY-MM-DD
 ```
 
@@ -133,11 +140,13 @@ Or with an explicit previous metrics file:
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
-  --csv OUTPUT_DIR/registry_metrics.csv \
-  --output-dir OUTPUT_DIR \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output-dir $DATE_DIR \
   --date YYYY-MM-DD \
-  --previous-metrics OUTPUT_DIR/metrics-PREVIOUS-DATE.json
+  --previous-metrics OUTPUT_DIR/PREVIOUS-DATE/metrics-PREVIOUS-DATE.json
 ```
+
+**Important**: Pass the **base** OUTPUT_DIR (not DATE_DIR) as the directory to search for previous metrics, so the script can find metrics from earlier dated subfolders.
 
 ### Step 7: Generate the Usage Report
 
@@ -154,6 +163,8 @@ Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the
 
 #### Report Structure
 
+The main body focuses on insights and charts. Detailed event-count distribution tables are moved to an appendix.
+
 ```markdown
 # AI Registry -- Usage Report
 
@@ -164,8 +175,7 @@ Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the
 ---
 
 ## Executive Summary
-
-Lead with the number of new registry installs since the last report (if available), then total unique installs since tracking began, dominant cloud/compute/IdP, average daily install rate, and notable growth trends. Follow immediately with the timeseries chart.
+Lead with new installs since last report, total unique installs, dominant cloud/compute/IdP, growth trends. Include timeseries chart.
 
 ![Registry Installs Timeseries](registry-installs-timeseries-YYYY-MM-DD.png)
 
@@ -173,9 +183,8 @@ Lead with the number of new registry installs since the last report (if availabl
 - Deltas for total events, unique instances, heartbeat events, null registry_id count
 - Per-cloud-provider unique registry installs comparison table
 
-## Deployment Distribution
-
-![Deployment Distribution](deployment-distribution-YYYY-MM-DD.png)
+## Deployment Distribution (by Unique Instances)
+![Instance Distribution](instance-distribution-YYYY-MM-DD.png)
 
 ## Key Metrics
 | Metric | Value |
@@ -185,61 +194,40 @@ Lead with the number of new registry installs since the last report (if availabl
 | ... | ... |
 
 ## Registry Instance Lifetime
-Commentary on average/max lifetime, how many are multi-day vs single-day.
-Density chart showing age distribution (histogram + KDE) and age buckets.
-Table sorted by age (days) descending showing each instance with cloud, compute, auth, first seen, last seen, age in days, and event count.
-
-## Deployment Landscape
-
-### Registry Instances
-Table of unique registry_id values with their cloud, compute, storage, auth, federation status.
-
-### Cloud Provider Distribution
-Count and percentage of each cloud value (aws, azure, gcp, unknown).
-
-### Compute Platform Distribution
-Count and percentage of each compute value (docker, ecs, kubernetes, etc).
-
-### Storage Backend Distribution
-Count and percentage of each storage value (mongodb-ce, documentdb, etc).
-
-### Auth Provider Distribution
-Count and percentage of each auth value (auth0, keycloak, entra, cognito, none).
+Commentary on average/max lifetime, multi-day vs single-day.
+Density chart and top-10 table by age.
 
 ## Version Adoption
-
-### By Events
-Table of version strings with event counts and percentages. Note which are release vs dev/branch versions.
-
-### By Unique Registry Instances
-Table of version strings with unique registry instance counts. Shows how many distinct deployments run each version (an instance is counted under the latest version it reported).
-
-### Last Seen Version per Registry Instance
-Table showing each registry_id with its cloud, compute, last reported version, and last seen date. Sorted by last seen date descending. Useful for tracking which instances are on old versions.
+Table of version strings with event counts. Notes on release vs dev versions.
 
 ## Feature Adoption
-- Federation enabled rate
-- with-gateway vs registry-only mode
-- Heartbeat opt-in rate
+Federation, gateway mode, heartbeat rates.
 
 ## Search Usage
-- Total queries, average per instance, max from single instance
+Total queries (deduplicated), average per instance, max from single instance.
+
+## Heartbeat Metrics
+Server/agent/skill counts, uptime, search backend, embeddings provider.
 
 ## Architecture Patterns Observed
-Identify 3-5 distinct deployment patterns from the data (e.g., "Dev Setup", "AWS Production", "Azure Enterprise").
+3-5 distinct deployment patterns from the data.
 
 ## Recommendations
 3-5 actionable insights based on the data.
+
+## Appendix: Raw Distribution Tables
+Event-count-based distribution tables for cloud, compute, architecture, storage, and auth.
+These provide the raw numbers behind the instance-based chart above.
 ```
 
-Save the report to `OUTPUT_DIR/ai-registry-usage-report-YYYY-MM-DD.md`.
+Save the report to `$DATE_DIR/ai-registry-usage-report-YYYY-MM-DD.md`.
 
 ### Step 8: Generate Self-Contained HTML
 
-Convert the markdown report to a single self-contained HTML file using pandoc. The chart PNG is base64-embedded so the HTML works standalone. Run from the OUTPUT_DIR so relative image paths resolve:
+Convert the markdown report to a single self-contained HTML file using pandoc. The chart PNG is base64-embedded so the HTML works standalone. Run from the DATE_DIR so relative image paths resolve:
 
 ```bash
-cd OUTPUT_DIR && pandoc ai-registry-usage-report-YYYY-MM-DD.md \
+cd $DATE_DIR && pandoc ai-registry-usage-report-YYYY-MM-DD.md \
   -o ai-registry-usage-report-YYYY-MM-DD.html \
   --embed-resources --standalone \
   --css=.claude/skills/usage-report/report-style.css \
@@ -272,19 +260,39 @@ User: /usage-report
 
 Output:
 ```
-Executive Summary: 68 startup events from ~7 unique registry instances over 4 days...
-Compared to previous report (2026-03-30): +12 events (+21%), +2 new instances (+40%)
+Executive Summary: 1074 events from 97 unique registry instances over 21 days...
+Compared to previous report (2026-04-16): +327 events (+44%), +5 new instances (+5%)
 
-Full report: .scratchpad/usage-reports/ai-registry-usage-report-2026-03-31.md
-HTML report: .scratchpad/usage-reports/ai-registry-usage-report-2026-03-31.html
+Full report: .scratchpad/usage-reports/2026-04-18/ai-registry-usage-report-2026-04-18.md
+HTML report: .scratchpad/usage-reports/2026-04-18/ai-registry-usage-report-2026-04-18.html
 Charts:
-  - .scratchpad/usage-reports/deployment-distribution-2026-03-31.png
-  - .scratchpad/usage-reports/registry-installs-timeseries-2026-03-31.png
-CSV data: .scratchpad/usage-reports/registry_metrics.csv
+  - .scratchpad/usage-reports/2026-04-18/instance-distribution-2026-04-18.png
+  - .scratchpad/usage-reports/2026-04-18/registry-installs-timeseries-2026-04-18.png
+  - .scratchpad/usage-reports/2026-04-18/instance-lifetime-2026-04-18.png
+CSV data: .scratchpad/usage-reports/2026-04-18/registry_metrics.csv
 ```
 
 ```
 User: /usage-report /tmp/reports
 ```
 
-Output saved to `/tmp/reports/`.
+Output saved to `/tmp/reports/2026-04-18/`.
+
+## Output Directory Structure
+
+```
+.scratchpad/usage-reports/
+  2026-04-16/
+    ai-registry-usage-report-2026-04-16.md
+    ai-registry-usage-report-2026-04-16.html
+    instance-distribution-2026-04-16.png
+    registry-installs-timeseries-2026-04-16.png
+    instance-lifetime-2026-04-16.png
+    tables-2026-04-16.md
+    metrics-2026-04-16.json
+    registry_metrics.csv
+  2026-04-18/
+    ai-registry-usage-report-2026-04-18.md
+    ai-registry-usage-report-2026-04-18.html
+    ...
+```

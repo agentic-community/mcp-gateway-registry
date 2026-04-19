@@ -569,31 +569,48 @@ def _print_summary(documents: List[dict]) -> None:
             print(f"  Max:     {max(uptime_hours):.1f}")
 
     # Search query statistics (common to both)
+    # search_queries_total is a lifetime cumulative counter per instance,
+    # so we deduplicate by taking max per registry_id before summing.
     print("\n" + "-" * 80)
     print("SEARCH QUERY STATISTICS")
     print("-" * 80)
 
-    total_queries = [d.get("search_queries_total", 0) for d in documents if d.get("search_queries_total") is not None]
-    queries_24h = [d.get("search_queries_24h", 0) for d in documents if d.get("search_queries_24h") is not None]
-    queries_1h = [d.get("search_queries_1h", 0) for d in documents if d.get("search_queries_1h") is not None]
+    instance_max_total: dict[str, int] = {}
+    instance_max_24h: dict[str, int] = {}
+    instance_max_1h: dict[str, int] = {}
 
-    if total_queries:
-        print(f"\nTotal Search Queries (lifetime):")
-        print(f"  Sum:     {sum(total_queries):,}")
-        print(f"  Average: {sum(total_queries)/len(total_queries):.1f}")
-        print(f"  Max:     {max(total_queries):,}")
+    for d in documents:
+        rid = d.get("registry_id") or f"{d.get('cloud')}/{d.get('compute')}"
+        sq_total = d.get("search_queries_total")
+        sq_24h = d.get("search_queries_24h")
+        sq_1h = d.get("search_queries_1h")
 
-    if queries_24h:
-        print(f"\nSearch Queries (24h window):")
-        print(f"  Sum:     {sum(queries_24h):,}")
-        print(f"  Average: {sum(queries_24h)/len(queries_24h):.1f}")
-        print(f"  Max:     {max(queries_24h):,}")
+        if sq_total is not None:
+            instance_max_total[rid] = max(instance_max_total.get(rid, 0), sq_total)
+        if sq_24h is not None:
+            instance_max_24h[rid] = max(instance_max_24h.get(rid, 0), sq_24h)
+        if sq_1h is not None:
+            instance_max_1h[rid] = max(instance_max_1h.get(rid, 0), sq_1h)
 
-    if queries_1h:
-        print(f"\nSearch Queries (1h window):")
-        print(f"  Sum:     {sum(queries_1h):,}")
-        print(f"  Average: {sum(queries_1h)/len(queries_1h):.1f}")
-        print(f"  Max:     {max(queries_1h):,}")
+    if instance_max_total:
+        fleet_total = sum(instance_max_total.values())
+        instances_with_search = sum(1 for v in instance_max_total.values() if v > 0)
+        print(f"\nTotal Search Queries (lifetime, deduplicated per instance):")
+        print(f"  Fleet Total: {fleet_total:,}")
+        print(f"  Instances with search activity: {instances_with_search}")
+        print(f"  Max from single instance: {max(instance_max_total.values()):,}")
+
+    if instance_max_24h:
+        fleet_24h = sum(instance_max_24h.values())
+        print(f"\nSearch Queries (max 24h window per instance):")
+        print(f"  Fleet Total: {fleet_24h:,}")
+        print(f"  Max from single instance: {max(instance_max_24h.values()):,}")
+
+    if instance_max_1h:
+        fleet_1h = sum(instance_max_1h.values())
+        print(f"\nSearch Queries (max 1h window per instance):")
+        print(f"  Fleet Total: {fleet_1h:,}")
+        print(f"  Max from single instance: {max(instance_max_1h.values()):,}")
 
     print("\n" + "=" * 80 + "\n")
 

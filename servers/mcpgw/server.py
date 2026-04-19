@@ -334,7 +334,7 @@ async def intelligent_tool_finder(
             response = await client.post(
                 f"{REGISTRY_URL}/api/search/semantic",
                 headers=headers,
-                json={"query": query, "entity_types": ["mcp_server", "tool"], "max_results": top_n},
+                json={"query": query, "entity_types": ["mcp_server", "tool", "virtual_server"], "max_results": top_n},
             )
             response.raise_for_status()
             data = response.json()
