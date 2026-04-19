@@ -424,3 +424,4 @@ watch-collector-logs.sh
 NEXT-STEPS-TELEMETRY.md
 .env.telemetry-test
 registry_metrics.csv
+.claude/skills/usage-report/known-internal-instances.md

@@ -127,16 +127,20 @@ Run the analysis script to compute all distributions, instance timelines, and me
 - `tables-YYYY-MM-DD.md` -- pre-formatted markdown tables ready to embed in the report (with executive summary comparison at the top)
 - `metrics-YYYY-MM-DD.json` -- raw computed metrics as JSON (includes `per_cloud_unique_installs`)
 
-The script automatically finds the most recent previous `metrics-*.json` file by scanning the base output directory and all dated subdirectories. You can also specify a previous metrics file explicitly:
+The script automatically finds the most recent previous `metrics-*.json` file. Since output files are written to the dated subfolder (`$DATE_DIR`) but previous metrics live in *sibling* dated subfolders, you **must** pass `--search-dir OUTPUT_DIR` so the script searches the parent directory containing all dated subfolders:
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
   --csv $DATE_DIR/registry_metrics.csv \
   --output-dir $DATE_DIR \
+  --search-dir OUTPUT_DIR \
   --date YYYY-MM-DD
 ```
 
-Or with an explicit previous metrics file:
+- `--output-dir $DATE_DIR` -- where to write `tables-*.md` and `metrics-*.json`
+- `--search-dir OUTPUT_DIR` -- where to search for previous `metrics-*.json` files (scans this directory and all subdirectories). **If omitted, defaults to the parent of `--output-dir`.**
+
+Or with an explicit previous metrics file (skips auto-detection):
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
@@ -146,7 +150,20 @@ Or with an explicit previous metrics file:
   --previous-metrics OUTPUT_DIR/PREVIOUS-DATE/metrics-PREVIOUS-DATE.json
 ```
 
-**Important**: Pass the **base** OUTPUT_DIR (not DATE_DIR) as the directory to search for previous metrics, so the script can find metrics from earlier dated subfolders.
+### Step 6b: Identify Internal vs Customer Instances
+
+Check whether the file `.claude/skills/usage-report/known-internal-instances.md` exists before attempting to read it. **This file is gitignored and may not be present on all machines.** If the file does not exist, skip this step entirely and treat all instances as potential customer instances in the report.
+
+If the file exists, read the list of known internal registry instance IDs from it. These are internal development/testing/demo instances -- NOT customer deployments.
+
+When writing the report:
+
+1. **Clearly label known internal instances** in the Instance Lifetime table and Registry Instances table (e.g., add "(internal)" suffix or a dedicated column)
+2. **Separate metrics**: Report total fleet numbers AND customer-only numbers (excluding internal instances). For example: "97 total instances (3 known internal + possibly more, ~94 potential customer instances)"
+3. **Flag unusual activity from internal instances**: If internal instances show disproportionate activity (e.g., many registered servers/agents/skills, heavy search usage, frequent restarts/heartbeats), explicitly note this is internal testing activity and NOT indicative of customer usage patterns
+4. **Note that additional internal instances may exist** beyond the known list -- short-lived CI/CD runs, developer local setups, etc. may not be in the known list
+
+The known internal instances are typically the longest-running, highest-activity instances since they are always-on development environments.
 
 ### Step 7: Generate the Usage Report
 
@@ -191,11 +208,19 @@ Lead with new installs since last report, total unique installs, dominant cloud/
 |--------|-------|
 | Total Events | N |
 | Unique Registry Instances | N |
+| Known Internal Instances | 3 (+ possibly more) |
+| Potential Customer Instances | N - internal |
 | ... | ... |
+
+## Internal Instances (Development/Testing)
+List the known internal instances from known-internal-instances.md.
+Note their disproportionate activity (high search, many servers/agents/skills, long uptime).
+Clearly state: "Activity from these instances reflects internal testing and should not be interpreted as customer usage patterns."
+Flag any unusual spikes (e.g., restart storms, heavy search bursts) with context.
 
 ## Registry Instance Lifetime
 Commentary on average/max lifetime, multi-day vs single-day.
-Density chart and top-10 table by age.
+Density chart and top-10 table by age. Mark internal instances.
 
 ## Version Adoption
 Table of version strings with event counts. Notes on release vs dev versions.

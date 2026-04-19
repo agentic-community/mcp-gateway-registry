@@ -1103,7 +1103,16 @@ def main() -> None:
         default=None,
         help=(
             "Path to previous metrics JSON for comparison. "
-            "If not provided, auto-detects the most recent one in output-dir."
+            "If not provided, auto-detects the most recent one in search-dir."
+        ),
+    )
+    parser.add_argument(
+        "--search-dir",
+        default=None,
+        help=(
+            "Directory to search for previous metrics files. "
+            "Defaults to the parent of output-dir (useful when output-dir "
+            "is a dated subfolder like reports/2026-04-19/)."
         ),
     )
     args = parser.parse_args()
@@ -1133,7 +1142,10 @@ def main() -> None:
     # Load previous metrics for comparison
     prev_metrics_path = args.previous_metrics
     if not prev_metrics_path:
-        prev_metrics_path = _find_previous_metrics(args.output_dir, date_str)
+        search_dir = args.search_dir or os.path.dirname(
+            os.path.abspath(args.output_dir)
+        )
+        prev_metrics_path = _find_previous_metrics(search_dir, date_str)
 
     previous_metrics = None
     previous_cloud_installs = None
