@@ -36,11 +36,16 @@ LINE_PALETTE: str = "Set2"
 def _find_csv_files(
     directory: str,
 ) -> list[str]:
-    """Find all CSV files in the given directory."""
+    """Find all CSV files in the directory and dated subdirectories."""
     csv_files = []
     for filename in os.listdir(directory):
+        filepath = os.path.join(directory, filename)
         if filename.endswith(".csv"):
-            csv_files.append(os.path.join(directory, filename))
+            csv_files.append(filepath)
+        elif os.path.isdir(filepath):
+            for subfile in os.listdir(filepath):
+                if subfile.endswith(".csv"):
+                    csv_files.append(os.path.join(filepath, subfile))
     csv_files.sort()
     logger.info(f"Found {len(csv_files)} CSV files in {directory}")
     return csv_files

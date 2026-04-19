@@ -113,17 +113,17 @@ def _find_previous_metrics(
 ) -> str | None:
     """Find the most recent metrics JSON file before the current date.
 
-    Scans the output directory for metrics-YYYY-MM-DD.json files and
-    returns the path to the most recent one that predates current_date.
+    Scans the output directory and dated subdirectories (YYYY-MM-DD/)
+    for metrics-YYYY-MM-DD.json files and returns the path to the most
+    recent one that predates current_date.
     """
-    pattern = os.path.join(output_dir, "metrics-*.json")
-    candidates = glob.glob(pattern)
+    flat_pattern = os.path.join(output_dir, "metrics-*.json")
+    dated_pattern = os.path.join(output_dir, "*", "metrics-*.json")
+    candidates = glob.glob(flat_pattern) + glob.glob(dated_pattern)
 
-    # Extract date from filename and filter
     valid = []
     for path in candidates:
         basename = os.path.basename(path)
-        # Extract date portion: metrics-YYYY-MM-DD.json
         date_part = basename.replace("metrics-", "").replace(".json", "")
         if len(date_part) == 10 and date_part < current_date:
             valid.append((date_part, path))
@@ -172,7 +172,7 @@ def _compute_per_cloud_unique_installs(
     rows: list[dict[str, str]],
 ) -> dict[str, int]:
     """Compute unique registry_id count per cloud provider."""
-    cloud_ids = defaultdict(set)
+    cloud_ids: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         rid = row.get("registry_id", "").strip()
         if not rid:
@@ -181,6 +181,42 @@ def _compute_per_cloud_unique_installs(
         cloud_ids[cloud].add(rid)
 
     return {cloud: len(ids) for cloud, ids in sorted(cloud_ids.items())}
+
+
+def _compute_per_cloud_last_event(
+    rows: list[dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    """Compute last startup and heartbeat timestamp per cloud provider.
+
+    Returns dict mapping cloud -> {"last_startup": ts, "last_heartbeat": ts}.
+    Timestamps are date strings (YYYY-MM-DD).
+    """
+    cloud_last_startup: dict[str, str] = {}
+    cloud_last_heartbeat: dict[str, str] = {}
+
+    for row in rows:
+        cloud = row.get("cloud") or "unknown"
+        ts = (row.get("ts") or "")[:10]
+        if not ts:
+            continue
+
+        event_type = row.get("event", "")
+        if event_type == "startup":
+            if ts > cloud_last_startup.get(cloud, ""):
+                cloud_last_startup[cloud] = ts
+        elif event_type == "heartbeat":
+            if ts > cloud_last_heartbeat.get(cloud, ""):
+                cloud_last_heartbeat[cloud] = ts
+
+    result: dict[str, dict[str, str]] = {}
+    all_clouds = sorted(set(list(cloud_last_startup.keys()) + list(cloud_last_heartbeat.keys())))
+    for cloud in all_clouds:
+        result[cloud] = {
+            "last_startup": cloud_last_startup.get(cloud, "--"),
+            "last_heartbeat": cloud_last_heartbeat.get(cloud, "--"),
+        }
+
+    return result
 
 
 def _compute_instance_lifetime(
@@ -224,6 +260,7 @@ def _build_exec_summary_md(
     previous_metrics: dict | None,
     current_cloud_installs: dict[str, int],
     previous_cloud_installs: dict[str, int] | None,
+    cloud_last_event: dict[str, dict[str, str]] | None = None,
 ) -> str:
     """Build the executive summary markdown section with comparison."""
     lines = []
@@ -270,13 +307,15 @@ def _build_exec_summary_md(
     if previous_metrics is None:
         lines.append("*No previous report available for comparison.*")
         lines.append("")
-        # Still show per-cloud installs
         lines.append("### Unique Registry Installs by Cloud Provider")
         lines.append("")
-        lines.append("| Cloud Provider | Unique Installs |")
-        lines.append("|----------------|-----------------|")
+        lines.append("| Cloud Provider | Unique Installs | Last Startup | Last Heartbeat |")
+        lines.append("|----------------|-----------------|--------------|----------------|")
         for cloud, count in current_cloud_installs.items():
-            lines.append(f"| {cloud} | {count} |")
+            last_ev = (cloud_last_event or {}).get(cloud, {})
+            last_startup = last_ev.get("last_startup", "--")
+            last_heartbeat = last_ev.get("last_heartbeat", "--")
+            lines.append(f"| {cloud} | {count} | {last_startup} | {last_heartbeat} |")
         lines.append("")
         return "\n".join(lines)
 
@@ -304,12 +343,15 @@ def _build_exec_summary_md(
 
     lines.append("")
 
-    # Per-cloud unique installs comparison
     lines.append("### Unique Registry Installs by Cloud Provider")
     lines.append("")
     if previous_cloud_installs:
-        lines.append("| Cloud Provider | Previous | Current | Change |")
-        lines.append("|----------------|----------|---------|--------|")
+        lines.append(
+            "| Cloud Provider | Previous | Current | Change | Last Startup | Last Heartbeat |"
+        )
+        lines.append(
+            "|----------------|----------|---------|--------|--------------|----------------|"
+        )
         all_clouds = sorted(
             set(list(current_cloud_installs.keys()) + list(previous_cloud_installs.keys()))
         )
@@ -317,12 +359,21 @@ def _build_exec_summary_md(
             prev_count = previous_cloud_installs.get(cloud, 0)
             curr_count = current_cloud_installs.get(cloud, 0)
             delta = _compute_delta(curr_count, prev_count)
-            lines.append(f"| {cloud} | {prev_count} | {curr_count} | {delta} |")
+            last_ev = (cloud_last_event or {}).get(cloud, {})
+            last_startup = last_ev.get("last_startup", "--")
+            last_heartbeat = last_ev.get("last_heartbeat", "--")
+            lines.append(
+                f"| {cloud} | {prev_count} | {curr_count} | {delta} "
+                f"| {last_startup} | {last_heartbeat} |"
+            )
     else:
-        lines.append("| Cloud Provider | Unique Installs |")
-        lines.append("|----------------|-----------------|")
+        lines.append("| Cloud Provider | Unique Installs | Last Startup | Last Heartbeat |")
+        lines.append("|----------------|-----------------|--------------|----------------|")
         for cloud, count in current_cloud_installs.items():
-            lines.append(f"| {cloud} | {count} |")
+            last_ev = (cloud_last_event or {}).get(cloud, {})
+            last_startup = last_ev.get("last_startup", "--")
+            last_heartbeat = last_ev.get("last_heartbeat", "--")
+            lines.append(f"| {cloud} | {count} | {last_startup} | {last_heartbeat} |")
     lines.append("")
 
     # Distribution shift highlights
@@ -1077,6 +1128,7 @@ def main() -> None:
     search = _compute_search_stats(rows)
     features = _compute_feature_adoption(rows)
     cloud_installs = _compute_per_cloud_unique_installs(rows)
+    cloud_last_event = _compute_per_cloud_last_event(rows)
 
     # Load previous metrics for comparison
     prev_metrics_path = args.previous_metrics
@@ -1098,6 +1150,7 @@ def main() -> None:
         previous_metrics,
         cloud_installs,
         previous_cloud_installs,
+        cloud_last_event=cloud_last_event,
     )
 
     md_content = _build_markdown_tables(
