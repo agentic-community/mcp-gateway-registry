@@ -4,9 +4,12 @@ FROM --platform=${TARGETPLATFORM} public.ecr.aws/docker/library/python:3.14-slim
 WORKDIR /app
 
 # Install system dependencies and uv
-RUN apt-get update && apt-get install -y \
+# build-essential is required to compile asyncpg from source (no py3.14 wheel yet)
+# apt-get upgrade ensures latest security patches (e.g. openssl ~deb13u2)
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     sqlite3 \
     curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && pip install uv
 

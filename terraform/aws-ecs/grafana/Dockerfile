@@ -1,12 +1,13 @@
 # Grafana OSS for MCP Gateway Observability Pipeline
 # Pinned to stable version to avoid breaking changes
-FROM grafana/grafana:12.3.1
+FROM grafana/grafana:12.4.3
 
 # Switch to root to set up directories
 USER root
 
 # Install wget for health checks
-RUN apk add --no-cache wget
+# apk upgrade ensures latest Alpine security patches (openssl, zlib, musl)
+RUN apk update && apk upgrade --no-cache && apk add --no-cache wget
 
 # Copy provisioning configurations
 COPY provisioning/datasources /etc/grafana/provisioning/datasources
