@@ -1384,7 +1384,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         name: skill.name,
         description: skill.description || '',
         skill_md_url: skill.skill_md_url || '',
-        repository_url: '',
+        repository_url: skill.repository_url || '',
         version: skill.version || '',
         visibility: skill.visibility || 'public',
         tags: (skill.tags || []).join(', '),
