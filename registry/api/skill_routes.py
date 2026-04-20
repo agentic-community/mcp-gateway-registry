@@ -250,6 +250,7 @@ async def parse_skill_md(
             "content_version": result.get("content_version"),
             "skill_md_url": result.get("skill_md_url"),
             "skill_md_raw_url": result.get("skill_md_raw_url"),
+            "repository_url": result.get("repository_url"),
         }
     except SkillUrlValidationError as e:
         raise HTTPException(

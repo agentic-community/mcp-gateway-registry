@@ -53,6 +53,7 @@ export interface Skill {
   allowed_tools?: AllowedTool[];
   requirements?: SkillRequirement[];
   metadata?: SkillMetadata | null;
+  repository_url?: string;
   num_stars?: number;
   status?: 'active' | 'draft' | 'deprecated' | 'beta';
   health_status?: 'healthy' | 'unhealthy' | 'unknown';

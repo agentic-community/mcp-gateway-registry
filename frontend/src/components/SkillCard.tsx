@@ -657,7 +657,18 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                   className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-300 hover:underline"
                 >
                   <ArrowTopRightOnSquareIcon className="h-4 w-4" />
-                  View on GitHub
+                  View Skill
+                </a>
+              )}
+              {skill.repository_url && (
+                <a
+                  href={skill.repository_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-300 hover:underline"
+                >
+                  <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+                  View Repo
                 </a>
               )}
               {skillMdContent && (

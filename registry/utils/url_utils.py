@@ -67,6 +67,36 @@ def _is_raw_github_url(
     return False
 
 
+def _map_to_base_hostname(
+    hostname: str,
+) -> str:
+    """Map a raw or regular GitHub hostname to the base GitHub hostname.
+
+    Args:
+        hostname: Lowercase hostname to map
+
+    Returns:
+        Base GitHub hostname for constructing repository URLs
+
+    Examples:
+        >>> _map_to_base_hostname("raw.githubusercontent.com")
+        'github.com'
+        >>> _map_to_base_hostname("raw.github.mycompany.com")
+        'github.mycompany.com'
+        >>> _map_to_base_hostname("github.com")
+        'github.com'
+    """
+    if hostname == "raw.githubusercontent.com":
+        return "github.com"
+
+    # Enterprise raw URLs: strip "raw." prefix
+    if hostname.startswith("raw.") and "github" in hostname:
+        return hostname[4:]
+
+    # Already a base hostname (github.com, github.mycompany.com, etc.)
+    return hostname
+
+
 def _translate_github_url_to_raw(
     url: str,
 ) -> str:
@@ -161,3 +191,64 @@ def translate_skill_url(
     # GitHub URL: translate to raw
     raw_url = _translate_github_url_to_raw(url)
     return (url, raw_url)
+
+
+def extract_repository_url(
+    url: str,
+) -> str | None:
+    """Extract the GitHub repository URL from a SKILL.md URL.
+
+    Given a URL pointing to a file in a GitHub repository (either a blob URL
+    or a raw content URL), this function extracts the base repository URL
+    in the form https://{hostname}/{owner}/{repo}.
+
+    Handles:
+    - github.com blob URLs
+    - raw.githubusercontent.com URLs
+    - Enterprise GitHub URLs (github.mycompany.com, raw.github.mycompany.com)
+
+    Args:
+        url: URL to extract repository from
+
+    Returns:
+        Repository URL string, or None if not a GitHub URL or malformed
+
+    Examples:
+        >>> extract_repository_url("https://github.com/anthropics/skills/blob/main/SKILL.md")
+        'https://github.com/anthropics/skills'
+        >>> extract_repository_url("https://raw.githubusercontent.com/anthropics/skills/refs/heads/main/SKILL.md")
+        'https://github.com/anthropics/skills'
+        >>> extract_repository_url("https://example.com/file.md")
+        None
+    """
+    if not url or not url.strip():
+        return None
+
+    url = url.strip()
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return None
+
+    # Only handle GitHub hostnames
+    if not _is_github_hostname(hostname):
+        return None
+
+    # Extract path segments (skip leading empty segment from leading slash)
+    path_segments = [s for s in parsed.path.split("/") if s]
+    if len(path_segments) < 2:
+        return None
+
+    owner = path_segments[0]
+    repo = path_segments[1]
+
+    # Map the hostname back to the base GitHub hostname
+    hostname_lower = hostname.lower()
+    base_hostname = _map_to_base_hostname(hostname_lower)
+
+    return f"https://{base_hostname}/{owner}/{repo}"

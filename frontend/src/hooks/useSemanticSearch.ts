@@ -71,6 +71,7 @@ export interface SemanticSkillHit {
   tags: string[];
   skill_md_url?: string;
   skill_md_raw_url?: string;
+  repository_url?: string;
   version?: string;
   author?: string;
   visibility?: string;
