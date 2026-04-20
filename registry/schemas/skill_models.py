@@ -247,6 +247,9 @@ class SkillInfo(BaseModel):
     description: str
     skill_md_url: str
     skill_md_raw_url: str | None = Field(None, description="Raw URL for fetching SKILL.md content")
+    repository_url: HttpUrl | None = Field(
+        None, description="URL to the git repository containing the skill"
+    )
     tags: list[str] = Field(default_factory=list)
     author: str | None = None
     version: str | None = None

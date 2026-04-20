@@ -669,6 +669,7 @@ class SkillService:
                 description=s.description,
                 skill_md_url=str(s.skill_md_url),
                 skill_md_raw_url=str(s.skill_md_raw_url) if s.skill_md_raw_url else None,
+                repository_url=s.repository_url,
                 tags=s.tags,
                 author=s.metadata.author if s.metadata else None,
                 version=s.metadata.version if s.metadata else None,
