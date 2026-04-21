@@ -285,6 +285,16 @@ class Settings(BaseSettings):
         description="Comma-separated prefixes to filter IdP groups in IAM > Groups page",
     )
 
+    # M2M direct registration (issue #851)
+    m2m_direct_registration_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable direct M2M client registration API at /api/iam/m2m-clients. "
+            "This feature lets admins register M2M client_ids and group mappings "
+            "without an IdP Admin API token."
+        ),
+    )
+
     # ANS Integration
     ans_integration_enabled: bool = Field(
         default=False,

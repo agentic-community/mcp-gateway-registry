@@ -30,6 +30,7 @@ from registry.api.config_routes import router as config_router
 from registry.api.federation_export_routes import router as federation_export_router
 from registry.api.federation_routes import router as federation_router
 from registry.api.internal_routes import router as internal_router
+from registry.api.m2m_management_routes import router as m2m_management_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
 from registry.api.peer_management_routes import router as peer_management_router
@@ -686,6 +687,22 @@ async def lifespan(app: FastAPI):
             await ans_scheduler.start()
             logger.info("ANS sync scheduler started")
 
+        # Ensure unique index on idp_m2m_clients.client_id for the direct
+        # M2M registration API (issue #851). Only when feature is enabled.
+        if settings.m2m_direct_registration_enabled:
+            try:
+                from registry.repositories.documentdb.client import get_documentdb_client
+                from registry.services.m2m_management_service import (
+                    M2MManagementService,
+                )
+
+                m2m_db = await get_documentdb_client()
+                await M2MManagementService(m2m_db).ensure_indexes()
+            except Exception as e:
+                logger.warning(
+                    f"Failed to ensure idp_m2m_clients index (continuing with startup): {e}",
+                )
+
         # Initialize built-in demo servers (airegistry-tools)
         # Skipped when DISABLE_AI_REGISTRY_TOOLS_SERVER=true (e.g. GitOps/production deployments)
         if not settings.disable_ai_registry_tools_server:
@@ -891,6 +908,11 @@ app.include_router(registry_management_router, prefix="/api")
 # Register IdP M2M management routers (Okta and Auth0)
 app.include_router(okta_m2m_router, prefix="/api", tags=["Okta M2M"])
 app.include_router(auth0_m2m_router, prefix="/api", tags=["Auth0 M2M"])
+
+# Direct M2M client registration API (issue #851)
+# Does not require IdP Admin API token. Gated by feature flag.
+if settings.m2m_direct_registration_enabled:
+    app.include_router(m2m_management_router, prefix="/api", tags=["M2M Management"])
 
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])
