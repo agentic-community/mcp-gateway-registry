@@ -75,6 +75,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("registry_static_token_auth_enabled", "Static Token Auth Enabled", False),
             ("registry_api_token", "Registry API Token", True),
             ("max_tokens_per_user_per_hour", "JWT Token Vending Rate Limit (per user/hour)", False),
+            ("m2m_direct_registration_enabled", "M2M Direct Registration Enabled", False),
             ("secret_key", "Secret Key", True),
         ],
     },
