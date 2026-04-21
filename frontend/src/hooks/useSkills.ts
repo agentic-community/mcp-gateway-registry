@@ -37,6 +37,7 @@ export const useSkills = (): UseSkillsReturn => {
         description: skillInfo.description || '',
         skill_md_url: skillInfo.skill_md_url || '',
         skill_md_raw_url: skillInfo.skill_md_raw_url || '',
+        repository_url: skillInfo.repository_url,
         version: skillInfo.version,
         author: skillInfo.author,
         visibility: skillInfo.visibility || 'public',
