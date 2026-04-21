@@ -1262,6 +1262,42 @@ class GroupSummary(BaseModel):
     attributes: dict[str, Any] | None = Field(None, description="Group attributes")
 
 
+class IdPM2MClient(BaseModel):
+    """M2M client record as stored in idp_m2m_clients.
+
+    Models the response shape from the /api/iam/m2m-clients direct
+    registration API (issue #851).
+    """
+
+    client_id: str = Field(..., description="IdP application client ID")
+    name: str = Field(..., description="Application name")
+    description: str | None = Field(None, description="Application description")
+    groups: list[str] = Field(
+        default_factory=list, description="Groups this client belongs to"
+    )
+    enabled: bool = Field(True, description="Whether the client is active")
+    provider: str = Field(
+        ..., description="Identity provider (okta, keycloak, entra, manual)"
+    )
+    idp_app_id: str | None = Field(None, description="IdP internal app ID")
+    created_by: str | None = Field(
+        None, description="Operator who registered this client (manual records)"
+    )
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+
+
+class M2MClientListResponse(BaseModel):
+    """Paginated response for GET /api/iam/m2m-clients."""
+
+    total: int = Field(..., description="Total number of matching records")
+    limit: int = Field(..., description="Limit applied to this page")
+    skip: int = Field(..., description="Offset applied to this page")
+    items: list[IdPM2MClient] = Field(
+        default_factory=list, description="Records on this page"
+    )
+
+
 class GroupSyncStatusResponse(BaseModel):
     """Response model for list groups endpoint with sync status."""
 
@@ -1462,6 +1498,7 @@ class RegistryClient:
         if (
             endpoint.startswith("/api/agents")
             or endpoint.startswith("/api/management")
+            or endpoint.startswith("/api/iam")
             or endpoint.startswith("/api/search")
             or endpoint.startswith("/api/federation")
             or endpoint.startswith("/api/peers")
@@ -4154,6 +4191,174 @@ class RegistryClient:
         result = response.json()
         logger.info(f"Startup ping result: {result.get('status')}")
         return result
+
+    # -------------------------------------------------------------------------
+    # Direct M2M client registration (issue #851, /api/iam/m2m-clients)
+    #
+    # These endpoints write directly to idp_m2m_clients without calling any
+    # IdP Admin API. Useful when OKTA_API_TOKEN / equivalent is unavailable.
+    # -------------------------------------------------------------------------
+
+    def create_m2m_client(
+        self,
+        client_id: str,
+        client_name: str,
+        groups: list[str] | None = None,
+        description: str | None = None,
+    ) -> IdPM2MClient:
+        """Register an M2M client directly (admin only).
+
+        Args:
+            client_id: IdP application client ID to register.
+            client_name: Human-readable name for the client.
+            groups: Group mappings for authorization.
+            description: Optional description.
+
+        Returns:
+            The persisted M2M client record.
+
+        Raises:
+            requests.HTTPError: 401/403 on auth, 409 if client_id already exists,
+                422 for invalid payload.
+        """
+        logger.info(f"Registering M2M client: {client_id}")
+
+        payload: dict[str, Any] = {
+            "client_id": client_id,
+            "client_name": client_name,
+            "groups": list(groups) if groups else [],
+        }
+        if description is not None:
+            payload["description"] = description
+
+        response = self._make_request(
+            method="POST",
+            endpoint="/api/iam/m2m-clients",
+            data=payload,
+        )
+        return IdPM2MClient(**response.json())
+
+    def list_m2m_clients(
+        self,
+        provider: str | None = None,
+        limit: int = 500,
+        skip: int = 0,
+    ) -> M2MClientListResponse:
+        """List M2M clients with pagination.
+
+        Args:
+            provider: Optional provider filter (e.g. "manual", "okta").
+            limit: Max records to return (1-1000).
+            skip: Offset for pagination.
+
+        Returns:
+            Paginated envelope with total, limit, skip, items.
+
+        Raises:
+            requests.HTTPError: 401 if unauthenticated.
+        """
+        logger.info(
+            f"Listing M2M clients (provider={provider}, limit={limit}, skip={skip})"
+        )
+
+        params: dict[str, Any] = {"limit": limit, "skip": skip}
+        if provider is not None:
+            params["provider"] = provider
+
+        response = self._make_request(
+            method="GET",
+            endpoint="/api/iam/m2m-clients",
+            params=params,
+        )
+        return M2MClientListResponse(**response.json())
+
+    def get_m2m_client(self, client_id: str) -> IdPM2MClient:
+        """Get a single M2M client by client_id.
+
+        Args:
+            client_id: IdP application client ID.
+
+        Returns:
+            The M2M client record.
+
+        Raises:
+            requests.HTTPError: 401 if unauthenticated, 404 if not found.
+        """
+        logger.info(f"Getting M2M client: {client_id}")
+
+        response = self._make_request(
+            method="GET",
+            endpoint=f"/api/iam/m2m-clients/{quote(client_id, safe='')}",
+        )
+        return IdPM2MClient(**response.json())
+
+    def patch_m2m_client(
+        self,
+        client_id: str,
+        client_name: str | None = None,
+        groups: list[str] | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+    ) -> IdPM2MClient:
+        """Partially update an M2M client (admin only).
+
+        Only manual records (provider == "manual") can be updated. IdP-synced
+        records return 403.
+
+        Fields left as None are NOT sent to the server (unchanged). To clear
+        groups, pass an empty list explicitly.
+
+        Args:
+            client_id: IdP application client ID to update.
+            client_name: New name, or None to leave unchanged.
+            groups: New groups list (empty list clears), or None to leave unchanged.
+            description: New description, or None to leave unchanged.
+            enabled: New enabled flag, or None to leave unchanged.
+
+        Returns:
+            The updated M2M client record.
+
+        Raises:
+            requests.HTTPError: 401/403 on auth, 404 if not found, 403 if record
+                was IdP-synced.
+        """
+        logger.info(f"Updating M2M client: {client_id}")
+
+        payload: dict[str, Any] = {}
+        if client_name is not None:
+            payload["client_name"] = client_name
+        if groups is not None:
+            payload["groups"] = list(groups)
+        if description is not None:
+            payload["description"] = description
+        if enabled is not None:
+            payload["enabled"] = enabled
+
+        response = self._make_request(
+            method="PATCH",
+            endpoint=f"/api/iam/m2m-clients/{quote(client_id, safe='')}",
+            data=payload,
+        )
+        return IdPM2MClient(**response.json())
+
+    def delete_m2m_client(self, client_id: str) -> None:
+        """Delete a manual M2M client (admin only).
+
+        Only manual records (provider == "manual") can be deleted.
+
+        Args:
+            client_id: IdP application client ID to delete.
+
+        Raises:
+            requests.HTTPError: 401/403 on auth, 404 if not found, 403 if record
+                was IdP-synced.
+        """
+        logger.info(f"Deleting M2M client: {client_id}")
+
+        self._make_request(
+            method="DELETE",
+            endpoint=f"/api/iam/m2m-clients/{quote(client_id, safe='')}",
+        )
 
 
 def _format_tool_result(

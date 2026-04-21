@@ -3004,6 +3004,168 @@ def cmd_user_delete(args: argparse.Namespace) -> int:
         return 1
 
 
+def _print_m2m_client(client: Any) -> None:
+    """Print an IdPM2MClient record in a readable format."""
+    print(f"Client ID:    {client.client_id}")
+    print(f"Name:         {client.name}")
+    print(f"Provider:     {client.provider}")
+    print(f"Enabled:      {client.enabled}")
+    print(f"Groups:       {', '.join(client.groups) if client.groups else '(none)'}")
+    print(f"Description:  {client.description or '(none)'}")
+    print(f"Created by:   {client.created_by or '(not set)'}")
+    print(f"Created at:   {client.created_at}")
+    print(f"Updated at:   {client.updated_at}")
+
+
+def cmd_m2m_client_create(args: argparse.Namespace) -> int:
+    """Register an M2M client directly (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        groups = (
+            [g.strip() for g in args.groups.split(",") if g.strip()]
+            if args.groups
+            else []
+        )
+        client = _create_client(args)
+        result = client.create_m2m_client(
+            client_id=args.client_id,
+            client_name=args.client_name,
+            groups=groups,
+            description=args.description,
+        )
+        logger.info("M2M client registered successfully\n")
+        _print_m2m_client(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Register M2M client failed: {e}")
+        return 1
+
+
+def cmd_m2m_client_list(args: argparse.Namespace) -> int:
+    """List M2M clients with pagination.
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        client = _create_client(args)
+        result = client.list_m2m_clients(
+            provider=args.provider,
+            limit=args.limit,
+            skip=args.skip,
+        )
+
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+
+        print(
+            f"Total: {result.total}  (showing {len(result.items)} at skip={result.skip}, limit={result.limit})\n"
+        )
+        for item in result.items:
+            _print_m2m_client(item)
+            print("-" * 60)
+        return 0
+    except Exception as e:
+        logger.error(f"List M2M clients failed: {e}")
+        return 1
+
+
+def cmd_m2m_client_get(args: argparse.Namespace) -> int:
+    """Get a single M2M client by client_id.
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        client = _create_client(args)
+        result = client.get_m2m_client(args.client_id)
+
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+
+        _print_m2m_client(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Get M2M client failed: {e}")
+        return 1
+
+
+def cmd_m2m_client_update(args: argparse.Namespace) -> int:
+    """Partially update an M2M client (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        # groups is optional; empty-string input means "clear groups".
+        groups: list[str] | None = None
+        if args.groups is not None:
+            groups = [g.strip() for g in args.groups.split(",") if g.strip()]
+
+        enabled: bool | None = None
+        if args.enabled is not None:
+            enabled = args.enabled.lower() == "true"
+
+        client = _create_client(args)
+        result = client.patch_m2m_client(
+            client_id=args.client_id,
+            client_name=args.client_name,
+            groups=groups,
+            description=args.description,
+            enabled=enabled,
+        )
+        logger.info("M2M client updated successfully\n")
+        _print_m2m_client(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Update M2M client failed: {e}")
+        return 1
+
+
+def cmd_m2m_client_delete(args: argparse.Namespace) -> int:
+    """Delete a manual M2M client (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        if not args.force:
+            confirmation = input(
+                f"Delete M2M client '{args.client_id}'? (yes/no): "
+            )
+            if confirmation.lower() != "yes":
+                logger.info("Operation cancelled")
+                return 0
+
+        client = _create_client(args)
+        client.delete_m2m_client(args.client_id)
+        logger.info(f"M2M client '{args.client_id}' deleted successfully")
+        return 0
+    except Exception as e:
+        logger.error(f"Delete M2M client failed: {e}")
+        return 1
+
+
 def cmd_group_create(args: argparse.Namespace) -> int:
     """
     Create a new IAM group.
@@ -4957,6 +5119,82 @@ Examples:
     user_delete_parser.add_argument("--username", required=True, help="Username to delete")
     user_delete_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
+    # -------------------------------------------------------------------------
+    # M2M direct registration commands (issue #851)
+    # Write to idp_m2m_clients without IdP Admin API. Admin only for mutations.
+    # -------------------------------------------------------------------------
+
+    m2m_create_parser = subparsers.add_parser(
+        "m2m-client-create",
+        help="Register an M2M client directly (no IdP Admin API required)",
+    )
+    m2m_create_parser.add_argument(
+        "--client-id", required=True, help="IdP application client ID to register"
+    )
+    m2m_create_parser.add_argument(
+        "--client-name", required=True, help="Human-readable name for the client"
+    )
+    m2m_create_parser.add_argument(
+        "--groups",
+        default="",
+        help="Comma-separated group names (empty string = no groups)",
+    )
+    m2m_create_parser.add_argument("--description", help="Optional description")
+
+    m2m_list_parser = subparsers.add_parser(
+        "m2m-client-list", help="List registered M2M clients (paginated)"
+    )
+    m2m_list_parser.add_argument(
+        "--provider", help="Filter by provider (e.g. manual, okta, auth0)"
+    )
+    m2m_list_parser.add_argument(
+        "--limit", type=int, default=500, help="Max records per page (1-1000, default 500)"
+    )
+    m2m_list_parser.add_argument(
+        "--skip", type=int, default=0, help="Offset for pagination (default 0)"
+    )
+    m2m_list_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    m2m_get_parser = subparsers.add_parser(
+        "m2m-client-get", help="Get a single M2M client by client_id"
+    )
+    m2m_get_parser.add_argument("--client-id", required=True, help="IdP client ID")
+    m2m_get_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    m2m_update_parser = subparsers.add_parser(
+        "m2m-client-update",
+        help="Partially update an M2M client (manual records only)",
+    )
+    m2m_update_parser.add_argument("--client-id", required=True, help="IdP client ID")
+    m2m_update_parser.add_argument(
+        "--client-name", help="New client name (omit to leave unchanged)"
+    )
+    m2m_update_parser.add_argument(
+        "--groups",
+        help="Comma-separated new groups list; empty string clears groups; omit to leave unchanged",
+    )
+    m2m_update_parser.add_argument(
+        "--description", help="New description (omit to leave unchanged)"
+    )
+    m2m_update_parser.add_argument(
+        "--enabled",
+        choices=["true", "false"],
+        help="Set enabled flag (omit to leave unchanged)",
+    )
+
+    m2m_delete_parser = subparsers.add_parser(
+        "m2m-client-delete",
+        help="Delete an M2M client (manual records only)",
+    )
+    m2m_delete_parser.add_argument("--client-id", required=True, help="IdP client ID")
+    m2m_delete_parser.add_argument(
+        "--force", action="store_true", help="Skip confirmation prompt"
+    )
+
     # Create IAM group command
     group_create_parser = subparsers.add_parser("group-create", help="Create a new IAM group")
     group_create_parser.add_argument("--name", required=True, help="Group name")
@@ -5374,6 +5612,12 @@ Examples:
         "user-create-m2m": cmd_user_create_m2m,
         "user-create-human": cmd_user_create_human,
         "user-delete": cmd_user_delete,
+        # Direct M2M client registration (issue #851)
+        "m2m-client-create": cmd_m2m_client_create,
+        "m2m-client-list": cmd_m2m_client_list,
+        "m2m-client-get": cmd_m2m_client_get,
+        "m2m-client-update": cmd_m2m_client_update,
+        "m2m-client-delete": cmd_m2m_client_delete,
         "group-create": cmd_group_create,
         "group-delete": cmd_group_delete,
         "group-list": cmd_group_list,
