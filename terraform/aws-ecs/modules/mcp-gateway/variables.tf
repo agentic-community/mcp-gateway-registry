@@ -651,6 +651,12 @@ variable "max_tokens_per_user_per_hour" {
   default     = 100
 }
 
+variable "m2m_direct_registration_enabled" {
+  description = "Enable the admin API at /api/iam/m2m-clients for direct M2M client registration (issue #851). Default: true."
+  type        = bool
+  default     = true
+}
+
 # =============================================================================
 # FEDERATION CONFIGURATION (Peer-to-Peer Registry Sync)
 # =============================================================================

@@ -597,6 +597,16 @@ variable "max_tokens_per_user_per_hour" {
 }
 
 # =============================================================================
+# M2M DIRECT CLIENT REGISTRATION (Issue #851)
+# =============================================================================
+
+variable "m2m_direct_registration_enabled" {
+  description = "Enable the admin API at /api/iam/m2m-clients that writes M2M client_ids and groups directly to the idp_m2m_clients collection without an IdP Admin API token. Default: true."
+  type        = bool
+  default     = true
+}
+
+# =============================================================================
 # FEDERATION CONFIGURATION (Peer-to-Peer Registry Sync)
 # =============================================================================
 

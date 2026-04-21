@@ -212,6 +212,11 @@ registry:
     skillSecurityScanEnabled: true  # Enable/disable skill security scanning
     skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
 
+    # M2M direct client registration (issue #851)
+    # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and
+    # their group mappings directly, without requiring an IdP Admin API token.
+    m2mDirectRegistrationEnabled: true
+
     # OpenTelemetry direct OTLP push export configuration
     otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
     otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)

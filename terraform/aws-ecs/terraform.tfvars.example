@@ -280,6 +280,17 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # max_tokens_per_user_per_hour = 100
 
 # ============================================================================
+# M2M DIRECT CLIENT REGISTRATION (Issue #851)
+# ============================================================================
+
+# Enable the admin API at /api/iam/m2m-clients that writes M2M client_ids
+# and their group mappings directly to the idp_m2m_clients collection,
+# without requiring an IdP Admin API token (e.g. OKTA_API_TOKEN).
+# Records created via this API are tagged provider="manual".
+# Default: true
+# m2m_direct_registration_enabled = true
+
+# ============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # ============================================================================
 

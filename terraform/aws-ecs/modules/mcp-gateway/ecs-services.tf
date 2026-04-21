@@ -219,6 +219,11 @@ module "ecs_service_auth" {
           name  = "REGISTRY_API_TOKEN"
           value = var.registry_api_token
         },
+        # M2M direct client registration (issue #851)
+        {
+          name  = "M2M_DIRECT_REGISTRATION_ENABLED"
+          value = tostring(var.m2m_direct_registration_enabled)
+        },
         # Federation configuration (peer-to-peer registry sync)
         {
           name  = "REGISTRY_ID"
@@ -862,6 +867,11 @@ module "ecs_service_registry" {
         {
           name  = "MAX_TOKENS_PER_USER_PER_HOUR"
           value = tostring(var.max_tokens_per_user_per_hour)
+        },
+        # M2M direct client registration (issue #851)
+        {
+          name  = "M2M_DIRECT_REGISTRATION_ENABLED"
+          value = tostring(var.m2m_direct_registration_enabled)
         },
         # Telemetry configuration
         {

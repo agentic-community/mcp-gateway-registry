@@ -125,11 +125,11 @@ module "mcp_gateway" {
   security_add_pending_tag      = var.security_add_pending_tag
 
   # Microsoft Entra ID configuration
-  entra_enabled              = var.entra_enabled
-  entra_tenant_id            = var.entra_tenant_id
-  entra_client_id            = var.entra_client_id
-  entra_client_secret        = var.entra_client_secret
-  idp_group_filter_prefix    = var.idp_group_filter_prefix
+  entra_enabled           = var.entra_enabled
+  entra_tenant_id         = var.entra_tenant_id
+  entra_client_id         = var.entra_client_id
+  entra_client_secret     = var.entra_client_secret
+  idp_group_filter_prefix = var.idp_group_filter_prefix
 
   # Okta configuration
   okta_enabled           = var.okta_enabled
@@ -142,15 +142,15 @@ module "mcp_gateway" {
   okta_auth_server_id    = var.okta_auth_server_id
 
   # Auth0 configuration
-  auth0_enabled                = var.auth0_enabled
-  auth0_domain                 = var.auth0_domain
-  auth0_client_id              = var.auth0_client_id
-  auth0_client_secret          = var.auth0_client_secret
-  auth0_audience               = var.auth0_audience
-  auth0_groups_claim           = var.auth0_groups_claim
-  auth0_m2m_client_id          = var.auth0_m2m_client_id
-  auth0_m2m_client_secret      = var.auth0_m2m_client_secret
-  auth0_management_api_token   = var.auth0_management_api_token
+  auth0_enabled              = var.auth0_enabled
+  auth0_domain               = var.auth0_domain
+  auth0_client_id            = var.auth0_client_id
+  auth0_client_secret        = var.auth0_client_secret
+  auth0_audience             = var.auth0_audience
+  auth0_groups_claim         = var.auth0_groups_claim
+  auth0_m2m_client_id        = var.auth0_m2m_client_id
+  auth0_m2m_client_secret    = var.auth0_m2m_client_secret
+  auth0_management_api_token = var.auth0_management_api_token
 
   # OAuth token storage
   oauth_store_tokens_in_session = var.oauth_store_tokens_in_session
@@ -159,6 +159,9 @@ module "mcp_gateway" {
   registry_static_token_auth_enabled = var.registry_static_token_auth_enabled
   registry_api_token                 = var.registry_api_token
   max_tokens_per_user_per_hour       = var.max_tokens_per_user_per_hour
+
+  # M2M direct client registration (issue #851)
+  m2m_direct_registration_enabled = var.m2m_direct_registration_enabled
 
   # Federation configuration (peer-to-peer registry sync)
   registry_id                          = var.registry_id
