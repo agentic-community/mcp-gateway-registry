@@ -981,3 +981,87 @@ class TestExternalIssuerSupport:
         ):
             with pytest.raises(ValueError):
                 provider._validate_external_token_by_kid("test-token", "bad-kid")
+
+    @patch("auth_server.providers.keycloak._EXTERNAL_JWKS_URI", {"https://custom-idp.example.com": "https://custom-idp.example.com/.well-known/jwks.json"})
+    @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", ["https://custom-idp.example.com"])
+    @patch("requests.get")
+    def test_get_external_jwks_direct_uri(self, mock_get):
+        """Test direct JWKS URI fetch (skipping OIDC Discovery)."""
+        provider = self._make_provider()
+
+        # Only JWKS endpoint should be called (no discovery)
+        jwks_response = MagicMock()
+        jwks_response.status_code = 200
+        jwks_response.json.return_value = {"keys": [{"kid": "direct-key", "kty": "RSA"}]}
+        mock_get.return_value = jwks_response
+
+        jwks = provider._get_external_jwks("https://custom-idp.example.com")
+
+        assert len(jwks["keys"]) == 1
+        assert jwks["keys"][0]["kid"] == "direct-key"
+        # Only 1 HTTP call (direct JWKS), NOT 2 (no discovery)
+        assert mock_get.call_count == 1
+        mock_get.assert_called_once_with(
+            "https://custom-idp.example.com/.well-known/jwks.json", timeout=10
+        )
+
+    @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", ["https://chatai.coop.ch"])
+    @patch("auth_server.providers.keycloak.EXTERNAL_GROUPS_CLAIM", "roles")
+    @patch("auth_server.providers.keycloak.EXTERNAL_DEFAULT_GROUPS", ["coop-chatai-users"])
+    def test_validate_external_token_uid_and_default_groups(self):
+        """Test that uid claim is used as username and default groups are assigned
+        when token has no roles/groups (Coop ChatAI scenario)."""
+        import time as time_mod
+
+        provider = self._make_provider()
+
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_key = private_key.public_key()
+
+        # Coop-style token: uid instead of sub, no roles/groups
+        test_claims = {
+            "iss": "https://chatai.coop.ch",
+            "uid": "NUNA1",
+            "language": "en",
+            "exp": int(time_mod.time()) + 3600,
+            "iat": int(time_mod.time()),
+            "jti": "test-jti-123",
+        }
+        test_token = jwt.encode(
+            test_claims,
+            private_key,
+            algorithm="RS256",
+            headers={"kid": "chat-ai"},
+        )
+
+        pub_numbers = public_key.public_numbers()
+
+        def _int_to_base64url(n, length=None):
+            import base64
+            b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+            return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+        jwks = {
+            "keys": [
+                {
+                    "kid": "chat-ai",
+                    "kty": "RSA",
+                    "alg": "RS256",
+                    "use": "sig",
+                    "n": _int_to_base64url(pub_numbers.n),
+                    "e": _int_to_base64url(pub_numbers.e),
+                }
+            ]
+        }
+
+        with patch.object(provider, "_get_external_jwks", return_value=jwks):
+            result = provider._validate_external_token(
+                test_token, "https://chatai.coop.ch", "chat-ai"
+            )
+
+        assert result["valid"] is True
+        assert result["method"] == "external_issuer"
+        assert result["username"] == "NUNA1"  # extracted from uid, not sub
+        assert result["groups"] == ["coop-chatai-users"]  # default groups applied

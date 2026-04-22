@@ -1,5 +1,6 @@
 """Keycloak authentication provider implementation."""
 
+import json
 import logging
 import os
 import time
@@ -18,14 +19,36 @@ JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-registry")
 SECRET_KEY = os.environ.get("SECRET_KEY", "development-secret-key")
 
 # External issuer configuration for federation / cross-IdP trust
-# Comma-separated list of OIDC issuer URLs (e.g. "https://login.microsoftonline.com/{tenant}/v2.0")
-EXTERNAL_ISSUERS = [
-    url.strip()
-    for url in os.environ.get("EXTERNAL_ISSUERS", "").split(",")
-    if url.strip()
-]
+#
+# Supports two formats:
+#   JSON array (recommended):
+#     EXTERNAL_ISSUERS=[{"issuer":"https://chatai.coop.ch","jwks_uri":"https://chatai.coop.ch/.well-known/jwks.json"}]
+#   Legacy comma-separated (OIDC Discovery only):
+#     EXTERNAL_ISSUERS=https://login.microsoftonline.com/{tenant}/v2.0
+#
+# When jwks_uri is provided, OIDC Discovery is skipped (for non-OIDC issuers).
+_raw_external = os.environ.get("EXTERNAL_ISSUERS", "")
+if _raw_external.strip().startswith("["):
+    _EXTERNAL_ISSUERS_CONFIG: list[dict[str, str]] = json.loads(_raw_external)
+else:
+    _EXTERNAL_ISSUERS_CONFIG = [
+        {"issuer": url.strip()}
+        for url in _raw_external.split(",")
+        if url.strip()
+    ]
+EXTERNAL_ISSUERS = [cfg["issuer"] for cfg in _EXTERNAL_ISSUERS_CONFIG]
+# Pre-built lookup: issuer → direct jwks_uri (skips OIDC Discovery)
+_EXTERNAL_JWKS_URI: dict[str, str] = {
+    cfg["issuer"]: cfg["jwks_uri"]
+    for cfg in _EXTERNAL_ISSUERS_CONFIG
+    if "jwks_uri" in cfg
+}
 # Claim in external tokens that maps to registry groups (default: "roles")
 EXTERNAL_GROUPS_CLAIM = os.environ.get("EXTERNAL_GROUPS_CLAIM", "roles")
+# Default groups assigned when external tokens have no roles/groups claim
+EXTERNAL_DEFAULT_GROUPS: list[str] = json.loads(
+    os.environ.get("EXTERNAL_DEFAULT_GROUPS", "[]")
+)
 
 
 logging.basicConfig(
@@ -270,7 +293,11 @@ class KeycloakProvider(AuthProvider):
             raise ValueError(f"Self-signed token validation failed: {e}")
 
     def _get_external_jwks(self, issuer_url: str) -> dict[str, Any]:
-        """Get JWKS for an external OIDC issuer via discovery, with caching."""
+        """Get JWKS for an external issuer, with caching.
+
+        If a direct jwks_uri was configured for this issuer, fetch it directly.
+        Otherwise, use OIDC Discovery (.well-known/openid-configuration).
+        """
         current_time = time.time()
         cached = self._external_jwks_cache.get(issuer_url)
         cached_time = self._external_jwks_cache_time.get(issuer_url, 0)
@@ -280,15 +307,21 @@ class KeycloakProvider(AuthProvider):
             return cached
 
         try:
-            # OIDC Discovery: fetch jwks_uri from well-known configuration
-            discovery_url = f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
-            logger.debug(f"Discovering JWKS URI from {discovery_url}")
-            disc_resp = requests.get(discovery_url, timeout=10)
-            disc_resp.raise_for_status()
-            jwks_uri = disc_resp.json().get("jwks_uri")
+            # Check for a directly configured JWKS URI (skips OIDC Discovery)
+            jwks_uri = _EXTERNAL_JWKS_URI.get(issuer_url)
 
-            if not jwks_uri:
-                raise ValueError(f"No jwks_uri in discovery document for {issuer_url}")
+            if jwks_uri:
+                logger.debug(f"Using configured JWKS URI for {issuer_url}: {jwks_uri}")
+            else:
+                # OIDC Discovery: fetch jwks_uri from well-known configuration
+                discovery_url = f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
+                logger.debug(f"Discovering JWKS URI from {discovery_url}")
+                disc_resp = requests.get(discovery_url, timeout=10)
+                disc_resp.raise_for_status()
+                jwks_uri = disc_resp.json().get("jwks_uri")
+
+                if not jwks_uri:
+                    raise ValueError(f"No jwks_uri in discovery document for {issuer_url}")
 
             logger.debug(f"Fetching external JWKS from {jwks_uri}")
             jwks_resp = requests.get(jwks_uri, timeout=10)
@@ -363,14 +396,23 @@ class KeycloakProvider(AuthProvider):
             elif isinstance(fallback, list):
                 groups = [str(g) for g in fallback]
 
+        # Assign default groups when token has no roles/groups claims
+        if not groups and EXTERNAL_DEFAULT_GROUPS:
+            groups = list(EXTERNAL_DEFAULT_GROUPS)
+            logger.info(
+                f"No groups claim in external token, using defaults: {groups}"
+            )
+
         logger.info(
             f"External token validated: issuer={issuer_url}, "
-            f"sub={claims.get('sub')}, groups={groups}"
+            f"sub={claims.get('sub', claims.get('uid'))}, groups={groups}"
         )
 
         return {
             "valid": True,
-            "username": claims.get("preferred_username", claims.get("sub")),
+            "username": claims.get(
+                "preferred_username", claims.get("sub", claims.get("uid"))
+            ),
             "email": claims.get("email"),
             "groups": groups,
             "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
