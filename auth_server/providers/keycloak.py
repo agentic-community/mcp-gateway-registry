@@ -100,6 +100,7 @@ class KeycloakProvider(AuthProvider):
             logger.debug("Validating JWT token")
 
             # First check if this is a self-signed token from our auth server
+            unverified_claims = None
             try:
                 unverified_claims = jwt.decode(token, options={"verify_signature": False})
                 if unverified_claims.get("iss") == JWT_ISSUER:
