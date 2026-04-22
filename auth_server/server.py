@@ -1145,6 +1145,43 @@ def _is_registry_api_request(
     return False
 
 
+def _check_registry_static_token(
+    bearer_token: str,
+) -> dict | None:
+    """Return the network-trusted identity payload if the bearer matches
+    the configured static token, else None.
+
+    This is the single place that decides "does this bearer map to an
+    admitted static-token identity?" and what that identity looks like.
+    Future extension (#779) replaces the body with a map lookup over
+    multiple keys without touching the /validate caller.
+
+    Args:
+        bearer_token: The raw bearer value extracted from the Authorization
+            header (already stripped of the "Bearer " prefix).
+
+    Returns:
+        Identity payload dict for a successful match, or None if no match.
+
+    Invariant:
+        When this helper is called, REGISTRY_API_TOKEN is guaranteed non-empty
+        because the /validate caller only reaches here after checking
+        REGISTRY_STATIC_TOKEN_AUTH_ENABLED, and the module-level guard at
+        lines ~96-105 disables that flag if REGISTRY_API_TOKEN is empty.
+    """
+    if hmac.compare_digest(bearer_token, REGISTRY_API_TOKEN):
+        return {
+            "username": "network-user",
+            "client_id": "network-trusted",
+            "groups": ["mcp-registry-admin"],
+            "scopes": [
+                "mcp-servers-unrestricted/read",
+                "mcp-servers-unrestricted/execute",
+            ],
+        }
+    return None
+
+
 def _is_federation_api_request(
     original_url: str,
 ) -> bool:
@@ -1364,71 +1401,62 @@ async def validate_request(request: Request):
             # If admin token also doesn't match, that block will return 403.
             # If admin token is NOT enabled, fall through to JWT validation.
 
-        # Static token auth: validate Registry API requests with static API key
+        # Static token auth: accept REGISTRY_API_TOKEN as an ADDITIONAL accepted
+        # credential on Registry API paths. A missing or mismatched bearer falls
+        # through to JWT/session validation so Okta tokens and UI-issued self-
+        # signed JWTs remain accepted. See issue #871.
+        #
+        # Extension point for #779 (multi-key static tokens) is the helper
+        # _check_registry_static_token; the control flow here does not change.
         if (
             REGISTRY_STATIC_TOKEN_AUTH_ENABLED
             and _is_registry_api_request(original_url)
             and not has_session_cookie
         ):
-            if not authorization:
-                logger.warning(
-                    "Network-trusted mode enabled but Authorization header missing. "
-                    "Hint: Use 'Authorization: Bearer <REGISTRY_API_TOKEN>'."
+            if authorization and authorization.startswith("Bearer "):
+                bearer_token = authorization[len("Bearer ") :].strip()
+                identity = _check_registry_static_token(bearer_token)
+                if identity is not None:
+                    logger.info(
+                        f"Network-trusted mode: Bypassing auth validation for "
+                        f"registry API request to {original_url}"
+                    )
+
+                    response_data = {
+                        "valid": True,
+                        "username": identity["username"],
+                        "client_id": identity["client_id"],
+                        "scopes": identity["scopes"],
+                        "method": "network-trusted",
+                        "groups": identity["groups"],
+                        "server_name": None,
+                        "tool_name": None,
+                    }
+
+                    response = JSONResponse(content=response_data, status_code=200)
+                    response.headers["X-User"] = identity["username"]
+                    response.headers["X-Username"] = identity["username"]
+                    response.headers["X-Client-Id"] = identity["client_id"]
+                    response.headers["X-Scopes"] = " ".join(identity["scopes"])
+                    response.headers["X-Auth-Method"] = "network-trusted"
+                    response.headers["X-Server-Name"] = ""
+                    response.headers["X-Tool-Name"] = ""
+
+                    return response
+
+                # Bearer present but does not match any static token. Fall
+                # through to JWT validation below (Okta RS256 / self-signed
+                # HS256). Intentionally does NOT log any portion of the bearer.
+                logger.debug(
+                    "Static token mismatch; falling through to JWT validation"
                 )
-                return JSONResponse(
-                    content={"detail": "Authorization header required"},
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+            else:
+                # No Authorization header or non-Bearer scheme. Fall through to
+                # session/JWT validation, which returns 401 if nothing matches.
+                logger.debug(
+                    "Registry API request without Bearer credential; "
+                    "falling through to session/JWT validation"
                 )
-
-            # Validate static API key (REGISTRY_API_TOKEN is guaranteed to be set here)
-            if not authorization.startswith("Bearer "):
-                logger.warning("Static token auth: Authorization header must use Bearer scheme")
-                return JSONResponse(
-                    content={"detail": "Authorization header must use Bearer scheme"},
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
-                )
-
-            bearer_token = authorization[len("Bearer ") :].strip()
-            if not hmac.compare_digest(bearer_token, REGISTRY_API_TOKEN):
-                logger.warning("Static token auth: Invalid API token provided")
-                return JSONResponse(
-                    content={"detail": "Invalid API token"},
-                    status_code=403,
-                    headers={"Connection": "close"},
-                )
-
-            logger.info(
-                f"Network-trusted mode: Bypassing auth validation for registry API "
-                f"request to {original_url}"
-            )
-
-            network_trusted_scopes = [
-                "mcp-servers-unrestricted/read",
-                "mcp-servers-unrestricted/execute",
-            ]
-            response_data = {
-                "valid": True,
-                "username": "network-user",
-                "client_id": "network-trusted",
-                "scopes": network_trusted_scopes,
-                "method": "network-trusted",
-                "groups": ["mcp-registry-admin"],
-                "server_name": None,
-                "tool_name": None,
-            }
-
-            response = JSONResponse(content=response_data, status_code=200)
-            response.headers["X-User"] = "network-user"
-            response.headers["X-Username"] = "network-user"
-            response.headers["X-Client-Id"] = "network-trusted"
-            response.headers["X-Scopes"] = " ".join(network_trusted_scopes)
-            response.headers["X-Auth-Method"] = "network-trusted"
-            response.headers["X-Server-Name"] = ""
-            response.headers["X-Tool-Name"] = ""
-
-            return response
 
         # Initialize validation result
         validation_result = None

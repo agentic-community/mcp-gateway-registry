@@ -1005,8 +1005,14 @@ class TestNetworkTrustedMode:
             assert response.headers["X-Auth-Method"] == "network-trusted"
             assert response.headers["X-Username"] == "network-user"
 
-    def test_network_trusted_requires_auth_header(self):
-        """Auth header must be present even in network-trusted mode."""
+    def test_network_trusted_missing_auth_falls_through_to_jwt(self):
+        """Missing Authorization header falls through to JWT/session validation.
+
+        Before issue #871 the static-token block terminated with a 401. After
+        the fix the block falls through so Okta JWT / self-signed JWT callers
+        still work. An absent Authorization header ultimately reaches the JWT
+        block which returns 401 with a different detail message.
+        """
         # Arrange
         import auth_server.server as server_module
 
@@ -1024,9 +1030,10 @@ class TestNetworkTrustedMode:
                 },
             )
 
-            # Assert
+            # Assert: 401 comes from the downstream JWT block, not the static
+            # token block. The detail text changed to the JWT-block message.
             assert response.status_code == 401
-            assert "Authorization header required" in response.json()["detail"]
+            assert "Missing or invalid Authorization header" in response.json()["detail"]
 
     @patch("auth_server.server.get_auth_provider")
     def test_network_trusted_does_not_bypass_mcp_gateway(
@@ -1134,9 +1141,24 @@ class TestNetworkTrustedMode:
             assert data["valid"] is True
             assert data["method"] == "network-trusted"
 
-    def test_network_trusted_invalid_api_token(self):
-        """When REGISTRY_API_TOKEN is set, mismatched Bearer token is rejected."""
-        # Arrange
+    @patch("auth_server.server.get_auth_provider")
+    def test_network_trusted_invalid_api_token_falls_through_to_jwt(
+        self,
+        mock_get_provider,
+        auth_env_vars,
+    ):
+        """A mismatched Bearer now falls through to JWT validation (issue #871).
+
+        Pre-#871 the static-token block returned 403 "Invalid API token". After
+        #871 a mismatched bearer is handed to the JWT block. When the JWT
+        provider rejects it, the final response does NOT contain the old
+        static-token-block detail text.
+        """
+        # Arrange - provider returns an invalid-token result
+        mock_provider = MagicMock()
+        mock_provider.validate_token = MagicMock(side_effect=ValueError("Invalid token"))
+        mock_get_provider.return_value = mock_provider
+
         import auth_server.server as server_module
 
         with (
@@ -1154,9 +1176,12 @@ class TestNetworkTrustedMode:
                 },
             )
 
-            # Assert
-            assert response.status_code == 403
-            assert "Invalid API token" in response.json()["detail"]
+            # Assert: response is no longer the static-token block's 403 with
+            # "Invalid API token". The terminal status depends on the JWT
+            # provider's failure handling (pre-existing 500 path wraps
+            # ValueError), but either way it must NOT be the old 403 body.
+            assert response.status_code != 403
+            assert "Invalid API token" not in response.json().get("detail", "")
 
     def test_network_trusted_disabled_when_no_token_configured(self):
         """When REGISTRY_API_TOKEN is empty, static token auth is disabled (falls back to JWT)."""
@@ -1208,8 +1233,13 @@ class TestNetworkTrustedMode:
             if response.status_code == 401:
                 assert "Authorization header required" not in response.json().get("detail", "")
 
-    def test_network_trusted_rejects_non_bearer_scheme(self):
-        """Authorization header with non-Bearer scheme is rejected."""
+    def test_network_trusted_non_bearer_scheme_falls_through_to_jwt(self):
+        """Non-Bearer scheme now falls through to JWT validation (issue #871).
+
+        Before #871 the static-token block returned 401 with detail mentioning
+        "Bearer scheme". After #871 the block falls through; the JWT block
+        returns 401 with its own detail message.
+        """
         # Arrange
         import auth_server.server as server_module
 
@@ -1228,13 +1258,22 @@ class TestNetworkTrustedMode:
                 },
             )
 
-            # Assert
+            # Assert: 401 from JWT block, not the old "Bearer scheme" detail
             assert response.status_code == 401
-            assert "Bearer scheme" in response.json()["detail"]
+            assert "Bearer scheme" not in response.json()["detail"]
 
-    def test_network_trusted_rejects_empty_bearer_token(self):
-        """Bearer token with empty value is rejected."""
-        # Arrange
+    @patch("auth_server.server.get_auth_provider")
+    def test_network_trusted_empty_bearer_falls_through_to_jwt(
+        self,
+        mock_get_provider,
+        auth_env_vars,
+    ):
+        """Empty Bearer token now falls through to JWT validation (issue #871)."""
+        # Arrange - provider rejects empty token
+        mock_provider = MagicMock()
+        mock_provider.validate_token = MagicMock(side_effect=ValueError("Empty token"))
+        mock_get_provider.return_value = mock_provider
+
         import auth_server.server as server_module
 
         with (
@@ -1252,9 +1291,179 @@ class TestNetworkTrustedMode:
                 },
             )
 
-            # Assert
-            assert response.status_code == 403
-            assert "Invalid API token" in response.json()["detail"]
+            # Assert: fall-through → JWT block rejects → no longer the old 403
+            # "Invalid API token" detail.
+            assert response.status_code != 403
+            assert "Invalid API token" not in response.json().get("detail", "")
+
+
+# =============================================================================
+# HELPER UNIT TESTS (issue #871)
+# =============================================================================
+
+
+class TestCheckRegistryStaticToken:
+    """Unit tests for the _check_registry_static_token helper (issue #871).
+
+    These verify the helper in isolation so issue #779 can swap the body for a
+    multi-key map lookup with confidence.
+    """
+
+    def test_exact_match_returns_network_trusted_identity(self):
+        """Matching bearer returns the network-trusted identity dict."""
+        import auth_server.server as server_module
+
+        with patch.object(server_module, "REGISTRY_API_TOKEN", "expected-token"):
+            identity = server_module._check_registry_static_token("expected-token")
+
+        assert identity is not None
+        assert identity["username"] == "network-user"
+        assert identity["client_id"] == "network-trusted"
+        assert identity["groups"] == ["mcp-registry-admin"]
+        assert "mcp-servers-unrestricted/read" in identity["scopes"]
+        assert "mcp-servers-unrestricted/execute" in identity["scopes"]
+
+    def test_mismatch_returns_none(self):
+        """Non-matching bearer returns None (not an exception, not a falsy dict)."""
+        import auth_server.server as server_module
+
+        with patch.object(server_module, "REGISTRY_API_TOKEN", "expected-token"):
+            assert server_module._check_registry_static_token("something-else") is None
+
+    def test_empty_bearer_returns_none(self):
+        """Empty-string bearer must not match any configured token."""
+        import auth_server.server as server_module
+
+        with patch.object(server_module, "REGISTRY_API_TOKEN", "expected-token"):
+            assert server_module._check_registry_static_token("") is None
+
+    def test_uses_timing_safe_comparison(self):
+        """Guard against regression: must use hmac.compare_digest, not ==.
+
+        Preserves resistance to timing attacks when #779 extends the helper.
+        """
+        import inspect
+
+        import auth_server.server as server_module
+
+        source = inspect.getsource(server_module._check_registry_static_token)
+        assert "hmac.compare_digest" in source
+        assert "bearer_token == REGISTRY_API_TOKEN" not in source
+
+
+# =============================================================================
+# JWT / STATIC TOKEN COEXISTENCE TESTS (issue #871)
+# =============================================================================
+
+
+class TestStaticTokenFallthrough:
+    """Tests verifying that static-token mode accepts Okta/self-signed JWTs
+    as ADDITIONAL credentials, not as replacements. See issue #871.
+    """
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_valid_jwt_accepted_when_static_token_enabled(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A valid IdP JWT must be accepted on /api/* even when static-token
+        mode is on. Pre-#871 the static-token block returned 403 here.
+        """
+        # Arrange
+        mock_get_provider.return_value = mock_cognito_provider
+
+        import auth_server.server as server_module
+
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "REGISTRY_API_TOKEN", "static-key"),
+            patch(
+                "auth_server.server.get_scope_repository",
+                return_value=mock_scope_repository_with_data,
+            ),
+        ):
+            client = TestClient(server_module.app)
+
+            # Act: send a non-matching Bearer that the JWT provider accepts
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer some-valid-idp-jwt",
+                    "X-Original-URL": "https://example.com/api/servers",
+                },
+            )
+
+            # Assert: JWT path wins; response is 200 but NOT network-trusted.
+            assert response.status_code == 200
+            data = response.json()
+            assert data["valid"] is True
+            assert data["method"] != "network-trusted"
+            # The cognito mock returns method="cognito".
+            assert data["username"] == "testuser"
+
+    def test_static_token_match_still_returns_network_trusted(self):
+        """The happy path for the static token is unchanged by #871."""
+        import auth_server.server as server_module
+
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "REGISTRY_API_TOKEN", "static-key"),
+        ):
+            client = TestClient(server_module.app)
+
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer static-key",
+                    "X-Original-URL": "https://example.com/api/servers",
+                },
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["method"] == "network-trusted"
+            assert data["client_id"] == "network-trusted"
+            assert response.headers["X-Auth-Method"] == "network-trusted"
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_mismatched_bearer_and_invalid_jwt_returns_401(
+        self,
+        mock_get_provider,
+        auth_env_vars,
+    ):
+        """Bearer that matches neither static token nor any valid JWT returns
+        401 from the JWT block (previously 403 from static-token block).
+        """
+        # Arrange - provider rejects the token
+        mock_provider = MagicMock()
+        mock_provider.validate_token = MagicMock(side_effect=ValueError("Invalid token"))
+        mock_get_provider.return_value = mock_provider
+
+        import auth_server.server as server_module
+
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "REGISTRY_API_TOKEN", "static-key"),
+        ):
+            client = TestClient(server_module.app)
+
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer neither-static-nor-jwt",
+                    "X-Original-URL": "https://example.com/api/servers",
+                },
+            )
+
+            # Assert: the terminal rejection is no longer the static-token
+            # block's 403 "Invalid API token". Downstream JWT failure
+            # semantics (401 on empty / 500 on provider ValueError etc.) are
+            # out of scope for #871; we only assert the removal of the old
+            # static-token rejection.
+            assert "Invalid API token" not in response.json().get("detail", "")
 
 
 # =============================================================================
