@@ -10,9 +10,7 @@ class TestValidateSkillMdUrlAuth:
     @patch("registry.services.skill_service._is_safe_url", return_value=True)
     async def test_auth_headers_passed_to_get(self, mock_safe_url, mock_auth):
         """Auth headers from GitHubAuthProvider are passed to httpx.get."""
-        mock_auth.get_auth_headers = AsyncMock(
-            return_value={"Authorization": "Bearer ghp_test"}
-        )
+        mock_auth.get_auth_headers = AsyncMock(return_value={"Authorization": "Bearer ghp_test"})
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -56,9 +54,7 @@ class TestValidateSkillMdUrlAuth:
 
             from registry.services.skill_service import _validate_skill_md_url
 
-            await _validate_skill_md_url(
-                "https://raw.githubusercontent.com/o/r/main/SKILL.md"
-            )
+            await _validate_skill_md_url("https://raw.githubusercontent.com/o/r/main/SKILL.md")
 
             call_kwargs = mock_client.get.call_args
             assert call_kwargs.kwargs.get("headers") == {}
@@ -72,9 +68,7 @@ class TestParseSkillMdContentAuth:
     @patch("registry.services.skill_service.translate_skill_url")
     async def test_auth_headers_passed_to_get(self, mock_translate, mock_safe_url, mock_auth):
         """Auth headers are passed to httpx.get when fetching SKILL.md content."""
-        mock_auth.get_auth_headers = AsyncMock(
-            return_value={"Authorization": "Bearer ghp_test"}
-        )
+        mock_auth.get_auth_headers = AsyncMock(return_value={"Authorization": "Bearer ghp_test"})
         mock_translate.return_value = (
             "https://github.com/o/r/blob/main/SKILL.md",
             "https://raw.githubusercontent.com/o/r/refs/heads/main/SKILL.md",
@@ -95,9 +89,7 @@ class TestParseSkillMdContentAuth:
 
             from registry.services.skill_service import _parse_skill_md_content
 
-            result = await _parse_skill_md_content(
-                "https://github.com/o/r/blob/main/SKILL.md"
-            )
+            result = await _parse_skill_md_content("https://github.com/o/r/blob/main/SKILL.md")
 
             call_kwargs = mock_client.get.call_args
             assert call_kwargs.kwargs.get("headers") == {"Authorization": "Bearer ghp_test"}
@@ -111,9 +103,7 @@ class TestCheckSkillHealthAuth:
     @patch("registry.services.skill_service._is_safe_url", return_value=True)
     async def test_auth_headers_passed_to_head(self, mock_safe_url, mock_auth):
         """Auth headers are passed to httpx.head in health check."""
-        mock_auth.get_auth_headers = AsyncMock(
-            return_value={"Authorization": "Bearer ghp_test"}
-        )
+        mock_auth.get_auth_headers = AsyncMock(return_value={"Authorization": "Bearer ghp_test"})
 
         mock_response = MagicMock()
         mock_response.status_code = 200

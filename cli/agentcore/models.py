@@ -39,12 +39,8 @@ class TargetInfo(BaseModel):
     name: str = Field(..., description="Target name")
     description: str | None = Field(None, description="Target description")
     status: str = Field(..., description="Target status")
-    target_type: str = Field(
-        ..., description="mcpServer, lambda, apiGateway, etc."
-    )
-    endpoint: str | None = Field(
-        None, description="MCP server endpoint (for mcpServer type)"
-    )
+    target_type: str = Field(..., description="mcpServer, lambda, apiGateway, etc.")
+    endpoint: str | None = Field(None, description="MCP server endpoint (for mcpServer type)")
 
 
 class GatewayInfo(BaseModel):
@@ -57,12 +53,8 @@ class GatewayInfo(BaseModel):
     description: str | None = Field(None, description="Gateway description")
     status: str = Field(..., description="Gateway status")
     authorizer_type: str = Field(..., description="CUSTOM_JWT, AWS_IAM, or NONE")
-    authorizer_config: dict[str, Any] | None = Field(
-        None, description="Authorizer configuration"
-    )
-    targets: list[TargetInfo] = Field(
-        default_factory=list, description="Gateway targets"
-    )
+    authorizer_config: dict[str, Any] | None = Field(None, description="Authorizer configuration")
+    targets: list[TargetInfo] = Field(default_factory=list, description="Gateway targets")
 
 
 class RuntimeInfo(BaseModel):
@@ -74,9 +66,7 @@ class RuntimeInfo(BaseModel):
     description: str | None = Field(None, description="Runtime description")
     status: str = Field(..., description="Runtime status")
     server_protocol: str = Field(..., description="MCP, HTTP, or A2A")
-    authorizer_config: dict[str, Any] | None = Field(
-        None, description="Authorizer configuration"
-    )
+    authorizer_config: dict[str, Any] | None = Field(None, description="Authorizer configuration")
     invocation_url: str = Field(..., description="Constructed invocation URL")
 
 
@@ -104,9 +94,7 @@ class SyncSummary(BaseModel):
     credentials_saved: int = Field(0, description="Credentials persisted to .env")
     tokens_generated: int = Field(0, description="Egress tokens generated")
     dry_run: bool = Field(False, description="Whether this was a dry run")
-    results: list[SyncResult] = Field(
-        default_factory=list, description="Individual results"
-    )
+    results: list[SyncResult] = Field(default_factory=list, description="Individual results")
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +117,21 @@ def _slugify(name: str) -> str:
 
 
 _UPPERCASE_WORDS: set[str] = {
-    "mcp", "a2a", "sre", "api", "http", "https", "aws", "iam",
-    "jwt", "oidc", "sso", "idp", "llm", "ai", "ml",
+    "mcp",
+    "a2a",
+    "sre",
+    "api",
+    "http",
+    "https",
+    "aws",
+    "iam",
+    "jwt",
+    "oidc",
+    "sso",
+    "idp",
+    "llm",
+    "ai",
+    "ml",
 }
 
 
@@ -170,8 +171,7 @@ def _validate_https_url(url: str, resource_name: str) -> bool:
 
     if not url.startswith("https://"):
         logger.warning(
-            f"Insecure URL for {resource_name}: {url} - "
-            f"Expected HTTPS, skipping registration"
+            f"Insecure URL for {resource_name}: {url} - Expected HTTPS, skipping registration"
         )
         return False
 
@@ -184,10 +184,7 @@ def _build_invocation_url(region: str, runtime_arn: str) -> str:
     Format: https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{encoded-ARN}/invocations
     """
     encoded_arn = quote(runtime_arn, safe="")
-    return (
-        f"https://bedrock-agentcore.{region}.amazonaws.com"
-        f"/runtimes/{encoded_arn}/invocations"
-    )
+    return f"https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{encoded_arn}/invocations"
 
 
 def _get_auth_scheme(authorizer_type: str) -> str:
@@ -225,9 +222,7 @@ def _load_token(token_file: str) -> str:
                 if isinstance(tokens_obj, dict):
                     token = tokens_obj.get("access_token") or tokens_obj.get("token")
             if not token:
-                raise ValueError(
-                    f"No access_token or token field in token file: {abs_path}"
-                )
+                raise ValueError(f"No access_token or token field in token file: {abs_path}")
             return token
     except FileNotFoundError:
         raise FileNotFoundError(f"Token file not found: {abs_path}")

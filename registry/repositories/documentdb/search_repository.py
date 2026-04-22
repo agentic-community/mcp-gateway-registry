@@ -197,8 +197,7 @@ def _distribute_results(
         selected.append((doc, score))
 
     logger.debug(
-        "Search distribution: max_results=%d, soft_cap=%d, "
-        "selected=%d, per_type=%s",
+        "Search distribution: max_results=%d, soft_cap=%d, selected=%d, per_type=%s",
         max_results,
         soft_cap,
         len(selected),
@@ -261,22 +260,26 @@ def _build_status_filter(
 
     if excluded_statuses:
         # Exclude listed statuses; documents missing the field are treated as active
-        conditions.append({
-            "$or": [
-                {"status": {"$nin": excluded_statuses}},
-                {"status": {"$exists": False}},
-            ]
-        })
+        conditions.append(
+            {
+                "$or": [
+                    {"status": {"$nin": excluded_statuses}},
+                    {"status": {"$exists": False}},
+                ]
+            }
+        )
 
     # Enabled filtering
     if not include_disabled:
         # Exclude disabled entities; documents missing is_enabled are treated as enabled
-        conditions.append({
-            "$or": [
-                {"is_enabled": True},
-                {"is_enabled": {"$exists": False}},
-            ]
-        })
+        conditions.append(
+            {
+                "$or": [
+                    {"is_enabled": True},
+                    {"is_enabled": {"$exists": False}},
+                ]
+            }
+        )
 
     if not conditions:
         return {}
@@ -1230,9 +1233,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             scored_docs.sort(key=lambda x: x["relevance_score"], reverse=True)
 
             # Convert to (doc, score) tuples and distribute with soft caps
-            scored_tuples = [
-                (item["doc"], item["relevance_score"]) for item in scored_docs
-            ]
+            scored_tuples = [(item["doc"], item["relevance_score"]) for item in scored_docs]
             selected = _distribute_results(scored_tuples, max_results)
 
             # Format results to match the API contract
@@ -1447,11 +1448,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if status_filter:
             pipeline.append({"$match": status_filter})
 
-        pipeline.extend([
-            text_boost_stage,
-            {"$sort": {"text_boost": -1}},
-            {"$limit": max(max_results * 3, 50)},
-        ])
+        pipeline.extend(
+            [
+                text_boost_stage,
+                {"$sort": {"text_boost": -1}},
+                {"$limit": max(max_results * 3, 50)},
+            ]
+        )
 
         cursor = collection.aggregate(pipeline)
         results = await cursor.to_list(length=max(max_results * 3, 50))
@@ -1659,7 +1662,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
             if query_embedding is None:
                 return await self._lexical_only_search(
-                    query, entity_types, max_results,
+                    query,
+                    entity_types,
+                    max_results,
                     include_draft=include_draft,
                     include_deprecated=include_deprecated,
                     include_disabled=include_disabled,
@@ -2056,7 +2061,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "Falling back to client-side cosine similarity search."
                 )
                 return await self._client_side_search(
-                    query, query_embedding, entity_types, max_results,
+                    query,
+                    query_embedding,
+                    entity_types,
+                    max_results,
                     include_draft=include_draft,
                     include_deprecated=include_deprecated,
                     include_disabled=include_disabled,
@@ -2068,7 +2076,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "Falling back to client-side cosine similarity search."
                 )
                 return await self._client_side_search(
-                    query, query_embedding, entity_types, max_results,
+                    query,
+                    query_embedding,
+                    entity_types,
+                    max_results,
                     include_draft=include_draft,
                     include_deprecated=include_deprecated,
                     include_disabled=include_disabled,

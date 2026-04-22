@@ -52,7 +52,9 @@ def get_token():
         if response.status_code == 200:
             tokens = response.json()
             access_token = tokens.get("access_token")
-            masked_token = f"{access_token[:8]}..." if access_token and len(access_token) > 8 else "***"
+            masked_token = (
+                f"{access_token[:8]}..." if access_token and len(access_token) > 8 else "***"
+            )
             print(f"✅ Token obtained: {masked_token}")
             return access_token
         else:

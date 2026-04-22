@@ -6,7 +6,6 @@ parallel fetching, sync timeout, and health indicator.
 """
 
 import json
-from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,7 +18,6 @@ from registry.services.federation.agentcore_client import (
     _safe_parse_json,
     _sanitize_path_segment,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -52,14 +50,18 @@ def _mcp_record(
     registry_id: str = "reg-abc123",
 ) -> dict:
     """Build a sample MCP descriptor record."""
-    server_content = json.dumps({
-        "title": "My MCP Server",
-        "description": "A test MCP server",
-        "remotes": [{"type": "streamable-http", "url": "https://example.com/mcp"}],
-    })
-    tools_content = json.dumps({
-        "tools": [{"name": "tool1"}, {"name": "tool2"}],
-    })
+    server_content = json.dumps(
+        {
+            "title": "My MCP Server",
+            "description": "A test MCP server",
+            "remotes": [{"type": "streamable-http", "url": "https://example.com/mcp"}],
+        }
+    )
+    tools_content = json.dumps(
+        {
+            "tools": [{"name": "tool1"}, {"name": "tool2"}],
+        }
+    )
     return {
         "recordId": record_id,
         "name": name,
@@ -80,15 +82,17 @@ def _a2a_record(
     record_id: str = "rec-002",
 ) -> dict:
     """Build a sample A2A descriptor record."""
-    agent_card = json.dumps({
-        "name": "My A2A Agent",
-        "description": "An A2A agent",
-        "url": "https://agent.example.com",
-        "version": "2.0.0",
-        "protocolVersion": "1.0",
-        "capabilities": {"streaming": True},
-        "skills": [{"name": "chat"}],
-    })
+    agent_card = json.dumps(
+        {
+            "name": "My A2A Agent",
+            "description": "An A2A agent",
+            "url": "https://agent.example.com",
+            "version": "2.0.0",
+            "protocolVersion": "1.0",
+            "capabilities": {"streaming": True},
+            "skills": [{"name": "chat"}],
+        }
+    )
     return {
         "recordId": record_id,
         "name": name,
@@ -108,11 +112,13 @@ def _custom_record(
     record_id: str = "rec-003",
 ) -> dict:
     """Build a sample CUSTOM descriptor record."""
-    custom_content = json.dumps({
-        "url": "https://original.example.com/api",
-        "capabilities": {"invoke": True},
-        "provider": {"organization": "TestCorp"},
-    })
+    custom_content = json.dumps(
+        {
+            "url": "https://original.example.com/api",
+            "capabilities": {"invoke": True},
+            "provider": {"organization": "TestCorp"},
+        }
+    )
     return {
         "recordId": record_id,
         "name": name,
@@ -133,11 +139,13 @@ def _skills_record(
 ) -> dict:
     """Build a sample AGENT_SKILLS descriptor record."""
     skill_md = "# My Skill\n\nDo something useful."
-    skill_def = json.dumps({
-        "description": "A useful skill",
-        "targetAgents": ["claude-code"],
-        "allowedTools": ["Read", "Write"],
-    })
+    skill_def = json.dumps(
+        {
+            "description": "A useful skill",
+            "targetAgents": ["claude-code"],
+            "allowedTools": ["Read", "Write"],
+        }
+    )
     return {
         "recordId": record_id,
         "name": name,
@@ -388,7 +396,9 @@ class TestTransformCustomRecord:
         assert result["supported_protocol"] == "other"
         assert result["path"] == "/agents/agentcore-custom-my-custom-thing"
         # Self-referencing URL
-        assert result["url"] == "https://my-registry.com/api/agents/agentcore-custom-my-custom-thing"
+        assert (
+            result["url"] == "https://my-registry.com/api/agents/agentcore-custom-my-custom-thing"
+        )
         # Original URL preserved in metadata
         assert result["metadata"]["original_url"] == "https://original.example.com/api"
 
@@ -415,7 +425,10 @@ class TestTransformSkillsRecord:
         assert result["name"] == "my-skill"
         assert result["path"] == "/skills/agentcore-my-skill"
         assert result["skill_md_content"] == "# My Skill\n\nDo something useful."
-        assert result["skill_md_url"] == "https://my-registry.com/api/skills/agentcore-my-skill/content"
+        assert (
+            result["skill_md_url"]
+            == "https://my-registry.com/api/skills/agentcore-my-skill/content"
+        )
         assert result["target_agents"] == ["claude-code"]
         assert result["registry_name"] == AGENTCORE_SOURCE
         assert result["is_read_only"] is True

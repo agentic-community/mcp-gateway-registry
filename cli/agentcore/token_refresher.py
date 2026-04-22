@@ -27,9 +27,8 @@ import argparse
 import json
 import logging
 import os
-import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -182,9 +181,7 @@ def _get_client_secret(
     env_var_name = f"{ENV_VAR_PREFIX}{client_id}"
     secret = os.environ.get(env_var_name)
     if secret:
-        logger.info(
-            f"Using client secret from env var {env_var_name}"
-        )
+        logger.info(f"Using client secret from env var {env_var_name}")
         return secret
 
     # Priority 2: Cognito auto-retrieval via AWS API
@@ -370,13 +367,10 @@ def _trigger_security_scan(
         status_code = e.response.status_code if e.response is not None else "?"
         if status_code == 403:
             logger.warning(
-                f"Security scan skipped for {server_path}: "
-                f"registry token lacks admin privileges"
+                f"Security scan skipped for {server_path}: registry token lacks admin privileges"
             )
         else:
-            logger.error(
-                f"Security scan failed for {server_path}: HTTP {status_code}"
-            )
+            logger.error(f"Security scan failed for {server_path}: HTTP {status_code}")
         return False
     except Exception as e:
         logger.error(f"Security scan failed for {server_path}: {e}")
@@ -413,9 +407,7 @@ def _load_registry_token(
                 if isinstance(tokens_obj, dict):
                     token = tokens_obj.get("access_token") or tokens_obj.get("token")
             if not token:
-                raise ValueError(
-                    f"No access_token or token field in token file: {abs_path}"
-                )
+                raise ValueError(f"No access_token or token field in token file: {abs_path}")
             return token
     except FileNotFoundError:
         raise FileNotFoundError(f"Token file not found: {abs_path}")
@@ -475,9 +467,7 @@ def refresh_all(
         client_id = allowed_clients[0]
 
         # Step 1: Resolve client_secret (per-client env -> auto -> vendor env)
-        client_secret = _get_client_secret(
-            idp_vendor, discovery_url, client_id
-        )
+        client_secret = _get_client_secret(idp_vendor, discovery_url, client_id)
         if not client_secret:
             skipped_count += 1
             continue
@@ -495,18 +485,14 @@ def refresh_all(
             continue
 
         # Step 4: Update registry
-        updated = _update_registry_credential(
-            registry_url, registry_token, server_path, token
-        )
+        updated = _update_registry_credential(registry_url, registry_token, server_path, token)
         if updated:
             success_count += 1
-            entry["last_refreshed"] = datetime.now(timezone.utc).isoformat()
+            entry["last_refreshed"] = datetime.now(UTC).isoformat()
 
             # Step 5: Trigger security rescan
             if run_scan:
-                scanned = _trigger_security_scan(
-                    registry_url, registry_token, server_path
-                )
+                scanned = _trigger_security_scan(registry_url, registry_token, server_path)
                 if scanned:
                     scan_success_count += 1
                 else:
@@ -622,9 +608,7 @@ Secret resolution priority (per client_id):
     registry_token = _load_registry_token(args.token_file)
 
     if args.loop:
-        logger.info(
-            f"Running in continuous mode, interval: {args.interval}s"
-        )
+        logger.info(f"Running in continuous mode, interval: {args.interval}s")
         while True:
             try:
                 refresh_all(

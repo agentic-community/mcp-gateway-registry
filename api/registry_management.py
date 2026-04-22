@@ -3027,11 +3027,7 @@ def cmd_m2m_client_create(args: argparse.Namespace) -> int:
         Exit code (0 for success, 1 for failure).
     """
     try:
-        groups = (
-            [g.strip() for g in args.groups.split(",") if g.strip()]
-            if args.groups
-            else []
-        )
+        groups = [g.strip() for g in args.groups.split(",") if g.strip()] if args.groups else []
         client = _create_client(args)
         result = client.create_m2m_client(
             client_id=args.client_id,
@@ -3150,9 +3146,7 @@ def cmd_m2m_client_delete(args: argparse.Namespace) -> int:
     """
     try:
         if not args.force:
-            confirmation = input(
-                f"Delete M2M client '{args.client_id}'? (yes/no): "
-            )
+            confirmation = input(f"Delete M2M client '{args.client_id}'? (yes/no): ")
             if confirmation.lower() != "yes":
                 logger.info("Operation cancelled")
                 return 0
@@ -5144,9 +5138,7 @@ Examples:
     m2m_list_parser = subparsers.add_parser(
         "m2m-client-list", help="List registered M2M clients (paginated)"
     )
-    m2m_list_parser.add_argument(
-        "--provider", help="Filter by provider (e.g. manual, okta, auth0)"
-    )
+    m2m_list_parser.add_argument("--provider", help="Filter by provider (e.g. manual, okta, auth0)")
     m2m_list_parser.add_argument(
         "--limit", type=int, default=500, help="Max records per page (1-1000, default 500)"
     )
@@ -5191,9 +5183,7 @@ Examples:
         help="Delete an M2M client (manual records only)",
     )
     m2m_delete_parser.add_argument("--client-id", required=True, help="IdP client ID")
-    m2m_delete_parser.add_argument(
-        "--force", action="store_true", help="Skip confirmation prompt"
-    )
+    m2m_delete_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
     # Create IAM group command
     group_create_parser = subparsers.add_parser("group-create", help="Create a new IAM group")

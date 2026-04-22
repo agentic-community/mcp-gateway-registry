@@ -191,7 +191,6 @@ def _create_okta_provider() -> OktaProvider:
     )
 
 
-
 def _create_auth0_provider() -> Auth0Provider:
     """Create and configure Auth0 provider."""
     # Required configuration

@@ -988,9 +988,7 @@ class AgentRegistrationRequest(BaseModel):
         v = v.lower()
         valid_values = ["a2a", "other"]
         if v not in valid_values:
-            raise ValueError(
-                f"supported_protocol must be one of: {', '.join(valid_values)}"
-            )
+            raise ValueError(f"supported_protocol must be one of: {', '.join(valid_values)}")
         return v
 
     @field_validator("visibility")
@@ -1017,7 +1015,5 @@ class AgentRegistrationRequest(BaseModel):
         """Validate trust_level value."""
         valid_values = ["unverified", "community", "verified", "trusted"]
         if v not in valid_values:
-            raise ValueError(
-                f"trust_level must be one of: {', '.join(valid_values)}"
-            )
+            raise ValueError(f"trust_level must be one of: {', '.join(valid_values)}")
         return v

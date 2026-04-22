@@ -26,7 +26,6 @@ from cli.agentcore.token_refresher import (
     refresh_all,
 )
 
-
 # ---------------------------------------------------------------------------
 # _detect_idp_vendor
 # ---------------------------------------------------------------------------
@@ -424,16 +423,23 @@ class TestRefreshAll:
         mock_token.return_value = "eyJnewtoken"
         mock_update.return_value = True
 
-        manifest_path = self._write_manifest(tmp_path, [{
-            "server_path": "/my-gw",
-            "gateway_arn": "arn:aws:bedrock:us-east-1:123:gateway/gw-1",
-            "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/pool/.well-known/openid-configuration",
-            "allowed_clients": ["client-1"],
-            "idp_vendor": "cognito",
-        }])
+        manifest_path = self._write_manifest(
+            tmp_path,
+            [
+                {
+                    "server_path": "/my-gw",
+                    "gateway_arn": "arn:aws:bedrock:us-east-1:123:gateway/gw-1",
+                    "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/pool/.well-known/openid-configuration",
+                    "allowed_clients": ["client-1"],
+                    "idp_vendor": "cognito",
+                }
+            ],
+        )
 
         summary = refresh_all(
-            manifest_path, "https://registry.example.com", "reg-token",
+            manifest_path,
+            "https://registry.example.com",
+            "reg-token",
             run_scan=False,
         )
 
@@ -482,7 +488,9 @@ class TestRefreshAll:
         manifest_path = self._write_manifest(tmp_path, entries)
 
         summary = refresh_all(
-            manifest_path, "https://registry.example.com", "reg-token",
+            manifest_path,
+            "https://registry.example.com",
+            "reg-token",
             run_scan=False,
         )
 
@@ -492,16 +500,23 @@ class TestRefreshAll:
 
     @patch("cli.agentcore.token_refresher._get_client_secret")
     def test_refresh_skips_no_allowed_clients(self, mock_secret, tmp_path):
-        manifest_path = self._write_manifest(tmp_path, [{
-            "server_path": "/no-clients",
-            "gateway_arn": "arn:1",
-            "discovery_url": "https://example.com",
-            "allowed_clients": [],
-            "idp_vendor": "cognito",
-        }])
+        manifest_path = self._write_manifest(
+            tmp_path,
+            [
+                {
+                    "server_path": "/no-clients",
+                    "gateway_arn": "arn:1",
+                    "discovery_url": "https://example.com",
+                    "allowed_clients": [],
+                    "idp_vendor": "cognito",
+                }
+            ],
+        )
 
         summary = refresh_all(
-            manifest_path, "https://registry.example.com", "token",
+            manifest_path,
+            "https://registry.example.com",
+            "token",
             run_scan=False,
         )
 
@@ -520,16 +535,23 @@ class TestRefreshAll:
         mock_token.return_value = "eyJtoken"
         mock_update.return_value = True
 
-        manifest_path = self._write_manifest(tmp_path, [{
-            "server_path": "/gw",
-            "gateway_arn": "arn:1",
-            "discovery_url": "https://cognito-idp.example.com",
-            "allowed_clients": ["c1"],
-            "idp_vendor": "cognito",
-        }])
+        manifest_path = self._write_manifest(
+            tmp_path,
+            [
+                {
+                    "server_path": "/gw",
+                    "gateway_arn": "arn:1",
+                    "discovery_url": "https://cognito-idp.example.com",
+                    "allowed_clients": ["c1"],
+                    "idp_vendor": "cognito",
+                }
+            ],
+        )
 
         refresh_all(
-            manifest_path, "https://registry.example.com", "token",
+            manifest_path,
+            "https://registry.example.com",
+            "token",
             run_scan=False,
         )
 
@@ -550,25 +572,30 @@ class TestRefreshAll:
         mock_update.return_value = True
         mock_scan.return_value = True
 
-        manifest_path = self._write_manifest(tmp_path, [{
-            "server_path": "/gw",
-            "gateway_arn": "arn:1",
-            "discovery_url": "https://cognito-idp.example.com",
-            "allowed_clients": ["c1"],
-            "idp_vendor": "cognito",
-        }])
+        manifest_path = self._write_manifest(
+            tmp_path,
+            [
+                {
+                    "server_path": "/gw",
+                    "gateway_arn": "arn:1",
+                    "discovery_url": "https://cognito-idp.example.com",
+                    "allowed_clients": ["c1"],
+                    "idp_vendor": "cognito",
+                }
+            ],
+        )
 
         summary = refresh_all(
-            manifest_path, "https://registry.example.com", "token",
+            manifest_path,
+            "https://registry.example.com",
+            "token",
             run_scan=True,
         )
 
         assert summary["success"] == 1
         assert summary["scans_triggered"] == 1
         assert summary["scans_failed"] == 0
-        mock_scan.assert_called_once_with(
-            "https://registry.example.com", "token", "/gw"
-        )
+        mock_scan.assert_called_once_with("https://registry.example.com", "token", "/gw")
 
     @patch("cli.agentcore.token_refresher._trigger_security_scan")
     @patch("cli.agentcore.token_refresher._update_registry_credential")
@@ -583,16 +610,23 @@ class TestRefreshAll:
         mock_token.return_value = "eyJtoken"
         mock_update.return_value = True
 
-        manifest_path = self._write_manifest(tmp_path, [{
-            "server_path": "/gw",
-            "gateway_arn": "arn:1",
-            "discovery_url": "https://cognito-idp.example.com",
-            "allowed_clients": ["c1"],
-            "idp_vendor": "cognito",
-        }])
+        manifest_path = self._write_manifest(
+            tmp_path,
+            [
+                {
+                    "server_path": "/gw",
+                    "gateway_arn": "arn:1",
+                    "discovery_url": "https://cognito-idp.example.com",
+                    "allowed_clients": ["c1"],
+                    "idp_vendor": "cognito",
+                }
+            ],
+        )
 
         summary = refresh_all(
-            manifest_path, "https://registry.example.com", "token",
+            manifest_path,
+            "https://registry.example.com",
+            "token",
             run_scan=False,
         )
 
@@ -614,16 +648,23 @@ class TestRefreshAll:
         mock_update.return_value = True
         mock_scan.return_value = False
 
-        manifest_path = self._write_manifest(tmp_path, [{
-            "server_path": "/gw",
-            "gateway_arn": "arn:1",
-            "discovery_url": "https://cognito-idp.example.com",
-            "allowed_clients": ["c1"],
-            "idp_vendor": "cognito",
-        }])
+        manifest_path = self._write_manifest(
+            tmp_path,
+            [
+                {
+                    "server_path": "/gw",
+                    "gateway_arn": "arn:1",
+                    "discovery_url": "https://cognito-idp.example.com",
+                    "allowed_clients": ["c1"],
+                    "idp_vendor": "cognito",
+                }
+            ],
+        )
 
         summary = refresh_all(
-            manifest_path, "https://registry.example.com", "token",
+            manifest_path,
+            "https://registry.example.com",
+            "token",
             run_scan=True,
         )
 
@@ -644,16 +685,23 @@ class TestRefreshAll:
         mock_token.return_value = "eyJtoken"
         mock_update.return_value = False
 
-        manifest_path = self._write_manifest(tmp_path, [{
-            "server_path": "/gw",
-            "gateway_arn": "arn:1",
-            "discovery_url": "https://cognito-idp.example.com",
-            "allowed_clients": ["c1"],
-            "idp_vendor": "cognito",
-        }])
+        manifest_path = self._write_manifest(
+            tmp_path,
+            [
+                {
+                    "server_path": "/gw",
+                    "gateway_arn": "arn:1",
+                    "discovery_url": "https://cognito-idp.example.com",
+                    "allowed_clients": ["c1"],
+                    "idp_vendor": "cognito",
+                }
+            ],
+        )
 
         summary = refresh_all(
-            manifest_path, "https://registry.example.com", "token",
+            manifest_path,
+            "https://registry.example.com",
+            "token",
             run_scan=True,
         )
 

@@ -231,9 +231,7 @@ async def management_create_m2m_user(
             await collection.insert_one(client_doc)
             client_id_val = result.get("client_id", "")
             masked_client_id = f"{client_id_val[:8]}..." if client_id_val else "<none>"
-            logger.info(
-                f"Stored M2M client in MongoDB: {masked_client_id} (provider: {provider})"
-            )
+            logger.info(f"Stored M2M client in MongoDB: {masked_client_id} (provider: {provider})")
         except Exception as e:
             logger.warning(f"Failed to store M2M client in MongoDB: {e}")
             # Don't fail the entire operation if MongoDB storage fails

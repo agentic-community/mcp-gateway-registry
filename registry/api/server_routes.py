@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from ..audit import set_audit_action
-from ..auth.csrf import generate_csrf_token, verify_csrf_token, verify_csrf_token_flexible
+from ..auth.csrf import generate_csrf_token, verify_csrf_token_flexible
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..constants import VALID_AUTH_SCHEMES

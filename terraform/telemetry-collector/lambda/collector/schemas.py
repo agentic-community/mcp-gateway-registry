@@ -57,12 +57,8 @@ class StartupEvent(BaseModel):
     search_queries_total: int = Field(
         default=0, ge=0, description="Lifetime semantic search query count"
     )
-    search_queries_24h: int = Field(
-        default=0, ge=0, description="Search queries in last 24 hours"
-    )
-    search_queries_1h: int = Field(
-        default=0, ge=0, description="Search queries in last hour"
-    )
+    search_queries_24h: int = Field(default=0, ge=0, description="Search queries in last 24 hours")
+    search_queries_1h: int = Field(default=0, ge=0, description="Search queries in last hour")
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")
@@ -138,12 +134,8 @@ class HeartbeatEvent(BaseModel):
     search_queries_total: int = Field(
         default=0, ge=0, description="Lifetime semantic search query count"
     )
-    search_queries_24h: int = Field(
-        default=0, ge=0, description="Search queries in last 24 hours"
-    )
-    search_queries_1h: int = Field(
-        default=0, ge=0, description="Search queries in last hour"
-    )
+    search_queries_24h: int = Field(default=0, ge=0, description="Search queries in last 24 hours")
+    search_queries_1h: int = Field(default=0, ge=0, description="Search queries in last hour")
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")

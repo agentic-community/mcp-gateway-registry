@@ -31,9 +31,7 @@ from .models import (
 )
 
 # Add parent directory to path for api imports
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from api.registry_client import (
     AgentRegistration,
     InternalServiceRegistration,
@@ -93,8 +91,7 @@ def _retry_registry_call(func):
         wait=wait_exponential(multiplier=1, min=1, max=4),
         retry=retry_if_exception(_should_retry),
         before_sleep=lambda retry_state: logger.warning(
-            f"Registry call failed, retrying in "
-            f"{retry_state.next_action.sleep}s..."
+            f"Registry call failed, retrying in {retry_state.next_action.sleep}s..."
         ),
     )(func)
 
@@ -259,16 +256,12 @@ class RegistrationBuilder:
         raw_name = runtime.get("agentRuntimeName", runtime["agentRuntimeId"])
         path = f"/{_slugify(raw_name)}"
         display = _display_name(raw_name)
-        invocation_url = _build_invocation_url(
-            self.region, runtime.get("agentRuntimeArn", "")
-        )
+        invocation_url = _build_invocation_url(self.region, runtime.get("agentRuntimeArn", ""))
 
         return InternalServiceRegistration(
             path=path,
             name=display,
-            description=runtime.get(
-                "description", f"AgentCore MCP Server: {display}"
-            ),
+            description=runtime.get("description", f"AgentCore MCP Server: {display}"),
             proxy_pass_url=invocation_url,
             mcp_endpoint=invocation_url,
             auth_provider="bedrock-agentcore",
@@ -294,12 +287,8 @@ class RegistrationBuilder:
         raw_name = runtime.get("agentRuntimeName", runtime["agentRuntimeId"])
         path = f"/{_slugify(raw_name)}"
         display = _display_name(raw_name)
-        invocation_url = _build_invocation_url(
-            self.region, runtime.get("agentRuntimeArn", "")
-        )
-        protocol = runtime.get("protocolConfiguration", {}).get(
-            "serverProtocol", "HTTP"
-        )
+        invocation_url = _build_invocation_url(self.region, runtime.get("agentRuntimeArn", ""))
+        protocol = runtime.get("protocolConfiguration", {}).get("serverProtocol", "HTTP")
 
         tags = ["agentcore", "runtime", "agent", "auto-registered"]
         if protocol == "A2A":
@@ -307,9 +296,7 @@ class RegistrationBuilder:
 
         return AgentRegistration(
             name=display,
-            description=runtime.get(
-                "description", f"AgentCore Agent: {display}"
-            ),
+            description=runtime.get("description", f"AgentCore Agent: {display}"),
             url=invocation_url,
             path=path,
             version="1.0.0",
@@ -409,8 +396,7 @@ class SyncOrchestrator:
         """
         if self.dry_run:
             logger.info(
-                f"[DRY-RUN] Would write manifest with "
-                f"{len(self._manifest_entries)} entries"
+                f"[DRY-RUN] Would write manifest with {len(self._manifest_entries)} entries"
             )
             return
 
@@ -421,21 +407,14 @@ class SyncOrchestrator:
         with open(self.manifest_path, "w") as f:
             json.dump(self._manifest_entries, f, indent=2)
 
-        logger.info(
-            f"Wrote {len(self._manifest_entries)} entries "
-            f"to {self.manifest_path}"
-        )
+        logger.info(f"Wrote {len(self._manifest_entries)} entries to {self.manifest_path}")
 
     def print_summary(self) -> None:
         """Print sync summary in text or JSON format."""
-        registered = sum(
-            1 for r in self.results if r["status"] == "registered"
-        )
+        registered = sum(1 for r in self.results if r["status"] == "registered")
         skipped = sum(1 for r in self.results if r["status"] == "skipped")
         failed = sum(1 for r in self.results if r["status"] == "failed")
-        dry_run_count = sum(
-            1 for r in self.results if r["status"] == "dry_run"
-        )
+        dry_run_count = sum(1 for r in self.results if r["status"] == "dry_run")
 
         summary = {
             "dry_run": self.dry_run,
@@ -497,22 +476,20 @@ class SyncOrchestrator:
         if gateway.get("authorizerType") != "CUSTOM_JWT":
             return
 
-        jwt_config = (
-            gateway
-            .get("authorizerConfiguration", {})
-            .get("customJWTAuthorizer", {})
-        )
+        jwt_config = gateway.get("authorizerConfiguration", {}).get("customJWTAuthorizer", {})
         discovery_url = jwt_config.get("discoveryUrl", "")
         if not discovery_url:
             return
 
-        self._manifest_entries.append({
-            "server_path": server_path,
-            "gateway_arn": gateway.get("gatewayArn", ""),
-            "discovery_url": discovery_url,
-            "allowed_clients": jwt_config.get("allowedClients", []),
-            "idp_vendor": _detect_idp_vendor(discovery_url),
-        })
+        self._manifest_entries.append(
+            {
+                "server_path": server_path,
+                "gateway_arn": gateway.get("gatewayArn", ""),
+                "discovery_url": discovery_url,
+                "allowed_clients": jwt_config.get("allowedClients", []),
+                "idp_vendor": _detect_idp_vendor(discovery_url),
+            }
+        )
 
     # ------------------------------------------------------------------
     # Internal -- gateway registration
@@ -525,15 +502,17 @@ class SyncOrchestrator:
         gateway_arn = gateway.get("gatewayArn", "")
 
         if not _validate_https_url(gateway_url, gateway_name):
-            self.results.append({
-                "resource_type": "gateway",
-                "resource_name": gateway_name,
-                "resource_arn": gateway_arn,
-                "registration_type": "mcp_server",
-                "path": f"/{_slugify(gateway_name)}",
-                "status": "skipped",
-                "message": "Invalid URL (must be HTTPS)",
-            })
+            self.results.append(
+                {
+                    "resource_type": "gateway",
+                    "resource_name": gateway_name,
+                    "resource_arn": gateway_arn,
+                    "registration_type": "mcp_server",
+                    "path": f"/{_slugify(gateway_name)}",
+                    "status": "skipped",
+                    "message": "Invalid URL (must be HTTPS)",
+                }
+            )
             return
 
         registration = self.builder.build_gateway_registration(gateway)
@@ -564,10 +543,7 @@ class SyncOrchestrator:
             if _is_conflict_error(e) and not self.overwrite:
                 result["status"] = "skipped"
                 result["message"] = "Already registered - skipping (use --overwrite)"
-                logger.warning(
-                    f"Already registered - skipping: {gateway_name} "
-                    f"(use --overwrite)"
-                )
+                logger.warning(f"Already registered - skipping: {gateway_name} (use --overwrite)")
             else:
                 result["status"] = "failed"
                 result["message"] = str(e)
@@ -582,9 +558,7 @@ class SyncOrchestrator:
     # Internal -- target registration
     # ------------------------------------------------------------------
 
-    def _register_target(
-        self, gateway: dict[str, Any], target: dict[str, Any]
-    ) -> None:
+    def _register_target(self, gateway: dict[str, Any], target: dict[str, Any]) -> None:
         registration = self.builder.build_target_registration(gateway, target)
         if not registration:
             return
@@ -595,9 +569,7 @@ class SyncOrchestrator:
         result: dict[str, Any] = {
             "resource_type": "target",
             "resource_name": target_name,
-            "resource_arn": (
-                f"{gateway.get('gatewayArn', '')}:target:{target['targetId']}"
-            ),
+            "resource_arn": (f"{gateway.get('gatewayArn', '')}:target:{target['targetId']}"),
             "registration_type": "mcp_server",
             "path": registration.service_path,
         }
@@ -639,9 +611,7 @@ class SyncOrchestrator:
     def _register_runtime_as_server(self, runtime: dict[str, Any]) -> None:
         registration = self.builder.build_runtime_mcp_registration(runtime)
         registration.overwrite = self.overwrite
-        runtime_name = runtime.get(
-            "agentRuntimeName", runtime["agentRuntimeId"]
-        )
+        runtime_name = runtime.get("agentRuntimeName", runtime["agentRuntimeId"])
 
         result: dict[str, Any] = {
             "resource_type": "runtime",
@@ -654,17 +624,12 @@ class SyncOrchestrator:
         if self.dry_run:
             result["status"] = "dry_run"
             result["message"] = "Would register as MCP Server"
-            logger.info(
-                f"[DRY-RUN] Would register runtime as MCP Server: "
-                f"{runtime_name}"
-            )
+            logger.info(f"[DRY-RUN] Would register runtime as MCP Server: {runtime_name}")
         else:
             try:
                 self._register_service_with_retry(registration)
                 result["status"] = "registered"
-                logger.info(
-                    f"Registered runtime as MCP Server: {runtime_name}"
-                )
+                logger.info(f"Registered runtime as MCP Server: {runtime_name}")
             except Exception as e:
                 if "already exists" in str(e).lower() and not self.overwrite:
                     result["status"] = "skipped"
@@ -678,9 +643,7 @@ class SyncOrchestrator:
 
     def _register_runtime_as_agent(self, runtime: dict[str, Any]) -> None:
         registration = self.builder.build_runtime_agent_registration(runtime)
-        runtime_name = runtime.get(
-            "agentRuntimeName", runtime["agentRuntimeId"]
-        )
+        runtime_name = runtime.get("agentRuntimeName", runtime["agentRuntimeId"])
 
         result: dict[str, Any] = {
             "resource_type": "runtime",
@@ -693,47 +656,32 @@ class SyncOrchestrator:
         if self.dry_run:
             result["status"] = "dry_run"
             result["message"] = "Would register as A2A Agent"
-            logger.info(
-                f"[DRY-RUN] Would register runtime as Agent: {runtime_name}"
-            )
+            logger.info(f"[DRY-RUN] Would register runtime as Agent: {runtime_name}")
         else:
             try:
                 self._register_agent_with_retry(registration)
                 result["status"] = "registered"
-                logger.info(
-                    f"Registered runtime as Agent: {runtime_name}"
-                )
+                logger.info(f"Registered runtime as Agent: {runtime_name}")
             except Exception as e:
                 if _is_conflict_error(e) and self.overwrite:
                     # AgentRegistration has no overwrite field,
                     # so update via PUT when conflict + overwrite
                     try:
-                        self._update_agent_with_retry(
-                            registration.path, registration
-                        )
+                        self._update_agent_with_retry(registration.path, registration)
                         result["status"] = "registered"
                         result["message"] = "Updated (overwrite)"
-                        logger.info(
-                            f"Updated existing agent: {runtime_name}"
-                        )
+                        logger.info(f"Updated existing agent: {runtime_name}")
                     except Exception as update_err:
                         result["status"] = "failed"
                         result["message"] = str(update_err)
-                        logger.error(
-                            f"Failed to update agent {runtime_name}: "
-                            f"{update_err}"
-                        )
+                        logger.error(f"Failed to update agent {runtime_name}: {update_err}")
                 elif _is_conflict_error(e):
                     result["status"] = "skipped"
-                    result["message"] = (
-                        "Already registered - use --overwrite to update"
-                    )
+                    result["message"] = "Already registered - use --overwrite to update"
                 else:
                     result["status"] = "failed"
                     result["message"] = str(e)
-                    logger.error(
-                        f"Failed to register runtime as agent: {e}"
-                    )
+                    logger.error(f"Failed to register runtime as agent: {e}")
 
         self.results.append(result)
 
@@ -742,15 +690,11 @@ class SyncOrchestrator:
     # ------------------------------------------------------------------
 
     @_retry_registry_call
-    def _register_service_with_retry(
-        self, registration: InternalServiceRegistration
-    ) -> None:
+    def _register_service_with_retry(self, registration: InternalServiceRegistration) -> None:
         self.registry.register_service(registration)
 
     @_retry_registry_call
-    def _register_agent_with_retry(
-        self, registration: AgentRegistration
-    ) -> None:
+    def _register_agent_with_retry(self, registration: AgentRegistration) -> None:
         self.registry.register_agent(registration)
 
     @_retry_registry_call

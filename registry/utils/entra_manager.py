@@ -73,9 +73,7 @@ def _build_prefix_odata_filter(
     Returns:
         OData $filter expression string
     """
-    conditions = [
-        f"startswith(displayName,'{prefix}')" for prefix in prefixes
-    ]
+    conditions = [f"startswith(displayName,'{prefix}')" for prefix in prefixes]
     return " or ".join(conditions)
 
 
@@ -575,9 +573,7 @@ async def list_entra_groups() -> list[dict[str, Any]]:
         logger.info(
             "Retrieved %d groups from Entra ID%s",
             len(groups),
-            f" (prefix filter: {IDP_GROUP_FILTER_PREFIXES})"
-            if IDP_GROUP_FILTER_PREFIXES
-            else "",
+            f" (prefix filter: {IDP_GROUP_FILTER_PREFIXES})" if IDP_GROUP_FILTER_PREFIXES else "",
         )
 
         return [

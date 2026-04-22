@@ -8,9 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -77,9 +75,7 @@ SAMPLE_LAMBDA_TARGET = {
     "targetId": "t-lambda-1",
     "name": "Lambda Target",
     "status": "READY",
-    "targetConfiguration": {
-        "lambda": {"functionArn": "arn:aws:lambda:us-east-1:111:function:foo"}
-    },
+    "targetConfiguration": {"lambda": {"functionArn": "arn:aws:lambda:us-east-1:111:function:foo"}},
 }
 
 
@@ -279,9 +275,7 @@ class TestIdempotency:
         orch, registry, scanner = _make_orchestrator(overwrite=False)
         resp = MagicMock()
         resp.status_code = 409
-        registry.register_agent.side_effect = requests.HTTPError(
-            response=resp
-        )
+        registry.register_agent.side_effect = requests.HTTPError(response=resp)
         scanner.scan_runtimes.return_value = [SAMPLE_HTTP_RUNTIME]
 
         orch.sync_runtimes()
@@ -294,9 +288,7 @@ class TestIdempotency:
         orch, registry, scanner = _make_orchestrator(overwrite=True)
         resp = MagicMock()
         resp.status_code = 409
-        registry.register_agent.side_effect = requests.HTTPError(
-            response=resp
-        )
+        registry.register_agent.side_effect = requests.HTTPError(response=resp)
         scanner.scan_runtimes.return_value = [SAMPLE_HTTP_RUNTIME]
 
         orch.sync_runtimes()
@@ -310,9 +302,7 @@ class TestIdempotency:
         orch, registry, scanner = _make_orchestrator(overwrite=True)
         resp = MagicMock()
         resp.status_code = 409
-        registry.register_agent.side_effect = requests.HTTPError(
-            response=resp
-        )
+        registry.register_agent.side_effect = requests.HTTPError(response=resp)
         registry.update_agent.side_effect = Exception("Update failed")
         scanner.scan_runtimes.return_value = [SAMPLE_HTTP_RUNTIME]
 
@@ -333,10 +323,20 @@ class TestRegistrationErrorHandling:
     def test_registry_error_records_failed_and_continues(self):
         orch, registry, scanner = _make_orchestrator()
         # First gateway fails, second succeeds
-        gw1 = {**SAMPLE_GATEWAY, "gatewayId": "gw-fail", "name": "Fail GW",
-                "gatewayArn": "arn:fail", "authorizerType": "NONE"}
-        gw2 = {**SAMPLE_GATEWAY, "gatewayId": "gw-ok", "name": "OK GW",
-                "gatewayArn": "arn:ok", "authorizerType": "NONE"}
+        gw1 = {
+            **SAMPLE_GATEWAY,
+            "gatewayId": "gw-fail",
+            "name": "Fail GW",
+            "gatewayArn": "arn:fail",
+            "authorizerType": "NONE",
+        }
+        gw2 = {
+            **SAMPLE_GATEWAY,
+            "gatewayId": "gw-ok",
+            "name": "OK GW",
+            "gatewayArn": "arn:ok",
+            "authorizerType": "NONE",
+        }
         scanner.scan_gateways.return_value = [gw1, gw2]
         registry.register_service.side_effect = [
             Exception("Internal Server Error"),
@@ -450,44 +450,55 @@ class TestDetectIdpVendor:
     def test_cognito_detection(self):
         from cli.agentcore.registration import _detect_idp_vendor
 
-        assert _detect_idp_vendor(
-            "https://cognito-idp.us-east-1.amazonaws.com/pool/.well-known/openid-configuration"
-        ) == "cognito"
+        assert (
+            _detect_idp_vendor(
+                "https://cognito-idp.us-east-1.amazonaws.com/pool/.well-known/openid-configuration"
+            )
+            == "cognito"
+        )
 
     def test_auth0_detection(self):
         from cli.agentcore.registration import _detect_idp_vendor
 
-        assert _detect_idp_vendor(
-            "https://myorg.auth0.com/.well-known/openid-configuration"
-        ) == "auth0"
+        assert (
+            _detect_idp_vendor("https://myorg.auth0.com/.well-known/openid-configuration")
+            == "auth0"
+        )
 
     def test_okta_detection(self):
         from cli.agentcore.registration import _detect_idp_vendor
 
-        assert _detect_idp_vendor(
-            "https://myorg.okta.com/.well-known/openid-configuration"
-        ) == "okta"
+        assert (
+            _detect_idp_vendor("https://myorg.okta.com/.well-known/openid-configuration") == "okta"
+        )
 
     def test_entra_detection(self):
         from cli.agentcore.registration import _detect_idp_vendor
 
-        assert _detect_idp_vendor(
-            "https://login.microsoftonline.com/tenant/.well-known/openid-configuration"
-        ) == "entra"
+        assert (
+            _detect_idp_vendor(
+                "https://login.microsoftonline.com/tenant/.well-known/openid-configuration"
+            )
+            == "entra"
+        )
 
     def test_keycloak_detection(self):
         from cli.agentcore.registration import _detect_idp_vendor
 
-        assert _detect_idp_vendor(
-            "https://keycloak.example.com/realms/myrealm/.well-known/openid-configuration"
-        ) == "keycloak"
+        assert (
+            _detect_idp_vendor(
+                "https://keycloak.example.com/realms/myrealm/.well-known/openid-configuration"
+            )
+            == "keycloak"
+        )
 
     def test_unknown_detection(self):
         from cli.agentcore.registration import _detect_idp_vendor
 
-        assert _detect_idp_vendor(
-            "https://custom-idp.example.com/.well-known/openid-configuration"
-        ) == "unknown"
+        assert (
+            _detect_idp_vendor("https://custom-idp.example.com/.well-known/openid-configuration")
+            == "unknown"
+        )
 
 
 # ---------------------------------------------------------------------------

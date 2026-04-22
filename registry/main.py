@@ -196,13 +196,13 @@ async def _sync_agentcore_on_startup(
         federation_config: FederationConfig with agentcore settings
         server_service: ServerService for server registration
     """
-    from registry.schemas.agent_models import AgentCard
-    from registry.schemas.skill_models import SkillCard
     from registry.repositories.factory import (
         get_agent_repository,
         get_server_repository,
         get_skill_repository,
     )
+    from registry.schemas.agent_models import AgentCard
+    from registry.schemas.skill_models import SkillCard
     from registry.services.agent_service import agent_service
     from registry.services.federation.agentcore_client import (
         AgentCoreFederationClient,
@@ -252,8 +252,7 @@ async def _sync_agentcore_on_startup(
                 synced_paths["servers"].add(server_path)
         except Exception as e:
             logger.error(
-                f"Failed to sync AgentCore server "
-                f"{server_data.get('server_name', 'unknown')}: {e}"
+                f"Failed to sync AgentCore server {server_data.get('server_name', 'unknown')}: {e}"
             )
 
     # Register agents (A2A + CUSTOM records)
@@ -275,10 +274,7 @@ async def _sync_agentcore_on_startup(
                 agent_count += 1
                 synced_paths["agents"].add(agent_path)
         except Exception as e:
-            logger.error(
-                f"Failed to sync AgentCore agent "
-                f"{agent_data.get('name', 'unknown')}: {e}"
-            )
+            logger.error(f"Failed to sync AgentCore agent {agent_data.get('name', 'unknown')}: {e}")
 
     # Register skills (AGENT_SKILLS records)
     skill_count = 0
@@ -299,17 +295,13 @@ async def _sync_agentcore_on_startup(
                 # Skill already exists -- update instead
                 logger.debug(f"Skill create failed for {skill_path}, trying update: {create_err}")
                 update_fields = {
-                    k: v for k, v in skill_data.items()
-                    if k not in ("path", "id", "created_at")
+                    k: v for k, v in skill_data.items() if k not in ("path", "id", "created_at")
                 }
                 await skill_repo.update(skill_path, update_fields)
                 skill_count += 1
                 synced_paths["skills"].add(skill_path)
         except Exception as e:
-            logger.error(
-                f"Failed to sync AgentCore skill "
-                f"{skill_data.get('name', 'unknown')}: {e}"
-            )
+            logger.error(f"Failed to sync AgentCore skill {skill_data.get('name', 'unknown')}: {e}")
 
     logger.info(
         f"Synced from AWS Agent Registry: "
@@ -503,9 +495,7 @@ async def lifespan(app: FastAPI):
         all_skills = await skill_repo.list_all(skip=0, limit=10000)
         for skill_card in all_skills:
             try:
-                await search_repo.index_skill(
-                    skill_card.path, skill_card, skill_card.is_enabled
-                )
+                await search_repo.index_skill(skill_card.path, skill_card, skill_card.is_enabled)
                 logger.debug(f"Updated {backend_name} index for skill: {skill_card.path}")
             except Exception as e:
                 logger.error(
@@ -542,14 +532,15 @@ async def lifespan(app: FastAPI):
 
                 # Sync on startup if configured
                 sync_on_startup = (
-                    federation_config.anthropic.enabled
-                    and federation_config.anthropic.sync_on_startup
-                ) or (
-                    federation_config.asor.enabled
-                    and federation_config.asor.sync_on_startup
-                ) or (
-                    federation_config.aws_registry.enabled
-                    and federation_config.aws_registry.sync_on_startup
+                    (
+                        federation_config.anthropic.enabled
+                        and federation_config.anthropic.sync_on_startup
+                    )
+                    or (federation_config.asor.enabled and federation_config.asor.sync_on_startup)
+                    or (
+                        federation_config.aws_registry.enabled
+                        and federation_config.aws_registry.sync_on_startup
+                    )
                 )
 
                 if sync_on_startup:
@@ -711,7 +702,9 @@ async def lifespan(app: FastAPI):
 
             await initialize_demo_servers()
         else:
-            logger.info("Demo server auto-registration disabled (DISABLE_AI_REGISTRY_TOOLS_SERVER=true)")
+            logger.info(
+                "Demo server auto-registration disabled (DISABLE_AI_REGISTRY_TOOLS_SERVER=true)"
+            )
 
         # Always generate nginx configuration at startup to ensure placeholders are replaced
         # In registry-only mode, generate base config without MCP server location blocks

@@ -25,7 +25,6 @@ from registry.schemas.federation_schema import (
     FederationConfig,
 )
 
-
 # =============================================================================
 # AgentCoreRegistryConfig Tests
 # =============================================================================
@@ -276,9 +275,11 @@ class TestFederationConfigAwsRegistry:
 
     def test_backward_compat_agentcore_key(self):
         """FederationConfig should accept old 'agentcore' key from MongoDB."""
-        config = FederationConfig(**{
-            "agentcore": {"enabled": True, "aws_region": "eu-west-1"},
-        })
+        config = FederationConfig(
+            **{
+                "agentcore": {"enabled": True, "aws_region": "eu-west-1"},
+            }
+        )
         assert config.aws_registry.enabled is True
         assert config.aws_registry.aws_region == "eu-west-1"
 

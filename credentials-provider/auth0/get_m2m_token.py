@@ -52,9 +52,7 @@ def _get_client_id() -> str:
     if client_id:
         return client_id
 
-    raise ValueError(
-        "Client ID must be provided via --client-id or AUTH0_M2M_CLIENT_ID env var"
-    )
+    raise ValueError("Client ID must be provided via --client-id or AUTH0_M2M_CLIENT_ID env var")
 
 
 def _get_client_secret() -> str:

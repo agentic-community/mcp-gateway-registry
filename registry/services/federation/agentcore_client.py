@@ -16,8 +16,10 @@ import logging
 import time
 from concurrent.futures import (
     ThreadPoolExecutor,
-    TimeoutError as FuturesTimeoutError,
     as_completed,
+)
+from concurrent.futures import (
+    TimeoutError as FuturesTimeoutError,
 )
 from datetime import UTC, datetime
 from typing import Any
@@ -385,10 +387,7 @@ class AgentCoreFederationClient:
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "")
-            logger.error(
-                f"Failed to list records from registry {registry_id}: "
-                f"{error_code} - {e}"
-            )
+            logger.error(f"Failed to list records from registry {registry_id}: {error_code} - {e}")
             return []
         except BotoCoreError as e:
             logger.error(f"Failed to list records from registry {registry_id}: {e}")
@@ -421,19 +420,14 @@ class AgentCoreFederationClient:
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "")
             if error_code == "ResourceNotFoundException":
-                logger.warning(
-                    f"Record {record_id} not found in registry {registry_id}"
-                )
+                logger.warning(f"Record {record_id} not found in registry {registry_id}")
             else:
                 logger.error(
-                    f"Failed to get record {record_id} from {registry_id}: "
-                    f"{error_code} - {e}"
+                    f"Failed to get record {record_id} from {registry_id}: {error_code} - {e}"
                 )
             return None
         except BotoCoreError as e:
-            logger.error(
-                f"Failed to get record {record_id} from {registry_id}: {e}"
-            )
+            logger.error(f"Failed to get record {record_id} from {registry_id}: {e}")
             return None
 
     def fetch_all_records(
@@ -524,7 +518,9 @@ class AgentCoreFederationClient:
         """
         registry_id = reg_config.registry_id
         status_filter = reg_config.sync_status_filter
-        account_info = f" (account={reg_config.aws_account_id})" if reg_config.aws_account_id else ""
+        account_info = (
+            f" (account={reg_config.aws_account_id})" if reg_config.aws_account_id else ""
+        )
         logger.info(f"Fetching records from AWS Agent Registry: {registry_id}{account_info}")
 
         # Swap to cross-account client if needed
@@ -543,7 +539,8 @@ class AgentCoreFederationClient:
 
             # Filter to configured descriptor types
             filtered_summaries = [
-                s for s in record_summaries
+                s
+                for s in record_summaries
                 if s.get("descriptorType", "") in reg_config.descriptor_types
             ]
 

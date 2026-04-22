@@ -26,10 +26,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Default GitHub hosts that receive auth headers
-_DEFAULT_GITHUB_HOSTS: frozenset[str] = frozenset({
-    "github.com",
-    "raw.githubusercontent.com",
-})
+_DEFAULT_GITHUB_HOSTS: frozenset[str] = frozenset(
+    {
+        "github.com",
+        "raw.githubusercontent.com",
+    }
+)
 
 
 class GitHubAuthProvider:
@@ -53,9 +55,7 @@ class GitHubAuthProvider:
     def _build_allowed_hosts(self) -> frozenset[str]:
         """Build allowed hosts from defaults + github_extra_hosts config."""
         extra_raw = settings.github_extra_hosts
-        extra = frozenset(
-            h.strip().lower() for h in extra_raw.split(",") if h.strip()
-        )
+        extra = frozenset(h.strip().lower() for h in extra_raw.split(",") if h.strip())
         return _DEFAULT_GITHUB_HOSTS | extra
 
     def _is_allowed_host(self, url: str) -> bool:

@@ -1272,13 +1272,9 @@ class IdPM2MClient(BaseModel):
     client_id: str = Field(..., description="IdP application client ID")
     name: str = Field(..., description="Application name")
     description: str | None = Field(None, description="Application description")
-    groups: list[str] = Field(
-        default_factory=list, description="Groups this client belongs to"
-    )
+    groups: list[str] = Field(default_factory=list, description="Groups this client belongs to")
     enabled: bool = Field(True, description="Whether the client is active")
-    provider: str = Field(
-        ..., description="Identity provider (okta, keycloak, entra, manual)"
-    )
+    provider: str = Field(..., description="Identity provider (okta, keycloak, entra, manual)")
     idp_app_id: str | None = Field(None, description="IdP internal app ID")
     created_by: str | None = Field(
         None, description="Operator who registered this client (manual records)"
@@ -1293,9 +1289,7 @@ class M2MClientListResponse(BaseModel):
     total: int = Field(..., description="Total number of matching records")
     limit: int = Field(..., description="Limit applied to this page")
     skip: int = Field(..., description="Offset applied to this page")
-    items: list[IdPM2MClient] = Field(
-        default_factory=list, description="Records on this page"
-    )
+    items: list[IdPM2MClient] = Field(default_factory=list, description="Records on this page")
 
 
 class GroupSyncStatusResponse(BaseModel):
@@ -2145,7 +2139,9 @@ class RegistryClient:
         logger.info(f"Updating agent: {path}")
 
         response = self._make_request(
-            method="PUT", endpoint=f"/api/agents{path}", data=agent.model_dump(exclude_none=True, by_alias=True)
+            method="PUT",
+            endpoint=f"/api/agents{path}",
+            data=agent.model_dump(exclude_none=True, by_alias=True),
         )
 
         result = AgentDetail(**response.json())
@@ -4257,9 +4253,7 @@ class RegistryClient:
         Raises:
             requests.HTTPError: 401 if unauthenticated.
         """
-        logger.info(
-            f"Listing M2M clients (provider={provider}, limit={limit}, skip={skip})"
-        )
+        logger.info(f"Listing M2M clients (provider={provider}, limit={limit}, skip={skip})")
 
         params: dict[str, Any] = {"limit": limit, "skip": skip}
         if provider is not None:

@@ -16,14 +16,11 @@ Covers:
 
 import math
 
-import pytest
-
 from registry.repositories.documentdb.search_repository import (
     SOFT_CAP_RATIO,
     _distribute_results,
     _tool_extraction_limit,
 )
-
 
 # =============================================================================
 # HELPERS
@@ -79,8 +76,7 @@ def _make_agents(
 ) -> list[tuple[dict, float]]:
     """Create a list of agent result tuples with descending scores."""
     return [
-        _make_doc("a2a_agent", f"agent-{i}", round(start_score - i * step, 4))
-        for i in range(count)
+        _make_doc("a2a_agent", f"agent-{i}", round(start_score - i * step, 4)) for i in range(count)
     ]
 
 
@@ -91,8 +87,7 @@ def _make_tools(
 ) -> list[tuple[dict, float]]:
     """Create a list of tool result tuples with descending scores."""
     return [
-        _make_doc("mcp_tool", f"tool-{i}", round(start_score - i * step, 4))
-        for i in range(count)
+        _make_doc("mcp_tool", f"tool-{i}", round(start_score - i * step, 4)) for i in range(count)
     ]
 
 
@@ -103,8 +98,7 @@ def _make_skills(
 ) -> list[tuple[dict, float]]:
     """Create a list of skill result tuples with descending scores."""
     return [
-        _make_doc("skill", f"skill-{i}", round(start_score - i * step, 4))
-        for i in range(count)
+        _make_doc("skill", f"skill-{i}", round(start_score - i * step, 4)) for i in range(count)
     ]
 
 
@@ -308,8 +302,7 @@ class TestDistributeResults:
         tools = _make_tools(5, start_score=0.75)
         skills = _make_skills(5, start_score=0.65)
         virtual = [
-            _make_doc("virtual_server", f"vs-{i}", round(0.60 - i * 0.05, 4))
-            for i in range(5)
+            _make_doc("virtual_server", f"vs-{i}", round(0.60 - i * 0.05, 4)) for i in range(5)
         ]
         scored = servers + agents + tools + skills + virtual
         scored.sort(key=lambda x: x[1], reverse=True)

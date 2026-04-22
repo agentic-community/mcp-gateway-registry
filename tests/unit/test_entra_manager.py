@@ -1162,9 +1162,7 @@ class TestPrefixValidation:
 
         valid_prefixes = ["mcp-", "registry_groups", "AI Teams", "test123"]
         for prefix in valid_prefixes:
-            assert re.match(r"^[a-zA-Z0-9\-_ ]+$", prefix), (
-                f"Prefix '{prefix}' should be valid"
-            )
+            assert re.match(r"^[a-zA-Z0-9\-_ ]+$", prefix), f"Prefix '{prefix}' should be valid"
 
     def test_invalid_prefix_with_single_quote(self):
         """Test that single quotes are rejected (OData injection prevention)."""

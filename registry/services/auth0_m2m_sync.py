@@ -11,6 +11,7 @@ from datetime import datetime
 
 import requests
 from motor.motor_asyncio import AsyncIOMotorDatabase
+
 from registry.schemas.idp_m2m_client import IdPM2MClient
 
 logging.basicConfig(

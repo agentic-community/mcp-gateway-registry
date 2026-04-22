@@ -45,9 +45,10 @@ class TestDomainMatching:
         from registry.services.github_auth import GitHubAuthProvider
 
         provider = GitHubAuthProvider()
-        assert provider._is_allowed_host(
-            "https://raw.githubusercontent.com/owner/repo/main/SKILL.md"
-        ) is True
+        assert (
+            provider._is_allowed_host("https://raw.githubusercontent.com/owner/repo/main/SKILL.md")
+            is True
+        )
 
     def test_non_github_host_is_not_allowed(self):
         """Non-GitHub hosts are rejected."""
@@ -76,9 +77,7 @@ class TestDomainMatching:
 
         provider = GitHubAuthProvider()
         assert provider._is_allowed_host("https://github.mycompany.com/org/repo") is True
-        assert provider._is_allowed_host(
-            "https://raw.github.mycompany.com/org/repo/main/f"
-        ) is True
+        assert provider._is_allowed_host("https://raw.github.mycompany.com/org/repo/main/f") is True
 
     @patch("registry.services.github_auth.settings")
     def test_empty_extra_hosts(self, mock_settings):
@@ -291,9 +290,7 @@ class TestTokenExchange:
             assert headers == {}
 
     @patch("registry.services.github_auth.settings")
-    async def test_custom_api_base_url_used_in_exchange(
-        self, mock_settings, rsa_private_key_pem
-    ):
+    async def test_custom_api_base_url_used_in_exchange(self, mock_settings, rsa_private_key_pem):
         """Custom github_api_base_url is used for token exchange requests."""
         _mock_app_settings(mock_settings, rsa_private_key_pem)
         mock_settings.github_api_base_url = "https://github.mycompany.com/api/v3"
@@ -317,9 +314,7 @@ class TestTokenExchange:
             mock_settings.github_extra_hosts = "github.mycompany.com"
             provider._allowed_hosts = provider._build_allowed_hosts()
 
-            headers = await provider.get_auth_headers(
-                "https://github.mycompany.com/org/repo"
-            )
+            headers = await provider.get_auth_headers("https://github.mycompany.com/org/repo")
             assert headers == {"Authorization": "Bearer ghs_enterprise_token"}
 
             # Verify the POST was made to the custom API URL

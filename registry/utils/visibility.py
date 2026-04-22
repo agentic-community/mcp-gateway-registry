@@ -51,7 +51,5 @@ def validate_visibility(
     """
     normalized = _normalize_visibility(value)
     if normalized not in VALID_VISIBILITY_VALUES:
-        raise ValueError(
-            f"Visibility must be one of: {', '.join(VALID_VISIBILITY_VALUES)}"
-        )
+        raise ValueError(f"Visibility must be one of: {', '.join(VALID_VISIBILITY_VALUES)}")
     return normalized

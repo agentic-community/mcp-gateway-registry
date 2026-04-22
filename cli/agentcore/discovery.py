@@ -83,17 +83,12 @@ class AgentCoreScanner:
 
             for item in response.get("items", []):
                 if item.get("status") == READY_STATUS:
-                    gateway = self.client.get_gateway(
-                        gatewayIdentifier=item["gatewayId"]
-                    )
-                    gateway["targets"] = self._get_gateway_targets(
-                        item["gatewayId"]
-                    )
+                    gateway = self.client.get_gateway(gatewayIdentifier=item["gatewayId"])
+                    gateway["targets"] = self._get_gateway_targets(item["gatewayId"])
                     gateways.append(gateway)
                 else:
                     logger.debug(
-                        f"Skipping gateway {item['gatewayId']} "
-                        f"with status {item['status']}"
+                        f"Skipping gateway {item['gatewayId']} with status {item['status']}"
                     )
 
             if "nextToken" in response:
@@ -153,17 +148,12 @@ class AgentCoreScanner:
 
             for item in response.get("agentRuntimes", []):
                 if item.get("status") == READY_STATUS:
-                    runtime = self.client.get_agent_runtime(
-                        agentRuntimeId=item["agentRuntimeId"]
-                    )
-                    runtime["endpoints"] = self._get_runtime_endpoints(
-                        item["agentRuntimeId"]
-                    )
+                    runtime = self.client.get_agent_runtime(agentRuntimeId=item["agentRuntimeId"])
+                    runtime["endpoints"] = self._get_runtime_endpoints(item["agentRuntimeId"])
                     runtimes.append(runtime)
                 else:
                     logger.debug(
-                        f"Skipping runtime {item['agentRuntimeId']} "
-                        f"with status {item['status']}"
+                        f"Skipping runtime {item['agentRuntimeId']} with status {item['status']}"
                     )
 
             if "nextToken" in response:
@@ -187,9 +177,7 @@ class AgentCoreScanner:
         paginator_params: dict[str, Any] = {"agentRuntimeId": runtime_id}
 
         while True:
-            response = self.client.list_agent_runtime_endpoints(
-                **paginator_params
-            )
+            response = self.client.list_agent_runtime_endpoints(**paginator_params)
 
             for item in response.get("runtimeEndpoints", []):
                 if item.get("status") == READY_STATUS:

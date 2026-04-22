@@ -24,9 +24,7 @@ def _backfill_supported_protocol(
         {"supported_protocol": {"$exists": False}},
         {"$set": {"supported_protocol": "other"}},
     )
-    logger.info(
-        f"supported_protocol backfill: {result.modified_count} agents updated"
-    )
+    logger.info(f"supported_protocol backfill: {result.modified_count} agents updated")
 
 
 def _backfill_trust_level(
@@ -37,9 +35,7 @@ def _backfill_trust_level(
         {"trust_level": "unverified"},
         {"$set": {"trust_level": "community"}},
     )
-    logger.info(
-        f"trust_level backfill: {result.modified_count} agents updated"
-    )
+    logger.info(f"trust_level backfill: {result.modified_count} agents updated")
 
 
 def _backfill_visibility(

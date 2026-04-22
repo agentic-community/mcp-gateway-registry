@@ -27,15 +27,6 @@ import sys
 import time
 from collections import (
     Counter,
-    defaultdict,
-)
-from typing import (
-    Any,
-    Dict,
-    List,
-    Optional,
-    Set,
-    Tuple,
 )
 
 logging.basicConfig(
@@ -131,7 +122,7 @@ ALL_COLUMNS = [
 # ---------------------------------------------------------------------------
 
 
-def _load_bastion_env() -> Dict[str, str]:
+def _load_bastion_env() -> dict[str, str]:
     """Load connection variables from ~/bastion.env.
 
     Returns:
@@ -165,7 +156,7 @@ def _load_bastion_env() -> Dict[str, str]:
 def _get_credentials(
     secret_arn: str,
     aws_region: str,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Fetch DocumentDB credentials from AWS Secrets Manager.
 
     Args:
@@ -181,11 +172,17 @@ def _get_credentials(
     try:
         result = subprocess.run(  # nosec B603 B607 - hardcoded command
             [
-                "aws", "secretsmanager", "get-secret-value",
-                "--secret-id", secret_arn,
-                "--region", aws_region,
-                "--query", "SecretString",
-                "--output", "text",
+                "aws",
+                "secretsmanager",
+                "get-secret-value",
+                "--secret-id",
+                secret_arn,
+                "--region",
+                aws_region,
+                "--query",
+                "SecretString",
+                "--output",
+                "text",
             ],
             capture_output=True,
             text=True,
@@ -219,7 +216,7 @@ def _run_mongosh(
     database: str,
     eval_script: str,
     timeout: int = 120,
-) -> Optional[str]:
+) -> str | None:
     """Run a mongosh eval command and return stdout.
 
     Args:
@@ -238,14 +235,20 @@ def _run_mongosh(
     try:
         result = subprocess.run(  # nosec B603 B607 - hardcoded command
             [
-                "mongosh", conn_string,
+                "mongosh",
+                conn_string,
                 "--tls",
-                "--tlsCAFile", CA_BUNDLE_PATH,
-                "--retryWrites", "false",
-                "--authenticationMechanism", "SCRAM-SHA-1",
-                "--password", password,
+                "--tlsCAFile",
+                CA_BUNDLE_PATH,
+                "--retryWrites",
+                "false",
+                "--authenticationMechanism",
+                "SCRAM-SHA-1",
+                "--password",
+                password,
                 "--quiet",
-                "--eval", eval_script,
+                "--eval",
+                eval_script,
             ],
             capture_output=True,
             text=True,
@@ -300,7 +303,7 @@ def _fetch_documents(
     password: str,
     database: str,
     collection: str,
-) -> List[dict]:
+) -> list[dict]:
     """Fetch all documents from a DocumentDB collection.
 
     Args:
@@ -374,8 +377,8 @@ def _delete_documents(
 
 
 def _write_csv(
-    documents: List[dict],
-    columns: List[str],
+    documents: list[dict],
+    columns: list[str],
     output_path: str,
 ) -> int:
     """Write documents to a CSV file.
@@ -406,7 +409,7 @@ def _write_csv(
 
 def _resolve_collections(
     collection_arg: str,
-) -> List[str]:
+) -> list[str]:
     """Resolve the --collection argument to a list of collection names.
 
     Args:
@@ -420,7 +423,7 @@ def _resolve_collections(
     return [collection_arg]
 
 
-def _print_summary(documents: List[dict]) -> None:
+def _print_summary(documents: list[dict]) -> None:
     """Print a formatted summary of telemetry data.
 
     Args:
@@ -434,8 +437,10 @@ def _print_summary(documents: List[dict]) -> None:
     heartbeat_events = [d for d in documents if d.get("event") == "heartbeat"]
 
     # Get unique registry IDs
-    startup_ids: Set[str] = {d.get("registry_id") for d in startup_events if d.get("registry_id")}
-    heartbeat_ids: Set[str] = {d.get("registry_id") for d in heartbeat_events if d.get("registry_id")}
+    startup_ids: set[str] = {d.get("registry_id") for d in startup_events if d.get("registry_id")}
+    heartbeat_ids: set[str] = {
+        d.get("registry_id") for d in heartbeat_events if d.get("registry_id")
+    }
     all_ids = startup_ids | heartbeat_ids
 
     print("\n" + "=" * 80)
@@ -458,53 +463,55 @@ def _print_summary(documents: List[dict]) -> None:
         versions = Counter(d.get("v") for d in startup_events if d.get("v"))
         print(f"\nRegistry Versions ({len(versions)} unique):")
         for version, count in versions.most_common(10):
-            print(f"  {version:20s} : {count:4d} ({count/len(startup_events)*100:5.1f}%)")
+            print(f"  {version:20s} : {count:4d} ({count / len(startup_events) * 100:5.1f}%)")
 
         # Python version distribution
         py_versions = Counter(d.get("py") for d in startup_events if d.get("py"))
         print(f"\nPython Versions ({len(py_versions)} unique):")
         for py_ver, count in py_versions.most_common():
-            print(f"  Python {py_ver:15s} : {count:4d} ({count/len(startup_events)*100:5.1f}%)")
+            print(f"  Python {py_ver:15s} : {count:4d} ({count / len(startup_events) * 100:5.1f}%)")
 
         # OS distribution
         os_dist = Counter(d.get("os") for d in startup_events if d.get("os"))
         print(f"\nOperating Systems ({len(os_dist)} unique):")
         for os_name, count in os_dist.most_common():
-            print(f"  {os_name:20s} : {count:4d} ({count/len(startup_events)*100:5.1f}%)")
+            print(f"  {os_name:20s} : {count:4d} ({count / len(startup_events) * 100:5.1f}%)")
 
         # Cloud provider distribution
         cloud_dist = Counter(d.get("cloud") for d in startup_events if d.get("cloud"))
         print(f"\nCloud Providers ({len(cloud_dist)} unique):")
         for cloud, count in cloud_dist.most_common():
-            print(f"  {cloud:20s} : {count:4d} ({count/len(startup_events)*100:5.1f}%)")
+            print(f"  {cloud:20s} : {count:4d} ({count / len(startup_events) * 100:5.1f}%)")
 
         # Compute platform distribution
         compute_dist = Counter(d.get("compute") for d in startup_events if d.get("compute"))
         print(f"\nCompute Platforms ({len(compute_dist)} unique):")
         for compute, count in compute_dist.most_common():
-            print(f"  {compute:20s} : {count:4d} ({count/len(startup_events)*100:5.1f}%)")
+            print(f"  {compute:20s} : {count:4d} ({count / len(startup_events) * 100:5.1f}%)")
 
         # Storage backend distribution
         storage_dist = Counter(d.get("storage") for d in startup_events if d.get("storage"))
         print(f"\nStorage Backends ({len(storage_dist)} unique):")
         for storage, count in storage_dist.most_common():
-            print(f"  {storage:20s} : {count:4d} ({count/len(startup_events)*100:5.1f}%)")
+            print(f"  {storage:20s} : {count:4d} ({count / len(startup_events) * 100:5.1f}%)")
 
         # Auth provider distribution
         auth_dist = Counter(d.get("auth") for d in startup_events if d.get("auth"))
         print(f"\nAuth Providers ({len(auth_dist)} unique):")
         for auth, count in auth_dist.most_common():
-            print(f"  {auth:20s} : {count:4d} ({count/len(startup_events)*100:5.1f}%)")
+            print(f"  {auth:20s} : {count:4d} ({count / len(startup_events) * 100:5.1f}%)")
 
         # Federation enabled
         federation_count = sum(1 for d in startup_events if d.get("federation") is True)
-        print(f"\nFederation Enabled: {federation_count:4d} ({federation_count/len(startup_events)*100:5.1f}%)")
+        print(
+            f"\nFederation Enabled: {federation_count:4d} ({federation_count / len(startup_events) * 100:5.1f}%)"
+        )
 
         # Deployment mode
         mode_dist = Counter(d.get("mode") for d in startup_events if d.get("mode"))
         print(f"\nDeployment Modes ({len(mode_dist)} unique):")
         for mode, count in mode_dist.most_common():
-            print(f"  {mode:20s} : {count:4d} ({count/len(startup_events)*100:5.1f}%)")
+            print(f"  {mode:20s} : {count:4d} ({count / len(startup_events) * 100:5.1f}%)")
 
     # Aggregate field summaries for heartbeat events
     if heartbeat_events:
@@ -513,58 +520,74 @@ def _print_summary(documents: List[dict]) -> None:
         print("-" * 80)
 
         # Server count statistics
-        server_counts = [d.get("servers_count", 0) for d in heartbeat_events if d.get("servers_count") is not None]
+        server_counts = [
+            d.get("servers_count", 0)
+            for d in heartbeat_events
+            if d.get("servers_count") is not None
+        ]
         if server_counts:
-            print(f"\nRegistered MCP Servers:")
-            print(f"  Average: {sum(server_counts)/len(server_counts):.1f}")
+            print("\nRegistered MCP Servers:")
+            print(f"  Average: {sum(server_counts) / len(server_counts):.1f}")
             print(f"  Min:     {min(server_counts)}")
             print(f"  Max:     {max(server_counts)}")
             print(f"  Total:   {sum(server_counts)}")
 
         # Agent count statistics
-        agent_counts = [d.get("agents_count", 0) for d in heartbeat_events if d.get("agents_count") is not None]
+        agent_counts = [
+            d.get("agents_count", 0) for d in heartbeat_events if d.get("agents_count") is not None
+        ]
         if agent_counts:
-            print(f"\nRegistered Agents:")
-            print(f"  Average: {sum(agent_counts)/len(agent_counts):.1f}")
+            print("\nRegistered Agents:")
+            print(f"  Average: {sum(agent_counts) / len(agent_counts):.1f}")
             print(f"  Min:     {min(agent_counts)}")
             print(f"  Max:     {max(agent_counts)}")
             print(f"  Total:   {sum(agent_counts)}")
 
         # Skills count statistics
-        skills_counts = [d.get("skills_count", 0) for d in heartbeat_events if d.get("skills_count") is not None]
+        skills_counts = [
+            d.get("skills_count", 0) for d in heartbeat_events if d.get("skills_count") is not None
+        ]
         if skills_counts:
-            print(f"\nRegistered Skills:")
-            print(f"  Average: {sum(skills_counts)/len(skills_counts):.1f}")
+            print("\nRegistered Skills:")
+            print(f"  Average: {sum(skills_counts) / len(skills_counts):.1f}")
             print(f"  Min:     {min(skills_counts)}")
             print(f"  Max:     {max(skills_counts)}")
             print(f"  Total:   {sum(skills_counts)}")
 
         # Peers count statistics
-        peers_counts = [d.get("peers_count", 0) for d in heartbeat_events if d.get("peers_count") is not None]
+        peers_counts = [
+            d.get("peers_count", 0) for d in heartbeat_events if d.get("peers_count") is not None
+        ]
         if peers_counts:
-            print(f"\nFederation Peers:")
-            print(f"  Average: {sum(peers_counts)/len(peers_counts):.1f}")
+            print("\nFederation Peers:")
+            print(f"  Average: {sum(peers_counts) / len(peers_counts):.1f}")
             print(f"  Min:     {min(peers_counts)}")
             print(f"  Max:     {max(peers_counts)}")
             print(f"  Total:   {sum(peers_counts)}")
 
         # Search backend distribution
-        search_backend_dist = Counter(d.get("search_backend") for d in heartbeat_events if d.get("search_backend"))
+        search_backend_dist = Counter(
+            d.get("search_backend") for d in heartbeat_events if d.get("search_backend")
+        )
         print(f"\nSearch Backends ({len(search_backend_dist)} unique):")
         for backend, count in search_backend_dist.most_common():
-            print(f"  {backend:20s} : {count:4d} ({count/len(heartbeat_events)*100:5.1f}%)")
+            print(f"  {backend:20s} : {count:4d} ({count / len(heartbeat_events) * 100:5.1f}%)")
 
         # Embeddings provider distribution
-        embeddings_dist = Counter(d.get("embeddings_provider") for d in heartbeat_events if d.get("embeddings_provider"))
+        embeddings_dist = Counter(
+            d.get("embeddings_provider") for d in heartbeat_events if d.get("embeddings_provider")
+        )
         print(f"\nEmbeddings Providers ({len(embeddings_dist)} unique):")
         for provider, count in embeddings_dist.most_common():
-            print(f"  {provider:20s} : {count:4d} ({count/len(heartbeat_events)*100:5.1f}%)")
+            print(f"  {provider:20s} : {count:4d} ({count / len(heartbeat_events) * 100:5.1f}%)")
 
         # Uptime statistics
-        uptime_hours = [d.get("uptime_hours", 0) for d in heartbeat_events if d.get("uptime_hours") is not None]
+        uptime_hours = [
+            d.get("uptime_hours", 0) for d in heartbeat_events if d.get("uptime_hours") is not None
+        ]
         if uptime_hours:
-            print(f"\nUptime (hours):")
-            print(f"  Average: {sum(uptime_hours)/len(uptime_hours):.1f}")
+            print("\nUptime (hours):")
+            print(f"  Average: {sum(uptime_hours) / len(uptime_hours):.1f}")
             print(f"  Min:     {min(uptime_hours):.1f}")
             print(f"  Max:     {max(uptime_hours):.1f}")
 
@@ -595,27 +618,27 @@ def _print_summary(documents: List[dict]) -> None:
     if instance_max_total:
         fleet_total = sum(instance_max_total.values())
         instances_with_search = sum(1 for v in instance_max_total.values() if v > 0)
-        print(f"\nTotal Search Queries (lifetime, deduplicated per instance):")
+        print("\nTotal Search Queries (lifetime, deduplicated per instance):")
         print(f"  Fleet Total: {fleet_total:,}")
         print(f"  Instances with search activity: {instances_with_search}")
         print(f"  Max from single instance: {max(instance_max_total.values()):,}")
 
     if instance_max_24h:
         fleet_24h = sum(instance_max_24h.values())
-        print(f"\nSearch Queries (max 24h window per instance):")
+        print("\nSearch Queries (max 24h window per instance):")
         print(f"  Fleet Total: {fleet_24h:,}")
         print(f"  Max from single instance: {max(instance_max_24h.values()):,}")
 
     if instance_max_1h:
         fleet_1h = sum(instance_max_1h.values())
-        print(f"\nSearch Queries (max 1h window per instance):")
+        print("\nSearch Queries (max 1h window per instance):")
         print(f"  Fleet Total: {fleet_1h:,}")
         print(f"  Max from single instance: {max(instance_max_1h.values()):,}")
 
     print("\n" + "=" * 80 + "\n")
 
 
-def _connect(args: argparse.Namespace) -> Tuple[Dict[str, str], Dict[str, str]]:
+def _connect(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, str]]:
     """Load bastion env and fetch credentials.
 
     Args:

@@ -264,12 +264,8 @@ async def search_skills(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     q: str = Query(..., description="Search query"),
     tags: str | None = Query(None, description="Comma-separated tags to filter by"),
-    include_deprecated: bool = Query(
-        False, description="Include deprecated skills in results"
-    ),
-    include_draft: bool = Query(
-        False, description="Include draft skills in results"
-    ),
+    include_deprecated: bool = Query(False, description="Include deprecated skills in results"),
+    include_draft: bool = Query(False, description="Include draft skills in results"),
 ) -> dict:
     """Search for skills by name, description, or tags.
 
@@ -413,7 +409,9 @@ async def get_skill_content(
 
         async with httpx.AsyncClient() as client:
             headers = await _github_auth.get_auth_headers(str(raw_url))
-            response = await client.get(str(raw_url), headers=headers, follow_redirects=True, timeout=30.0)
+            response = await client.get(
+                str(raw_url), headers=headers, follow_redirects=True, timeout=30.0
+            )
 
             # SSRF protection: validate final URL after redirects
             final_url = str(response.url)

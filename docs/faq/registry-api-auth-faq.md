@@ -19,7 +19,7 @@ Before #871, turning on static-token mode silently broke every non-static-token 
 Yes, since [#779](https://github.com/agentic-community/mcp-gateway-registry/issues/779). Define a key in `REGISTRY_API_KEYS` whose `groups` list maps to read-only scopes (e.g., `mcp-servers-unrestricted/read`). The key will authenticate successfully but will not carry mutating scopes, so the registry treats it as a non-admin caller.
 
 ```json
-[{"name": "ci-readonly", "key": "<64-char-hex>", "groups": ["mcp-readonly"]}]
+{"ci-readonly": {"key": "<generated-token>", "groups": ["mcp-readonly"]}}
 ```
 
 Make sure the group `mcp-readonly` is mapped to the desired read-only scopes in your `group_mappings` collection.
@@ -65,6 +65,7 @@ The **Settings → Authentication** page shows:
 |---|---|---|
 | `registry_static_token_auth_enabled` | Static Token Auth Enabled | Displayed as `true` / `false` |
 | `registry_api_token` | Registry API Token | Masked |
+| `registry_api_keys` | Registry API Keys | Masked |
 | `m2m_direct_registration_enabled` | M2M Direct Registration Enabled | Displayed as `true` / `false` (from [#851](https://github.com/agentic-community/mcp-gateway-registry/issues/851)) |
 
 The field registry is defined in [registry/api/config_routes.py](../../registry/api/config_routes.py).
@@ -74,7 +75,7 @@ The field registry is defined in [registry/api/config_routes.py](../../registry/
 Three improvements, landing in order on top of each other:
 
 1. **[#871](https://github.com/agentic-community/mcp-gateway-registry/issues/871) — coexistence** (shipped): static token and JWT auth work together on `/api/*`.
-2. **[#779](https://github.com/agentic-community/mcp-gateway-registry/issues/779) — multi-key static tokens** (shipped): replaces the single `REGISTRY_API_TOKEN` with a `REGISTRY_API_KEYS` JSON array, each key carrying its own groups. Lets operators give scripts the minimum privilege they need. Zero-downtime rotation is built in.
+2. **[#779](https://github.com/agentic-community/mcp-gateway-registry/issues/779) — multi-key static tokens** (shipped): replaces the single `REGISTRY_API_TOKEN` with a `REGISTRY_API_KEYS` JSON object, each key carrying its own groups. Lets operators give scripts the minimum privilege they need. Zero-downtime rotation is built in.
 3. **[#826](https://github.com/agentic-community/mcp-gateway-registry/issues/826) — external user access tokens**: lets a frontend application that has its own IdP integration call the Registry API on behalf of a logged-in user, either via `/userinfo` group enrichment (Solution A) or a new token-exchange endpoint (Solution B).
 
 See the [full design in Registry API Authentication](../registry-api-auth.md#roadmap-near-term-improvements).

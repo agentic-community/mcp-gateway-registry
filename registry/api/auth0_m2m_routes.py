@@ -8,14 +8,14 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.repositories.documentdb.client import get_documentdb_client
 from registry.schemas.idp_m2m_client import (
     IdPM2MClient,
     IdPM2MClientUpdate,
 )
-from pydantic import BaseModel
-
 from registry.services.auth0_m2m_sync import get_auth0_m2m_sync
 
 logging.basicConfig(

@@ -347,9 +347,7 @@ class Auth0Provider(AuthProvider):
             response.raise_for_status()
 
             user_info = response.json()
-            logger.debug(
-                f"User info retrieved for: {user_info.get('nickname', 'unknown')}"
-            )
+            logger.debug(f"User info retrieved for: {user_info.get('nickname', 'unknown')}")
 
             return user_info
 
@@ -568,8 +566,7 @@ class Auth0Provider(AuthProvider):
                 or id_token_claims.get("email")
                 or id_token_claims.get("sub"),
                 "email": id_token_claims.get("email"),
-                "name": id_token_claims.get("name")
-                or id_token_claims.get("given_name"),
+                "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
                 "groups": groups,
             }
 

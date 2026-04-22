@@ -172,7 +172,7 @@ Rules:
 
 ### How scopes are resolved
 
-At startup, the auth server calls `map_groups_to_scopes(entry.groups)` for each entry to resolve groups into scopes using the same pipeline as IdP/JWT auth. The resolved scopes are cached in memory. If an operator modifies group_mappings in MongoDB, the auth server must be restarted to pick up the change.
+At startup, the auth server calls `map_groups_to_scopes(entry.groups)` for each entry to resolve groups into scopes using the same pipeline as IdP/JWT auth. The resolved scopes are cached in memory. When an operator imports or modifies group_mappings (e.g., via `registry_management.py import-group`), the registry triggers an auth server scope reload that also rebuilds the static token map, so changes propagate without a restart.
 
 ### Identity for multi-key matches
 

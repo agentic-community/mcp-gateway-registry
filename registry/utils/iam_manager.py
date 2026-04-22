@@ -30,9 +30,7 @@ IDP_GROUP_FILTER_PREFIX: str = os.environ.get("IDP_GROUP_FILTER_PREFIX", "")
 # Parse comma-separated prefixes and validate each one to prevent injection
 IDP_GROUP_FILTER_PREFIXES: list[str] = []
 if IDP_GROUP_FILTER_PREFIX:
-    IDP_GROUP_FILTER_PREFIXES = [
-        p.strip() for p in IDP_GROUP_FILTER_PREFIX.split(",") if p.strip()
-    ]
+    IDP_GROUP_FILTER_PREFIXES = [p.strip() for p in IDP_GROUP_FILTER_PREFIX.split(",") if p.strip()]
     for _prefix in IDP_GROUP_FILTER_PREFIXES:
         if not re.match(r"^[a-zA-Z0-9\-_ ]+$", _prefix):
             raise ValueError(
@@ -62,10 +60,7 @@ def _filter_groups_by_prefix(
     if not prefixes:
         return groups
 
-    return [
-        g for g in groups
-        if any(g.get("name", "").startswith(prefix) for prefix in prefixes)
-    ]
+    return [g for g in groups if any(g.get("name", "").startswith(prefix) for prefix in prefixes)]
 
 
 @runtime_checkable

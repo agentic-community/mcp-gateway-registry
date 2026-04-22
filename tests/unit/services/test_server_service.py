@@ -859,7 +859,9 @@ class TestWildcardServerAccess:
         result = await server_service.get_filtered_servers(["*"], include_inactive=True)
         assert len(result) == 2
 
-        result_active_only = await server_service.get_filtered_servers(["*"], include_inactive=False)
+        result_active_only = await server_service.get_filtered_servers(
+            ["*"], include_inactive=False
+        )
         assert len(result_active_only) == 1
         assert "/active" in result_active_only
 
@@ -895,9 +897,7 @@ class TestWildcardServerAccess:
         """Test user_can_access_server_path with ['*'] returns True for existing server."""
         mock_server_repository.get.return_value = sample_server_dict
 
-        result = await server_service.user_can_access_server_path(
-            sample_server_dict["path"], ["*"]
-        )
+        result = await server_service.user_can_access_server_path(sample_server_dict["path"], ["*"])
 
         assert result is True
 

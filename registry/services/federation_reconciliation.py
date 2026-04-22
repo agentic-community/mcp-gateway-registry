@@ -310,7 +310,8 @@ async def _reconcile_agentcore_agents(
 
     all_agents = await agent_repo.list_all()
     agentcore_agents = [
-        a for a in all_agents
+        a
+        for a in all_agents
         if "agentcore" in (a.tags or []) and str(a.path).startswith("/agents/agentcore-")
     ]
 
@@ -320,16 +321,12 @@ async def _reconcile_agentcore_agents(
                 success = await agent_repo.delete(agent.path)
                 if success:
                     removed.append(agent.name)
-                    logger.info(
-                        f"AgentCore reconciliation: removed stale agent '{agent.name}'"
-                    )
+                    logger.info(f"AgentCore reconciliation: removed stale agent '{agent.name}'")
                 else:
                     errors.append(f"Failed to remove agent {agent.name} ({agent.path})")
             except Exception as e:
                 errors.append(f"Error removing agent {agent.path}: {e}")
-                logger.error(
-                    f"AgentCore reconciliation: error removing agent {agent.path}: {e}"
-                )
+                logger.error(f"AgentCore reconciliation: error removing agent {agent.path}: {e}")
 
     return {"removed": removed, "errors": errors}
 
@@ -355,7 +352,8 @@ async def _reconcile_agentcore_skills(
 
     all_skills = await skill_repo.list_all()
     agentcore_skills = [
-        s for s in all_skills
+        s
+        for s in all_skills
         if "agentcore" in (s.tags or []) and str(s.path).startswith("/skills/agentcore-")
     ]
 
@@ -365,16 +363,12 @@ async def _reconcile_agentcore_skills(
                 success = await skill_repo.delete(skill.path)
                 if success:
                     removed.append(skill.name)
-                    logger.info(
-                        f"AgentCore reconciliation: removed stale skill '{skill.name}'"
-                    )
+                    logger.info(f"AgentCore reconciliation: removed stale skill '{skill.name}'")
                 else:
                     errors.append(f"Failed to remove skill {skill.name} ({skill.path})")
             except Exception as e:
                 errors.append(f"Error removing skill {skill.path}: {e}")
-                logger.error(
-                    f"AgentCore reconciliation: error removing skill {skill.path}: {e}"
-                )
+                logger.error(f"AgentCore reconciliation: error removing skill {skill.path}: {e}")
 
     return {"removed": removed, "errors": errors}
 
@@ -435,18 +429,12 @@ async def reconcile_agentcore_records(
     server_result = await _reconcile_agentcore_servers(
         expected["servers"], server_service, server_repo
     )
-    agent_result = await _reconcile_agentcore_agents(
-        expected["agents"], agent_repo
-    )
-    skill_result = await _reconcile_agentcore_skills(
-        expected["skills"], skill_repo
-    )
+    agent_result = await _reconcile_agentcore_agents(expected["agents"], agent_repo)
+    skill_result = await _reconcile_agentcore_skills(expected["skills"], skill_repo)
 
     elapsed = time.time() - start_time
     total_removed = (
-        len(server_result["removed"])
-        + len(agent_result["removed"])
-        + len(skill_result["removed"])
+        len(server_result["removed"]) + len(agent_result["removed"]) + len(skill_result["removed"])
     )
 
     # Record metrics
@@ -457,9 +445,15 @@ async def reconcile_agentcore_records(
         if instruments:
             counter = instruments.get(RECONCILIATION_REMOVED_METRIC)
             if counter:
-                counter.add(len(server_result["removed"]), {"source": "agentcore", "item_type": "server"})
-                counter.add(len(agent_result["removed"]), {"source": "agentcore", "item_type": "agent"})
-                counter.add(len(skill_result["removed"]), {"source": "agentcore", "item_type": "skill"})
+                counter.add(
+                    len(server_result["removed"]), {"source": "agentcore", "item_type": "server"}
+                )
+                counter.add(
+                    len(agent_result["removed"]), {"source": "agentcore", "item_type": "agent"}
+                )
+                counter.add(
+                    len(skill_result["removed"]), {"source": "agentcore", "item_type": "skill"}
+                )
 
             histogram = instruments.get(RECONCILIATION_DURATION_METRIC)
             if histogram:

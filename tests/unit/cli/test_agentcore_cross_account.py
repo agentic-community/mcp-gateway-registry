@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # _parse_account_ids
 # ---------------------------------------------------------------------------
@@ -126,9 +125,7 @@ class TestScannerCrossAccount:
         mock_client = MagicMock()
         mock_session.client.return_value = mock_client
 
-        scanner = AgentCoreScanner(
-            region="us-east-2", timeout=5, session=mock_session
-        )
+        scanner = AgentCoreScanner(region="us-east-2", timeout=5, session=mock_session)
 
         # Should use session.client, not boto3.client
         mock_session.client.assert_called_once()
@@ -163,13 +160,9 @@ class TestRegistrationBuilderCrossAccount:
         mock_session = MagicMock()
         mock_sts = MagicMock()
         mock_session.client.return_value = mock_sts
-        mock_sts.get_caller_identity.return_value = {
-            "Account": "999988887777"
-        }
+        mock_sts.get_caller_identity.return_value = {"Account": "999988887777"}
 
-        builder = RegistrationBuilder(
-            region="us-east-2", session=mock_session
-        )
+        builder = RegistrationBuilder(region="us-east-2", session=mock_session)
 
         mock_session.client.assert_called_once_with("sts")
         mock_boto3.client.assert_not_called()
@@ -179,9 +172,7 @@ class TestRegistrationBuilderCrossAccount:
     def test_builder_without_session_uses_default(self, mock_boto3):
         mock_sts = MagicMock()
         mock_boto3.client.return_value = mock_sts
-        mock_sts.get_caller_identity.return_value = {
-            "Account": "111122223333"
-        }
+        mock_sts.get_caller_identity.return_value = {"Account": "111122223333"}
 
         from cli.agentcore.registration import RegistrationBuilder
 
@@ -203,11 +194,15 @@ class TestCLIAccountArgs:
         from cli.agentcore.sync import build_parser
 
         parser = build_parser()
-        args = parser.parse_args([
-            "sync",
-            "--accounts", "111122223333,444455556666",
-            "--assume-role-name", "CrossAccountRole",
-        ])
+        args = parser.parse_args(
+            [
+                "sync",
+                "--accounts",
+                "111122223333,444455556666",
+                "--assume-role-name",
+                "CrossAccountRole",
+            ]
+        )
         assert args.accounts == "111122223333,444455556666"
         assert args.assume_role_name == "CrossAccountRole"
 
@@ -223,10 +218,13 @@ class TestCLIAccountArgs:
         from cli.agentcore.sync import build_parser
 
         parser = build_parser()
-        args = parser.parse_args([
-            "list",
-            "--accounts", "111122223333",
-        ])
+        args = parser.parse_args(
+            [
+                "list",
+                "--accounts",
+                "111122223333",
+            ]
+        )
         assert args.accounts == "111122223333"
 
     def test_default_role_name(self):

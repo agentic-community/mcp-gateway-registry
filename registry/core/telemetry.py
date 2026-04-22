@@ -731,7 +731,9 @@ class TelemetryScheduler:
     async def _send_heartbeat(self) -> None:
         """Send heartbeat event if lock acquired."""
         # Acquire lock (interval matches heartbeat frequency)
-        lock_acquired = await _acquire_telemetry_lock("heartbeat", _get_heartbeat_lock_interval_seconds())
+        lock_acquired = await _acquire_telemetry_lock(
+            "heartbeat", _get_heartbeat_lock_interval_seconds()
+        )
 
         if not lock_acquired:
             logger.info("[telemetry] Heartbeat already sent recently by another replica")

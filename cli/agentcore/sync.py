@@ -112,9 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         sub.add_argument(
             "--assume-role-name",
-            default=os.environ.get(
-                "AGENTCORE_ASSUME_ROLE_NAME", "AgentCoreSyncRole"
-            ),
+            default=os.environ.get("AGENTCORE_ASSUME_ROLE_NAME", "AgentCoreSyncRole"),
             help=(
                 "IAM role name to assume in each target account "
                 "(default: AGENTCORE_ASSUME_ROLE_NAME env or AgentCoreSyncRole)"
@@ -182,7 +180,7 @@ def _assume_role_session(
     account_id: str,
     role_name: str,
     region: str,
-) -> "boto3.Session":
+) -> boto3.Session:
     """Assume an IAM role in a target account and return a boto3 Session.
 
     Args:
@@ -240,9 +238,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     # Add project root so api.registry_client is importable
     sys.path.insert(
         0,
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        ),
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
     from api.registry_client import RegistryClient
 
@@ -271,13 +267,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
     # Run sync for each account
     for label, session in account_sessions:
         if len(account_sessions) > 1:
-            logger.info(f"\n{'='*60}")
+            logger.info(f"\n{'=' * 60}")
             logger.info(f"Syncing account: {label}")
-            logger.info(f"{'='*60}")
+            logger.info(f"{'=' * 60}")
 
-        scanner = AgentCoreScanner(
-            region=args.region, timeout=args.timeout, session=session
-        )
+        scanner = AgentCoreScanner(region=args.region, timeout=args.timeout, session=session)
         builder = RegistrationBuilder(
             region=args.region, visibility=args.visibility, session=session
         )
@@ -338,9 +332,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     all_errors: list[str] = []
 
     for label, session in account_sessions:
-        scanner = AgentCoreScanner(
-            region=args.region, timeout=args.timeout, session=session
-        )
+        scanner = AgentCoreScanner(region=args.region, timeout=args.timeout, session=session)
 
         if not args.runtimes_only:
             try:
@@ -412,9 +404,7 @@ def _print_list_text(
         print("-" * 70)
         for rt in runtimes:
             name = rt.get("agentRuntimeName", rt.get("agentRuntimeId", "unknown"))
-            protocol = rt.get("protocolConfiguration", {}).get(
-                "serverProtocol", "unknown"
-            )
+            protocol = rt.get("protocolConfiguration", {}).get("serverProtocol", "unknown")
             status = rt.get("status", "unknown")
             print(f"  {name:<30} protocol={protocol:<8} [{status}]")
     else:

@@ -29,7 +29,6 @@ from registry.services.federation_reconciliation import (
     reconcile_agentcore_records,
 )
 
-
 # =============================================================================
 # Helper: create mock agent/skill objects
 # =============================================================================
@@ -380,9 +379,7 @@ class TestReconcileAgentcoreRecords:
         skill_repo = AsyncMock()
         skill_repo.list_all.return_value = []
 
-        with patch(
-            "registry.services.federation_reconciliation._record_reconciliation_metrics"
-        ):
+        with patch("registry.services.federation_reconciliation._record_reconciliation_metrics"):
             result = await reconcile_agentcore_records(
                 config=config,
                 server_service=AsyncMock(),
@@ -430,9 +427,7 @@ class TestReconcileAgentcoreRecords:
             "skills": set(),
         }
 
-        with patch(
-            "registry.services.federation_reconciliation._record_reconciliation_metrics"
-        ):
+        with patch("registry.services.federation_reconciliation._record_reconciliation_metrics"):
             result = await reconcile_agentcore_records(
                 config=config,
                 server_service=server_service,
@@ -472,9 +467,7 @@ class TestReconcileAgentcoreRecords:
         skill_repo = AsyncMock()
         skill_repo.list_all.return_value = []
 
-        with patch(
-            "registry.services.federation_reconciliation._record_reconciliation_metrics"
-        ):
+        with patch("registry.services.federation_reconciliation._record_reconciliation_metrics"):
             result = await reconcile_agentcore_records(
                 config=config,
                 server_service=server_service,

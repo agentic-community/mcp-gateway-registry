@@ -8,10 +8,7 @@ Tests the SyncOrchestrator end-to-end with mocked external dependencies
 from __future__ import annotations
 
 import json
-import os
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Sample data
@@ -98,13 +95,13 @@ def _mock_agentcore_client(gateways=None, runtimes=None):
 
     # list_gateways
     gw_items = []
-    for gw in (gateways or []):
+    for gw in gateways or []:
         gw_items.append({"gatewayId": gw["gatewayId"], "status": gw["status"]})
     client.list_gateways.return_value = {"items": gw_items}
 
     # get_gateway -- return the full gateway dict for each ID
     def _get_gateway(gatewayIdentifier):
-        for gw in (gateways or []):
+        for gw in gateways or []:
             if gw["gatewayId"] == gatewayIdentifier:
                 return dict(gw)
         return {}
@@ -117,13 +114,13 @@ def _mock_agentcore_client(gateways=None, runtimes=None):
 
     # list_agent_runtimes
     rt_items = []
-    for rt in (runtimes or []):
+    for rt in runtimes or []:
         rt_items.append({"agentRuntimeId": rt["agentRuntimeId"], "status": rt["status"]})
     client.list_agent_runtimes.return_value = {"agentRuntimes": rt_items}
 
     # get_agent_runtime
     def _get_runtime(agentRuntimeId):
-        for rt in (runtimes or []):
+        for rt in runtimes or []:
             if rt["agentRuntimeId"] == agentRuntimeId:
                 return dict(rt)
         return {}
@@ -156,8 +153,10 @@ def _build_orchestrator(
             return mock_ac_client
         return MagicMock()
 
-    with patch("cli.agentcore.registration.boto3") as reg_boto3, \
-         patch("cli.agentcore.discovery.boto3") as disc_boto3:
+    with (
+        patch("cli.agentcore.registration.boto3") as reg_boto3,
+        patch("cli.agentcore.discovery.boto3") as disc_boto3,
+    ):
         reg_boto3.client.side_effect = _boto3_client
         disc_boto3.client.side_effect = _boto3_client
 

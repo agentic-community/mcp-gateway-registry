@@ -14,9 +14,7 @@ class TestGetSkillContentAuth:
         self, mock_get_service, mock_access, mock_safe_url, mock_auth
     ):
         """Auth headers from GitHubAuthProvider are passed to httpx.get."""
-        mock_auth.get_auth_headers = AsyncMock(
-            return_value={"Authorization": "Bearer ghp_test"}
-        )
+        mock_auth.get_auth_headers = AsyncMock(return_value={"Authorization": "Bearer ghp_test"})
 
         # Mock skill service to return a skill with raw URL
         mock_skill = MagicMock()

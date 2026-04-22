@@ -1488,7 +1488,7 @@ Supported providers: """
                         f"'{var_name}' configuration was not completed properly for provider '{provider}'"
                     )
                 else:
-                    display_name = str(provider_config.get('display_name', provider))
+                    display_name = str(provider_config.get("display_name", provider))
                     logger.error(f"'{var_name}' is required for {display_name}")
                     logger.error(
                         f"Set {var_name.upper()} environment variable or add '{var_name}' to config file"
@@ -1527,10 +1527,8 @@ Supported providers: """
 
     # Check for critical scopes (generic check for offline_access)
     if "offline_access" in provider_config.get("scopes", []) and "offline_access" not in scopes:
-        display_name = str(provider_config.get('display_name', provider))
-        logger.warning(
-            f"WARNING: 'offline_access' scope is recommended for {display_name}!"
-        )
+        display_name = str(provider_config.get("display_name", provider))
+        logger.warning(f"WARNING: 'offline_access' scope is recommended for {display_name}!")
         logger.warning("Without this scope, refresh tokens may not be issued.")
 
         if use_interactive:

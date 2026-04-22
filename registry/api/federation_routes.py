@@ -677,8 +677,7 @@ async def remove_aws_registry(
     # Find and remove registry
     original_count = len(config.aws_registry.registries)
     config.aws_registry.registries = [
-        r for r in config.aws_registry.registries
-        if r.registry_id != registry_id
+        r for r in config.aws_registry.registries if r.registry_id != registry_id
     ]
 
     if len(config.aws_registry.registries) == original_count:
@@ -797,9 +796,7 @@ async def _deregister_agents_from_registry(
 
     # Primary: query by metadata
     matching_paths = set()
-    by_metadata = await agent_repo.find_with_filter(
-        {"metadata.agentcore_registry_id": registry_id}
-    )
+    by_metadata = await agent_repo.find_with_filter({"metadata.agentcore_registry_id": registry_id})
     matching_paths.update(by_metadata.keys())
 
     # Fallback: query by tag + path pattern for older records without metadata
@@ -1069,20 +1066,17 @@ async def sync_federation(
         if (source is None or source == "aws_registry") and config.aws_registry.enabled:
             logger.info("Syncing from AWS Agent Registry...")
 
-            from ..schemas.agent_models import AgentCard
-            from ..schemas.skill_models import SkillCard
             from ..repositories.factory import (
-                get_agent_repository,
                 get_skill_repository,
             )
+            from ..schemas.agent_models import AgentCard
+            from ..schemas.skill_models import SkillCard
             from ..services.agent_service import agent_service
             from ..services.federation.agentcore_client import AgentCoreFederationClient
             from ..services.server_service import server_service
             from ..services.skill_service import get_skill_service
 
-            agentcore_client = AgentCoreFederationClient(
-                aws_region=config.aws_registry.aws_region
-            )
+            agentcore_client = AgentCoreFederationClient(aws_region=config.aws_registry.aws_region)
             records = agentcore_client.fetch_all_records(
                 registry_configs=config.aws_registry.registries,
                 sync_timeout_seconds=config.aws_registry.sync_timeout_seconds,
@@ -1107,7 +1101,9 @@ async def sync_federation(
                     await server_service.toggle_service(srv_path, True)
                     results["aws_registry"]["servers"].append(srv.get("server_name", srv_path))
                 except Exception as e:
-                    logger.error(f"Failed to sync AgentCore server {srv.get('server_name', 'unknown')}: {e}")
+                    logger.error(
+                        f"Failed to sync AgentCore server {srv.get('server_name', 'unknown')}: {e}"
+                    )
 
             # Register agents (A2A + CUSTOM records)
             for agent_data in records["agents"]:
@@ -1122,7 +1118,9 @@ async def sync_federation(
                         await agent_service.update_agent(agent_path, agent_data)
                     results["aws_registry"]["agents"].append(agent_data.get("name", agent_path))
                 except Exception as e:
-                    logger.error(f"Failed to sync AgentCore agent {agent_data.get('name', 'unknown')}: {e}")
+                    logger.error(
+                        f"Failed to sync AgentCore agent {agent_data.get('name', 'unknown')}: {e}"
+                    )
 
             # Register skills (AGENT_SKILLS records)
             skill_service = get_skill_service()
@@ -1136,15 +1134,20 @@ async def sync_federation(
                         skill_card = SkillCard(**skill_data)
                         await skill_repo.create(skill_card)
                     except Exception as create_err:
-                        logger.debug(f"Skill create failed for {skill_path}, trying update: {create_err}")
+                        logger.debug(
+                            f"Skill create failed for {skill_path}, trying update: {create_err}"
+                        )
                         update_fields = {
-                            k: v for k, v in skill_data.items()
+                            k: v
+                            for k, v in skill_data.items()
                             if k not in ("path", "id", "created_at")
                         }
                         await skill_repo.update(skill_path, update_fields)
                     results["aws_registry"]["skills"].append(skill_data.get("name", skill_path))
                 except Exception as e:
-                    logger.error(f"Failed to sync AgentCore skill {skill_data.get('name', 'unknown')}: {e}")
+                    logger.error(
+                        f"Failed to sync AgentCore skill {skill_data.get('name', 'unknown')}: {e}"
+                    )
 
             agentcore_total = (
                 len(results["aws_registry"]["servers"])

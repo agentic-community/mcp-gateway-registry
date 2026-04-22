@@ -668,9 +668,7 @@ async def list_agents(
                 sync_metadata=agent.sync_metadata,
                 ans_metadata=agent.ans_metadata,
                 registered_by=agent.registered_by,
-                status=agent.status
-                if hasattr(agent, "status") and agent.status
-                else "active",
+                status=agent.status if hasattr(agent, "status") and agent.status else "active",
                 provider_organization=agent.provider.organization if agent.provider else None,
                 provider_url=agent.provider.url if agent.provider else None,
                 source_created_at=agent.source_created_at.isoformat()

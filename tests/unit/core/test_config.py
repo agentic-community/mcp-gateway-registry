@@ -893,6 +893,7 @@ class TestSettingsTabVisibilityFeatureFlags:
         new_settings = Settings()
         with patch("registry.api.config_routes.settings", new_settings):
             from registry.api.config_routes import get_config
+
             result = await get_config()
             assert result["features"]["agents"] is False
             assert result["features"]["mcp_servers"] is True
@@ -907,6 +908,7 @@ class TestSettingsTabVisibilityFeatureFlags:
         new_settings = Settings()
         with patch("registry.api.config_routes.settings", new_settings):
             from registry.api.config_routes import get_config
+
             result = await get_config()
             assert result["features"]["agents"] is False
             assert result["features"]["mcp_servers"] is True
@@ -929,6 +931,7 @@ class TestSettingsTabVisibilityFeatureFlags:
         new_settings = Settings()
         with patch("registry.api.config_routes.settings", new_settings):
             from registry.api.config_routes import get_config
+
             result = await get_config()
             assert result["features"]["virtual_servers"] is False
 
@@ -942,6 +945,7 @@ class TestSettingsTabVisibilityFeatureFlags:
         new_settings = Settings()
         with patch("registry.api.config_routes.settings", new_settings):
             from registry.api.config_routes import get_config
+
             result = await get_config()
             assert result["features"]["virtual_servers"] is False
             assert result["features"]["agents"] is True
@@ -972,8 +976,7 @@ class TestSettingsTabVisibilityStartupWarnings:
             log_tab_visibility_warnings(s)
 
         assert any(
-            "SHOW_AGENTS_TAB" in msg and "mcp-servers-only" in msg
-            for msg in caplog.messages
+            "SHOW_AGENTS_TAB" in msg and "mcp-servers-only" in msg for msg in caplog.messages
         )
 
     def test_settings_tab_no_warning_when_consistent(self, monkeypatch, tmp_path, caplog):
