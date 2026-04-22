@@ -17,6 +17,16 @@ JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
 JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-registry")
 SECRET_KEY = os.environ.get("SECRET_KEY", "development-secret-key")
 
+# External issuer configuration for federation / cross-IdP trust
+# Comma-separated list of OIDC issuer URLs (e.g. "https://login.microsoftonline.com/{tenant}/v2.0")
+EXTERNAL_ISSUERS = [
+    url.strip()
+    for url in os.environ.get("EXTERNAL_ISSUERS", "").split(",")
+    if url.strip()
+]
+# Claim in external tokens that maps to registry groups (default: "roles")
+EXTERNAL_GROUPS_CLAIM = os.environ.get("EXTERNAL_GROUPS_CLAIM", "roles")
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +73,10 @@ class KeycloakProvider(AuthProvider):
         self._jwks_cache_time: float = 0
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
+        # Per-issuer JWKS cache for external issuers
+        self._external_jwks_cache: dict[str, dict[str, Any]] = {}
+        self._external_jwks_cache_time: dict[str, float] = {}
+
         # Keycloak endpoints - use internal URL for server-to-server, external for browser redirects
         self.realm_url = f"{self.keycloak_url}/realms/{realm}"
         self.external_realm_url = f"{self.keycloak_external_url}/realms/{realm}"
@@ -73,14 +87,17 @@ class KeycloakProvider(AuthProvider):
         self.logout_url = f"{self.external_realm_url}/protocol/openid-connect/logout"
         self.config_url = f"{self.realm_url}/.well-known/openid_configuration"
 
+        if EXTERNAL_ISSUERS:
+            logger.info(f"External issuers configured: {EXTERNAL_ISSUERS}")
+
         logger.debug(
             f"Initialized Keycloak provider for realm '{realm}' at {keycloak_url} (external: {self.keycloak_external_url})"
         )
 
     def validate_token(self, token: str, **kwargs: Any) -> dict[str, Any]:
-        """Validate Keycloak JWT token."""
+        """Validate JWT token from Keycloak or a configured external issuer."""
         try:
-            logger.debug("Validating Keycloak JWT token")
+            logger.debug("Validating JWT token")
 
             # First check if this is a self-signed token from our auth server
             try:
@@ -91,15 +108,21 @@ class KeycloakProvider(AuthProvider):
             except Exception as e:
                 logger.debug(f"Not a self-signed token: {e}")
 
-            # Get JWKS for validation
-            jwks = self.get_jwks()
-
             # Decode token header to get key ID
             unverified_header = jwt.get_unverified_header(token)
             kid = unverified_header.get("kid")
 
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
+
+            # Check if token issuer matches an external issuer
+            token_issuer = unverified_claims.get("iss", "") if unverified_claims else ""
+            if EXTERNAL_ISSUERS and token_issuer in EXTERNAL_ISSUERS:
+                logger.debug(f"Token issuer matches external issuer: {token_issuer}")
+                return self._validate_external_token(token, token_issuer, kid)
+
+            # Standard Keycloak validation path
+            jwks = self.get_jwks()
 
             # Find matching key
             signing_key = None
@@ -111,13 +134,19 @@ class KeycloakProvider(AuthProvider):
                     break
 
             if not signing_key:
+                # Key not found in Keycloak JWKS — try external issuers as fallback
+                if EXTERNAL_ISSUERS:
+                    logger.debug(
+                        f"Key {kid} not in Keycloak JWKS, trying external issuers"
+                    )
+                    return self._validate_external_token_by_kid(token, kid)
                 raise ValueError(f"No matching key found for kid: {kid}")
 
             # Validate and decode token - accept multiple valid issuers
             valid_issuers = [
-                self.external_realm_url,  # External URL: https://mcpgateway.ddns.net/realms/mcp-gateway
-                self.realm_url,  # Internal URL: http://keycloak:8080/realms/mcp-gateway
-                f"http://localhost:8080/realms/{self.realm}",  # Localhost URL for development
+                self.external_realm_url,
+                self.realm_url,
+                f"http://localhost:8080/realms/{self.realm}",
             ]
 
             claims = None
@@ -164,7 +193,7 @@ class KeycloakProvider(AuthProvider):
             logger.warning(f"Token validation failed: Invalid token - {e}")
             raise ValueError(f"Invalid token: {e}")
         except Exception as e:
-            logger.error(f"Keycloak token validation error: {e}")
+            logger.error(f"Token validation error: {e}")
             raise ValueError(f"Token validation failed: {e}")
 
     def _validate_self_signed_token(self, token: str) -> dict[str, Any]:
@@ -238,6 +267,135 @@ class KeycloakProvider(AuthProvider):
         except Exception as e:
             logger.error(f"Self-signed token validation error: {e}")
             raise ValueError(f"Self-signed token validation failed: {e}")
+
+    def _get_external_jwks(self, issuer_url: str) -> dict[str, Any]:
+        """Get JWKS for an external OIDC issuer via discovery, with caching."""
+        current_time = time.time()
+        cached = self._external_jwks_cache.get(issuer_url)
+        cached_time = self._external_jwks_cache_time.get(issuer_url, 0)
+
+        if cached and (current_time - cached_time) < self._jwks_cache_ttl:
+            logger.debug(f"Using cached external JWKS for {issuer_url}")
+            return cached
+
+        try:
+            # OIDC Discovery: fetch jwks_uri from well-known configuration
+            discovery_url = f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
+            logger.debug(f"Discovering JWKS URI from {discovery_url}")
+            disc_resp = requests.get(discovery_url, timeout=10)
+            disc_resp.raise_for_status()
+            jwks_uri = disc_resp.json().get("jwks_uri")
+
+            if not jwks_uri:
+                raise ValueError(f"No jwks_uri in discovery document for {issuer_url}")
+
+            logger.debug(f"Fetching external JWKS from {jwks_uri}")
+            jwks_resp = requests.get(jwks_uri, timeout=10)
+            jwks_resp.raise_for_status()
+
+            jwks = jwks_resp.json()
+            self._external_jwks_cache[issuer_url] = jwks
+            self._external_jwks_cache_time[issuer_url] = current_time
+
+            logger.info(
+                f"Fetched and cached JWKS for external issuer {issuer_url} "
+                f"({len(jwks.get('keys', []))} keys)"
+            )
+            return jwks
+
+        except Exception as e:
+            logger.error(f"Failed to retrieve JWKS for external issuer {issuer_url}: {e}")
+            raise ValueError(f"Cannot retrieve external JWKS for {issuer_url}: {e}")
+
+    def _validate_external_token(
+        self, token: str, issuer_url: str, kid: str
+    ) -> dict[str, Any]:
+        """Validate a token from a specific external OIDC issuer.
+
+        External tokens have their groups extracted from a configurable claim
+        (EXTERNAL_GROUPS_CLAIM, default: "roles") and are mapped into the same
+        groups-based RBAC system used by Keycloak tokens.
+        """
+        from jwt import PyJWK
+
+        jwks = self._get_external_jwks(issuer_url)
+
+        signing_key = None
+        for key in jwks.get("keys", []):
+            if key.get("kid") == kid:
+                signing_key = PyJWK(key).key
+                break
+
+        if not signing_key:
+            raise ValueError(
+                f"No matching key for kid {kid} in external issuer {issuer_url}"
+            )
+
+        # Validate signature and standard claims (exp, iat) but skip audience
+        # check — external IdPs use their own audience values
+        claims = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
+            issuer=issuer_url,
+            options={
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_aud": False,
+            },
+        )
+
+        # Map configured claim → groups for RBAC
+        groups_value = claims.get(EXTERNAL_GROUPS_CLAIM, [])
+        if isinstance(groups_value, str):
+            groups = [groups_value]
+        elif isinstance(groups_value, list):
+            groups = [str(g) for g in groups_value]
+        else:
+            groups = []
+
+        # Also check standard "groups" claim as fallback
+        if not groups and EXTERNAL_GROUPS_CLAIM != "groups":
+            fallback = claims.get("groups", [])
+            if isinstance(fallback, str):
+                groups = [fallback]
+            elif isinstance(fallback, list):
+                groups = [str(g) for g in fallback]
+
+        logger.info(
+            f"External token validated: issuer={issuer_url}, "
+            f"sub={claims.get('sub')}, groups={groups}"
+        )
+
+        return {
+            "valid": True,
+            "username": claims.get("preferred_username", claims.get("sub")),
+            "email": claims.get("email"),
+            "groups": groups,
+            "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
+            "client_id": claims.get("azp", claims.get("aud", "external")),
+            "method": "external_issuer",
+            "data": claims,
+        }
+
+    def _validate_external_token_by_kid(
+        self, token: str, kid: str
+    ) -> dict[str, Any]:
+        """Try all configured external issuers to find one with a matching kid."""
+        last_error = None
+        for issuer_url in EXTERNAL_ISSUERS:
+            try:
+                return self._validate_external_token(token, issuer_url, kid)
+            except Exception as e:
+                logger.debug(
+                    f"External issuer {issuer_url} did not match kid {kid}: {e}"
+                )
+                last_error = e
+                continue
+
+        raise last_error or ValueError(
+            f"No matching key found for kid {kid} in any configured issuer"
+        )
 
     def get_jwks(self) -> dict[str, Any]:
         """Get JSON Web Key Set from Keycloak with caching."""

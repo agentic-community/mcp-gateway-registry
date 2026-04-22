@@ -804,3 +804,180 @@ class TestKeycloakProviderInfo:
         assert is_healthy is True
         mock_get.assert_called_once()
         assert "/health/ready" in mock_get.call_args[0][0]
+
+
+# =============================================================================
+# EXTERNAL ISSUER SUPPORT TESTS
+# =============================================================================
+
+
+class TestExternalIssuerSupport:
+    """Tests for external OIDC issuer validation (federation / cross-IdP trust)."""
+
+    def _make_provider(self):
+        """Create a KeycloakProvider for testing."""
+        from auth_server.providers.keycloak import KeycloakProvider
+
+        return KeycloakProvider(
+            keycloak_url="http://keycloak:8080",
+            realm="test-realm",
+            client_id="test-client",
+            client_secret="test-secret",
+        )
+
+    @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", [])
+    def test_no_external_issuers_configured(self):
+        """When EXTERNAL_ISSUERS is empty, external path is never tried."""
+        provider = self._make_provider()
+
+        # A token with an unknown kid should raise without trying external
+        with patch.object(provider, "get_jwks", return_value={"keys": []}):
+            with pytest.raises(ValueError, match="No matching key"):
+                provider.validate_token("fake.jwt.token")
+
+    @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", ["https://external-idp.example.com"])
+    @patch("requests.get")
+    def test_get_external_jwks_discovery(self, mock_get):
+        """Test OIDC discovery + JWKS fetch for external issuer."""
+        provider = self._make_provider()
+
+        # Mock discovery endpoint
+        discovery_response = MagicMock()
+        discovery_response.status_code = 200
+        discovery_response.json.return_value = {
+            "issuer": "https://external-idp.example.com",
+            "jwks_uri": "https://external-idp.example.com/jwks",
+        }
+
+        # Mock JWKS endpoint
+        jwks_response = MagicMock()
+        jwks_response.status_code = 200
+        jwks_response.json.return_value = {"keys": [{"kid": "ext-key-1", "kty": "RSA"}]}
+
+        mock_get.side_effect = [discovery_response, jwks_response]
+
+        jwks = provider._get_external_jwks("https://external-idp.example.com")
+
+        assert len(jwks["keys"]) == 1
+        assert jwks["keys"][0]["kid"] == "ext-key-1"
+
+    @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", ["https://external-idp.example.com"])
+    @patch("requests.get")
+    def test_external_jwks_caching(self, mock_get):
+        """Test that external JWKS responses are cached."""
+        provider = self._make_provider()
+
+        discovery_response = MagicMock()
+        discovery_response.status_code = 200
+        discovery_response.json.return_value = {
+            "jwks_uri": "https://external-idp.example.com/jwks",
+        }
+        jwks_response = MagicMock()
+        jwks_response.status_code = 200
+        jwks_response.json.return_value = {"keys": [{"kid": "k1", "kty": "RSA"}]}
+
+        mock_get.side_effect = [discovery_response, jwks_response]
+
+        # First call fetches
+        provider._get_external_jwks("https://external-idp.example.com")
+        # Second call uses cache
+        provider._get_external_jwks("https://external-idp.example.com")
+
+        # Only 2 HTTP calls (discovery + jwks), not 4
+        assert mock_get.call_count == 2
+
+    @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", ["https://external-idp.example.com"])
+    @patch("auth_server.providers.keycloak.EXTERNAL_GROUPS_CLAIM", "roles")
+    def test_validate_external_token_maps_roles_to_groups(self):
+        """Test that the configured claim (roles) is mapped to groups."""
+        import time as time_mod
+
+        provider = self._make_provider()
+
+        # Create a proper RSA key pair for signing
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.primitives import serialization
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_key = private_key.public_key()
+
+        # Create a test token
+        test_claims = {
+            "iss": "https://external-idp.example.com",
+            "sub": "ext-user-123",
+            "roles": ["Agent Editor", "Agent User"],
+            "email": "user@example.com",
+            "exp": int(time_mod.time()) + 3600,
+            "iat": int(time_mod.time()),
+        }
+        test_token = jwt.encode(
+            test_claims,
+            private_key,
+            algorithm="RS256",
+            headers={"kid": "test-kid"},
+        )
+
+        # Build JWKS from public key
+        from jwt import PyJWK
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        pub_numbers = public_key.public_numbers()
+
+        def _int_to_base64url(n, length=None):
+            import base64
+
+            b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+            return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+        jwks = {
+            "keys": [
+                {
+                    "kid": "test-kid",
+                    "kty": "RSA",
+                    "alg": "RS256",
+                    "use": "sig",
+                    "n": _int_to_base64url(pub_numbers.n),
+                    "e": _int_to_base64url(pub_numbers.e),
+                }
+            ]
+        }
+
+        # Patch external JWKS retrieval
+        with patch.object(provider, "_get_external_jwks", return_value=jwks):
+            result = provider._validate_external_token(
+                test_token, "https://external-idp.example.com", "test-kid"
+            )
+
+        assert result["valid"] is True
+        assert result["method"] == "external_issuer"
+        assert result["groups"] == ["Agent Editor", "Agent User"]
+        assert result["username"] == "ext-user-123"
+        assert result["email"] == "user@example.com"
+
+    @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", ["https://idp1.example.com", "https://idp2.example.com"])
+    def test_validate_external_token_by_kid_tries_all_issuers(self):
+        """Test that _validate_external_token_by_kid iterates all issuers."""
+        provider = self._make_provider()
+
+        expected_result = {"valid": True, "method": "external_issuer", "groups": []}
+
+        def side_effect(token, issuer, kid):
+            if issuer == "https://idp2.example.com":
+                return expected_result
+            raise ValueError("wrong issuer")
+
+        with patch.object(provider, "_validate_external_token", side_effect=side_effect):
+            result = provider._validate_external_token_by_kid("test-token", "some-kid")
+
+        assert result == expected_result
+
+    @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", ["https://idp1.example.com"])
+    def test_validate_external_token_by_kid_raises_if_none_match(self):
+        """Test error when no external issuer has the kid."""
+        provider = self._make_provider()
+
+        with patch.object(
+            provider, "_validate_external_token", side_effect=ValueError("no key")
+        ):
+            with pytest.raises(ValueError):
+                provider._validate_external_token_by_kid("test-token", "bad-kid")
