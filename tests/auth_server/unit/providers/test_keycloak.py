@@ -832,7 +832,7 @@ class TestExternalIssuerSupport:
 
         # A token with an unknown kid should raise without trying external
         with patch.object(provider, "get_jwks", return_value={"keys": []}):
-            with pytest.raises(ValueError, match="No matching key"):
+            with pytest.raises(ValueError, match="Invalid token"):
                 provider.validate_token("fake.jwt.token")
 
     @patch("auth_server.providers.keycloak.EXTERNAL_ISSUERS", ["https://external-idp.example.com"])
