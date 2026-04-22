@@ -12,8 +12,8 @@ from fastapi.responses import PlainTextResponse
 
 from ..auth.dependencies import enhanced_auth
 from ..core.config import DeploymentMode, RegistryMode, settings
-from ..schemas.registry_card import LifecycleStatus
 from ..core.metrics import CONFIG_EXPORT_REQUESTS, CONFIG_VIEW_REQUESTS
+from ..schemas.registry_card import LifecycleStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -74,6 +74,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("oauth_store_tokens_in_session", "Store OAuth IdP Tokens in Session Cookie", False),
             ("registry_static_token_auth_enabled", "Static Token Auth Enabled", False),
             ("registry_api_token", "Registry API Token", True),
+            ("registry_api_keys", "Registry API Keys", True),
             ("max_tokens_per_user_per_hour", "JWT Token Vending Rate Limit (per user/hour)", False),
             ("m2m_direct_registration_enabled", "M2M Direct Registration Enabled", False),
             ("secret_key", "Secret Key", True),

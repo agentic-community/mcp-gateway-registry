@@ -124,6 +124,7 @@ services:
       - OAUTH_STORE_TOKENS_IN_SESSION=${OAUTH_STORE_TOKENS_IN_SESSION:-false}
       - REGISTRY_STATIC_TOKEN_AUTH_ENABLED=${REGISTRY_STATIC_TOKEN_AUTH_ENABLED:-false}
       - REGISTRY_API_TOKEN=${REGISTRY_API_TOKEN:-}
+      - REGISTRY_API_KEYS=${REGISTRY_API_KEYS:-}
       - MAX_TOKENS_PER_USER_PER_HOUR=${MAX_TOKENS_PER_USER_PER_HOUR:-100}
       # Telemetry Configuration
       # Disable all:       set MCP_TELEMETRY_DISABLED=1  to disable all telemetry (startup ping + heartbeat)
@@ -257,6 +258,10 @@ services:
       - DOCUMENTDB_USE_IAM=${DOCUMENTDB_USE_IAM:-false}
       - DOCUMENTDB_REPLICA_SET=${DOCUMENTDB_REPLICA_SET:-rs0}
       - DOCUMENTDB_READ_PREFERENCE=${DOCUMENTDB_READ_PREFERENCE:-secondaryPreferred}
+      # Registry API static token auth
+      - REGISTRY_STATIC_TOKEN_AUTH_ENABLED=${REGISTRY_STATIC_TOKEN_AUTH_ENABLED:-false}
+      - REGISTRY_API_TOKEN=${REGISTRY_API_TOKEN:-}
+      - REGISTRY_API_KEYS=${REGISTRY_API_KEYS:-}
       # OAuth token storage in session (set to false for Entra ID large tokens)
       - OAUTH_STORE_TOKENS_IN_SESSION=${OAUTH_STORE_TOKENS_IN_SESSION:-false}
     ports:

@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     oauth_store_tokens_in_session: bool = False  # Store OAuth tokens in session cookies
     registry_static_token_auth_enabled: bool = False  # Enable static token auth (IdP-independent)
     registry_api_token: str = ""  # Static API token for registry access
+    registry_api_keys: str = ""  # Multi-key static tokens JSON (Issue #779)
     max_tokens_per_user_per_hour: int = 100  # JWT token vending rate limit
 
     # Embeddings settings [Default]
@@ -351,7 +352,9 @@ class Settings(BaseSettings):
 
     # Tab visibility overrides (AND-ed with REGISTRY_MODE feature flags)
     show_servers_tab: bool = Field(default=True, description="Show MCP Servers tab in UI")
-    show_virtual_servers_tab: bool = Field(default=True, description="Show Virtual MCP Servers tab in UI")
+    show_virtual_servers_tab: bool = Field(
+        default=True, description="Show Virtual MCP Servers tab in UI"
+    )
     show_skills_tab: bool = Field(default=True, description="Show Skills tab in UI")
     show_agents_tab: bool = Field(default=True, description="Show Agents tab in UI")
 
@@ -677,7 +680,8 @@ def log_tab_visibility_warnings(s: Settings) -> None:
             logger.warning(
                 "%s is true but REGISTRY_MODE=%s does not enable this feature; "
                 "the tab will remain hidden.",
-                param_name, mode.value,
+                param_name,
+                mode.value,
             )
 
 

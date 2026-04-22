@@ -2337,6 +2337,10 @@ async def reload_scopes(request: Request, authorization: str | None = Header(Non
         SCOPES_CONFIG = await reload_scopes_config()
         logger.info(f"Successfully reloaded scopes configuration by '{caller_identity}'")
 
+        # Rebuild static token map so per-key scopes pick up any
+        # group-to-scope mapping changes that triggered this reload.
+        await _build_static_token_map()
+
         return JSONResponse(
             status_code=200,
             content={
