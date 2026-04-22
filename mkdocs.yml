@@ -104,6 +104,7 @@ nav:
     - FAQ: faq/index.md
   - Authentication & Security:
     - Authentication Guide: auth.md
+    - Registry API Authentication: registry-api-auth.md
     - IAM Settings UI: iam-settings-ui.md
     - Amazon Cognito Setup: cognito.md
     - Access Control & Scopes: scopes.md
