@@ -31,3 +31,4 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I register and manage MCP servers that require authentication?](registering-auth-protected-servers.md)
 - [Can I use an Entra ID token to call the registry API instead of the UI-generated token?](use-entra-token-for-registry-api.md)
 - [How do I register an M2M client and assign it groups without an IdP Admin API token?](registering-m2m-client-without-idp-admin-token.md)
+- [Registry API Authentication FAQ (static token, IdP JWT, coexistence)](registry-api-auth-faq.md)

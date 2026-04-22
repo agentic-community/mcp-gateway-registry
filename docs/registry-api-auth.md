@@ -260,27 +260,10 @@ The current values appear on the **Settings → Authentication** page in the web
 
 ## FAQ
 
-**Q. Can I use an IdP token and the static token on the same deployment?**
-Yes, as of #871. The static token is accepted as an *additional* credential, not an exclusive one.
-
-**Q. Do I need to seed MongoDB with `mcp-servers-unrestricted/*` scope docs for the static token to work?**
-No. The registry hard-codes admin access when `X-Auth-Method == "network-trusted"`; it does not query MongoDB for these scope names.
-
-**Q. Can I give a static token only read access?**
-Not with today's single-token model. #779 will fix this by letting each key declare its own groups, which then flow through normal group→scope resolution.
-
-**Q. Why does the static token not work on `/<server>/tools/list`?**
-By design. The static token is only accepted on Registry API paths (`/api/*`, `/v0.1/*`). MCP gateway tool invocations always require full IdP auth — treat this boundary as deliberate, not a bug.
-
-**Q. What status code does a fully invalid bearer get?**
-Since #871, **401** from the JWT block ("Missing or invalid Authorization header..."). Before #871 it was 403 "Invalid API token" from the static-token block. No caller with a valid credential is affected by this change.
-
-**Q. Is my UI-issued JWT usable against `/api/*`?**
-Yes, since #871. Before the fix, self-signed tokens worked only when static-token mode was off.
+See the dedicated FAQ page: [Registry API Authentication FAQ](faq/registry-api-auth-faq.md).
 
 ## References
 
-- Design docs for #871: [`.scratchpad/issue-871/`](../.scratchpad/issue-871/)
 - Issue #871: [feat: allow JWT/session auth to coexist with static token auth](https://github.com/agentic-community/mcp-gateway-registry/issues/871)
 - Issue #779: [feat: Support multiple static API keys with per-key group/scope assignments](https://github.com/agentic-community/mcp-gateway-registry/issues/779)
 - Issue #826: [feat: Support External User Access Tokens (Service-to-Service on Behalf of Users)](https://github.com/agentic-community/mcp-gateway-registry/issues/826)
