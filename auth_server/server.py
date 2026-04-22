@@ -9,6 +9,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 
 # Import shared scopes loader and repository factory from registry common module
@@ -39,7 +40,11 @@ from metrics_middleware import add_auth_metrics_middleware
 
 # Import provider factory
 from providers.factory import get_auth_provider
-from pydantic import BaseModel
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+)
 
 sys.path.insert(0, "/app")
 # Import MCP audit logging components
@@ -91,18 +96,194 @@ OAUTH_STORE_TOKENS_IN_SESSION: bool = (
     os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "false").lower() == "true"
 )
 
-logging.info(f"OAUTH_STORE_TOKENS_IN_SESSION={'enabled' if OAUTH_STORE_TOKENS_IN_SESSION else 'disabled'}")
+logging.info(
+    f"OAUTH_STORE_TOKENS_IN_SESSION={'enabled' if OAUTH_STORE_TOKENS_IN_SESSION else 'disabled'}"
+)
 
-# Validate configuration: static token auth requires REGISTRY_API_TOKEN to be set
-if _registry_static_token_requested and not REGISTRY_API_TOKEN:
+# Issue #779: multiple static API keys with per-key groups.
+_REGISTRY_API_KEYS_RAW: str = os.environ.get("REGISTRY_API_KEYS", "").strip()
+
+# Validate configuration: static token auth requires at least one token source
+if _registry_static_token_requested and not REGISTRY_API_TOKEN and not _REGISTRY_API_KEYS_RAW:
     logging.error(
-        "REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true but REGISTRY_API_TOKEN is not set. "
-        "Static token auth is DISABLED. Set REGISTRY_API_TOKEN or disable the feature. "
+        "REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true but neither REGISTRY_API_TOKEN "
+        "nor REGISTRY_API_KEYS is set. Static token auth is DISABLED. "
+        "Set at least one of these or disable the feature. "
         "Falling back to standard IdP JWT validation."
     )
     REGISTRY_STATIC_TOKEN_AUTH_ENABLED: bool = False
 else:
     REGISTRY_STATIC_TOKEN_AUTH_ENABLED: bool = _registry_static_token_requested
+
+
+# ---------------------------------------------------------------------------
+# Multi-key static token config model and parser (Issue #779)
+# ---------------------------------------------------------------------------
+
+_KEY_NAME_PATTERN: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+_RESERVED_KEY_NAMES: frozenset = frozenset(
+    {
+        "legacy",
+        "network-user",
+        "network-trusted",
+    }
+)
+
+_STATIC_TOKEN_MAP: dict[str, dict] = {}
+
+
+class _RegistryApiKeyEntry(BaseModel):
+    """Config entry parsed from REGISTRY_API_KEYS."""
+
+    name: str = Field(
+        ...,
+        description="Key name (log-safe identifier)",
+    )
+    key: str = Field(
+        ...,
+        min_length=32,
+        description=(
+            "The Bearer token value. Minimum 32 chars matches the default "
+            "output of python3 -c 'import secrets; print(secrets.token_urlsafe(32))'."
+        ),
+    )
+    groups: list[str] = Field(
+        ...,
+        min_length=1,
+        description="Groups this key is mapped to",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(
+        cls,
+        v: str,
+    ) -> str:
+        if not _KEY_NAME_PATTERN.match(v):
+            raise ValueError(f"Invalid key name '{v}': must match ^[a-z0-9][a-z0-9_-]{{0,63}}$")
+        if v in _RESERVED_KEY_NAMES:
+            raise ValueError(
+                f"Key name '{v}' is reserved (legacy/internal). Pick a different name."
+            )
+        return v
+
+
+def _parse_registry_api_keys(
+    raw: str,
+) -> list[_RegistryApiKeyEntry]:
+    """Parse REGISTRY_API_KEYS env var into validated entries.
+
+    Returns:
+        List of entries. Empty list if raw is empty.
+
+    Raises:
+        ValueError: on malformed JSON, duplicate name, duplicate key value,
+            reserved name, or validation failure on any entry.
+    """
+    if not raw:
+        return []
+
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"REGISTRY_API_KEYS is not valid JSON: {e}") from e
+
+    if not isinstance(doc, dict):
+        raise ValueError("REGISTRY_API_KEYS must be a JSON object")
+
+    entries: list[_RegistryApiKeyEntry] = []
+    seen_names: set[str] = set()
+    seen_keys: set[str] = set()
+
+    for name, value in doc.items():
+        if name in seen_names:
+            raise ValueError(f"Duplicate key name in REGISTRY_API_KEYS: {name}")
+
+        if not isinstance(value, dict):
+            raise ValueError(f"Entry for '{name}' must be an object")
+
+        try:
+            entry = _RegistryApiKeyEntry(name=name, **value)
+        except Exception as e:
+            raise ValueError(f"Invalid entry '{name}': {e}") from e
+
+        if entry.key in seen_keys:
+            raise ValueError(f"Duplicate key value across entries (conflicts around name '{name}')")
+
+        seen_names.add(entry.name)
+        seen_keys.add(entry.key)
+        entries.append(entry)
+
+    return entries
+
+
+async def _build_static_token_map() -> None:
+    """Build _STATIC_TOKEN_MAP from env config. Fail-closed on any error."""
+    global REGISTRY_STATIC_TOKEN_AUTH_ENABLED, _STATIC_TOKEN_MAP
+
+    if not REGISTRY_STATIC_TOKEN_AUTH_ENABLED:
+        return
+
+    token_map: dict[str, dict] = {}
+
+    try:
+        parsed = _parse_registry_api_keys(_REGISTRY_API_KEYS_RAW)
+    except ValueError as e:
+        logging.error(
+            "Failed to parse REGISTRY_API_KEYS: %s. Static-token auth DISABLED.",
+            e,
+        )
+        REGISTRY_STATIC_TOKEN_AUTH_ENABLED = False
+        return
+
+    for entry in parsed:
+        scopes = await map_groups_to_scopes(entry.groups)
+        if not scopes:
+            logging.warning(
+                "Static key '%s' has no scope mappings for groups %s. "
+                "Requests using this key will get 403 on all protected endpoints.",
+                entry.name,
+                entry.groups,
+            )
+        token_map[entry.name] = {
+            "key_bytes": entry.key.encode("utf-8"),
+            "groups": list(entry.groups),
+            "scopes": scopes,
+        }
+
+    if REGISTRY_API_TOKEN:
+        # Legacy entry uses the well-known admin scopes directly to avoid a DB
+        # roundtrip. The list must include the UI scope name "mcp-registry-admin"
+        # so the registry resolves admin UI permissions through the standard path
+        # (the hard-coded admin branch was removed in #779).
+        token_map["legacy"] = {
+            "key_bytes": REGISTRY_API_TOKEN.encode("utf-8"),
+            "groups": ["mcp-registry-admin"],
+            "scopes": [
+                "mcp-registry-admin",
+                "mcp-servers-unrestricted/read",
+                "mcp-servers-unrestricted/execute",
+            ],
+            "username_override": "network-user",
+            "client_id_override": "network-trusted",
+        }
+
+    _STATIC_TOKEN_MAP = token_map
+
+    if not _STATIC_TOKEN_MAP:
+        logging.warning(
+            "Static-token auth ENABLED but no keys loaded. "
+            "Check REGISTRY_API_TOKEN / REGISTRY_API_KEYS. "
+            "All bearer tokens will fall through to JWT validation."
+        )
+    else:
+        logging.info(
+            "Static-token auth: loaded %d key(s): %s",
+            len(_STATIC_TOKEN_MAP),
+            sorted(_STATIC_TOKEN_MAP.keys()),
+        )
+
 
 # Get ROOT_PATH for path-based routing (auth server's own path, e.g. /auth-server)
 ROOT_PATH = os.environ.get("ROOT_PATH", "").rstrip("/")
@@ -690,6 +871,10 @@ async def lifespan(app: FastAPI):
         # Fall back to empty config
         SCOPES_CONFIG = {"group_mappings": {}}
 
+    # Build multi-key static token map (Issue #779).
+    # Runs after scopes are loaded so map_groups_to_scopes can resolve groups.
+    await _build_static_token_map()
+
     yield
 
     # Shutdown: Add cleanup code here if needed in the future
@@ -1148,38 +1333,44 @@ def _is_registry_api_request(
 def _check_registry_static_token(
     bearer_token: str,
 ) -> dict | None:
-    """Return the network-trusted identity payload if the bearer matches
-    the configured static token, else None.
+    """Return the identity payload if the bearer matches a configured static
+    key, else None.
 
-    This is the single place that decides "does this bearer map to an
-    admitted static-token identity?" and what that identity looks like.
-    Future extension (#779) replaces the body with a map lookup over
-    multiple keys without touching the /validate caller.
+    Each pair-wise comparison uses hmac.compare_digest so individual
+    comparisons are constant-time. We iterate all configured entries without
+    early return as belt-and-braces so total comparison time is independent
+    of which entry (if any) matched. With small N this matters less than the
+    per-comparison guarantee, but costs almost nothing.
 
-    Args:
-        bearer_token: The raw bearer value extracted from the Authorization
-            header (already stripped of the "Bearer " prefix).
+    For the legacy REGISTRY_API_TOKEN entry (map key "legacy"), the returned
+    username and client_id are overridden to "network-user" /
+    "network-trusted" to preserve back-compat with pre-#779 audit log
+    consumers.
 
-    Returns:
-        Identity payload dict for a successful match, or None if no match.
-
-    Invariant:
-        When this helper is called, REGISTRY_API_TOKEN is guaranteed non-empty
-        because the /validate caller only reaches here after checking
-        REGISTRY_STATIC_TOKEN_AUTH_ENABLED, and the module-level guard at
-        lines ~96-105 disables that flag if REGISTRY_API_TOKEN is empty.
+    See issue #779.
     """
-    if hmac.compare_digest(bearer_token, REGISTRY_API_TOKEN):
-        return {
-            "username": "network-user",
-            "client_id": "network-trusted",
-            "groups": ["mcp-registry-admin"],
-            "scopes": [
-                "mcp-servers-unrestricted/read",
-                "mcp-servers-unrestricted/execute",
-            ],
-        }
-    return None
+    bearer_bytes = bearer_token.encode("utf-8")
+    matched_entry: dict | None = None
+    matched_name: str | None = None
+
+    for name, entry in _STATIC_TOKEN_MAP.items():
+        if hmac.compare_digest(bearer_bytes, entry["key_bytes"]):
+            if matched_entry is None:
+                matched_entry = entry
+                matched_name = name
+
+    if matched_entry is None:
+        return None
+
+    username = matched_entry.get("username_override", matched_name)
+    client_id = matched_entry.get("client_id_override", matched_name)
+
+    return {
+        "username": username,
+        "client_id": client_id,
+        "groups": list(matched_entry["groups"]),
+        "scopes": list(matched_entry["scopes"]),
+    }
 
 
 def _is_federation_api_request(
@@ -1418,8 +1609,9 @@ async def validate_request(request: Request):
                 identity = _check_registry_static_token(bearer_token)
                 if identity is not None:
                     logger.info(
-                        f"Network-trusted mode: Bypassing auth validation for "
-                        f"registry API request to {original_url}"
+                        "Network-trusted mode: key='%s' for %s",
+                        identity["username"],
+                        original_url,
                     )
 
                     response_data = {
@@ -1447,9 +1639,7 @@ async def validate_request(request: Request):
                 # Bearer present but does not match any static token. Fall
                 # through to JWT validation below (Okta RS256 / self-signed
                 # HS256). Intentionally does NOT log any portion of the bearer.
-                logger.debug(
-                    "Static token mismatch; falling through to JWT validation"
-                )
+                logger.debug("Static token mismatch; falling through to JWT validation")
             else:
                 # No Authorization header or non-Bearer scheme. Fall through to
                 # session/JWT validation, which returns 401 if nothing matches.
@@ -2809,9 +2999,7 @@ async def oauth2_callback(
                 # Redirect is within the deployment's cookie domain
                 redirect_is_safe = True
         if not redirect_is_safe:
-            logger.warning(
-                f"Blocked unsafe redirect URL: {redirect_url}, falling back to /"
-            )
+            logger.warning(f"Blocked unsafe redirect URL: {redirect_url}, falling back to /")
             redirect_url = "/"
         response = RedirectResponse(url=redirect_url, status_code=302)
 

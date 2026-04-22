@@ -1325,23 +1325,29 @@ class TestNetworkTrustedAuthMethod:
     """Tests for network-trusted auth method in nginx_proxied_auth (issue #357)."""
 
     @pytest.mark.asyncio
-    async def test_network_trusted_with_admin_scopes_gets_admin_group(
+    async def test_network_trusted_with_admin_scopes_gets_admin(
         self, mock_scopes_config: dict[str, Any]
     ):
-        """Test network-trusted auth method with admin scopes gets admin group."""
+        """Test network-trusted auth method with admin scopes resolves to admin.
+
+        After issue #779, network-trusted goes through the standard resolution
+        path (hard-coded admin branch removed). The auth server now returns the
+        full scope set including UI scope names (e.g. mcp-registry-admin) so
+        the registry can derive admin status via _user_is_admin.
+        """
         # Arrange
         mock_request = Mock(spec=Request)
         mock_request.url.path = "/api/servers"
         mock_request.method = "GET"
         mock_request.headers = {}
 
-        # Act
+        # Act: scopes now include the UI scope name for admin resolution
         context = await nginx_proxied_auth(
             request=mock_request,
             session=None,
             x_user="network-user",
             x_username="network-user",
-            x_scopes="mcp-servers-unrestricted/read mcp-servers-unrestricted/execute",
+            x_scopes="mcp-registry-admin mcp-servers-unrestricted/read mcp-servers-unrestricted/execute",
             x_auth_method="network-trusted",
         )
 
@@ -1351,6 +1357,32 @@ class TestNetworkTrustedAuthMethod:
         assert "mcp-registry-admin" in context["groups"]
         assert "mcp-servers-unrestricted/read" in context["scopes"]
         assert "mcp-servers-unrestricted/execute" in context["scopes"]
+        assert context["is_admin"] is True
+
+    @pytest.mark.asyncio
+    async def test_network_trusted_readonly_scopes_not_admin(
+        self, mock_scopes_config: dict[str, Any]
+    ):
+        """Test network-trusted with read-only scopes does NOT get admin (issue #779)."""
+        # Arrange
+        mock_request = Mock(spec=Request)
+        mock_request.url.path = "/api/servers"
+        mock_request.method = "GET"
+        mock_request.headers = {}
+
+        # Act: read-only scopes only
+        context = await nginx_proxied_auth(
+            request=mock_request,
+            session=None,
+            x_user="monitoring-script",
+            x_username="monitoring-script",
+            x_scopes="registry-users-lob1",
+            x_auth_method="network-trusted",
+        )
+
+        # Assert
+        assert context["username"] == "monitoring-script"
+        assert context["is_admin"] is False
 
 
 # =============================================================================
@@ -1370,18 +1402,21 @@ class TestUserIsAdmin:
     See GitHub issue #663.
     """
 
-    @pytest.mark.parametrize("action", [
-        "register_service",
-        "modify_service",
-        "toggle_service",
-        "delete_service",
-        "publish_agent",
-        "modify_agent",
-        "delete_agent",
-        "create_virtual_server",
-        "modify_virtual_server",
-        "delete_virtual_server",
-    ])
+    @pytest.mark.parametrize(
+        "action",
+        [
+            "register_service",
+            "modify_service",
+            "toggle_service",
+            "delete_service",
+            "publish_agent",
+            "modify_agent",
+            "delete_agent",
+            "create_virtual_server",
+            "modify_virtual_server",
+            "delete_virtual_server",
+        ],
+    )
     def test_admin_with_mutating_action_all(self, action: str):
         """User with any mutating action for [all] is admin."""
         # Arrange
@@ -1477,13 +1512,16 @@ class TestUserIsAdmin:
         # Assert
         assert result is False
 
-    @pytest.mark.parametrize("action", [
-        "list_service",
-        "get_agent",
-        "health_check_service",
-        "list_agents",
-        "list_virtual_server",
-    ])
+    @pytest.mark.parametrize(
+        "action",
+        [
+            "list_service",
+            "get_agent",
+            "health_check_service",
+            "list_agents",
+            "list_virtual_server",
+        ],
+    )
     def test_read_only_actions_never_grant_admin(self, action: str):
         """Read-only actions with 'all' do not grant admin status."""
         # Arrange

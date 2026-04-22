@@ -10,11 +10,19 @@ Before #871, turning on static-token mode silently broke every non-static-token 
 
 ## Do I need to seed MongoDB with `mcp-servers-unrestricted/*` scope docs for the static token to work?
 
-No. The registry **hard-codes** full admin access when the auth server sets `X-Auth-Method == "network-trusted"` (see [registry/auth/dependencies.py:620-637](../../registry/auth/dependencies.py)). It does not look up `mcp-servers-unrestricted/read` or `mcp-servers-unrestricted/execute` in Mongo on the static-token path. The scopes returned in the `/validate` response on that path are informational (they appear in audit logs) but are not used for authorization decisions at the registry layer.
+**After #779:** Yes, the standard scope-resolution path is used for all static-token keys (including the legacy `REGISTRY_API_TOKEN`). The auth server resolves each key's groups to scopes via `group_mappings` in MongoDB. If the group-to-scope mappings are missing, the key will authenticate but carry an empty scope set, which means the registry will treat it as a non-admin caller.
+
+**Before #779:** No. The registry hard-coded full admin access when the auth server set `X-Auth-Method == "network-trusted"`. Scopes returned in the `/validate` response were informational only.
 
 ## Can I give a static token read-only access?
 
-Not with today's single-token model — anyone holding `REGISTRY_API_TOKEN` is effectively a full registry admin. This is tracked in [issue #779](https://github.com/agentic-community/mcp-gateway-registry/issues/779), which proposes replacing the single token with a map of keys, each with its own set of groups that flow through normal `group_mappings` → scopes resolution. Until #779 ships, use per-user IdP tokens with narrow scopes (or a session cookie) for read-only automation.
+Yes, since [#779](https://github.com/agentic-community/mcp-gateway-registry/issues/779). Define a key in `REGISTRY_API_KEYS` whose `groups` list maps to read-only scopes (e.g., `mcp-servers-unrestricted/read`). The key will authenticate successfully but will not carry mutating scopes, so the registry treats it as a non-admin caller.
+
+```json
+[{"name": "ci-readonly", "key": "<64-char-hex>", "groups": ["mcp-readonly"]}]
+```
+
+Make sure the group `mcp-readonly` is mapped to the desired read-only scopes in your `group_mappings` collection.
 
 ## Why does the static token not work on `/<server>/tools/list`?
 
@@ -34,14 +42,20 @@ No caller with a valid credential is affected by this change. The status-code sh
 
 Yes, since #871. Before the fix, the **Get JWT Token** sidebar in the UI produced valid HS256 JWTs that were nonetheless rejected on `/api/*` when static-token mode was on. After #871 they flow through the same `_validate_self_signed_token` path as any other UI-issued token, regardless of whether static-token mode is on.
 
-## How do I rotate `REGISTRY_API_TOKEN` without downtime?
+## How do I rotate a static token without downtime?
 
-Not possible today — there is a cutover window during which old clients are rejected while new clients have yet to pick up the new value. Mitigations:
+**With `REGISTRY_API_KEYS` (recommended):** Zero-downtime rotation is straightforward:
+
+1. Add a new key entry to the JSON array (the old key stays).
+2. Deploy the updated config. Both keys are now valid.
+3. Migrate clients to the new key at your own pace.
+4. Remove the old key entry and redeploy.
+
+**With legacy `REGISTRY_API_TOKEN` only:** There is still a cutover window during which old clients are rejected while new clients have yet to pick up the new value. Mitigations:
 
 - Roll out the new token value to clients first, then flip the server value.
 - Or accept a brief 401/403 window and notify callers.
-
-The clean fix is [#779](https://github.com/agentic-community/mcp-gateway-registry/issues/779) — multiple keys can coexist, so rotation becomes: add new key, move clients over, remove old key.
+- Or migrate to `REGISTRY_API_KEYS` for zero-downtime rotation.
 
 ## Where do I see the current values in the UI?
 
@@ -60,7 +74,7 @@ The field registry is defined in [registry/api/config_routes.py](../../registry/
 Three improvements, landing in order on top of each other:
 
 1. **[#871](https://github.com/agentic-community/mcp-gateway-registry/issues/871) — coexistence** (shipped): static token and JWT auth work together on `/api/*`.
-2. **[#779](https://github.com/agentic-community/mcp-gateway-registry/issues/779) — multi-key static tokens**: replaces the single `REGISTRY_API_TOKEN` with a `REGISTRY_API_KEYS` map, each key carrying its own groups. Lets operators give scripts the minimum privilege they need.
+2. **[#779](https://github.com/agentic-community/mcp-gateway-registry/issues/779) — multi-key static tokens** (shipped): replaces the single `REGISTRY_API_TOKEN` with a `REGISTRY_API_KEYS` JSON array, each key carrying its own groups. Lets operators give scripts the minimum privilege they need. Zero-downtime rotation is built in.
 3. **[#826](https://github.com/agentic-community/mcp-gateway-registry/issues/826) — external user access tokens**: lets a frontend application that has its own IdP integration call the Registry API on behalf of a logged-in user, either via `/userinfo` group enrichment (Solution A) or a new token-exchange endpoint (Solution B).
 
 See the [full design in Registry API Authentication](../registry-api-auth.md#roadmap-near-term-improvements).

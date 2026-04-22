@@ -9,16 +9,17 @@ This page is the single source of truth for how callers authenticate against the
 1. [The big picture](#the-big-picture)
 2. [Accepted credentials today](#accepted-credentials-today)
 3. [Static API token (`REGISTRY_API_TOKEN`)](#static-api-token-registry_api_token)
-4. [Session cookie (browser UI)](#session-cookie-browser-ui)
-5. [IdP-issued JWT (Okta / Entra / Cognito / Keycloak)](#idp-issued-jwt)
-6. [UI-issued self-signed JWT](#ui-issued-self-signed-jwt)
-7. [Coexistence rules (who wins when)](#coexistence-rules)
-8. [Roadmap: near-term improvements](#roadmap-near-term-improvements)
-   - [#779 — multiple static API keys with per-key groups](#779--multi-key-static-tokens)
-   - [#826 — external user access tokens (service-on-behalf-of-user)](#826--external-user-access-tokens)
-9. [Common operator tasks](#common-operator-tasks)
-10. [FAQ](#faq)
-11. [References](#references)
+4. [Multi-key static tokens (`REGISTRY_API_KEYS`)](#multi-key-static-tokens-registry_api_keys)
+5. [Session cookie (browser UI)](#session-cookie-browser-ui)
+6. [IdP-issued JWT (Okta / Entra / Cognito / Keycloak)](#idp-issued-jwt)
+7. [UI-issued self-signed JWT](#ui-issued-self-signed-jwt)
+8. [Coexistence rules (who wins when)](#coexistence-rules)
+9. [Threat model for static tokens](#threat-model-for-static-tokens)
+10. [Roadmap: near-term improvements](#roadmap-near-term-improvements)
+    - [#826 — external user access tokens (service-on-behalf-of-user)](#826--external-user-access-tokens)
+11. [Common operator tasks](#common-operator-tasks)
+12. [FAQ](#faq)
+13. [References](#references)
 
 ## The big picture
 
@@ -51,7 +52,7 @@ On a Registry API path the auth server checks credentials in this order (as of [
 |---|---|---|---|---|
 | 1 | Session cookie (`mcp_gateway_session=...`) | Always | `oauth2` / IdP-specific | UI browser flow. Short-circuits everything else. |
 | 2 | Federation static token | `FEDERATION_STATIC_TOKEN_AUTH_ENABLED=true` and the request path is `/api/federation/*` or `/api/peers/*` | `federation-static` | Peer-to-peer federation only. Narrow scope. |
-| 3 | Registry static token (`REGISTRY_API_TOKEN`) | `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true` | `network-trusted` | See the section below. |
+| 3 | Registry static token(s) (`REGISTRY_API_TOKEN` and/or `REGISTRY_API_KEYS`) | `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true` | `network-trusted` | Single legacy key or multiple per-key scoped keys. See sections below. |
 | 4 | IdP-issued JWT (Okta RS256, Entra, Cognito, Keycloak) | Always | `oauth2` (or IdP-specific) | Full per-user identity with groups from the ID token at login time. |
 | 5 | UI-issued self-signed JWT (HS256) | Always | `self-signed` | Tokens minted by the **Get JWT Token** sidebar button or `POST /api/tokens/generate`. |
 | — | No credential | — | — | 401 returned. |
@@ -60,16 +61,16 @@ On a Registry API path the auth server checks credentials in this order (as of [
 
 ## Static API token (`REGISTRY_API_TOKEN`)
 
-A single shared secret, validated with `hmac.compare_digest` and mapped to a hard-coded "network-trusted" identity.
+A single shared secret (the "legacy" key), validated with `hmac.compare_digest` and mapped to a full-admin identity. This is the simplest setup and is backwards-compatible with all previous releases.
 
 ### Configuration
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `REGISTRY_STATIC_TOKEN_AUTH_ENABLED` | bool | `false` | When `true`, the static token is accepted on Registry API paths. |
-| `REGISTRY_API_TOKEN` | str | empty | The shared secret. Must be non-empty for the flag to take effect. |
+| `REGISTRY_STATIC_TOKEN_AUTH_ENABLED` | bool | `false` | When `true`, static tokens are accepted on Registry API paths. |
+| `REGISTRY_API_TOKEN` | str | empty | The shared secret. At least one of `REGISTRY_API_TOKEN` or `REGISTRY_API_KEYS` must be set for the flag to take effect. |
 
-If `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true` but `REGISTRY_API_TOKEN` is empty, the auth server logs an error and **silently disables** the feature at startup.
+If `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true` but neither `REGISTRY_API_TOKEN` nor `REGISTRY_API_KEYS` is set, the auth server logs an error and disables the feature at startup.
 
 ### Generate a token
 
@@ -119,9 +120,9 @@ uv run python api/registry_management.py \
   list
 ```
 
-### Identity granted by the static token
+### Identity granted by the legacy static token
 
-When the static token matches, the auth server returns:
+When `REGISTRY_API_TOKEN` matches, the auth server returns the legacy admin identity:
 
 ```json
 {
@@ -130,22 +131,85 @@ When the static token matches, the auth server returns:
   "client_id": "network-trusted",
   "method": "network-trusted",
   "groups": ["mcp-registry-admin"],
-  "scopes": [
-    "mcp-servers-unrestricted/read",
-    "mcp-servers-unrestricted/execute"
-  ]
+  "scopes": ["mcp-registry-admin", "mcp-servers-unrestricted/read", "mcp-servers-unrestricted/execute"]
 }
 ```
 
-Downstream the registry **hard-codes full admin access** whenever `X-Auth-Method == "network-trusted"` ([registry/auth/dependencies.py:620-637](../registry/auth/dependencies.py)) — it does **not** look up the `mcp-servers-unrestricted/*` scopes in MongoDB. So:
+The `mcp-registry-admin` scope (a UI scope name) ensures the registry resolves this caller as a full admin through the standard permissions path. Anyone holding `REGISTRY_API_TOKEN` is effectively a registry admin. Protect the secret accordingly.
 
-- You do **not** need to seed scope documents for `mcp-servers-unrestricted/*` for this to work.
-- Anyone holding `REGISTRY_API_TOKEN` is effectively a registry admin. Protect the secret accordingly.
+### Where static tokens do NOT work
 
-### Where the static token does NOT work
-
-- **MCP gateway paths** (`/<server>/tools/list` etc.) always require IdP auth. The static token is ignored there.
+- **MCP gateway paths** (`/<server>/tools/list` etc.) always require IdP auth. Static tokens are ignored there.
 - **Paths outside `/api/*` and `/v0.1/*`** (e.g. health endpoints, audit endpoints behind other prefixes) follow their own rules.
+
+## Multi-key static tokens (`REGISTRY_API_KEYS`)
+
+*Added in [issue #779](https://github.com/agentic-community/mcp-gateway-registry/issues/779).*
+
+Multiple static API keys, each with its own name and groups. Each key's groups flow through the standard `group_mappings` to scopes resolution, so a read-only key gets read-only permissions and an admin key gets admin permissions.
+
+### Configuration
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
+| `REGISTRY_API_KEYS` | JSON string | empty | Map of named keys. Format below. |
+
+`REGISTRY_API_KEYS` is only consulted when `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true`. If both `REGISTRY_API_TOKEN` and `REGISTRY_API_KEYS` are set, they are merged: the legacy token becomes an implicit entry named `legacy` with `groups=["mcp-registry-admin"]`.
+
+### Format
+
+```env
+REGISTRY_API_KEYS='{"monitoring":{"key":"<token-1>","groups":["mcp-readonly"]},"deploy":{"key":"<token-2>","groups":["mcp-registry-admin"]}}'
+```
+
+Rules:
+- **name**: must match `^[a-z0-9][a-z0-9_-]{0,63}$` (log-safe identifier)
+- **key**: minimum 32 characters (use `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`)
+- **groups**: non-empty list of group names from your `scopes.yml` / `mcp_scope_default` group_mappings
+- Reserved names: `legacy`, `network-user`, `network-trusted` cannot be used
+- Key values must be unique across all entries
+- On any parse or validation error, the feature is disabled entirely (fail-closed)
+
+### How scopes are resolved
+
+At startup, the auth server calls `map_groups_to_scopes(entry.groups)` for each entry to resolve groups into scopes using the same pipeline as IdP/JWT auth. The resolved scopes are cached in memory. If an operator modifies group_mappings in MongoDB, the auth server must be restarted to pick up the change.
+
+### Identity for multi-key matches
+
+When a named key matches, the auth server returns:
+
+```json
+{
+  "valid": true,
+  "username": "monitoring",
+  "client_id": "monitoring",
+  "method": "network-trusted",
+  "groups": ["mcp-readonly"],
+  "scopes": ["mcp-readonly/read"]
+}
+```
+
+The key **name** becomes the `username` and `client_id`, which appear in audit logs. This is how operators can answer "which consumer made this call."
+
+### Registry-side authorization
+
+The registry no longer hard-codes admin access for `network-trusted` callers. Instead, it resolves permissions from the scopes returned by the auth server, just like any other auth method. A key with `groups=["mcp-readonly"]` will NOT be able to delete servers, register agents, or perform other admin actions.
+
+### Example: read-only monitoring key
+
+1. Ensure your `scopes.yml` has a group like `mcp-readonly` mapped to read-only scopes.
+2. Generate a key: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
+3. Add to your config:
+
+```bash
+REGISTRY_API_KEYS='{"monitoring":{"key":"YOUR_GENERATED_KEY","groups":["mcp-readonly"]}}'
+```
+
+4. Use it:
+
+```bash
+curl -sS -H "Authorization: Bearer YOUR_GENERATED_KEY" "$REGISTRY_URL/api/servers"
+```
 
 ## Session cookie (browser UI)
 
@@ -165,40 +229,27 @@ Starting with [#871](https://github.com/agentic-community/mcp-gateway-registry/i
 
 1. If the request has a valid session cookie → session auth wins.
 2. Else if the path is a federation path and the federation static token matches → `federation-static`.
-3. Else if the path is a Registry API path AND static-token mode is on AND the bearer matches `REGISTRY_API_TOKEN` → `network-trusted`.
+3. Else if the path is a Registry API path AND static-token mode is on AND the bearer matches any entry in `_STATIC_TOKEN_MAP` (legacy `REGISTRY_API_TOKEN` or any `REGISTRY_API_KEYS` entry) → `network-trusted`.
 4. Else fall through to IdP JWT / self-signed JWT validation.
 5. Else 401.
 
 **Behavior change since #871**: a bearer that matches neither the static token nor any valid JWT now returns **401** from the JWT block, where it previously returned **403 "Invalid API token"** from the static-token block. No legitimate caller is broken by this — only one that was already sending an invalid credential.
 
+## Threat model for static tokens
+
+`REGISTRY_API_KEYS` is a sensitive secret. An attacker who obtains the raw JSON value gains access equivalent to the most privileged key in the map. Specifically:
+
+- Any entry whose groups include `mcp-registry-admin` (or any group that maps to admin UI scopes) is equivalent to full admin compromise.
+- Read-only keys limit the blast radius to data exfiltration (listing servers, reading configs) but cannot mutate.
+- Key names appear in audit logs, so a compromised key is identifiable after the fact.
+
+Mitigations:
+- Store `REGISTRY_API_KEYS` in a secrets manager (AWS Secrets Manager, Vault, etc.), never in plaintext config files.
+- Terraform variables use `sensitive = true`; Helm renders the value into a Kubernetes Secret.
+- Rotate keys by adding a new key, migrating clients, then removing the old key. Restart the auth server after each config change.
+- Consider using the `existingSecret` Helm pattern to pull from an External Secrets Operator rather than templating the value.
+
 ## Roadmap: near-term improvements
-
-The current registry API auth model has two known gaps. Both are tracked and sequenced on top of #871.
-
-### #779 — multi-key static tokens
-
-Tracked at [issue #779](https://github.com/agentic-community/mcp-gateway-registry/issues/779).
-
-**Problem.** Today there is exactly one `REGISTRY_API_TOKEN`, and it grants hard-coded full admin access. Every script that needs any Registry API access gets the same superuser privileges — a read-only monitoring script is indistinguishable from a deployment pipeline that writes server configs.
-
-**Proposed solution.** Replace the single token with a map of keys, each with its own set of groups that flow through the normal `group_mappings` → scopes resolution:
-
-```env
-REGISTRY_API_KEYS='{
-  "monitoring-script":  { "key": "<token-1>", "groups": ["mcp-readonly"] },
-  "deploy-pipeline":    { "key": "<token-2>", "groups": ["mcp-registry-admin"] },
-  "koda-integration":   { "key": "<token-3>", "groups": ["koda_users"] }
-}'
-```
-
-**How it composes with #871.** #871 extracts a `_check_registry_static_token(bearer_token) -> dict | None` helper. #779 swaps that helper's body from a single `hmac.compare_digest` to a map iteration. The `/validate` control flow (including the fall-through to JWT) does not change.
-
-**Benefits.**
-- Per-key identity in audit logs (which script made this call?).
-- Principle of least privilege for automation (read-only scripts don't write).
-- Legacy `REGISTRY_API_TOKEN` is kept as a shorthand for single-entry deployments (back-compat).
-
-**Status.** Design pending. Will land on a branch after #871 ships.
 
 ### #826 — external user access tokens
 
@@ -226,7 +277,7 @@ Result: external user tokens get zero scopes and are effectively denied.
 
 **How it composes with #871.** Both options rely on the fall-through behavior #871 introduces — without it, external tokens would be rejected by the static-token block before ever reaching JWT validation (Option A) or `_validate_self_signed_token` (Option B). #871 does not ship either solution; it just makes them possible.
 
-**Status.** Design pending. Expected to land after #779. Solution A is the recommended first cut.
+**Status.** Design pending. Solution A is the recommended first cut.
 
 ## Common operator tasks
 
@@ -241,14 +292,24 @@ REGISTRY_API_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32)
 docker compose restart auth-server registry
 ```
 
-### Rotate the static token
+### Rotate a static token
+
+**Legacy single-key (`REGISTRY_API_TOKEN`):**
 
 1. Generate a new token with the `secrets.token_urlsafe` command above.
 2. Update `REGISTRY_API_TOKEN` in your deployment config.
 3. Restart the auth server.
 4. Update all clients that use the token (CI/CD pipelines, scripts).
 
-During the rotation window clients will see 401/403 until they switch over. There is no atomic rotation today; multi-key support (#779) will make it possible to run old and new keys in parallel during the cutover.
+**Multi-key (`REGISTRY_API_KEYS`) zero-downtime rotation:**
+
+1. Add a new entry (e.g. `deploy-v2`) with a fresh key to the JSON map.
+2. Restart the auth server. Both old and new keys now work.
+3. Migrate clients to the new key.
+4. Remove the old entry from the JSON map.
+5. Restart the auth server again.
+
+This overlap-rotation pattern avoids any window where clients see 401.
 
 ### Disable static-token mode
 

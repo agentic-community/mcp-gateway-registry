@@ -978,9 +978,11 @@ class TestNetworkTrustedMode:
         # Arrange
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("test-api-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "test-api-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1016,9 +1018,11 @@ class TestNetworkTrustedMode:
         # Arrange
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("test-api-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "test-api-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1049,9 +1053,11 @@ class TestNetworkTrustedMode:
         mock_provider.validate_token = AsyncMock(side_effect=ValueError("Invalid token"))
         mock_get_provider.return_value = mock_provider
 
+        token_map = _make_legacy_token_map("test-api-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "test-api-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1093,9 +1099,11 @@ class TestNetworkTrustedMode:
         # Arrange
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("test-api-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "test-api-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1120,9 +1128,11 @@ class TestNetworkTrustedMode:
         # Arrange
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("my-secret-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "my-secret-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1161,9 +1171,11 @@ class TestNetworkTrustedMode:
 
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("my-secret-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "my-secret-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1213,9 +1225,11 @@ class TestNetworkTrustedMode:
         # Arrange
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("test-api-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "test-api-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1243,9 +1257,11 @@ class TestNetworkTrustedMode:
         # Arrange
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("test-api-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "test-api-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1276,9 +1292,11 @@ class TestNetworkTrustedMode:
 
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("test-api-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "test-api-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1302,18 +1320,35 @@ class TestNetworkTrustedMode:
 # =============================================================================
 
 
-class TestCheckRegistryStaticToken:
-    """Unit tests for the _check_registry_static_token helper (issue #871).
+def _make_legacy_token_map(token: str) -> dict[str, dict]:
+    """Build a _STATIC_TOKEN_MAP with just the legacy entry for test helpers."""
+    return {
+        "legacy": {
+            "key_bytes": token.encode("utf-8"),
+            "groups": ["mcp-registry-admin"],
+            "scopes": [
+                "mcp-registry-admin",
+                "mcp-servers-unrestricted/read",
+                "mcp-servers-unrestricted/execute",
+            ],
+            "username_override": "network-user",
+            "client_id_override": "network-trusted",
+        },
+    }
 
-    These verify the helper in isolation so issue #779 can swap the body for a
-    multi-key map lookup with confidence.
+
+class TestCheckRegistryStaticToken:
+    """Unit tests for the _check_registry_static_token helper.
+
+    Updated for issue #779 (multi-key map iteration).
     """
 
-    def test_exact_match_returns_network_trusted_identity(self):
-        """Matching bearer returns the network-trusted identity dict."""
+    def test_legacy_match_returns_network_trusted_identity(self):
+        """Matching bearer for legacy key returns the back-compat identity dict."""
         import auth_server.server as server_module
 
-        with patch.object(server_module, "REGISTRY_API_TOKEN", "expected-token"):
+        token_map = _make_legacy_token_map("expected-token")
+        with patch.object(server_module, "_STATIC_TOKEN_MAP", token_map):
             identity = server_module._check_registry_static_token("expected-token")
 
         assert identity is not None
@@ -1327,28 +1362,99 @@ class TestCheckRegistryStaticToken:
         """Non-matching bearer returns None (not an exception, not a falsy dict)."""
         import auth_server.server as server_module
 
-        with patch.object(server_module, "REGISTRY_API_TOKEN", "expected-token"):
+        token_map = _make_legacy_token_map("expected-token")
+        with patch.object(server_module, "_STATIC_TOKEN_MAP", token_map):
             assert server_module._check_registry_static_token("something-else") is None
 
     def test_empty_bearer_returns_none(self):
         """Empty-string bearer must not match any configured token."""
         import auth_server.server as server_module
 
-        with patch.object(server_module, "REGISTRY_API_TOKEN", "expected-token"):
+        token_map = _make_legacy_token_map("expected-token")
+        with patch.object(server_module, "_STATIC_TOKEN_MAP", token_map):
             assert server_module._check_registry_static_token("") is None
 
-    def test_uses_timing_safe_comparison(self):
-        """Guard against regression: must use hmac.compare_digest, not ==.
+    def test_empty_map_returns_none(self):
+        """When no keys are configured, any bearer returns None."""
+        import auth_server.server as server_module
 
-        Preserves resistance to timing attacks when #779 extends the helper.
-        """
+        with patch.object(server_module, "_STATIC_TOKEN_MAP", {}):
+            assert server_module._check_registry_static_token("any-token") is None
+
+    def test_uses_timing_safe_comparison(self):
+        """Guard against regression: must use hmac.compare_digest, not ==."""
         import inspect
 
         import auth_server.server as server_module
 
         source = inspect.getsource(server_module._check_registry_static_token)
         assert "hmac.compare_digest" in source
-        assert "bearer_token == REGISTRY_API_TOKEN" not in source
+
+    def test_multi_key_match_returns_correct_identity(self):
+        """With multiple keys, the matched entry's identity is returned."""
+        import auth_server.server as server_module
+
+        token_map = {
+            "monitoring": {
+                "key_bytes": b"aaaa" * 8,
+                "groups": ["mcp-readonly"],
+                "scopes": ["mcp-readonly/read"],
+            },
+            "deploy": {
+                "key_bytes": b"bbbb" * 8,
+                "groups": ["mcp-registry-admin"],
+                "scopes": ["mcp-servers-unrestricted/read"],
+            },
+        }
+        with patch.object(server_module, "_STATIC_TOKEN_MAP", token_map):
+            identity = server_module._check_registry_static_token("bbbb" * 8)
+
+        assert identity is not None
+        assert identity["username"] == "deploy"
+        assert identity["client_id"] == "deploy"
+        assert identity["groups"] == ["mcp-registry-admin"]
+
+    def test_multi_key_no_match_returns_none(self):
+        """With multiple keys, a non-matching bearer returns None."""
+        import auth_server.server as server_module
+
+        token_map = {
+            "monitoring": {
+                "key_bytes": b"aaaa" * 8,
+                "groups": ["mcp-readonly"],
+                "scopes": ["mcp-readonly/read"],
+            },
+        }
+        with patch.object(server_module, "_STATIC_TOKEN_MAP", token_map):
+            assert server_module._check_registry_static_token("wrong-token") is None
+
+    def test_legacy_username_override_preserved(self):
+        """Legacy entry uses username_override / client_id_override for back-compat."""
+        import auth_server.server as server_module
+
+        token_map = _make_legacy_token_map("legacy-token")
+        with patch.object(server_module, "_STATIC_TOKEN_MAP", token_map):
+            identity = server_module._check_registry_static_token("legacy-token")
+
+        assert identity["username"] == "network-user"
+        assert identity["client_id"] == "network-trusted"
+
+    def test_non_legacy_key_uses_name_as_username(self):
+        """Non-legacy entries use the key name as username and client_id."""
+        import auth_server.server as server_module
+
+        token_map = {
+            "ci-pipeline": {
+                "key_bytes": b"x" * 32,
+                "groups": ["mcp-registry-admin"],
+                "scopes": ["admin/all"],
+            },
+        }
+        with patch.object(server_module, "_STATIC_TOKEN_MAP", token_map):
+            identity = server_module._check_registry_static_token("x" * 32)
+
+        assert identity["username"] == "ci-pipeline"
+        assert identity["client_id"] == "ci-pipeline"
 
 
 # =============================================================================
@@ -1377,9 +1483,11 @@ class TestStaticTokenFallthrough:
 
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("static-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "static-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
             patch(
                 "auth_server.server.get_scope_repository",
                 return_value=mock_scope_repository_with_data,
@@ -1408,9 +1516,11 @@ class TestStaticTokenFallthrough:
         """The happy path for the static token is unchanged by #871."""
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("static-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "static-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1444,9 +1554,11 @@ class TestStaticTokenFallthrough:
 
         import auth_server.server as server_module
 
+        token_map = _make_legacy_token_map("static-key")
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
             patch.object(server_module, "REGISTRY_API_TOKEN", "static-key"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
         ):
             client = TestClient(server_module.app)
 
@@ -1791,3 +1903,389 @@ class TestOAuth2CallbackTokenStorage:
         # Metadata is stored when flag is True
         assert session_data["token_expires_in"] == 3600
         assert "token_obtained_at" in session_data
+
+
+# =============================================================================
+# MULTI-KEY STATIC TOKEN PARSER TESTS (issue #779)
+# =============================================================================
+
+
+class TestParseRegistryApiKeys:
+    """Unit tests for _parse_registry_api_keys config parser."""
+
+    def test_empty_string_returns_empty_list(self):
+        """Empty raw string produces no entries."""
+        import auth_server.server as server_module
+
+        result = server_module._parse_registry_api_keys("")
+        assert result == []
+
+    def test_valid_single_entry(self):
+        """A single valid entry parses correctly."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "deploy-pipeline": {
+                    "key": "a" * 32,
+                    "groups": ["mcp-registry-admin"],
+                }
+            }
+        )
+        result = server_module._parse_registry_api_keys(raw)
+        assert len(result) == 1
+        assert result[0].name == "deploy-pipeline"
+        assert result[0].key == "a" * 32
+        assert result[0].groups == ["mcp-registry-admin"]
+
+    def test_valid_multiple_entries(self):
+        """Multiple valid entries parse correctly."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "monitoring": {"key": "m" * 32, "groups": ["mcp-readonly"]},
+                "deploy": {"key": "d" * 32, "groups": ["mcp-registry-admin"]},
+            }
+        )
+        result = server_module._parse_registry_api_keys(raw)
+        assert len(result) == 2
+        names = {e.name for e in result}
+        assert names == {"monitoring", "deploy"}
+
+    def test_malformed_json_raises(self):
+        """Non-JSON input raises ValueError."""
+        import auth_server.server as server_module
+
+        with pytest.raises(ValueError, match="not valid JSON"):
+            server_module._parse_registry_api_keys("{bad json")
+
+    def test_non_object_json_raises(self):
+        """A JSON array (not object) raises ValueError."""
+        import auth_server.server as server_module
+
+        with pytest.raises(ValueError, match="must be a JSON object"):
+            server_module._parse_registry_api_keys('[{"key":"abc"}]')
+
+    def test_reserved_name_legacy_raises(self):
+        """The name 'legacy' is reserved and must be rejected."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "legacy": {"key": "x" * 32, "groups": ["admin"]},
+            }
+        )
+        with pytest.raises(ValueError, match="reserved"):
+            server_module._parse_registry_api_keys(raw)
+
+    def test_reserved_name_network_user_raises(self):
+        """The name 'network-user' is reserved."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "network-user": {"key": "x" * 32, "groups": ["admin"]},
+            }
+        )
+        with pytest.raises(ValueError, match="reserved"):
+            server_module._parse_registry_api_keys(raw)
+
+    def test_reserved_name_network_trusted_raises(self):
+        """The name 'network-trusted' is reserved."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "network-trusted": {"key": "x" * 32, "groups": ["admin"]},
+            }
+        )
+        with pytest.raises(ValueError, match="reserved"):
+            server_module._parse_registry_api_keys(raw)
+
+    def test_key_too_short_raises(self):
+        """Key shorter than 32 chars raises."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "short-key": {"key": "abc", "groups": ["admin"]},
+            }
+        )
+        with pytest.raises(ValueError, match="Invalid entry"):
+            server_module._parse_registry_api_keys(raw)
+
+    def test_empty_groups_raises(self):
+        """Empty groups list raises."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "no-groups": {"key": "x" * 32, "groups": []},
+            }
+        )
+        with pytest.raises(ValueError, match="Invalid entry"):
+            server_module._parse_registry_api_keys(raw)
+
+    def test_duplicate_key_value_raises(self):
+        """Two entries with the same key value raises."""
+        import json
+
+        import auth_server.server as server_module
+
+        same_key = "k" * 32
+        raw = json.dumps(
+            {
+                "entry-a": {"key": same_key, "groups": ["g1"]},
+                "entry-b": {"key": same_key, "groups": ["g2"]},
+            }
+        )
+        with pytest.raises(ValueError, match="Duplicate key value"):
+            server_module._parse_registry_api_keys(raw)
+
+    def test_invalid_name_format_raises(self):
+        """Name with uppercase or special chars raises."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "Invalid-Name!": {"key": "x" * 32, "groups": ["admin"]},
+            }
+        )
+        with pytest.raises(ValueError, match="Invalid"):
+            server_module._parse_registry_api_keys(raw)
+
+    def test_entry_not_object_raises(self):
+        """Entry value that is not a dict raises."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "bad-entry": "just-a-string",
+            }
+        )
+        with pytest.raises(ValueError, match="must be an object"):
+            server_module._parse_registry_api_keys(raw)
+
+    def test_empty_object_returns_empty_list(self):
+        """An empty JSON object '{}' returns an empty list."""
+        import auth_server.server as server_module
+
+        result = server_module._parse_registry_api_keys("{}")
+        assert result == []
+
+
+# =============================================================================
+# MULTI-KEY BUILD TOKEN MAP TESTS (issue #779)
+# =============================================================================
+
+
+class TestBuildStaticTokenMap:
+    """Unit tests for _build_static_token_map startup builder."""
+
+    @pytest.mark.asyncio
+    async def test_disabled_flag_does_nothing(self):
+        """When REGISTRY_STATIC_TOKEN_AUTH_ENABLED is False, map stays empty."""
+        import auth_server.server as server_module
+
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", False),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", {}),
+        ):
+            await server_module._build_static_token_map()
+            assert server_module._STATIC_TOKEN_MAP == {}
+
+    @pytest.mark.asyncio
+    async def test_legacy_only_builds_single_entry(self):
+        """With only REGISTRY_API_TOKEN set (no REGISTRY_API_KEYS), map has one legacy entry."""
+        import auth_server.server as server_module
+
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "REGISTRY_API_TOKEN", "t" * 32),
+            patch.object(server_module, "_REGISTRY_API_KEYS_RAW", ""),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", {}),
+        ):
+            await server_module._build_static_token_map()
+            assert "legacy" in server_module._STATIC_TOKEN_MAP
+            assert len(server_module._STATIC_TOKEN_MAP) == 1
+            legacy = server_module._STATIC_TOKEN_MAP["legacy"]
+            assert legacy["username_override"] == "network-user"
+            assert legacy["client_id_override"] == "network-trusted"
+
+    @pytest.mark.asyncio
+    async def test_bad_json_disables_feature(self):
+        """Malformed REGISTRY_API_KEYS disables static-token auth (fail-closed)."""
+        import auth_server.server as server_module
+
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "REGISTRY_API_TOKEN", ""),
+            patch.object(server_module, "_REGISTRY_API_KEYS_RAW", "{bad json"),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", {}),
+        ):
+            await server_module._build_static_token_map()
+            assert server_module.REGISTRY_STATIC_TOKEN_AUTH_ENABLED is False
+
+    @pytest.mark.asyncio
+    async def test_valid_keys_plus_legacy_merged(self):
+        """Both REGISTRY_API_KEYS and REGISTRY_API_TOKEN produce merged map."""
+        import json
+
+        import auth_server.server as server_module
+
+        raw = json.dumps(
+            {
+                "monitoring": {"key": "m" * 32, "groups": ["mcp-readonly"]},
+            }
+        )
+
+        mock_repo = AsyncMock()
+        mock_repo.get_group_mappings.return_value = ["mcp-readonly/read"]
+
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "REGISTRY_API_TOKEN", "t" * 32),
+            patch.object(server_module, "_REGISTRY_API_KEYS_RAW", raw),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", {}),
+            patch(
+                "auth_server.server.get_scope_repository",
+                return_value=mock_repo,
+            ),
+        ):
+            await server_module._build_static_token_map()
+            assert "monitoring" in server_module._STATIC_TOKEN_MAP
+            assert "legacy" in server_module._STATIC_TOKEN_MAP
+            assert len(server_module._STATIC_TOKEN_MAP) == 2
+
+    @pytest.mark.asyncio
+    async def test_zero_keys_warns_but_stays_enabled(self):
+        """Empty REGISTRY_API_KEYS and empty REGISTRY_API_TOKEN logs warning."""
+        import auth_server.server as server_module
+
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "REGISTRY_API_TOKEN", ""),
+            patch.object(server_module, "_REGISTRY_API_KEYS_RAW", ""),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", {}),
+        ):
+            await server_module._build_static_token_map()
+            assert server_module._STATIC_TOKEN_MAP == {}
+            # Feature stays enabled (callers just fall through to JWT)
+            assert server_module.REGISTRY_STATIC_TOKEN_AUTH_ENABLED is True
+
+
+# =============================================================================
+# MULTI-KEY VALIDATE INTEGRATION TESTS (issue #779)
+# =============================================================================
+
+
+class TestMultiKeyStaticTokenValidate:
+    """Integration tests for multi-key static token through /validate."""
+
+    def test_named_key_returns_key_name_as_username(self):
+        """A named key match returns the key name as X-Username."""
+        import auth_server.server as server_module
+
+        token_map = {
+            "ci-runner": {
+                "key_bytes": ("c" * 32).encode("utf-8"),
+                "groups": ["mcp-registry-admin"],
+                "scopes": ["mcp-servers-unrestricted/read"],
+            },
+        }
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
+        ):
+            client = TestClient(server_module.app)
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": f"Bearer {'c' * 32}",
+                    "X-Original-URL": "https://example.com/api/servers",
+                },
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["username"] == "ci-runner"
+            assert data["client_id"] == "ci-runner"
+            assert data["method"] == "network-trusted"
+            assert response.headers["X-Username"] == "ci-runner"
+
+    def test_readonly_key_gets_limited_scopes(self):
+        """A read-only key gets only the scopes configured for its groups."""
+        import auth_server.server as server_module
+
+        token_map = {
+            "readonly-monitor": {
+                "key_bytes": ("r" * 32).encode("utf-8"),
+                "groups": ["mcp-readonly"],
+                "scopes": ["mcp-readonly/read"],
+            },
+        }
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
+        ):
+            client = TestClient(server_module.app)
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": f"Bearer {'r' * 32}",
+                    "X-Original-URL": "https://example.com/api/servers",
+                },
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scopes"] == ["mcp-readonly/read"]
+            assert data["groups"] == ["mcp-readonly"]
+
+    def test_key_with_empty_scopes_still_matches(self):
+        """A key whose groups map to no scopes still matches (but will 403 at registry)."""
+        import auth_server.server as server_module
+
+        token_map = {
+            "empty-scope-key": {
+                "key_bytes": ("e" * 32).encode("utf-8"),
+                "groups": ["ghost-group"],
+                "scopes": [],
+            },
+        }
+        with (
+            patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
+            patch.object(server_module, "_STATIC_TOKEN_MAP", token_map),
+        ):
+            client = TestClient(server_module.app)
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": f"Bearer {'e' * 32}",
+                    "X-Original-URL": "https://example.com/api/servers",
+                },
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scopes"] == []
+            assert data["username"] == "empty-scope-key"

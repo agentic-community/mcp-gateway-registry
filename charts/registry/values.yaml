@@ -39,6 +39,12 @@ app:
   skillSecurityScanEnabled: true  # Enable/disable skill security scanning
   skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
 
+  # Static API keys for registry path authentication (JSON string)
+  # Configures multiple static API keys that fall through to JWT validation when unmatched
+  registryApiKeys: ""
+  registryApiKeysExistingSecret: ""  # If set, read REGISTRY_API_KEYS from this K8s secret instead
+  registryApiKeysExistingSecretKey: "REGISTRY_API_KEYS"  # Key within the existing secret
+
   # M2M direct client registration (issue #851)
   # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and
   # their group mappings directly, without requiring an IdP Admin API token.

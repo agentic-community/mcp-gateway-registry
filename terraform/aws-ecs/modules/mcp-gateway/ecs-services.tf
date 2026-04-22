@@ -219,6 +219,10 @@ module "ecs_service_auth" {
           name  = "REGISTRY_API_TOKEN"
           value = var.registry_api_token
         },
+        {
+          name  = "REGISTRY_API_KEYS"
+          value = var.registry_api_keys
+        },
         # M2M direct client registration (issue #851)
         {
           name  = "M2M_DIRECT_REGISTRATION_ENABLED"
@@ -863,6 +867,10 @@ module "ecs_service_registry" {
         {
           name  = "REGISTRY_API_TOKEN"
           value = var.registry_api_token
+        },
+        {
+          name  = "REGISTRY_API_KEYS"
+          value = var.registry_api_keys
         },
         {
           name  = "MAX_TOKENS_PER_USER_PER_HOUR"

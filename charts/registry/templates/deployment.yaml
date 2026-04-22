@@ -137,6 +137,13 @@ spec:
                   name: {{ .Values.auth0.managementApiTokenExistingSecret }}
                   key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
             {{- end }}
+            {{- if .Values.app.registryApiKeysExistingSecret }}
+            - name: REGISTRY_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.registryApiKeysExistingSecret }}
+                  key: {{ .Values.app.registryApiKeysExistingSecretKey }}
+            {{- end }}
             {{- if .Values.ans.apiKeyExistingSecret }}
             - name: ANS_API_KEY
               valueFrom:

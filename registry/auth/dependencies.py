@@ -615,29 +615,8 @@ async def nginx_proxied_auth(
             f"nginx-proxied auth for user: {username}, method: {x_auth_method}, scopes: {scopes}"
         )
 
-        # Network-trusted mode: grant full admin access directly
-        # (avoids database lookups that may fail if scope documents are missing)
-        if x_auth_method == "network-trusted":
-            accessible_servers = []
-            accessible_services = ["all"]
-            accessible_agents = ["all"]
-            ui_permissions = {
-                "list_service": ["all"],
-                "register_service": ["all"],
-                "health_check_service": ["all"],
-                "toggle_service": ["all"],
-                "modify_service": ["all"],
-                "list_agents": ["all"],
-                "get_agent": ["all"],
-                "publish_agent": ["all"],
-                "modify_agent": ["all"],
-                "delete_agent": ["all"],
-            }
-            can_modify = True
-            is_admin = True
-        elif x_auth_method == "federation-static":
+        if x_auth_method == "federation-static":
             # Federation static token: scoped access to federation/peer endpoints only
-            # No server/agent/service access needed
             accessible_servers = []
             accessible_services = []
             accessible_agents = []
@@ -645,19 +624,17 @@ async def nginx_proxied_auth(
             can_modify = False
             is_admin = False
         else:
-            # Get accessible servers based on scopes
+            # Standard resolution for all auth methods including network-trusted
+            # (Issue #779: network-trusted now carries per-key scopes from the
+            # auth server instead of hard-coded admin).
             accessible_servers = await get_user_accessible_servers(scopes)
 
-            # Get UI permissions
             ui_permissions = await get_ui_permissions_for_user(scopes)
 
-            # Get accessible services
             accessible_services = get_accessible_services_for_user(ui_permissions)
 
-            # Get accessible agents
             accessible_agents = get_accessible_agents_for_user(ui_permissions)
 
-            # Check modification permissions
             can_modify = user_can_modify_servers(groups, scopes)
 
             is_admin = _user_is_admin(ui_permissions)

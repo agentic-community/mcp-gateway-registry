@@ -645,6 +645,13 @@ variable "registry_api_token" {
   sensitive   = true
 }
 
+variable "registry_api_keys" {
+  description = "JSON string configuring multiple static API keys with per-key group assignments."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "max_tokens_per_user_per_hour" {
   description = "Maximum JWT tokens that can be vended per user per hour."
   type        = number
