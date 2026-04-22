@@ -8,16 +8,15 @@ ready to embed in the usage report.
 Supports comparison with a previous metrics JSON to produce an
 executive summary with deltas at the top of the report.
 """
+
 import argparse
 import csv
 import glob
 import json
 import logging
 import os
-from collections import Counter
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
-
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -240,16 +239,18 @@ def _compute_instance_lifetime(
         latest_date = datetime.strptime(latest, "%Y-%m-%d")
         age_days = (latest_date - first_date).days
 
-        result.append({
-            "registry_id": inst["registry_id"],
-            "cloud": inst["cloud"],
-            "compute": inst["compute"],
-            "auth": inst["auth"],
-            "first_seen": first,
-            "latest_seen": latest,
-            "age_days": age_days,
-            "events": inst["events"],
-        })
+        result.append(
+            {
+                "registry_id": inst["registry_id"],
+                "cloud": inst["cloud"],
+                "compute": inst["compute"],
+                "auth": inst["auth"],
+                "first_seen": first,
+                "latest_seen": latest,
+                "age_days": age_days,
+                "events": inst["events"],
+            }
+        )
 
     result.sort(key=lambda x: x["age_days"], reverse=True)
     return result
@@ -385,9 +386,7 @@ def _build_exec_summary_md(
     curr_clouds = set(current_cloud_installs.keys())
     new_clouds = curr_clouds - prev_clouds
     if new_clouds:
-        lines.append(
-            f"**New cloud providers**: {', '.join(sorted(new_clouds))}"
-        )
+        lines.append(f"**New cloud providers**: {', '.join(sorted(new_clouds))}")
         lines.append("")
 
     return "\n".join(lines)
@@ -402,17 +401,11 @@ def _compute_key_metrics(
     heartbeat_count = sum(1 for r in rows if r.get("event") == "heartbeat")
 
     # Unique identified instances
-    registry_ids = {
-        r["registry_id"]
-        for r in rows
-        if r.get("registry_id", "").strip()
-    }
+    registry_ids = {r["registry_id"] for r in rows if r.get("registry_id", "").strip()}
     identified_count = len(registry_ids)
 
     # Null registry_id count
-    null_id_count = sum(
-        1 for r in rows if not r.get("registry_id", "").strip()
-    )
+    null_id_count = sum(1 for r in rows if not r.get("registry_id", "").strip())
 
     # Collection period
     timestamps = []
@@ -493,39 +486,37 @@ def _compute_instance_table(
         max_skills = max(_safe_int(e.get("skills_count", "")) for e in events)
 
         # Track max search queries
-        max_search = max(
-            _safe_int(e.get("search_queries_total", "")) for e in events
-        )
+        max_search = max(_safe_int(e.get("search_queries_total", "")) for e in events)
 
         # search_queries_total is already a lifetime cumulative counter
         # in each event, so take the max (latest value) not the sum
-        total_search = max(
-            _safe_int(e.get("search_queries_total", "")) for e in events
-        )
+        total_search = max(_safe_int(e.get("search_queries_total", "")) for e in events)
 
         first_ts = events[0].get("ts", "")[:10]
         latest_ts = events[-1].get("ts", "")[:10]
 
-        result.append({
-            "registry_id": rid[:12] + "...",
-            "registry_id_full": rid,
-            "cloud": latest.get("cloud") or "unknown",
-            "compute": latest.get("compute") or "unknown",
-            "storage": latest.get("storage") or "unknown",
-            "auth": latest.get("auth") or "none",
-            "federation": latest.get("federation", "").strip().lower() == "true",
-            "arch": latest.get("arch") or "unknown",
-            "mode": latest.get("mode") or "unknown",
-            "version": latest.get("v") or "unknown",
-            "events": len(events),
-            "max_servers": max_servers,
-            "max_agents": max_agents,
-            "max_skills": max_skills,
-            "max_search_queries": max_search,
-            "total_search_queries": total_search,
-            "first_seen": first_ts,
-            "latest_seen": latest_ts,
-        })
+        result.append(
+            {
+                "registry_id": rid[:12] + "...",
+                "registry_id_full": rid,
+                "cloud": latest.get("cloud") or "unknown",
+                "compute": latest.get("compute") or "unknown",
+                "storage": latest.get("storage") or "unknown",
+                "auth": latest.get("auth") or "none",
+                "federation": latest.get("federation", "").strip().lower() == "true",
+                "arch": latest.get("arch") or "unknown",
+                "mode": latest.get("mode") or "unknown",
+                "version": latest.get("v") or "unknown",
+                "events": len(events),
+                "max_servers": max_servers,
+                "max_agents": max_agents,
+                "max_skills": max_skills,
+                "max_search_queries": max_search,
+                "total_search_queries": total_search,
+                "first_seen": first_ts,
+                "latest_seen": latest_ts,
+            }
+        )
 
     result.sort(key=lambda x: x["events"], reverse=True)
     return result
@@ -535,9 +526,7 @@ def _compute_unidentified_profiles(
     rows: list[dict[str, str]],
 ) -> list[dict]:
     """Group unidentified events into distinct deployment profiles."""
-    unidentified = [
-        r for r in rows if not r.get("registry_id", "").strip()
-    ]
+    unidentified = [r for r in rows if not r.get("registry_id", "").strip()]
 
     # Group by (cloud, compute, arch, storage, auth, mode)
     profiles = defaultdict(list)
@@ -559,35 +548,33 @@ def _compute_unidentified_profiles(
         max_servers = max(_safe_int(e.get("servers_count", "")) for e in events)
         max_agents = max(_safe_int(e.get("agents_count", "")) for e in events)
         max_skills = max(_safe_int(e.get("skills_count", "")) for e in events)
-        max_search = max(
-            _safe_int(e.get("search_queries_total", "")) for e in events
-        )
+        max_search = max(_safe_int(e.get("search_queries_total", "")) for e in events)
         # search_queries_total is already a lifetime cumulative counter
         # in each event, so take the max (latest value) not the sum
-        total_search = max(
-            _safe_int(e.get("search_queries_total", "")) for e in events
-        )
+        total_search = max(_safe_int(e.get("search_queries_total", "")) for e in events)
 
         events.sort(key=lambda r: r.get("ts", ""))
         first_ts = events[0].get("ts", "")[:10]
         latest_ts = events[-1].get("ts", "")[:10]
 
-        result.append({
-            "cloud": cloud,
-            "compute": compute,
-            "arch": arch,
-            "storage": storage,
-            "auth": auth,
-            "mode": mode,
-            "events": len(events),
-            "max_servers": max_servers,
-            "max_agents": max_agents,
-            "max_skills": max_skills,
-            "max_search_queries": max_search,
-            "total_search_queries": total_search,
-            "first_seen": first_ts,
-            "latest_seen": latest_ts,
-        })
+        result.append(
+            {
+                "cloud": cloud,
+                "compute": compute,
+                "arch": arch,
+                "storage": storage,
+                "auth": auth,
+                "mode": mode,
+                "events": len(events),
+                "max_servers": max_servers,
+                "max_agents": max_agents,
+                "max_skills": max_skills,
+                "max_search_queries": max_search,
+                "total_search_queries": total_search,
+                "first_seen": first_ts,
+                "latest_seen": latest_ts,
+            }
+        )
 
     result.sort(key=lambda x: x["events"], reverse=True)
     return result
@@ -605,13 +592,11 @@ def _compute_instance_timeline(
     cloud+compute for unidentified profiles.
     """
     if registry_id:
-        filtered = [
-            r for r in rows
-            if r.get("registry_id", "").strip() == registry_id
-        ]
+        filtered = [r for r in rows if r.get("registry_id", "").strip() == registry_id]
     elif cloud and compute:
         filtered = [
-            r for r in rows
+            r
+            for r in rows
             if not r.get("registry_id", "").strip()
             and (r.get("cloud") or "unknown") == cloud
             and (r.get("compute") or "unknown") == compute
@@ -632,18 +617,18 @@ def _compute_instance_timeline(
         max_servers = max(_safe_int(e.get("servers_count", "")) for e in events)
         max_agents = max(_safe_int(e.get("agents_count", "")) for e in events)
         max_skills = max(_safe_int(e.get("skills_count", "")) for e in events)
-        max_search = max(
-            _safe_int(e.get("search_queries_total", "")) for e in events
-        )
+        max_search = max(_safe_int(e.get("search_queries_total", "")) for e in events)
 
-        result.append({
-            "date": date,
-            "events": len(events),
-            "max_servers": max_servers,
-            "max_agents": max_agents,
-            "max_skills": max_skills,
-            "max_search_queries": max_search,
-        })
+        result.append(
+            {
+                "date": date,
+                "events": len(events),
+                "max_servers": max_servers,
+                "max_agents": max_agents,
+                "max_skills": max_skills,
+                "max_search_queries": max_search,
+            }
+        )
 
     return result
 
@@ -662,12 +647,14 @@ def _compute_version_table(
         vtype = _classify_version(version)
         branch = _extract_version_branch(version) if vtype == "dev" else "--"
 
-        result.append({
-            "version": version,
-            "type": "**Release**" if vtype == "release" else f"Dev ({branch})",
-            "events": count,
-            "percentage": _format_pct(count, total),
-        })
+        result.append(
+            {
+                "version": version,
+                "type": "**Release**" if vtype == "release" else f"Dev ({branch})",
+                "events": count,
+                "percentage": _format_pct(count, total),
+            }
+        )
 
     return result
 
@@ -699,15 +686,9 @@ def _compute_search_stats(
         sq_24h = _safe_int(r.get("search_queries_24h", ""))
         sq_1h = _safe_int(r.get("search_queries_1h", ""))
 
-        instance_max_total[instance_key] = max(
-            instance_max_total.get(instance_key, 0), sq_total
-        )
-        instance_max_24h[instance_key] = max(
-            instance_max_24h.get(instance_key, 0), sq_24h
-        )
-        instance_max_1h[instance_key] = max(
-            instance_max_1h.get(instance_key, 0), sq_1h
-        )
+        instance_max_total[instance_key] = max(instance_max_total.get(instance_key, 0), sq_total)
+        instance_max_24h[instance_key] = max(instance_max_24h.get(instance_key, 0), sq_24h)
+        instance_max_1h[instance_key] = max(instance_max_1h.get(instance_key, 0), sq_1h)
 
         if sq_total > 0:
             active_instances.add(instance_key)
@@ -739,16 +720,9 @@ def _compute_feature_adoption(
     """Compute feature adoption rates."""
     total = len(rows)
 
-    fed_enabled = sum(
-        1 for r in rows
-        if r.get("federation", "").strip().lower() == "true"
-    )
-    with_gw = sum(
-        1 for r in rows if r.get("mode") == "with-gateway"
-    )
-    reg_only = sum(
-        1 for r in rows if r.get("mode") == "registry-only"
-    )
+    fed_enabled = sum(1 for r in rows if r.get("federation", "").strip().lower() == "true")
+    with_gw = sum(1 for r in rows if r.get("mode") == "with-gateway")
+    reg_only = sum(1 for r in rows if r.get("mode") == "registry-only")
 
     return [
         {
@@ -771,15 +745,14 @@ def _compute_feature_adoption(
         },
         {
             "feature": "Heartbeat (opt-out, on by default)",
-            "enabled": len({
-                r.get("registry_id", "").strip()
-                for r in rows
-                if r.get("event") == "heartbeat"
-                and r.get("registry_id", "").strip()
-            }),
-            "disabled": total - sum(
-                1 for r in rows if r.get("event") == "heartbeat"
+            "enabled": len(
+                {
+                    r.get("registry_id", "").strip()
+                    for r in rows
+                    if r.get("event") == "heartbeat" and r.get("registry_id", "").strip()
+                }
             ),
+            "disabled": total - sum(1 for r in rows if r.get("event") == "heartbeat"),
             "rate": _format_pct(
                 sum(1 for r in rows if r.get("event") == "heartbeat"),
                 total,
@@ -817,18 +790,14 @@ def _build_markdown_tables(
     lines.append(f"| Total Events | {metrics['total_events']} |")
     lines.append(f"| Startup Events | {metrics['startup_events']} |")
     lines.append(f"| Heartbeat Events | {metrics['heartbeat_events']} |")
-    lines.append(
-        f"| Unique Registry Instances (identified) "
-        f"| {metrics['identified_instances']} |"
-    )
+    lines.append(f"| Unique Registry Instances (identified) | {metrics['identified_instances']} |")
     lines.append(
         f"| Events with null registry_id "
         f"| {metrics['null_registry_id_count']} "
         f"({metrics['null_registry_id_pct']}) |"
     )
     lines.append(
-        f"| Collection Period "
-        f"| {metrics['earliest_ts'][:10]} to {metrics['latest_ts'][:10]} |"
+        f"| Collection Period | {metrics['earliest_ts'][:10]} to {metrics['latest_ts'][:10]} |"
     )
     lines.append("")
 
@@ -946,9 +915,14 @@ def _build_markdown_tables(
         ("Auth Provider", "auth", "Auth Provider"),
     ]
     for title, key, col_name in dim_config:
-        lines.append(_md_distribution_table(
-            title, distributions[key], total, col_name,
-        ))
+        lines.append(
+            _md_distribution_table(
+                title,
+                distributions[key],
+                total,
+                col_name,
+            )
+        )
 
     # Version Adoption
     lines.append("## Version Adoption")
@@ -956,12 +930,7 @@ def _build_markdown_tables(
     lines.append("| Version | Type | Events | Percentage |")
     lines.append("|---------|------|--------|------------|")
     for v in versions:
-        lines.append(
-            f"| `{v['version']}` "
-            f"| {v['type']} "
-            f"| {v['events']} "
-            f"| {v['percentage']} |"
-        )
+        lines.append(f"| `{v['version']}` | {v['type']} | {v['events']} | {v['percentage']} |")
     lines.append("")
 
     # Feature Adoption
@@ -971,10 +940,7 @@ def _build_markdown_tables(
     lines.append("|---------|---------|----------|------|")
     for feat in features:
         lines.append(
-            f"| {feat['feature']} "
-            f"| {feat['enabled']} "
-            f"| {feat['disabled']} "
-            f"| {feat['rate']} |"
+            f"| {feat['feature']} | {feat['enabled']} | {feat['disabled']} | {feat['rate']} |"
         )
     lines.append("")
 
@@ -989,15 +955,10 @@ def _build_markdown_tables(
         f"({', '.join(search['active_instance_names'])}) |"
     )
     lines.append(
-        f"| Total search queries (sum of per-instance lifetime counts) "
-        f"| {search['lifetime_sum']} |"
+        f"| Total search queries (sum of per-instance lifetime counts) | {search['lifetime_sum']} |"
     )
-    lines.append(
-        f"| Average per instance | {search['lifetime_avg']} |"
-    )
-    lines.append(
-        f"| Max from single instance | {search['lifetime_max']} |"
-    )
+    lines.append(f"| Average per instance | {search['lifetime_avg']} |")
+    lines.append(f"| Max from single instance | {search['lifetime_max']} |")
     lines.append("")
 
     # Instance Timelines
@@ -1007,7 +968,8 @@ def _build_markdown_tables(
     # Identified instances
     for inst in instances:
         timeline = _compute_instance_timeline(
-            rows, registry_id=inst["registry_id_full"],
+            rows,
+            registry_id=inst["registry_id_full"],
         )
         if not timeline:
             continue
@@ -1030,21 +992,17 @@ def _build_markdown_tables(
     for prof in unidentified:
         if prof["max_servers"] > 0 or prof["max_search_queries"] > 0 or prof["events"] >= 5:
             timeline = _compute_instance_timeline(
-                rows, cloud=prof["cloud"], compute=prof["compute"],
+                rows,
+                cloud=prof["cloud"],
+                compute=prof["compute"],
             )
             if not timeline:
                 continue
             label = f"{prof['cloud']}/{prof['compute']}/{prof['auth']}"
             lines.append(f"### Unidentified: {label}")
             lines.append("")
-            lines.append(
-                "| Date | Events | Servers | Agents "
-                "| Skills | Search Queries |"
-            )
-            lines.append(
-                "|------|--------|---------|--------"
-                "|--------|----------------|"
-            )
+            lines.append("| Date | Events | Servers | Agents | Skills | Search Queries |")
+            lines.append("|------|--------|---------|--------|--------|----------------|")
             for day in timeline:
                 lines.append(
                     f"| {day['date']} "
@@ -1142,9 +1100,7 @@ def main() -> None:
     # Load previous metrics for comparison
     prev_metrics_path = args.previous_metrics
     if not prev_metrics_path:
-        search_dir = args.search_dir or os.path.dirname(
-            os.path.abspath(args.output_dir)
-        )
+        search_dir = args.search_dir or os.path.dirname(os.path.abspath(args.output_dir))
         prev_metrics_path = _find_previous_metrics(search_dir, date_str)
 
     previous_metrics = None
@@ -1152,9 +1108,7 @@ def main() -> None:
     if prev_metrics_path:
         previous_metrics = _load_previous_metrics(prev_metrics_path)
         if previous_metrics:
-            previous_cloud_installs = previous_metrics.get(
-                "per_cloud_unique_installs", None
-            )
+            previous_cloud_installs = previous_metrics.get("per_cloud_unique_installs", None)
 
     # Build executive summary
     exec_summary_md = _build_exec_summary_md(
@@ -1166,8 +1120,14 @@ def main() -> None:
     )
 
     md_content = _build_markdown_tables(
-        metrics, distributions, instances, unidentified,
-        versions, search, features, rows,
+        metrics,
+        distributions,
+        instances,
+        unidentified,
+        versions,
+        search,
+        features,
+        rows,
         exec_summary_md=exec_summary_md,
         instance_lifetime=instance_lifetime,
     )
@@ -1178,9 +1138,7 @@ def main() -> None:
         "key_metrics": metrics,
         "per_cloud_unique_installs": cloud_installs,
         "instance_lifetime": instance_lifetime,
-        "distributions": {
-            k: dict(v.most_common()) for k, v in distributions.items()
-        },
+        "distributions": {k: dict(v.most_common()) for k, v in distributions.items()},
         "identified_instances": instances,
         "unidentified_profiles": unidentified,
         "version_adoption": versions,
@@ -1189,8 +1147,10 @@ def main() -> None:
     }
 
     _write_outputs(md_content, metrics_json, args.output_dir, date_str)
-    logger.info(f"Analysis complete: {metrics['total_events']} events, "
-                f"{metrics['identified_instances']} identified instances")
+    logger.info(
+        f"Analysis complete: {metrics['total_events']} events, "
+        f"{metrics['identified_instances']} identified instances"
+    )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ Reads ALL CSV files in a given directory, deduplicates events, and produces
 a PNG line chart showing cumulative unique registry_id values per cloud
 provider over time.
 """
+
 import argparse
 import csv
 import logging
@@ -12,12 +13,12 @@ from collections import defaultdict
 from datetime import datetime
 
 import matplotlib
+
 matplotlib.use("Agg")
 
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import seaborn as sns
-
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -79,9 +80,7 @@ def _deduplicate_events(
         if key not in seen:
             seen.add(key)
             unique_rows.append(row)
-    logger.info(
-        f"Deduplicated: {len(rows)} -> {len(unique_rows)} unique events"
-    )
+    logger.info(f"Deduplicated: {len(rows)} -> {len(unique_rows)} unique events")
     return unique_rows
 
 
@@ -129,9 +128,7 @@ def _compute_cumulative_installs(
 
         # Convert to sorted list of tuples
         sorted_dates = sorted(daily_cumulative.keys())
-        result[cloud] = [
-            (d, daily_cumulative[d]) for d in sorted_dates
-        ]
+        result[cloud] = [(d, daily_cumulative[d]) for d in sorted_dates]
 
     return result
 
@@ -160,9 +157,7 @@ def _compute_daily_unique_installs(
     result = {}
     for cloud, date_ids in cloud_date_ids.items():
         sorted_dates = sorted(date_ids.keys())
-        result[cloud] = [
-            (d, len(date_ids[d])) for d in sorted_dates
-        ]
+        result[cloud] = [(d, len(date_ids[d])) for d in sorted_dates]
 
     return result
 
@@ -176,7 +171,8 @@ def _generate_chart(
     sns.set_theme(style="whitegrid")
 
     fig, (ax_cumulative, ax_daily) = plt.subplots(
-        2, 1,
+        2,
+        1,
         figsize=(FIGURE_WIDTH, FIGURE_HEIGHT),
         sharex=True,
     )

@@ -4,6 +4,7 @@ Unlike generate_charts.py which counts events, this chart counts unique
 registry instances per dimension value. Each instance is counted once
 using its latest reported value for each dimension.
 """
+
 import argparse
 import csv
 import logging
@@ -11,11 +12,11 @@ import os
 from collections import Counter
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 
 logging.basicConfig(
     level=logging.INFO,

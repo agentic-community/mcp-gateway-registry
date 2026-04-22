@@ -4,7 +4,7 @@ description: Generate a usage report for MCP Gateway Registry by SSHing into the
 license: Apache-2.0
 metadata:
   author: mcp-gateway-registry
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Usage Report Skill
@@ -17,6 +17,7 @@ Export telemetry data from the MCP Gateway Registry's DocumentDB telemetry colle
 2. **Terraform state** available in `terraform/telemetry-collector/` (to read bastion IP)
 3. **Bastion host enabled** (`bastion_enabled = true` in `terraform/telemetry-collector/terraform.tfvars`)
 4. **AWS credentials** configured on the bastion host (for Secrets Manager access)
+5. **GitHub CLI (`gh`)** authenticated with read access to the upstream repo (`agentic-community/mcp-gateway-registry`) for collecting stars, forks, and contributor counts
 
 ## Input
 
@@ -121,6 +122,25 @@ This produces a PNG with two panels:
 
 **Note**: Run this after Step 6 (telemetry analysis) since it reads the metrics JSON.
 
+### Step 5d: Fetch GitHub Repository Stats
+
+Collect community-growth signals for the upstream repo (`agentic-community/mcp-gateway-registry`) using the authenticated `gh` CLI. These numbers complement telemetry by showing project interest outside of deployed instances.
+
+```bash
+# Star, fork, watcher, open-issue counts (single API call)
+gh api repos/agentic-community/mcp-gateway-registry \
+  --jq '{stars: .stargazers_count, forks: .forks_count, watchers: .subscribers_count, open_issues: .open_issues_count}' \
+  > $DATE_DIR/github_stats.json
+
+# Unique contributors (paginate through all pages, count unique logins)
+gh api --paginate repos/agentic-community/mcp-gateway-registry/contributors \
+  --jq '.[].login' | sort -u | wc -l > $DATE_DIR/github_contributors_count.txt
+```
+
+Record these numbers in the report and compare them against the previous report's `github_stats.json` (if present in the previous dated subfolder). Compute deltas for stars, forks, and contributors the same way telemetry metrics are compared.
+
+**Note**: If `gh` is not authenticated or the API call fails, skip the GitHub section in the report and log a short note instead of failing the entire run.
+
 ### Step 6: Run Telemetry Analysis
 
 Run the analysis script to compute all distributions, instance timelines, and metrics. This produces two files:
@@ -192,13 +212,14 @@ The main body focuses on insights and charts. Detailed event-count distribution 
 ---
 
 ## Executive Summary
-Lead with new installs since last report, total unique installs, dominant cloud/compute/IdP, growth trends. Include timeseries chart.
+Lead with new installs since last report, total unique installs, dominant cloud/compute/IdP, growth trends. Also include the current GitHub star count (with delta vs previous report) as a top-line community signal. Include timeseries chart.
 
 ![Registry Installs Timeseries](registry-installs-timeseries-YYYY-MM-DD.png)
 
 ### Comparison with Previous Report
 - Deltas for total events, unique instances, heartbeat events, null registry_id count
 - Per-cloud-provider unique registry installs comparison table
+- GitHub stars delta (and forks/contributors if notable)
 
 ## Deployment Distribution (by Unique Instances)
 ![Instance Distribution](instance-distribution-YYYY-MM-DD.png)
@@ -234,6 +255,17 @@ Total queries (deduplicated), average per instance, max from single instance.
 ## Heartbeat Metrics
 Server/agent/skill counts, uptime, search backend, embeddings provider.
 
+## GitHub Repository
+Community-growth signals for `agentic-community/mcp-gateway-registry` pulled via the `gh` CLI in Step 5d. Include a table with current values and deltas vs the previous report:
+
+| Metric | Previous | Current | Change |
+|--------|----------|---------|--------|
+| Stars | N | N | +N |
+| Forks | N | N | +N |
+| Contributors | N | N | +N |
+
+Add a short narrative: direction of growth (stars/week trend), any notable jumps (e.g., post-launch spike, blog-post-driven traffic), and whether contributor count is broadening (new external contributors) or concentrating.
+
 ## Architecture Patterns Observed
 3-5 distinct deployment patterns from the data.
 
@@ -267,9 +299,9 @@ which pandoc >/dev/null || sudo apt-get install -y pandoc
 ### Step 9: Present Results
 
 After generating the report:
-1. Display the Executive Summary (with comparison deltas) and Key Metrics directly in the conversation
+1. Display the Executive Summary (with comparison deltas, including GitHub stars delta) and Key Metrics directly in the conversation
 2. Tell the user the full report path, HTML path, CSV path, and chart paths
-3. Highlight the most interesting findings and notable changes from the previous report
+3. Highlight the most interesting findings and notable changes from the previous report (telemetry + GitHub)
 
 ## Error Handling
 
@@ -319,5 +351,7 @@ Output saved to `/tmp/reports/2026-04-18/`.
   2026-04-18/
     ai-registry-usage-report-2026-04-18.md
     ai-registry-usage-report-2026-04-18.html
+    github_stats.json
+    github_contributors_count.txt
     ...
 ```

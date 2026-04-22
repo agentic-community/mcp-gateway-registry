@@ -3,18 +3,18 @@
 Reads the metrics JSON (which contains instance_lifetime data) and
 produces a PNG with a histogram + KDE overlay of instance ages in days.
 """
+
 import argparse
 import json
 import logging
 import os
-from collections import Counter
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -54,7 +54,8 @@ def _generate_chart(
     sns.set_theme(style="whitegrid")
 
     fig, (ax_hist, ax_bar) = plt.subplots(
-        1, 2,
+        1,
+        2,
         figsize=(FIGURE_WIDTH, FIGURE_HEIGHT),
         gridspec_kw={"width_ratios": [3, 2]},
     )
@@ -115,7 +116,8 @@ def _generate_chart(
         f"Single-day: {single_day}"
     )
     ax_hist.text(
-        0.97, 0.95,
+        0.97,
+        0.95,
         stats_text,
         transform=ax_hist.transAxes,
         fontsize=10,

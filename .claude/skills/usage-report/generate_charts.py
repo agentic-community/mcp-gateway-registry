@@ -4,6 +4,7 @@ Reads registry_metrics.csv and produces a PNG with subplots showing
 distributions across cloud, compute, storage, auth, version type,
 and deployment mode.
 """
+
 import argparse
 import csv
 import logging
@@ -11,11 +12,11 @@ import os
 from collections import Counter
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 
 # Configure logging with basicConfig
 logging.basicConfig(
