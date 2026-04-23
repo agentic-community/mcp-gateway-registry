@@ -577,7 +577,7 @@ async def list_agents(
     query: str | None = Query(None, description="Search query string"),
     enabled_only: bool = Query(False, description="Show only enabled agents"),
     visibility: str | None = Query(None, description="Filter by visibility"),
-    limit: int = Query(20, ge=1, le=100, description="Number of agents to return (max 100)"),
+    limit: int = Query(20, ge=1, le=500, description="Number of agents to return (max 500)"),
     offset: int = Query(0, ge=0, description="Number of agents to skip"),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):

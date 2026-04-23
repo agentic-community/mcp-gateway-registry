@@ -85,7 +85,7 @@ export function useServerList(): UseServerListReturn {
     try {
       // Fetch both regular servers and virtual servers in parallel
       const [serversResponse, virtualServersResponse] = await Promise.all([
-        axios.get<ServerListResponse>('/api/servers'),
+        axios.get<ServerListResponse>('/api/servers?limit=500'),
         axios.get<VirtualServerListResponse>('/api/virtual-servers'),
       ]);
 

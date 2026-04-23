@@ -146,7 +146,7 @@ async def list_skills(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     include_disabled: bool = Query(False, description="Include disabled skills"),
     tag: str | None = Query(None, description="Filter by tag"),
-    limit: int = Query(20, ge=1, le=100, description="Number of skills to return (max 100)"),
+    limit: int = Query(20, ge=1, le=500, description="Number of skills to return (max 500)"),
     offset: int = Query(0, ge=0, description="Number of skills to skip"),
 ) -> dict:
     """List all registered skills with visibility filtering and pagination."""

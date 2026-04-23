@@ -321,7 +321,7 @@ async def read_root(
 async def get_servers_json(
     request: Request,
     query: str | None = None,
-    limit: int = Query(20, ge=1, le=100, description="Number of servers to return (max 100)"),
+    limit: int = Query(20, ge=1, le=500, description="Number of servers to return (max 500)"),
     offset: int = Query(0, ge=0, description="Number of servers to skip"),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
