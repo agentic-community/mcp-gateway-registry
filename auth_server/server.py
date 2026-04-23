@@ -169,6 +169,36 @@ class _RegistryApiKeyEntry(BaseModel):
         return v
 
 
+def _repair_stripped_json(
+    raw: str,
+) -> str:
+    """Re-quote a JSON-like string where docker-compose stripped double quotes.
+
+    Converts e.g. {name:{key:val,groups:[g1]}} back to valid JSON by adding
+    double quotes around all bare identifiers and values.
+    """
+    import re
+
+    result = []
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch in "{}[],:":
+            result.append(ch)
+            i += 1
+        elif ch in " \t\n\r":
+            i += 1
+        else:
+            # Read a bare token (everything until a structural char)
+            j = i
+            while j < len(raw) and raw[j] not in "{}[],:":
+                j += 1
+            token = raw[i:j].strip()
+            result.append(f'"{token}"')
+            i = j
+    return "".join(result)
+
+
 def _parse_registry_api_keys(
     raw: str,
 ) -> list[_RegistryApiKeyEntry]:
@@ -186,8 +216,19 @@ def _parse_registry_api_keys(
 
     try:
         doc = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"REGISTRY_API_KEYS is not valid JSON: {e}") from e
+    except json.JSONDecodeError:
+        # Docker Compose strips double quotes from .env values containing JSON.
+        # Attempt to recover by re-quoting bare identifiers:
+        #   {name:{key:val,...}} -> {"name":{"key":"val",...}}
+        repaired = _repair_stripped_json(raw)
+        try:
+            doc = json.loads(repaired)
+            logging.warning(
+                "REGISTRY_API_KEYS was not valid JSON (docker-compose may have "
+                "stripped quotes). Auto-repaired successfully."
+            )
+        except json.JSONDecodeError as e2:
+            raise ValueError(f"REGISTRY_API_KEYS is not valid JSON: {e2}") from e2
 
     if not isinstance(doc, dict):
         raise ValueError("REGISTRY_API_KEYS must be a JSON object")
