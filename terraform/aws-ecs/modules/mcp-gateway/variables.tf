@@ -658,6 +658,32 @@ variable "max_tokens_per_user_per_hour" {
   default     = 100
 }
 
+# Registration webhook (issue #742)
+variable "registration_webhook_url" {
+  description = "Webhook URL to POST to on successful registration or deletion. Disabled if empty."
+  type        = string
+  default     = ""
+}
+
+variable "registration_webhook_auth_header" {
+  description = "Auth header name for webhook requests."
+  type        = string
+  default     = "Authorization"
+}
+
+variable "registration_webhook_auth_token" {
+  description = "Auth token for webhook requests."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_webhook_timeout_seconds" {
+  description = "Timeout for webhook HTTP calls in seconds."
+  type        = number
+  default     = 10
+}
+
 variable "m2m_direct_registration_enabled" {
   description = "Enable the admin API at /api/iam/m2m-clients for direct M2M client registration (issue #851). Default: true."
   type        = bool

@@ -604,6 +604,35 @@ variable "max_tokens_per_user_per_hour" {
 }
 
 # =============================================================================
+# REGISTRATION WEBHOOK (Issue #742)
+# =============================================================================
+
+variable "registration_webhook_url" {
+  description = "Webhook URL to POST to on successful registration or deletion. Disabled if empty."
+  type        = string
+  default     = ""
+}
+
+variable "registration_webhook_auth_header" {
+  description = "Auth header name for webhook requests (e.g. Authorization, X-API-Key). If Authorization, Bearer is auto-prepended."
+  type        = string
+  default     = "Authorization"
+}
+
+variable "registration_webhook_auth_token" {
+  description = "Auth token for webhook requests. Leave empty for unauthenticated webhooks."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_webhook_timeout_seconds" {
+  description = "Timeout for webhook HTTP calls in seconds."
+  type        = number
+  default     = 10
+}
+
+# =============================================================================
 # M2M DIRECT CLIENT REGISTRATION (Issue #851)
 # =============================================================================
 

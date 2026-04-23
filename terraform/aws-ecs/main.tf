@@ -161,6 +161,12 @@ module "mcp_gateway" {
   registry_api_keys                  = var.registry_api_keys
   max_tokens_per_user_per_hour       = var.max_tokens_per_user_per_hour
 
+  # Registration webhook (issue #742)
+  registration_webhook_url             = var.registration_webhook_url
+  registration_webhook_auth_header     = var.registration_webhook_auth_header
+  registration_webhook_auth_token      = var.registration_webhook_auth_token
+  registration_webhook_timeout_seconds = var.registration_webhook_timeout_seconds
+
   # M2M direct client registration (issue #851)
   m2m_direct_registration_enabled = var.m2m_direct_registration_enabled
 

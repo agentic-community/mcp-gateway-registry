@@ -289,6 +289,25 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # max_tokens_per_user_per_hour = 100
 
 # ============================================================================
+# REGISTRATION WEBHOOK (Issue #742)
+# ============================================================================
+
+# Fire an async POST to this URL when a server, agent, or skill is registered
+# or deleted. Disabled when empty (default).
+# registration_webhook_url = "https://your-endpoint.example.com/webhook"
+
+# Auth header name. If "Authorization", the token is auto-prefixed with "Bearer ".
+# For custom headers (e.g. X-API-Key), the token is sent as-is.
+# Default: "Authorization"
+# registration_webhook_auth_header = "Authorization"
+
+# Auth token for webhook requests. Leave empty for unauthenticated webhooks.
+# registration_webhook_auth_token = ""
+
+# Timeout for webhook HTTP calls in seconds. Default: 10
+# registration_webhook_timeout_seconds = 10
+
+# ============================================================================
 # M2M DIRECT CLIENT REGISTRATION (Issue #851)
 # ============================================================================
 
