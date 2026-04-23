@@ -223,23 +223,6 @@ module "ecs_service_auth" {
           name  = "REGISTRY_API_KEYS"
           value = var.registry_api_keys
         },
-        # Registration webhook (issue #742)
-        {
-          name  = "REGISTRATION_WEBHOOK_URL"
-          value = var.registration_webhook_url
-        },
-        {
-          name  = "REGISTRATION_WEBHOOK_AUTH_HEADER"
-          value = var.registration_webhook_auth_header
-        },
-        {
-          name  = "REGISTRATION_WEBHOOK_AUTH_TOKEN"
-          value = var.registration_webhook_auth_token
-        },
-        {
-          name  = "REGISTRATION_WEBHOOK_TIMEOUT_SECONDS"
-          value = tostring(var.registration_webhook_timeout_seconds)
-        },
         # M2M direct client registration (issue #851)
         {
           name  = "M2M_DIRECT_REGISTRATION_ENABLED"
@@ -897,6 +880,23 @@ module "ecs_service_registry" {
         {
           name  = "M2M_DIRECT_REGISTRATION_ENABLED"
           value = tostring(var.m2m_direct_registration_enabled)
+        },
+        # Registration webhook (issue #742)
+        {
+          name  = "REGISTRATION_WEBHOOK_URL"
+          value = var.registration_webhook_url
+        },
+        {
+          name  = "REGISTRATION_WEBHOOK_AUTH_HEADER"
+          value = var.registration_webhook_auth_header
+        },
+        {
+          name  = "REGISTRATION_WEBHOOK_AUTH_TOKEN"
+          value = var.registration_webhook_auth_token
+        },
+        {
+          name  = "REGISTRATION_WEBHOOK_TIMEOUT_SECONDS"
+          value = tostring(var.registration_webhook_timeout_seconds)
         },
         # Telemetry configuration
         {
