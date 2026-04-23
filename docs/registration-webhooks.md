@@ -300,6 +300,7 @@ The gate is checked on the following operations:
 | Agent | Register | `POST /api/agents/register` |
 | Agent | Update | `PUT /api/agents/{path}` |
 | Server | Register | `POST /servers/register`, `POST /internal/register`, `POST /api/servers/register` |
+| Server | Update | `POST /edit/{path}` |
 | Skill | Register | `POST /api/skills` |
 | Skill | Update | `PUT /api/skills/{path}` |
 

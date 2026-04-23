@@ -1616,6 +1616,24 @@ async def edit_server_submit(
                 detail="Invalid JSON in metadata field",
             )
 
+    # Registration gate check (admission control, issue #809)
+    gate_result = await check_registration_gate(
+        asset_type="server",
+        operation="update",
+        source_api=f"/edit/{service_path}",
+        registration_payload=updated_server_entry,
+        raw_headers=request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied server update '{name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
+
     # Handle auth fields for edit
     if auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
         updated_server_entry["auth_scheme"] = auth_scheme

@@ -85,6 +85,10 @@ def pytest_configure(config):
     # (AWS DocumentDB requires TLS, but local MongoDB CE does not)
     os.environ["DOCUMENTDB_USE_TLS"] = "false"
 
+    # Disable registration gate for all tests by default
+    # (dedicated gate tests mock settings directly)
+    os.environ["REGISTRATION_GATE_ENABLED"] = "false"
+
     print(
         "Test environment configured: DOCUMENTDB_HOST=localhost, STORAGE_BACKEND=mongodb-ce, DOCUMENTDB_DIRECT_CONNECTION=true, DOCUMENTDB_USE_TLS=false"
     )
