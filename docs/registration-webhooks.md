@@ -213,6 +213,8 @@ Run with: `uvicorn receiver:app --host 0.0.0.0 --port 6789`
 
 ## Registration Gate (Admission Control)
 
+![Registration Gate Configuration](img/registration-gate.png)
+
 The **registration gate** is an admission control webhook called **before** a registration or update is persisted. Unlike the notification webhook above (which fires after the fact and cannot block the operation), the registration gate can **approve or deny** a request based on custom business logic such as naming conventions, compliance rules, or approval workflows.
 
 ### How It Differs from the Notification Webhook
