@@ -1513,6 +1513,7 @@ async def edit_server_submit(
     metadata: Annotated[str | None, Form()] = None,
     visibility: Annotated[str, Form()] = "public",
     allowed_groups: Annotated[str | None, Form()] = None,
+    service_status: Annotated[str | None, Form(alias="status")] = None,
     auth_scheme: Annotated[str, Form()] = "none",
     auth_credential: Annotated[str | None, Form()] = None,
     auth_header_name: Annotated[str | None, Form()] = None,
@@ -1599,6 +1600,10 @@ async def edit_server_submit(
         "visibility": visibility,
         "allowed_groups": allowed_groups_list,
     }
+
+    # Add optional status if provided
+    if service_status:
+        updated_server_entry["status"] = service_status
 
     # Add optional mcp_endpoint if provided
     if mcp_endpoint:
