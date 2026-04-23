@@ -217,6 +217,12 @@ registry:
     registryApiKeysExistingSecret: ""  # If set, read REGISTRY_API_KEYS from this K8s secret instead
     registryApiKeysExistingSecretKey: "REGISTRY_API_KEYS"  # Key within the existing secret
 
+    # Registration webhook (issue #742)
+    registrationWebhookUrl: ""
+    registrationWebhookAuthHeader: "Authorization"
+    registrationWebhookAuthToken: ""
+    registrationWebhookTimeoutSeconds: "10"
+
     # M2M direct client registration (issue #851)
     # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and
     # their group mappings directly, without requiring an IdP Admin API token.
