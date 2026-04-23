@@ -7,6 +7,7 @@ and management following the A2A protocol specification.
 Based on: docs/design/a2a-protocol-integration.md
 """
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -36,6 +37,7 @@ from ..schemas.agent_models import (
     AgentRegistrationRequest,
 )
 from ..services.agent_service import agent_service
+from ..services.webhook_service import send_registration_webhook
 from ..utils.request_utils import get_client_ip
 
 
@@ -540,6 +542,16 @@ async def register_agent(
             logger.warning(
                 f"ANS linking failed for agent '{path}' with ANS ID '{request.ans_agent_id}': {e}"
             )
+
+    # Registration webhook (Issue #742)
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="registration",
+            registration_type="agent",
+            card_data=agent_card.model_dump(mode="json"),
+            performed_by=user_context["username"],
+        )
+    )
 
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
@@ -1407,6 +1419,15 @@ async def delete_agent(
     await faiss_service.remove_entity(path)
 
     logger.info(f"Agent at path '{path}' deleted by user '{user_context['username']}'")
+
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="deletion",
+            registration_type="agent",
+            card_data=existing_agent.model_dump(mode="json"),
+            performed_by=user_context.get("username"),
+        )
+    )
 
     return JSONResponse(
         status_code=status.HTTP_204_NO_CONTENT,

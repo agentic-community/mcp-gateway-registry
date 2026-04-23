@@ -48,6 +48,24 @@ class Settings(BaseSettings):
     registry_api_keys: str = ""  # Multi-key static tokens JSON (Issue #779)
     max_tokens_per_user_per_hour: int = 100  # JWT token vending rate limit
 
+    # Registration webhook settings (Issue #742)
+    registration_webhook_url: str | None = Field(
+        default=None,
+        description="Webhook URL to POST to on successful registration or deletion. Disabled if not set.",
+    )
+    registration_webhook_auth_header: str = Field(
+        default="Authorization",
+        description="Auth header name for webhook requests (e.g., Authorization, X-API-Key)",
+    )
+    registration_webhook_auth_token: str | None = Field(
+        default=None,
+        description="Auth token for webhook. If header is Authorization, Bearer is auto-prepended.",
+    )
+    registration_webhook_timeout_seconds: int = Field(
+        default=10,
+        description="Timeout for webhook HTTP calls in seconds",
+    )
+
     # Embeddings settings [Default]
     embeddings_provider: str = "sentence-transformers"  # 'sentence-transformers' or 'litellm'
     embeddings_model_name: str = "all-MiniLM-L6-v2"

@@ -19,6 +19,7 @@ from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
+from ..services.webhook_service import send_registration_webhook
 from ..utils.credential_encryption import encrypt_credential_in_server_dict
 
 logger = logging.getLogger(__name__)
@@ -835,6 +836,16 @@ async def register_service(
 
     # Security scanning if enabled (non-blocking — scan is non-fatal, don't block response)
     asyncio.create_task(_perform_security_scan_on_registration(path, proxy_pass_url, server_entry))
+
+    # Registration webhook (Issue #742)
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="registration",
+            registration_type="server",
+            card_data=server_entry,
+            performed_by=user_context["username"],
+        )
+    )
 
     logger.info(
         f"New service registered: '{name}' at path '{path}' by user '{user_context['username']}'"
@@ -2742,6 +2753,16 @@ async def register_service_api(
         asyncio.create_task(health_service.perform_immediate_health_check(path))
         asyncio.create_task(faiss_service.save_data())
 
+        # Registration webhook (Issue #742)
+        asyncio.create_task(
+            send_registration_webhook(
+                event_type="registration",
+                registration_type="server",
+                card_data=server_entry,
+                performed_by=user_context.get("username"),
+            )
+        )
+
         return JSONResponse(
             status_code=201,
             content={
@@ -3120,6 +3141,16 @@ async def remove_service_api(
         logger.info(f"Successfully removed server {path} from scopes")
     except Exception as e:
         logger.warning(f"Failed to remove server {path} from scopes: {e}")
+
+    # Deletion webhook (Issue #742): server_info was fetched before removal
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="deletion",
+            registration_type="server",
+            card_data=server_info,
+            performed_by=user_context.get("username"),
+        )
+    )
 
     return JSONResponse(
         status_code=200,

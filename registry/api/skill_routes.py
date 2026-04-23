@@ -10,6 +10,7 @@ All recommendations implemented:
 - Resource listing endpoints
 """
 
+import asyncio
 import logging
 from typing import (
     Annotated,
@@ -52,6 +53,7 @@ from ..services.skill_service import (
     get_skill_service,
 )
 from ..services.tool_validation_service import get_tool_validation_service
+from ..services.webhook_service import send_registration_webhook
 from ..utils.path_utils import normalize_skill_path
 
 # Configure logging
@@ -641,6 +643,15 @@ async def register_skill(
         # Perform security scan on registration (non-blocking on failure)
         await _perform_skill_security_scan_on_registration(skill, service)
 
+        asyncio.create_task(
+            send_registration_webhook(
+                event_type="registration",
+                registration_type="skill",
+                card_data=skill.model_dump(mode="json"),
+                performed_by=owner,
+            )
+        )
+
         return skill
 
     except SkillUrlValidationError as e:
@@ -748,6 +759,15 @@ async def delete_skill(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
         )
+
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="deletion",
+            registration_type="skill",
+            card_data=existing.model_dump(mode="json"),
+            performed_by=user_context.get("username"),
+        )
+    )
 
 
 @router.post("/{skill_path:path}/toggle", response_model=dict, summary="Toggle skill enabled state")
