@@ -699,8 +699,8 @@ class TestListAgents:
 
     @pytest.mark.asyncio
     async def test_list_agents_limit_exceeds_max_rejected(self, test_app, mock_user_context):
-        """limit=101 must be rejected with 422."""
-        response = test_app.get("/agents?limit=101")
+        """limit=501 must be rejected with 422."""
+        response = test_app.get("/agents?limit=501")
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     @pytest.mark.asyncio
