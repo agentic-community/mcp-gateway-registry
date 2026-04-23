@@ -10,7 +10,6 @@ This document provides a comprehensive reference for all configuration files in 
 | [`.env` (OAuth)](#oauth-environment-configuration) | OAuth provider credentials | Environment | `credentials-provider/oauth/` | `.env.example` | **Yes** - Required |
 | [`.env` (AgentCore)](#agentcore-environment-configuration) | AgentCore authentication config | Environment | `credentials-provider/agentcore-auth/` | `.env.example` | **Optional** - Only if using AgentCore |
 | [`oauth2_providers.yml`](#oauth2-providers-configuration) | OAuth2 provider definitions | YAML | `auth_server/` | - | **No** - Pre-configured |
-| [`scopes.yml`](#scopes-configuration) | Fine-grained access control scopes | YAML | `auth_server/` | - | **Rarely** - Only for custom permissions |
 | [`oauth_providers.yaml`](#oauth-providers-mapping) | Provider-specific OAuth configurations | YAML | `credentials-provider/oauth/` | - | **No** - Pre-configured |
 | [`docker-compose.yml`](#docker-compose-configuration) | Container orchestration | YAML | Project root | - | **Rarely** - Only for custom deployments |
 
@@ -300,7 +299,6 @@ STORAGE_BACKEND=file  # DEPRECATED - Use mongodb-ce instead
 **Data stored in:**
 - Servers: `~/mcp-gateway/servers/*.json`
 - Agents: `~/mcp-gateway/agents/*.json`
-- Scopes: `auth_server/scopes.yml`
 - Security scans: `~/mcp-gateway/security_scans/*.json`
 
 #### MongoDB CE Backend (Recommended for Local Development)
@@ -387,7 +385,7 @@ mongosh --host <cluster-endpoint> \
 - MongoDB CE uses application-level vector search (Python cosine similarity)
 - DocumentDB uses native HNSW vector indexes for production performance
 - Both backends use the same repository code (`DocumentDBServerRepository`, etc.)
-- `auth_server/scopes.yml` is no longer the source of truth when using mongodb-ce or documentdb backend
+- Scopes are stored in MongoDB (collection `mcp_scopes_{namespace}`) and managed via the API
 
 **Switching Between Backends:**
 
@@ -683,19 +681,6 @@ When using Keycloak as the authentication provider, the following configuration 
 - **Amazon Cognito**: Amazon managed authentication service
 - **GitHub**: Repository and development services (planned)
 - **Google**: Google Workspace and consumer services (planned)
-
----
-
-## Scopes Configuration
-
-**File:** `auth_server/scopes.yml`
-**Purpose:** Fine-grained access control (FGAC) scope definitions.
-
-### Scope Categories
-
-- **MCP Servers**: Individual server access (`mcp-servers-{name}/read`, `mcp-servers-{name}/execute`)
-- **Unrestricted**: Global access (`mcp-servers-unrestricted/read`, `mcp-servers-unrestricted/execute`)
-- **Admin**: Administrative functions (`admin/registry`, `admin/users`)
 
 ---
 
