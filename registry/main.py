@@ -706,6 +706,16 @@ async def lifespan(app: FastAPI):
                 "Demo server auto-registration disabled (DISABLE_AI_REGISTRY_TOOLS_SERVER=true)"
             )
 
+        # Verify registration gate connectivity (non-blocking)
+        from registry.services.registration_gate_service import verify_gate_connectivity
+
+        try:
+            await verify_gate_connectivity()
+        except Exception as e:
+            logger.warning(
+                f"Registration gate connectivity check failed (continuing with startup): {e}"
+            )
+
         # Always generate nginx configuration at startup to ensure placeholders are replaced
         # In registry-only mode, generate base config without MCP server location blocks
         if settings.nginx_updates_enabled:

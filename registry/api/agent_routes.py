@@ -37,6 +37,7 @@ from ..schemas.agent_models import (
     AgentRegistrationRequest,
 )
 from ..services.agent_service import agent_service
+from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.request_utils import get_client_ip
 
@@ -487,6 +488,24 @@ async def register_agent(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid agent card: {str(e)}",
+        )
+
+    # Registration gate check (admission control, issue #809)
+    gate_result = await check_registration_gate(
+        asset_type="agent",
+        operation="register",
+        source_api="/api/agents/register",
+        registration_payload=request.model_dump(mode="json"),
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied agent '{request.name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
     success = await agent_service.register_agent(agent_card)
@@ -1317,6 +1336,24 @@ async def update_agent(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid agent card: {str(e)}",
+        )
+
+    # Registration gate check for update (admission control, issue #809)
+    gate_result = await check_registration_gate(
+        asset_type="agent",
+        operation="update",
+        source_api=f"/api/agents/{path}",
+        registration_payload=request.model_dump(mode="json"),
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied agent update '{request.name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
     success = await agent_service.update_agent(path, updated_agent)

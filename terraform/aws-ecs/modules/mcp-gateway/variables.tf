@@ -684,6 +684,50 @@ variable "registration_webhook_timeout_seconds" {
   default     = 10
 }
 
+# Registration gate / admission control (issue #809)
+variable "registration_gate_enabled" {
+  description = "Enable registration gate (admission control). Default: false."
+  type        = bool
+  default     = false
+}
+
+variable "registration_gate_url" {
+  description = "URL of the registration gate endpoint."
+  type        = string
+  default     = ""
+}
+
+variable "registration_gate_auth_type" {
+  description = "Auth type for gate: none, api_key, or bearer."
+  type        = string
+  default     = "none"
+}
+
+variable "registration_gate_auth_credential" {
+  description = "Auth credential for the gate endpoint."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_gate_auth_header_name" {
+  description = "Header name when auth_type=api_key."
+  type        = string
+  default     = "X-Api-Key"
+}
+
+variable "registration_gate_timeout_seconds" {
+  description = "HTTP timeout per gate attempt in seconds."
+  type        = number
+  default     = 5
+}
+
+variable "registration_gate_max_retries" {
+  description = "Retries after first gate attempt."
+  type        = number
+  default     = 2
+}
+
 variable "m2m_direct_registration_enabled" {
   description = "Enable the admin API at /api/iam/m2m-clients for direct M2M client registration (issue #851). Default: true."
   type        = bool

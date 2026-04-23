@@ -1,4 +1,8 @@
-# Registration Webhooks
+# Registration Webhooks and Gate
+
+MCP Gateway Registry provides two external integration points for registration lifecycle events: **notification webhooks** that fire after a registration or deletion, and a **registration gate** (admission control) that can approve or deny registrations and updates before they are persisted.
+
+## Notification Webhooks
 
 MCP Gateway Registry can send HTTP webhook notifications when servers, agents, or skills are registered (added) or deleted (removed). This enables external systems to react to registry changes in real time, for example updating a CMDB, triggering a CI/CD pipeline, sending a Slack notification, or syncing with a third-party inventory.
 
@@ -207,14 +211,14 @@ Run with: `uvicorn receiver:app --host 0.0.0.0 --port 6789`
 
 ---
 
-## Registration Gate (Coming Soon)
+## Registration Gate (Admission Control)
 
-Issue [#809](https://github.com/agentic-community/mcp-gateway-registry/issues/809) adds a **registration gate** (admission control webhook) that is called **before** a registration is persisted. Unlike the notification webhook described above (which fires after the fact and cannot block the operation), the registration gate can **approve or deny** a registration based on custom business logic.
+The **registration gate** is an admission control webhook called **before** a registration or update is persisted. Unlike the notification webhook above (which fires after the fact and cannot block the operation), the registration gate can **approve or deny** a request based on custom business logic such as naming conventions, compliance rules, or approval workflows.
 
 ### How It Differs from the Notification Webhook
 
-| Aspect | Notification Webhook (this page) | Registration Gate (#809) |
-|--------|----------------------------------|--------------------------|
+| Aspect | Notification Webhook | Registration Gate |
+|--------|---------------------|-------------------|
 | Timing | After the registration is persisted | Before the registration is persisted |
 | Can block registration | No (fire-and-forget) | Yes (approve/deny) |
 | Failure behavior | Logged, never blocks caller | Fail-closed: blocks registration if gate is unavailable |
@@ -222,25 +226,115 @@ Issue [#809](https://github.com/agentic-community/mcp-gateway-registry/issues/80
 | Applies to | Registration and deletion events | Registration and update events |
 | Credential handling | Full card data sent | Credentials stripped from payload |
 
-### Planned Capabilities
+### Capabilities
 
-- Approve or deny registrations based on naming conventions, compliance rules, or approval workflows
-- Applies to all asset types: servers, agents, and skills (both register and update operations)
+- Approve or deny registrations and updates for servers, agents, and skills
 - Configurable authentication: none, API key, or Bearer token
-- Fail-closed design: if the gate is unreachable, registrations are blocked
-- Custom denial messages returned to the caller
-- Sensitive fields (credentials, tokens, passwords) are never sent to the gate endpoint
+- Fail-closed design: if the gate is unreachable after retries, registration is blocked
+- Custom denial messages returned to the caller as HTTP 403
+- Sensitive fields (credentials, tokens, passwords) are automatically stripped from the payload sent to the gate
+- Exponential backoff retries (0.5s, 1s, 2s, ...)
+- Startup connectivity check (non-blocking, logs warnings if gate is unreachable)
 
-### Planned Configuration
+### Gate Protocol
 
-| Variable | Description |
-|----------|-------------|
-| `REGISTRATION_GATE_ENABLED` | Enable/disable the gate (default: false) |
-| `REGISTRATION_GATE_URL` | URL of the gate endpoint |
-| `REGISTRATION_GATE_AUTH_TYPE` | Auth type: none, api_key, or bearer |
-| `REGISTRATION_GATE_AUTH_CREDENTIAL` | API key or Bearer token |
-| `REGISTRATION_GATE_AUTH_HEADER_NAME` | Header name for api_key auth (default: X-Api-Key) |
-| `REGISTRATION_GATE_TIMEOUT_SECONDS` | HTTP timeout per attempt (default: 5) |
-| `REGISTRATION_GATE_MAX_RETRIES` | Max retry attempts (default: 2) |
+The registry sends a POST request to the gate URL with the following JSON body:
+
+```json
+{
+  "asset_type": "agent",
+  "operation": "register",
+  "source_api": "/api/agents/register",
+  "registration_payload": { ... },
+  "request_headers": { "host": "...", "content-type": "..." }
+}
+```
+
+**Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `asset_type` | `"agent"`, `"server"`, or `"skill"` |
+| `operation` | `"register"` or `"update"` |
+| `source_api` | The API path that triggered the request |
+| `registration_payload` | The registration data with sensitive fields removed |
+| `request_headers` | HTTP headers from the original request (sensitive headers excluded) |
+
+**Gate Response Codes:**
+
+| Status Code | Meaning |
+|-------------|---------|
+| `200` | Registration allowed |
+| `403` | Registration denied. Response body may include `{"error": "reason"}` |
+| Any other | Triggers retry (unexpected status) |
+
+### Credential Sanitization
+
+The following fields are automatically removed from `registration_payload` before sending to the gate:
+
+- Fields named: `auth_credential`, `auth_credential_encrypted`, `auth_header_name`
+- Fields containing: `credential`, `secret`, `token`, `password`, `api_key`
+
+Sensitive request headers are also excluded: `authorization`, `cookie`, `x-csrf-token`.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REGISTRATION_GATE_ENABLED` | `false` | Enable/disable the gate |
+| `REGISTRATION_GATE_URL` | (empty) | URL of the gate endpoint. Must be set when enabled |
+| `REGISTRATION_GATE_AUTH_TYPE` | `none` | Auth type: `none`, `api_key`, or `bearer` |
+| `REGISTRATION_GATE_AUTH_CREDENTIAL` | (empty) | API key or Bearer token value |
+| `REGISTRATION_GATE_AUTH_HEADER_NAME` | `X-Api-Key` | Header name for `api_key` auth type |
+| `REGISTRATION_GATE_TIMEOUT_SECONDS` | `5` | HTTP timeout per attempt (seconds) |
+| `REGISTRATION_GATE_MAX_RETRIES` | `2` | Retry attempts after first failure (exponential backoff) |
+
+### Endpoints Covered
+
+The gate is checked on the following operations:
+
+| Asset Type | Operation | Endpoint |
+|------------|-----------|----------|
+| Agent | Register | `POST /api/agents/register` |
+| Agent | Update | `PUT /api/agents/{path}` |
+| Server | Register | `POST /servers/register`, `POST /internal/register`, `POST /api/servers/register` |
+| Skill | Register | `POST /api/skills` |
+| Skill | Update | `PUT /api/skills/{path}` |
+
+### Example: Simple Gate Endpoint
+
+A minimal Python gate endpoint that approves all registrations:
+
+```python
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+@app.post("/gate")
+async def gate(request: Request):
+    body = await request.json()
+    # Implement your approval logic here
+    return {"status": "allowed"}
+```
+
+To deny a registration, return HTTP 403 with an error message:
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+@app.post("/gate")
+async def gate(request: Request):
+    body = await request.json()
+    name = body.get("registration_payload", {}).get("name", "")
+    if not name.startswith("prod-"):
+        return JSONResponse(
+            status_code=403,
+            content={"error": "All production assets must start with 'prod-'"},
+        )
+    return {"status": "allowed"}
+```
 
 See [issue #809](https://github.com/agentic-community/mcp-gateway-registry/issues/809) for the full design specification.

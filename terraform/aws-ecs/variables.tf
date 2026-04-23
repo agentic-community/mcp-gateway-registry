@@ -633,6 +633,53 @@ variable "registration_webhook_timeout_seconds" {
 }
 
 # =============================================================================
+# REGISTRATION GATE / ADMISSION CONTROL (Issue #809)
+# =============================================================================
+
+variable "registration_gate_enabled" {
+  description = "Enable the registration gate (admission control). When enabled, an external endpoint must approve registrations and updates before they are persisted. Default: false."
+  type        = bool
+  default     = false
+}
+
+variable "registration_gate_url" {
+  description = "URL of the registration gate endpoint. Must be set when gate is enabled."
+  type        = string
+  default     = ""
+}
+
+variable "registration_gate_auth_type" {
+  description = "Auth type for the gate endpoint: none, api_key, or bearer. Default: none."
+  type        = string
+  default     = "none"
+}
+
+variable "registration_gate_auth_credential" {
+  description = "Auth credential for the gate endpoint (used with api_key or bearer auth types)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_gate_auth_header_name" {
+  description = "Header name when auth_type=api_key. Default: X-Api-Key."
+  type        = string
+  default     = "X-Api-Key"
+}
+
+variable "registration_gate_timeout_seconds" {
+  description = "HTTP timeout per gate request attempt in seconds. Default: 5."
+  type        = number
+  default     = 5
+}
+
+variable "registration_gate_max_retries" {
+  description = "Number of retries after the first gate attempt. Uses exponential backoff. Default: 2."
+  type        = number
+  default     = 2
+}
+
+# =============================================================================
 # M2M DIRECT CLIENT REGISTRATION (Issue #851)
 # =============================================================================
 

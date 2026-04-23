@@ -167,6 +167,15 @@ module "mcp_gateway" {
   registration_webhook_auth_token      = var.registration_webhook_auth_token
   registration_webhook_timeout_seconds = var.registration_webhook_timeout_seconds
 
+  # Registration gate / admission control (issue #809)
+  registration_gate_enabled          = var.registration_gate_enabled
+  registration_gate_url              = var.registration_gate_url
+  registration_gate_auth_type        = var.registration_gate_auth_type
+  registration_gate_auth_credential  = var.registration_gate_auth_credential
+  registration_gate_auth_header_name = var.registration_gate_auth_header_name
+  registration_gate_timeout_seconds  = var.registration_gate_timeout_seconds
+  registration_gate_max_retries      = var.registration_gate_max_retries
+
   # M2M direct client registration (issue #851)
   m2m_direct_registration_enabled = var.m2m_direct_registration_enabled
 

@@ -171,3 +171,37 @@ class VirtualServerServiceError(VirtualServerRegistryError):
     """Internal service error during virtual server operation."""
 
     pass
+
+
+# Registration Gate exceptions
+
+
+class RegistrationGateError(RegistryError):
+    """Base exception for registration gate operations."""
+
+    pass
+
+
+class RegistrationGateDeniedError(RegistrationGateError):
+    """Registration was denied by the gate endpoint."""
+
+    def __init__(
+        self,
+        reason: str,
+    ):
+        self.reason = reason
+        super().__init__(f"Registration denied by policy gate: {reason}")
+
+
+class RegistrationGateUnavailableError(RegistrationGateError):
+    """Gate endpoint is unreachable or returned an unexpected error."""
+
+    def __init__(
+        self,
+        detail: str,
+    ):
+        self.detail = detail
+        super().__init__(
+            f"Registration gate is unavailable: {detail}. "
+            f"Registration blocked (fail-closed policy)."
+        )

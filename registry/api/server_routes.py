@@ -19,6 +19,7 @@ from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
+from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.credential_encryption import encrypt_credential_in_server_dict
 
@@ -627,6 +628,7 @@ async def toggle_service_route(
 
 @router.post("/register")
 async def register_service(
+    request: Request,
     name: Annotated[str, Form()],
     description: Annotated[str, Form()],
     path: Annotated[str, Form()],
@@ -736,6 +738,25 @@ async def register_service(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
             )
+
+    # Registration gate check (admission control, issue #809)
+    # Called BEFORE credential encryption so sanitize() can strip plaintext fields
+    gate_result = await check_registration_gate(
+        asset_type="server",
+        operation="register",
+        source_api="/servers/register",
+        registration_payload=server_entry,
+        raw_headers=request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied server '{name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
 
     # Add auth fields
     if auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
@@ -1002,6 +1023,24 @@ async def internal_register_service(
                 status_code=400,
                 content={"error": "Invalid metadata", "reason": "metadata must be valid JSON"},
             )
+
+    # Registration gate check (admission control, issue #809)
+    gate_result = await check_registration_gate(
+        asset_type="server",
+        operation="register",
+        source_api="/internal/register",
+        registration_payload=server_entry,
+        raw_headers=request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied internal server '{name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
 
     # Encrypt credential before storage (if provided)
     if auth_credential and auth_scheme != "none":
@@ -2660,6 +2699,24 @@ async def register_service_api(
         external_tags_list = [tag.strip() for tag in external_tags.split(",") if tag.strip()]
         if external_tags_list:
             server_entry["external_tags"] = external_tags_list
+
+    # Registration gate check (admission control, issue #809)
+    gate_result = await check_registration_gate(
+        asset_type="server",
+        operation="register",
+        source_api="/api/servers/register",
+        registration_payload=server_entry,
+        raw_headers=request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied server '{name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
 
     # Encrypt credential before storage (if provided)
     if auth_credential and auth_scheme != "none":

@@ -260,9 +260,22 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("disable_ai_registry_tools_server", "Disable AI Registry Tools Server", False),
         ],
     },
+    "registration_gate": {
+        "title": "Registration Gate (Admission Control)",
+        "order": 17,
+        "fields": [
+            ("registration_gate_enabled", "Gate Enabled", False),
+            ("registration_gate_url", "Gate URL", False),
+            ("registration_gate_auth_type", "Auth Type", False),
+            ("registration_gate_auth_credential", "Auth Credential", True),
+            ("registration_gate_auth_header_name", "Auth Header Name", False),
+            ("registration_gate_timeout_seconds", "Timeout (s)", False),
+            ("registration_gate_max_retries", "Max Retries", False),
+        ],
+    },
     "github_auth": {
         "title": "GitHub Private Repo Auth",
-        "order": 17,
+        "order": 18,
         "fields": [
             ("github_pat", "Personal Access Token", True),
             ("github_app_id", "GitHub App ID", False),
@@ -581,6 +594,7 @@ async def get_config() -> dict[str, Any]:
         "deployment_mode": settings.deployment_mode.value,
         "registry_mode": settings.registry_mode.value,
         "nginx_updates_enabled": settings.nginx_updates_enabled,
+        "registration_gate_enabled": settings.registration_gate_enabled,
         "asset_lifecycle_statuses": [s.value for s in LifecycleStatus],
         "features": {
             "mcp_servers": (

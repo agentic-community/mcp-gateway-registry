@@ -898,6 +898,35 @@ module "ecs_service_registry" {
           name  = "REGISTRATION_WEBHOOK_TIMEOUT_SECONDS"
           value = tostring(var.registration_webhook_timeout_seconds)
         },
+        # Registration gate / admission control (issue #809)
+        {
+          name  = "REGISTRATION_GATE_ENABLED"
+          value = tostring(var.registration_gate_enabled)
+        },
+        {
+          name  = "REGISTRATION_GATE_URL"
+          value = var.registration_gate_url
+        },
+        {
+          name  = "REGISTRATION_GATE_AUTH_TYPE"
+          value = var.registration_gate_auth_type
+        },
+        {
+          name  = "REGISTRATION_GATE_AUTH_CREDENTIAL"
+          value = var.registration_gate_auth_credential
+        },
+        {
+          name  = "REGISTRATION_GATE_AUTH_HEADER_NAME"
+          value = var.registration_gate_auth_header_name
+        },
+        {
+          name  = "REGISTRATION_GATE_TIMEOUT_SECONDS"
+          value = tostring(var.registration_gate_timeout_seconds)
+        },
+        {
+          name  = "REGISTRATION_GATE_MAX_RETRIES"
+          value = tostring(var.registration_gate_max_retries)
+        },
         # Telemetry configuration
         {
           name  = "MCP_TELEMETRY_DISABLED"

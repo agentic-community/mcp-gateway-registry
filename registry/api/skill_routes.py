@@ -52,6 +52,7 @@ from ..services.skill_service import (
     _is_safe_url,
     get_skill_service,
 )
+from ..services.registration_gate_service import check_registration_gate
 from ..services.tool_validation_service import get_tool_validation_service
 from ..services.webhook_service import send_registration_webhook
 from ..utils.path_utils import normalize_skill_path
@@ -633,6 +634,24 @@ async def register_skill(
         description=f"Register skill {request.name}",
     )
 
+    # Registration gate check (admission control, issue #809)
+    gate_result = await check_registration_gate(
+        asset_type="skill",
+        operation="register",
+        source_api="/api/skills",
+        registration_payload=request.model_dump(mode="json"),
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied skill '{request.name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
+
     service = get_skill_service()
     owner = user_context.get("username")
 
@@ -699,6 +718,24 @@ async def update_skill(
 
     if not _user_can_modify_skill(existing, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Registration gate check for update (admission control, issue #809)
+    gate_result = await check_registration_gate(
+        asset_type="skill",
+        operation="update",
+        source_api=f"/api/skills/{normalized_path}",
+        registration_payload=request.model_dump(mode="json"),
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied skill update '{request.name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
 
     updates = request.model_dump(exclude_unset=True, mode="json")
 

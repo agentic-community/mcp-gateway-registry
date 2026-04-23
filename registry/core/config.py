@@ -66,6 +66,36 @@ class Settings(BaseSettings):
         description="Timeout for webhook HTTP calls in seconds",
     )
 
+    # Registration Gate Configuration (Admission Control, Issue #809)
+    registration_gate_enabled: bool = Field(
+        default=False,
+        description="Enable registration gate (admission control webhook) for all asset registrations and updates",
+    )
+    registration_gate_url: str = Field(
+        default="",
+        description="URL of the registration gate endpoint (HTTPS recommended, HTTP triggers warning)",
+    )
+    registration_gate_auth_type: str = Field(
+        default="none",
+        description="Auth type for gate endpoint: 'none', 'api_key', or 'bearer'",
+    )
+    registration_gate_auth_credential: str = Field(
+        default="",
+        description="API key or Bearer token for authenticating with the gate endpoint",
+    )
+    registration_gate_auth_header_name: str = Field(
+        default="X-Api-Key",
+        description="HTTP header name for API key auth (only used when auth_type='api_key')",
+    )
+    registration_gate_timeout_seconds: int = Field(
+        default=5,
+        description="HTTP request timeout in seconds for each gate call attempt",
+    )
+    registration_gate_max_retries: int = Field(
+        default=2,
+        description="Maximum retry attempts for gate calls on transient failures",
+    )
+
     # Embeddings settings [Default]
     embeddings_provider: str = "sentence-transformers"  # 'sentence-transformers' or 'litellm'
     embeddings_model_name: str = "all-MiniLM-L6-v2"

@@ -52,6 +52,17 @@ app:
   registrationWebhookAuthToken: ""  # Auth token. Leave empty for unauthenticated webhooks.
   registrationWebhookTimeoutSeconds: "10"
 
+  # Registration gate / admission control (issue #809)
+  # Calls an external endpoint to approve or deny registrations and updates
+  # BEFORE they are persisted. Fail-closed when gate is unreachable.
+  registrationGateEnabled: false
+  registrationGateUrl: ""  # Gate URL. Must be set when enabled.
+  registrationGateAuthType: "none"  # none, api_key, or bearer
+  registrationGateAuthCredential: ""  # Credential for api_key or bearer
+  registrationGateAuthHeaderName: "X-Api-Key"  # Header for api_key auth
+  registrationGateTimeoutSeconds: "5"
+  registrationGateMaxRetries: "2"
+
   # M2M direct client registration (issue #851)
   # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and
   # their group mappings directly, without requiring an IdP Admin API token.

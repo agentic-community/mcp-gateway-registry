@@ -223,6 +223,15 @@ registry:
     registrationWebhookAuthToken: ""
     registrationWebhookTimeoutSeconds: "10"
 
+    # Registration gate / admission control (issue #809)
+    registrationGateEnabled: false
+    registrationGateUrl: ""
+    registrationGateAuthType: "none"
+    registrationGateAuthCredential: ""
+    registrationGateAuthHeaderName: "X-Api-Key"
+    registrationGateTimeoutSeconds: "5"
+    registrationGateMaxRetries: "2"
+
     # M2M direct client registration (issue #851)
     # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and
     # their group mappings directly, without requiring an IdP Admin API token.

@@ -308,6 +308,34 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # registration_webhook_timeout_seconds = 10
 
 # ============================================================================
+# REGISTRATION GATE / ADMISSION CONTROL (Issue #809)
+# ============================================================================
+
+# Enable registration gate (admission control). When enabled, an external
+# endpoint must approve registrations and updates before they are persisted.
+# Fail-closed: if the gate is unreachable after retries, registration is blocked.
+# Default: false
+# registration_gate_enabled = false
+
+# URL of the registration gate endpoint. Must be set when gate is enabled.
+# registration_gate_url = "https://your-endpoint.example.com/gate"
+
+# Auth type: none, api_key, or bearer. Default: none
+# registration_gate_auth_type = "none"
+
+# Auth credential for api_key or bearer auth types.
+# registration_gate_auth_credential = ""
+
+# Header name when auth_type=api_key. Default: X-Api-Key
+# registration_gate_auth_header_name = "X-Api-Key"
+
+# HTTP timeout per gate request attempt in seconds. Default: 5
+# registration_gate_timeout_seconds = 5
+
+# Retries after the first gate attempt (exponential backoff). Default: 2
+# registration_gate_max_retries = 2
+
+# ============================================================================
 # M2M DIRECT CLIENT REGISTRATION (Issue #851)
 # ============================================================================
 
