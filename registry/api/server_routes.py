@@ -329,12 +329,19 @@ async def read_root(
 @router.get("/servers")
 async def get_servers_json(
     request: Request,
-    query: str | None = None,
+    query: str | None = Query(
+        None,
+        description="Lexical substring search across server name, description, tags, and metadata",
+    ),
     limit: int = Query(20, ge=1, le=500, description="Number of servers to return (max 500)"),
     offset: int = Query(0, ge=0, description="Number of servers to skip"),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
-    """Get servers data as JSON for React frontend and external API (supports both session cookies and Bearer tokens)."""
+    """Get servers data as JSON for React frontend and external API.
+
+    Uses lexical (substring) search, not hybrid/semantic. For vector-based
+    search, use POST /api/search/semantic instead.
+    """
     logger.debug(f"get_servers_json called: limit={limit}, offset={offset}, query={query!r}")
 
     # Set audit action for server list

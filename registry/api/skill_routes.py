@@ -267,14 +267,18 @@ async def parse_skill_md(
 @router.get("/search", summary="Search skills")
 async def search_skills(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
-    q: str = Query(..., description="Search query"),
+    q: str = Query(
+        ...,
+        description="Lexical substring search across skill name, description, tags, and metadata",
+    ),
     tags: str | None = Query(None, description="Comma-separated tags to filter by"),
     include_deprecated: bool = Query(False, description="Include deprecated skills in results"),
     include_draft: bool = Query(False, description="Include draft skills in results"),
 ) -> dict:
-    """Search for skills by name, description, or tags.
+    """Search for skills by name, description, tags, and metadata.
 
-    Returns skills matching the query with basic relevance scoring.
+    Uses lexical (substring) search with basic relevance scoring, not
+    hybrid/semantic. For vector-based search, use POST /api/search/semantic instead.
     Deprecated and draft skills are excluded by default.
     """
     service = get_skill_service()
