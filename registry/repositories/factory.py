@@ -5,6 +5,7 @@ Repository factory - creates concrete implementations based on configuration.
 import logging
 
 from ..core.config import settings
+from .app_log_repository import AppLogRepository
 from .audit_repository import AuditRepositoryBase
 from .interfaces import (
     AgentRepositoryBase,
@@ -37,6 +38,7 @@ _virtual_server_repo: VirtualServerRepositoryBase | None = None
 _backend_session_repo: BackendSessionRepositoryBase | None = None
 _skill_security_scan_repo: SkillSecurityScanRepositoryBase | None = None
 _registry_card_repo: RegistryCardRepositoryBase | None = None
+_app_log_repo: AppLogRepository | None = None
 
 
 def get_server_repository() -> ServerRepositoryBase:
@@ -333,6 +335,28 @@ def get_registry_card_repository() -> RegistryCardRepositoryBase:
     return _registry_card_repo
 
 
+def get_app_log_repository() -> AppLogRepository | None:
+    """Get application log repository singleton.
+
+    Note: Only available with DocumentDB/MongoDB backends.
+    Returns None for file backend.
+    """
+    global _app_log_repo
+
+    if _app_log_repo is not None:
+        return _app_log_repo
+
+    backend = settings.storage_backend
+    if backend in ("documentdb", "mongodb-ce"):
+        _app_log_repo = AppLogRepository()
+        logger.info("Initialized application log repository (DocumentDB/MongoDB)")
+    else:
+        logger.warning("Application log repository requires MongoDB backend.")
+        return None
+
+    return _app_log_repo
+
+
 def reset_repositories() -> None:
     """Reset all repository singletons. USE ONLY IN TESTS."""
     global \
@@ -348,7 +372,8 @@ def reset_repositories() -> None:
         _virtual_server_repo, \
         _backend_session_repo, \
         _skill_security_scan_repo, \
-        _registry_card_repo
+        _registry_card_repo, \
+        _app_log_repo
     _server_repo = None
     _agent_repo = None
     _scope_repo = None
@@ -362,3 +387,4 @@ def reset_repositories() -> None:
     _backend_session_repo = None
     _skill_security_scan_repo = None
     _registry_card_repo = None
+    _app_log_repo = None

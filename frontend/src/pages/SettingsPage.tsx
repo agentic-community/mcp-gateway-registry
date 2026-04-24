@@ -10,6 +10,7 @@ import {
   CogIcon,
   ServerStackIcon,
   IdentificationIcon,
+  DocumentTextIcon,
 } from '@heroicons/react/24/outline';
 import FederationPeers from '../components/FederationPeers';
 import FederationPeerForm from '../components/FederationPeerForm';
@@ -20,6 +21,7 @@ import IAMGroups from '../components/IAMGroups';
 import IAMUsers from '../components/IAMUsers';
 import IAMM2M from '../components/IAMM2M';
 import RegistryCardSettings from '../components/RegistryCardSettings';
+import ApplicationLogs from '../components/ApplicationLogs';
 import ExternalRegistries from '../components/ExternalRegistries';
 import { useAuth } from '../contexts/AuthContext';
 import { canAccessSettings } from '../utils/permissions';
@@ -74,6 +76,14 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     icon: <ClipboardDocumentListIcon className="h-5 w-5" />,
     items: [
       { id: 'logs', label: 'Audit Logs', path: '/settings/audit/logs' },
+    ],
+  },
+  {
+    id: 'app-logs',
+    label: 'Application Logs',
+    icon: <DocumentTextIcon className="h-5 w-5" />,
+    items: [
+      { id: 'viewer', label: 'Log Viewer', path: '/settings/app-logs/viewer' },
     ],
   },
   {
@@ -233,6 +243,11 @@ const SettingsPage: React.FC = () => {
     // Audit > Logs
     if (path === '/settings/audit/logs' || path === '/settings/audit') {
       return <AuditLogsPage embedded />;
+    }
+
+    // Application Logs > Viewer
+    if (path === '/settings/app-logs/viewer' || path === '/settings/app-logs') {
+      return <ApplicationLogs onShowToast={showToast} />;
     }
 
     // Registry > Card

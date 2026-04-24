@@ -56,13 +56,16 @@ from registry.core.config import settings
 from registry.repositories.factory import get_scope_repository
 from registry.utils.request_utils import get_client_ip
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,  # Set the log level to INFO
-    # Define log message format
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
+# Configure logging using shared module (RotatingFileHandler + optional MongoDB)
+from registry.utils.logging_setup import setup_logging as _setup_logging
+from pathlib import Path as _LogPath
+
+_auth_log_file = _setup_logging(
+    service_name="auth-server",
+    log_file=_LogPath("/app/logs/auth-server.log") if _LogPath("/app").exists() else None,
 )
 logger = logging.getLogger(__name__)
+logger.info(f"Auth-server logging configured. Writing to file: {_auth_log_file}")
 
 # Import JWT constants from shared internal auth module
 from registry.auth.internal import (

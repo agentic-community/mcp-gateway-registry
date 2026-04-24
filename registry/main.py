@@ -30,6 +30,7 @@ from registry.api.config_routes import router as config_router
 from registry.api.federation_export_routes import router as federation_export_router
 from registry.api.federation_routes import router as federation_router
 from registry.api.internal_routes import router as internal_router
+from registry.api.log_routes import router as log_router
 from registry.api.m2m_management_routes import router as m2m_management_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
@@ -92,52 +93,10 @@ from registry.version import __version__
 # Server start time tracking moved to registry/api/system_routes.py
 
 
-# Configure logging with file and console handlers
-def setup_logging():
-    """Configure logging to write to both file and console."""
-    # Ensure log directory exists
-    log_dir = settings.log_dir
-    log_dir.mkdir(parents=True, exist_ok=True)
+# Setup logging using shared module (RotatingFileHandler + optional MongoDB)
+from registry.utils.logging_setup import setup_logging as _setup_logging
 
-    # Define log file path
-    log_file = log_dir / "registry.log"
-
-    # Create formatters
-    file_formatter = logging.Formatter(
-        "%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s"
-    )
-
-    console_formatter = logging.Formatter(
-        "%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s"
-    )
-
-    # Get root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-
-    # Remove any existing handlers
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-
-    # File handler
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(file_formatter)
-
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(console_formatter)
-
-    # Add handlers to root logger
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
-
-    return log_file
-
-
-# Setup logging
-log_file_path = setup_logging()
+log_file_path = _setup_logging(service_name="registry")
 logger = logging.getLogger(__name__)
 logger.info(f"Logging configured. Writing to file: {log_file_path}")
 
@@ -824,6 +783,10 @@ app = FastAPI(
             "description": "Audit log viewing and export endpoints. Requires admin permissions.",
         },
         {
+            "name": "Application Logs",
+            "description": "Centralized application log retrieval API. Requires admin permissions.",
+        },
+        {
             "name": "skills",
             "description": "Agent Skills registration and management. Requires JWT Bearer token authentication.",
         },
@@ -906,6 +869,7 @@ app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring
 app.include_router(federation_export_router)
 app.include_router(peer_management_router)
 app.include_router(audit_router, prefix="/api", tags=["Audit Logs"])
+app.include_router(log_router, prefix="/api", tags=["Application Logs"])
 app.include_router(registry_management_router, prefix="/api")
 
 # Register IdP M2M management routers (Okta and Auth0)

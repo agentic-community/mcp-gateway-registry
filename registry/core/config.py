@@ -374,6 +374,36 @@ class Settings(BaseSettings):
         description="ANS verification cache TTL in seconds",
     )
 
+    # Application Log Configuration (Issue #886)
+    app_log_max_bytes: int = Field(
+        default=50 * 1024 * 1024,
+        description="Max size per log file in bytes before rotation (default 50 MB)",
+    )
+    app_log_backup_count: int = Field(
+        default=5,
+        description="Number of rotated backup log files to keep",
+    )
+    app_log_mongodb_enabled: bool = Field(
+        default=False,
+        description="Write application logs to MongoDB application_logs collection",
+    )
+    app_log_mongodb_ttl_days: int = Field(
+        default=7,
+        description="Days to retain application log entries in MongoDB (TTL index)",
+    )
+    app_log_mongodb_buffer_size: int = Field(
+        default=50,
+        description="Number of log records to buffer before flushing to MongoDB",
+    )
+    app_log_mongodb_flush_interval_seconds: float = Field(
+        default=5.0,
+        description="Seconds between periodic flushes of buffered log records to MongoDB",
+    )
+    app_log_level: str = Field(
+        default="INFO",
+        description="Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+
     # Audit Logging Configuration
     audit_log_enabled: bool = True  # Enable/disable audit logging globally
     audit_log_dir: str = "logs/audit"  # Directory for local audit log files
