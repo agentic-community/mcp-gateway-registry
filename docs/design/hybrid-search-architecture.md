@@ -428,17 +428,19 @@ The flattened metadata text is:
 3. Matched in the `$or` keyword filter alongside path, name, description, tags, and tools
 4. Scored with +1.0 text boost when matched in the `_build_text_boost_stage` pipeline
 
-### REST API List Endpoint Keyword Search
+### REST API List Endpoint Keyword Search (Pure Lexical, No Vectors)
 
-The same `flatten_metadata_to_text()` utility is used by the REST API list endpoints to include metadata in their simple keyword filters:
+The REST API list endpoints below are **pure lexical search**. They do not use embeddings, vector similarity, or the DocumentDB search index. They load all items from storage, build a searchable text string per item in Python, and perform a case-insensitive substring match. No hybrid or semantic search is involved.
 
-| Endpoint | Parameter | Metadata Handling |
-|----------|-----------|-------------------|
-| `GET /api/agents?query=` | `query` | Metadata appended to `searchable_text` (substring match) |
-| `GET /api/servers?query=` | `query` | Metadata appended to `searchable_text` (substring match) |
-| `GET /api/skills/search?q=` | `q` | Metadata matched with +0.1 relevance score (author, version, extra) |
+The same `flatten_metadata_to_text()` utility is used to include metadata in these filters:
 
-This ensures that keyword search results are consistent across both the hybrid search endpoint (`/api/search`) and the individual list endpoints.
+| Endpoint | Parameter | Search Type | Metadata Handling |
+|----------|-----------|-------------|-------------------|
+| `GET /api/agents?query=` | `query` | Substring match (lexical only) | Metadata appended to `searchable_text` |
+| `GET /api/servers?query=` | `query` | Substring match (lexical only) | Metadata appended to `searchable_text` |
+| `GET /api/skills/search?q=` | `q` | Scored substring match (lexical only) | Metadata matched with +0.1 relevance score (author, version, extra) |
+
+For hybrid (vector + keyword) search, use `POST /api/search/semantic` instead.
 
 ### Metadata Sources
 
