@@ -3,7 +3,7 @@ global:
   # Image tag for all services (auth-server, registry, mcpgw)
   # This value is passed down to all subcharts via Helm's global scope
   image:
-    tag: 1.0.19
+    tag: 1.0.20
 
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
