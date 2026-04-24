@@ -22,6 +22,7 @@ from ..services.server_service import server_service
 from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.credential_encryption import encrypt_credential_in_server_dict
+from ..utils.metadata import flatten_metadata_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -257,8 +258,15 @@ async def read_root(
             )
             continue
 
-        # Include description and tags in search
-        searchable_text = f"{server_name.lower()} {server_info.get('description', '').lower()} {' '.join(server_info.get('tags', []))}"
+        # Include description, tags, and metadata in search
+        server_metadata = server_info.get("metadata", {})
+        metadata_text = flatten_metadata_to_text(server_metadata) if server_metadata else ""
+        searchable_text = (
+            f"{server_name.lower()} "
+            f"{server_info.get('description', '').lower()} "
+            f"{' '.join(server_info.get('tags', []))} "
+            f"{metadata_text.lower()}"
+        )
         if not search_query or search_query in searchable_text:
             # Fetch enabled status before health check to avoid race condition (Issue #612)
             is_enabled = await server_service.is_service_enabled(path)
@@ -387,8 +395,15 @@ async def get_servers_json(
         ):
             continue
 
-        # Include description and tags in search
-        searchable_text = f"{server_name.lower()} {server_info.get('description', '').lower()} {' '.join(server_info.get('tags', []))}"
+        # Include description, tags, and metadata in search
+        server_metadata = server_info.get("metadata", {})
+        metadata_text = flatten_metadata_to_text(server_metadata) if server_metadata else ""
+        searchable_text = (
+            f"{server_name.lower()} "
+            f"{server_info.get('description', '').lower()} "
+            f"{' '.join(server_info.get('tags', []))} "
+            f"{metadata_text.lower()}"
+        )
         if not search_query or search_query in searchable_text:
             # Fetch enabled status before health check to avoid race condition (Issue #612)
             is_enabled = await server_service.is_service_enabled(path)

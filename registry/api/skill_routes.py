@@ -14,6 +14,7 @@ import asyncio
 import logging
 from typing import (
     Annotated,
+    Any,
 )
 
 from fastapi import (
@@ -55,6 +56,7 @@ from ..services.skill_service import (
 from ..services.registration_gate_service import check_registration_gate
 from ..services.tool_validation_service import get_tool_validation_service
 from ..services.webhook_service import send_registration_webhook
+from ..utils.metadata import flatten_metadata_to_text
 from ..utils.path_utils import normalize_skill_path
 
 # Configure logging
@@ -309,6 +311,19 @@ async def search_skills(
         skill_tags_lower = [t.lower() for t in (skill.tags or [])]
         if any(query_lower in t for t in skill_tags_lower):
             score += 0.2
+
+        # Match in metadata (author, version, extra key-value pairs)
+        skill_meta_dict: dict[str, Any] = {}
+        if skill.metadata:
+            if skill.metadata.author:
+                skill_meta_dict["author"] = skill.metadata.author
+            if skill.metadata.version:
+                skill_meta_dict["version"] = skill.metadata.version
+            if skill.metadata.extra:
+                skill_meta_dict.update(skill.metadata.extra)
+        metadata_text = flatten_metadata_to_text(skill_meta_dict)
+        if metadata_text and query_lower in metadata_text.lower():
+            score += 0.1
 
         # Filter by specified tags
         if tag_list:

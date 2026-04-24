@@ -695,6 +695,123 @@ class TestListAgents:
             assert data["offset"] == 0
             assert data["has_next"] is False
 
+    # --- Metadata keyword search tests (issue #775) ---
+
+    @pytest.mark.asyncio
+    async def test_list_agents_query_matches_metadata_value(self, test_app, mock_user_context):
+        """Query matches a value in agent metadata."""
+        agent_with_meta = AgentCardFactory(
+            name="generic-agent",
+            description="A generic agent",
+            tags=["general"],
+            path="/agents/generic-agent",
+            metadata={"team": "finance", "region": "us-east-1"},
+        )
+        agent_without_meta = AgentCardFactory(
+            name="other-agent",
+            description="Another agent",
+            tags=["other"],
+            path="/agents/other-agent",
+            metadata={},
+        )
+
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_all_agents = AsyncMock(
+                return_value=[agent_with_meta, agent_without_meta]
+            )
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?query=finance")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["total_count"] == 1
+            assert data["agents"][0]["name"] == "generic-agent"
+
+    @pytest.mark.asyncio
+    async def test_list_agents_query_matches_metadata_key(self, test_app, mock_user_context):
+        """Query matches a key name in agent metadata."""
+        agent = AgentCardFactory(
+            name="generic-agent",
+            description="A generic agent",
+            tags=[],
+            path="/agents/generic-agent",
+            metadata={"department": "engineering"},
+        )
+
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?query=department")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["total_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_list_agents_query_matches_metadata_list_item(self, test_app, mock_user_context):
+        """Query matches an item inside a metadata list value."""
+        agent = AgentCardFactory(
+            name="polyglot-agent",
+            description="A polyglot agent",
+            tags=[],
+            path="/agents/polyglot-agent",
+            metadata={"languages": ["python", "golang", "rust"]},
+        )
+
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?query=golang")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["total_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_list_agents_query_no_match_in_metadata(self, test_app, mock_user_context):
+        """Query that does not match name, description, tags, skills, or metadata returns nothing."""
+        agent = AgentCardFactory(
+            name="agent-a",
+            description="Description A",
+            tags=["tag-a"],
+            path="/agents/agent-a",
+            metadata={"team": "alpha"},
+        )
+
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?query=nonexistent")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["total_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_list_agents_empty_metadata_no_error(self, test_app, mock_user_context):
+        """Agent with empty metadata does not cause errors during search."""
+        agent = AgentCardFactory(
+            name="minimal-agent",
+            description="Minimal",
+            tags=[],
+            path="/agents/minimal-agent",
+            metadata={},
+        )
+
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?query=minimal")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["total_count"] == 1
+
     # --- Pagination: Validation tests ---
 
     @pytest.mark.asyncio

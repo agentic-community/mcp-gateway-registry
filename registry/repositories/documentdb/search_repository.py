@@ -9,6 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 
 from ...core.config import embedding_config, settings
 from ...schemas.agent_models import AgentCard
+from ...utils.metadata import flatten_metadata_to_text
 from ..interfaces import SearchRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
@@ -207,25 +208,8 @@ def _distribute_results(
     return selected
 
 
-def _flatten_metadata_to_text(metadata: dict[str, Any]) -> str:
-    """Flatten a metadata dict into a searchable text string.
 
-    Handles nested lists and dicts by joining their string values.
-    Example: {"team": "myteam", "langs": ["python", "go"]}
-    becomes: "team myteam langs python go"
-    """
-    if not isinstance(metadata, dict) or not metadata:
-        return ""
-    parts = []
-    for key, value in metadata.items():
-        parts.append(str(key))
-        if isinstance(value, list):
-            parts.extend(str(item) for item in value)
-        elif isinstance(value, dict):
-            parts.extend(str(v) for v in value.values())
-        else:
-            parts.append(str(value))
-    return " ".join(parts)
+
 
 
 def _build_status_filter(
@@ -611,7 +595,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         text_for_embedding = " ".join(filter(None, text_parts))
 
         # Flatten metadata into a searchable text field for keyword matching
-        metadata_text = _flatten_metadata_to_text(metadata)
+        metadata_text = flatten_metadata_to_text(metadata)
 
         try:
             model = await self._get_embedding_model()
@@ -700,7 +684,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         # Flatten agent metadata for keyword search
         agent_metadata = getattr(agent_card, "metadata", None) or {}
-        agent_metadata_text = _flatten_metadata_to_text(agent_metadata)
+        agent_metadata_text = flatten_metadata_to_text(agent_metadata)
 
         doc = {
             "_id": path,
@@ -760,7 +744,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             text_parts.append(f"Author: {skill.metadata.author}")
 
         if skill.metadata and skill.metadata.extra:
-            extra_text = _flatten_metadata_to_text(skill.metadata.extra)
+            extra_text = flatten_metadata_to_text(skill.metadata.extra)
             if extra_text:
                 text_parts.append(extra_text)
 
@@ -790,7 +774,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if skill.metadata and skill.metadata.version:
             skill_metadata_parts.append(f"version {skill.metadata.version}")
         if skill.metadata and skill.metadata.extra:
-            extra_text = _flatten_metadata_to_text(skill.metadata.extra)
+            extra_text = flatten_metadata_to_text(skill.metadata.extra)
             if extra_text:
                 skill_metadata_parts.append(extra_text)
         if skill.registry_name:

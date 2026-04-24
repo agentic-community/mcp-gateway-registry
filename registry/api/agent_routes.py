@@ -38,6 +38,7 @@ from ..schemas.agent_models import (
 )
 from ..services.agent_service import agent_service
 from ..services.registration_gate_service import check_registration_gate
+from ..utils.metadata import flatten_metadata_to_text
 from ..services.webhook_service import send_registration_webhook
 from ..utils.request_utils import get_client_ip
 
@@ -671,9 +672,11 @@ async def list_agents(
         if visibility and agent.visibility != visibility:
             continue
 
+        metadata_text = flatten_metadata_to_text(agent.metadata) if agent.metadata else ""
         searchable_text = (
             f"{agent.name.lower()} {agent.description.lower()} "
-            f"{' '.join(agent.tags)} {' '.join([s.name for s in agent.skills])}"
+            f"{' '.join(agent.tags)} {' '.join([s.name for s in agent.skills])} "
+            f"{metadata_text.lower()}"
         )
 
         if not search_query or search_query in searchable_text:

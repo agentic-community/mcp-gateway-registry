@@ -411,7 +411,7 @@ Virtual MCP Servers are indexed in the unified `mcp_embeddings_{dimensions}` col
 
 ## Metadata in Search
 
-Custom metadata from servers, agents, skills, and virtual servers is included in both semantic embeddings and keyword search. Metadata is flattened to a text string using `_flatten_metadata_to_text()`:
+Custom metadata from servers, agents, skills, and virtual servers is included in semantic embeddings, hybrid/keyword search, and the REST API list endpoint keyword filters. Metadata is flattened to a text string using `flatten_metadata_to_text()` (defined in `registry/utils/metadata.py`):
 
 - Each key name is included as a token
 - Scalar values are converted to strings
@@ -420,17 +420,32 @@ Custom metadata from servers, agents, skills, and virtual servers is included in
 
 For example, a server with metadata `{"source": "agentcore-sync", "region": "us-east-1"}` produces the metadata text: `source agentcore-sync region us-east-1`.
 
-This flattened text is:
+### Hybrid / DocumentDB Search
+
+The flattened metadata text is:
 1. Appended to `text_for_embedding` so semantic search captures metadata meaning
 2. Stored in `metadata_text` field for keyword/regex matching
 3. Matched in the `$or` keyword filter alongside path, name, description, tags, and tools
 4. Scored with +1.0 text boost when matched in the `_build_text_boost_stage` pipeline
 
-Metadata sources per entity type:
+### REST API List Endpoint Keyword Search
+
+The same `flatten_metadata_to_text()` utility is used by the REST API list endpoints to include metadata in their simple keyword filters:
+
+| Endpoint | Parameter | Metadata Handling |
+|----------|-----------|-------------------|
+| `GET /api/agents?query=` | `query` | Metadata appended to `searchable_text` (substring match) |
+| `GET /api/servers?query=` | `query` | Metadata appended to `searchable_text` (substring match) |
+| `GET /api/skills/search?q=` | `q` | Metadata matched with +0.1 relevance score (author, version, extra) |
+
+This ensures that keyword search results are consistent across both the hybrid search endpoint (`/api/search`) and the individual list endpoints.
+
+### Metadata Sources
+
 | Entity Type    | Metadata Source |
 |----------------|-----------------|
 | MCP Server     | `server_info.get("metadata", {})` |
-| A2A Agent      | `agent_card.get("metadata", {})` |
+| A2A Agent      | `agent_card.metadata` |
 | Agent Skill    | Author, version, `extra` dict (custom key-value pairs), registry_name |
 | Virtual Server | `created_by` field |
 
