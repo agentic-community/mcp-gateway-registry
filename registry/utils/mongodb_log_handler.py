@@ -16,52 +16,7 @@ from typing import Any
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
-
-def _build_sync_connection_string() -> str:
-    """Build a synchronous PyMongo connection string from registry settings."""
-    from ..core.config import settings
-
-    if settings.documentdb_use_iam:
-        import boto3
-
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        if not credentials:
-            raise ValueError("AWS credentials not found for DocumentDB IAM auth")
-        return (
-            f"mongodb://{credentials.access_key}:{credentials.secret_key}@"
-            f"{settings.documentdb_host}:{settings.documentdb_port}/"
-            f"{settings.documentdb_database}?"
-            f"authSource=$external&authMechanism=MONGODB-AWS"
-        )
-
-    if settings.documentdb_username and settings.documentdb_password:
-        if settings.storage_backend == "mongodb-ce":
-            auth_mechanism = "SCRAM-SHA-256"
-        else:
-            auth_mechanism = "SCRAM-SHA-1"
-        return (
-            f"mongodb://{settings.documentdb_username}:{settings.documentdb_password}@"
-            f"{settings.documentdb_host}:{settings.documentdb_port}/"
-            f"{settings.documentdb_database}?authMechanism={auth_mechanism}&authSource=admin"
-        )
-
-    return (
-        f"mongodb://{settings.documentdb_host}:{settings.documentdb_port}/"
-        f"{settings.documentdb_database}"
-    )
-
-
-def _get_tls_kwargs() -> dict[str, Any]:
-    """Build TLS keyword arguments for PyMongo client."""
-    from ..core.config import settings
-
-    kwargs: dict[str, Any] = {}
-    if settings.documentdb_use_tls:
-        kwargs["tls"] = True
-        if settings.documentdb_tls_ca_file:
-            kwargs["tlsCAFile"] = settings.documentdb_tls_ca_file
-    return kwargs
+from .mongodb_connection import build_client_options, build_connection_string, build_tls_kwargs
 
 
 class MongoDBLogHandler(logging.Handler):
@@ -117,18 +72,11 @@ class MongoDBLogHandler(logging.Handler):
         try:
             from ..core.config import settings
 
-            conn_str = _build_sync_connection_string()
-            tls_kwargs = _get_tls_kwargs()
-
-            client_opts: dict[str, Any] = {"retryWrites": False}
-            if settings.documentdb_direct_connection:
-                client_opts["directConnection"] = True
-
             self._client = MongoClient(
-                conn_str,
+                build_connection_string(),
                 serverSelectionTimeoutMS=5000,
-                **client_opts,
-                **tls_kwargs,
+                **build_client_options(),
+                **build_tls_kwargs(),
             )
             db = self._client[settings.documentdb_database]
             self._collection = db[self._collection_name]

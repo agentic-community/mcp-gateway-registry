@@ -41,6 +41,15 @@ app:
   federationEncryptionKey: # If not provided, a Fernet key is auto-generated
   registryId: # Unique identifier for this registry instance (optional)
 
+  # Application Log Configuration (centralized log rotation and retrieval)
+  appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
+  appLogBackupCount: "5"           # Number of rotated backup log files to keep
+  appLogMongodbEnabled: "false"    # Write application logs to MongoDB (requires MongoDB backend)
+  appLogMongodbTtlDays: "7"        # Days to retain log entries in MongoDB (TTL index)
+  appLogMongodbBufferSize: "50"    # Records to buffer before flushing to MongoDB
+  appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
+  appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, or cognito
 authProvider:
