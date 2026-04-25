@@ -442,6 +442,31 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # audit_log_ttl_days = 7
 
 # ============================================================================
+# APPLICATION LOG CONFIGURATION
+# ============================================================================
+#
+# Centralized application logging to MongoDB for cross-pod log retrieval.
+# When enabled, application logs from all pods are written to a shared
+# MongoDB collection accessible via the admin API.
+#
+
+# Enable writing application logs to MongoDB
+# Default: false
+# app_log_mongodb_enabled = false
+
+# Application log retention period in days (TTL index)
+# Default: 7
+# app_log_mongodb_ttl_days = 7
+
+# Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+# Default: "INFO"
+# app_log_level = "INFO"
+
+# Comma-separated logger names to exclude from MongoDB writes
+# Default: "uvicorn.access,httpx,pymongo,motor"
+# app_log_excluded_loggers = "uvicorn.access,httpx,pymongo,motor"
+
+# ============================================================================
 # AUTHENTICATION PROVIDER CONFIGURATION
 # ============================================================================
 #

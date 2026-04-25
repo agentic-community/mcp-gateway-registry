@@ -52,6 +52,13 @@ PEER_SYNC_DURATION_SECONDS = Gauge(
     "peer_sync_duration_seconds", "Duration of peer sync operations", ["peer_id", "success"]
 )
 
+# Application log handler metrics (issue #886)
+APP_LOG_FLUSH_FAILURES = Counter(
+    "app_log_mongodb_flush_failures_total",
+    "Total MongoDB log handler flush failures",
+    ["service"],
+)
+
 # Telemetry metrics (issue #558)
 telemetry_sends_total = Counter(
     "telemetry_sends_total",

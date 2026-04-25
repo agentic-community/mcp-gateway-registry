@@ -4518,6 +4518,52 @@ def cmd_telemetry_startup(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_logs(args: argparse.Namespace) -> int:
+    """Query application logs (admin only).
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+
+        if getattr(args, "metadata", False):
+            metadata = client.get_log_metadata()
+            print(json.dumps(metadata.model_dump(), indent=2))
+            return 0
+
+        result = client.get_logs(
+            service=getattr(args, "service", None),
+            level=getattr(args, "level", None),
+            hostname=getattr(args, "hostname", None),
+            search=getattr(args, "search", None),
+            start=getattr(args, "start", None),
+            end=getattr(args, "end", None),
+            limit=getattr(args, "limit", 100),
+            offset=getattr(args, "offset", 0),
+        )
+
+        if getattr(args, "json", False):
+            print(json.dumps(result.model_dump(), indent=2))
+        else:
+            print(f"Total: {result.total_count}  (showing {len(result.entries)}, "
+                  f"offset={result.offset}, has_next={result.has_next})")
+            print("-" * 100)
+            for entry in result.entries:
+                print(f"[{entry.timestamp}] {entry.level:<8} {entry.service}/{entry.hostname} "
+                      f"{entry.logger}:{entry.lineno}  {entry.message}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Log query failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     """
     Main entry point for the CLI.
@@ -5532,6 +5578,32 @@ Examples:
         help="Force an immediate startup telemetry event (admin only)",
     )
 
+    # ==========================================
+    # Application Log Commands (issue #886)
+    # ==========================================
+
+    logs_parser = subparsers.add_parser(
+        "logs", help="Query application logs (admin only)"
+    )
+    logs_parser.add_argument("--service", help="Filter by service name")
+    logs_parser.add_argument(
+        "--level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Minimum log level",
+    )
+    logs_parser.add_argument("--hostname", help="Filter by hostname/pod")
+    logs_parser.add_argument("--search", help="Substring search in messages")
+    logs_parser.add_argument("--start", help="Start timestamp (ISO-8601)")
+    logs_parser.add_argument("--end", help="End timestamp (ISO-8601)")
+    logs_parser.add_argument("--limit", type=int, default=100, help="Page size (default: 100)")
+    logs_parser.add_argument("--offset", type=int, default=0, help="Offset for pagination")
+    logs_parser.add_argument(
+        "--metadata", action="store_true", help="Show available filter values instead of logs"
+    )
+    logs_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
     args = parser.parse_args()
 
     # Enable debug logging if requested
@@ -5649,6 +5721,7 @@ Examples:
         # Telemetry management commands
         "telemetry-heartbeat": cmd_telemetry_heartbeat,
         "telemetry-startup": cmd_telemetry_startup,
+        "logs": cmd_logs,
     }
 
     handler = command_handlers.get(args.command)

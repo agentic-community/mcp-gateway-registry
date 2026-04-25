@@ -173,6 +173,8 @@ spec:
               value: {{ .Values.app.appLogMongodbFlushIntervalSeconds | default "5.0" | quote }}
             - name: APP_LOG_LEVEL
               value: {{ .Values.app.appLogLevel | default "INFO" | quote }}
+            - name: APP_LOG_EXCLUDED_LOGGERS
+              value: {{ .Values.app.appLogExcludedLoggers | default "uvicorn.access,httpx,pymongo,motor" | quote }}
           livenessProbe:
             httpGet:
               path: /health

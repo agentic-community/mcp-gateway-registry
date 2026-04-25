@@ -273,9 +273,19 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("registration_gate_max_retries", "Max Retries", False),
         ],
     },
+    "app_log": {
+        "title": "Application Logging",
+        "order": 18,
+        "fields": [
+            ("app_log_mongodb_enabled", "MongoDB Enabled", False),
+            ("app_log_mongodb_ttl_days", "MongoDB TTL Days", False),
+            ("app_log_level", "Log Level", False),
+            ("app_log_excluded_loggers", "Excluded Loggers", False),
+        ],
+    },
     "github_auth": {
         "title": "GitHub Private Repo Auth",
-        "order": 18,
+        "order": 19,
         "fields": [
             ("github_pat", "Personal Access Token", True),
             ("github_app_id", "GitHub App ID", False),

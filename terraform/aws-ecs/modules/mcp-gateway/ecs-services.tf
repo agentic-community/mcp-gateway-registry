@@ -313,6 +313,22 @@ module "ecs_service_auth" {
           name  = "AUDIT_LOG_MONGODB_TTL_DAYS"
           value = tostring(var.audit_log_ttl_days)
         },
+        {
+          name  = "APP_LOG_MONGODB_ENABLED"
+          value = tostring(var.app_log_mongodb_enabled)
+        },
+        {
+          name  = "APP_LOG_MONGODB_TTL_DAYS"
+          value = tostring(var.app_log_mongodb_ttl_days)
+        },
+        {
+          name  = "APP_LOG_LEVEL"
+          value = var.app_log_level
+        },
+        {
+          name  = "APP_LOG_EXCLUDED_LOGGERS"
+          value = var.app_log_excluded_loggers
+        },
         # Metrics pipeline (only wired when observability is enabled)
         {
           name  = "METRICS_SERVICE_URL"
@@ -831,6 +847,22 @@ module "ecs_service_registry" {
         {
           name  = "AUDIT_LOG_MONGODB_TTL_DAYS"
           value = tostring(var.audit_log_ttl_days)
+        },
+        {
+          name  = "APP_LOG_MONGODB_ENABLED"
+          value = tostring(var.app_log_mongodb_enabled)
+        },
+        {
+          name  = "APP_LOG_MONGODB_TTL_DAYS"
+          value = tostring(var.app_log_mongodb_ttl_days)
+        },
+        {
+          name  = "APP_LOG_LEVEL"
+          value = var.app_log_level
+        },
+        {
+          name  = "APP_LOG_EXCLUDED_LOGGERS"
+          value = var.app_log_excluded_loggers
         },
         {
           name  = "DEPLOYMENT_MODE"

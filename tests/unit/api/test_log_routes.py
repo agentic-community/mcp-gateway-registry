@@ -9,9 +9,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from registry.api import log_routes
 from registry.api.log_routes import router
 
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture(autouse=True)
+def _clear_rate_limit_cache():
+    """Reset rate limit cache between tests."""
+    log_routes._rate_limit_cache.clear()
 
 
 # =============================================================================
@@ -66,9 +73,11 @@ def sample_log_entries() -> list[dict[str, Any]]:
             "hostname": "pod-abc123",
             "service": "registry",
             "level": "INFO",
+            "level_no": 20,
             "logger": "registry.main",
             "filename": "main.py",
             "lineno": 42,
+            "process": 130,
             "message": "Server started successfully",
         },
         {
@@ -76,9 +85,11 @@ def sample_log_entries() -> list[dict[str, Any]]:
             "hostname": "pod-abc123",
             "service": "registry",
             "level": "ERROR",
+            "level_no": 40,
             "logger": "registry.api.server_routes",
             "filename": "server_routes.py",
             "lineno": 100,
+            "process": 130,
             "message": "Failed to register server: timeout",
         },
     ]
@@ -89,9 +100,9 @@ def admin_client(mock_admin_context, mock_app_log_repo):
     app = FastAPI()
     app.include_router(router, prefix="/api")
 
-    from registry.auth.dependencies import enhanced_auth
+    from registry.auth.dependencies import nginx_proxied_auth
 
-    app.dependency_overrides[enhanced_auth] = lambda: mock_admin_context
+    app.dependency_overrides[nginx_proxied_auth] = lambda: mock_admin_context
 
     with patch(
         "registry.api.log_routes.get_app_log_repository",
@@ -108,9 +119,9 @@ def non_admin_client(mock_non_admin_context, mock_app_log_repo):
     app = FastAPI()
     app.include_router(router, prefix="/api")
 
-    from registry.auth.dependencies import enhanced_auth
+    from registry.auth.dependencies import nginx_proxied_auth
 
-    app.dependency_overrides[enhanced_auth] = lambda: mock_non_admin_context
+    app.dependency_overrides[nginx_proxied_auth] = lambda: mock_non_admin_context
 
     with patch(
         "registry.api.log_routes.get_app_log_repository",
@@ -128,9 +139,9 @@ def no_mongo_client(mock_admin_context):
     app = FastAPI()
     app.include_router(router, prefix="/api")
 
-    from registry.auth.dependencies import enhanced_auth
+    from registry.auth.dependencies import nginx_proxied_auth
 
-    app.dependency_overrides[enhanced_auth] = lambda: mock_admin_context
+    app.dependency_overrides[nginx_proxied_auth] = lambda: mock_admin_context
 
     with patch(
         "registry.api.log_routes.get_app_log_repository",
@@ -214,7 +225,7 @@ class TestQueryLogs:
         response = admin_client.get("/api/admin/logs?level=ERROR")
         assert response.status_code == 200
         call_kwargs = mock_app_log_repo.query.call_args[1]
-        assert call_kwargs["level"] == "ERROR"
+        assert call_kwargs["level_no"] == 40
 
     def test_filter_by_hostname(self, admin_client, mock_app_log_repo):
         mock_app_log_repo.query.return_value = ([], 0)
@@ -272,7 +283,7 @@ class TestQueryLogs:
         assert response.status_code == 422
 
     def test_limit_validation_too_high(self, admin_client):
-        response = admin_client.get("/api/admin/logs?limit=1001")
+        response = admin_client.get("/api/admin/logs?limit=10001")
         assert response.status_code == 422
 
     def test_offset_validation_negative(self, admin_client):
@@ -308,7 +319,9 @@ class TestExportLogs:
         mock_app_log_repo.query.return_value = ([], 0)
 
         response = admin_client.get("/api/admin/logs/export")
-        assert "application-logs.jsonl" in response.headers.get("content-disposition", "")
+        disposition = response.headers.get("content-disposition", "")
+        assert "logs-all-" in disposition
+        assert ".jsonl" in disposition
 
     def test_export_with_filters(self, admin_client, mock_app_log_repo):
         mock_app_log_repo.query.return_value = ([], 0)
@@ -317,7 +330,7 @@ class TestExportLogs:
         assert response.status_code == 200
         call_kwargs = mock_app_log_repo.query.call_args[1]
         assert call_kwargs["service"] == "registry"
-        assert call_kwargs["level"] == "ERROR"
+        assert call_kwargs["level_no"] == 40
 
     def test_export_limit_validation(self, admin_client):
         response = admin_client.get("/api/admin/logs/export?limit=50001")
@@ -363,3 +376,79 @@ class TestNoMongoDBBackend:
     def test_metadata_returns_503(self, no_mongo_client):
         response = no_mongo_client.get("/api/admin/logs/metadata")
         assert response.status_code == 503
+
+
+# =============================================================================
+# RATE LIMITING TESTS
+# =============================================================================
+
+
+class TestRateLimiting:
+    """Test per-user rate limiting on log API endpoints."""
+
+    def test_rate_limit_exceeded(self, admin_client, mock_app_log_repo):
+        mock_app_log_repo.query.return_value = ([], 0)
+
+        for _ in range(10):
+            response = admin_client.get("/api/admin/logs")
+            assert response.status_code == 200
+
+        response = admin_client.get("/api/admin/logs")
+        assert response.status_code == 429
+        assert "Rate limit exceeded" in response.json()["detail"]
+
+    def test_rate_limit_applies_to_export(self, admin_client, mock_app_log_repo):
+        mock_app_log_repo.query.return_value = ([], 0)
+
+        for _ in range(10):
+            admin_client.get("/api/admin/logs/export")
+
+        response = admin_client.get("/api/admin/logs/export")
+        assert response.status_code == 429
+
+
+# =============================================================================
+# SEARCH SANITIZATION TESTS
+# =============================================================================
+
+
+class TestSearchSanitization:
+    """Test that regex metacharacters in search are properly escaped."""
+
+    def test_regex_metacharacters_escaped(self, admin_client, mock_app_log_repo):
+        mock_app_log_repo.query.return_value = ([], 0)
+
+        response = admin_client.get("/api/admin/logs?search=error.*timeout")
+        assert response.status_code == 200
+        call_kwargs = mock_app_log_repo.query.call_args[1]
+        assert call_kwargs["search"] == r"error\.\*timeout"
+
+    def test_search_truncated_at_max_length(self, admin_client, mock_app_log_repo):
+        mock_app_log_repo.query.return_value = ([], 0)
+
+        long_search = "a" * 300
+        response = admin_client.get(f"/api/admin/logs?search={long_search}")
+        assert response.status_code == 200
+        call_kwargs = mock_app_log_repo.query.call_args[1]
+        assert len(call_kwargs["search"]) == 200
+
+    def test_empty_search_returns_none(self, admin_client, mock_app_log_repo):
+        mock_app_log_repo.query.return_value = ([], 0)
+
+        response = admin_client.get("/api/admin/logs")
+        assert response.status_code == 200
+        call_kwargs = mock_app_log_repo.query.call_args[1]
+        assert call_kwargs["search"] is None
+
+    def test_level_no_mapping(self, admin_client, mock_app_log_repo):
+        mock_app_log_repo.query.return_value = ([], 0)
+
+        for level, expected_no in [
+            ("DEBUG", 10), ("INFO", 20), ("WARNING", 30),
+            ("ERROR", 40), ("CRITICAL", 50),
+        ]:
+            log_routes._rate_limit_cache.clear()
+            response = admin_client.get(f"/api/admin/logs?level={level}")
+            assert response.status_code == 200
+            call_kwargs = mock_app_log_repo.query.call_args[1]
+            assert call_kwargs["level_no"] == expected_no, f"{level} should map to {expected_no}"

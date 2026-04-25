@@ -1422,6 +1422,39 @@ class SkillRatingResponse(BaseModel):
     )
 
 
+class AppLogEntry(BaseModel):
+    """Single application log entry."""
+
+    timestamp: str = Field(..., description="Log timestamp (ISO-8601)")
+    hostname: str = Field(..., description="Pod/hostname that emitted the log")
+    service: str = Field(..., description="Service name (registry, auth-server)")
+    level: str = Field(..., description="Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
+    level_no: int = Field(..., description="Numeric log level")
+    logger: str = Field(..., description="Python logger name")
+    filename: str = Field(..., description="Source filename")
+    lineno: int = Field(..., description="Source line number")
+    process: int = Field(..., description="Process ID")
+    message: str = Field(..., description="Log message")
+
+
+class AppLogResponse(BaseModel):
+    """Response model for application log query."""
+
+    entries: list[AppLogEntry] = Field(default_factory=list, description="Log entries")
+    total_count: int = Field(0, description="Total matching entries")
+    limit: int = Field(100, description="Applied page size")
+    offset: int = Field(0, description="Applied offset")
+    has_next: bool = Field(False, description="Whether more entries exist")
+
+
+class AppLogMetadataResponse(BaseModel):
+    """Response model for application log metadata."""
+
+    services: list[str] = Field(default_factory=list, description="Available service names")
+    hostnames: list[str] = Field(default_factory=list, description="Available hostnames")
+    levels: list[str] = Field(default_factory=list, description="Available log levels")
+
+
 class RegistryClient:
     """
     MCP Gateway Registry API client.
@@ -4353,6 +4386,79 @@ class RegistryClient:
             method="DELETE",
             endpoint=f"/api/iam/m2m-clients/{quote(client_id, safe='')}",
         )
+
+
+    # -------------------------------------------------------------------------
+    # Application Logs (admin-only, issue #886)
+    # -------------------------------------------------------------------------
+
+    def get_logs(
+        self,
+        service: str | None = None,
+        level: str | None = None,
+        hostname: str | None = None,
+        search: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> AppLogResponse:
+        """Query application logs (admin only).
+
+        Args:
+            service: Filter by service name.
+            level: Minimum log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+            hostname: Filter by hostname/pod.
+            search: Substring search in log messages.
+            start: Start timestamp (ISO-8601).
+            end: End timestamp (ISO-8601).
+            limit: Page size (1-10000).
+            offset: Offset for pagination.
+
+        Returns:
+            AppLogResponse with matching log entries.
+        """
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if service:
+            params["service"] = service
+        if level:
+            params["level"] = level
+        if hostname:
+            params["hostname"] = hostname
+        if search:
+            params["search"] = search
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+
+        response = self._make_request(
+            method="GET",
+            endpoint="/api/admin/logs",
+            params=params,
+        )
+        return AppLogResponse(**response.json())
+
+    def get_log_metadata(self) -> AppLogMetadataResponse:
+        """Get available filter values for application logs (admin only).
+
+        Returns:
+            AppLogMetadataResponse with services, hostnames, and levels.
+        """
+        response = self._make_request(
+            method="GET",
+            endpoint="/api/admin/logs/metadata",
+        )
+        return AppLogMetadataResponse(**response.json())
+
+    def get_log_services(self) -> list[str]:
+        """Get list of distinct service names from application logs (admin only).
+
+        Returns:
+            List of service name strings.
+        """
+        metadata = self.get_log_metadata()
+        return metadata.services
 
 
 def _format_tool_result(

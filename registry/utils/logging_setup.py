@@ -74,11 +74,17 @@ def setup_logging(
         try:
             from .mongodb_log_handler import MongoDBLogHandler
 
+            excluded = frozenset(
+                name.strip()
+                for name in settings.app_log_excluded_loggers.split(",")
+                if name.strip()
+            )
             mongo_handler = MongoDBLogHandler(
                 service_name=service_name,
                 buffer_size=settings.app_log_mongodb_buffer_size,
                 flush_interval=settings.app_log_mongodb_flush_interval_seconds,
                 ttl_days=settings.app_log_mongodb_ttl_days,
+                excluded_loggers=excluded,
             )
             mongo_handler.setLevel(level)
             mongo_handler.setFormatter(formatter)

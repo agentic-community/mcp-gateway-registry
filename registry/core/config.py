@@ -403,6 +403,10 @@ class Settings(BaseSettings):
         default="INFO",
         description="Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
+    app_log_excluded_loggers: str = Field(
+        default="uvicorn.access,httpx,pymongo,motor",
+        description="Comma-separated logger names to exclude from MongoDB log writes",
+    )
 
     # Audit Logging Configuration
     audit_log_enabled: bool = True  # Enable/disable audit logging globally

@@ -799,6 +799,39 @@ variable "audit_log_ttl_days" {
 }
 
 # =============================================================================
+# APPLICATION LOG CONFIGURATION
+# =============================================================================
+
+variable "app_log_mongodb_enabled" {
+  description = "Write application logs to MongoDB for centralized retrieval."
+  type        = bool
+  default     = false
+}
+
+variable "app_log_mongodb_ttl_days" {
+  description = "Days to retain application logs in MongoDB (TTL index). Common values: 3 (dev), 7 (standard)."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.app_log_mongodb_ttl_days >= 1 && var.app_log_mongodb_ttl_days <= 365
+    error_message = "Application log TTL must be between 1 and 365 days"
+  }
+}
+
+variable "app_log_level" {
+  description = "Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)."
+  type        = string
+  default     = "INFO"
+}
+
+variable "app_log_excluded_loggers" {
+  description = "Comma-separated logger names to exclude from MongoDB log writes."
+  type        = string
+  default     = "uvicorn.access,httpx,pymongo,motor"
+}
+
+# =============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # =============================================================================
 

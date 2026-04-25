@@ -250,6 +250,7 @@ services:
       - APP_LOG_MONGODB_BUFFER_SIZE=${APP_LOG_MONGODB_BUFFER_SIZE:-50}
       - APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS=${APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS:-5.0}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - APP_LOG_EXCLUDED_LOGGERS=${APP_LOG_EXCLUDED_LOGGERS:-uvicorn.access,httpx,pymongo,motor}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -412,6 +413,7 @@ services:
       - APP_LOG_MONGODB_BUFFER_SIZE=${APP_LOG_MONGODB_BUFFER_SIZE:-50}
       - APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS=${APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS:-5.0}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - APP_LOG_EXCLUDED_LOGGERS=${APP_LOG_EXCLUDED_LOGGERS:-uvicorn.access,httpx,pymongo,motor}
     ports:
       - "8888:8888"
     security_opt:

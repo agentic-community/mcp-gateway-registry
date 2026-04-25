@@ -49,6 +49,7 @@ app:
   appLogMongodbBufferSize: "50"    # Records to buffer before flushing to MongoDB
   appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
   appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
 
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, or cognito

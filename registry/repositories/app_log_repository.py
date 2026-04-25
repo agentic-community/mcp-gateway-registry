@@ -28,7 +28,7 @@ class AppLogRepository:
     async def query(
         self,
         service: str | None = None,
-        level: str | None = None,
+        level_no: int | None = None,
         hostname: str | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
@@ -40,11 +40,11 @@ class AppLogRepository:
 
         Args:
             service: Filter by service name (registry, auth-server).
-            level: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+            level_no: Minimum log level number (10=DEBUG, 20=INFO, etc.).
             hostname: Filter by pod/hostname.
             start: Only include entries at or after this timestamp.
             end: Only include entries at or before this timestamp.
-            search: Substring search within the message field.
+            search: Substring search within the message field (pre-escaped).
             skip: Number of entries to skip (offset).
             limit: Maximum number of entries to return.
 
@@ -57,8 +57,8 @@ class AppLogRepository:
 
         if service:
             query_filter["service"] = service
-        if level:
-            query_filter["level"] = level.upper()
+        if level_no is not None:
+            query_filter["level_no"] = {"$gte": level_no}
         if hostname:
             query_filter["hostname"] = hostname
 
@@ -74,7 +74,11 @@ class AppLogRepository:
             query_filter["message"] = {"$regex": search, "$options": "i"}
 
         try:
-            total = await collection.count_documents(query_filter)
+            if not query_filter:
+                total = await collection.estimated_document_count()
+            else:
+                total = await collection.count_documents(query_filter)
+
             cursor = (
                 collection.find(query_filter)
                 .sort("timestamp", -1)

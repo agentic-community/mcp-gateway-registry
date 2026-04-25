@@ -19,6 +19,16 @@ from pymongo.errors import PyMongoError
 from .mongodb_connection import build_client_options, build_connection_string, build_tls_kwargs
 
 
+EXCLUDED_LOGGERS_DEFAULT = frozenset({
+    "pymongo",
+    "motor",
+    "registry.utils.mongodb_log_handler",
+    "registry.utils.logging_setup",
+    "uvicorn.access",
+    "httpx",
+})
+
+
 class MongoDBLogHandler(logging.Handler):
     """Logging handler that buffers records and flushes them to MongoDB.
 
@@ -26,7 +36,7 @@ class MongoDBLogHandler(logging.Handler):
     flushes when the buffer reaches ``buffer_size`` records.
 
     The target collection is ``application_logs_{namespace}`` with a TTL
-    index on the ``timestamp`` field.
+    index on the ``created_at`` field.
     """
 
     def __init__(
@@ -35,6 +45,7 @@ class MongoDBLogHandler(logging.Handler):
         buffer_size: int = 50,
         flush_interval: float = 5.0,
         ttl_days: int = 7,
+        excluded_loggers: frozenset[str] | None = None,
     ):
         super().__init__()
         from ..core.config import settings
@@ -46,6 +57,8 @@ class MongoDBLogHandler(logging.Handler):
         self._buffer_size = buffer_size
         self._flush_interval = flush_interval
         self._ttl_days = ttl_days
+        self._excluded_loggers = excluded_loggers or EXCLUDED_LOGGERS_DEFAULT
+        self._flush_failure_count = 0
         self._closed = False
 
         namespace = settings.documentdb_namespace
@@ -82,12 +95,16 @@ class MongoDBLogHandler(logging.Handler):
             self._collection = db[self._collection_name]
 
             self._collection.create_index(
-                "timestamp",
+                "created_at",
                 expireAfterSeconds=self._ttl_days * 86400,
                 background=True,
             )
             self._collection.create_index(
-                [("service", 1), ("level", 1), ("timestamp", -1)],
+                [("service", 1), ("level_no", -1), ("timestamp", -1)],
+                background=True,
+            )
+            self._collection.create_index(
+                [("hostname", 1), ("timestamp", -1)],
                 background=True,
             )
             self._connect_error_logged = False
@@ -104,27 +121,47 @@ class MongoDBLogHandler(logging.Handler):
                 self._connect_error_logged = True
             return False
 
+    def _is_excluded(self, logger_name: str) -> bool:
+        for excluded in self._excluded_loggers:
+            if logger_name == excluded or logger_name.startswith(excluded + "."):
+                return True
+        return False
+
+    @property
+    def flush_failure_count(self) -> int:
+        return self._flush_failure_count
+
     def emit(self, record: logging.LogRecord) -> None:
         if self._closed:
             return
 
-        doc = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=UTC),
-            "hostname": self._hostname,
-            "service": self._service_name,
-            "level": record.levelname,
-            "logger": record.name,
-            "filename": record.filename,
-            "lineno": record.lineno,
-            "message": self.format(record),
-        }
+        if self._is_excluded(record.name):
+            return
 
-        with self._buffer_lock:
-            self._buffer.append(doc)
-            should_flush = len(self._buffer) >= self._buffer_size
+        try:
+            now = datetime.fromtimestamp(record.created, tz=UTC)
+            doc = {
+                "timestamp": now,
+                "hostname": self._hostname,
+                "service": self._service_name,
+                "level": record.levelname,
+                "level_no": record.levelno,
+                "logger": record.name,
+                "filename": record.filename,
+                "lineno": record.lineno,
+                "process": record.process,
+                "message": self.format(record),
+                "created_at": now,
+            }
 
-        if should_flush:
-            self._flush()
+            with self._buffer_lock:
+                self._buffer.append(doc)
+                should_flush = len(self._buffer) >= self._buffer_size
+
+            if should_flush:
+                self._flush()
+        except Exception:
+            pass
 
     def _flush(self) -> None:
         """Flush buffered records to MongoDB."""
@@ -140,7 +177,13 @@ class MongoDBLogHandler(logging.Handler):
         try:
             self._collection.insert_many(batch, ordered=False)
         except PyMongoError:
-            pass
+            self._flush_failure_count += 1
+            try:
+                from ..core.metrics import APP_LOG_FLUSH_FAILURES
+
+                APP_LOG_FLUSH_FAILURES.labels(service=self._service_name).inc()
+            except Exception:
+                pass
 
     def _periodic_flush(self) -> None:
         """Background thread: flush buffer every ``flush_interval`` seconds."""
