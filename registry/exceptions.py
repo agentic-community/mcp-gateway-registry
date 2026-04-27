@@ -173,6 +173,50 @@ class VirtualServerServiceError(VirtualServerRegistryError):
     pass
 
 
+# Skill content fetch exceptions
+
+
+class SkillContentFetchError(SkillRegistryError):
+    """Failed to fetch skill content from a remote URL."""
+
+    def __init__(
+        self,
+        url: str,
+        reason: str,
+        status_code: int = 502,
+    ):
+        self.url = url
+        self.reason = reason
+        self.status_code = status_code
+        super().__init__(f"Failed to fetch content from '{url}': {reason}")
+
+
+class SkillContentSSRFError(SkillRegistryError):
+    """URL failed SSRF validation."""
+
+    def __init__(
+        self,
+        url: str,
+    ):
+        self.url = url
+        super().__init__(
+            f"URL failed SSRF validation: {url}"
+        )
+
+
+class SkillContentTooLargeError(SkillRegistryError):
+    """Fetched content exceeds the size limit."""
+
+    def __init__(
+        self,
+        max_size: int,
+    ):
+        self.max_size = max_size
+        super().__init__(
+            f"Content exceeds {max_size // 1024} KB limit"
+        )
+
+
 # Registration Gate exceptions
 
 

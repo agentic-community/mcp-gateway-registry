@@ -236,7 +236,7 @@ class TestSkillInlineContent:
         mock_async_client.get = AsyncMock(return_value=mock_response)
 
         with (
-            patch("registry.api.skill_routes._is_safe_url", return_value=True),
+            patch("registry.services.skill_service._is_safe_url", return_value=True),
             patch("httpx.AsyncClient", return_value=mock_async_client),
         ):
             # Act
@@ -271,7 +271,7 @@ class TestSkillInlineContent:
         mock_async_client.get = AsyncMock(return_value=mock_response)
 
         with (
-            patch("registry.api.skill_routes._is_safe_url", return_value=True),
+            patch("registry.services.skill_service._is_safe_url", return_value=True),
             patch("httpx.AsyncClient", return_value=mock_async_client),
         ):
             # Act

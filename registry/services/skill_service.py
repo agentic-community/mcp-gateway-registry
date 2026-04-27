@@ -182,7 +182,7 @@ def _build_fetch_headers(
     headers: dict[str, str] = {}
     fetch_url = url
 
-    if auth_scheme == "none" or not auth_credential:
+    if auth_scheme in ("none", "global_credentials") or not auth_credential:
         return fetch_url, headers
 
     if auth_scheme == "bearer":
@@ -606,7 +606,7 @@ async def _check_skill_health(
 
     # Build auth headers for private repos
     credential = None
-    if auth_scheme != "none" and auth_credential_encrypted:
+    if auth_scheme not in ("none", "global_credentials") and auth_credential_encrypted:
         from ..utils.credential_encryption import decrypt_credential
 
         credential = decrypt_credential(auth_credential_encrypted)
@@ -618,7 +618,7 @@ async def _check_skill_health(
     try:
         async with httpx.AsyncClient() as client:
             github_headers = await _github_auth.get_auth_headers(str(url))
-            merged_headers = {**fetch_headers, **github_headers}
+            merged_headers = {**github_headers, **fetch_headers}
             response = await client.head(
                 fetch_url, headers=merged_headers,
                 follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT,
@@ -673,44 +673,48 @@ async def _compute_content_integrity(
     """
     file_hashes: list[FileHash] = []
 
-    async def _hash_url(url: str, rel_path: str) -> FileHash | None:
+    async def _hash_url(
+        client: httpx.AsyncClient,
+        url: str,
+        rel_path: str,
+    ) -> FileHash | None:
         fetch_url, fetch_headers = _build_fetch_headers(
             url, auth_scheme, auth_credential, auth_header_name,
         )
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    fetch_url, headers=fetch_headers,
-                    follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT,
-                )
-                if resp.status_code >= 400:
-                    logger.warning("Integrity fetch failed for %s: HTTP %s", rel_path, resp.status_code)
-                    return None
-                digest = hashlib.sha256(resp.content).hexdigest()
-                return FileHash(path=rel_path, sha256=digest, size_bytes=len(resp.content))
+            resp = await client.get(
+                fetch_url, headers=fetch_headers,
+                follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT,
+            )
+            if resp.status_code >= 400:
+                logger.warning("Integrity fetch failed for %s: HTTP %s", rel_path, resp.status_code)
+                return None
+            digest = hashlib.sha256(resp.content).hexdigest()
+            return FileHash(path=rel_path, sha256=digest, size_bytes=len(resp.content))
         except httpx.RequestError as e:
             logger.warning("Integrity fetch error for %s: %s", rel_path, e)
             return None
 
-    skill_md_hash = await _hash_url(skill_md_url, "SKILL.md")
-    if not skill_md_hash:
-        return None
-    file_hashes.append(skill_md_hash)
+    async with httpx.AsyncClient() as client:
+        skill_md_hash = await _hash_url(client, skill_md_url, "SKILL.md")
+        if not skill_md_hash:
+            return None
+        file_hashes.append(skill_md_hash)
 
-    if resource_manifest:
-        from ..utils.url_utils import derive_resource_url
+        if resource_manifest:
+            from ..utils.url_utils import derive_resource_url
 
-        all_resources = (
-            resource_manifest.references
-            + resource_manifest.scripts
-            + resource_manifest.agents
-            + resource_manifest.assets
-        )
-        for res in all_resources:
-            res_url = derive_resource_url(skill_md_url, res.path)
-            fh = await _hash_url(res_url, res.path)
-            if fh:
-                file_hashes.append(fh)
+            all_resources = (
+                resource_manifest.references
+                + resource_manifest.scripts
+                + resource_manifest.agents
+                + resource_manifest.assets
+            )
+            for res in all_resources:
+                res_url = derive_resource_url(skill_md_url, res.path)
+                fh = await _hash_url(client, res_url, res.path)
+                if fh:
+                    file_hashes.append(fh)
 
     sorted_entries = sorted(file_hashes, key=lambda h: h.path)
     composite_input = "".join(f"{h.path}:{h.sha256}" for h in sorted_entries)
@@ -721,6 +725,159 @@ async def _compute_content_integrity(
         file_hashes=file_hashes,
         computed_at=datetime.now(UTC),
     )
+
+
+def _decrypt_skill_auth(
+    skill: SkillCard,
+) -> tuple[str, str | None, str | None]:
+    """Extract and decrypt authentication details from a skill.
+
+    Returns (auth_scheme, plaintext_credential_or_none, auth_header_name).
+    """
+    auth_scheme = getattr(skill, "auth_scheme", "none")
+    encrypted_cred = getattr(skill, "auth_credential_encrypted", None)
+    credential = None
+    if auth_scheme not in ("none", "global_credentials") and encrypted_cred:
+        from ..utils.credential_encryption import decrypt_credential
+
+        credential = decrypt_credential(encrypted_cred)
+    return auth_scheme, credential, getattr(skill, "auth_header_name", None)
+
+
+async def _fetch_authenticated_content(
+    url: str,
+    skill: SkillCard,
+    *,
+    max_size: int | None = None,
+    timeout: float = 30.0,
+) -> "httpx.Response":
+    """Fetch content from a URL using the skill's encrypted credentials.
+
+    Handles SSRF validation, credential decryption, header building,
+    and redirect safety checks.
+
+    Raises:
+        SkillContentSSRFError: URL or redirect target fails SSRF check.
+        SkillContentFetchError: Upstream returned an HTTP error or was unreachable.
+        SkillContentTooLargeError: Response body exceeds max_size.
+    """
+    from ..exceptions import (
+        SkillContentFetchError,
+        SkillContentSSRFError,
+        SkillContentTooLargeError,
+    )
+
+    if not _is_safe_url(url):
+        raise SkillContentSSRFError(url)
+
+    auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
+    fetch_url, fetch_headers = _build_fetch_headers(
+        url, auth_scheme, credential, auth_header_name,
+    )
+
+    if auth_scheme == "none":
+        merged_headers = fetch_headers
+    elif auth_scheme == "global_credentials":
+        merged_headers = await _github_auth.get_auth_headers(fetch_url)
+    else:
+        github_headers = await _github_auth.get_auth_headers(fetch_url)
+        merged_headers = {**github_headers, **fetch_headers}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                fetch_url,
+                headers=merged_headers,
+                follow_redirects=True,
+                timeout=timeout,
+            )
+
+            final_url = str(response.url)
+            if final_url != fetch_url and not _is_safe_url(final_url):
+                raise SkillContentSSRFError(final_url)
+
+            if response.status_code >= 400:
+                raise SkillContentFetchError(
+                    url, f"HTTP {response.status_code}",
+                )
+
+            if max_size and len(response.content) > max_size:
+                raise SkillContentTooLargeError(max_size)
+
+            return response
+    except httpx.RequestError as e:
+        logger.error("Failed to fetch from %s: %s", url, e)
+        raise SkillContentFetchError(url, str(e))
+
+
+async def _check_drift_inline(
+    service: "SkillService",
+    skill_path: str,
+    skill: SkillCard,
+    file_path: str,
+    content_bytes: bytes,
+) -> None:
+    """Compare fetched content against the stored integrity baseline.
+
+    Runs as a fire-and-forget background task so it never blocks the
+    content response.  Updates the DB only when a change is detected
+    (or when a previously-drifted file returns to its baseline).
+    """
+    integrity = skill.content_integrity
+    if not integrity or not integrity.file_hashes:
+        return
+
+    baseline = {fh.path: fh.sha256 for fh in integrity.file_hashes}
+    expected = baseline.get(file_path)
+    if expected is None:
+        return
+
+    actual = hashlib.sha256(content_bytes).hexdigest()
+    file_drifted = actual != expected
+
+    previously_drifted = file_path in (integrity.drifted_files or [])
+    now = datetime.now(UTC).isoformat()
+
+    try:
+        if file_drifted == previously_drifted:
+            await service.update_skill(
+                skill_path,
+                {"content_integrity.last_drift_check": now},
+            )
+            return
+
+        current_drifted = list(integrity.drifted_files or [])
+        if file_drifted and file_path not in current_drifted:
+            current_drifted.append(file_path)
+        elif not file_drifted and file_path in current_drifted:
+            current_drifted.remove(file_path)
+
+        current_tags = list(skill.tags or [])
+        drift_tag = "content-drifted"
+        if current_drifted and drift_tag not in current_tags:
+            current_tags.append(drift_tag)
+        elif not current_drifted and drift_tag in current_tags:
+            current_tags.remove(drift_tag)
+
+        combined_updates: dict[str, Any] = {
+            "content_integrity.drift_detected": bool(current_drifted),
+            "content_integrity.last_drift_check": now,
+            "content_integrity.drifted_files": current_drifted,
+            "tags": current_tags,
+        }
+        await service.update_skill(skill_path, combined_updates)
+
+        if current_drifted:
+            await service.toggle_skill(skill_path, enabled=False)
+            logger.warning(
+                "Drift detected for %s in skill %s, skill disabled",
+                file_path, skill_path,
+            )
+        else:
+            await service.toggle_skill(skill_path, enabled=True)
+            logger.info("Drift cleared for skill %s, skill re-enabled", skill_path)
+    except Exception:
+        logger.debug("Failed to persist drift state for %s", skill_path, exc_info=True)
 
 
 def _build_skill_card(
@@ -768,7 +925,7 @@ def _build_skill_card(
     credential_updated_at = None
     if (
         getattr(request, "auth_credential", None)
-        and getattr(request, "auth_scheme", "none") != "none"
+        and getattr(request, "auth_scheme", "none") not in ("none", "global_credentials")
     ):
         from ..utils.credential_encryption import encrypt_credential
 

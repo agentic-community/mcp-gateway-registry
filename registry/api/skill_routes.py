@@ -49,10 +49,17 @@ from ..schemas.skill_models import (
     ToolValidationResult,
     VisibilityEnum,
 )
-from ..services.github_auth import github_auth_provider as _github_auth
+from ..exceptions import (
+    SkillContentFetchError,
+    SkillContentSSRFError,
+    SkillContentTooLargeError,
+)
 from ..services.skill_service import (
     _build_fetch_headers,
+    _check_drift_inline,
+    _decrypt_skill_auth,
     _discover_skill_resources,
+    _fetch_authenticated_content,
     _is_safe_url,
     get_skill_service,
 )
@@ -492,56 +499,73 @@ async def get_skill_content(
             detail="No SKILL.md URL configured for this skill",
         )
 
-    if resource is not None:
-        manifest = skill.resource_manifest
-        if not manifest:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No resource manifest available for this skill",
-            )
-        all_resources = manifest.references + manifest.scripts + manifest.agents + manifest.assets
-        matched = [r for r in all_resources if r.path == resource]
-        if not matched:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Resource '{resource}' not found in manifest",
+    try:
+        if resource is not None:
+            manifest = skill.resource_manifest
+            if not manifest:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="No resource manifest available for this skill",
+                )
+            all_resources = manifest.references + manifest.scripts + manifest.agents + manifest.assets
+            matched = [r for r in all_resources if r.path == resource]
+            if not matched:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Resource '{resource}' not found in manifest",
+                )
+
+            from ..utils.url_utils import derive_resource_url
+
+            resource_url = derive_resource_url(str(raw_url), resource)
+            response = await _fetch_authenticated_content(
+                resource_url, skill, max_size=MAX_RESOURCE_SIZE,
             )
 
-        from ..utils.url_utils import derive_resource_url
+            drift_task = asyncio.create_task(
+                _check_drift_inline(service, normalized_path, skill, resource, response.content)
+            )
+            drift_task.add_done_callback(_log_task_exception)
 
-        resource_url = derive_resource_url(str(raw_url), resource)
-        response = await _fetch_authenticated_content(
-            resource_url, skill, max_size=MAX_RESOURCE_SIZE,
-        )
+            return {
+                "content": response.text,
+                "path": resource,
+                "type": matched[0].type,
+                "url": resource_url,
+            }
+
+        response = await _fetch_authenticated_content(str(raw_url), skill)
 
         drift_task = asyncio.create_task(
-            _check_drift_inline(service, normalized_path, skill, resource, response.content)
+            _check_drift_inline(service, normalized_path, skill, "SKILL.md", response.content)
         )
         drift_task.add_done_callback(_log_task_exception)
 
-        return {
+        result: dict[str, Any] = {
             "content": response.text,
-            "path": resource,
-            "type": matched[0].type,
-            "url": resource_url,
+            "url": str(raw_url),
         }
+        if skill.resource_manifest:
+            result["resource_manifest"] = skill.resource_manifest.model_dump()
+        if skill.content_integrity:
+            result["drift_detected"] = skill.content_integrity.drift_detected
+        return result
 
-    response = await _fetch_authenticated_content(str(raw_url), skill)
-
-    drift_task = asyncio.create_task(
-        _check_drift_inline(service, normalized_path, skill, "SKILL.md", response.content)
-    )
-    drift_task.add_done_callback(_log_task_exception)
-
-    result: dict[str, Any] = {
-        "content": response.text,
-        "url": str(raw_url),
-    }
-    if skill.resource_manifest:
-        result["resource_manifest"] = skill.resource_manifest.model_dump()
-    if skill.content_integrity:
-        result["drift_detected"] = skill.content_integrity.drift_detected
-    return result
+    except SkillContentSSRFError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"URL failed SSRF validation: {e.url}",
+        )
+    except SkillContentTooLargeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(e),
+        )
+    except SkillContentFetchError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(e),
+        )
 
 
 @router.get(
@@ -914,12 +938,12 @@ async def update_skill(
     # Encrypt credential if provided on update
     auth_credential = updates.pop("auth_credential", None)
     auth_scheme = updates.get("auth_scheme", existing.auth_scheme)
-    if auth_credential and auth_scheme != "none":
+    if auth_credential and auth_scheme not in ("none", "global_credentials"):
         from ..utils.credential_encryption import encrypt_credential
 
         updates["auth_credential_encrypted"] = encrypt_credential(auth_credential)
         updates["credential_updated_at"] = datetime.now(UTC).isoformat()
-    elif auth_scheme == "none":
+    elif auth_scheme in ("none", "global_credentials"):
         updates["auth_credential_encrypted"] = None
         updates["auth_header_name"] = None
         updates["credential_updated_at"] = None
@@ -1096,87 +1120,6 @@ def _log_task_exception(task: asyncio.Task) -> None:
         logger.error("Background task failed: %s", exc, exc_info=exc)
 
 
-def _decrypt_skill_auth(
-    skill: SkillCard,
-) -> tuple[str, str | None, str | None]:
-    """Extract and decrypt authentication details from a skill.
-
-    Returns (auth_scheme, plaintext_credential_or_none, auth_header_name).
-    """
-    auth_scheme = getattr(skill, "auth_scheme", "none")
-    encrypted_cred = getattr(skill, "auth_credential_encrypted", None)
-    credential = None
-    if auth_scheme != "none" and encrypted_cred:
-        from ..utils.credential_encryption import decrypt_credential
-
-        credential = decrypt_credential(encrypted_cred)
-    return auth_scheme, credential, getattr(skill, "auth_header_name", None)
-
-
-async def _fetch_authenticated_content(
-    url: str,
-    skill: SkillCard,
-    *,
-    max_size: int | None = None,
-    timeout: float = 30.0,
-) -> "httpx.Response":
-    """Fetch content from a URL using the skill's encrypted credentials.
-
-    Handles SSRF validation, credential decryption, header building,
-    and redirect safety checks. Raises HTTPException on failure.
-    """
-    import httpx as _httpx
-
-    if not _is_safe_url(url):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="URL failed SSRF validation - private/internal addresses are not allowed",
-        )
-
-    auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
-    fetch_url, fetch_headers = _build_fetch_headers(url, auth_scheme, credential, auth_header_name)
-
-    # Merge in GitHub App / token auth headers so public-repo fetches
-    # benefit from the higher rate-limit ceiling.  Per-skill credentials
-    # take precedence on key collisions because they are explicitly
-    # configured for this skill's source.
-    github_headers = await _github_auth.get_auth_headers(fetch_url)
-    merged_headers = {**github_headers, **fetch_headers}
-
-    try:
-        async with _httpx.AsyncClient() as client:
-            response = await client.get(
-                fetch_url, headers=merged_headers, follow_redirects=True, timeout=timeout,
-            )
-
-            final_url = str(response.url)
-            if final_url != fetch_url and not _is_safe_url(final_url):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Redirect to unsafe URL blocked: {final_url}",
-                )
-
-            if response.status_code >= 400:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Failed to fetch content: HTTP {response.status_code}",
-                )
-
-            if max_size and len(response.content) > max_size:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=f"Content exceeds {max_size // 1024} KB limit",
-                )
-
-            return response
-    except _httpx.RequestError as e:
-        logger.error("Failed to fetch from %s: %s", url, e)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch content: {e}",
-        )
-
-
 def _user_can_access_skill(
     skill: SkillCard,
     user_context: dict,
@@ -1277,82 +1220,3 @@ async def _perform_skill_security_scan_on_registration(
                 logger.error(f"Failed to add security-pending tag: {tag_err}")
 
 
-async def _check_drift_inline(
-    service: "SkillService",
-    skill_path: str,
-    skill: SkillCard,
-    file_path: str,
-    content_bytes: bytes,
-) -> None:
-    """Compare fetched content against the stored integrity baseline.
-
-    Runs as a fire-and-forget background task so it never blocks the
-    content response.  Updates the DB only when a change is detected
-    (or when a previously-drifted file returns to its baseline).
-    """
-    import hashlib
-    from datetime import UTC, datetime
-
-    integrity = skill.content_integrity
-    if not integrity or not integrity.file_hashes:
-        return
-
-    baseline = {fh.path: fh.sha256 for fh in integrity.file_hashes}
-    expected = baseline.get(file_path)
-    if expected is None:
-        return
-
-    actual = hashlib.sha256(content_bytes).hexdigest()
-    file_drifted = actual != expected
-
-    previously_drifted = file_path in (integrity.drifted_files or [])
-    now = datetime.now(UTC).isoformat()
-
-    try:
-        # Fast path: drift state for this file did not change.  Persist
-        # only the last-checked timestamp in a single update so we still
-        # have an audit trail of the verification.
-        if file_drifted == previously_drifted:
-            await service.update_skill(
-                skill_path,
-                {"content_integrity.last_drift_check": now},
-            )
-            return
-
-        current_drifted = list(integrity.drifted_files or [])
-        if file_drifted and file_path not in current_drifted:
-            current_drifted.append(file_path)
-        elif not file_drifted and file_path in current_drifted:
-            current_drifted.remove(file_path)
-
-        # Batch all field-level changes (integrity state + tags) into a
-        # single update_skill() call.  This halves DB round-trips and
-        # avoids interleaving where another task could observe a
-        # half-applied state.  Enable/disable is a separate persistence
-        # path (set_state vs update) and must remain its own call.
-        current_tags = list(skill.tags or [])
-        drift_tag = "content-drifted"
-        if current_drifted and drift_tag not in current_tags:
-            current_tags.append(drift_tag)
-        elif not current_drifted and drift_tag in current_tags:
-            current_tags.remove(drift_tag)
-
-        combined_updates: dict[str, Any] = {
-            "content_integrity.drift_detected": bool(current_drifted),
-            "content_integrity.last_drift_check": now,
-            "content_integrity.drifted_files": current_drifted,
-            "tags": current_tags,
-        }
-        await service.update_skill(skill_path, combined_updates)
-
-        if current_drifted:
-            await service.toggle_skill(skill_path, enabled=False)
-            logger.warning(
-                "Drift detected for %s in skill %s — skill disabled",
-                file_path, skill_path,
-            )
-        else:
-            await service.toggle_skill(skill_path, enabled=True)
-            logger.info("Drift cleared for skill %s — skill re-enabled", skill_path)
-    except Exception:
-        logger.debug("Failed to persist drift state for %s", skill_path, exc_info=True)

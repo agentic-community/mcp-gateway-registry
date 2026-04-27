@@ -211,9 +211,9 @@ class SkillCard(BaseModel):
     # Literal keeps the wire-format strings compatible with existing clients
     # while rejecting unsupported schemes at validation time.  Adding a new
     # scheme requires updating both this list and SkillRegistrationRequest.
-    auth_scheme: Literal["none", "bearer", "api_key"] = Field(
+    auth_scheme: Literal["none", "global_credentials", "bearer", "api_key"] = Field(
         default="none",
-        description="Auth scheme for fetching SKILL.md: none, bearer, api_key",
+        description="Auth scheme for fetching SKILL.md: none, global_credentials, bearer, api_key",
     )
     auth_credential_encrypted: str | None = Field(
         None,
@@ -377,9 +377,9 @@ class SkillRegistrationRequest(BaseModel):
         default="draft",
         description="Lifecycle status (default: draft). Allowed: active, deprecated, draft, beta",
     )
-    auth_scheme: Literal["none", "bearer", "api_key"] = Field(
+    auth_scheme: Literal["none", "global_credentials", "bearer", "api_key"] = Field(
         default="none",
-        description="Auth scheme for fetching SKILL.md from private repos: none, bearer, api_key",
+        description="Auth scheme for fetching SKILL.md from private repos: none, global_credentials, bearer, api_key",
     )
     auth_credential: str | None = Field(
         None,
