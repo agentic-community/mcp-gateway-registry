@@ -21,6 +21,7 @@ from fastapi import (
 from pydantic import BaseModel
 
 from ..audit.context import set_audit_action
+from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..exceptions import (
     VirtualServerAlreadyExistsError,
@@ -460,6 +461,7 @@ async def toggle_virtual_server(
     request: ToggleVirtualServerRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     vs_path: str = Path(..., description="Virtual server path"),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict:
     """Enable or disable a virtual MCP server.
 

@@ -113,13 +113,21 @@ async def verify_csrf_token_flexible(
     - Form data (for traditional HTML forms)
     - X-CSRF-Token header (for React/SPA applications)
 
+    Skips CSRF validation when no session cookie is present, as the request
+    is from a non-browser client (e.g. Bearer token auth) and CSRF attacks
+    require a browser session with cookies.
+
     Args:
         request: The incoming FastAPI request.
 
     Raises:
-        HTTPException: If the CSRF token is missing, invalid, or the session
-            cookie is not present.
+        HTTPException: If CSRF token is missing or invalid for session-based requests.
     """
+    session_id = request.cookies.get(settings.session_cookie_name)
+    if not session_id:
+        logger.debug("No session cookie present, skipping CSRF check (non-browser client)")
+        return
+
     # Try to get token from header first (for JSON requests)
     csrf_token = request.headers.get("X-CSRF-Token")
 
@@ -129,22 +137,13 @@ async def verify_csrf_token_flexible(
             form_data = await request.form()
             csrf_token = form_data.get("csrf_token")
         except Exception:
-            # Not form data, continue without token
             pass
 
     if not csrf_token:
-        logger.warning("CSRF validation failed: no token provided")
+        logger.warning("CSRF validation failed: no token provided (session-based request)")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="CSRF validation failed: no token provided",
-        )
-
-    session_id = request.cookies.get(settings.session_cookie_name)
-    if not session_id:
-        logger.warning("CSRF validation failed: no session cookie present")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="CSRF validation failed: no session",
         )
 
     if not validate_csrf_token(csrf_token, session_id):
