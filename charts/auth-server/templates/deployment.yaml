@@ -47,6 +47,8 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           envFrom:
+            - configMapRef:
+                name: auth-server-app-log-config
             - secretRef:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if eq $authProviderType "keycloak" }}
@@ -113,23 +115,6 @@ spec:
                   name: {{ .Values.auth0.managementApiTokenExistingSecret }}
                   key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
             {{- end }}
-            # Application Log Configuration
-            - name: APP_LOG_MAX_BYTES
-              value: {{ .Values.app.appLogMaxBytes | default "52428800" | quote }}
-            - name: APP_LOG_BACKUP_COUNT
-              value: {{ .Values.app.appLogBackupCount | default "5" | quote }}
-            - name: APP_LOG_MONGODB_ENABLED
-              value: {{ .Values.app.appLogMongodbEnabled | default "false" | quote }}
-            - name: APP_LOG_MONGODB_TTL_DAYS
-              value: {{ .Values.app.appLogMongodbTtlDays | default "7" | quote }}
-            - name: APP_LOG_MONGODB_BUFFER_SIZE
-              value: {{ .Values.app.appLogMongodbBufferSize | default "50" | quote }}
-            - name: APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS
-              value: {{ .Values.app.appLogMongodbFlushIntervalSeconds | default "5.0" | quote }}
-            - name: APP_LOG_LEVEL
-              value: {{ .Values.app.appLogLevel | default "INFO" | quote }}
-            - name: APP_LOG_EXCLUDED_LOGGERS
-              value: {{ .Values.app.appLogExcludedLoggers | default "uvicorn.access,httpx,pymongo,motor" | quote }}
           livenessProbe:
             httpGet:
               path: /health

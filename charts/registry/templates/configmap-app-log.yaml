@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-app-log-config
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+data:
+  APP_LOG_MAX_BYTES: {{ .Values.app.appLogMaxBytes | default "52428800" | quote }}
+  APP_LOG_BACKUP_COUNT: {{ .Values.app.appLogBackupCount | default "5" | quote }}
+  APP_LOG_MONGODB_ENABLED: {{ .Values.app.appLogMongodbEnabled | default "false" | quote }}
+  APP_LOG_MONGODB_TTL_DAYS: {{ .Values.app.appLogMongodbTtlDays | default "7" | quote }}
+  APP_LOG_MONGODB_BUFFER_SIZE: {{ .Values.app.appLogMongodbBufferSize | default "50" | quote }}
+  APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS: {{ .Values.app.appLogMongodbFlushIntervalSeconds | default "5.0" | quote }}
+  APP_LOG_LEVEL: {{ .Values.app.appLogLevel | default "INFO" | quote }}
+  APP_LOG_EXCLUDED_LOGGERS: {{ .Values.app.appLogExcludedLoggers | default "uvicorn.access,httpx,pymongo,motor" | quote }}
