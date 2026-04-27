@@ -150,15 +150,23 @@ Run the analysis script to compute all distributions, instance timelines, and me
 The script automatically finds the most recent previous `metrics-*.json` file. Since output files are written to the dated subfolder (`$DATE_DIR`) but previous metrics live in *sibling* dated subfolders, you **must** pass `--search-dir OUTPUT_DIR` so the script searches the parent directory containing all dated subfolders:
 
 ```bash
+INTERNAL_INSTANCES_FILE=".claude/skills/usage-report/known-internal-instances.md"
+INTERNAL_FLAG=""
+if [ -f "$INTERNAL_INSTANCES_FILE" ]; then
+  INTERNAL_FLAG="--internal-instances $INTERNAL_INSTANCES_FILE"
+fi
+
 /usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
   --csv $DATE_DIR/registry_metrics.csv \
   --output-dir $DATE_DIR \
   --search-dir OUTPUT_DIR \
-  --date YYYY-MM-DD
+  --date YYYY-MM-DD \
+  $INTERNAL_FLAG
 ```
 
 - `--output-dir $DATE_DIR` -- where to write `tables-*.md` and `metrics-*.json`
 - `--search-dir OUTPUT_DIR` -- where to search for previous `metrics-*.json` files (scans this directory and all subdirectories). **If omitted, defaults to the parent of `--output-dir`.**
+- `--internal-instances` -- path to `known-internal-instances.md` listing known internal registry instance IDs. When provided, internal instances are labeled "(internal)" in the Instance Lifetime and Identified Instances tables, a Most Active Instances table is generated with an Internal column, and stickiness metrics (3+ day non-internal count, longest-running non-internal instance) are computed and included in the JSON output.
 
 Or with an explicit previous metrics file (skips auto-detection):
 
@@ -167,14 +175,20 @@ Or with an explicit previous metrics file (skips auto-detection):
   --csv $DATE_DIR/registry_metrics.csv \
   --output-dir $DATE_DIR \
   --date YYYY-MM-DD \
-  --previous-metrics OUTPUT_DIR/PREVIOUS-DATE/metrics-PREVIOUS-DATE.json
+  --previous-metrics OUTPUT_DIR/PREVIOUS-DATE/metrics-PREVIOUS-DATE.json \
+  $INTERNAL_FLAG
 ```
 
 ### Step 6b: Identify Internal vs Customer Instances
 
-Check whether the file `.claude/skills/usage-report/known-internal-instances.md` exists before attempting to read it. **This file is gitignored and may not be present on all machines.** If the file does not exist, skip this step entirely and treat all instances as potential customer instances in the report.
+The `--internal-instances` flag passed in Step 6 handles internal instance identification automatically. The analysis script reads `.claude/skills/usage-report/known-internal-instances.md` (if it exists, since it is gitignored and may not be present on all machines) and:
 
-If the file exists, read the list of known internal registry instance IDs from it. These are internal development/testing/demo instances -- NOT customer deployments.
+1. Labels internal instances with "(internal)" in the Instance Lifetime and Identified Instances tables
+2. Generates a "Most Active Instances" table ranked by activity score (max servers + agents + skills + search), with an Internal column and a Version column
+3. Computes stickiness metrics (3+ day non-internal count, longest-running non-internal) and writes them to the JSON output under the `stickiness` key
+4. Writes the list of internal instance IDs to the JSON output under `internal_instance_ids`
+
+If the file does not exist, the script treats all instances as external (no internal labeling, stickiness counts all instances).
 
 When writing the report:
 
@@ -190,12 +204,14 @@ The known internal instances are typically the longest-running, highest-activity
 Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the report. Add narrative sections (Executive Summary, Architecture Patterns, Recommendations) around the data tables. The tables file contains:
 
 - Key Metrics table
-- Registry Instance Lifetime table (age in days, sorted descending)
-- Identified and Unidentified instance tables
+- Registry Instance Lifetime table (age in days, sorted descending, internal instances labeled)
+- Identified and Unidentified instance tables (internal instances labeled)
 - Cloud, Compute, Architecture, Storage, Auth distribution tables
 - Version Adoption table
 - Feature Adoption table
 - Search Usage table
+- Sticky Instance Breakdown table (one row per cloud/compute/storage/auth profile, with count, percentage, and change vs previous)
+- Most Active Instances table (top 10 by activity score, with Version and Internal columns)
 - Per-instance daily timelines (with servers, agents, skills, search queries)
 
 #### Report Structure
@@ -216,10 +232,12 @@ Lead with new installs since last report, total unique installs, dominant cloud/
 
 Include an **instance stickiness** line: "N instances have been running for 3+ days (up/down from M in the previous report). The longest-running non-internal instance is `REGISTRY_ID` at D days (previously P days)." This signals real adoption beyond one-time trials.
 
-To compute these numbers:
-1. Count instances from the `instance_lifetime` list in `metrics-YYYY-MM-DD.json` where `age_days >= 3`, excluding known internal instance IDs.
-2. Find the max `age_days` among non-internal instances for the "longest-running customer" value.
-3. Compare both numbers against the same counts from the previous report's `metrics-*.json`.
+These numbers are pre-computed by `analyze_telemetry.py` (when `--internal-instances` is provided) and available in `metrics-YYYY-MM-DD.json` under the `stickiness` key:
+- `stickiness.sticky_3plus_days`: count of non-internal instances where age_days >= 3
+- `stickiness.longest_non_internal_id`: registry_id with max age_days (filtered)
+- `stickiness.longest_non_internal_days`: max age_days value
+
+Compare both numbers against the same `stickiness` values from the previous report's `metrics-*.json`.
 
 ![Registry Installs Timeseries](registry-installs-timeseries-YYYY-MM-DD.png)
 
@@ -264,12 +282,15 @@ Total queries (deduplicated), average per instance, max from single instance.
 ## Heartbeat Metrics
 Server/agent/skill counts, uptime, search backend, embeddings provider.
 
+## Sticky Instance Breakdown (3+ Days)
+This section is pre-generated by `analyze_telemetry.py` in the `tables-YYYY-MM-DD.md` file. It shows a single table of unique non-internal registry instances with age >= 3 days, grouped by deployment profile (cloud, compute, storage, auth combination). Each row shows the instance count, percentage, and change vs the previous report. The profile counts are also saved in the metrics JSON as `sticky_profiles` so future reports can compute deltas.
+
+Add a short narrative highlighting the top deployment profiles and any notable shifts in the mix.
+
 ## Most Active Instances (by Feature Usage)
-Top 10 instances ranked by cumulative feature usage: max registered servers + max registered agents + max registered skills + lifetime search queries. This shows which deployments use the registry most actively, beyond raw event counts.
+This table is pre-generated by `analyze_telemetry.py` in the `tables-YYYY-MM-DD.md` file. It shows the top 10 instances ranked by activity score (max servers + agents + skills + lifetime search queries), with columns: Rank, Registry ID, Cloud/Compute/Auth, Version, Servers, Agents, Skills, Search, Total, Internal.
 
-To compute: for each identified instance, take the maximum `servers_count`, `agents_count`, `skills_count` observed across all its heartbeat events, plus the maximum `search_queries_total` (lifetime, deduplicated). Sum these four values as the "total" activity score, sort descending, and show the top 10.
-
-Include columns: Rank, Registry ID, Cloud/Compute/Auth, Servers, Agents, Skills, Search, Total, Age (days), Notes. Mark internal instances. Add a short narrative highlighting distinct usage patterns among the top customer instances (e.g., full-featured vs search-only vs skills-catalog).
+Add a short narrative below the table highlighting distinct usage patterns among the top customer instances (e.g., full-featured vs search-only vs skills-catalog).
 
 ## GitHub Repository
 Community-growth signals for `agentic-community/mcp-gateway-registry` pulled via the `gh` CLI in Step 5d. Include a table with current values and deltas vs the previous report:

@@ -15,6 +15,7 @@ import glob
 import json
 import logging
 import os
+import re
 from collections import Counter, defaultdict
 from datetime import datetime
 
@@ -83,6 +84,311 @@ def _format_pct(
     if total == 0:
         return "0%"
     return f"{count / total * 100:.0f}%"
+
+
+def _parse_internal_instances(
+    path: str,
+) -> set[str]:
+    """Parse known-internal-instances.md and return a set of registry IDs.
+
+    The file contains a markdown table with registry IDs in backticks.
+    Returns an empty set if the file does not exist.
+    """
+    if not path or not os.path.exists(path):
+        logger.info("No known-internal-instances file found, treating all as external")
+        return set()
+
+    ids = set()
+    with open(path) as f:
+        for line in f:
+            match = re.search(r"`([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`", line)
+            if match:
+                ids.add(match.group(1))
+
+    logger.info(f"Loaded {len(ids)} known internal instance IDs from {path}")
+    return ids
+
+
+def _is_internal(
+    registry_id: str,
+    internal_ids: set[str],
+) -> bool:
+    """Check if a registry_id (possibly truncated) matches a known internal ID."""
+    if not internal_ids:
+        return False
+    truncated = registry_id.rstrip(".")
+    for full_id in internal_ids:
+        if full_id.startswith(truncated):
+            return True
+    return False
+
+
+def _compute_stickiness(
+    instance_lifetime: list[dict],
+    internal_ids: set[str],
+) -> dict:
+    """Compute stickiness metrics: 3+ day non-internal instances and longest-running."""
+    non_internal = [
+        inst for inst in instance_lifetime
+        if not _is_internal(inst["registry_id"], internal_ids)
+    ]
+    sticky = [inst for inst in non_internal if inst["age_days"] >= 3]
+    longest = max(non_internal, key=lambda x: x["age_days"]) if non_internal else None
+
+    return {
+        "sticky_3plus_days": len(sticky),
+        "total_non_internal": len(non_internal),
+        "longest_non_internal_id": longest["registry_id"] if longest else None,
+        "longest_non_internal_days": longest["age_days"] if longest else 0,
+    }
+
+
+def _display_id(
+    registry_id: str,
+    internal_ids: set[str],
+) -> str:
+    """Return registry_id with ' (internal)' suffix if it matches a known internal ID."""
+    if _is_internal(registry_id, internal_ids):
+        return f"{registry_id} (internal)"
+    return registry_id
+
+
+def _score_instances(
+    instances: list[dict],
+    internal_ids: set[str],
+) -> list[dict]:
+    """Score instances by feature usage and return sorted list (descending).
+
+    Activity score = max_servers + max_agents + max_skills + total_search_queries.
+    Instances with zero activity are excluded.
+    """
+    scored = []
+    for inst in instances:
+        servers = inst.get("max_servers", 0)
+        agents = inst.get("max_agents", 0)
+        skills = inst.get("max_skills", 0)
+        search = inst.get("total_search_queries", 0)
+        total = servers + agents + skills + search
+        if total == 0:
+            continue
+        scored.append(
+            {
+                "registry_id": inst["registry_id"],
+                "cloud": inst["cloud"],
+                "compute": inst["compute"],
+                "auth": inst["auth"],
+                "version": inst.get("version", "unknown"),
+                "servers": servers,
+                "agents": agents,
+                "skills": skills,
+                "search": search,
+                "total": total,
+                "is_internal": _is_internal(inst["registry_id"], internal_ids),
+            }
+        )
+
+    scored.sort(key=lambda x: x["total"], reverse=True)
+    return scored
+
+
+def _build_most_active_table(
+    instances: list[dict],
+    internal_ids: set[str],
+    top_n: int = 10,
+) -> str:
+    """Build a markdown table of the most active non-internal instances."""
+    scored = _score_instances(instances, internal_ids)
+    non_internal = [inst for inst in scored if not inst["is_internal"]]
+    top = non_internal[:top_n]
+
+    lines = []
+    lines.append("## Most Active Instances (by Feature Usage)")
+    lines.append("")
+    lines.append(
+        "| Rank | Registry ID | Cloud/Compute/Auth "
+        "| Version | Servers | Agents | Skills | Search | Total |"
+    )
+    lines.append(
+        "|------|-------------|-------------------"
+        "|---------|---------|--------|--------|--------|-------|"
+    )
+    for i, inst in enumerate(top, 1):
+        label = f"{inst['cloud']}/{inst['compute']}/{inst['auth']}"
+        lines.append(
+            f"| {i} "
+            f"| `{inst['registry_id']}` "
+            f"| {label} "
+            f"| `{inst['version']}` "
+            f"| {inst['servers']} "
+            f"| {inst['agents']} "
+            f"| {inst['skills']} "
+            f"| {inst['search']} "
+            f"| {inst['total']} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _get_sticky_instances(
+    instances: list[dict],
+    instance_lifetime: list[dict],
+    internal_ids: set[str],
+    min_age_days: int = 3,
+) -> list[dict]:
+    """Return non-internal instances with age >= min_age_days."""
+    age_lookup = {inst["registry_id"]: inst["age_days"] for inst in instance_lifetime}
+
+    sticky = []
+    for inst in instances:
+        rid = inst["registry_id"]
+        if _is_internal(rid, internal_ids):
+            continue
+        age = age_lookup.get(rid, 0)
+        if age >= min_age_days:
+            sticky.append(inst)
+    return sticky
+
+
+def _compute_sticky_profile_counts(
+    sticky_instances: list[dict],
+) -> dict[tuple[str, str, str, str], int]:
+    """Count instances per (cloud, compute, storage, auth) combination."""
+    counter: dict[tuple[str, str, str, str], int] = {}
+    for inst in sticky_instances:
+        key = (inst["cloud"], inst["compute"], inst["storage"], inst["auth"])
+        counter[key] = counter.get(key, 0) + 1
+    return counter
+
+
+def _build_sticky_breakdown_table(
+    instances: list[dict],
+    instance_lifetime: list[dict],
+    internal_ids: set[str],
+    previous_sticky_profiles: dict[str, int] | None = None,
+) -> tuple[str, dict[str, int]]:
+    """Build a single table of sticky instances grouped by deployment profile.
+
+    Each row is a unique (cloud, compute, storage, auth) combination with
+    instance count, percentage, and change vs the previous report.
+
+    Returns:
+        Tuple of (markdown_string, profile_counts_for_json).
+    """
+    sticky = _get_sticky_instances(instances, instance_lifetime, internal_ids)
+    total_sticky = len(sticky)
+
+    profile_counts = _compute_sticky_profile_counts(sticky)
+
+    profile_counts_for_json = {
+        f"{c}/{co}/{s}/{a}": count
+        for (c, co, s, a), count in profile_counts.items()
+    }
+
+    if total_sticky == 0:
+        return "", profile_counts_for_json
+
+    sorted_profiles = sorted(
+        profile_counts.items(),
+        key=lambda x: (x[0][0], x[0][1], x[0][2], x[0][3]),
+    )
+
+    prev = previous_sticky_profiles or {}
+
+    lines = []
+    lines.append("## Sticky Instance Breakdown (3+ Days)")
+    lines.append("")
+    lines.append(
+        f"**{total_sticky} non-internal instances** running for 3 or more days, "
+        f"grouped by deployment profile."
+    )
+    lines.append("")
+    lines.append(
+        "| Cloud | Compute | Storage | Auth "
+        "| Instances | Percentage | Change |"
+    )
+    lines.append(
+        "|-------|---------|---------|------"
+        "|-----------|------------|--------|"
+    )
+    for (cloud, compute, storage, auth), count in sorted_profiles:
+        pct = _format_pct(count, total_sticky)
+        profile_key = f"{cloud}/{compute}/{storage}/{auth}"
+        prev_count = prev.get(profile_key, 0)
+        if prev_count == 0 and count > 0:
+            change = f"+{count} (new)"
+        elif prev_count == count:
+            change = "0"
+        else:
+            delta = count - prev_count
+            sign = "+" if delta > 0 else ""
+            change = f"{sign}{delta}"
+        lines.append(
+            f"| {cloud} | {compute} | {storage} | {auth} "
+            f"| {count} | {pct} | {change} |"
+        )
+    lines.append("")
+
+    return "\n".join(lines), profile_counts_for_json
+
+
+def _build_sticky_cloud_compute_table(
+    instances: list[dict],
+    instance_lifetime: list[dict],
+    internal_ids: set[str],
+    previous_sticky_cloud_compute: dict[str, int] | None = None,
+) -> tuple[str, dict[str, int]]:
+    """Build a summary table of sticky instances grouped by cloud and compute.
+
+    Returns:
+        Tuple of (markdown_string, cloud_compute_counts_for_json).
+    """
+    sticky = _get_sticky_instances(instances, instance_lifetime, internal_ids)
+    total_sticky = len(sticky)
+
+    counter: dict[tuple[str, str], int] = {}
+    for inst in sticky:
+        key = (inst["cloud"], inst["compute"])
+        counter[key] = counter.get(key, 0) + 1
+
+    counts_for_json = {
+        f"{cloud}/{compute}": count
+        for (cloud, compute), count in counter.items()
+    }
+
+    if total_sticky == 0:
+        return "", counts_for_json
+
+    sorted_pairs = sorted(
+        counter.items(),
+        key=lambda x: (x[0][0], x[0][1]),
+    )
+
+    prev = previous_sticky_cloud_compute or {}
+
+    lines = []
+    lines.append("### By Cloud and Compute Platform")
+    lines.append("")
+    lines.append("| Cloud | Compute | Instances | Percentage | Change |")
+    lines.append("|-------|---------|-----------|------------|--------|")
+    for (cloud, compute), count in sorted_pairs:
+        pct = _format_pct(count, total_sticky)
+        pair_key = f"{cloud}/{compute}"
+        prev_count = prev.get(pair_key, 0)
+        if prev_count == 0 and count > 0:
+            change = f"+{count} (new)"
+        elif prev_count == count:
+            change = "0"
+        else:
+            delta = count - prev_count
+            sign = "+" if delta > 0 else ""
+            change = f"{sign}{delta}"
+        lines.append(
+            f"| {cloud} | {compute} "
+            f"| {count} | {pct} | {change} |"
+        )
+    lines.append("")
+
+    return "\n".join(lines), counts_for_json
 
 
 def _md_distribution_table(
@@ -772,8 +1078,15 @@ def _build_markdown_tables(
     rows: list[dict[str, str]],
     exec_summary_md: str | None = None,
     instance_lifetime: list[dict] | None = None,
-) -> str:
-    """Build all markdown tables as a single string."""
+    internal_ids: set[str] | None = None,
+    previous_sticky_profiles: dict[str, int] | None = None,
+    previous_sticky_cloud_compute: dict[str, int] | None = None,
+) -> tuple[str, dict[str, int], dict[str, int]]:
+    """Build all markdown tables as a single string.
+
+    Returns:
+        Tuple of (markdown_content, sticky_profile_counts, sticky_cloud_compute_counts).
+    """
     total = metrics["total_events"]
     lines = []
 
@@ -827,8 +1140,9 @@ def _build_markdown_tables(
             "|------------|-----------|------------|--------|"
         )
         for inst in instance_lifetime:
+            rid_display = _display_id(inst["registry_id"], internal_ids or set())
             lines.append(
-                f"| `{inst['registry_id']}` "
+                f"| `{rid_display}` "
                 f"| {inst['cloud']} "
                 f"| {inst['compute']} "
                 f"| {inst['auth']} "
@@ -856,8 +1170,9 @@ def _build_markdown_tables(
     )
     for inst in instances:
         fed = "Yes" if inst["federation"] else "No"
+        rid_display = _display_id(inst["registry_id"], internal_ids or set())
         lines.append(
-            f"| `{inst['registry_id']}` "
+            f"| `{rid_display}` "
             f"| {inst['cloud']} "
             f"| {inst['compute']} "
             f"| {inst['storage']} "
@@ -961,6 +1276,32 @@ def _build_markdown_tables(
     lines.append(f"| Max from single instance | {search['lifetime_max']} |")
     lines.append("")
 
+    # Sticky Instance Breakdown
+    sticky_profile_counts: dict[str, int] = {}
+    sticky_cloud_compute_counts: dict[str, int] = {}
+    if instance_lifetime:
+        sticky_md, sticky_profile_counts = _build_sticky_breakdown_table(
+            instances,
+            instance_lifetime,
+            internal_ids or set(),
+            previous_sticky_profiles=previous_sticky_profiles,
+        )
+        if sticky_md:
+            lines.append(sticky_md)
+
+        cc_md, sticky_cloud_compute_counts = _build_sticky_cloud_compute_table(
+            instances,
+            instance_lifetime,
+            internal_ids or set(),
+            previous_sticky_cloud_compute=previous_sticky_cloud_compute,
+        )
+        if cc_md:
+            lines.append(cc_md)
+
+    # Most Active Instances
+    most_active_md = _build_most_active_table(instances, internal_ids or set())
+    lines.append(most_active_md)
+
     # Instance Timelines
     lines.append("## Instance Timelines")
     lines.append("")
@@ -1014,7 +1355,7 @@ def _build_markdown_tables(
                 )
             lines.append("")
 
-    return "\n".join(lines)
+    return "\n".join(lines), sticky_profile_counts, sticky_cloud_compute_counts
 
 
 def _write_outputs(
@@ -1073,6 +1414,15 @@ def main() -> None:
             "is a dated subfolder like reports/2026-04-19/)."
         ),
     )
+    parser.add_argument(
+        "--internal-instances",
+        default=None,
+        help=(
+            "Path to known-internal-instances.md file listing internal "
+            "registry instance IDs. If provided, internal instances are "
+            "labeled in tables and excluded from stickiness metrics."
+        ),
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.csv):
@@ -1080,6 +1430,8 @@ def main() -> None:
         raise SystemExit(1)
 
     date_str = args.date or datetime.now().strftime("%Y-%m-%d")
+
+    internal_ids = _parse_internal_instances(args.internal_instances)
 
     rows = _read_csv(args.csv)
     if not rows:
@@ -1119,7 +1471,17 @@ def main() -> None:
         cloud_last_event=cloud_last_event,
     )
 
-    md_content = _build_markdown_tables(
+    stickiness = _compute_stickiness(instance_lifetime, internal_ids)
+
+    previous_sticky_profiles = None
+    previous_sticky_cloud_compute = None
+    if previous_metrics:
+        previous_sticky_profiles = previous_metrics.get("sticky_profiles", None)
+        previous_sticky_cloud_compute = previous_metrics.get(
+            "sticky_cloud_compute", None
+        )
+
+    md_content, sticky_profile_counts, sticky_cc_counts = _build_markdown_tables(
         metrics,
         distributions,
         instances,
@@ -1130,6 +1492,9 @@ def main() -> None:
         rows,
         exec_summary_md=exec_summary_md,
         instance_lifetime=instance_lifetime,
+        internal_ids=internal_ids,
+        previous_sticky_profiles=previous_sticky_profiles,
+        previous_sticky_cloud_compute=previous_sticky_cloud_compute,
     )
 
     # Build JSON with all computed data
@@ -1138,6 +1503,10 @@ def main() -> None:
         "key_metrics": metrics,
         "per_cloud_unique_installs": cloud_installs,
         "instance_lifetime": instance_lifetime,
+        "stickiness": stickiness,
+        "sticky_profiles": sticky_profile_counts,
+        "sticky_cloud_compute": sticky_cc_counts,
+        "internal_instance_ids": sorted(internal_ids),
         "distributions": {k: dict(v.most_common()) for k, v in distributions.items()},
         "identified_instances": instances,
         "unidentified_profiles": unidentified,
