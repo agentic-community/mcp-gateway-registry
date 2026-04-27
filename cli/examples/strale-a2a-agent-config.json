@@ -1,7 +1,7 @@
 {
   "protocolVersion": "1.0",
   "name": "Strale",
-  "description": "Trust and quality infrastructure for AI agents. 250+ quality-scored capabilities for validation, compliance, enrichment, and Web3 — each with dual-profile quality scores and audit trails.",
+  "description": "Catalog of data capabilities for AI agents: IBAN/VAT/LEI validation, company registry lookups across 27 countries, sanctions and PEP screening, web extraction, document parsing, and Web3 wallet/token intelligence.",
   "url": "https://api.strale.io/a2a",
   "path": "/strale",
   "version": "0.2.3",
@@ -17,12 +17,10 @@
     "sanctions",
     "kyb",
     "web3",
-    "trust",
     "enrichment"
   ],
   "visibility": "public",
   "status": "active",
-  "trustLevel": "community",
   "license": "MIT",
   "isEnabled": true,
   "provider": {

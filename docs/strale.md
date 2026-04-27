@@ -1,6 +1,6 @@
 # Strale Integration
 
-Strale is trust and quality infrastructure for AI agents. It provides 250+ quality-scored data capabilities — IBAN validation, company registry lookups across 27 countries, sanctions screening, web scraping, lead enrichment, Web3 risk analysis — each continuously tested and assigned a dual-profile quality score (0-100). Every execution returns structured JSON with data provenance and a compliance-ready audit trail.
+Strale exposes a catalog of data capabilities for AI agents — IBAN/VAT/LEI validation, company registry lookups across 27 countries, sanctions and PEP screening, web extraction, document parsing, and Web3 wallet/token intelligence. Every execution returns structured JSON with provenance.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ Strale is trust and quality infrastructure for AI agents. It provides 250+ quali
 │              │     │                      │     │  api.strale.io   │
 └──────────────┘     └──────────────────────┘     └──────────────────┘
                             │                            │
-                            │ A2A                        │ 250+ capabilities
+                            │ A2A                        │ capability catalog 
                             ▼                            ▼
                      ┌──────────────┐            ┌──────────────────┐
                      │ Strale A2A   │            │ Company regs,    │
@@ -83,9 +83,9 @@ curl -X POST http://localhost:3000/strale/a2a \
 |------|:---:|---|
 | `strale_ping` | No | Health check |
 | `strale_getting_started` | No | Free capabilities with example inputs |
-| `strale_search` | No | Search 250+ capabilities by keyword |
+| `strale_search` | No | Browse the capability catalog by keyword |
 | `strale_execute` | Partial | Run any capability. 5 free-tier slugs work without auth. |
-| `strale_trust_profile` | No | Quality score and execution guidance |
+| `strale_trust_profile` | No | Strale Quality Score and execution guidance |
 | `strale_methodology` | No | Quality scoring methodology |
 | `strale_balance` | Yes | Check wallet balance |
 | `strale_transaction` | Partial | Retrieve past execution records |
@@ -104,7 +104,7 @@ These capabilities work without an API key (10 calls/day per IP):
 
 The Strale server is tagged for discovery via the gateway's semantic search:
 
-`validation`, `compliance`, `enrichment`, `kyb`, `sanctions`, `web3`, `trust`, `audit-trail`, `iban`, `vat`, `domain`, `email`, `company-data`, `quality-scored`
+`validation`, `compliance`, `kyb`, `sanctions`, `web3`, `iban`, `vat`, `domain`, `email`, `company-data`
 
 ## Links
 
