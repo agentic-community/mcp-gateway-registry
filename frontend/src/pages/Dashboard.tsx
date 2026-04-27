@@ -301,6 +301,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     target_agents: '',  // Raw string, parsed on save
     metadata: '',  // JSON string for custom metadata
     status: 'draft' as 'active' | 'draft' | 'deprecated' | 'beta',
+    auth_scheme: 'none' as 'none' | 'global_credentials' | 'bearer' | 'api_key',
+    auth_credential: '',
+    auth_header_name: '',
   });
   const [skillFormLoading, setSkillFormLoading] = useState(false);
   const [showDeleteSkillConfirm, setShowDeleteSkillConfirm] = useState<string | null>(null);
@@ -1391,6 +1394,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         target_agents: (skill.target_agents || []).join(', '),
         metadata: skill.metadata?.extra ? JSON.stringify(skill.metadata.extra, null, 2) : '',
         status: (skill.status || 'active') as 'active' | 'draft' | 'deprecated' | 'beta',
+        auth_scheme: (skill.auth_scheme || 'none') as 'none' | 'global_credentials' | 'bearer' | 'api_key',
+        auth_credential: '',
+        auth_header_name: skill.auth_header_name || '',
       });
     } else {
       // Create mode - reset form
@@ -1407,6 +1413,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         target_agents: '',
         metadata: '',
         status: 'draft',
+        auth_scheme: 'none',
+        auth_credential: '',
+        auth_header_name: '',
       });
     }
     setShowSkillModal(true);
@@ -1422,7 +1431,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
     try {
       setSkillParseLoading(true);
-      const response = await axios.post(`/api/skills/parse-skill-md?url=${encodeURIComponent(skillForm.skill_md_url)}`);
+      const params = new URLSearchParams({ url: skillForm.skill_md_url });
+      if (skillForm.auth_scheme !== 'none') {
+        params.set('auth_scheme', skillForm.auth_scheme);
+      }
+      if (skillForm.auth_credential && skillForm.auth_scheme !== 'none' && skillForm.auth_scheme !== 'global_credentials') {
+        params.set('auth_credential', skillForm.auth_credential);
+      }
+      if (skillForm.auth_header_name && skillForm.auth_scheme === 'api_key') {
+        params.set('auth_header_name', skillForm.auth_header_name);
+      }
+      const response = await axios.post(`/api/skills/parse-skill-md?${params.toString()}`);
       const data = response.data;
 
       if (data.success) {
@@ -1444,7 +1463,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     } finally {
       setSkillParseLoading(false);
     }
-  }, [skillForm.skill_md_url, skillParseLoading, showToast]);
+  }, [skillForm.skill_md_url, skillForm.auth_scheme, skillForm.auth_credential, skillForm.auth_header_name, skillParseLoading, showToast]);
 
   const handleSaveSkill = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1476,7 +1495,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         }
       }
 
-      const payload = {
+      const payload: Record<string, any> = {
         name: skillForm.name,
         description: skillForm.description,
         skill_md_url: skillForm.skill_md_url,
@@ -1487,7 +1506,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         target_agents: parseTags(skillForm.target_agents),
         metadata: parsedMetadata,
         status: skillForm.status,
+        auth_scheme: skillForm.auth_scheme,
       };
+
+      if (skillForm.auth_scheme !== 'none' && skillForm.auth_scheme !== 'global_credentials') {
+        if (skillForm.auth_credential) {
+          payload.auth_credential = skillForm.auth_credential;
+        }
+        if (skillForm.auth_scheme === 'api_key' && skillForm.auth_header_name) {
+          payload.auth_header_name = skillForm.auth_header_name;
+        }
+      }
 
       if (editingSkill) {
         // Update existing skill
@@ -3486,6 +3515,92 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   Comma-separated list of compatible coding assistants
                 </p>
               </div>
+
+              {/* Source Authentication */}
+              <div className="border-t border-gray-200 dark:border-gray-600 pt-4 mt-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                  Source Authentication
+                </label>
+                <select
+                  value={skillForm.auth_scheme}
+                  onChange={(e) => {
+                    const newScheme = e.target.value as 'none' | 'global_credentials' | 'bearer' | 'api_key';
+                    setSkillForm(prev => ({
+                      ...prev,
+                      auth_scheme: newScheme,
+                      auth_credential: (newScheme === 'none' || newScheme === 'global_credentials') ? '' : prev.auth_credential,
+                      auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : '',
+                    }));
+                  }}
+                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="none">None (public repo, no auth)</option>
+                  <option value="global_credentials">Use global credentials (registry PAT)</option>
+                  <option value="bearer">Bearer token (per-skill)</option>
+                  <option value="api_key">API key (per-skill, custom header)</option>
+                </select>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  How the registry authenticates when fetching SKILL.md from the source
+                </p>
+                {skillAutoFill && skillForm.auth_scheme === 'global_credentials' && skillForm.skill_md_url && (
+                  <button
+                    type="button"
+                    onClick={handleParseSkillMd}
+                    disabled={skillParseLoading}
+                    className="mt-2 px-3 py-1.5 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
+                  >
+                    {skillParseLoading ? 'Parsing...' : 'Re-parse with global credentials'}
+                  </button>
+                )}
+              </div>
+
+              {(skillForm.auth_scheme === 'bearer' || skillForm.auth_scheme === 'api_key') && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                    {skillForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
+                  </label>
+                  <div className="flex space-x-2">
+                    <input
+                      type="password"
+                      value={skillForm.auth_credential}
+                      onChange={(e) => setSkillForm(prev => ({ ...prev, auth_credential: e.target.value }))}
+                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
+                      placeholder={editingSkill ? 'Leave blank to keep existing credential' : (skillForm.auth_scheme === 'bearer' ? 'Enter bearer token (e.g., ghp_...)' : 'Enter API key')}
+                    />
+                    {skillAutoFill && skillForm.skill_md_url && skillForm.auth_credential && (
+                      <button
+                        type="button"
+                        onClick={handleParseSkillMd}
+                        disabled={skillParseLoading}
+                        className="px-3 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors whitespace-nowrap"
+                      >
+                        {skillParseLoading ? 'Parsing...' : 'Re-parse'}
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Encrypted before storage. Never displayed after saving.
+                  </p>
+                </div>
+              )}
+
+              {skillForm.auth_scheme === 'api_key' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                    Header Name
+                  </label>
+                  <input
+                    type="text"
+                    value={skillForm.auth_header_name}
+                    onChange={(e) => setSkillForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
+                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
+                    placeholder="PRIVATE-TOKEN"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    HTTP header name for the API key (default: PRIVATE-TOKEN)
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">

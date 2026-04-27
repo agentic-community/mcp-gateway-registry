@@ -332,6 +332,14 @@ class SkillInfo(BaseModel):
     owner: str | None = Field(
         None, description="Owner email/username for private visibility access control"
     )
+    auth_scheme: Literal["none", "global_credentials", "bearer", "api_key"] = Field(
+        default="none",
+        description="Auth scheme for fetching SKILL.md: none, global_credentials, bearer, api_key",
+    )
+    auth_header_name: str | None = Field(
+        None,
+        description="Custom header name for credential (default: Authorization for bearer, PRIVATE-TOKEN for api_key)",
+    )
     num_stars: float = Field(default=0.0, ge=0.0, le=5.0, description="Average rating (1-5 stars)")
     health_status: Literal["healthy", "unhealthy", "unknown"] = Field(
         default="unknown", description="Health status from last SKILL.md accessibility check"

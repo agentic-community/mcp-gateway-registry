@@ -49,6 +49,8 @@ export const useSkills = (): UseSkillsReturn => {
         allowed_tools: skillInfo.allowed_tools || [],
         requirements: skillInfo.requirements || [],
         metadata: skillInfo.metadata || null,
+        auth_scheme: skillInfo.auth_scheme || 'none',
+        auth_header_name: skillInfo.auth_header_name || undefined,
         num_stars: skillInfo.num_stars || 0,
         status: skillInfo.status || 'active',
         health_status: skillInfo.health_status || 'unknown',

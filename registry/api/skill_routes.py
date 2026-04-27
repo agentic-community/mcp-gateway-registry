@@ -210,6 +210,8 @@ async def list_skills(
                 allowed_groups=s.allowed_groups,
                 registry_name=s.registry_name,
                 owner=s.owner,
+                auth_scheme=s.auth_scheme,
+                auth_header_name=s.auth_header_name,
                 num_stars=s.num_stars,
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
@@ -249,15 +251,24 @@ async def list_skills(
 async def parse_skill_md(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     url: str = Query(..., description="URL to SKILL.md file"),
+    auth_scheme: str = Query("none", description="Auth scheme: none, global_credentials, bearer, api_key"),
+    auth_credential: str | None = Query(None, description="Plaintext credential for bearer/api_key"),
+    auth_header_name: str | None = Query(None, description="Custom header name for api_key scheme"),
 ) -> dict:
     """Parse SKILL.md content and extract metadata.
 
     Returns name, description, version, and tags from the SKILL.md file.
     Useful for auto-populating the skill registration form.
+    Accepts optional auth parameters for parsing private repo SKILL.md files.
     """
     service = get_skill_service()
     try:
-        result = await service.parse_skill_md(url)
+        result = await service.parse_skill_md(
+            url,
+            auth_scheme=auth_scheme,
+            auth_credential=auth_credential,
+            auth_header_name=auth_header_name,
+        )
         return {
             "success": True,
             "name": result.get("name"),

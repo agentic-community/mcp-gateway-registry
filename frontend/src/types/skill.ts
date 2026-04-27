@@ -54,6 +54,8 @@ export interface Skill {
   requirements?: SkillRequirement[];
   metadata?: SkillMetadata | null;
   repository_url?: string;
+  auth_scheme?: 'none' | 'global_credentials' | 'bearer' | 'api_key';
+  auth_header_name?: string;
   num_stars?: number;
   status?: 'active' | 'draft' | 'deprecated' | 'beta';
   health_status?: 'healthy' | 'unhealthy' | 'unknown';

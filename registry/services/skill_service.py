@@ -383,6 +383,9 @@ async def _validate_skill_md_url(
 
 async def _parse_skill_md_content(
     url: str,
+    auth_scheme: str = "none",
+    auth_credential: str | None = None,
+    auth_header_name: str | None = None,
 ) -> dict[str, Any]:
     """Parse SKILL.md content and extract metadata.
 
@@ -429,10 +432,18 @@ async def _parse_skill_md_content(
 
     try:
         async with httpx.AsyncClient() as client:
-            # Fetch from raw URL with GitHub auth if applicable
-            headers = await _github_auth.get_auth_headers(raw_url_str)
+            fetch_url, fetch_headers = _build_fetch_headers(
+                raw_url_str, auth_scheme, auth_credential, auth_header_name,
+            )
+            if auth_scheme == "none":
+                headers = fetch_headers
+            elif auth_scheme == "global_credentials":
+                headers = await _github_auth.get_auth_headers(fetch_url)
+            else:
+                github_headers = await _github_auth.get_auth_headers(fetch_url)
+                headers = {**github_headers, **fetch_headers}
             response = await client.get(
-                raw_url_str, headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
+                fetch_url, headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
             )
 
             # SSRF protection: validate final URL after redirects
@@ -1139,6 +1150,8 @@ class SkillService:
                 allowed_groups=s.allowed_groups,
                 registry_name=s.registry_name,
                 owner=s.owner,
+                auth_scheme=s.auth_scheme,
+                auth_header_name=s.auth_header_name,
                 num_stars=s.num_stars,
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
@@ -1293,16 +1306,27 @@ class SkillService:
     async def parse_skill_md(
         self,
         url: str,
+        auth_scheme: str = "none",
+        auth_credential: str | None = None,
+        auth_header_name: str | None = None,
     ) -> dict[str, Any]:
         """Parse SKILL.md content and extract metadata.
 
         Args:
             url: URL to SKILL.md file
+            auth_scheme: Auth scheme (none, global_credentials, bearer, api_key)
+            auth_credential: Plaintext credential for bearer/api_key
+            auth_header_name: Custom header name for api_key scheme
 
         Returns:
             Dict with parsed metadata (name, description, version, tags)
         """
-        return await _parse_skill_md_content(url)
+        return await _parse_skill_md_content(
+            url,
+            auth_scheme=auth_scheme,
+            auth_credential=auth_credential,
+            auth_header_name=auth_header_name,
+        )
 
     async def check_skill_health(
         self,
