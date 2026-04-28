@@ -48,17 +48,18 @@ from pydantic import (
 
 sys.path.insert(0, "/app")
 # Import MCP audit logging components
+from pathlib import Path as _LogPath
+
 from registry.audit.mcp_logger import MCPLogger
 from registry.audit.models import Identity, MCPServer
 from registry.audit.service import AuditLogger
 from registry.common.scopes_loader import reload_scopes_config
 from registry.core.config import settings
 from registry.repositories.factory import get_scope_repository
-from registry.utils.request_utils import get_client_ip
 
 # Configure logging using shared module (RotatingFileHandler + optional MongoDB)
 from registry.utils.logging_setup import setup_logging as _setup_logging
-from pathlib import Path as _LogPath
+from registry.utils.request_utils import get_client_ip
 
 _auth_log_file = _setup_logging(
     service_name="auth-server",
@@ -180,8 +181,6 @@ def _repair_stripped_json(
     Converts e.g. {name:{key:val,groups:[g1]}} back to valid JSON by adding
     double quotes around all bare identifiers and values.
     """
-    import re
-
     result = []
     i = 0
     while i < len(raw):

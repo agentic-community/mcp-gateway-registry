@@ -2,11 +2,7 @@
 
 import logging
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
-
+from unittest.mock import patch
 
 # =============================================================================
 # LOGGING SETUP TESTS
@@ -21,7 +17,7 @@ class TestSetupLogging:
             mock_settings.app_log_level = "INFO"
             mock_settings.app_log_max_bytes = 50 * 1024 * 1024
             mock_settings.app_log_backup_count = 5
-            mock_settings.app_log_mongodb_enabled = False
+            mock_settings.app_log_centralized_enabled = False
             mock_settings.log_dir = tmp_path
 
             from registry.utils.logging_setup import setup_logging
@@ -37,7 +33,7 @@ class TestSetupLogging:
             mock_settings.app_log_level = "INFO"
             mock_settings.app_log_max_bytes = 50 * 1024 * 1024
             mock_settings.app_log_backup_count = 5
-            mock_settings.app_log_mongodb_enabled = False
+            mock_settings.app_log_centralized_enabled = False
             mock_settings.log_dir = tmp_path
 
             from registry.utils.logging_setup import setup_logging
@@ -58,7 +54,7 @@ class TestSetupLogging:
             mock_settings.app_log_level = "WARNING"
             mock_settings.app_log_max_bytes = 10 * 1024 * 1024
             mock_settings.app_log_backup_count = 3
-            mock_settings.app_log_mongodb_enabled = False
+            mock_settings.app_log_centralized_enabled = False
             mock_settings.log_dir = tmp_path
 
             from registry.utils.logging_setup import setup_logging
@@ -66,9 +62,7 @@ class TestSetupLogging:
             setup_logging(service_name="test-service", log_file=tmp_path / "test.log")
 
             root = logging.getLogger()
-            rotating_handlers = [
-                h for h in root.handlers if isinstance(h, RotatingFileHandler)
-            ]
+            rotating_handlers = [h for h in root.handlers if isinstance(h, RotatingFileHandler)]
             assert len(rotating_handlers) == 1
             assert rotating_handlers[0].maxBytes == 10 * 1024 * 1024
             assert rotating_handlers[0].backupCount == 3
@@ -78,7 +72,7 @@ class TestSetupLogging:
             mock_settings.app_log_level = "INFO"
             mock_settings.app_log_max_bytes = 50 * 1024 * 1024
             mock_settings.app_log_backup_count = 5
-            mock_settings.app_log_mongodb_enabled = False
+            mock_settings.app_log_centralized_enabled = False
             mock_settings.log_dir = tmp_path
 
             from registry.utils.logging_setup import setup_logging
@@ -92,7 +86,7 @@ class TestSetupLogging:
             mock_settings.app_log_level = "INFO"
             mock_settings.app_log_max_bytes = 50 * 1024 * 1024
             mock_settings.app_log_backup_count = 5
-            mock_settings.app_log_mongodb_enabled = False
+            mock_settings.app_log_centralized_enabled = False
             mock_settings.log_dir = tmp_path
 
             from registry.utils.logging_setup import setup_logging
@@ -102,9 +96,7 @@ class TestSetupLogging:
             root = logging.getLogger()
             from registry.utils.mongodb_log_handler import MongoDBLogHandler
 
-            mongo_handlers = [
-                h for h in root.handlers if isinstance(h, MongoDBLogHandler)
-            ]
+            mongo_handlers = [h for h in root.handlers if isinstance(h, MongoDBLogHandler)]
             assert len(mongo_handlers) == 0
 
     def test_mongodb_handler_skipped_for_file_backend(self, tmp_path):
@@ -112,7 +104,7 @@ class TestSetupLogging:
             mock_settings.app_log_level = "INFO"
             mock_settings.app_log_max_bytes = 50 * 1024 * 1024
             mock_settings.app_log_backup_count = 5
-            mock_settings.app_log_mongodb_enabled = True
+            mock_settings.app_log_centralized_enabled = True
             mock_settings.storage_backend = "file"
             mock_settings.log_dir = tmp_path
 
@@ -123,9 +115,7 @@ class TestSetupLogging:
             root = logging.getLogger()
             from registry.utils.mongodb_log_handler import MongoDBLogHandler
 
-            mongo_handlers = [
-                h for h in root.handlers if isinstance(h, MongoDBLogHandler)
-            ]
+            mongo_handlers = [h for h in root.handlers if isinstance(h, MongoDBLogHandler)]
             assert len(mongo_handlers) == 0
 
     def test_clears_existing_handlers(self, tmp_path):
@@ -138,7 +128,7 @@ class TestSetupLogging:
             mock_settings.app_log_level = "INFO"
             mock_settings.app_log_max_bytes = 50 * 1024 * 1024
             mock_settings.app_log_backup_count = 5
-            mock_settings.app_log_mongodb_enabled = False
+            mock_settings.app_log_centralized_enabled = False
             mock_settings.log_dir = tmp_path
 
             from registry.utils.logging_setup import setup_logging
@@ -239,9 +229,7 @@ class TestMongoDBLogHandler:
     def test_flush_triggers_at_buffer_size(self):
         with (
             patch("registry.core.config.settings") as mock_settings,
-            patch(
-                "registry.utils.mongodb_log_handler.MongoDBLogHandler._flush"
-            ) as mock_flush,
+            patch("registry.utils.mongodb_log_handler.MongoDBLogHandler._flush") as mock_flush,
         ):
             mock_settings.documentdb_namespace = "test"
             mock_settings.documentdb_host = "localhost"

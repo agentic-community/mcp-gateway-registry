@@ -70,6 +70,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
   const [metadata, setMetadata] = useState<LogMetadata | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [fetchTrigger, setFetchTrigger] = useState(0);
   const [filters, setFilters] = useState<LogFilters>({
     service: '',
     level: '',
@@ -107,7 +108,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
       if (err.response?.status === 403) {
         setError('Access denied. Admin permissions required.');
       } else if (err.response?.status === 503) {
-        setError('Application logs require MongoDB storage backend.');
+        setError('Centralized application logging is not enabled. Set APP_LOG_CENTRALIZED_ENABLED=true.');
       } else {
         setError(err.response?.data?.detail || 'Failed to load application logs.');
       }
@@ -127,22 +128,23 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
   useEffect(() => {
     _fetchLogs(offset);
-  }, [offset, _fetchLogs]);
+  }, [offset, fetchTrigger, _fetchLogs]);
 
   useEffect(() => {
     _fetchMetadata();
   }, [_fetchMetadata]);
 
   const handleApplyFilters = () => {
-    setOffset(0);
     setExpandedRow(null);
-    _fetchLogs(0);
+    setOffset(0);
+    setFetchTrigger((prev) => prev + 1);
   };
 
   const handleClearFilters = () => {
     setFilters({ service: '', level: '', hostname: '', search: '', start: '', end: '' });
-    setOffset(0);
     setExpandedRow(null);
+    setOffset(0);
+    setFetchTrigger((prev) => prev + 1);
   };
 
   const handleExport = useCallback(() => {
@@ -407,7 +409,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" aria-label="Application log entries">
                 <thead>
                   <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                     <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-40">Timestamp</th>
@@ -424,7 +426,12 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                         className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors ${
                           expandedRow === idx ? 'bg-gray-50 dark:bg-gray-700/50' : ''
                         }`}
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={expandedRow === idx}
+                        aria-label={`${entry.level} log from ${entry.service} at ${_formatTimestamp(entry.timestamp)}`}
                         onClick={() => setExpandedRow(expandedRow === idx ? null : idx)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedRow(expandedRow === idx ? null : idx); } }}
                       >
                         <td className="px-4 py-2.5 text-gray-600 dark:text-gray-400 font-mono text-xs whitespace-nowrap">
                           {_formatTimestamp(entry.timestamp)}

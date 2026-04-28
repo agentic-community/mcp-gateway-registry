@@ -7,10 +7,10 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -44,9 +44,7 @@ def _check_rate_limit(user_id: str) -> bool:
     if user_id not in _rate_limit_cache:
         _rate_limit_cache[user_id] = []
 
-    _rate_limit_cache[user_id] = [
-        t for t in _rate_limit_cache[user_id] if t > window_start
-    ]
+    _rate_limit_cache[user_id] = [t for t in _rate_limit_cache[user_id] if t > window_start]
 
     if len(_rate_limit_cache[user_id]) >= RATE_LIMIT_MAX_REQUESTS:
         return False
@@ -133,11 +131,15 @@ class LogMetadataResponse(BaseModel):
 async def query_logs(
     user_context: Annotated[dict, Depends(_require_admin)],
     service: Annotated[str | None, Query(description="Filter by service name")] = None,
-    level: Annotated[str | None, Query(description="Minimum log level: DEBUG, INFO, WARNING, ERROR, CRITICAL")] = None,
+    level: Annotated[
+        str | None, Query(description="Minimum log level: DEBUG, INFO, WARNING, ERROR, CRITICAL")
+    ] = None,
     hostname: Annotated[str | None, Query(description="Filter by pod/hostname")] = None,
     start: Annotated[datetime | None, Query(description="Start of time range (ISO 8601)")] = None,
     end: Annotated[datetime | None, Query(description="End of time range (ISO 8601)")] = None,
-    search: Annotated[str | None, Query(description="Substring search in message (max 200 chars)")] = None,
+    search: Annotated[
+        str | None, Query(description="Substring search in message (max 200 chars)")
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=10000, description="Max entries to return")] = 100,
     offset: Annotated[int, Query(ge=0, description="Number of entries to skip")] = 0,
 ) -> LogQueryResponse:
@@ -186,7 +188,9 @@ async def export_logs(
     hostname: Annotated[str | None, Query(description="Filter by pod/hostname")] = None,
     start: Annotated[datetime | None, Query(description="Start of time range (ISO 8601)")] = None,
     end: Annotated[datetime | None, Query(description="End of time range (ISO 8601)")] = None,
-    search: Annotated[str | None, Query(description="Substring search in message (max 200 chars)")] = None,
+    search: Annotated[
+        str | None, Query(description="Substring search in message (max 200 chars)")
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=50000, description="Max entries to export")] = 10000,
 ) -> StreamingResponse:
     username = user_context.get("username", "unknown")
@@ -219,7 +223,7 @@ async def export_logs(
             yield json.dumps(entry, default=str) + "\n"
 
     svc_label = service or "all"
-    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     filename = f"logs-{svc_label}-{ts}.jsonl"
 
     return StreamingResponse(

@@ -251,14 +251,14 @@ registry:
     telemetryDebug: false  # Set to true to log payloads instead of sending
 
     # Application Log Configuration (centralized log rotation and retrieval)
-    # NOTE: MongoDB logging is OFF by default (appLogMongodbEnabled: "false").
-    # Set to "true" to enable writing application logs to MongoDB for the /admin/logs API.
+    # NOTE: Centralized logging is ON by default (appLogCentralizedEnabled: "true").
+    # Set to "false" to disable writing application logs to centralized store for the /admin/logs API.
     # Anchor &appLogConfig is reused by auth-server below to keep values in sync.
     <<: &appLogConfig
       appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
       appLogBackupCount: "5"           # Number of rotated backup log files to keep
-      appLogMongodbEnabled: "false"    # Write application logs to MongoDB (requires MongoDB backend)
-      appLogMongodbTtlDays: "7"        # Days to retain log entries in MongoDB (TTL index)
+      appLogCentralizedEnabled: "true"  # Write application logs to centralized store (requires MongoDB backend)
+      appLogCentralizedTtlDays: "1"    # Days to retain log entries in centralized store (TTL index)
       appLogMongodbBufferSize: "50"    # Records to buffer before flushing to MongoDB
       appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
       appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)

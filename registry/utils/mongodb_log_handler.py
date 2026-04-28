@@ -18,15 +18,16 @@ from pymongo.errors import PyMongoError
 
 from .mongodb_connection import build_client_options, build_connection_string, build_tls_kwargs
 
-
-EXCLUDED_LOGGERS_DEFAULT = frozenset({
-    "pymongo",
-    "motor",
-    "registry.utils.mongodb_log_handler",
-    "registry.utils.logging_setup",
-    "uvicorn.access",
-    "httpx",
-})
+EXCLUDED_LOGGERS_DEFAULT = frozenset(
+    {
+        "pymongo",
+        "motor",
+        "registry.utils.mongodb_log_handler",
+        "registry.utils.logging_setup",
+        "uvicorn.access",
+        "httpx",
+    }
+)
 
 
 class MongoDBLogHandler(logging.Handler):

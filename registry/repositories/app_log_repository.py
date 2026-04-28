@@ -6,7 +6,6 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from ..core.config import settings
 from .documentdb.client import get_collection_name, get_documentdb_client
 
 logger = logging.getLogger(__name__)
@@ -79,12 +78,7 @@ class AppLogRepository:
             else:
                 total = await collection.count_documents(query_filter)
 
-            cursor = (
-                collection.find(query_filter)
-                .sort("timestamp", -1)
-                .skip(skip)
-                .limit(limit)
-            )
+            cursor = collection.find(query_filter).sort("timestamp", -1).skip(skip).limit(limit)
 
             results: list[dict[str, Any]] = []
             async for doc in cursor:

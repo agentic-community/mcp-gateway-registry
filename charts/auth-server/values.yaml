@@ -44,8 +44,8 @@ app:
   # Application Log Configuration (centralized log rotation and retrieval)
   appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
   appLogBackupCount: "5"           # Number of rotated backup log files to keep
-  appLogMongodbEnabled: "false"    # Write application logs to MongoDB (requires MongoDB backend)
-  appLogMongodbTtlDays: "7"        # Days to retain log entries in MongoDB (TTL index)
+  appLogCentralizedEnabled: "true"  # Write application logs to centralized store (requires MongoDB backend)
+  appLogCentralizedTtlDays: "1"    # Days to retain log entries in centralized store (TTL index)
   appLogMongodbBufferSize: "50"    # Records to buffer before flushing to MongoDB
   appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
   appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)

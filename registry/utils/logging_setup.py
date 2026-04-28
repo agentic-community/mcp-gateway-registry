@@ -10,7 +10,6 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-
 LOG_FORMAT = "%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s"
 
 
@@ -66,10 +65,10 @@ def setup_logging(
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
 
-    # 3. MongoDB handler (optional)
-    if (
-        settings.app_log_mongodb_enabled
-        and settings.storage_backend in ("documentdb", "mongodb-ce")
+    # 3. Centralized log handler (optional, writes to MongoDB/DocumentDB)
+    if settings.app_log_centralized_enabled and settings.storage_backend in (
+        "documentdb",
+        "mongodb-ce",
     ):
         try:
             from .mongodb_log_handler import MongoDBLogHandler
@@ -83,7 +82,7 @@ def setup_logging(
                 service_name=service_name,
                 buffer_size=settings.app_log_mongodb_buffer_size,
                 flush_interval=settings.app_log_mongodb_flush_interval_seconds,
-                ttl_days=settings.app_log_mongodb_ttl_days,
+                ttl_days=settings.app_log_centralized_ttl_days,
                 excluded_loggers=excluded,
             )
             mongo_handler.setLevel(level)

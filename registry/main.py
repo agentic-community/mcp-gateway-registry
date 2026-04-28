@@ -87,14 +87,12 @@ from registry.services.peer_sync_scheduler import get_peer_sync_scheduler
 # Import services for initialization
 from registry.services.server_service import server_service
 
-# Import version
-from registry.version import __version__
-
 # Server start time tracking moved to registry/api/system_routes.py
-
-
 # Setup logging using shared module (RotatingFileHandler + optional MongoDB)
 from registry.utils.logging_setup import setup_logging as _setup_logging
+
+# Import version
+from registry.version import __version__
 
 log_file_path = _setup_logging(service_name="registry")
 logger = logging.getLogger(__name__)

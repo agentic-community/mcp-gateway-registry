@@ -383,13 +383,13 @@ class Settings(BaseSettings):
         default=5,
         description="Number of rotated backup log files to keep",
     )
-    app_log_mongodb_enabled: bool = Field(
-        default=False,
-        description="Write application logs to MongoDB application_logs collection",
+    app_log_centralized_enabled: bool = Field(
+        default=True,
+        description="Write application logs to centralized application_logs collection",
     )
-    app_log_mongodb_ttl_days: int = Field(
-        default=7,
-        description="Days to retain application log entries in MongoDB (TTL index)",
+    app_log_centralized_ttl_days: int = Field(
+        default=1,
+        description="Days to retain application log entries in centralized store (TTL index)",
     )
     app_log_mongodb_buffer_size: int = Field(
         default=50,

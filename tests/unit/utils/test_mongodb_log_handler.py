@@ -203,15 +203,27 @@ class TestDocumentSchema:
         doc = handler._buffer[0]
 
         expected_fields = {
-            "timestamp", "hostname", "service", "level", "level_no",
-            "logger", "filename", "lineno", "process", "message", "created_at",
+            "timestamp",
+            "hostname",
+            "service",
+            "level",
+            "level_no",
+            "logger",
+            "filename",
+            "lineno",
+            "process",
+            "message",
+            "created_at",
         }
         assert set(doc.keys()) == expected_fields
 
     def test_level_no_matches_record(self, handler):
         for level, expected_no in [
-            (logging.DEBUG, 10), (logging.INFO, 20), (logging.WARNING, 30),
-            (logging.ERROR, 40), (logging.CRITICAL, 50),
+            (logging.DEBUG, 10),
+            (logging.INFO, 20),
+            (logging.WARNING, 30),
+            (logging.ERROR, 40),
+            (logging.CRITICAL, 50),
         ]:
             handler._buffer.clear()
             record = logging.LogRecord(

@@ -876,16 +876,16 @@ variable "audit_log_ttl_days" {
 # APPLICATION LOG CONFIGURATION
 # =============================================================================
 
-variable "app_log_mongodb_enabled" {
-  description = "Write application logs to MongoDB for centralized retrieval."
+variable "app_log_centralized_enabled" {
+  description = "Write application logs to a centralized store for cross-pod retrieval."
   type        = bool
-  default     = false
+  default     = true
 }
 
-variable "app_log_mongodb_ttl_days" {
-  description = "Days to retain application logs in MongoDB (TTL index)."
+variable "app_log_centralized_ttl_days" {
+  description = "Days to retain centralized application logs (TTL index)."
   type        = number
-  default     = 7
+  default     = 1
 }
 
 variable "app_log_level" {

@@ -277,8 +277,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "title": "Application Logging",
         "order": 18,
         "fields": [
-            ("app_log_mongodb_enabled", "MongoDB Enabled", False),
-            ("app_log_mongodb_ttl_days", "MongoDB TTL Days", False),
+            ("app_log_centralized_enabled", "Centralized Enabled", False),
+            ("app_log_centralized_ttl_days", "Centralized TTL Days", False),
             ("app_log_level", "Log Level", False),
             ("app_log_excluded_loggers", "Excluded Loggers", False),
         ],

@@ -802,19 +802,19 @@ variable "audit_log_ttl_days" {
 # APPLICATION LOG CONFIGURATION
 # =============================================================================
 
-variable "app_log_mongodb_enabled" {
-  description = "Write application logs to MongoDB for centralized retrieval."
+variable "app_log_centralized_enabled" {
+  description = "Write application logs to a centralized store for cross-pod retrieval."
   type        = bool
-  default     = false
+  default     = true
 }
 
-variable "app_log_mongodb_ttl_days" {
-  description = "Days to retain application logs in MongoDB (TTL index). Common values: 3 (dev), 7 (standard)."
+variable "app_log_centralized_ttl_days" {
+  description = "Days to retain centralized application logs (TTL index). Common values: 1 (dev), 3 (staging), 7 (production)."
   type        = number
-  default     = 7
+  default     = 1
 
   validation {
-    condition     = var.app_log_mongodb_ttl_days >= 1 && var.app_log_mongodb_ttl_days <= 365
+    condition     = var.app_log_centralized_ttl_days >= 1 && var.app_log_centralized_ttl_days <= 365
     error_message = "Application log TTL must be between 1 and 365 days"
   }
 }

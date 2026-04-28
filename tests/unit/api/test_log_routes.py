@@ -444,8 +444,11 @@ class TestSearchSanitization:
         mock_app_log_repo.query.return_value = ([], 0)
 
         for level, expected_no in [
-            ("DEBUG", 10), ("INFO", 20), ("WARNING", 30),
-            ("ERROR", 40), ("CRITICAL", 50),
+            ("DEBUG", 10),
+            ("INFO", 20),
+            ("WARNING", 30),
+            ("ERROR", 40),
+            ("CRITICAL", 50),
         ]:
             log_routes._rate_limit_cache.clear()
             response = admin_client.get(f"/api/admin/logs?level={level}")

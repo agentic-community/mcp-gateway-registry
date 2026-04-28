@@ -450,13 +450,13 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # MongoDB collection accessible via the admin API.
 #
 
-# Enable writing application logs to MongoDB
-# Default: false
-# app_log_mongodb_enabled = false
+# Enable writing application logs to centralized store
+# Default: true
+# app_log_centralized_enabled = true
 
 # Application log retention period in days (TTL index)
-# Default: 7
-# app_log_mongodb_ttl_days = 7
+# Default: 1
+# app_log_centralized_ttl_days = 1
 
 # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 # Default: "INFO"

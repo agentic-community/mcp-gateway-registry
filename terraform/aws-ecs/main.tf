@@ -209,8 +209,8 @@ module "mcp_gateway" {
   audit_log_ttl_days = var.audit_log_ttl_days
 
   # Application log configuration
-  app_log_mongodb_enabled  = var.app_log_mongodb_enabled
-  app_log_mongodb_ttl_days = var.app_log_mongodb_ttl_days
+  app_log_centralized_enabled  = var.app_log_centralized_enabled
+  app_log_centralized_ttl_days = var.app_log_centralized_ttl_days
   app_log_level            = var.app_log_level
   app_log_excluded_loggers = var.app_log_excluded_loggers
 

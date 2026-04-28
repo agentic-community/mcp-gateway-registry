@@ -314,12 +314,12 @@ module "ecs_service_auth" {
           value = tostring(var.audit_log_ttl_days)
         },
         {
-          name  = "APP_LOG_MONGODB_ENABLED"
-          value = tostring(var.app_log_mongodb_enabled)
+          name  = "APP_LOG_CENTRALIZED_ENABLED"
+          value = tostring(var.app_log_centralized_enabled)
         },
         {
-          name  = "APP_LOG_MONGODB_TTL_DAYS"
-          value = tostring(var.app_log_mongodb_ttl_days)
+          name  = "APP_LOG_CENTRALIZED_TTL_DAYS"
+          value = tostring(var.app_log_centralized_ttl_days)
         },
         {
           name  = "APP_LOG_LEVEL"
@@ -849,12 +849,12 @@ module "ecs_service_registry" {
           value = tostring(var.audit_log_ttl_days)
         },
         {
-          name  = "APP_LOG_MONGODB_ENABLED"
-          value = tostring(var.app_log_mongodb_enabled)
+          name  = "APP_LOG_CENTRALIZED_ENABLED"
+          value = tostring(var.app_log_centralized_enabled)
         },
         {
-          name  = "APP_LOG_MONGODB_TTL_DAYS"
-          value = tostring(var.app_log_mongodb_ttl_days)
+          name  = "APP_LOG_CENTRALIZED_TTL_DAYS"
+          value = tostring(var.app_log_centralized_ttl_days)
         },
         {
           name  = "APP_LOG_LEVEL"
