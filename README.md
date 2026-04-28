@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/agentic-community-mcp-gateway-registry-badge.png)](https://mseep.ai/app/agentic-community-mcp-gateway-registry)
+
 <div align="center">
 <img src="docs/img/mcp_gateway_horizontal_white_logo.png" alt="MCP Gateway & Registry Logo" width="100%">
 
