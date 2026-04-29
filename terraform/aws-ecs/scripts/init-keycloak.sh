@@ -178,11 +178,35 @@ create_clients() {
         "publicClient": false
     }'
     
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
+    local web_response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
-        -d "$web_client_json" > /dev/null
-    
+        -d "$web_client_json")
+
+    if [ "$web_response" = "201" ]; then
+        echo "  - Web client created"
+    elif [ "$web_response" = "409" ]; then
+        echo "  - Web client already exists, updating redirect URIs..."
+        local web_client_uuid=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-web" 2>/dev/null | \
+            jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
+        if [ -n "$web_client_uuid" ] && [ "$web_client_uuid" != "null" ]; then
+            local update_response=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_uuid}" \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                -d "$web_client_json")
+            if [ "$update_response" = "204" ]; then
+                echo -e "  - ${GREEN}Web client updated successfully${NC}"
+            else
+                echo -e "  - ${RED}Failed to update web client (HTTP $update_response)${NC}"
+            fi
+        fi
+    else
+        echo -e "${RED}  - Failed to create web client (HTTP $web_response)${NC}"
+    fi
+
     # Create M2M client
     local m2m_client_json='{
         "clientId": "mcp-gateway-m2m",
@@ -196,13 +220,22 @@ create_clients() {
         "serviceAccountsEnabled": true,
         "publicClient": false
     }'
-    
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
+
+    local m2m_response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
-        -d "$m2m_client_json" > /dev/null
-    
-    echo -e "${GREEN}Clients created successfully!${NC}"
+        -d "$m2m_client_json")
+
+    if [ "$m2m_response" = "201" ]; then
+        echo "  - M2M client created"
+    elif [ "$m2m_response" = "409" ]; then
+        echo "  - M2M client already exists"
+    else
+        echo -e "${RED}  - Failed to create M2M client (HTTP $m2m_response)${NC}"
+    fi
+
+    echo -e "${GREEN}Clients configured successfully!${NC}"
 }
 
 # Function to create groups
