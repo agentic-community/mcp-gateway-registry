@@ -2317,8 +2317,8 @@ async def _list_groups_impl(
         if include_scopes:
             try:
                 scopes_data = await list_groups()
-                result["scopes_groups"] = scopes_data.get("groups", {})
-                scopes_group_names = set(scopes_data.get("groups", {}).keys())
+                result["scopes_groups"] = scopes_data
+                scopes_group_names = set(scopes_data.keys())
                 logger.info(f"Found {len(scopes_group_names)} groups in scopes")
             except Exception as e:
                 logger.error(f"Failed to list scopes groups: {e}")

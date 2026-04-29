@@ -27,6 +27,7 @@ from registry.api.agent_routes import router as agent_router
 from registry.api.ans_routes import router as ans_router
 from registry.api.auth0_m2m_routes import router as auth0_m2m_router
 from registry.api.config_routes import router as config_router
+from registry.api.export_routes import router as export_router
 from registry.api.federation_export_routes import router as federation_export_router
 from registry.api.federation_routes import router as federation_router
 from registry.api.internal_routes import router as internal_router
@@ -868,6 +869,7 @@ app.include_router(federation_export_router)
 app.include_router(peer_management_router)
 app.include_router(audit_router, prefix="/api", tags=["Audit Logs"])
 app.include_router(log_router, prefix="/api", tags=["Application Logs"])
+app.include_router(export_router, tags=["Data Export"])
 app.include_router(registry_management_router, prefix="/api")
 
 # Register IdP M2M management routers (Okta and Auth0)

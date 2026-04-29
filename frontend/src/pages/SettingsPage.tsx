@@ -11,6 +11,7 @@ import {
   ServerStackIcon,
   IdentificationIcon,
   DocumentTextIcon,
+  ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
 import FederationPeers from '../components/FederationPeers';
 import FederationPeerForm from '../components/FederationPeerForm';
@@ -23,6 +24,7 @@ import IAMM2M from '../components/IAMM2M';
 import RegistryCardSettings from '../components/RegistryCardSettings';
 import ApplicationLogs from '../components/ApplicationLogs';
 import ExternalRegistries from '../components/ExternalRegistries';
+import DataExport from '../components/DataExport';
 import { useAuth } from '../contexts/AuthContext';
 import { canAccessSettings } from '../utils/permissions';
 
@@ -126,6 +128,15 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     icon: <CogIcon className="h-5 w-5" />,
     items: [
       { id: 'configuration', label: 'Configuration', path: '/settings/system-config/configuration' },
+    ],
+    adminOnly: true,
+  },
+  {
+    id: 'data-export',
+    label: 'Data Export',
+    icon: <ArrowDownTrayIcon className="h-5 w-5" />,
+    items: [
+      { id: 'export', label: 'Export', path: '/settings/data-export/export' },
     ],
     adminOnly: true,
   },
@@ -284,6 +295,11 @@ const SettingsPage: React.FC = () => {
     // System Config > Configuration
     if (path === '/settings/system-config/configuration' || path === '/settings/system-config') {
       return <ConfigPanel showToast={showToast} />;
+    }
+
+    // Data Export > Export
+    if (path === '/settings/data-export/export' || path === '/settings/data-export') {
+      return <DataExport onShowToast={showToast} />;
     }
 
     // IAM > Groups
