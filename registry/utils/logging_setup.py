@@ -54,16 +54,23 @@ def setup_logging(
         resolved_log_file = settings.log_dir / f"{service_name}.log"
 
     if resolved_log_file is not None:
-        resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = RotatingFileHandler(
-            filename=str(resolved_log_file),
-            maxBytes=settings.app_log_max_bytes,
-            backupCount=settings.app_log_backup_count,
-            encoding="utf-8",
-        )
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        root.addHandler(file_handler)
+        try:
+            resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                filename=str(resolved_log_file),
+                maxBytes=settings.app_log_max_bytes,
+                backupCount=settings.app_log_backup_count,
+                encoding="utf-8",
+            )
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
+        except PermissionError:
+            root.warning(
+                f"Cannot write to log file {resolved_log_file}, "
+                "continuing with console logging only"
+            )
+            resolved_log_file = None
 
     # 3. Centralized log handler (optional, writes to MongoDB/DocumentDB)
     if settings.app_log_centralized_enabled and settings.storage_backend in (
