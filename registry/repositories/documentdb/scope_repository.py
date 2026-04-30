@@ -170,8 +170,8 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
 
             server_entry = {"server": server_name, "methods": methods, "tools": tools}
 
-            result = await collection.update_many(
-                {},
+            result = await collection.update_one(
+                {"_id": scope_name},
                 {
                     "$push": {
                         "server_access": {
@@ -181,6 +181,10 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                     "$set": {"updated_at": datetime.utcnow()},
                 },
             )
+
+            if result.matched_count == 0:
+                logger.error(f"Scope '{scope_name}' not found")
+                return False
 
             self._scopes_cache.setdefault(scope_name, []).append(server_entry)
 
@@ -200,8 +204,8 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             collection = await self._get_collection()
             server_name = server_path.lstrip("/")
 
-            result = await collection.update_many(
-                {},
+            result = await collection.update_one(
+                {"_id": scope_name},
                 {
                     "$pull": {
                         "server_access": {
@@ -212,6 +216,10 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                     "$set": {"updated_at": datetime.utcnow()},
                 },
             )
+
+            if result.matched_count == 0:
+                logger.error(f"Scope '{scope_name}' not found")
+                return False
 
             if scope_name in self._scopes_cache:
                 self._scopes_cache[scope_name] = [
