@@ -247,6 +247,15 @@ class AgentRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def get_all_states(self) -> dict[str, bool]:
+        """Get enabled/disabled state for all agents in a single query.
+
+        Returns:
+            Dict mapping agent path to enabled (True) or disabled (False).
+        """
+        pass
+
+    @abstractmethod
     async def set_state(
         self,
         path: str,
@@ -495,7 +504,7 @@ class ScopeRepositoryBase(ABC):
                 }
             }
         """
-        pass
+        return {}
 
     @abstractmethod
     async def group_exists(
@@ -918,7 +927,7 @@ class SearchRepositoryBase(ABC):
             skill: SkillCard object
             is_enabled: Whether skill is enabled
         """
-        pass
+        return None
 
     async def index_virtual_server(
         self,
@@ -936,7 +945,7 @@ class SearchRepositoryBase(ABC):
             virtual_server: VirtualServerConfig object
             is_enabled: Whether virtual server is enabled
         """
-        pass
+        return None
 
     async def search_by_tags(
         self,

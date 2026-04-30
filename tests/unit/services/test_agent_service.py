@@ -95,6 +95,9 @@ class InMemoryAgentRepository(AgentRepositoryBase):
     async def get_state(self, path: str) -> bool:
         return self._enabled.get(path, False)
 
+    async def get_all_states(self) -> dict[str, bool]:
+        return dict(self._enabled)
+
     async def set_state(self, path: str, enabled: bool) -> bool:
         if path not in self._agents:
             return False

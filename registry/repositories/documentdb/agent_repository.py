@@ -198,31 +198,29 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
 
     async def get_state(
         self,
-        path: str = None,
-    ) -> dict[str, list[str]] | bool:
-        """Get agent state."""
-        if path is None:
-            collection = await self._get_collection()
-
-            try:
-                cursor = collection.find({})
-                state = {"enabled": [], "disabled": []}
-                async for doc in cursor:
-                    agent_path = doc.get("_id")
-                    if agent_path:
-                        if doc.get("is_enabled", False):
-                            state["enabled"].append(agent_path)
-                        else:
-                            state["disabled"].append(agent_path)
-                return state
-            except Exception as e:
-                logger.error(f"Error getting all agent state from DocumentDB: {e}", exc_info=True)
-                return {"enabled": [], "disabled": []}
-
+        path: str,
+    ) -> bool:
+        """Get enabled/disabled state for a single agent."""
         agent = await self.get(path)
         if agent:
             return getattr(agent, "is_enabled", False)
         return False
+
+    async def get_all_states(self) -> dict[str, bool]:
+        """Get enabled/disabled state for all agents in a single query."""
+        collection = await self._get_collection()
+
+        try:
+            cursor = collection.find({}, {"_id": 1, "is_enabled": 1})
+            states: dict[str, bool] = {}
+            async for doc in cursor:
+                agent_path = doc.get("_id")
+                if agent_path:
+                    states[agent_path] = doc.get("is_enabled", False)
+            return states
+        except Exception as e:
+            logger.error(f"Error getting all agent states from DocumentDB: {e}", exc_info=True)
+            return {}
 
     async def set_state(
         self,

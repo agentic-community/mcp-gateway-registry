@@ -800,8 +800,8 @@ class TestAgentsEndpoint:
             ),
             patch.object(
                 agent_service,
-                "is_agent_enabled",
-                return_value=True,
+                "get_all_agent_states",
+                return_value={"/agents/public-agent": True},
             ),
         ):
             client = TestClient(app)
@@ -850,8 +850,11 @@ class TestAgentsEndpoint:
             ),
             patch.object(
                 agent_service,
-                "is_agent_enabled",
-                return_value=True,
+                "get_all_agent_states",
+                return_value={
+                    "/agents/public-agent": True,
+                    "/agents/engineering-agent": True,
+                },
             ),
         ):
             client = TestClient(app)
@@ -1152,8 +1155,8 @@ class TestDisabledItemsFiltering:
             ),
             patch.object(
                 agent_service,
-                "is_agent_enabled",
-                return_value=False,  # Agent is disabled
+                "get_all_agent_states",
+                return_value={"/agents/public-agent": False},
             ),
         ):
             client = TestClient(app)
@@ -1402,8 +1405,11 @@ class TestChainPrevention:
             ),
             patch.object(
                 agent_service,
-                "is_agent_enabled",
-                return_value=True,
+                "get_all_agent_states",
+                return_value={
+                    "/agents/local-agent": True,
+                    "/agents/peer-a/synced-agent": True,
+                },
             ),
         ):
             client = TestClient(app)

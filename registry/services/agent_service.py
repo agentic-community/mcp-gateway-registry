@@ -322,12 +322,8 @@ class AgentService:
         Returns:
             List of enabled agent paths
         """
-        agents = await self._repo.list_all()
-        enabled = []
-        for a in agents:
-            if await self._repo.get_state(a.path):
-                enabled.append(a.path)
-        return enabled
+        all_states = await self._repo.get_all_states()
+        return [path for path, enabled in all_states.items() if enabled]
 
     async def get_disabled_agents(self) -> list[str]:
         """
@@ -336,12 +332,17 @@ class AgentService:
         Returns:
             List of disabled agent paths
         """
-        agents = await self._repo.list_all()
-        disabled = []
-        for a in agents:
-            if not await self._repo.get_state(a.path):
-                disabled.append(a.path)
-        return disabled
+        all_states = await self._repo.get_all_states()
+        return [path for path, enabled in all_states.items() if not enabled]
+
+    async def get_all_agent_states(self) -> dict[str, bool]:
+        """
+        Get enabled/disabled state for all agents in a single query.
+
+        Returns:
+            Dict mapping agent path to enabled (True) or disabled (False).
+        """
+        return await self._repo.get_all_states()
 
     async def index_agent(
         self,

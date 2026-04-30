@@ -341,9 +341,9 @@ def mock_agent_repository():
     mock.create.return_value = True
     mock.update.return_value = True
     mock.get_state.return_value = False
+    mock.get_all_states.return_value = {}
     mock.save_state.return_value = True
     mock.set_state.return_value = True
-    mock.get_all_state.return_value = {}
     return mock
 
 
