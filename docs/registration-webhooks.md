@@ -285,11 +285,61 @@ Sensitive request headers are also excluded: `authorization`, `cookie`, `x-csrf-
 |----------|---------|-------------|
 | `REGISTRATION_GATE_ENABLED` | `false` | Enable/disable the gate |
 | `REGISTRATION_GATE_URL` | (empty) | URL of the gate endpoint. Must be set when enabled |
-| `REGISTRATION_GATE_AUTH_TYPE` | `none` | Auth type: `none`, `api_key`, or `bearer` |
-| `REGISTRATION_GATE_AUTH_CREDENTIAL` | (empty) | API key or Bearer token value |
+| `REGISTRATION_GATE_AUTH_TYPE` | `none` | Auth type: `none`, `api_key`, `bearer`, or `oauth2_client_credentials` |
+| `REGISTRATION_GATE_AUTH_CREDENTIAL` | (empty) | API key or Bearer token value (for `api_key` or `bearer` auth) |
 | `REGISTRATION_GATE_AUTH_HEADER_NAME` | `X-Api-Key` | Header name for `api_key` auth type |
 | `REGISTRATION_GATE_TIMEOUT_SECONDS` | `5` | HTTP timeout per attempt (seconds) |
 | `REGISTRATION_GATE_MAX_RETRIES` | `2` | Retry attempts after first failure (exponential backoff) |
+| `REGISTRATION_GATE_OAUTH2_TOKEN_URL` | (empty) | OAuth2 token endpoint URL (required for `oauth2_client_credentials`) |
+| `REGISTRATION_GATE_OAUTH2_CLIENT_ID` | (empty) | OAuth2 client ID (required for `oauth2_client_credentials`) |
+| `REGISTRATION_GATE_OAUTH2_CLIENT_SECRET` | (empty) | OAuth2 client secret (required for `oauth2_client_credentials`) |
+| `REGISTRATION_GATE_OAUTH2_SCOPE` | (empty) | OAuth2 scope parameter (optional, e.g. `api://app-id/.default` for Entra) |
+
+### OAuth2 Client Credentials Authentication
+
+When the gate endpoint is protected by an OAuth2 identity provider (e.g., Microsoft Entra ID, Okta, Auth0, Keycloak, or Cognito), set `REGISTRATION_GATE_AUTH_TYPE=oauth2_client_credentials` and configure the token endpoint credentials. The registry acquires a fresh access token via the [OAuth2 Client Credentials flow (RFC 6749 Section 4.4)](https://datatracker.ietf.org/doc/html/rfc6749#section-4.4) before each gate call.
+
+**How it works:**
+
+1. Before calling the gate endpoint, the registry POSTs to the configured token URL with `grant_type=client_credentials`, `client_id`, `client_secret`, and optionally `scope`
+2. If the token endpoint returns a valid `access_token`, the registry sends it as `Authorization: Bearer <token>` to the gate
+3. If token acquisition fails (timeout, invalid credentials, network error), the registration is **blocked immediately** (fail-closed). No gate call is attempted.
+
+**Example configuration (Entra ID):**
+
+```bash
+REGISTRATION_GATE_ENABLED=true
+REGISTRATION_GATE_URL=https://gate.example.com/check
+REGISTRATION_GATE_AUTH_TYPE=oauth2_client_credentials
+REGISTRATION_GATE_OAUTH2_TOKEN_URL=https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/token
+REGISTRATION_GATE_OAUTH2_CLIENT_ID=your-client-id
+REGISTRATION_GATE_OAUTH2_CLIENT_SECRET=your-client-secret
+REGISTRATION_GATE_OAUTH2_SCOPE=api://your-app-id/.default
+```
+
+**Example configuration (Okta):**
+
+```bash
+REGISTRATION_GATE_AUTH_TYPE=oauth2_client_credentials
+REGISTRATION_GATE_OAUTH2_TOKEN_URL=https://dev-123456.okta.com/oauth2/default/v1/token
+REGISTRATION_GATE_OAUTH2_CLIENT_ID=your-client-id
+REGISTRATION_GATE_OAUTH2_CLIENT_SECRET=your-client-secret
+REGISTRATION_GATE_OAUTH2_SCOPE=api://gate
+```
+
+**Example configuration (Keycloak):**
+
+```bash
+REGISTRATION_GATE_AUTH_TYPE=oauth2_client_credentials
+REGISTRATION_GATE_OAUTH2_TOKEN_URL=https://keycloak.example.com/realms/mcp-gateway/protocol/openid-connect/token
+REGISTRATION_GATE_OAUTH2_CLIENT_ID=your-client-id
+REGISTRATION_GATE_OAUTH2_CLIENT_SECRET=your-client-secret
+REGISTRATION_GATE_OAUTH2_SCOPE=
+```
+
+**Startup validation:** At startup, the registry verifies that all required OAuth2 fields (`token_url`, `client_id`, `client_secret`) are set when `auth_type` is `oauth2_client_credentials`, and attempts a test token acquisition. Warnings are logged if the token URL uses HTTP instead of HTTPS, or if the test token acquisition fails.
+
+See [issue #917](https://github.com/agentic-community/mcp-gateway-registry/issues/917) for the full design specification.
 
 ### Endpoints Covered
 

@@ -271,6 +271,10 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("registration_gate_auth_header_name", "Auth Header Name", False),
             ("registration_gate_timeout_seconds", "Timeout (s)", False),
             ("registration_gate_max_retries", "Max Retries", False),
+            ("registration_gate_oauth2_token_url", "OAuth2 Token URL", False),
+            ("registration_gate_oauth2_client_id", "OAuth2 Client ID", False),
+            ("registration_gate_oauth2_client_secret", "OAuth2 Client Secret", True),
+            ("registration_gate_oauth2_scope", "OAuth2 Scope", False),
         ],
     },
     "app_log": {

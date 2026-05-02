@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     )
     registration_gate_auth_type: str = Field(
         default="none",
-        description="Auth type for gate endpoint: 'none', 'api_key', or 'bearer'",
+        description="Auth type for gate endpoint: 'none', 'api_key', 'bearer', or 'oauth2_client_credentials'",
     )
     registration_gate_auth_credential: str = Field(
         default="",
@@ -94,6 +94,24 @@ class Settings(BaseSettings):
     registration_gate_max_retries: int = Field(
         default=2,
         description="Maximum retry attempts for gate calls on transient failures",
+    )
+
+    # Registration Gate OAuth2 Client Credentials (Issue #917)
+    registration_gate_oauth2_token_url: str = Field(
+        default="",
+        description="OAuth2 token endpoint URL for client credentials flow",
+    )
+    registration_gate_oauth2_client_id: str = Field(
+        default="",
+        description="OAuth2 client ID for client credentials flow",
+    )
+    registration_gate_oauth2_client_secret: str = Field(
+        default="",
+        description="OAuth2 client secret for client credentials flow",
+    )
+    registration_gate_oauth2_scope: str = Field(
+        default="",
+        description="OAuth2 scope parameter (e.g., api://app-id/.default for Entra)",
     )
 
     # Embeddings settings [Default]

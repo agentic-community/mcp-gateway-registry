@@ -76,8 +76,82 @@ def _sanitize_payload(
     return sanitized
 
 
-def _build_auth_headers() -> dict[str, str]:
+async def _acquire_oauth2_token() -> str | None:
+    """Acquire an access token via OAuth2 Client Credentials flow.
+
+    Posts to the configured token endpoint with client_id and
+    client_secret. Returns the access_token string on success,
+    or None on failure.
+
+    Returns:
+        The access token string, or None if acquisition failed.
+    """
+    token_url = settings.registration_gate_oauth2_token_url
+    client_id = settings.registration_gate_oauth2_client_id
+    client_secret = settings.registration_gate_oauth2_client_secret
+    scope = settings.registration_gate_oauth2_scope
+    timeout = settings.registration_gate_timeout_seconds
+
+    form_data: dict[str, str] = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    if scope:
+        form_data["scope"] = scope
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                token_url,
+                data=form_data,
+            )
+
+        if response.status_code != 200:
+            logger.error(
+                f"OAuth2 token acquisition failed: "
+                f"status={response.status_code}, "
+                f"body={response.text[:200]}"
+            )
+            return None
+
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            logger.error(
+                "OAuth2 token response missing 'access_token' field"
+            )
+            return None
+
+        logger.info(
+            "OAuth2 token acquired successfully for gate authentication"
+        )
+        return access_token
+
+    except httpx.TimeoutException:
+        logger.error(
+            f"OAuth2 token acquisition timed out after {timeout}s"
+        )
+        return None
+
+    except httpx.RequestError as e:
+        logger.error(
+            f"OAuth2 token acquisition connection error: {e}"
+        )
+        return None
+
+    except Exception as e:
+        logger.error(
+            f"OAuth2 token acquisition unexpected error: {e}"
+        )
+        return None
+
+
+async def _build_auth_headers() -> dict[str, str]:
     """Build authentication headers based on gate auth configuration.
+
+    For oauth2_client_credentials, acquires a fresh token from the
+    configured token endpoint before each gate call.
 
     Returns:
         Dictionary of auth headers to include in the gate request.
@@ -91,6 +165,15 @@ def _build_auth_headers() -> dict[str, str]:
     if auth_type == RegistrationGateAuthType.API_KEY and credential:
         header_name = settings.registration_gate_auth_header_name
         return {header_name: credential}
+
+    if auth_type == RegistrationGateAuthType.OAUTH2_CLIENT_CREDENTIALS:
+        token = await _acquire_oauth2_token()
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+        logger.error(
+            "Failed to acquire OAuth2 token for gate authentication"
+        )
+        return {}
 
     return {}
 
@@ -165,7 +248,28 @@ async def _call_gate_endpoint(
     max_retries = settings.registration_gate_max_retries
 
     headers = {"Content-Type": "application/json"}
-    headers.update(_build_auth_headers())
+    auth_headers = await _build_auth_headers()
+
+    auth_type = settings.registration_gate_auth_type.lower()
+    if (
+        auth_type == RegistrationGateAuthType.OAUTH2_CLIENT_CREDENTIALS
+        and not auth_headers
+    ):
+        logger.error(
+            "OAuth2 token acquisition failed. "
+            "Blocking registration (fail-closed)."
+        )
+        return RegistrationGateResult(
+            allowed=False,
+            error_message=(
+                "Registration gate authentication failed. "
+                "Unable to acquire OAuth2 token."
+            ),
+            gate_status_code=None,
+            attempts=0,
+        )
+
+    headers.update(auth_headers)
 
     payload_json = gate_request.model_dump_json()
     total_attempts = 1 + max_retries
@@ -347,3 +451,47 @@ async def verify_gate_connectivity() -> None:
             f"The gate endpoint may be unreachable. "
             f"Registrations will be blocked until the gate is available."
         )
+
+    if auth_type.lower() == RegistrationGateAuthType.OAUTH2_CLIENT_CREDENTIALS:
+        token_url = settings.registration_gate_oauth2_token_url
+        client_id = settings.registration_gate_oauth2_client_id
+        client_secret = settings.registration_gate_oauth2_client_secret
+
+        if token_url.startswith("http://"):
+            logger.warning(
+                "OAuth2 token endpoint URL uses HTTP. "
+                "HTTPS is strongly recommended to protect client credentials."
+            )
+
+        missing: list[str] = []
+        if not token_url:
+            missing.append("REGISTRATION_GATE_OAUTH2_TOKEN_URL")
+        if not client_id:
+            missing.append("REGISTRATION_GATE_OAUTH2_CLIENT_ID")
+        if not client_secret:
+            missing.append("REGISTRATION_GATE_OAUTH2_CLIENT_SECRET")
+
+        if missing:
+            logger.error(
+                f"Registration gate auth_type is 'oauth2_client_credentials' "
+                f"but required config is missing: {', '.join(missing)}. "
+                f"Gate calls will fail until these are set."
+            )
+        else:
+            logger.info(
+                f"Registration gate OAuth2 config: "
+                f"token_url={token_url}, client_id={client_id}, "
+                f"scope={settings.registration_gate_oauth2_scope or '(not set)'}"
+            )
+            test_token = await _acquire_oauth2_token()
+            if test_token:
+                logger.info(
+                    "Registration gate OAuth2 startup check: "
+                    "token acquisition succeeded"
+                )
+            else:
+                logger.warning(
+                    "Registration gate OAuth2 startup check: "
+                    "token acquisition failed. Gate calls will fail "
+                    "until the token endpoint is reachable and credentials are valid."
+                )

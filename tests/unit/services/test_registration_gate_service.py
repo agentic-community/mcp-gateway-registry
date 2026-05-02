@@ -8,7 +8,6 @@ from unittest.mock import (
 )
 
 import httpx
-import pytest
 
 from registry.schemas.registration_gate_models import (
     RegistrationGateAuthType,
@@ -18,9 +17,7 @@ from registry.schemas.registration_gate_models import (
 )
 from registry.services.registration_gate_service import (
     GATE_ERROR_MAX_LENGTH,
-    SENSITIVE_FIELD_NAMES,
-    SENSITIVE_FIELD_SUBSTRINGS,
-    SENSITIVE_HEADERS,
+    _acquire_oauth2_token,
     _build_auth_headers,
     _extract_request_headers,
     _is_gate_configured,
@@ -70,6 +67,10 @@ def _make_mock_settings(
     auth_header_name: str = "X-Api-Key",
     timeout_seconds: int = 5,
     max_retries: int = 2,
+    oauth2_token_url: str = "",
+    oauth2_client_id: str = "",
+    oauth2_client_secret: str = "",
+    oauth2_scope: str = "",
 ) -> MagicMock:
     """Build a MagicMock that mimics the settings object.
 
@@ -81,6 +82,10 @@ def _make_mock_settings(
         auth_header_name: Header name for api_key auth.
         timeout_seconds: Per-request timeout.
         max_retries: Max retries on transient failures.
+        oauth2_token_url: OAuth2 token endpoint URL.
+        oauth2_client_id: OAuth2 client ID.
+        oauth2_client_secret: OAuth2 client secret.
+        oauth2_scope: OAuth2 scope parameter.
 
     Returns:
         MagicMock configured with the given values.
@@ -93,6 +98,10 @@ def _make_mock_settings(
     mock.registration_gate_auth_header_name = auth_header_name
     mock.registration_gate_timeout_seconds = timeout_seconds
     mock.registration_gate_max_retries = max_retries
+    mock.registration_gate_oauth2_token_url = oauth2_token_url
+    mock.registration_gate_oauth2_client_id = oauth2_client_id
+    mock.registration_gate_oauth2_client_secret = oauth2_client_secret
+    mock.registration_gate_oauth2_scope = oauth2_scope
     return mock
 
 
@@ -370,68 +379,96 @@ class TestSanitizePayload:
 
 
 class TestBuildAuthHeaders:
-    """Tests for _build_auth_headers."""
+    """Tests for _build_auth_headers (async)."""
 
-    def test_returns_empty_when_auth_type_none(self):
+    async def test_returns_empty_when_auth_type_none(self):
         """No headers when auth_type is 'none'."""
         with patch(SETTINGS_PATH) as mock_settings:
             mock_settings.registration_gate_auth_type = "none"
             mock_settings.registration_gate_auth_credential = ""
 
-            headers = _build_auth_headers()
+            headers = await _build_auth_headers()
 
             assert headers == {}
 
-    def test_returns_bearer_header(self):
+    async def test_returns_bearer_header(self):
         """Bearer token header when auth_type is 'bearer'."""
         with patch(SETTINGS_PATH) as mock_settings:
             mock_settings.registration_gate_auth_type = "bearer"
             mock_settings.registration_gate_auth_credential = "my-jwt-token"
 
-            headers = _build_auth_headers()
+            headers = await _build_auth_headers()
 
             assert headers == {"Authorization": "Bearer my-jwt-token"}
 
-    def test_returns_api_key_header(self):
+    async def test_returns_api_key_header(self):
         """Custom API key header when auth_type is 'api_key'."""
         with patch(SETTINGS_PATH) as mock_settings:
             mock_settings.registration_gate_auth_type = "api_key"
             mock_settings.registration_gate_auth_credential = "key-abc-123"
             mock_settings.registration_gate_auth_header_name = "X-Api-Key"
 
-            headers = _build_auth_headers()
+            headers = await _build_auth_headers()
 
             assert headers == {"X-Api-Key": "key-abc-123"}
 
-    def test_api_key_with_custom_header_name(self):
+    async def test_api_key_with_custom_header_name(self):
         """API key uses the configured header name."""
         with patch(SETTINGS_PATH) as mock_settings:
             mock_settings.registration_gate_auth_type = "api_key"
             mock_settings.registration_gate_auth_credential = "my-key"
             mock_settings.registration_gate_auth_header_name = "X-Custom-Auth"
 
-            headers = _build_auth_headers()
+            headers = await _build_auth_headers()
 
             assert headers == {"X-Custom-Auth": "my-key"}
 
-    def test_bearer_with_empty_credential_returns_empty(self):
+    async def test_bearer_with_empty_credential_returns_empty(self):
         """No headers when bearer auth has empty credential."""
         with patch(SETTINGS_PATH) as mock_settings:
             mock_settings.registration_gate_auth_type = "bearer"
             mock_settings.registration_gate_auth_credential = ""
 
-            headers = _build_auth_headers()
+            headers = await _build_auth_headers()
 
             assert headers == {}
 
-    def test_api_key_with_empty_credential_returns_empty(self):
+    async def test_api_key_with_empty_credential_returns_empty(self):
         """No headers when api_key auth has empty credential."""
         with patch(SETTINGS_PATH) as mock_settings:
             mock_settings.registration_gate_auth_type = "api_key"
             mock_settings.registration_gate_auth_credential = ""
             mock_settings.registration_gate_auth_header_name = "X-Api-Key"
 
-            headers = _build_auth_headers()
+            headers = await _build_auth_headers()
+
+            assert headers == {}
+
+    async def test_oauth2_success_returns_bearer_header(self):
+        """OAuth2 auth type acquires token and returns Bearer header."""
+        with patch(SETTINGS_PATH) as mock_settings:
+            mock_settings.registration_gate_auth_type = "oauth2_client_credentials"
+
+            with patch(
+                "registry.services.registration_gate_service._acquire_oauth2_token",
+                new_callable=AsyncMock,
+                return_value="dynamic-token-xyz",
+            ):
+                headers = await _build_auth_headers()
+
+            assert headers == {"Authorization": "Bearer dynamic-token-xyz"}
+
+    async def test_oauth2_token_failure_returns_empty(self):
+        """OAuth2 auth type returns empty dict when token acquisition fails."""
+        with patch(SETTINGS_PATH) as mock_settings:
+            mock_settings.registration_gate_auth_type = "oauth2_client_credentials"
+
+            with patch(
+                "registry.services.registration_gate_service._acquire_oauth2_token",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                headers = await _build_auth_headers()
 
             assert headers == {}
 
@@ -1034,3 +1071,328 @@ class TestCallGateEndpoint:
 
             assert result.allowed is False
             assert result.error_message == "Registration denied by policy"
+
+
+# ===========================================================================
+# _acquire_oauth2_token tests
+# ===========================================================================
+
+
+ACQUIRE_TOKEN_SETTINGS_PATH = SETTINGS_PATH
+
+
+class TestAcquireOAuth2Token:
+    """Tests for _acquire_oauth2_token."""
+
+    def _make_oauth2_settings(
+        self,
+        token_url: str = "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+        client_id: str = "test-client-id",
+        client_secret: str = "test-client-secret",
+        scope: str = "api://app-id/.default",
+        timeout: int = 5,
+    ) -> MagicMock:
+        """Build mock settings for OAuth2 token acquisition."""
+        mock = MagicMock()
+        mock.registration_gate_oauth2_token_url = token_url
+        mock.registration_gate_oauth2_client_id = client_id
+        mock.registration_gate_oauth2_client_secret = client_secret
+        mock.registration_gate_oauth2_scope = scope
+        mock.registration_gate_timeout_seconds = timeout
+        return mock
+
+    async def test_success_returns_access_token(self):
+        """Happy path: token endpoint returns 200 with access_token."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json = MagicMock(return_value={
+            "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        })
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(ACQUIRE_TOKEN_SETTINGS_PATH, self._make_oauth2_settings()),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+        ):
+            token = await _acquire_oauth2_token()
+
+        assert token == "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9"
+
+    async def test_includes_scope_when_configured(self):
+        """Scope parameter is included in form data when set."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json = MagicMock(return_value={
+            "access_token": "token123",
+            "token_type": "Bearer",
+        })
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                ACQUIRE_TOKEN_SETTINGS_PATH,
+                self._make_oauth2_settings(scope="api://my-app/.default"),
+            ),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+        ):
+            await _acquire_oauth2_token()
+
+        call_kwargs = mock_client.post.call_args
+        sent_data = call_kwargs.kwargs.get("data", {})
+        assert sent_data["scope"] == "api://my-app/.default"
+        assert sent_data["grant_type"] == "client_credentials"
+
+    async def test_excludes_scope_when_empty(self):
+        """Scope parameter is omitted when config is empty."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json = MagicMock(return_value={
+            "access_token": "token123",
+        })
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                ACQUIRE_TOKEN_SETTINGS_PATH,
+                self._make_oauth2_settings(scope=""),
+            ),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+        ):
+            await _acquire_oauth2_token()
+
+        call_kwargs = mock_client.post.call_args
+        sent_data = call_kwargs.kwargs.get("data", {})
+        assert "scope" not in sent_data
+
+    async def test_non_200_returns_none(self):
+        """Non-200 response from token endpoint returns None."""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(ACQUIRE_TOKEN_SETTINGS_PATH, self._make_oauth2_settings()),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+        ):
+            token = await _acquire_oauth2_token()
+
+        assert token is None
+
+    async def test_missing_access_token_field_returns_none(self):
+        """200 response without access_token field returns None."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json = MagicMock(return_value={
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        })
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(ACQUIRE_TOKEN_SETTINGS_PATH, self._make_oauth2_settings()),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+        ):
+            token = await _acquire_oauth2_token()
+
+        assert token is None
+
+    async def test_timeout_returns_none(self):
+        """Timeout from token endpoint returns None."""
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(
+            side_effect=httpx.TimeoutException("timed out"),
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(ACQUIRE_TOKEN_SETTINGS_PATH, self._make_oauth2_settings()),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+        ):
+            token = await _acquire_oauth2_token()
+
+        assert token is None
+
+    async def test_connection_error_returns_none(self):
+        """Connection error to token endpoint returns None."""
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(
+            side_effect=httpx.ConnectError("connection refused"),
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(ACQUIRE_TOKEN_SETTINGS_PATH, self._make_oauth2_settings()),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+        ):
+            token = await _acquire_oauth2_token()
+
+        assert token is None
+
+    async def test_unexpected_exception_returns_none(self):
+        """Unexpected exception returns None."""
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(
+            side_effect=Exception("unexpected error"),
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(ACQUIRE_TOKEN_SETTINGS_PATH, self._make_oauth2_settings()),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+        ):
+            token = await _acquire_oauth2_token()
+
+        assert token is None
+
+
+# ===========================================================================
+# check_registration_gate with OAuth2 auth tests
+# ===========================================================================
+
+
+class TestCheckRegistrationGateOAuth2:
+    """Tests for gate calls with oauth2_client_credentials auth type."""
+
+    async def test_gate_fails_closed_on_token_acquisition_failure(self):
+        """Registration is blocked when OAuth2 token cannot be acquired."""
+        mock_settings = _make_mock_settings(
+            auth_type="oauth2_client_credentials",
+            oauth2_token_url="https://login.example.com/token",
+            oauth2_client_id="client-id",
+            oauth2_client_secret="client-secret",
+        )
+
+        with (
+            patch(SETTINGS_PATH, mock_settings),
+            patch(
+                "registry.services.registration_gate_service._acquire_oauth2_token",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(ASYNCIO_SLEEP_PATH, new_callable=AsyncMock),
+        ):
+            result = await check_registration_gate(
+                asset_type="agent",
+                operation="register",
+                source_api="/api/agents/register",
+                registration_payload={"name": "test-agent"},
+                raw_headers=[],
+            )
+
+        assert result.allowed is False
+        assert "OAuth2 token" in result.error_message
+        assert result.attempts == 0
+
+    async def test_gate_succeeds_with_oauth2_token(self):
+        """Gate call succeeds with dynamically acquired OAuth2 token."""
+        mock_response = _make_mock_response(status_code=200)
+        mock_client = _make_mock_http_client(response=mock_response)
+        mock_settings = _make_mock_settings(
+            auth_type="oauth2_client_credentials",
+            oauth2_token_url="https://login.example.com/token",
+            oauth2_client_id="client-id",
+            oauth2_client_secret="client-secret",
+        )
+
+        with (
+            patch(SETTINGS_PATH, mock_settings),
+            patch(
+                "registry.services.registration_gate_service._acquire_oauth2_token",
+                new_callable=AsyncMock,
+                return_value="dynamic-token-abc",
+            ),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+            patch(ASYNCIO_SLEEP_PATH, new_callable=AsyncMock),
+        ):
+            result = await check_registration_gate(
+                asset_type="agent",
+                operation="register",
+                source_api="/api/agents/register",
+                registration_payload={"name": "test-agent"},
+                raw_headers=[],
+            )
+
+        assert result.allowed is True
+        assert result.gate_status_code == 200
+
+        call_kwargs = mock_client.post.call_args
+        headers_sent = call_kwargs.kwargs.get("headers", {})
+        assert headers_sent.get("Authorization") == "Bearer dynamic-token-abc"
+
+    async def test_gate_denied_with_oauth2_token(self):
+        """Gate denies registration even with valid OAuth2 token."""
+        mock_response = _make_mock_response(
+            status_code=403,
+            json_data={"status": "denied", "error": "Policy violation"},
+        )
+        mock_client = _make_mock_http_client(response=mock_response)
+        mock_settings = _make_mock_settings(
+            auth_type="oauth2_client_credentials",
+            oauth2_token_url="https://login.example.com/token",
+            oauth2_client_id="client-id",
+            oauth2_client_secret="client-secret",
+        )
+
+        with (
+            patch(SETTINGS_PATH, mock_settings),
+            patch(
+                "registry.services.registration_gate_service._acquire_oauth2_token",
+                new_callable=AsyncMock,
+                return_value="valid-token",
+            ),
+            patch(HTTPX_CLIENT_PATH, return_value=mock_client),
+            patch(ASYNCIO_SLEEP_PATH, new_callable=AsyncMock),
+        ):
+            result = await check_registration_gate(
+                asset_type="agent",
+                operation="register",
+                source_api="/api/agents/register",
+                registration_payload={"name": "test-agent"},
+                raw_headers=[],
+            )
+
+        assert result.allowed is False
+        assert result.error_message == "Policy violation"
+        assert result.gate_status_code == 403
+
+
+# ===========================================================================
+# RegistrationGateAuthType enum update test
+# ===========================================================================
+
+
+class TestRegistrationGateAuthTypeOAuth2:
+    """Tests for the OAuth2 addition to RegistrationGateAuthType enum."""
+
+    def test_oauth2_client_credentials_enum_value(self):
+        """Enum contains the new oauth2_client_credentials value."""
+        assert (
+            RegistrationGateAuthType.OAUTH2_CLIENT_CREDENTIALS
+            == "oauth2_client_credentials"
+        )

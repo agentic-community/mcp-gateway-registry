@@ -14,6 +14,7 @@ class RegistrationGateAuthType(str, Enum):
     NONE = "none"
     API_KEY = "api_key"
     BEARER = "bearer"
+    OAUTH2_CLIENT_CREDENTIALS = "oauth2_client_credentials"
 
 
 class RegistrationGateRequest(BaseModel):

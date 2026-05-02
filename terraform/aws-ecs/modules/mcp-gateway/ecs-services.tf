@@ -959,6 +959,22 @@ module "ecs_service_registry" {
           name  = "REGISTRATION_GATE_MAX_RETRIES"
           value = tostring(var.registration_gate_max_retries)
         },
+        {
+          name  = "REGISTRATION_GATE_OAUTH2_TOKEN_URL"
+          value = var.registration_gate_oauth2_token_url
+        },
+        {
+          name  = "REGISTRATION_GATE_OAUTH2_CLIENT_ID"
+          value = var.registration_gate_oauth2_client_id
+        },
+        {
+          name  = "REGISTRATION_GATE_OAUTH2_CLIENT_SECRET"
+          value = var.registration_gate_oauth2_client_secret
+        },
+        {
+          name  = "REGISTRATION_GATE_OAUTH2_SCOPE"
+          value = var.registration_gate_oauth2_scope
+        },
         # Telemetry configuration
         {
           name  = "MCP_TELEMETRY_DISABLED"

@@ -231,6 +231,10 @@ registry:
     registrationGateAuthHeaderName: "X-Api-Key"
     registrationGateTimeoutSeconds: "5"
     registrationGateMaxRetries: "2"
+    registrationGateOauth2TokenUrl: ""
+    registrationGateOauth2ClientId: ""
+    registrationGateOauth2ClientSecret: ""
+    registrationGateOauth2Scope: ""
 
     # M2M direct client registration (issue #851)
     # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and

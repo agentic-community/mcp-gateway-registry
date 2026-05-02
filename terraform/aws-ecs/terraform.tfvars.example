@@ -335,6 +335,19 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Retries after the first gate attempt (exponential backoff). Default: 2
 # registration_gate_max_retries = 2
 
+# OAuth2 token endpoint for client credentials flow (used when auth_type=oauth2_client_credentials)
+# Example (Entra): https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/token
+# registration_gate_oauth2_token_url = ""
+
+# OAuth2 client ID for client credentials flow
+# registration_gate_oauth2_client_id = ""
+
+# OAuth2 client secret for client credentials flow
+# registration_gate_oauth2_client_secret = ""
+
+# OAuth2 scope parameter (optional, e.g., api://your-app-id/.default for Entra)
+# registration_gate_oauth2_scope = ""
+
 # ============================================================================
 # M2M DIRECT CLIENT REGISTRATION (Issue #851)
 # ============================================================================

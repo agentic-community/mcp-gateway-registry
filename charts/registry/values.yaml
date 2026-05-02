@@ -62,6 +62,10 @@ app:
   registrationGateAuthHeaderName: "X-Api-Key"  # Header for api_key auth
   registrationGateTimeoutSeconds: "5"
   registrationGateMaxRetries: "2"
+  registrationGateOauth2TokenUrl: ""  # OAuth2 token endpoint for client credentials flow
+  registrationGateOauth2ClientId: ""  # OAuth2 client ID
+  registrationGateOauth2ClientSecret: ""  # OAuth2 client secret
+  registrationGateOauth2Scope: ""  # OAuth2 scope (e.g., api://app-id/.default for Entra)
 
   # M2M direct client registration (issue #851)
   # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and

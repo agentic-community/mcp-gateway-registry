@@ -679,6 +679,31 @@ variable "registration_gate_max_retries" {
   default     = 2
 }
 
+variable "registration_gate_oauth2_token_url" {
+  description = "OAuth2 token endpoint URL for gate client credentials flow."
+  type        = string
+  default     = ""
+}
+
+variable "registration_gate_oauth2_client_id" {
+  description = "OAuth2 client ID for gate client credentials flow."
+  type        = string
+  default     = ""
+}
+
+variable "registration_gate_oauth2_client_secret" {
+  description = "OAuth2 client secret for gate client credentials flow."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_gate_oauth2_scope" {
+  description = "OAuth2 scope parameter for gate client credentials flow."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # M2M DIRECT CLIENT REGISTRATION (Issue #851)
 # =============================================================================

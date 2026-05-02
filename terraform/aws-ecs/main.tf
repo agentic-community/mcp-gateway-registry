@@ -175,6 +175,10 @@ module "mcp_gateway" {
   registration_gate_auth_header_name = var.registration_gate_auth_header_name
   registration_gate_timeout_seconds  = var.registration_gate_timeout_seconds
   registration_gate_max_retries      = var.registration_gate_max_retries
+  registration_gate_oauth2_token_url     = var.registration_gate_oauth2_token_url
+  registration_gate_oauth2_client_id     = var.registration_gate_oauth2_client_id
+  registration_gate_oauth2_client_secret = var.registration_gate_oauth2_client_secret
+  registration_gate_oauth2_scope         = var.registration_gate_oauth2_scope
 
   # M2M direct client registration (issue #851)
   m2m_direct_registration_enabled = var.m2m_direct_registration_enabled
