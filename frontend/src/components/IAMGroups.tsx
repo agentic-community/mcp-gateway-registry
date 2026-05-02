@@ -85,7 +85,7 @@ const EXAMPLE_SCOPE_JSON = {
     list_service: ['currenttime'],
     health_check_service: ['currenttime'],
   },
-  create_in_idp: true,
+  create_in_idp: false,
 };
 
 // Default entry has all methods selected
@@ -338,7 +338,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
   const [groupMappings, setGroupMappings] = useState('');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [uiPermissions, setUiPermissions] = useState<Record<string, string>>({});
-  const [createInIdp, setCreateInIdp] = useState(true);
+  const [createInIdp, setCreateInIdp] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [showUiPermissions, setShowUiPermissions] = useState(false);
 
