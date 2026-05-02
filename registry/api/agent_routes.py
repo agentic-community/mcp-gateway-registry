@@ -459,6 +459,7 @@ async def register_agent(
             tags=tag_list,
             license=request.license,
             visibility=request.visibility,
+            allowed_groups=request.allowed_groups,
             trust_level=request.trust_level,
             supported_protocol=request.supported_protocol,
             registered_by=user_context["username"],
@@ -600,6 +601,11 @@ async def list_agents(
     ),
     enabled_only: bool = Query(False, description="Show only enabled agents"),
     visibility: str | None = Query(None, description="Filter by visibility"),
+    allowed_groups: str | None = Query(
+        None,
+        alias="allowed_groups",
+        description="Filter by allowed_groups (comma-separated). Returns only group-restricted agents whose allowed_groups intersect with the given values.",
+    ),
     limit: int = Query(20, ge=1, le=500, description="Number of agents to return (max 500)"),
     offset: int = Query(0, ge=0, description="Number of agents to skip"),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
@@ -649,8 +655,10 @@ async def list_agents(
     # Determine if user has unrestricted access (no agents will be filtered out)
     is_admin = user_context.get("is_admin", False) if user_context else False
     accessible_agent_list = user_context.get("accessible_agents", []) if user_context else []
-    has_field_filters = bool(query or enabled_only or visibility)
-    is_unrestricted = is_admin or "all" in accessible_agent_list
+    has_field_filters = bool(query or enabled_only or visibility or allowed_groups)
+    # Admins skip all filtering. Non-admin users with "all" in accessible_agents
+    # still need _filter_agents_by_access to enforce group-restricted visibility.
+    is_unrestricted = is_admin
 
     # Dual-path pagination:
     # - Fast path: DB-level skip/limit for unrestricted users without field filters
@@ -677,6 +685,12 @@ async def list_agents(
 
         if visibility and agent.visibility != visibility:
             continue
+
+        if allowed_groups:
+            requested_groups = {g.strip() for g in allowed_groups.split(",") if g.strip()}
+            agent_groups = set(getattr(agent, "allowed_groups", []))
+            if not requested_groups.intersection(agent_groups):
+                continue
 
         metadata_text = flatten_metadata_to_text(agent.metadata) if agent.metadata else ""
         searchable_text = (
@@ -724,6 +738,7 @@ async def list_agents(
                 if agent.last_health_check
                 else None,
                 visibility=getattr(agent, "visibility", "public"),
+                allowed_groups=getattr(agent, "allowed_groups", []),
                 supported_protocol=getattr(agent, "supported_protocol", None),
                 metadata=agent.metadata if agent.metadata else {},
             )
@@ -1306,6 +1321,7 @@ async def update_agent(
             tags=tag_list,
             license=request.license,
             visibility=request.visibility,
+            allowed_groups=request.allowed_groups,
             trust_level=request.trust_level,
             supported_protocol=request.supported_protocol,
             registered_by=existing_agent.registered_by,

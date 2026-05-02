@@ -8,6 +8,7 @@ Based on: docs/design/a2a-protocol-integration.md
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -27,6 +28,8 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+GROUP_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 
 def _validate_path_format(
@@ -741,6 +744,11 @@ class AgentInfo(BaseModel):
         "public",
         description="public, group-restricted, or internal",
     )
+    allowed_groups: list[str] = Field(
+        default_factory=list,
+        alias="allowedGroups",
+        description="Groups with access when visibility is group-restricted",
+    )
     supported_protocol: str | None = Field(
         default=None,
         alias="supportedProtocol",
@@ -880,6 +888,12 @@ class AgentRegistrationRequest(BaseModel):
         default="public",
         description="Visibility: public, private, or group-restricted (default: public). 'internal' accepted as alias for 'private'.",
     )
+    allowed_groups: list[str] = Field(
+        default_factory=list,
+        alias="allowedGroups",
+        max_length=50,
+        description="Groups with access when visibility is group-restricted (list or comma-separated string)",
+    )
     trust_level: str = Field(
         default="community",
         alias="trustLevel",
@@ -1017,3 +1031,44 @@ class AgentRegistrationRequest(BaseModel):
         if v not in valid_values:
             raise ValueError(f"trust_level must be one of: {', '.join(valid_values)}")
         return v
+
+    @field_validator("allowed_groups", mode="before")
+    @classmethod
+    def _normalize_allowed_groups(
+        cls,
+        v: str | list[str] | None,
+    ) -> list[str]:
+        """Normalize allowed_groups from comma-separated string or list."""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [g.strip() for g in v.split(",") if g.strip()]
+        if isinstance(v, list):
+            return [str(g).strip() for g in v if str(g).strip()]
+        return []
+
+    @field_validator("allowed_groups", mode="after")
+    @classmethod
+    def _validate_group_name_format(
+        cls,
+        v: list[str],
+    ) -> list[str]:
+        """Validate group name format (alphanumeric, hyphens, underscores, dots)."""
+        for name in v:
+            if not GROUP_NAME_PATTERN.match(name):
+                raise ValueError(
+                    f"Invalid group name '{name}'. "
+                    "Group names may only contain letters, digits, hyphens, underscores, and dots."
+                )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_group_restricted_groups(
+        self,
+    ) -> "AgentRegistrationRequest":
+        """Validate group-restricted visibility has allowed groups."""
+        if self.visibility == "group-restricted" and not self.allowed_groups:
+            raise ValueError(
+                "group-restricted visibility requires at least one allowed_group"
+            )
+        return self

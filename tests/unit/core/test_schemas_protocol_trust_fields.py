@@ -300,6 +300,7 @@ class TestAgentRegistrationRequest:
             supported_protocol="a2a",
             trust_level="verified",
             visibility="group-restricted",
+            allowed_groups=["test-group"],
         )
         assert req.supported_protocol == "a2a"
         assert req.trust_level == "verified"

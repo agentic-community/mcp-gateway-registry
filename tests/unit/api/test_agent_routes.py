@@ -588,9 +588,9 @@ class TestListAgents:
     """Tests for GET /agents endpoint."""
 
     @pytest.mark.asyncio
-    async def test_list_agents_success(self, test_app, mock_user_context, sample_agent_card):
-        """Test successful agent listing (unrestricted user, no filters = fast path)."""
-        # Arrange - mock_user_context has accessible_agents=["all"] and no field filters,
+    async def test_list_agents_success(self, test_app_admin, mock_admin_context, sample_agent_card):
+        """Test successful agent listing (admin user, no filters = fast path)."""
+        # Arrange - mock_admin_context has is_admin=True and no field filters,
         # so the route uses the fast path (get_agents_paginated)
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(
@@ -599,7 +599,7 @@ class TestListAgents:
             mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Act
-            response = test_app.get("/agents")
+            response = test_app_admin.get("/agents")
 
             # Assert
             assert response.status_code == status.HTTP_200_OK
@@ -835,14 +835,14 @@ class TestListAgents:
     # --- Pagination: Fast path tests (unrestricted user, no field filters) ---
 
     @pytest.mark.asyncio
-    async def test_list_agents_fast_path_with_limit_offset(self, test_app, mock_user_context):
-        """Unrestricted user with limit/offset uses DB-level pagination."""
+    async def test_list_agents_fast_path_with_limit_offset(self, test_app_admin, mock_admin_context):
+        """Admin user with limit/offset uses DB-level pagination."""
         agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(5)]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(return_value=(agents[2:4], 5))
             mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
-            response = test_app.get("/agents?limit=2&offset=2")
+            response = test_app_admin.get("/agents?limit=2&offset=2")
 
             assert response.status_code == status.HTTP_200_OK
             data = response.json()
@@ -854,14 +854,14 @@ class TestListAgents:
             mock_agent_service.get_agents_paginated.assert_called_once_with(skip=2, limit=2)
 
     @pytest.mark.asyncio
-    async def test_list_agents_fast_path_has_next_false(self, test_app, mock_user_context):
+    async def test_list_agents_fast_path_has_next_false(self, test_app_admin, mock_admin_context):
         """Fast path: has_next is false when all agents fit in one page."""
         agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(3)]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(return_value=(agents, 3))
             mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
-            response = test_app.get("/agents?limit=20")
+            response = test_app_admin.get("/agents?limit=20")
 
             assert response.status_code == status.HTTP_200_OK
             data = response.json()
@@ -870,13 +870,13 @@ class TestListAgents:
             assert data["has_next"] is False
 
     @pytest.mark.asyncio
-    async def test_list_agents_fast_path_offset_beyond_total(self, test_app, mock_user_context):
+    async def test_list_agents_fast_path_offset_beyond_total(self, test_app_admin, mock_admin_context):
         """Fast path: offset beyond total returns empty list."""
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(return_value=([], 3))
             mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
-            response = test_app.get("/agents?offset=100")
+            response = test_app_admin.get("/agents?offset=100")
 
             assert response.status_code == status.HTTP_200_OK
             data = response.json()

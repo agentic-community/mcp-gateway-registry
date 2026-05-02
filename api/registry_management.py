@@ -1715,6 +1715,8 @@ def cmd_agent_list(args: argparse.Namespace) -> int:
                 params["enabled_only"] = "true"
             if hasattr(args, "visibility") and args.visibility:
                 params["visibility"] = args.visibility
+            if hasattr(args, "allowed_groups") and args.allowed_groups:
+                params["allowed_groups"] = args.allowed_groups
             raw_response = client._make_request(method="GET", endpoint="/api/agents", params=params)
             print(json.dumps(raw_response.json(), indent=2, default=str))
             return 0
@@ -1723,6 +1725,7 @@ def cmd_agent_list(args: argparse.Namespace) -> int:
             query=args.query if hasattr(args, "query") else None,
             enabled_only=args.enabled_only if hasattr(args, "enabled_only") else False,
             visibility=args.visibility if hasattr(args, "visibility") else None,
+            allowed_groups=args.allowed_groups if hasattr(args, "allowed_groups") else None,
             limit=limit,
             offset=offset,
         )
@@ -4859,6 +4862,10 @@ Examples:
     )
     agent_list_parser.add_argument(
         "--offset", type=int, default=0, help="Number of agents to skip (default 0)"
+    )
+    agent_list_parser.add_argument(
+        "--allowed-groups",
+        help="Filter by allowed_groups (comma-separated). Returns only group-restricted agents matching these groups.",
     )
     agent_list_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 

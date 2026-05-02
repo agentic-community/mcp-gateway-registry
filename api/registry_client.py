@@ -2093,6 +2093,7 @@ class RegistryClient:
         query: str | None = None,
         enabled_only: bool = False,
         visibility: str | None = None,
+        allowed_groups: str | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> AgentListResponse:
@@ -2124,6 +2125,8 @@ class RegistryClient:
             params["enabled_only"] = "true"
         if visibility:
             params["visibility"] = visibility
+        if allowed_groups:
+            params["allowed_groups"] = allowed_groups
 
         response = self._make_request(method="GET", endpoint="/api/agents", params=params)
 

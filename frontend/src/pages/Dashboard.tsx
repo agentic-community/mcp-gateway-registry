@@ -277,6 +277,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     description: '',
     version: '',
     visibility: 'private' as 'public' | 'private' | 'group-restricted',
+    allowed_groups: '',
     trust_level: 'community' as 'community' | 'verified' | 'trusted' | 'unverified',
     supported_protocol: 'other' as 'a2a' | 'other',
     tags: [] as string[],
@@ -1063,6 +1064,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         description: fullAgent.description || agent.description || '',
         version: fullAgent.version || agent.version || '1.0.0',
         visibility: fullAgent.visibility || agent.visibility || 'private',
+        allowed_groups: (fullAgent.allowedGroups || fullAgent.allowed_groups || []).join(', '),
         trust_level: fullAgent.trust_level || agent.trust_level || 'community',
         supported_protocol: (fullAgent.supported_protocol || agent.supported_protocol || 'other') as 'a2a' | 'other',
         tags: fullAgent.tags || agent.tags || [],
@@ -1084,6 +1086,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         description: agent.description || '',
         version: agent.version || '1.0.0',
         visibility: agent.visibility || 'private',
+        allowed_groups: '',
         trust_level: agent.trust_level || 'community',
         supported_protocol: (agent.supported_protocol || 'other') as 'a2a' | 'other',
         tags: agent.tags || [],
@@ -1194,6 +1197,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         url: editAgentForm.url,
         version: editAgentForm.version,
         visibility: editAgentForm.visibility,
+        allowedGroups: editAgentForm.visibility === 'group-restricted'
+          ? editAgentForm.allowed_groups.split(',').map(g => g.trim()).filter(g => g)
+          : [],
         trustLevel: editAgentForm.trust_level,
         supportedProtocol: editAgentForm.supported_protocol,
         tags: editAgentForm.tags,
@@ -3194,6 +3200,29 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   <option value="group-restricted">Group Restricted</option>
                 </select>
               </div>
+
+              {editAgentForm.visibility === 'group-restricted' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                    Allowed Groups
+                  </label>
+                  <input
+                    type="text"
+                    value={editAgentForm.allowed_groups}
+                    onChange={(e) => setEditAgentForm(prev => ({ ...prev, allowed_groups: e.target.value }))}
+                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
+                    placeholder="e.g. finance-team, engineering"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Comma-separated list of groups that can access this agent
+                  </p>
+                  {editAgentForm.allowed_groups.trim() === '' && (
+                    <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                      At least one group is required for group-restricted visibility
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">

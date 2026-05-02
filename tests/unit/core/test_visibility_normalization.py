@@ -129,7 +129,7 @@ class TestRegistrationVisibilityNormalization:
 
     def test_group_normalized_to_group_restricted(self):
         """Registration with visibility='group' should normalize to 'group-restricted'."""
-        req = _build_minimal_registration(visibility="group")
+        req = _build_minimal_registration(visibility="group", allowed_groups=["test-group"])
         assert req.visibility == "group-restricted"
 
     def test_default_is_public(self):

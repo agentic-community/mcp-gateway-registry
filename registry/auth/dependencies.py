@@ -547,6 +547,7 @@ async def nginx_proxied_auth(
         str | None, Header(alias="X-Auth-Method", include_in_schema=False)
     ] = None,
     x_client_id: Annotated[str | None, Header(alias="X-Client-Id", include_in_schema=False)] = None,
+    x_groups: Annotated[str | None, Header(alias="X-Groups", include_in_schema=False)] = None,
 ) -> dict[str, Any]:
     """
     Authentication dependency that works with both nginx-proxied requests and direct requests.
@@ -589,9 +590,11 @@ async def nginx_proxied_auth(
         # Parse scopes from space-separated header
         scopes = x_scopes.split() if x_scopes else []
 
-        # Map scopes to get groups based on auth method
-        groups = []
-        if x_auth_method in [
+        # Parse groups from X-Groups header (set by auth server from JWT claims)
+        groups = x_groups.split() if x_groups else []
+
+        # If auth server did not forward groups, fall back to admin/user classification
+        if not groups and x_auth_method in [
             "keycloak",
             "entra",
             "cognito",
@@ -600,9 +603,6 @@ async def nginx_proxied_auth(
             "network-trusted",
             "federation-static",
         ]:
-            # User authenticated via OAuth2 JWT (Keycloak, Entra ID, Cognito, Okta, or Auth0)
-            # Scopes already contain mapped permissions
-            # Check if user has admin scopes
             if (
                 "mcp-servers-unrestricted/read" in scopes
                 and "mcp-servers-unrestricted/execute" in scopes
@@ -612,7 +612,8 @@ async def nginx_proxied_auth(
                 groups = ["mcp-registry-user"]
 
         logger.info(
-            f"nginx-proxied auth for user: {username}, method: {x_auth_method}, scopes: {scopes}"
+            f"nginx-proxied auth for user: {username}, method: {x_auth_method}, "
+            f"groups: {groups}, scopes: {scopes}"
         )
 
         if x_auth_method == "federation-static":

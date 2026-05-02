@@ -91,6 +91,7 @@ interface AgentFormData {
   tags: string;
   capabilities: string;
   visibility: string;
+  allowed_groups: string;
   repository_url: string;
   streaming: boolean;
   status: string;
@@ -146,6 +147,7 @@ const initialAgentForm: AgentFormData = {
   tags: '',
   capabilities: '',
   visibility: 'public',
+  allowed_groups: '',
   repository_url: '',
   streaming: false,
   status: 'active',
@@ -347,6 +349,9 @@ const RegisterPage: React.FC = () => {
             capabilities: parsed.capabilities ? JSON.stringify(parsed.capabilities) : prev.capabilities,
             metadata: parsed.metadata ? JSON.stringify(parsed.metadata, null, 2) : prev.metadata,
             visibility: parsed.visibility || prev.visibility,
+            allowed_groups: Array.isArray(parsed.allowedGroups || parsed.allowed_groups)
+              ? (parsed.allowedGroups || parsed.allowed_groups).join(', ')
+              : prev.allowed_groups,
             repository_url: parsed.repository_url || parsed.repositoryUrl || prev.repository_url,
             streaming: parsed.streaming || parsed.capabilities?.streaming || prev.streaming,
             status: parsed.status || prev.status,
@@ -462,6 +467,9 @@ const RegisterPage: React.FC = () => {
         version: agentForm.version,
         tags: agentForm.tags,
         visibility: agentForm.visibility,
+        allowedGroups: agentForm.visibility === 'group-restricted'
+          ? agentForm.allowed_groups.split(',').map(g => g.trim()).filter(g => g)
+          : [],
         streaming: agentForm.streaming,
         status: agentForm.status || 'active',
         provider: agentForm.provider_organization ? {
@@ -964,6 +972,27 @@ const RegisterPage: React.FC = () => {
             <option value="group-restricted">Group Restricted</option>
           </select>
         </div>
+
+        {agentForm.visibility === 'group-restricted' && (
+          <div>
+            <label className={labelClass}>Allowed Groups</label>
+            <input
+              type="text"
+              className={inputClass}
+              value={agentForm.allowed_groups}
+              onChange={(e) => setAgentForm(prev => ({ ...prev, allowed_groups: e.target.value }))}
+              placeholder="e.g. finance-team, engineering"
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Comma-separated list of groups that can access this agent
+            </p>
+            {agentForm.allowed_groups.trim() === '' && (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                At least one group is required for group-restricted visibility
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Trust Level */}
         <div>
