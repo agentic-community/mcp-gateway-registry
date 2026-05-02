@@ -1987,7 +1987,7 @@ class RegistryClient:
                 - server_access (optional): List of server access definitions
                 - group_mappings (optional): List of group mappings
                 - ui_permissions (optional): Dictionary of UI permissions
-                - create_in_idp (optional): Whether to create in IdP (default: true)
+                - create_in_idp (optional): Whether to create in IdP (default: false)
 
         Returns:
             Response data
