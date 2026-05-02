@@ -2245,7 +2245,7 @@ async def internal_create_group(
     caller: Annotated[str, Depends(validate_internal_auth)],
     group_name: Annotated[str, Form()],
     description: Annotated[str, Form()] = "",
-    create_in_idp: Annotated[bool, Form()] = True,
+    create_in_idp: Annotated[bool, Form()] = False,
 ):
     """Internal endpoint to create a new group in both IdP and scopes.yml (requires admin authentication)."""
     logger.info(f"Creating group '{group_name}' via internal endpoint by caller '{caller}'")
@@ -3386,7 +3386,7 @@ async def remove_server_from_groups_api(
 async def _create_group_impl(
     group_name: str,
     description: str = "",
-    create_in_idp: bool = True,
+    create_in_idp: bool = False,
 ) -> JSONResponse:
     """
     Internal implementation for group creation.
@@ -3461,7 +3461,7 @@ async def create_group_api(
     request: Request,
     group_name: Annotated[str, Form()],
     description: Annotated[str, Form()] = "",
-    create_in_idp: Annotated[bool, Form()] = True,
+    create_in_idp: Annotated[bool, Form()] = False,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
@@ -3476,7 +3476,7 @@ async def create_group_api(
     **Request body (form data):**
     - `group_name` (required): Name of the new group
     - `description` (optional): Group description
-    - `create_in_idp` (optional): Whether to create in IdP (default: true)
+    - `create_in_idp` (optional): Whether to create in IdP (default: false)
 
     **Response:**
     Returns confirmation of group creation.

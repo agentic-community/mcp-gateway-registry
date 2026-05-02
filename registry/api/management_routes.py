@@ -410,7 +410,7 @@ async def management_create_group(
     """
     Create a new group in the identity provider and/or MongoDB (admin only).
 
-    When create_in_idp is True (default), creates in both the configured
+    When create_in_idp is True, creates in both the configured
     identity provider and MongoDB scopes collection.
     When create_in_idp is False, creates only in MongoDB scopes collection.
     """
@@ -419,7 +419,7 @@ async def management_create_group(
     iam = get_iam_manager()
 
     # Extract create_in_idp from scope_config (frontend sends it there)
-    create_in_idp = True  # default: create in IdP
+    create_in_idp = False  # default: do not create in IdP
     if payload.scope_config and "create_in_idp" in payload.scope_config:
         create_in_idp = bool(payload.scope_config["create_in_idp"])
     logger.debug(
