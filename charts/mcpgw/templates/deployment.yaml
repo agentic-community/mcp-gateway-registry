@@ -49,6 +49,8 @@ spec:
                 name: {{ .Values.global.existingSharedSecret | default .Values.global.sharedSecretName }}
             {{- end }}
           env:
+            - name: BUILD_VERSION
+              value: {{ .Values.global.image.tag | quote }}
             - name: HOST
               value: 0.0.0.0
             {{- if .Values.app.embeddingsApiKeyExistingSecret }}

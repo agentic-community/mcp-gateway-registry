@@ -221,6 +221,7 @@ build_and_push_component() {
 
     docker build \
         --file "$dockerfile" \
+        --build-arg BUILD_VERSION="$VERSION" \
         $build_args \
         --label "org.opencontainers.image.created=$BUILD_DATE" \
         --label "org.opencontainers.image.source=https://github.com/agentic-community/mcp-gateway-registry" \

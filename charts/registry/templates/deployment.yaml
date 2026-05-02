@@ -67,6 +67,8 @@ spec:
                 name: {{ .Values.global.existingOauthProviderSecret | default .Values.global.oauthProviderSecretName }}
             {{- end }}
           env:
+            - name: BUILD_VERSION
+              value: {{ .Values.global.image.tag | quote }}
             - name: DEPLOYMENT_MODE
               value: {{ .Values.app.deploymentMode | default "with-gateway" | quote }}
             - name: REGISTRY_MODE

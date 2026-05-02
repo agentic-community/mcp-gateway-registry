@@ -66,6 +66,8 @@ spec:
                 name: {{ .Values.global.existingOauthProviderSecret | default .Values.global.oauthProviderSecretName }}
             {{- end }}
           env:
+            - name: BUILD_VERSION
+              value: {{ .Values.global.image.tag | quote }}
             {{- if .Values.entra.clientSecretExistingSecret }}
             - name: ENTRA_CLIENT_SECRET
               valueFrom:
