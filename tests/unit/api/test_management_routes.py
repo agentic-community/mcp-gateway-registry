@@ -407,7 +407,11 @@ class TestManagementCreateGroup:
             # Act
             response = client.post(
                 "/api/management/iam/groups",
-                json={"name": "new-group", "description": "A new test group"},
+                json={
+                    "name": "new-group",
+                    "description": "A new test group",
+                    "scope_config": {"create_in_idp": True},
+                },
             )
 
             # Assert
@@ -453,7 +457,11 @@ class TestManagementCreateGroup:
             # Act
             response = client.post(
                 "/api/management/iam/groups",
-                json={"name": "new-group", "description": "Entra test group"},
+                json={
+                    "name": "new-group",
+                    "description": "Entra test group",
+                    "scope_config": {"create_in_idp": True},
+                },
             )
 
             # Assert
@@ -500,7 +508,10 @@ class TestManagementCreateGroup:
         # Act
         response = client.post(
             "/api/management/iam/groups",
-            json={"name": "existing-group"},
+            json={
+                "name": "existing-group",
+                "scope_config": {"create_in_idp": True},
+            },
         )
 
         # Assert
@@ -516,7 +527,10 @@ class TestManagementCreateGroup:
         # Act
         response = client.post(
             "/api/management/iam/groups",
-            json={"name": "new-group"},
+            json={
+                "name": "new-group",
+                "scope_config": {"create_in_idp": True},
+            },
         )
 
         # Assert
@@ -545,7 +559,10 @@ class TestManagementCreateGroup:
             # Act
             response = client.post(
                 "/api/management/iam/groups",
-                json={"name": "partial-group"},
+                json={
+                    "name": "partial-group",
+                    "scope_config": {"create_in_idp": True},
+                },
             )
 
             # Assert - should still succeed (IdP creation succeeded)
@@ -575,7 +592,10 @@ class TestManagementCreateGroup:
             # Act
             response = client.post(
                 "/api/management/iam/groups",
-                json={"name": "minimal-group"},
+                json={
+                    "name": "minimal-group",
+                    "scope_config": {"create_in_idp": True},
+                },
             )
 
             # Assert
@@ -695,23 +715,17 @@ class TestManagementCreateGroupCreateInIdp:
                 agent_access=[],
             )
 
-    def test_create_group_default_creates_in_idp(self, test_client_admin):
-        """When create_in_idp not in scope_config, default to creating in IdP."""
+    def test_create_group_default_does_not_create_in_idp(self, test_client_admin):
+        """When create_in_idp not in scope_config, default to NOT creating in IdP."""
         # Arrange
         client, mock_iam = test_client_admin
-        mock_iam.create_group.return_value = {
-            "id": "default-group-id",
-            "name": "default-group",
-            "path": "/default-group",
-            "attributes": None,
-        }
 
         with (
             patch(
                 "registry.api.management_routes.scope_service.import_group",
                 new_callable=AsyncMock,
                 return_value=True,
-            ),
+            ) as mock_import_group,
             patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
         ):
             # Act
@@ -722,7 +736,21 @@ class TestManagementCreateGroupCreateInIdp:
 
             # Assert
             assert response.status_code == 200
-            mock_iam.create_group.assert_called_once()
+            data = response.json()
+            assert data["name"] == "default-group"
+
+            # IdP create_group should NOT be called (default is False)
+            mock_iam.create_group.assert_not_called()
+
+            # MongoDB scope should still be created with group name as mapping
+            mock_import_group.assert_called_once_with(
+                scope_name="default-group",
+                description="",
+                group_mappings=["default-group"],
+                server_access=[],
+                ui_permissions={},
+                agent_access=[],
+            )
 
 
 # =============================================================================
