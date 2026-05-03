@@ -478,9 +478,10 @@ async def verify_gate_connectivity() -> None:
                 f"Gate calls will fail until these are set."
             )
         else:
+            masked_id = client_id[:8] + "..." if len(client_id) > 8 else "***"
             logger.info(
                 f"Registration gate OAuth2 config: "
-                f"token_url={token_url}, client_id={client_id}, "
+                f"token_url={token_url}, client_id={masked_id}, "
                 f"scope={settings.registration_gate_oauth2_scope or '(not set)'}"
             )
             test_token = await _acquire_oauth2_token()
