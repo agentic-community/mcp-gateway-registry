@@ -681,9 +681,6 @@ def parse_server_and_tool_from_url(original_url: str) -> tuple[str | None, str |
         Tuple of (server_name, tool_name) or (None, None) if parsing fails
     """
     try:
-        # Extract path from URL (remove query parameters and fragments)
-        from urllib.parse import urlparse
-
         parsed_url = urlparse(original_url)
         path = parsed_url.path.strip("/")
 
@@ -3253,8 +3250,6 @@ async def oauth2_logout(
                 # Try to derive from the request
                 referer = request.headers.get("referer", "")
                 if referer:
-                    from urllib.parse import urlparse
-
                     parsed = urlparse(referer)
                     registry_base = f"{parsed.scheme}://{parsed.netloc}"
                 else:
