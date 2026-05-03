@@ -305,6 +305,17 @@ When the gate endpoint is protected by an OAuth2 identity provider (e.g., Micros
 2. If the token endpoint returns a valid `access_token`, the registry sends it as `Authorization: Bearer <token>` to the gate
 3. If token acquisition fails (timeout, invalid credentials, network error), the registration is **blocked immediately** (fail-closed). No gate call is attempted.
 
+**OAuth2 Configuration Parameters:**
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `REGISTRATION_GATE_OAUTH2_TOKEN_URL` | (empty) | Yes | OAuth2 token endpoint URL. This is the IdP endpoint that issues access tokens via the client credentials grant. Example (Entra): `https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/token` |
+| `REGISTRATION_GATE_OAUTH2_CLIENT_ID` | (empty) | Yes | OAuth2 client ID (also called "application ID" in Entra). The service principal identity used to authenticate with the token endpoint. |
+| `REGISTRATION_GATE_OAUTH2_CLIENT_SECRET` | (empty) | Yes | OAuth2 client secret. The credential paired with the client ID. This value is sensitive and is masked on the System Config page. Never logged. |
+| `REGISTRATION_GATE_OAUTH2_SCOPE` | (empty) | No | OAuth2 scope or resource parameter sent in the token request. Some IdPs require this (e.g., Entra requires `api://{app-id}/.default`), others use it optionally or not at all. Leave empty if your IdP does not require a scope for client credentials grants. |
+
+All four parameters are available in Docker (`.env` / `docker-compose.yml`), Terraform/ECS (`variables.tf` / `ecs-services.tf`), Helm/EKS (`values.yaml` / `secret.yaml`), and the System Config page in the UI.
+
 **Example configuration (Entra ID):**
 
 ```bash
