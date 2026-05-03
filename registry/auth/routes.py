@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import urllib.parse
 from typing import Annotated
@@ -14,6 +15,44 @@ from ..core.config import settings
 from .csrf import generate_csrf_token, verify_csrf_token_flexible
 
 logger = logging.getLogger(__name__)
+
+_ROOT_PATH: str = os.environ.get("ROOT_PATH", "").rstrip("/")
+
+
+def _build_external_url(
+    request: Request,
+    path: str = "",
+) -> str:
+    """Build an external URL with proper scheme, host, and ROOT_PATH.
+
+    Args:
+        request: The FastAPI request object
+        path: The path to append (e.g., "/logout", "/")
+
+    Returns:
+        Full external URL (e.g., "https://host/registry/logout")
+    """
+    host = request.headers.get("host", "localhost:7860")
+
+    cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "")
+    x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
+
+    if (
+        cloudfront_proto.lower() == "https"
+        or x_forwarded_proto.lower() == "https"
+        or request.url.scheme == "https"
+    ):
+        scheme = "https"
+    else:
+        scheme = "http"
+
+    if "localhost" in host and ":" not in host:
+        host = "localhost:7860"
+
+    if path and not path.startswith("/"):
+        path = f"/{path}"
+
+    return f"{scheme}://{host}{_ROOT_PATH}{path}"
 
 
 # Prometheus metrics for logout observability
@@ -92,30 +131,9 @@ async def login_form(request: Request, error: str | None = None):
 async def oauth2_login_redirect(provider: str, request: Request):
     """Redirect to auth server for OAuth2 login"""
     try:
-        # Build redirect URL to auth server - use external URL for browser redirects
-        # When behind CloudFront, request.base_url may have wrong scheme/host
-        # Check CloudFront and X-Forwarded headers to build correct URL
-        host = request.headers.get("host", "")
-        cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "")
-        x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
-
-        # Determine scheme - prefer CloudFront header, then X-Forwarded-Proto
-        if cloudfront_proto.lower() == "https" or x_forwarded_proto.lower() == "https":
-            scheme = "https"
-        else:
-            scheme = request.url.scheme
-
-        # Build registry URL from headers (more reliable behind proxies)
-        if host:
-            registry_url = f"{scheme}://{host}"
-        else:
-            registry_url = str(request.base_url).rstrip("/")
-
+        registry_url = _build_external_url(request, "/")
         auth_external_url = settings.auth_server_external_url
-        auth_url = f"{auth_external_url}/oauth2/login/{provider}?redirect_uri={registry_url}/"
-        logger.info(
-            f"request.base_url: {request.base_url}, registry_url: {registry_url}, auth_external_url: {auth_external_url}, auth_url: {auth_url}"
-        )
+        auth_url = f"{auth_external_url}/oauth2/login/{provider}?redirect_uri={registry_url}"
         logger.info(f"Redirecting to OAuth2 login for provider {provider}: {auth_url}")
         return RedirectResponse(url=auth_url, status_code=302)
 
@@ -213,28 +231,7 @@ async def logout_handler(
         # If user was logged in via OAuth2, redirect to provider logout
         if provider:
             auth_external_url = settings.auth_server_external_url
-
-            # Build redirect URI based on current host
-            # Check CloudFront header first, then x-forwarded-proto, then request scheme
-            host = request.headers.get("host", "localhost:7860")
-            cloudfront_proto = request.headers.get("x-cloudfront-forwarded-proto", "")
-            x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
-
-            if (
-                cloudfront_proto.lower() == "https"
-                or x_forwarded_proto.lower() == "https"
-                or request.url.scheme == "https"
-            ):
-                scheme = "https"
-            else:
-                scheme = "http"
-
-            # Handle localhost specially to ensure correct port
-            if "localhost" in host and ":" not in host:
-                redirect_uri = f"{scheme}://localhost:7860/logout"
-            else:
-                redirect_uri = f"{scheme}://{host}/logout"
-
+            redirect_uri = _build_external_url(request, "/logout")
             logout_url = f"{auth_external_url}/oauth2/logout/{provider}?redirect_uri={redirect_uri}"
 
             # Extract id_token from session and append as id_token_hint if present
