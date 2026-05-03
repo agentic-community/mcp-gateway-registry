@@ -38,6 +38,7 @@ mkdocs build
 - `complete-setup-guide.md` - Step-by-step setup from scratch
 - `installation.md` - Complete installation guide
 - `auth.md` - Authentication and OAuth setup
+- `registration-webhooks.md` - Registration notifications and admission-control gate integrations
 - `cognito.md` - Amazon Cognito configuration
 - `keycloak-integration.md` - Keycloak integration guide
 - `scopes.md` - Access control and permissions

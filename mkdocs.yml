@@ -105,6 +105,7 @@ nav:
   - Authentication & Security:
     - Authentication Guide: auth.md
     - Registry API Authentication: registry-api-auth.md
+    - Registration Webhooks and Gate: registration-webhooks.md
     - IAM Settings UI: iam-settings-ui.md
     - Amazon Cognito Setup: cognito.md
     - Access Control & Scopes: scopes.md

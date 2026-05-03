@@ -304,6 +304,35 @@ The gate is checked on the following operations:
 | Skill | Register | `POST /api/skills` |
 | Skill | Update | `PUT /api/skills/{path}` |
 
+### Pattern: External Trust Preflight Before Admission
+
+The registration gate can be used as a security preflight step before a newly discovered MCP server, A2A agent, or skill becomes an executable dependency for users and AI agents. This complements the built-in security scanner: the registry still owns admission, access control, and auditability, while the gate can call external risk services for additional signals.
+
+A typical server admission flow is:
+
+1. Discover or propose a remote MCP server for registration.
+2. Send the sanitized registration payload to the registration gate before persistence.
+3. Have the gate evaluate policy, using internal rules and optional external trust checks.
+4. Store the decision and relevant preflight summary in the operator's approval/audit system.
+5. Return `200` only when policy passes; otherwise return `403` with a clear human-review reason.
+
+When designing a trust preflight, prefer deterministic policy over a single vendor verdict. Useful inputs include endpoint allow/deny lists, transport type, domain ownership, scanner severity, prior approval status, and whether the endpoint requires privileged credentials. If the preflight depends on a third-party service, keep the gate fail-closed for production and define a manual review process for outages or inconclusive results.
+
+Optional external check example:
+
+```bash
+# Trust metadata check for a proposed MCP endpoint.
+agentcash fetch 'https://shield.vainplex.dev/api/cdp/check/mcp/trust?shieldapi_source=mcp-gateway-registry' \
+  -m POST \
+  -H 'content-type: application/json' \
+  -b '{"endpoint":"https://mcp.example.com"}'
+
+# Deeper endpoint scan when policy requires more context.
+agentcash fetch 'https://shield.vainplex.dev/api/cdp/full/scan?target=mcp.example.com&shieldapi_source=mcp-gateway-registry'
+```
+
+Treat external preflight results as one admission signal, not as a replacement for registry governance. The gate should return a concise denial reason such as `External trust preflight requires human review` and avoid storing raw credentials or sensitive headers in external systems.
+
 ### Example: Simple Gate Endpoint
 
 A minimal Python gate endpoint that approves all registrations:
