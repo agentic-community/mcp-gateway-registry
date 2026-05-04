@@ -153,6 +153,24 @@ def _display_id(
     return registry_id
 
 
+def _latest_nonempty(
+    events: list[dict],
+    field: str,
+) -> str:
+    """Return the most recent non-empty value for a field across events.
+
+    Events must be sorted by timestamp ascending. Heartbeat events populate
+    fields like search_backend and embeddings_provider while startup events
+    leave them empty, so the latest non-empty value reflects the current
+    runtime configuration.
+    """
+    for event in reversed(events):
+        value = (event.get(field) or "").strip()
+        if value:
+            return value
+    return "unknown"
+
+
 def _score_instances(
     instances: list[dict],
     internal_ids: set[str],
@@ -183,6 +201,7 @@ def _score_instances(
                 "skills": skills,
                 "search": search,
                 "total": total,
+                "embeddings_provider": inst.get("embeddings_provider", "unknown"),
                 "is_internal": _is_internal(inst["registry_id"], internal_ids),
             }
         )
@@ -206,11 +225,11 @@ def _build_most_active_table(
     lines.append("")
     lines.append(
         "| Rank | Registry ID | Cloud/Compute/Auth "
-        "| Version | Servers | Agents | Skills | Search | Total |"
+        "| Version | Embeddings | Servers | Agents | Skills | Search | Total |"
     )
     lines.append(
         "|------|-------------|-------------------"
-        "|---------|---------|--------|--------|--------|-------|"
+        "|---------|------------|---------|--------|--------|--------|-------|"
     )
     for i, inst in enumerate(top, 1):
         label = f"{inst['cloud']}/{inst['compute']}/{inst['auth']}"
@@ -219,6 +238,7 @@ def _build_most_active_table(
             f"| `{inst['registry_id']}` "
             f"| {label} "
             f"| `{inst['version']}` "
+            f"| {inst['embeddings_provider']} "
             f"| {inst['servers']} "
             f"| {inst['agents']} "
             f"| {inst['skills']} "
@@ -798,6 +818,10 @@ def _compute_instance_table(
         # in each event, so take the max (latest value) not the sum
         total_search = max(_safe_int(e.get("search_queries_total", "")) for e in events)
 
+        # Track search backend and embeddings provider (most recent non-empty value)
+        search_backend = _latest_nonempty(events, "search_backend")
+        embeddings_provider = _latest_nonempty(events, "embeddings_provider")
+
         first_ts = events[0].get("ts", "")[:10]
         latest_ts = events[-1].get("ts", "")[:10]
 
@@ -819,6 +843,8 @@ def _compute_instance_table(
                 "max_skills": max_skills,
                 "max_search_queries": max_search,
                 "total_search_queries": total_search,
+                "search_backend": search_backend,
+                "embeddings_provider": embeddings_provider,
                 "first_seen": first_ts,
                 "latest_seen": latest_ts,
             }
