@@ -455,20 +455,37 @@ def mask_token(token: str) -> str:
 def _is_redirect_within_cookie_domain(
     url: str,
     cookie_domain: str,
+    request: Request | None = None,
 ) -> bool:
-    """Check if an absolute redirect URL's host is within SESSION_COOKIE_DOMAIN.
+    """Check if an absolute redirect URL is safe to redirect to.
 
-    SESSION_COOKIE_DOMAIN (e.g. ".example.com") defines the trust boundary —
-    the apex host and any subdomain sharing the session cookie are safe
-    redirect targets. The leading dot is conventional but not required.
+    An absolute URL is safe when either:
+      - its (scheme, host) matches the inbound request's origin (same-origin
+        is always safe because the browser already trusts that host), or
+      - its host is within SESSION_COOKIE_DOMAIN, which defines the
+        cross-subdomain trust boundary for deployments that share the session
+        cookie across hosts (e.g. ".example.com" covers the apex and any
+        subdomain).
+
+    SESSION_COOKIE_DOMAIN is optional: .env.example documents the empty default
+    for single-domain deployments, so this helper must not reject same-origin
+    redirects when it is unset.
     """
-    if not cookie_domain:
-        return False
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return False
-    # urlparse().hostname is lowercased by Python; normalize apex to match.
-    hostname = parsed.hostname or ""
+    hostname = (parsed.hostname or "").lower()
+
+    if request is not None:
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+        forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+        request_scheme = forwarded_proto or request.url.scheme
+        request_host = (forwarded_host or request.url.hostname or "").lower()
+        if request_host and parsed.scheme == request_scheme and hostname == request_host:
+            return True
+
+    if not cookie_domain:
+        return False
     apex = cookie_domain.lstrip(".").lower()
     return hostname == apex or hostname.endswith(f".{apex}")
 
@@ -3056,12 +3073,13 @@ async def oauth2_callback(
             "redirect_uri", OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/")
         )
         # Validate redirect_url to prevent open redirect attacks. Relative URLs
-        # are always safe; absolute URLs must be within SESSION_COOKIE_DOMAIN.
+        # are always safe; absolute URLs must be same-origin with the inbound
+        # request or within SESSION_COOKIE_DOMAIN when that is configured.
         cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
         redirect_parsed = urlparse(redirect_url)
         redirect_is_safe = (
             not redirect_parsed.scheme and not redirect_parsed.netloc
-        ) or _is_redirect_within_cookie_domain(redirect_url, cookie_domain)
+        ) or _is_redirect_within_cookie_domain(redirect_url, cookie_domain, request)
         if not redirect_is_safe:
             logger.warning(f"Blocked unsafe redirect URL: {redirect_url}, falling back to /")
             redirect_url = "/"
@@ -3225,7 +3243,7 @@ async def oauth2_logout(
             parsed = urlparse(redirect_uri)
             if parsed.scheme or parsed.netloc:
                 cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
-                if not _is_redirect_within_cookie_domain(redirect_uri, cookie_domain):
+                if not _is_redirect_within_cookie_domain(redirect_uri, cookie_domain, request):
                     logger.warning(
                         f"Blocked unsafe logout redirect_uri for {provider}: {redirect_uri}"
                     )
