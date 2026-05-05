@@ -206,6 +206,11 @@ class VirtualServerService:
 
         updates = request.model_dump(exclude_unset=True)
 
+        # Coerce None string fields to empty string to prevent MongoDB
+        # from storing null which breaks Pydantic validation on read
+        if "description" in updates and updates["description"] is None:
+            updates["description"] = ""
+
         # Validate tool mappings if being updated
         if "tool_mappings" in updates and updates["tool_mappings"]:
             tool_mappings = [ToolMapping(**tm) for tm in updates["tool_mappings"]]

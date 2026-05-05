@@ -204,7 +204,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
       if (isEditMode) {
         const updateData: UpdateVirtualServerRequest = {
           server_name: name.trim(),
-          description: description.trim() || null,
+          description: description.trim() || '',
           tool_mappings: allMappings,
           required_scopes: parsedScopes,
           tags: parsedTags,

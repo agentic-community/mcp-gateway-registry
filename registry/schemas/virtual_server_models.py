@@ -16,6 +16,7 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
+    model_validator,
 )
 
 # Configure logging
@@ -123,6 +124,14 @@ class VirtualServerConfig(BaseModel):
         max_length=2048,
         description="Description of the virtual server's purpose",
     )
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def coerce_null_description(cls, v: Any) -> str:
+        """Coerce None to empty string for MongoDB documents with null description."""
+        if v is None:
+            return ""
+        return v
 
     # Tool configuration
     tool_mappings: list[ToolMapping] = Field(
@@ -237,6 +246,15 @@ class VirtualServerInfo(BaseModel):
     path: str = Field(..., description="Virtual server path")
     server_name: str = Field(..., description="Human-readable name")
     description: str = Field(default="", description="Server description")
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def coerce_null_description(cls, v: Any) -> str:
+        """Coerce None to empty string for MongoDB documents with null description."""
+        if v is None:
+            return ""
+        return v
+
     tool_count: int = Field(default=0, description="Number of mapped tools")
     backend_count: int = Field(default=0, description="Number of unique backend servers")
     backend_paths: list[str] = Field(
