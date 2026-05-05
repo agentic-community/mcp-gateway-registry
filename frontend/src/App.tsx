@@ -11,16 +11,7 @@ import Logout from './pages/Logout';
 import OAuthCallback from './pages/OAuthCallback';
 import ProtectedRoute from './components/ProtectedRoute';
 import SettingsPage from './pages/SettingsPage';
-
-// Get basename from <base> tag for path-based routing (e.g., /registry)
-const getBasename = () => {
-  const baseTag = document.querySelector('base');
-  if (baseTag && baseTag.href) {
-    const url = new URL(baseTag.href);
-    return url.pathname.replace(/\/$/, '') || '/';
-  }
-  return '/';
-};
+import { getBasename } from './utils/basePath';
 
 function App() {
   return (

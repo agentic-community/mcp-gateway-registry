@@ -983,7 +983,14 @@ _ROOT_PATH: str = os.environ.get("ROOT_PATH", "")
 
 
 def _build_cached_index_html() -> str | None:
-    """Read index.html and inject <base> tag if ROOT_PATH is set.
+    """Read index.html and inject <base> tag and rewrite absolute asset paths.
+
+    Create React App (with homepage="/") emits absolute asset URLs like
+    /static/js/main.*.js and /favicon.ico. A <base> tag alone does not affect
+    absolute paths, so when ROOT_PATH is set (path-based routing) we must also
+    rewrite those URLs to include the prefix. Without this, the browser
+    requests e.g. https://host/static/js/... which bypasses the ingress rule
+    that only routes /<ROOT_PATH>/* to the app, and 404s.
 
     Returns:
         Modified HTML string if ROOT_PATH is set, None otherwise.
@@ -998,9 +1005,15 @@ def _build_cached_index_html() -> str | None:
     with open(index_path) as f:
         html_content = f.read()
 
-    # Inject <base> tag if not already present
+    prefix = _ROOT_PATH.rstrip("/")
+
+    # Rewrite absolute asset references to include ROOT_PATH
+    html_content = html_content.replace('="/static/', f'="{prefix}/static/')
+    html_content = html_content.replace('="/favicon.ico"', f'="{prefix}/favicon.ico"')
+
+    # Inject <base> tag if not already present (for React Router relative links)
     if "<base" not in html_content:
-        base_href = _ROOT_PATH if _ROOT_PATH.endswith("/") else f"{_ROOT_PATH}/"
+        base_href = f"{prefix}/"
         base_tag = f'<base href="{base_href}">'
         html_content = html_content.replace("<head>", f"<head>\n    {base_tag}")
 

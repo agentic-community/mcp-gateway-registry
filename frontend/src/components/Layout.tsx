@@ -12,6 +12,7 @@ import Sidebar from './Sidebar';
 import UptimeDisplay from './UptimeDisplay';
 import { useServerStats } from '../hooks/useServerStats';
 import { useAuth } from '../contexts/AuthContext';
+import { apiUrl } from '../utils/basePath';
 import logo from '../assets/logo.png';
 
 interface LayoutProps {
@@ -33,7 +34,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   }, []);
 
   const fetchTags = useCallback(() => {
-    fetch('/api/search/tags')
+    fetch(apiUrl('/api/search/tags'))
       .then(res => res.json())
       .then(data => setAvailableTags(data.tags || []))
       .catch(err => console.error('Failed to fetch tags:', err));
@@ -41,7 +42,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   useEffect(() => {
     // Fetch version from API
-    fetch('/api/version')
+    fetch(apiUrl('/api/version'))
       .then(res => res.json())
       .then(data => setVersion(data.version))
       .catch(err => console.error('Failed to fetch version:', err));

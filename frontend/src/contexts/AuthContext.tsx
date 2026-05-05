@@ -1,15 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import axios from 'axios';
-
-// Get base URL from <base> tag for path-based routing (e.g., /registry)
-const getBaseURL = () => {
-  const baseTag = document.querySelector('base');
-  if (baseTag && baseTag.href) {
-    const url = new URL(baseTag.href);
-    return url.pathname.replace(/\/$/, '');
-  }
-  return '';
-};
+import { getBaseURL } from '../utils/basePath';
 
 // Configure axios to include credentials (cookies) with all requests
 axios.defaults.withCredentials = true;

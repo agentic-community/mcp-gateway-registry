@@ -452,6 +452,27 @@ def mask_token(token: str) -> str:
     return "***MASKED***"
 
 
+def _is_redirect_within_cookie_domain(
+    url: str,
+    cookie_domain: str,
+) -> bool:
+    """Check if an absolute redirect URL's host is within SESSION_COOKIE_DOMAIN.
+
+    SESSION_COOKIE_DOMAIN (e.g. ".example.com") defines the trust boundary —
+    the apex host and any subdomain sharing the session cookie are safe
+    redirect targets. The leading dot is conventional but not required.
+    """
+    if not cookie_domain:
+        return False
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    # urlparse().hostname is lowercased by Python; normalize apex to match.
+    hostname = parsed.hostname or ""
+    apex = cookie_domain.lstrip(".").lower()
+    return hostname == apex or hostname.endswith(f".{apex}")
+
+
 def _is_safe_redirect_url(
     url: str,
     allowed_hosts: set[str] | None = None,
@@ -2678,7 +2699,10 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
         # The callback_uri MUST match exactly between authorization and token exchange
         auth_server_external_url = os.environ.get("AUTH_SERVER_EXTERNAL_URL", "").rstrip("/")
         if auth_server_external_url:
-            auth_server_url = f"{auth_server_external_url}{ROOT_PATH}"
+            # AUTH_SERVER_EXTERNAL_URL is the complete public base URL and
+            # already includes any path prefix (e.g. "/auth-server" in path
+            # routing mode); ROOT_PATH is only used in the host-fallback branch.
+            auth_server_url = auth_server_external_url
             scheme = "https" if auth_server_external_url.startswith("https") else "http"
             logger.info(f"OAuth2 login - using AUTH_SERVER_EXTERNAL_URL: {auth_server_url}")
         else:
@@ -3034,21 +3058,13 @@ async def oauth2_callback(
         redirect_url = temp_session_data.get(
             "redirect_uri", OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/")
         )
-        # Validate redirect_url to prevent open redirect attacks.
-        # Allow relative URLs and absolute URLs within the deployment's cookie domain.
-        # SESSION_COOKIE_DOMAIN (e.g., ".example.com") defines the trust boundary —
-        # any service sharing the session cookie is a safe redirect target.
+        # Validate redirect_url to prevent open redirect attacks. Relative URLs
+        # are always safe; absolute URLs must be within SESSION_COOKIE_DOMAIN.
         cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
         redirect_parsed = urlparse(redirect_url)
-        redirect_is_safe = False
-        if not redirect_parsed.scheme and not redirect_parsed.netloc:
-            # Relative URL — always safe
-            redirect_is_safe = True
-        elif redirect_parsed.scheme in ("http", "https"):
-            redirect_hostname = redirect_parsed.hostname or ""
-            if cookie_domain and redirect_hostname.endswith(cookie_domain):
-                # Redirect is within the deployment's cookie domain
-                redirect_is_safe = True
+        redirect_is_safe = (
+            not redirect_parsed.scheme and not redirect_parsed.netloc
+        ) or _is_redirect_within_cookie_domain(redirect_url, cookie_domain)
         if not redirect_is_safe:
             logger.warning(f"Blocked unsafe redirect URL: {redirect_url}, falling back to /")
             redirect_url = "/"
@@ -3092,8 +3108,9 @@ async def oauth2_callback(
 
         response.set_cookie(**cookie_params)
 
-        # Clear temporary OAuth2 session
-        response.delete_cookie("oauth2_temp_session")
+        # Clear temporary OAuth2 session. The cookie was set without a
+        # domain attribute, so delete must also omit domain to match.
+        response.delete_cookie("oauth2_temp_session", path="/")
 
         logger.info(
             f"Successfully authenticated user {hash_username(mapped_user['username'])} via {provider}"
@@ -3201,6 +3218,21 @@ async def oauth2_logout(
     try:
         if provider not in OAUTH2_CONFIG.get("providers", {}):
             raise HTTPException(status_code=404, detail=f"Provider {provider} not found")
+
+        # Reject absolute redirect_uri that escapes the
+        # deployment's cookie domain before forwarding it to the IdP. The IdP's
+        # post_logout_redirect_uri allow-list is the authoritative check, but
+        # this guards against misconfigured IdP clients and makes the intent
+        # explicit at our boundary.
+        if redirect_uri:
+            parsed = urlparse(redirect_uri)
+            if parsed.scheme or parsed.netloc:
+                cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
+                if not _is_redirect_within_cookie_domain(redirect_uri, cookie_domain):
+                    logger.warning(
+                        f"Blocked unsafe logout redirect_uri for {provider}: {redirect_uri}"
+                    )
+                    redirect_uri = None
 
         provider_config = OAUTH2_CONFIG["providers"][provider]
         logout_url = provider_config.get("logout_url")

@@ -198,9 +198,17 @@ async def logout_handler(
             except (SignatureExpired, BadSignature, Exception) as e:
                 logger.debug(f"Could not decode session for logout: {e}")
 
-        # Clear local session cookie
+        # Clear local session cookie. Must match (name, domain, path) of the
+        # Set-Cookie used by auth_server to create the cookie, or the browser
+        # will ignore the deletion. secure=False is intentional: an expired
+        # empty cookie has no secrets, and secure=True on an HTTP request
+        # would cause the browser to reject the Set-Cookie header entirely.
         response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-        response.delete_cookie(settings.session_cookie_name)
+        response.delete_cookie(
+            settings.session_cookie_name,
+            path="/",
+            domain=settings.session_cookie_domain,
+        )
 
         # If user was logged in via OAuth2, redirect to provider logout
         if provider:
@@ -272,7 +280,11 @@ async def logout_handler(
 
             logger.debug(f"Redirecting to {provider} logout")
             response = RedirectResponse(url=logout_url, status_code=status.HTTP_303_SEE_OTHER)
-            response.delete_cookie(settings.session_cookie_name)
+            response.delete_cookie(
+                settings.session_cookie_name,
+                path="/",
+                domain=settings.session_cookie_domain,
+            )
 
         logger.info("User logged out.")
         return response
@@ -281,7 +293,11 @@ async def logout_handler(
         logger.error(f"Error during logout: {e}")
         # Fallback to simple logout
         response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-        response.delete_cookie(settings.session_cookie_name)
+        response.delete_cookie(
+            settings.session_cookie_name,
+            path="/",
+            domain=settings.session_cookie_domain,
+        )
         return response
 
 
