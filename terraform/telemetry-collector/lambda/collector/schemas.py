@@ -2,11 +2,23 @@
 Pydantic validation schemas for telemetry events.
 
 Matches schemas from registry/core/telemetry.py (issue #558 client implementation).
+
+NOTE on embeddings_backend_kind: keep the regex allowlist here in sync with
+_BACKEND_KIND_PATTERNS in registry/core/telemetry.py. The return values of
+_derive_embeddings_backend_kind() must be a subset of the values this regex
+accepts.
 """
 
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Allowlist of values for embeddings_backend_kind across both StartupEvent
+# and HeartbeatEvent. Kept as a module-level constant so both models can
+# reference the same regex.
+_EMBEDDINGS_BACKEND_KIND_PATTERN = (
+    r"^(sentence-transformers|bedrock|openai|azure-openai|voyage|cohere|other|unknown)$"
+)
 
 
 class StartupEvent(BaseModel):
@@ -59,6 +71,17 @@ class StartupEvent(BaseModel):
     )
     search_queries_24h: int = Field(default=0, ge=0, description="Search queries in last 24 hours")
     search_queries_1h: int = Field(default=0, ge=0, description="Search queries in last hour")
+    # Embeddings telemetry (added in schema v2, optional for backward compat)
+    embeddings_provider: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Embeddings code path (sentence-transformers or litellm). Added in schema v2.",
+    )
+    embeddings_backend_kind: str | None = Field(
+        default=None,
+        pattern=_EMBEDDINGS_BACKEND_KIND_PATTERN,
+        description=("Derived coarse-grained embeddings backend category. Added in schema v2."),
+    )
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")
@@ -76,7 +99,7 @@ class StartupEvent(BaseModel):
             "example": {
                 "event": "startup",
                 "registry_id": "c546a650-8af9-4721-9efb-7df221b2a0d9",
-                "v": "1.0.16",
+                "v": "1.0.22",
                 "py": "3.12",
                 "os": "linux",
                 "arch": "x86_64",
@@ -87,6 +110,8 @@ class StartupEvent(BaseModel):
                 "storage": "documentdb",
                 "auth": "keycloak",
                 "federation": True,
+                "embeddings_provider": "litellm",
+                "embeddings_backend_kind": "bedrock",
                 "search_queries_total": 150,
                 "search_queries_24h": 12,
                 "search_queries_1h": 3,
@@ -129,7 +154,17 @@ class HeartbeatEvent(BaseModel):
         pattern="^(faiss|documentdb)$",
         description="Search backend type",
     )
-    embeddings_provider: str = Field(..., min_length=1, max_length=100)
+    # Schema v1 required this field; schema v2+ keeps it for backward compat
+    # but relaxes to optional so future clients can omit it symmetrically
+    # with StartupEvent. In practice v1.0.22+ always sets it.
+    embeddings_provider: str | None = Field(
+        default=None, max_length=100, description="Embeddings code path"
+    )
+    embeddings_backend_kind: str | None = Field(
+        default=None,
+        pattern=_EMBEDDINGS_BACKEND_KIND_PATTERN,
+        description=("Derived coarse-grained embeddings backend category. Added in schema v2."),
+    )
     uptime_hours: int = Field(..., ge=0, description="Instance uptime in hours")
     search_queries_total: int = Field(
         default=0, ge=0, description="Lifetime semantic search query count"
@@ -153,7 +188,7 @@ class HeartbeatEvent(BaseModel):
             "example": {
                 "event": "heartbeat",
                 "registry_id": "c546a650-8af9-4721-9efb-7df221b2a0d9",
-                "v": "1.0.16",
+                "v": "1.0.22",
                 "cloud": "aws",
                 "compute": "ecs",
                 "servers_count": 15,
@@ -162,6 +197,7 @@ class HeartbeatEvent(BaseModel):
                 "peers_count": 2,
                 "search_backend": "documentdb",
                 "embeddings_provider": "sentence-transformers",
+                "embeddings_backend_kind": "sentence-transformers",
                 "uptime_hours": 48,
                 "search_queries_total": 150,
                 "search_queries_24h": 12,

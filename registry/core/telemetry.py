@@ -105,6 +105,74 @@ def _detect_compute_platform() -> str:
     return "unknown"
 
 
+# Ordered prefix-match table for deriving embeddings_backend_kind from the
+# configured EMBEDDINGS_MODEL_NAME setting. Order matters: more-specific
+# prefixes must come first. Matching is first-hit-wins, case-insensitive,
+# against the left-trimmed, lowercased model name.
+#
+# NOTE: keep the set of result kinds in sync with the regex allowlist in
+# terraform/telemetry-collector/lambda/collector/schemas.py
+# (StartupEvent.embeddings_backend_kind and HeartbeatEvent.embeddings_backend_kind).
+_BACKEND_KIND_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("bedrock/", "bedrock"),
+    ("amazon.", "bedrock"),
+    ("amazon-", "bedrock"),
+    ("openai/", "openai"),
+    ("azure/", "azure-openai"),
+    ("text-embedding-", "openai"),
+    ("voyage-", "voyage"),
+    ("voyage/", "voyage"),
+    ("embed-english-", "cohere"),
+    ("embed-multilingual-", "cohere"),
+    ("cohere/", "cohere"),
+)
+
+
+def _derive_embeddings_backend_kind(
+    provider: str,
+    model_name: str | None,
+) -> str:
+    """Return a coarse-grained embeddings backend category for telemetry rollups.
+
+    The raw model_name is consulted only locally for this derivation and is
+    NEVER included in the returned telemetry payload. See docs/TELEMETRY.md
+    for the privacy callout.
+
+    Args:
+        provider: Value of settings.embeddings_provider
+            ("sentence-transformers" or "litellm").
+        model_name: Value of settings.embeddings_model_name (may be None/empty).
+
+    Returns:
+        One of: "sentence-transformers", "bedrock", "openai", "azure-openai",
+        "voyage", "cohere", "other", "unknown".
+    """
+    if provider == "sentence-transformers":
+        return "sentence-transformers"
+
+    if not model_name:
+        return "unknown"
+
+    normalized = model_name.strip().lower()
+    for prefix, kind in _BACKEND_KIND_PATTERNS:
+        if normalized.startswith(prefix):
+            return kind
+
+    if provider == "litellm":
+        # Log once per build so operators who see a rising 'other' bucket in
+        # the usage report can turn on DEBUG logging and identify which model
+        # names are unmapped. The model name itself is NOT logged (we keep
+        # the operator-configured string local to the process).
+        logger.debug(
+            "[telemetry] Embeddings model did not match any known backend-kind "
+            "pattern; reporting as 'other'. Extend _BACKEND_KIND_PATTERNS if "
+            "this is a recognized vendor."
+        )
+        return "other"
+
+    return "unknown"
+
+
 def _compute_signature(body: bytes) -> str:
     """Compute HMAC-SHA256 signature for a telemetry request body.
 
@@ -306,10 +374,14 @@ async def _build_startup_payload() -> dict:
 
     counts = await get_search_counts()
     registry_id = await _get_registry_id()
+    embeddings_backend_kind = _derive_embeddings_backend_kind(
+        settings.embeddings_provider,
+        settings.embeddings_model_name,
+    )
 
     return {
         "event": "startup",
-        "schema_version": "1",
+        "schema_version": "2",
         "registry_id": registry_id,
         "v": __version__,
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
@@ -322,6 +394,8 @@ async def _build_startup_payload() -> dict:
         "storage": settings.storage_backend,  # file, documentdb, mongodb-ce
         "auth": settings.auth_provider,  # cognito, keycloak, entra, github, google
         "federation": settings.federation_static_token_auth_enabled,
+        "embeddings_provider": settings.embeddings_provider,
+        "embeddings_backend_kind": embeddings_backend_kind,
         "search_queries_total": counts["total"],
         "search_queries_24h": counts["last_24h"],
         "search_queries_1h": counts["last_1h"],
@@ -388,10 +462,14 @@ async def _build_heartbeat_payload() -> dict:
 
     counts = await get_search_counts()
     registry_id = await _get_registry_id()
+    embeddings_backend_kind = _derive_embeddings_backend_kind(
+        settings.embeddings_provider,
+        settings.embeddings_model_name,
+    )
 
     return {
         "event": "heartbeat",
-        "schema_version": "1",
+        "schema_version": "2",
         "registry_id": registry_id,
         "v": __version__,
         "cloud": _detect_cloud_provider(),
@@ -402,6 +480,7 @@ async def _build_heartbeat_payload() -> dict:
         "peers_count": peers_count,
         "search_backend": search_backend,
         "embeddings_provider": settings.embeddings_provider,
+        "embeddings_backend_kind": embeddings_backend_kind,
         "uptime_hours": uptime_hours,
         "search_queries_total": counts["total"],
         "search_queries_24h": counts["last_24h"],

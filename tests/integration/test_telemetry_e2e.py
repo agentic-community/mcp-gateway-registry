@@ -37,6 +37,7 @@ def _mock_settings(
     telemetry_debug: bool = False,
     telemetry_endpoint: str = "https://telemetry.mcpgateway.io/v1/collect",
     embeddings_provider: str = "sentence-transformers",
+    embeddings_model_name: str = "all-MiniLM-L6-v2",
     deployment_mode: str = "with-gateway",
     registry_mode: str = "full",
     auth_provider: str = "none",
@@ -51,6 +52,7 @@ def _mock_settings(
     mock.telemetry_debug = telemetry_debug
     mock.telemetry_endpoint = telemetry_endpoint
     mock.embeddings_provider = embeddings_provider
+    mock.embeddings_model_name = embeddings_model_name
     mock.deployment_mode.value = deployment_mode
     mock.registry_mode.value = registry_mode
     mock.auth_provider = auth_provider

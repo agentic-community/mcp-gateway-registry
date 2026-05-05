@@ -14,6 +14,7 @@ from registry.core.telemetry import (
     _acquire_telemetry_lock,
     _build_heartbeat_payload,
     _build_startup_payload,
+    _derive_embeddings_backend_kind,
     _get_heartbeat_interval_minutes,
     _get_heartbeat_lock_interval_seconds,
     _get_or_create_instance_id,
@@ -230,6 +231,8 @@ class TestPayloadBuilding:
             mock_settings.storage_backend = "file"
             mock_settings.auth_provider = "cognito"
             mock_settings.federation_static_token_auth_enabled = False
+            mock_settings.embeddings_provider = "sentence-transformers"
+            mock_settings.embeddings_model_name = "all-MiniLM-L6-v2"
 
             payload = await _build_startup_payload()
             payload_str = json.dumps(payload)
@@ -764,3 +767,213 @@ class TestConstants:
             mock_settings.telemetry_heartbeat_interval_minutes = 5
             assert _get_heartbeat_interval_minutes() == 5
             assert _get_heartbeat_lock_interval_seconds() == 300
+
+
+class TestDeriveEmbeddingsBackendKind:
+    """Tests for _derive_embeddings_backend_kind() (issue #934)."""
+
+    # sentence-transformers always wins regardless of model_name
+    @pytest.mark.parametrize(
+        "model_name",
+        ["all-MiniLM-L6-v2", "BAAI/bge-large-en-v1.5", "", None],
+    )
+    def test_sentence_transformers_provider(self, model_name):
+        assert (
+            _derive_embeddings_backend_kind("sentence-transformers", model_name)
+            == "sentence-transformers"
+        )
+
+    # Known prefixes map to the right backend kind
+    @pytest.mark.parametrize(
+        "model_name,expected",
+        [
+            # Bedrock
+            ("bedrock/amazon.titan-embed-text-v2:0", "bedrock"),
+            ("amazon.titan-embed-text-v2:0", "bedrock"),
+            ("amazon-titan-v1", "bedrock"),
+            # OpenAI
+            ("openai/text-embedding-3-small", "openai"),
+            ("text-embedding-3-large", "openai"),
+            ("text-embedding-ada-002", "openai"),
+            # Azure OpenAI
+            ("azure/my-deployment-name", "azure-openai"),
+            # Voyage
+            ("voyage-large-2", "voyage"),
+            ("voyage/voyage-3", "voyage"),
+            # Cohere
+            ("embed-english-v3.0", "cohere"),
+            ("embed-multilingual-v3.0", "cohere"),
+            ("cohere/embed-v3", "cohere"),
+        ],
+    )
+    def test_known_prefixes_with_litellm(self, model_name, expected):
+        assert _derive_embeddings_backend_kind("litellm", model_name) == expected
+
+    def test_case_insensitive_matching(self):
+        assert _derive_embeddings_backend_kind("litellm", "BEDROCK/AMAZON.TITAN-V1") == "bedrock"
+
+    def test_whitespace_trimmed(self):
+        assert (
+            _derive_embeddings_backend_kind("litellm", "  bedrock/amazon.titan-v1  ") == "bedrock"
+        )
+
+    def test_litellm_unrecognized_model_falls_back_to_other(self):
+        assert _derive_embeddings_backend_kind("litellm", "my-custom-proxy/model-x") == "other"
+
+    def test_litellm_empty_model_is_unknown(self):
+        assert _derive_embeddings_backend_kind("litellm", "") == "unknown"
+
+    def test_litellm_none_model_is_unknown(self):
+        assert _derive_embeddings_backend_kind("litellm", None) == "unknown"
+
+    def test_unknown_provider_with_known_model_prefix_wins(self):
+        # Model prefix wins even when provider is unrecognized
+        assert _derive_embeddings_backend_kind("weird", "amazon.titan-v1") == "bedrock"
+
+    def test_unknown_provider_and_unknown_model_is_unknown(self):
+        assert _derive_embeddings_backend_kind("weird", "foo-bar") == "unknown"
+
+    def test_return_value_always_in_allowlist(self):
+        """The returned string must always be one of the 8 valid values."""
+        allowlist = {
+            "sentence-transformers",
+            "bedrock",
+            "openai",
+            "azure-openai",
+            "voyage",
+            "cohere",
+            "other",
+            "unknown",
+        }
+        # Spot check a few representative inputs
+        for provider, model in [
+            ("sentence-transformers", "all-MiniLM-L6-v2"),
+            ("litellm", "bedrock/amazon.titan-v1"),
+            ("litellm", ""),
+            ("litellm", "unknown-vendor/model"),
+            ("weird", "foo"),
+        ]:
+            assert _derive_embeddings_backend_kind(provider, model) in allowlist
+
+
+class TestEmbeddingsTelemetryFields:
+    """Tests for the new embeddings fields in telemetry payloads (issue #934)."""
+
+    @pytest.mark.asyncio
+    async def test_startup_includes_embeddings_fields(self):
+        """Startup payload must include embeddings_provider and embeddings_backend_kind."""
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.stats_repository.get_search_counts",
+                new_callable=AsyncMock,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
+            ),
+            patch(
+                "registry.core.telemetry._get_registry_id",
+                new_callable=AsyncMock,
+                return_value="test-registry-id",
+            ),
+        ):
+            mock_settings.deployment_mode.value = "with-gateway"
+            mock_settings.registry_mode.value = "full"
+            mock_settings.storage_backend = "mongodb-ce"
+            mock_settings.auth_provider = "keycloak"
+            mock_settings.federation_static_token_auth_enabled = False
+            mock_settings.embeddings_provider = "litellm"
+            mock_settings.embeddings_model_name = "bedrock/amazon.titan-embed-text-v2:0"
+
+            payload = await _build_startup_payload()
+
+            assert payload["embeddings_provider"] == "litellm"
+            assert payload["embeddings_backend_kind"] == "bedrock"
+            assert payload["schema_version"] == "2"
+
+    @pytest.mark.asyncio
+    async def test_startup_payload_omits_raw_model_name_and_dimensions(self):
+        """The raw model name and dimensions must NEVER appear in the payload."""
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.stats_repository.get_search_counts",
+                new_callable=AsyncMock,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
+            ),
+            patch(
+                "registry.core.telemetry._get_registry_id",
+                new_callable=AsyncMock,
+                return_value="test-registry-id",
+            ),
+        ):
+            mock_settings.deployment_mode.value = "with-gateway"
+            mock_settings.registry_mode.value = "full"
+            mock_settings.storage_backend = "file"
+            mock_settings.auth_provider = "keycloak"
+            mock_settings.federation_static_token_auth_enabled = False
+            mock_settings.embeddings_provider = "litellm"
+            mock_settings.embeddings_model_name = "bedrock/amazon.titan-embed-text-v2:0"
+            mock_settings.embeddings_model_dimensions = 1024
+
+            payload = await _build_startup_payload()
+
+            # Privacy assertions: these fields must NEVER be sent
+            assert "embeddings_model_name" not in payload
+            assert "embeddings_model_dimensions" not in payload
+            assert "embeddings_api_key" not in payload
+            assert "embeddings_secret_key" not in payload
+            assert "embeddings_api_base" not in payload
+            assert "embeddings_aws_region" not in payload
+
+            # And the raw model name must not appear anywhere in the serialized JSON
+            payload_json = json.dumps(payload)
+            assert "titan-embed-text-v2" not in payload_json
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_includes_backend_kind_and_keeps_provider(self):
+        """Heartbeat must keep embeddings_provider AND include embeddings_backend_kind."""
+        with (
+            patch(
+                "registry.api.system_routes.get_server_start_time",
+                return_value=datetime.now(UTC),
+            ),
+            patch("registry.repositories.factory.get_server_repository") as mock_server_repo,
+            patch("registry.repositories.factory.get_agent_repository") as mock_agent_repo,
+            patch("registry.repositories.factory.get_skill_repository") as mock_skill_repo,
+            patch("registry.repositories.factory.get_peer_federation_repository") as mock_peer_repo,
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.stats_repository.get_search_counts",
+                new_callable=AsyncMock,
+                return_value={"total": 0, "last_24h": 0, "last_1h": 0},
+            ),
+            patch(
+                "registry.core.telemetry._get_registry_id",
+                new_callable=AsyncMock,
+                return_value="test-registry-id",
+            ),
+        ):
+            mock_settings.storage_backend = "documentdb"
+            mock_settings.embeddings_provider = "sentence-transformers"
+            mock_settings.embeddings_model_name = "all-MiniLM-L6-v2"
+            mock_settings.embeddings_model_dimensions = 384
+
+            # Mock repository methods
+            for repo_mock in (mock_server_repo, mock_agent_repo, mock_skill_repo):
+                instance = MagicMock()
+                instance.list_all = AsyncMock(return_value=[])
+                repo_mock.return_value = instance
+            peer_instance = MagicMock()
+            peer_instance.list_peers = AsyncMock(return_value=[])
+            mock_peer_repo.return_value = peer_instance
+
+            payload = await _build_heartbeat_payload()
+
+            assert payload["embeddings_provider"] == "sentence-transformers"
+            assert payload["embeddings_backend_kind"] == "sentence-transformers"
+            assert payload["schema_version"] == "2"
+
+            # Privacy assertions
+            assert "embeddings_model_name" not in payload
+            assert "embeddings_model_dimensions" not in payload
+            payload_json = json.dumps(payload)
+            assert "MiniLM" not in payload_json

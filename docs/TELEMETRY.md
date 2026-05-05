@@ -27,6 +27,8 @@ Sent once at startup:
 | `search_queries_total` | `150` | Lifetime semantic search query count |
 | `search_queries_24h` | `12` | Search queries in the last 24 hours |
 | `search_queries_1h` | `3` | Search queries in the last hour |
+| `embeddings_provider` | `litellm` | Embeddings code path: `sentence-transformers` or `litellm` (added in schema v2) |
+| `embeddings_backend_kind` | `bedrock` | Derived coarse backend category: `sentence-transformers`, `bedrock`, `openai`, `azure-openai`, `voyage`, `cohere`, `other`, or `unknown` (added in schema v2) |
 | `ts` | `2026-03-18T00:00:00Z` | ISO 8601 timestamp |
 
 ### Tier 2: Daily Heartbeat (Opt-Out, Default ON)
@@ -42,7 +44,8 @@ Sent at a configurable interval (default: every 24 hours). Includes all Tier 1 f
 | `skills_count` | `23` | Number of registered skills |
 | `peers_count` | `2` | Number of federation peers |
 | `search_backend` | `documentdb` | Search backend (faiss or documentdb) |
-| `embeddings_provider` | `sentence-transformers` | Embeddings provider |
+| `embeddings_provider` | `sentence-transformers` | Embeddings code path: `sentence-transformers` or `litellm` |
+| `embeddings_backend_kind` | `bedrock` | Derived coarse backend category: `sentence-transformers`, `bedrock`, `openai`, `azure-openai`, `voyage`, `cohere`, `other`, or `unknown` (added in schema v2) |
 | `uptime_hours` | `48` | Hours since server started |
 
 ## Request Signing (HMAC)
@@ -53,7 +56,7 @@ This is not a secret-based authentication mechanism -- the signing key is embedd
 
 ### Example HTTP Request
 
-A startup event request looks like this:
+A startup event request (schema v2) looks like this:
 
 ```http
 POST /v1/collect HTTP/1.1
@@ -61,10 +64,10 @@ Host: m3ijrhd020.execute-api.us-east-1.amazonaws.com
 Content-Type: application/json
 X-Telemetry-Signature: 8a3f2b...c9d1e0
 
-{"arch":"x86_64","auth":"keycloak","cloud":"aws","compute":"ecs","event":"startup","federation":true,"mode":"with-gateway","os":"linux","py":"3.12","registry_id":"c546a650-8af9-4721-9efb-7df221b2a0d9","registry_mode":"full","schema_version":"1","search_queries_1h":3,"search_queries_24h":12,"search_queries_total":150,"storage":"documentdb","ts":"2026-03-18T00:00:00+00:00","v":"1.0.16"}
+{"arch":"x86_64","auth":"keycloak","cloud":"aws","compute":"ecs","embeddings_backend_kind":"bedrock","embeddings_provider":"litellm","event":"startup","federation":true,"mode":"with-gateway","os":"linux","py":"3.12","registry_id":"c546a650-8af9-4721-9efb-7df221b2a0d9","registry_mode":"full","schema_version":"2","search_queries_1h":3,"search_queries_24h":12,"search_queries_total":150,"storage":"documentdb","ts":"2026-03-18T00:00:00+00:00","v":"1.0.22"}
 ```
 
-A heartbeat event request:
+A heartbeat event request (schema v2):
 
 ```http
 POST /v1/collect HTTP/1.1
@@ -72,8 +75,10 @@ Host: m3ijrhd020.execute-api.us-east-1.amazonaws.com
 Content-Type: application/json
 X-Telemetry-Signature: 5b7e1a...d4f2c3
 
-{"agents_count":8,"cloud":"aws","compute":"ecs","embeddings_provider":"sentence-transformers","event":"heartbeat","peers_count":2,"registry_id":"c546a650-8af9-4721-9efb-7df221b2a0d9","schema_version":"1","search_backend":"documentdb","search_queries_1h":3,"search_queries_24h":12,"search_queries_total":150,"servers_count":15,"skills_count":23,"ts":"2026-03-18T12:00:00+00:00","uptime_hours":48,"v":"1.0.16"}
+{"agents_count":8,"cloud":"aws","compute":"ecs","embeddings_backend_kind":"sentence-transformers","embeddings_provider":"sentence-transformers","event":"heartbeat","peers_count":2,"registry_id":"c546a650-8af9-4721-9efb-7df221b2a0d9","schema_version":"2","search_backend":"documentdb","search_queries_1h":3,"search_queries_24h":12,"search_queries_total":150,"servers_count":15,"skills_count":23,"ts":"2026-03-18T12:00:00+00:00","uptime_hours":48,"v":"1.0.22"}
 ```
+
+Registries running versions earlier than v1.0.22 emit `schema_version":"1"` events without `embeddings_backend_kind`. The collector accepts both versions.
 
 Notes:
 - JSON body keys are sorted alphabetically (`sort_keys=True`) and compact (`separators=(",",":")`) for deterministic HMAC computation
@@ -99,11 +104,34 @@ API endpoints (require admin auth):
 
 We never collect any personally identifiable information (PII):
 
-- ❌ IP addresses, MAC addresses, hostnames
-- ❌ Server names, URLs, file paths
-- ❌ User data, credentials, tokens
-- ❌ Query content, agent card content, skill code
-- ❌ Any data that could identify a person or organization
+- IP addresses, MAC addresses, hostnames
+- Server names, URLs, file paths
+- User data, credentials, tokens
+- Query content, agent card content, skill code
+- Any data that could identify a person or organization
+
+### Embeddings configuration -- what is NOT sent
+
+The registry reads the embeddings settings locally to derive the coarse `embeddings_backend_kind` category, but these operator-configured values are **never** included in any telemetry payload:
+
+- `EMBEDDINGS_MODEL_NAME` (e.g. `amazon.titan-embed-text-v2:0`, `text-embedding-3-small`, or any custom/deployment-specific name)
+- `EMBEDDINGS_MODEL_DIMENSIONS` (the configured vector size)
+- `EMBEDDINGS_API_KEY`, `EMBEDDINGS_SECRET_KEY` (credentials)
+- `EMBEDDINGS_API_BASE` (endpoint URL)
+- `EMBEDDINGS_AWS_REGION` (infrastructure region)
+
+Only the derived `embeddings_backend_kind` (one of a fixed 8-value allowlist) and the existing `embeddings_provider` code-path string leave the registry process.
+
+## Schema Versioning
+
+Telemetry events include a `schema_version` field. We bump it whenever fields are added, removed, or have their semantics changed. Additive optional fields still bump from N to N+1 so downstream consumers can tell at a glance which events carry the newer data.
+
+| Version | Introduced in | Changes |
+|---------|---------------|---------|
+| `"1"` | Initial release | Original startup + heartbeat schema |
+| `"2"` | v1.0.22 | Added `embeddings_provider` to startup; added `embeddings_backend_kind` to both startup and heartbeat |
+
+Older registry versions continue to send schema v1 events; the collector accepts both versions side-by-side.
 
 ## Startup Banner
 

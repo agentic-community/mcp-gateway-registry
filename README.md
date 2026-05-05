@@ -738,9 +738,11 @@ echo 'ASOR_ACCESS_TOKEN=your_token' >> .env
 
 The registry collects **anonymous, non-sensitive** usage telemetry to help us understand adoption patterns and improve the product. Both tiers are **opt-out** and **on by default**.
 
-**What is sent (Tier 1 -- startup ping):** Registry version, Python version, OS, CPU architecture, cloud provider, storage backend, auth provider, and deployment mode. No IP addresses, hostnames, file paths, user data, or any PII.
+**What is sent (Tier 1 -- startup ping):** Registry version, Python version, OS, CPU architecture, cloud provider, storage backend, auth provider, deployment mode, embeddings provider (`sentence-transformers` or `litellm`), and embeddings backend kind (a derived coarse category: `sentence-transformers`, `bedrock`, `openai`, `azure-openai`, `voyage`, `cohere`, `other`, or `unknown`). No IP addresses, hostnames, file paths, user data, or any PII.
 
-**Also sent by default (Tier 2 -- daily heartbeat):** Aggregate counts (number of servers, agents, skills, peers), search backend, embeddings provider, and uptime. Same privacy guarantees as Tier 1. Disable heartbeat only: `MCP_TELEMETRY_OPT_OUT=1`.
+**Also sent by default (Tier 2 -- daily heartbeat):** Aggregate counts (number of servers, agents, skills, peers), search backend, embeddings provider, embeddings backend kind, and uptime. Same privacy guarantees as Tier 1. Disable heartbeat only: `MCP_TELEMETRY_OPT_OUT=1`.
+
+**What is never sent:** The raw `EMBEDDINGS_MODEL_NAME`, `EMBEDDINGS_MODEL_DIMENSIONS`, credentials (API keys, AWS secrets), endpoints (`EMBEDDINGS_API_BASE`), and regions (`EMBEDDINGS_AWS_REGION`). Only the derived backend-kind category is reported. See [docs/TELEMETRY.md](docs/TELEMETRY.md) for the complete schema and privacy guarantees.
 
 > **Behavior change (post v1.0.18):** The daily heartbeat was previously opt-in (`MCP_TELEMETRY_OPT_IN=1`). It is now opt-out and sent by default. Since the heartbeat contains only aggregate counts (no PII), this aligns it with the startup ping behavior.
 
