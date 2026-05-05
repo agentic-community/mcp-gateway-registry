@@ -120,9 +120,7 @@ class DocumentDBVirtualServerRepository(VirtualServerRepositoryBase):
                 configs.append(_document_to_config(doc))
             except Exception as e:
                 doc_id = doc.get("_id", "unknown")
-                logger.error(
-                    f"Failed to parse virtual server document '{doc_id}': {e}"
-                )
+                logger.error(f"Failed to parse virtual server document '{doc_id}': {e}")
         return configs
 
     async def list_enabled(self) -> list[VirtualServerConfig]:
@@ -135,9 +133,7 @@ class DocumentDBVirtualServerRepository(VirtualServerRepositoryBase):
                 configs.append(_document_to_config(doc))
             except Exception as e:
                 doc_id = doc.get("_id", "unknown")
-                logger.error(
-                    f"Failed to parse virtual server document '{doc_id}': {e}"
-                )
+                logger.error(f"Failed to parse virtual server document '{doc_id}': {e}")
         return configs
 
     async def create(

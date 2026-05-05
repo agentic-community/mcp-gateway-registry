@@ -441,6 +441,33 @@ class TestVirtualServerServiceCRUD:
             await service.update_virtual_server("/virtual/nonexistent", request)
 
     @pytest.mark.asyncio
+    async def test_update_virtual_server_coerces_null_description(self, service, mock_vs_repo):
+        """Description=None from the request must be persisted as "" (PR #932 fix).
+
+        The frontend previously sent description=null when the field was
+        cleared. Without this coercion, MongoDB stored a literal null and
+        subsequent reads failed Pydantic validation, silently dropping the
+        document from listings.
+        """
+        existing = VirtualServerConfig(
+            path="/virtual/dev",
+            server_name="Dev",
+            description="Old description",
+        )
+        mock_vs_repo.get.return_value = existing
+        mock_vs_repo.update.return_value = existing
+
+        request = UpdateVirtualServerRequest(description=None)
+
+        with patch.object(service, "_trigger_nginx_reload", new_callable=AsyncMock):
+            await service.update_virtual_server("/virtual/dev", request)
+
+        # Verify the update dict passed to the repo has "" not None
+        mock_vs_repo.update.assert_called_once()
+        _call_path, call_updates = mock_vs_repo.update.call_args.args
+        assert call_updates["description"] == ""
+
+    @pytest.mark.asyncio
     async def test_update_virtual_server_with_new_tool_mappings(
         self, service, mock_vs_repo, mock_server_repo
     ):

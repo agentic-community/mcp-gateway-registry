@@ -338,6 +338,28 @@ class TestVirtualServerConfig:
         assert restored.tags == ["dev"]
         assert restored.is_enabled is True
 
+    def test_null_description_coerced_to_empty_string(self):
+        """MongoDB docs with description=null must deserialize (PR #932 fix).
+
+        Older records persisted a literal null for description. The Pydantic
+        validator added in PR #932 coerces that to the empty string on read
+        so the repository does not silently drop the document.
+        """
+        config = VirtualServerConfig(
+            path="/virtual/legacy-null",
+            server_name="Legacy",
+            description=None,
+        )
+        assert config.description == ""
+
+    def test_missing_description_defaults_to_empty_string(self):
+        """Description field is optional with a default of empty string."""
+        config = VirtualServerConfig(
+            path="/virtual/no-description",
+            server_name="No Description",
+        )
+        assert config.description == ""
+
 
 class TestVirtualServerInfo:
     """Tests for VirtualServerInfo model."""
@@ -369,6 +391,15 @@ class TestVirtualServerInfo:
         assert info.tags == []
         assert info.created_by is None
         assert info.created_at is None
+
+    def test_null_description_coerced_to_empty_string(self):
+        """Symmetric defensive coercion on VirtualServerInfo (PR #932 fix)."""
+        info = VirtualServerInfo(
+            path="/virtual/legacy-null",
+            server_name="Legacy",
+            description=None,
+        )
+        assert info.description == ""
 
 
 class TestCreateVirtualServerRequest:
