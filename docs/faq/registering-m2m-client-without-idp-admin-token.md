@@ -62,6 +62,36 @@ Updated at:   ...
 
 `Provider: manual` means the record was created via this API (rather than synced from an IdP). Manual records are the only ones this API can modify or delete later.
 
+## Step 2b (optional): Register via the Registry UI
+
+In v1.0.22 and later, the same registration is available in the UI:
+
+1. Open **Settings > IAM > M2M Accounts**.
+2. Click **Register existing client** (the gray button next to the purple "Create M2M Account" button).
+3. Fill in `Client ID`, a human-readable `Client Name`, pick one or more groups, and (optionally) a description.
+4. Click **Register**. The new record appears in the list with a `manual` provider badge, and the **Registered by** column shows the admin username who submitted the form.
+
+Use the UI path when you want a point-and-click flow; use the CLI path from Step 2 for scripted automation or CI.
+
+The same list page also shows records synced from your IdP (`okta`, `auth0`, `keycloak`, `entra`). Edit and Delete are disabled on those rows because they are owned by the IdP sync layer; manage them in the IdP instead.
+
+## Least-privilege reminder
+
+Registered clients inherit the authorization of their assigned groups as soon as the next token is issued. Grant only the minimum groups necessary. In practice:
+
+- Start with a read-only group (for example `registry-readonly`) and add more only when the workload actually needs them.
+- Prefer narrow groups (for example `pipeline-operators`) over broad ones (for example `registry-admins`).
+- Removing a group via the UI Edit view or via `PATCH /api/iam/m2m-clients/{client_id}` takes effect on the next token issued for that client; existing tokens retain their groups until they expire.
+
+## Rotating or recovering the client secret
+
+The registry does not manage secrets for manually-registered clients. The client secret lives in your IdP (Keycloak / Entra / Okta / Auth0), where it was created. If you lose it:
+
+- Rotate the secret in your IdP's admin UI (Keycloak: **Clients > your client > Credentials > Regenerate secret**; Entra: **App registrations > your app > Certificates & secrets**).
+- Update your application with the new secret. No change is required in the registry: `client_id` did not change, so groups and authorization continue to work.
+
+If you want the registry to manage secrets end-to-end, use the legacy "Create M2M Account" path instead; that flow requires an IdP Admin API token.
+
 ## Step 3: Verify from your application
 
 1. Request an M2M access token from Keycloak using client credentials:

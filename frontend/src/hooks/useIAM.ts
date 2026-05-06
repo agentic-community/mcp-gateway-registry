@@ -181,3 +181,92 @@ export async function updateUserGroups(
   );
   return res.data;
 }
+
+// ─── M2M Client (idp_m2m_clients) Types ────────────────────────
+// Mirrors registry/schemas/idp_m2m_client.py IdPM2MClient / Create / Patch / ListResponse.
+
+export interface M2MClient {
+  client_id: string;
+  name: string;
+  description?: string | null;
+  groups: string[];
+  enabled: boolean;
+  provider: 'manual' | 'okta' | 'auth0' | 'keycloak' | 'entra' | string;
+  created_at: string;
+  updated_at: string;
+  idp_app_id?: string | null;
+  created_by?: string | null;
+}
+
+export interface RegisterM2MClientPayload {
+  client_id: string;
+  client_name: string;
+  groups: string[];
+  description?: string;
+}
+
+export interface PatchM2MClientPayload {
+  client_name?: string;
+  groups?: string[];
+  description?: string;
+  enabled?: boolean;
+}
+
+export interface M2MClientListResponse {
+  total: number;
+  limit: number;
+  skip: number;
+  items: M2MClient[];
+}
+
+// ─── Hook: useM2MClients ────────────────────────────────────────
+
+export function useM2MClients() {
+  const [clients, setClients] = useState<M2MClient[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchClients = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await axios.get<M2MClientListResponse>(
+        '/api/iam/m2m-clients',
+        { params: { limit: 1000 } }
+      );
+      setClients(res.data.items || []);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to load M2M clients');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchClients(); }, [fetchClients]);
+
+  return { clients, isLoading, error, refetch: fetchClients };
+}
+
+export async function registerM2MClient(
+  payload: RegisterM2MClientPayload
+): Promise<M2MClient> {
+  const res = await axios.post<M2MClient>('/api/iam/m2m-clients', payload);
+  return res.data;
+}
+
+export async function patchM2MClient(
+  clientId: string,
+  payload: PatchM2MClientPayload
+): Promise<M2MClient> {
+  const res = await axios.patch<M2MClient>(
+    `/api/iam/m2m-clients/${encodeURIComponent(clientId)}`,
+    payload
+  );
+  return res.data;
+}
+
+export async function deleteM2MClient(clientId: string): Promise<void> {
+  await axios.delete(
+    `/api/iam/m2m-clients/${encodeURIComponent(clientId)}`
+  );
+}
