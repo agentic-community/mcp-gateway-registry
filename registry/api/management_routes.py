@@ -152,22 +152,31 @@ async def management_list_users(
         cursor = collection.find({})
         m2m_docs = await cursor.to_list(length=None)
 
-        # Add M2M clients as users with special email pattern
+        # Deduplicate: skip MongoDB entries whose client_id already appears
+        # in the IdP results (e.g. Keycloak already lists M2M service accounts)
+        existing_usernames = {u.get("username", "").lower() for u in raw_users}
+
+        # Add only M2M clients that are NOT already in the IdP listing
+        added = 0
         for doc in m2m_docs:
             client_id = doc.get("client_id", "")
+            name = doc.get("name", client_id)
+            if name.lower() in existing_usernames or client_id.lower() in existing_usernames:
+                continue
             raw_users.append(
                 {
                     "id": client_id,
-                    "username": doc.get("name", client_id),
-                    "email": f"{client_id}@service-account.local",  # Special email pattern for M2M
+                    "username": name,
+                    "email": f"{client_id}@service-account.local",
                     "firstName": None,
                     "lastName": None,
                     "enabled": doc.get("enabled", True),
                     "groups": doc.get("groups", []),
                 }
             )
+            added += 1
 
-        logger.debug(f"[LIST_USERS] Added {len(m2m_docs)} M2M clients from MongoDB")
+        logger.debug(f"[LIST_USERS] Added {added} M2M clients from MongoDB (skipped {len(m2m_docs) - added} duplicates)")
     except Exception as e:
         logger.warning(f"Failed to retrieve M2M clients from MongoDB: {e}")
         # Don't fail the entire operation if MongoDB query fails
@@ -285,10 +294,37 @@ async def management_delete_user(
 
     iam = get_iam_manager()
 
+    idp_deleted = False
     try:
         await iam.delete_user(username=username)
+        idp_deleted = True
     except Exception as exc:
-        raise _translate_iam_error(exc) from exc
+        # Check if the error is "not found" — the user might only exist in MongoDB
+        if "not found" not in str(exc).lower():
+            raise _translate_iam_error(exc) from exc
+
+    # Also remove from MongoDB idp_m2m_clients (handles orphaned records
+    # that exist in MongoDB but not in the IdP)
+    mongo_deleted = False
+    try:
+        from registry.repositories.documentdb.client import get_documentdb_client
+
+        db = await get_documentdb_client()
+        collection = db["idp_m2m_clients"]
+        result = await collection.delete_one(
+            {"$or": [{"client_id": username}, {"name": username}]}
+        )
+        if result.deleted_count > 0:
+            mongo_deleted = True
+            logger.info(f"Removed M2M client '{username}' from MongoDB idp_m2m_clients")
+    except Exception as e:
+        logger.warning(f"Failed to remove M2M client from MongoDB: {e}")
+
+    if not idp_deleted and not mongo_deleted:
+        raise HTTPException(
+            status_code=400,
+            detail=f"User or M2M account '{username}' not found",
+        )
 
     return UserDeleteResponse(username=username)
 
