@@ -409,6 +409,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       sync_metadata: a.sync_metadata,
       ans_metadata: a.ans_metadata,
       registered_by: a.registered_by,
+      lifecycle_status: a.lifecycle_status,
     }));
   }, [agentsFromStats]);
 
