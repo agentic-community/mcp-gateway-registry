@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from registry.utils.iam_errors import IdPForbiddenError, IdPNotFoundError
+
 logger = logging.getLogger(__name__)
 
 
@@ -432,6 +434,7 @@ class TestManagementCreateGroup:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=True,
             )
 
     def test_create_group_success_entra(self, test_client_admin):
@@ -482,6 +485,7 @@ class TestManagementCreateGroup:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=True,
             )
 
     def test_create_group_requires_admin(self, test_client_regular):
@@ -610,6 +614,7 @@ class TestManagementCreateGroup:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=True,
             )
 
 
@@ -654,7 +659,9 @@ class TestManagementCreateGroupCreateInIdp:
             # IdP create_group should NOT have been called
             mock_iam.create_group.assert_not_called()
 
-            # MongoDB scope should still be created with group name as mapping
+            # MongoDB scope should still be created with group name as mapping.
+            # is_idp_managed=False is persisted so later PATCH/DELETE won't
+            # call the IdP (see issue #946).
             mock_import_group.assert_called_once_with(
                 scope_name="local-only-group",
                 description="Local only group",
@@ -662,6 +669,7 @@ class TestManagementCreateGroupCreateInIdp:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=False,
             )
 
     def test_create_group_with_create_in_idp_true(self, test_client_admin):
@@ -713,6 +721,7 @@ class TestManagementCreateGroupCreateInIdp:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=True,
             )
 
     def test_create_group_default_does_not_create_in_idp(self, test_client_admin):
@@ -742,7 +751,8 @@ class TestManagementCreateGroupCreateInIdp:
             # IdP create_group should NOT be called (default is False)
             mock_iam.create_group.assert_not_called()
 
-            # MongoDB scope should still be created with group name as mapping
+            # MongoDB scope should still be created with group name as mapping.
+            # Default create_in_idp=False => is_idp_managed=False persisted.
             mock_import_group.assert_called_once_with(
                 scope_name="default-group",
                 description="",
@@ -750,6 +760,7 @@ class TestManagementCreateGroupCreateInIdp:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=False,
             )
 
 
@@ -764,16 +775,38 @@ class TestManagementDeleteGroupLocalOnly:
     """Tests for deleting groups that only exist in MongoDB (local-only)."""
 
     def test_delete_local_only_group_succeeds(self, test_client_admin):
-        """Delete succeeds when group only exists in MongoDB (IdP returns not found)."""
+        """Delete succeeds when group only exists in MongoDB (IdP returns not found).
+
+        Two paths both lead to success:
+        - is_idp_managed=False persisted (issue #946): IdP call is skipped.
+        - is_idp_managed=True but IdP raises not-found: typed exception
+          fall-through in the route handler still lets MongoDB delete proceed.
+
+        This test covers the second path (legacy record, IdP raises not found).
+        """
         # Arrange
         client, mock_iam = test_client_admin
-        mock_iam.delete_group.side_effect = Exception("Group 'local-group' not found")
+        # Provider managers translate a 404 error to IdPNotFoundError; the
+        # route catches that typed exception and falls through.
+        mock_iam.delete_group.side_effect = IdPNotFoundError(
+            "Group 'local-group' not found"
+        )
 
-        with patch(
-            "registry.api.management_routes.scope_service.delete_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_delete_scope:
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value={
+                    "scope_name": "local-group",
+                    "is_idp_managed": True,
+                },
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.delete_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_delete_scope,
+        ):
             # Act
             response = client.delete("/api/management/iam/groups/local-group")
 
@@ -836,16 +869,28 @@ class TestManagementDeleteGroup:
         assert "Administrator permissions" in response.json()["detail"]
 
     def test_delete_group_not_found_in_idp_still_deletes_from_mongodb(self, test_client_admin):
-        """Test that IdP 'not found' is handled gracefully (local-only group delete)."""
+        """Test that IdP 'not found' is handled gracefully (legacy record delete)."""
         # Arrange
         client, mock_iam = test_client_admin
-        mock_iam.delete_group.side_effect = Exception("Group 'nonexistent' not found")
+        mock_iam.delete_group.side_effect = IdPNotFoundError(
+            "Group 'nonexistent' not found"
+        )
 
-        with patch(
-            "registry.api.management_routes.scope_service.delete_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_delete_scope:
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value={
+                    "scope_name": "nonexistent",
+                    "is_idp_managed": True,
+                },
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.delete_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_delete_scope,
+        ):
             # Act
             response = client.delete("/api/management/iam/groups/nonexistent")
 

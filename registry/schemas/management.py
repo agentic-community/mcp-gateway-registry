@@ -77,6 +77,14 @@ class GroupSummary(BaseModel):
     name: str
     path: str
     attributes: dict | None = None
+    is_idp_managed: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the group is managed in the upstream identity provider. "
+            "None for legacy records that predate the flag; True means "
+            "PATCH/DELETE call the IdP, False means local-only. See issue #946."
+        ),
+    )
 
 
 class GroupListResponse(BaseModel):
@@ -129,3 +137,11 @@ class GroupDetailResponse(BaseModel):
     group_mappings: list | None = None
     ui_permissions: dict | None = None
     agent_access: list | None = None
+    is_idp_managed: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the group is managed in the upstream identity provider. "
+            "None for legacy records that predate the flag; True means "
+            "PATCH/DELETE call the IdP, False means local-only. See issue #946."
+        ),
+    )

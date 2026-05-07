@@ -184,8 +184,15 @@ class FileScopeRepository(ScopeRepositoryBase):
         self,
         group_name: str,
         description: str = "",
+        is_idp_managed: bool = True,
     ) -> bool:
-        """Create a new group in scopes."""
+        """Create a new group in scopes.
+
+        The `is_idp_managed` kwarg is accepted for interface compatibility
+        with `DocumentDBScopeRepository` (see issue #946) but is not
+        persisted. The file backend is dev-only and not a production target.
+        """
+        del is_idp_managed
         try:
             if group_name in self._scopes_data:
                 logger.warning(f"Group {group_name} already exists in scopes.yml")
@@ -260,6 +267,7 @@ class FileScopeRepository(ScopeRepositoryBase):
         group_mappings: list = None,
         ui_permissions: dict = None,
         agent_access: list = None,
+        is_idp_managed: bool = True,
     ) -> bool:
         """
         Import a complete group definition.
@@ -271,7 +279,11 @@ class FileScopeRepository(ScopeRepositoryBase):
             group_mappings: List of group names this group maps to
             ui_permissions: Dictionary of UI permissions
             agent_access: List of agent paths this group can access
+            is_idp_managed: Accepted for interface compatibility with
+                `DocumentDBScopeRepository` (see issue #946) but not persisted.
+                The file backend is dev-only and not a production target.
         """
+        del is_idp_managed
         try:
             # Set defaults
             if server_access is None:

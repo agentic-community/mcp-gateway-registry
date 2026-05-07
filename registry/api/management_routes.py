@@ -4,8 +4,9 @@ import logging
 import os
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from ..audit.context import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
 from ..schemas.management import (
     GroupCreateRequest,
@@ -23,6 +24,7 @@ from ..schemas.management import (
     UserSummary,
 )
 from ..services import scope_service
+from ..utils.iam_errors import IdPForbiddenError, IdPNotFoundError
 from ..utils.iam_manager import get_iam_manager
 
 logger = logging.getLogger(__name__)
@@ -354,7 +356,13 @@ async def management_update_user_groups(
         logger.warning(f"Error checking/updating M2M account in DocumentDB: {e}")
         # Continue to IdP update if DocumentDB check fails
 
-    # If not an M2M account, update through IdP
+    # If not an M2M account, update through IdP. The IdP manager computes the
+    # add/remove diff against the user's current memberships, so groups that
+    # are unchanged (including local-only scopes that happen to be in the
+    # payload) never touch the IdP. Only *new* additions hit the IdP, and if
+    # one of those doesn't exist there we surface a 400 with a helpful message
+    # pointing the operator at the correct "map an existing IdP group via
+    # group_mappings" workflow (see issue #946).
     iam = get_iam_manager()
 
     try:
@@ -363,6 +371,19 @@ async def management_update_user_groups(
             groups=payload.groups,
         )
     except Exception as exc:
+        detail = str(exc).lower()
+        if "group" in detail and "not found" in detail:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot assign user '{username}' to a group that does "
+                    "not exist in the identity provider. If this is a "
+                    "local-only group (created with 'Create in identity "
+                    "provider' unchecked), add the user to the IdP group "
+                    "referenced in the scope's group_mappings instead. "
+                    f"Underlying error: {exc}"
+                ),
+            ) from exc
         raise _translate_iam_error(exc) from exc
 
     return UpdateUserGroupsResponse(
@@ -377,23 +398,20 @@ async def management_update_user_groups(
 async def management_list_groups(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
-    """List IAM groups from the configured identity provider (admin only)."""
+    """List IAM groups from the configured identity provider and local-only
+    scope documents (admin only).
+
+    Local-only groups (created with `create_in_idp=False`, see issue #946) live
+    only in the MongoDB `scopes` collection and are invisible to the IdP.
+    This handler merges the IdP list with any MongoDB scope documents that
+    don't appear in the IdP response so every UI picker sees them.
+    """
     _require_admin(user_context)
 
     iam = get_iam_manager()
 
     try:
         raw_groups = await iam.list_groups()
-        summaries = [
-            GroupSummary(
-                id=group.get("id", ""),
-                name=group.get("name", ""),
-                path=group.get("path", ""),
-                attributes=group.get("attributes"),
-            )
-            for group in raw_groups
-        ]
-        return GroupListResponse(groups=summaries, total=len(summaries))
     except Exception as exc:
         logger.error("Failed to list IAM groups: %s", exc)
         raise HTTPException(
@@ -401,10 +419,69 @@ async def management_list_groups(
             detail="Unable to list IAM groups",
         ) from exc
 
+    # Cross-reference with MongoDB scope documents.
+    # scope_service.list_groups() also eagerly backfills any legacy docs
+    # missing the is_idp_managed flag (see DocumentDBScopeRepository.list_groups).
+    scope_groups_map: dict = {}
+    try:
+        scope_groups = await scope_service.list_groups()
+        for name, meta in scope_groups.items():
+            if isinstance(meta, dict):
+                scope_groups_map[name] = meta
+    except Exception as exc:
+        logger.warning(
+            "Could not cross-reference scope docs for is_idp_managed: %s",
+            exc,
+        )
+
+    summaries: list[GroupSummary] = []
+    idp_names: set[str] = set()
+    for group in raw_groups:
+        name = group.get("name", "")
+        idp_names.add(name)
+        scope_meta = scope_groups_map.get(name, {})
+        summaries.append(
+            GroupSummary(
+                id=group.get("id", ""),
+                name=name,
+                path=group.get("path", ""),
+                attributes=group.get("attributes"),
+                is_idp_managed=scope_meta.get("is_idp_managed"),
+            )
+        )
+
+    # Append local-only groups (present in MongoDB scopes, absent from IdP).
+    # Synthesize id/path using the scope name, mirroring the create path.
+    local_only: list[GroupSummary] = []
+    for name, scope_meta in scope_groups_map.items():
+        if name in idp_names:
+            continue
+        description = scope_meta.get("description") if isinstance(scope_meta, dict) else None
+        local_only.append(
+            GroupSummary(
+                id=name,
+                name=name,
+                path=f"/{name}",
+                attributes={"description": [description]} if description else None,
+                is_idp_managed=scope_meta.get("is_idp_managed", False),
+            )
+        )
+        logger.debug(
+            "iam_groups_list_local_only_included scope=%s is_idp_managed=%s",
+            name,
+            scope_meta.get("is_idp_managed", False),
+        )
+
+    local_only.sort(key=lambda summary: summary.name)
+    summaries.extend(local_only)
+
+    return GroupListResponse(groups=summaries, total=len(summaries))
+
 
 @router.post("/iam/groups", response_model=GroupSummary)
 async def management_create_group(
     payload: GroupCreateRequest,
+    request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
@@ -412,7 +489,9 @@ async def management_create_group(
 
     When create_in_idp is True, creates in both the configured
     identity provider and MongoDB scopes collection.
-    When create_in_idp is False, creates only in MongoDB scopes collection.
+    When create_in_idp is False, creates only in MongoDB scopes collection
+    and persists `is_idp_managed=False` so subsequent PATCH/DELETE do not
+    call the IdP (see issue #946).
     """
     _require_admin(user_context)
 
@@ -426,6 +505,15 @@ async def management_create_group(
         "create_in_idp=%s for group '%s' (from scope_config)",
         create_in_idp,
         payload.name,
+    )
+
+    set_audit_action(
+        request,
+        operation="create",
+        resource_type="group",
+        resource_id=payload.name,
+        description=f"Create group '{payload.name}'",
+        idp_skip_reason=None if create_in_idp else "local_only",
     )
 
     try:
@@ -478,6 +566,7 @@ async def management_create_group(
             server_access=server_access,
             ui_permissions=ui_permissions,
             agent_access=agent_access,
+            is_idp_managed=create_in_idp,
         )
 
         if not import_success:
@@ -492,6 +581,7 @@ async def management_create_group(
             name=result.get("name", ""),
             path=result.get("path", ""),
             attributes=result.get("attributes"),
+            is_idp_managed=create_in_idp,
         )
 
     except Exception as exc:
@@ -510,33 +600,75 @@ async def management_create_group(
 @router.delete("/iam/groups/{group_name}", response_model=GroupDeleteResponse)
 async def management_delete_group(
     group_name: str,
+    request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
-    Delete a group from the identity provider and/or MongoDB (admin only).
+    Delete a group (admin only).
 
-    Attempts to delete from IdP first. If the group does not exist in the IdP
-    (e.g., it was created with create_in_idp=False), the IdP error is logged
-    and the MongoDB deletion proceeds.
+    Behavior (see issue #946):
+    - is_idp_managed=False: IdP call is skipped entirely.
+    - is_idp_managed=True and IdP 403/404: non-fatal fall-through; MongoDB
+      deletion proceeds; audit entry includes idp_skip_reason.
+    - Any other IdP error: propagates as before (502).
     """
     _require_admin(user_context)
 
+    set_audit_action(
+        request,
+        operation="delete",
+        resource_type="group",
+        resource_id=group_name,
+        description=f"Delete group '{group_name}'",
+    )
+
     iam = get_iam_manager()
+    skip_reason: str | None = None
 
     try:
-        # Step 1: Attempt to delete from identity provider
-        try:
-            await iam.delete_group(group_name=group_name)
-        except Exception as idp_exc:
-            idp_detail = str(idp_exc).lower()
-            if "not found" in idp_detail or "404" in idp_detail:
+        existing_group = await scope_service.get_group(group_name)
+        is_idp_managed = True
+        if existing_group is not None:
+            is_idp_managed = bool(existing_group.get("is_idp_managed", True))
+
+        if is_idp_managed:
+            try:
+                await iam.delete_group(group_name=group_name)
+            except IdPNotFoundError as idp_exc:
                 logger.info(
-                    "Group '%s' not found in IdP (may be local-only), "
-                    "proceeding with MongoDB deletion",
+                    "iam_idp_fallthrough operation=delete resource=%s "
+                    "status=404 reason=not_found detail=%s",
                     group_name,
+                    idp_exc,
                 )
-            else:
-                raise
+                skip_reason = "not_found"
+            except IdPForbiddenError as idp_exc:
+                logger.warning(
+                    "iam_idp_fallthrough operation=delete resource=%s "
+                    "status=403 reason=forbidden detail=%s",
+                    group_name,
+                    idp_exc,
+                )
+                skip_reason = "forbidden"
+        else:
+            logger.info(
+                "iam_idp_skipped operation=delete resource=%s reason=local_only",
+                group_name,
+            )
+            skip_reason = "local_only"
+
+        if skip_reason is not None:
+            set_audit_action(
+                request,
+                operation="delete",
+                resource_type="group",
+                resource_id=group_name,
+                description=(
+                    f"Delete group '{group_name}' - IdP call skipped "
+                    f"({skip_reason})"
+                ),
+                idp_skip_reason=skip_reason,
+            )
 
         # Step 2: Delete from MongoDB scopes collection
         delete_success = await scope_service.delete_group(
@@ -551,6 +683,8 @@ async def management_delete_group(
 
         return GroupDeleteResponse(name=group_name)
 
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Failed to delete group: %s", exc)
         detail = str(exc).lower()
@@ -595,6 +729,7 @@ async def management_get_group(
             group_mappings=group_data.get("group_mappings"),
             ui_permissions=group_data.get("ui_permissions"),
             agent_access=group_data.get("agent_access"),
+            is_idp_managed=group_data.get("is_idp_managed", True),
         )
 
     except HTTPException:
@@ -612,21 +747,34 @@ async def management_get_group(
 async def management_update_group(
     group_name: str,
     payload: GroupUpdateRequest,
+    request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
     Update a group's properties and scope configuration (admin only).
 
-    This updates the group in both:
-    1. The configured identity provider (Keycloak or Entra ID)
-    2. MongoDB scopes collection for authorization
+    Behavior (see issue #946):
+    - is_idp_managed=False: IdP call is skipped entirely. MongoDB update
+      proceeds. The flag is preserved across edits.
+    - is_idp_managed=True and IdP 403/404: non-fatal fall-through; MongoDB
+      update proceeds; audit entry includes idp_skip_reason.
     """
     _require_admin(user_context)
 
+    set_audit_action(
+        request,
+        operation="update",
+        resource_type="group",
+        resource_id=group_name,
+        description=f"Update group '{group_name}'",
+    )
+
     iam = get_iam_manager()
+    skip_reason: str | None = None
 
     try:
-        # Step 1: Get existing group data to preserve group_mappings if not provided
+        # Step 1: Get existing group data.
+        # This also lazily backfills is_idp_managed for legacy documents.
         existing_group = await scope_service.get_group(group_name)
         if not existing_group:
             raise HTTPException(
@@ -634,11 +782,50 @@ async def management_update_group(
                 detail=f"Group '{group_name}' not found",
             )
 
-        # Step 2: Update group in identity provider (description only)
-        if payload.description is not None:
-            await iam.update_group(
-                group_name=group_name,
-                description=payload.description,
+        is_idp_managed = bool(existing_group.get("is_idp_managed", True))
+
+        # Step 2: Update group in identity provider (description only),
+        # gated on is_idp_managed. Catch typed IdP errors as non-fatal.
+        if payload.description is not None and is_idp_managed:
+            try:
+                await iam.update_group(
+                    group_name=group_name,
+                    description=payload.description,
+                )
+            except IdPNotFoundError as idp_exc:
+                logger.info(
+                    "iam_idp_fallthrough operation=update resource=%s "
+                    "status=404 reason=not_found detail=%s",
+                    group_name,
+                    idp_exc,
+                )
+                skip_reason = "not_found"
+            except IdPForbiddenError as idp_exc:
+                logger.warning(
+                    "iam_idp_fallthrough operation=update resource=%s "
+                    "status=403 reason=forbidden detail=%s",
+                    group_name,
+                    idp_exc,
+                )
+                skip_reason = "forbidden"
+        elif payload.description is not None:
+            logger.info(
+                "iam_idp_skipped operation=update resource=%s reason=local_only",
+                group_name,
+            )
+            skip_reason = "local_only"
+
+        if skip_reason is not None:
+            set_audit_action(
+                request,
+                operation="update",
+                resource_type="group",
+                resource_id=group_name,
+                description=(
+                    f"Update group '{group_name}' - IdP call skipped "
+                    f"({skip_reason})"
+                ),
+                idp_skip_reason=skip_reason,
             )
 
         # Step 3: Update in MongoDB scopes collection
@@ -668,14 +855,18 @@ async def management_update_group(
             agent_access, ui_permissions
         )
 
-        # Use import_group to update the scope data
+        # Use import_group to update the scope data.
+        # Preserve is_idp_managed across edits (import_group replaces the whole doc).
         import_success = await scope_service.import_group(
             scope_name=group_name,
-            description=payload.description or "",
+            description=payload.description
+            if payload.description is not None
+            else existing_group.get("description", ""),
             server_access=server_access,
             group_mappings=group_mappings,
             ui_permissions=ui_permissions,
             agent_access=agent_access,
+            is_idp_managed=is_idp_managed,
         )
 
         if not import_success:
@@ -684,7 +875,7 @@ async def management_update_group(
                 group_name,
             )
 
-        # Step 3: Fetch and return updated group details
+        # Step 4: Fetch and return updated group details
         group_data = await scope_service.get_group(group_name)
 
         if not group_data:
@@ -693,6 +884,7 @@ async def management_update_group(
                 id="",
                 name=group_name,
                 description=payload.description,
+                is_idp_managed=is_idp_managed,
             )
 
         return GroupDetailResponse(
@@ -704,8 +896,11 @@ async def management_update_group(
             group_mappings=group_data.get("group_mappings"),
             ui_permissions=group_data.get("ui_permissions"),
             agent_access=group_data.get("agent_access"),
+            is_idp_managed=group_data.get("is_idp_managed", True),
         )
 
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Failed to update group: %s", exc)
         detail = str(exc).lower()

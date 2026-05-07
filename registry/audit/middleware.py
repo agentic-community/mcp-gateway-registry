@@ -221,6 +221,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 resource_type=audit_action.get("resource_type", "unknown"),
                 resource_id=audit_action.get("resource_id"),
                 description=audit_action.get("description"),
+                idp_skip_reason=audit_action.get("idp_skip_reason"),
             )
 
         return None

@@ -475,7 +475,9 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
         setUiPermissions({});
       }
 
-      setCreateInIdp(true);
+      // Reflect whether the group is IdP-managed or local-only (issue #946).
+      // Null/undefined (legacy records) defaults to true to match pre-#946 behavior.
+      setCreateInIdp(detail.is_idp_managed !== false);
       setView('edit');
     } catch (err: any) {
       const detail = err.response?.data?.detail;
@@ -1062,6 +1064,26 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
                              focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 />
               </div>
+              {/* Create-in-IdP toggle, locked in edit mode (issue #946). */}
+              <div className="flex flex-col space-y-1">
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={createInIdp}
+                    disabled
+                    aria-describedby="create-in-idp-edit-help"
+                    className="rounded border-gray-300 dark:border-gray-600 text-purple-600
+                               focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    Create in Identity Provider (Keycloak / Entra ID)
+                  </span>
+                </label>
+                <p id="create-in-idp-edit-help" className="text-xs text-gray-500 dark:text-gray-400 pl-6">
+                  This setting cannot be changed after creation. To convert a group between
+                  local-only and IdP-managed, delete and recreate it.
+                </p>
+              </div>
             </div>
 
             {/* ── Server Access ──────────────────────────────────── */}
@@ -1334,7 +1356,28 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
               {filteredGroups.map((group) => (
                 <React.Fragment key={group.name}>
                   <tr className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                    <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">{group.name}</td>
+                    <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">
+                      <span>{group.name}</span>
+                      {group.is_idp_managed === false ? (
+                        <span
+                          role="status"
+                          aria-label="Local-only group: PATCH and DELETE will not call the upstream identity provider. Recommended for tenants without Group.ReadWrite.All."
+                          title="Local-only: PATCH and DELETE will not call the upstream IdP. Recommended for tenants without Group.ReadWrite.All."
+                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                        >
+                          Local-only
+                        </span>
+                      ) : group.is_idp_managed === true ? (
+                        <span
+                          role="status"
+                          aria-label="IdP-managed group: PATCH and DELETE will call the upstream identity provider."
+                          title="IdP-managed: this group is managed in the upstream identity provider."
+                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                        >
+                          IdP-managed
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="py-3 px-4 text-gray-600 dark:text-gray-400">{group.description || '\u2014'}</td>
                     <td className="py-3 px-4 text-gray-500 dark:text-gray-500 font-mono text-xs">{group.path || '\u2014'}</td>
                     <td className="py-3 px-4 text-right">

@@ -1,6 +1,7 @@
 """DocumentDB-based repository for authorization scopes storage."""
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,33 @@ from ..interfaces import ScopeRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
 logger = logging.getLogger(__name__)
+
+_GUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _looks_like_guid(
+    value: str,
+) -> bool:
+    """Return True if the string matches the GUID/UUID shape."""
+    return bool(_GUID_RE.match(value or ""))
+
+
+def _backfill_is_idp_managed(
+    doc: dict,
+) -> bool:
+    """Heuristic for legacy scope documents that predate issue #946.
+
+    - Any GUID-shaped entry in group_mappings is a strong signal of an
+      Entra-managed group, so treat the scope as IdP-managed.
+    - Otherwise default to True to preserve pre-#946 behavior. The 403/404
+      fall-through in PATCH/DELETE handles misclassified records safely.
+    """
+    for mapping in doc.get("group_mappings") or []:
+        if isinstance(mapping, str) and _looks_like_guid(mapping):
+            return True
+    return True
 
 
 class DocumentDBScopeRepository(ScopeRepositoryBase):
@@ -236,8 +264,16 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         self,
         group_name: str,
         description: str = "",
+        is_idp_managed: bool = True,
     ) -> bool:
-        """Create a new group in scopes."""
+        """Create a new group in scopes.
+
+        Args:
+            group_name: Name of the group.
+            description: Optional description.
+            is_idp_managed: Whether PATCH/DELETE should call the upstream IdP.
+                Defaults to True to preserve pre-#946 behavior.
+        """
         try:
             collection = await self._get_collection()
 
@@ -248,6 +284,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 "server_access": [],
                 "group_mappings": [],
                 "ui_permissions": {},
+                "is_idp_managed": is_idp_managed,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
             }
@@ -257,7 +294,9 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             self._scopes_cache.setdefault("UI-Scopes", {})[group_name] = {}
             self._scopes_cache.setdefault("group_mappings", {})[group_name] = []
 
-            logger.info(f"Created group '{group_name}'")
+            logger.info(
+                f"Created group '{group_name}' (is_idp_managed={is_idp_managed})"
+            )
             return True
         except Exception as e:
             logger.error(f"Failed to create group in DocumentDB: {e}", exc_info=True)
@@ -291,13 +330,35 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         self,
         group_name: str,
     ) -> dict[str, Any]:
-        """Get full details of a specific group."""
+        """Get full details of a specific group.
+
+        Lazily backfills `is_idp_managed` for legacy documents that predate
+        issue #946 so every call site sees a populated value.
+        """
         collection = await self._get_collection()
 
         try:
             group_doc = await collection.find_one({"_id": group_name})
             if not group_doc:
                 return None
+
+            if "is_idp_managed" not in group_doc:
+                backfilled = _backfill_is_idp_managed(group_doc)
+                await collection.update_one(
+                    {"_id": group_name},
+                    {
+                        "$set": {
+                            "is_idp_managed": backfilled,
+                            "updated_at": datetime.utcnow(),
+                        }
+                    },
+                )
+                group_doc["is_idp_managed"] = backfilled
+                logger.info(
+                    "scope_backfill operation=get group=%s is_idp_managed=%s",
+                    group_name,
+                    backfilled,
+                )
 
             group_doc["scope_name"] = group_doc.pop("_id")
             return group_doc
@@ -306,10 +367,37 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             return None
 
     async def list_groups(self) -> dict[str, Any]:
-        """List all groups with server counts."""
+        """List all groups with server counts.
+
+        Eagerly backfills `is_idp_managed` on any document that predates
+        issue #946. The `$exists: False` filter returns nothing once the
+        collection has been backfilled, so this is cheap on steady state.
+        """
         collection = await self._get_collection()
 
         try:
+            legacy_cursor = collection.find({"is_idp_managed": {"$exists": False}})
+            legacy_count = 0
+            async for legacy_doc in legacy_cursor:
+                backfilled = _backfill_is_idp_managed(legacy_doc)
+                await collection.update_one(
+                    {"_id": legacy_doc["_id"]},
+                    {
+                        "$set": {
+                            "is_idp_managed": backfilled,
+                            "updated_at": datetime.utcnow(),
+                        }
+                    },
+                )
+                legacy_count += 1
+                logger.info(
+                    "scope_backfill operation=list group=%s is_idp_managed=%s",
+                    legacy_doc["_id"],
+                    backfilled,
+                )
+            if legacy_count:
+                logger.info("scope_backfill batch_count=%d", legacy_count)
+
             cursor = collection.find({})
             groups = {}
             async for doc in cursor:
@@ -319,6 +407,8 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                     "server_count": server_count,
                     "ui_scopes": doc.get("ui_permissions", {}),
                     "mappings": doc.get("group_mappings", []),
+                    "is_idp_managed": doc.get("is_idp_managed", True),
+                    "description": doc.get("description"),
                 }
             return groups
         except Exception as e:
@@ -521,6 +611,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         group_mappings: list = None,
         ui_permissions: dict = None,
         agent_access: list = None,
+        is_idp_managed: bool = True,
     ) -> bool:
         """
         Import a complete group definition.
@@ -532,6 +623,9 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             group_mappings: List of group names this group maps to
             ui_permissions: Dictionary of UI permissions
             agent_access: List of agent paths this group can access
+            is_idp_managed: Whether PATCH/DELETE should call the upstream IdP.
+                Defaults to True to preserve pre-#946 behavior for callers
+                that do not explicitly pass the flag.
 
         Returns:
             True if successful, False otherwise
@@ -558,6 +652,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 "group_mappings": group_mappings,
                 "ui_permissions": ui_permissions,
                 "agent_access": agent_access,
+                "is_idp_managed": is_idp_managed,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
             }

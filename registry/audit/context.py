@@ -14,6 +14,7 @@ def set_audit_action(
     resource_type: str,
     resource_id: str | None = None,
     description: str | None = None,
+    idp_skip_reason: str | None = None,
 ) -> None:
     """
     Set audit action context on the request for the AuditMiddleware.
@@ -27,6 +28,9 @@ def set_audit_action(
         resource_type: The resource type (server, agent, auth, federation, health, search, scope, user, group)
         resource_id: Optional identifier of the resource being acted upon
         description: Optional human-readable description of the action
+        idp_skip_reason: When an IdP admin call was intentionally skipped, the
+            reason. One of: 'local_only', 'forbidden', 'not_found'.
+            See issue #946.
 
     Example:
         @router.post("/servers")
@@ -39,6 +43,7 @@ def set_audit_action(
         "resource_type": resource_type,
         "resource_id": resource_id,
         "description": description,
+        "idp_skip_reason": idp_skip_reason,
     }
 
 

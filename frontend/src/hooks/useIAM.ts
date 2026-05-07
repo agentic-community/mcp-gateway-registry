@@ -8,6 +8,9 @@ export interface IAMGroup {
   description?: string;
   path?: string;
   members_count?: number;
+  // True if the group is managed in the upstream IdP; false for local-only.
+  // Null/undefined for legacy records that predate the flag. See issue #946.
+  is_idp_managed?: boolean | null;
 }
 
 export interface IAMUser {
@@ -96,6 +99,8 @@ export interface GroupDetail {
   group_mappings?: string[];
   ui_permissions?: Record<string, string[]>;
   agent_access?: string[];
+  // See issue #946. True=IdP-managed, false=local-only, null=legacy/unknown.
+  is_idp_managed?: boolean | null;
 }
 
 export interface UpdateGroupPayload {

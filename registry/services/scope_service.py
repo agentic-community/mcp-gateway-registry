@@ -367,6 +367,7 @@ async def import_group(
     group_mappings: list = None,
     ui_permissions: dict = None,
     agent_access: list = None,
+    is_idp_managed: bool = True,
 ) -> bool:
     """
     Import a complete group definition with all document types.
@@ -382,6 +383,8 @@ async def import_group(
         group_mappings: Optional list of group names this group maps to
         ui_permissions: Optional dictionary of UI permissions
         agent_access: Optional list of agent paths this group can access
+        is_idp_managed: Whether PATCH/DELETE should call the upstream IdP.
+            See issue #946. Defaults to True to preserve pre-#946 behavior.
 
     Returns:
         True if successful, False otherwise
@@ -400,6 +403,7 @@ async def import_group(
             group_mappings=group_mappings,
             ui_permissions=ui_permissions,
             agent_access=agent_access,
+            is_idp_managed=is_idp_managed,
         )
 
         if success:

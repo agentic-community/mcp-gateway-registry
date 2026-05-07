@@ -142,6 +142,14 @@ class Action(BaseModel):
     description: str | None = Field(
         default=None, description="Human-readable description of the action"
     )
+    idp_skip_reason: str | None = Field(
+        default=None,
+        description=(
+            "When an IdP admin call was intentionally skipped, the reason. "
+            "One of: 'local_only' (is_idp_managed=False), "
+            "'forbidden' (IdP 403), 'not_found' (IdP 404)."
+        ),
+    )
 
 
 class Authorization(BaseModel):

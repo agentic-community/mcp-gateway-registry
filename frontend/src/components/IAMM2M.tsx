@@ -108,6 +108,18 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
   const [editTarget, setEditTarget] = useState<M2MClient | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
+  // Search query that filters the groups checklist in every view.
+  const [groupSearch, setGroupSearch] = useState('');
+  const filteredGroups = useMemo(() => {
+    if (!groupSearch.trim()) return groups;
+    const q = groupSearch.toLowerCase();
+    return groups.filter(
+      (g) =>
+        g.name.toLowerCase().includes(q) ||
+        (g.description || '').toLowerCase().includes(q)
+    );
+  }, [groups, groupSearch]);
+
   const filteredClients = useMemo(() => {
     if (!searchQuery) return clients;
     const q = searchQuery.toLowerCase();
@@ -123,6 +135,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
     setFormDescription('');
     setFormGroups(new Set());
     setErrors({});
+    setGroupSearch('');
   }, []);
 
   const resetRegisterForm = useCallback(() => {
@@ -131,6 +144,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
     setRegisterDescription('');
     setRegisterGroups(new Set());
     setRegisterErrors({});
+    setGroupSearch('');
   }, []);
 
   const toggleCreateGroup = (groupName: string) => {
@@ -245,6 +259,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
   const handleEdit = (client: M2MClient) => {
     setEditTarget(client);
     setFormGroups(new Set(client.groups || []));
+    setGroupSearch('');
     setView('edit');
   };
 
@@ -265,6 +280,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
       onShowToast(`Groups updated for "${editTarget.name}"`, 'success');
       setEditTarget(null);
       setFormGroups(new Set());
+      setGroupSearch('');
       setView('list');
       await refetch();
     } catch (err: any) {
@@ -354,13 +370,25 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
         <div className="space-y-4 max-w-lg">
           <div>
             <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Groups *</label>
+            <div className="relative mb-2">
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                value={groupSearch}
+                onChange={(e) => setGroupSearch(e.target.value)}
+                placeholder="Search groups..."
+                className="w-full pl-10 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              />
+            </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
               errors.groups ? 'border-2 border-red-500' : 'border border-gray-200 dark:border-gray-700'
             }`}>
               {groups.length === 0 ? (
                 <p className="text-xs text-gray-400">No groups available</p>
+              ) : filteredGroups.length === 0 ? (
+                <p className="text-xs text-gray-400">No groups match "{groupSearch}"</p>
               ) : (
-                groups.map((g) => (
+                filteredGroups.map((g) => (
                   <label key={g.name} className="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" checked={formGroups.has(g.name)}
                       onChange={() => { toggleCreateGroup(g.name); if (errors.groups) setErrors((p) => ({ ...p, groups: undefined })); }}
@@ -375,7 +403,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
         </div>
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <button onClick={() => { setFormGroups(new Set()); setEditTarget(null); setErrors({}); setView('list'); }}
+          <button onClick={() => { setFormGroups(new Set()); setEditTarget(null); setErrors({}); setGroupSearch(''); setView('list'); }}
             className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
             Cancel
           </button>
@@ -421,13 +449,25 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
           <div>
             <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Groups *</label>
+            <div className="relative mb-2">
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                value={groupSearch}
+                onChange={(e) => setGroupSearch(e.target.value)}
+                placeholder="Search groups..."
+                className="w-full pl-10 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              />
+            </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
               errors.groups ? 'border-2 border-red-500' : 'border border-gray-200 dark:border-gray-700'
             }`}>
               {groups.length === 0 ? (
                 <p className="text-xs text-gray-400">No groups available</p>
+              ) : filteredGroups.length === 0 ? (
+                <p className="text-xs text-gray-400">No groups match "{groupSearch}"</p>
               ) : (
-                groups.map((g) => (
+                filteredGroups.map((g) => (
                   <label key={g.name} className="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" checked={formGroups.has(g.name)}
                       onChange={() => { toggleCreateGroup(g.name); if (errors.groups) setErrors((p) => ({ ...p, groups: undefined })); }}
@@ -442,7 +482,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
         </div>
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <button onClick={() => { resetCreateForm(); setView('list'); }}
+          <button onClick={() => { resetCreateForm(); setGroupSearch(''); setView('list'); }}
             className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
             Cancel
           </button>
@@ -504,13 +544,25 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
           <div>
             <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Groups *</label>
+            <div className="relative mb-2">
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                value={groupSearch}
+                onChange={(e) => setGroupSearch(e.target.value)}
+                placeholder="Search groups..."
+                className="w-full pl-10 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              />
+            </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
               registerErrors.groups ? 'border-2 border-red-500' : 'border border-gray-200 dark:border-gray-700'
             }`}>
               {groups.length === 0 ? (
                 <p className="text-xs text-gray-400">No groups available</p>
+              ) : filteredGroups.length === 0 ? (
+                <p className="text-xs text-gray-400">No groups match "{groupSearch}"</p>
               ) : (
-                groups.map((g) => (
+                filteredGroups.map((g) => (
                   <label key={g.name} className="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" checked={registerGroups.has(g.name)}
                       onChange={() => { toggleRegisterGroup(g.name); if (registerErrors.groups) setRegisterErrors((p) => ({ ...p, groups: undefined })); }}

@@ -14,6 +14,8 @@ from typing import (
     runtime_checkable,
 )
 
+from .iam_errors import wrap_idp_admin_error
+
 # Configure logging with basicConfig
 logging.basicConfig(
     level=logging.INFO,
@@ -270,7 +272,13 @@ class KeycloakIAMManager:
         """Delete a group from Keycloak."""
         from .keycloak_manager import delete_keycloak_group
 
-        return await delete_keycloak_group(group_name=group_name)
+        try:
+            return await delete_keycloak_group(group_name=group_name)
+        except Exception as exc:
+            typed = wrap_idp_admin_error(exc)
+            if typed is not exc:
+                raise typed from exc
+            raise
 
     async def group_exists(self, group_name: str) -> bool:
         """Check if a group exists in Keycloak."""
@@ -302,7 +310,16 @@ class KeycloakIAMManager:
         """Update a group's properties in Keycloak."""
         from .keycloak_manager import update_keycloak_group
 
-        return await update_keycloak_group(group_name=group_name, description=description)
+        try:
+            return await update_keycloak_group(
+                group_name=group_name,
+                description=description,
+            )
+        except Exception as exc:
+            typed = wrap_idp_admin_error(exc)
+            if typed is not exc:
+                raise typed from exc
+            raise
 
 
 class EntraIAMManager:
@@ -361,7 +378,13 @@ class EntraIAMManager:
         """Delete a group from Entra ID."""
         from .entra_manager import delete_entra_group
 
-        return await delete_entra_group(group_name_or_id=group_name)
+        try:
+            return await delete_entra_group(group_name_or_id=group_name)
+        except Exception as exc:
+            typed = wrap_idp_admin_error(exc)
+            if typed is not exc:
+                raise typed from exc
+            raise
 
     async def group_exists(self, group_name: str) -> bool:
         """Check if a group exists in Entra ID."""
@@ -397,7 +420,16 @@ class EntraIAMManager:
         """Update a group's properties in Entra ID."""
         from .entra_manager import update_entra_group
 
-        return await update_entra_group(group_name_or_id=group_name, description=description)
+        try:
+            return await update_entra_group(
+                group_name_or_id=group_name,
+                description=description,
+            )
+        except Exception as exc:
+            typed = wrap_idp_admin_error(exc)
+            if typed is not exc:
+                raise typed from exc
+            raise
 
 
 class OktaIAMManager:
@@ -457,7 +489,13 @@ class OktaIAMManager:
         """Delete a group from Okta."""
         from .okta_manager import delete_okta_group
 
-        return await delete_okta_group(group_name_or_id=group_name)
+        try:
+            return await delete_okta_group(group_name_or_id=group_name)
+        except Exception as exc:
+            typed = wrap_idp_admin_error(exc)
+            if typed is not exc:
+                raise typed from exc
+            raise
 
     async def group_exists(self, group_name: str) -> bool:
         """Check if a group exists in Okta."""
@@ -493,7 +531,16 @@ class OktaIAMManager:
         """Update a group's properties in Okta."""
         from .okta_manager import update_okta_group
 
-        return await update_okta_group(group_name_or_id=group_name, description=description)
+        try:
+            return await update_okta_group(
+                group_name_or_id=group_name,
+                description=description,
+            )
+        except Exception as exc:
+            typed = wrap_idp_admin_error(exc)
+            if typed is not exc:
+                raise typed from exc
+            raise
 
 
 class Auth0IAMManager:
@@ -553,7 +600,13 @@ class Auth0IAMManager:
         """Delete a role (group) from Auth0."""
         from .auth0_manager import delete_auth0_group
 
-        return await delete_auth0_group(group_name_or_id=group_name)
+        try:
+            return await delete_auth0_group(group_name_or_id=group_name)
+        except Exception as exc:
+            typed = wrap_idp_admin_error(exc)
+            if typed is not exc:
+                raise typed from exc
+            raise
 
     async def group_exists(self, group_name: str) -> bool:
         """Check if a role (group) exists in Auth0."""
@@ -589,7 +642,16 @@ class Auth0IAMManager:
         """Update a role's (group's) properties in Auth0."""
         from .auth0_manager import update_auth0_group
 
-        return await update_auth0_group(group_name_or_id=group_name, description=description)
+        try:
+            return await update_auth0_group(
+                group_name_or_id=group_name,
+                description=description,
+            )
+        except Exception as exc:
+            typed = wrap_idp_admin_error(exc)
+            if typed is not exc:
+                raise typed from exc
+            raise
 
 
 def get_iam_manager() -> IAMManager:
