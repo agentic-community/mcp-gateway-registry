@@ -66,6 +66,13 @@ RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
 # Set ownership of application files, venv, logs, certs, and entrypoint
 RUN chown -R appuser:appuser /app /app/.venv /app/logs /app/certs /app/auth-entrypoint.sh
 
+# Bake the build version into the image so `docker inspect` and any future
+# version-reporting code path (issue #919) can read it. Requires
+# `docker build --build-arg BUILD_VERSION=$VERSION`; defaults to "1.0.0" when
+# unset, which matches the legacy behavior for ad-hoc builds.
+ARG BUILD_VERSION="1.0.0"
+ENV BUILD_VERSION=$BUILD_VERSION
+
 # Switch to non-root user
 USER appuser
 

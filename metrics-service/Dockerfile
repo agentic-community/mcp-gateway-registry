@@ -34,6 +34,11 @@ EXPOSE 8890
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8890/health || exit 1
 
+# Bake the build version into the image (issue #919). Requires
+# `docker build --build-arg BUILD_VERSION=$VERSION`; defaults to "1.0.0".
+ARG BUILD_VERSION="1.0.0"
+ENV BUILD_VERSION=$BUILD_VERSION
+
 # Switch to non-root user
 USER appuser
 

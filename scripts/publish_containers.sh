@@ -219,6 +219,13 @@ build_and_push_component() {
         print_color "$YELLOW" "   Adding build arg: SERVER_DIR=$server_path"
     fi
 
+    # Pass BUILD_VERSION to the Dockerfile ARG so docker/Dockerfile.registry bakes
+    # the correct ENV BUILD_VERSION at build time (issue #919). Without this, the
+    # ARG default "1.0.0" is used and the registry UI reports the wrong version.
+    # Harmless for Dockerfiles that do not declare this ARG.
+    build_args="$build_args --build-arg BUILD_VERSION=$VERSION"
+    print_color "$YELLOW" "   Adding build arg: BUILD_VERSION=$VERSION"
+
     docker build \
         --file "$dockerfile" \
         $build_args \
