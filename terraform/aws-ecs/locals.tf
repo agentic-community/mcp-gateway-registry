@@ -20,4 +20,24 @@ locals {
     ManagedBy   = "terraform"
     CreatedAt   = timestamp()
   }
+
+  # Storage backend classification (issue #955).
+  # Keep mongodb_compatible_backends in sync with registry/core/config.py
+  # ALLOWED_STORAGE_BACKENDS / MONGODB_BACKENDS (issue #954).
+  #
+  # - is_aws_documentdb:     true only when Terraform should provision AWS DocumentDB.
+  # - is_mongodb_compatible: true for any MongoDB-API-compatible backend.
+  # - uses_external_mongodb: true when the registry connects to a MongoDB the
+  #                          operator owns (Atlas, self-managed, etc.) via
+  #                          mongodb_connection_string / _secret_arn.
+  mongodb_compatible_backends = [
+    "documentdb",
+    "mongodb-ce",
+    "mongodb",
+    "mongodb-atlas",
+  ]
+
+  is_aws_documentdb     = var.storage_backend == "documentdb"
+  is_mongodb_compatible = contains(local.mongodb_compatible_backends, var.storage_backend)
+  uses_external_mongodb = local.is_mongodb_compatible && !local.is_aws_documentdb
 }

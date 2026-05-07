@@ -406,12 +406,20 @@ variable "security_add_pending_tag" {
 # =============================================================================
 
 variable "storage_backend" {
-  description = "Storage backend to use: 'file' or 'documentdb'"
+  description = <<-DESC
+    Storage backend. Accepted values (mirrors root variables.tf and
+    registry/core/config.py ALLOWED_STORAGE_BACKENDS): file, documentdb,
+    mongodb-ce, mongodb, mongodb-atlas. mongodb and mongodb-atlas are
+    aliases for mongodb-ce at the Python repository layer.
+  DESC
   type        = string
   default     = "file"
   validation {
-    condition     = contains(["file", "documentdb"], var.storage_backend)
-    error_message = "Storage backend must be either 'file' or 'documentdb'."
+    condition = contains(
+      ["file", "documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"],
+      var.storage_backend,
+    )
+    error_message = "Storage backend must be one of: file, documentdb, mongodb-ce, mongodb, mongodb-atlas."
   }
 }
 

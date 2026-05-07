@@ -293,6 +293,8 @@ services:
     build:
       context: metrics-service
       dockerfile: Dockerfile
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - METRICS_SERVICE_PORT=8890
       - METRICS_SERVICE_HOST=0.0.0.0
@@ -334,6 +336,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.auth
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       # Registry Configuration
       - REGISTRY_URL=${REGISTRY_URL:-http://localhost}
@@ -450,6 +454,7 @@ services:
       dockerfile: docker/Dockerfile.mcp-server-light
       args:
         SERVER_DIR: servers/currenttime
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - HOST=0.0.0.0
       - PORT=8000
@@ -465,6 +470,7 @@ services:
       dockerfile: docker/Dockerfile.mcp-server-light
       args:
         SERVER_DIR: servers/fininfo
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - PORT=8001
       - SECRET_KEY=${SECRET_KEY}
@@ -481,6 +487,7 @@ services:
       dockerfile: docker/Dockerfile.mcp-server
       args:
         SERVER_DIR: servers/mcpgw
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - HOST=0.0.0.0
       - PORT=8003
@@ -502,6 +509,7 @@ services:
       dockerfile: docker/Dockerfile.mcp-server-light
       args:
         SERVER_DIR: servers/realserverfaketools
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - PORT=8002
     ports:

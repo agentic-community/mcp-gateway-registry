@@ -56,7 +56,7 @@ module "ecs_cluster" {
 
 # IAM policy for task execution role to access DocumentDB credentials
 resource "aws_iam_role_policy" "task_execution_documentdb_secrets" {
-  count = var.storage_backend == "documentdb" ? 1 : 0
+  count = local.is_aws_documentdb ? 1 : 0
 
   name = "${var.name}-task-execution-documentdb-secrets"
   role = module.ecs_cluster.task_exec_iam_role_name
@@ -70,7 +70,7 @@ resource "aws_iam_role_policy" "task_execution_documentdb_secrets" {
           "secretsmanager:GetSecretValue"
         ]
         Resource = [
-          aws_secretsmanager_secret.documentdb_credentials.arn
+          aws_secretsmanager_secret.documentdb_credentials[0].arn
         ]
       }
     ]

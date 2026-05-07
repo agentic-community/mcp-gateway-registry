@@ -4,6 +4,8 @@ The registry storage layer accepts a full MongoDB connection string via the `MON
 
 When the variable is empty or unset, the registry falls back to the `DOCUMENTDB_*` variables, so existing deployments keep working unchanged.
 
+> **Required `STORAGE_BACKEND` value for Atlas:** pick any one of `mongodb-ce`, `mongodb`, or `mongodb-atlas`. All three are aliases routing to the same MongoDB/DocumentDB repository code path. Setting `STORAGE_BACKEND` to any other value (for example the intuitive-but-wrong `mongo`) causes the registry to fail startup with an error listing the accepted values. Releases before issue #954 shipped silently fell back to the local file/FAISS backend with `STORAGE_BACKEND=mongodb`, which produced a half-broken deployment (see `CHANGELOG` / release notes). Upgrade to a release that includes the `MONGODB_BACKENDS` alias support if you are on an older version.
+
 ## Prerequisites
 
 - A MongoDB Atlas cluster (free M0 tier is fine for dev) or any MongoDB-compatible service reachable from your deployment.
@@ -37,7 +39,12 @@ When `MONGODB_CONNECTION_STRING` is set, the `DOCUMENTDB_*` variables are ignore
 Edit your `.env` file (copy from [`.env.example`](../../.env.example) if you haven't already):
 
 ```bash
-# Keep STORAGE_BACKEND=mongodb-ce (the URI backend is the same code path).
+# STORAGE_BACKEND selects the repository code path. For MongoDB Atlas any of
+# these three values work (all are aliases for the same implementation):
+#   mongodb-ce, mongodb, mongodb-atlas
+# "documentdb" is reserved for AWS DocumentDB (different auth mechanism).
+# Any other value will cause the registry to fail startup with a clear
+# "Accepted values: ..." error.
 STORAGE_BACKEND=mongodb-ce
 
 # Leave DOCUMENTDB_* set for ops scripts that still read them individually,
@@ -81,6 +88,8 @@ You can also delete or not deploy the local `mongodb` service in [`docker-compos
 ---
 
 ## Deployment Type 2: AWS ECS via Terraform
+
+> **ECS tfvars note:** today the ECS Terraform allowlist in `terraform/aws-ecs/variables.tf` accepts only `"file"` and `"documentdb"`. For an Atlas deployment via ECS, keep `storage_backend = "documentdb"` in tfvars and let the `MONGODB_CONNECTION_STRING` override point the container at your Atlas URI — the Python registry reads the URI verbatim and does not care what the `storage_backend` value is at that point. Issue #955 tracks expanding the Terraform allowlist and gating the `aws_docdb_cluster` resource so a future `storage_backend = "mongodb-atlas"` in tfvars will skip the AWS DocumentDB provisioning entirely.
 
 The ECS Terraform module accepts two new variables (see [`terraform/aws-ecs/variables.tf`](../../terraform/aws-ecs/variables.tf)):
 
@@ -143,6 +152,8 @@ Connected to DocumentDB/MongoDB 8.x.x
 ---
 
 ## Deployment Type 3: Kubernetes / EKS via Helm
+
+> **Helm `storage_backend` note:** the `mongodb-configure` chart defaults to `storage_backend: mongodb-ce` (see [`charts/mongodb-configure/values.yaml`](../../charts/mongodb-configure/values.yaml)). That value is accepted by the registry. You may also override it to `mongodb` or `mongodb-atlas` — all three route to the same code path. Do not set it to `mongo` or other typos; the registry will fail startup at container init with a clear error listing accepted values.
 
 The [Helm chart](../../charts/mcp-gateway-registry-stack/) exposes the connection string through its values file. If using the [`mcp-gateway-registry-stack` chart](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/mcp-gateway-registry-stack), set the [mongodb.connectionString](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mcp-gateway-registry-stack/values.yaml#L95) variable (fill in the `"`s). 
 

@@ -174,14 +174,14 @@ async def reload_scopes_config(storage_backend: str | None = None) -> dict[str, 
     Returns:
         Dict with scopes configuration
     """
-    if storage_backend is None:
-        from ..core.config import settings
+    from ..core.config import MONGODB_BACKENDS, settings
 
+    if storage_backend is None:
         storage_backend = settings.storage_backend
 
     logger.info(f"Reloading scopes with storage backend: {storage_backend}")
 
-    if storage_backend in ("documentdb", "mongodb-ce"):
+    if storage_backend in MONGODB_BACKENDS:
         return await load_scopes_from_repository()
     else:
         # For file backend, also load into the repository so get_ui_scopes works

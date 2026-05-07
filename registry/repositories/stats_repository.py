@@ -16,7 +16,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ..core.config import settings
+from ..core.config import MONGODB_BACKENDS, settings
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ async def increment_search_counter() -> None:
     Fail-silent: never impacts search operation.
     """
     try:
-        if settings.storage_backend in ("mongodb-ce", "documentdb"):
+        if settings.storage_backend in MONGODB_BACKENDS:
             await _increment_mongodb()
         else:
             _increment_file()
@@ -42,7 +42,7 @@ async def get_search_count() -> int:
         Cumulative search count, or 0 on failure.
     """
     try:
-        if settings.storage_backend in ("mongodb-ce", "documentdb"):
+        if settings.storage_backend in MONGODB_BACKENDS:
             return await _get_count_mongodb()
         else:
             return _get_count_file()
@@ -58,7 +58,7 @@ async def get_search_counts() -> dict[str, int]:
         Dict with keys: total, last_24h, last_1h (all default to 0 on failure).
     """
     try:
-        if settings.storage_backend in ("mongodb-ce", "documentdb"):
+        if settings.storage_backend in MONGODB_BACKENDS:
             return await _get_counts_mongodb()
         else:
             return _get_counts_file()

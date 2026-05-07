@@ -14,7 +14,9 @@ def build_connection_string() -> str:
     If ``mongodb_connection_string`` is set, it is returned verbatim and all
     other auth/host branches are skipped. Otherwise, handles three modes:
     - IAM (MONGODB-AWS) for DocumentDB with AWS credentials
-    - Username/password (SCRAM-SHA-256 for MongoDB CE, SCRAM-SHA-1 for DocumentDB)
+    - Username/password. AWS DocumentDB is SCRAM-SHA-1 (v5.0 limitation);
+      every other MongoDB variant (CE, self-managed, Atlas, etc.) uses
+      SCRAM-SHA-256.
     - No authentication (local development)
     """
     from ..core.config import settings
@@ -37,10 +39,13 @@ def build_connection_string() -> str:
         )
 
     if settings.documentdb_username and settings.documentdb_password:
-        if settings.storage_backend == "mongodb-ce":
-            auth_mechanism = "SCRAM-SHA-256"
-        else:
+        # AWS DocumentDB v5.0 only supports SCRAM-SHA-1. All other
+        # MongoDB-compatible backends (mongodb-ce / mongodb / mongodb-atlas
+        # and any future alias) support SCRAM-SHA-256.
+        if settings.storage_backend == "documentdb":
             auth_mechanism = "SCRAM-SHA-1"
+        else:
+            auth_mechanism = "SCRAM-SHA-256"
         return (
             f"mongodb://{settings.documentdb_username}:{settings.documentdb_password}@"
             f"{settings.documentdb_host}:{settings.documentdb_port}/"

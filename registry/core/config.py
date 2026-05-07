@@ -4,8 +4,35 @@ from datetime import UTC
 from enum import Enum
 from pathlib import Path
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
+
+# Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist
+# at terraform/aws-ecs/variables.tf (issue #955) so both layers reject the same
+# typos with the same messages.
+ALLOWED_STORAGE_BACKENDS: frozenset[str] = frozenset(
+    {
+        "file",
+        "documentdb",
+        "mongodb-ce",
+        "mongodb",
+        "mongodb-atlas",
+    }
+)
+
+
+# MongoDB-compatible backends. All values in this set route to the same
+# DocumentDB/MongoDB repositories via the factory; documentdb is retained
+# only to preserve AWS DocumentDB-specific SCRAM-SHA-1 auth selection in
+# utils/mongodb_connection.py.
+MONGODB_BACKENDS: frozenset[str] = frozenset(
+    {
+        "documentdb",
+        "mongodb-ce",
+        "mongodb",
+        "mongodb-atlas",
+    }
+)
 
 
 class DeploymentMode(str, Enum):
@@ -492,7 +519,44 @@ class Settings(BaseSettings):
         return self.deployment_mode == DeploymentMode.WITH_GATEWAY
 
     # Storage Backend Configuration
-    storage_backend: str = "file"  # Options: "file", "documentdb"
+    storage_backend: str = Field(
+        default="file",
+        description=(
+            "Storage backend selection. Accepted values: "
+            "file, documentdb, mongodb-ce, mongodb, mongodb-atlas. "
+            "mongodb, mongodb-atlas, and mongodb-ce are aliases that route to "
+            "the same MongoDB/DocumentDB repositories. documentdb is retained "
+            "for AWS DocumentDB-specific auth (SCRAM-SHA-1). Unknown values "
+            "fail startup with a clear error listing accepted values."
+        ),
+    )
+
+    @field_validator("storage_backend", mode="before")
+    @classmethod
+    def _validate_storage_backend(
+        cls,
+        v: str | None,
+    ) -> str:
+        """Reject unknown STORAGE_BACKEND values at startup.
+
+        Empty string and None coerce to "file" (the historical default). Any
+        other value is normalized (stripped, lowercased) and compared against
+        ALLOWED_STORAGE_BACKENDS. Unknown values raise ValueError with the
+        full allowlist in the error message so operators can fix the env var
+        without a round-trip through the code.
+
+        Safe to echo v in the error: storage_backend is a non-secret config
+        name. Do not copy this pattern for fields that could hold credentials.
+        """
+        if v is None or v == "":
+            return "file"
+        if not isinstance(v, str):
+            raise ValueError(f"STORAGE_BACKEND must be a string, got {type(v).__name__}")
+        normalized = v.strip().lower()
+        if normalized not in ALLOWED_STORAGE_BACKENDS:
+            accepted = ", ".join(sorted(ALLOWED_STORAGE_BACKENDS))
+            raise ValueError(f"Invalid STORAGE_BACKEND={v!r}. Accepted values: {accepted}.")
+        return normalized
 
     # DocumentDB Configuration (only used when storage_backend="documentdb" or "mongodb-ce")
     documentdb_host: str = "localhost"

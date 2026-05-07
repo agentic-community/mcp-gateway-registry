@@ -9,8 +9,13 @@
 
 #
 # Security Group for DocumentDB
+# Gated on local.is_aws_documentdb (issue #955): external-MongoDB deployments
+# (Atlas / self-managed) reach their MongoDB through a different network path
+# and do not need this SG.
 #
 resource "aws_security_group" "documentdb" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   name        = "${var.name}-v2-documentdb-sg"
   description = "Security group for DocumentDB Elastic Cluster" # Keep original description to avoid recreation
   vpc_id      = module.vpc.vpc_id
@@ -30,7 +35,9 @@ resource "aws_security_group" "documentdb" {
 
 # Ingress from Registry service
 resource "aws_vpc_security_group_ingress_rule" "documentdb_from_registry" {
-  security_group_id = aws_security_group.documentdb.id
+  count = local.is_aws_documentdb ? 1 : 0
+
+  security_group_id = aws_security_group.documentdb[0].id
 
   referenced_security_group_id = module.mcp_gateway.ecs_security_group_ids.registry
   from_port                    = 27017
@@ -48,7 +55,9 @@ resource "aws_vpc_security_group_ingress_rule" "documentdb_from_registry" {
 
 # Ingress from Auth service
 resource "aws_vpc_security_group_ingress_rule" "documentdb_from_auth" {
-  security_group_id = aws_security_group.documentdb.id
+  count = local.is_aws_documentdb ? 1 : 0
+
+  security_group_id = aws_security_group.documentdb[0].id
 
   referenced_security_group_id = module.mcp_gateway.ecs_security_group_ids.auth
   from_port                    = 27017
@@ -66,7 +75,9 @@ resource "aws_vpc_security_group_ingress_rule" "documentdb_from_auth" {
 
 # Egress
 resource "aws_vpc_security_group_egress_rule" "documentdb_egress" {
-  security_group_id = aws_security_group.documentdb.id
+  count = local.is_aws_documentdb ? 1 : 0
+
+  security_group_id = aws_security_group.documentdb[0].id
 
   cidr_ipv4   = "0.0.0.0/0"
   ip_protocol = "-1"
@@ -82,9 +93,11 @@ resource "aws_vpc_security_group_egress_rule" "documentdb_egress" {
 
 # Registry -> DocumentDB
 resource "aws_vpc_security_group_egress_rule" "registry_to_documentdb" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   security_group_id = module.mcp_gateway.ecs_security_group_ids.registry
 
-  referenced_security_group_id = aws_security_group.documentdb.id
+  referenced_security_group_id = aws_security_group.documentdb[0].id
   from_port                    = 27017
   to_port                      = 27017
   ip_protocol                  = "tcp"
@@ -100,9 +113,11 @@ resource "aws_vpc_security_group_egress_rule" "registry_to_documentdb" {
 
 # Auth -> DocumentDB
 resource "aws_vpc_security_group_egress_rule" "auth_to_documentdb" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   security_group_id = module.mcp_gateway.ecs_security_group_ids.auth
 
-  referenced_security_group_id = aws_security_group.documentdb.id
+  referenced_security_group_id = aws_security_group.documentdb[0].id
   from_port                    = 27017
   to_port                      = 27017
   ip_protocol                  = "tcp"
@@ -118,8 +133,12 @@ resource "aws_vpc_security_group_egress_rule" "auth_to_documentdb" {
 
 #
 # KMS Key for DocumentDB Encryption
+# Gated on is_aws_documentdb. NOTE: re-planning out of the documentdb backend
+# enters this key into a 7-day pending-deletion window. See PR release notes.
 #
 resource "aws_kms_key" "documentdb" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   description             = "KMS key for DocumentDB Cluster and secrets encryption"
   deletion_window_in_days = 7
   enable_key_rotation     = true
@@ -195,19 +214,26 @@ resource "aws_kms_key" "documentdb" {
 }
 
 resource "aws_kms_alias" "documentdb" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   name          = "alias/${var.name}-documentdb"
-  target_key_id = aws_kms_key.documentdb.key_id
+  target_key_id = aws_kms_key.documentdb[0].key_id
 }
 
 #
 # Secrets Manager Secret for DocumentDB Credentials
+# Gated on is_aws_documentdb. NOTE: recovery_window_in_days = 0 means an
+# apply that re-plans this out destroys the secret IMMEDIATELY with no
+# recovery window. See PR release notes for the rollout warning.
 #
 #checkov:skip=CKV2_AWS_57:Secret rotation managed externally via dedicated rotation Lambda
 resource "aws_secretsmanager_secret" "documentdb_credentials" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   name                    = "${var.name}/documentdb/credentials"
   description             = "DocumentDB Cluster admin credentials"
   recovery_window_in_days = 0
-  kms_key_id              = aws_kms_key.documentdb.id
+  kms_key_id              = aws_kms_key.documentdb[0].id
 
   tags = merge(
     local.common_tags,
@@ -218,7 +244,9 @@ resource "aws_secretsmanager_secret" "documentdb_credentials" {
 }
 
 resource "aws_secretsmanager_secret_version" "documentdb_credentials" {
-  secret_id = aws_secretsmanager_secret.documentdb_credentials.id
+  count = local.is_aws_documentdb ? 1 : 0
+
+  secret_id = aws_secretsmanager_secret.documentdb_credentials[0].id
   secret_string = jsonencode({
     username = var.documentdb_admin_username
     password = var.documentdb_admin_password
@@ -230,6 +258,8 @@ resource "aws_secretsmanager_secret_version" "documentdb_credentials" {
 # DocumentDB Subnet Group
 #
 resource "aws_docdb_subnet_group" "registry" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   name       = "${var.name}-registry-subnet-group"
   subnet_ids = module.vpc.private_subnets
 
@@ -246,6 +276,8 @@ resource "aws_docdb_subnet_group" "registry" {
 # DocumentDB Cluster Parameter Group
 #
 resource "aws_docdb_cluster_parameter_group" "registry" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   family      = "docdb5.0"
   name        = "${var.name}-registry-params"
   description = "DocumentDB cluster parameter group for MCP Gateway Registry"
@@ -281,6 +313,8 @@ resource "aws_docdb_cluster_parameter_group" "registry" {
 # DocumentDB Cluster
 #
 resource "aws_docdb_cluster" "registry" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   cluster_identifier = "${var.name}-registry"
 
   # Engine
@@ -292,8 +326,8 @@ resource "aws_docdb_cluster" "registry" {
   master_password = var.documentdb_admin_password
 
   # Network configuration
-  db_subnet_group_name   = aws_docdb_subnet_group.registry.name
-  vpc_security_group_ids = [aws_security_group.documentdb.id]
+  db_subnet_group_name   = aws_docdb_subnet_group.registry[0].name
+  vpc_security_group_ids = [aws_security_group.documentdb[0].id]
   port                   = 27017
 
   # Backup configuration
@@ -305,10 +339,10 @@ resource "aws_docdb_cluster" "registry" {
 
   # Encryption
   storage_encrypted = true
-  kms_key_id        = aws_kms_key.documentdb.arn
+  kms_key_id        = aws_kms_key.documentdb[0].arn
 
   # Parameter group
-  db_cluster_parameter_group_name = aws_docdb_cluster_parameter_group.registry.name
+  db_cluster_parameter_group_name = aws_docdb_cluster_parameter_group.registry[0].name
 
   # Deletion protection (enable for production)
   deletion_protection = false
@@ -332,8 +366,10 @@ resource "aws_docdb_cluster" "registry" {
 #
 # Primary instance
 resource "aws_docdb_cluster_instance" "registry_primary" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   identifier         = "${var.name}-registry-primary"
-  cluster_identifier = aws_docdb_cluster.registry.id
+  cluster_identifier = aws_docdb_cluster.registry[0].id
 
   # Instance class (can be adjusted based on needs)
   # db.t3.medium = 2 vCPU, 4 GB RAM - good starting point
@@ -378,14 +414,16 @@ resource "aws_docdb_cluster_instance" "registry_primary" {
 # }
 
 #
-# Update SSM Parameters with new cluster endpoints
+# Update SSM Parameters with new cluster endpoints (gated on is_aws_documentdb)
 #
 #checkov:skip=CKV2_AWS_34:SSM parameter stores non-sensitive endpoint hostname, SecureString not required
 resource "aws_ssm_parameter" "documentdb_endpoint" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   name        = "/${var.name}/documentdb/endpoint"
   description = "DocumentDB Cluster endpoint"
   type        = "String"
-  value       = aws_docdb_cluster.registry.endpoint
+  value       = aws_docdb_cluster.registry[0].endpoint
   overwrite   = true
 
   tags = merge(
@@ -398,10 +436,12 @@ resource "aws_ssm_parameter" "documentdb_endpoint" {
 
 #checkov:skip=CKV2_AWS_34:SSM parameter stores non-sensitive endpoint hostname, SecureString not required
 resource "aws_ssm_parameter" "documentdb_reader_endpoint" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   name        = "/${var.name}/documentdb/reader_endpoint"
   description = "DocumentDB Cluster reader endpoint"
   type        = "String"
-  value       = aws_docdb_cluster.registry.reader_endpoint
+  value       = aws_docdb_cluster.registry[0].reader_endpoint
 
   tags = merge(
     local.common_tags,
@@ -412,17 +452,19 @@ resource "aws_ssm_parameter" "documentdb_reader_endpoint" {
 }
 
 resource "aws_ssm_parameter" "documentdb_connection_string" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   name        = "/${var.name}/documentdb/connection_string"
   description = "DocumentDB Cluster connection string"
   type        = "SecureString"
-  key_id      = aws_kms_key.documentdb.id
+  key_id      = aws_kms_key.documentdb[0].id
   # AWS DocumentDB only supports SCRAM-SHA-1 (not SCRAM-SHA-256 as of v5.0)
   # TODO: Update to SCRAM-SHA-256 when AWS DocumentDB adds support
   value = format(
     "mongodb://%s:%s@%s:27017/?authMechanism=SCRAM-SHA-1&authSource=admin&tls=true&tlsCAFile=global-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false",
     var.documentdb_admin_username,
     var.documentdb_admin_password,
-    aws_docdb_cluster.registry.endpoint
+    aws_docdb_cluster.registry[0].endpoint
   )
   overwrite = true
 

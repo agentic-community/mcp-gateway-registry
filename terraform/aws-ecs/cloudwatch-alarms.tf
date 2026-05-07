@@ -149,7 +149,11 @@ resource "aws_cloudwatch_metric_alarm" "waf_rate_limit_triggered_keycloak" {
 #
 
 # CloudWatch Alarm: KMS Throttling (DocumentDB Key)
+# Gated on is_aws_documentdb: no KMS key exists for external MongoDB
+# backends, so there's nothing to alarm on. Issue #955.
 resource "aws_cloudwatch_metric_alarm" "kms_throttling_documentdb" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   alarm_name          = "${var.name}-kms-throttling-documentdb"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
@@ -162,7 +166,7 @@ resource "aws_cloudwatch_metric_alarm" "kms_throttling_documentdb" {
   treat_missing_data  = "notBreaching"
 
   dimensions = {
-    KeyId = aws_kms_key.documentdb.id
+    KeyId = aws_kms_key.documentdb[0].id
   }
 
   alarm_actions = var.alarm_sns_topic_arn != "" ? [var.alarm_sns_topic_arn] : []
@@ -211,7 +215,10 @@ resource "aws_cloudwatch_metric_alarm" "kms_throttling_rds" {
 #
 
 # CloudWatch Alarm: DocumentDB Audit Log Failures
+# Gated on is_aws_documentdb. Issue #955.
 resource "aws_cloudwatch_metric_alarm" "documentdb_audit_log_failures" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   alarm_name          = "${var.name}-documentdb-audit-log-failures"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
@@ -224,7 +231,7 @@ resource "aws_cloudwatch_metric_alarm" "documentdb_audit_log_failures" {
   treat_missing_data  = "notBreaching"
 
   dimensions = {
-    DBClusterIdentifier = aws_docdb_cluster.registry.id
+    DBClusterIdentifier = aws_docdb_cluster.registry[0].id
   }
 
   alarm_actions = var.alarm_sns_topic_arn != "" ? [var.alarm_sns_topic_arn] : []

@@ -199,39 +199,44 @@ output "grafana_url" {
 #
 # DocumentDB Cluster Outputs
 #
+# All DocumentDB outputs return null when storage_backend != "documentdb"
+# because the underlying resources are gated on local.is_aws_documentdb.
+# Any downstream Terraform module that consumes these via terraform_remote_state
+# must handle the null case. Issue #955.
+#
 
 output "documentdb_cluster_endpoint" {
-  description = "DocumentDB Cluster endpoint"
-  value       = aws_docdb_cluster.registry.endpoint
+  description = "DocumentDB Cluster endpoint. Null when storage_backend != documentdb."
+  value       = local.is_aws_documentdb ? aws_docdb_cluster.registry[0].endpoint : null
 }
 
 output "documentdb_cluster_arn" {
-  description = "DocumentDB Cluster ARN"
-  value       = aws_docdb_cluster.registry.arn
+  description = "DocumentDB Cluster ARN. Null when storage_backend != documentdb."
+  value       = local.is_aws_documentdb ? aws_docdb_cluster.registry[0].arn : null
 }
 
 output "documentdb_reader_endpoint" {
-  description = "DocumentDB Cluster reader endpoint"
-  value       = aws_docdb_cluster.registry.reader_endpoint
+  description = "DocumentDB Cluster reader endpoint. Null when storage_backend != documentdb."
+  value       = local.is_aws_documentdb ? aws_docdb_cluster.registry[0].reader_endpoint : null
 }
 
 output "documentdb_security_group_id" {
-  description = "DocumentDB security group ID"
-  value       = aws_security_group.documentdb.id
+  description = "DocumentDB security group ID. Null when storage_backend != documentdb."
+  value       = local.is_aws_documentdb ? aws_security_group.documentdb[0].id : null
 }
 
 output "documentdb_kms_key_id" {
-  description = "KMS key ID for DocumentDB encryption"
-  value       = aws_kms_key.documentdb.id
+  description = "KMS key ID for DocumentDB encryption. Null when storage_backend != documentdb."
+  value       = local.is_aws_documentdb ? aws_kms_key.documentdb[0].id : null
 }
 
 output "documentdb_kms_key_arn" {
-  description = "KMS key ARN for DocumentDB encryption"
-  value       = aws_kms_key.documentdb.arn
+  description = "KMS key ARN for DocumentDB encryption. Null when storage_backend != documentdb."
+  value       = local.is_aws_documentdb ? aws_kms_key.documentdb[0].arn : null
 }
 
 output "documentdb_secrets_manager_secret_arn" {
-  description = "Secrets Manager secret ARN for DocumentDB credentials"
-  value       = aws_secretsmanager_secret.documentdb_credentials.arn
+  description = "Secrets Manager secret ARN for DocumentDB credentials. Null when storage_backend != documentdb."
+  value       = local.is_aws_documentdb ? aws_secretsmanager_secret.documentdb_credentials[0].arn : null
   sensitive   = true
 }

@@ -280,6 +280,35 @@ oauth_store_tokens_in_session = false
 # mongodb_connection_string_secret_arn = ""
 
 # ============================================================================
+# EXTERNAL MONGODB (Atlas, self-managed) - issue #955
+# ============================================================================
+# To point the registry at a MongoDB you already own (MongoDB Atlas,
+# self-managed replica set, etc.) WITHOUT provisioning AWS DocumentDB in
+# this Terraform state, set:
+#
+#   storage_backend = "mongodb-atlas"
+#   mongodb_connection_string_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:mongodb-atlas-uri-XXXXXX"
+#
+# Accepted storage_backend values (must match registry/core/config.py):
+#   "file"          - JSON files, no DocumentDB provisioned
+#   "documentdb"    - Provision AWS DocumentDB (this module manages the cluster)
+#   "mongodb-ce"    - External MongoDB CE, URI via mongodb_connection_string*
+#   "mongodb"       - Alias for mongodb-ce
+#   "mongodb-atlas" - Alias for mongodb-ce (intended for MongoDB Atlas)
+#
+# For any non-"documentdb" MongoDB backend, mongodb_connection_string or
+# mongodb_connection_string_secret_arn is REQUIRED. `terraform plan` will
+# fail with a clear precondition error if you forget.
+#
+# The Secrets Manager secret value must be the full URI, e.g.:
+#   mongodb+srv://user:pass@cluster.mongodb.net/mcp_registry?retryWrites=true&w=majority
+#
+# When switching from "documentdb" to an external-MongoDB backend, `terraform
+# apply` will destroy the existing DocumentDB cluster, its KMS key (7-day
+# pending-deletion), and the credentials secret (0-day recovery window -
+# immediate delete). Take a final snapshot first. See the PR release notes.
+
+# ============================================================================
 # REGISTRY STATIC TOKEN AUTH (IdP-independent API access)
 # ============================================================================
 

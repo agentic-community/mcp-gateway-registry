@@ -316,13 +316,32 @@ variable "documentdb_replica_count" {
 
 # Storage Backend Configuration
 variable "storage_backend" {
-  description = "Storage backend to use: 'file' or 'documentdb'"
+  description = <<-DESC
+    Storage backend selection. Must match the Python-side allowlist in
+    registry/core/config.py ALLOWED_STORAGE_BACKENDS (issue #954). Accepted
+    values:
+      "file"          - JSON files only. No AWS DocumentDB provisioned.
+      "documentdb"    - Provision AWS DocumentDB cluster in this Terraform
+                        state and use SCRAM-SHA-1 auth.
+      "mongodb-ce"    - Connect to an externally-provisioned MongoDB CE via
+                        mongodb_connection_string / _secret_arn. No AWS
+                        DocumentDB provisioned.
+      "mongodb"       - Alias for mongodb-ce.
+      "mongodb-atlas" - Alias for mongodb-ce (intended for MongoDB Atlas).
+
+    For non-"documentdb" MongoDB backends, mongodb_connection_string or
+    mongodb_connection_string_secret_arn must be set. Enforced at
+    `terraform plan` time via a precondition on the mcp_gateway module.
+  DESC
   type        = string
   default     = "file"
 
   validation {
-    condition     = contains(["file", "documentdb"], var.storage_backend)
-    error_message = "Storage backend must be either 'file' or 'documentdb'."
+    condition = contains(
+      ["file", "documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"],
+      var.storage_backend,
+    )
+    error_message = "Storage backend must be one of: file, documentdb, mongodb-ce, mongodb, mongodb-atlas."
   }
 }
 
