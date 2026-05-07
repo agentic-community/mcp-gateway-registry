@@ -31,7 +31,11 @@ services:
       - REGISTRY_DESCRIPTION=${REGISTRY_DESCRIPTION:-}
       - REGISTRY_CONTACT_EMAIL=${REGISTRY_CONTACT_EMAIL:-}
       - REGISTRY_CONTACT_URL=${REGISTRY_CONTACT_URL:-}
-      - BUILD_VERSION=${BUILD_VERSION:-1.0.0}
+      # BUILD_VERSION is NOT set here: it is baked into the image by the
+      # publish pipeline (issue #919). Setting it at the compose level with
+      # a "${BUILD_VERSION:-1.0.0}" default would stomp the image-baked
+      # value whenever the operator's .env did not set BUILD_VERSION,
+      # which is the silent-fallback symptom this PR fixes.
       - SECRET_KEY=${SECRET_KEY}
       - AUTH_SERVER_URL=${AUTH_SERVER_URL}
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
