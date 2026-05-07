@@ -977,3 +977,62 @@ class TestEmbeddingsTelemetryFields:
             assert "embeddings_model_dimensions" not in payload
             payload_json = json.dumps(payload)
             assert "MiniLM" not in payload_json
+
+
+class TestStorageBackendAliasRouting:
+    """Telemetry branching must treat every MONGODB_BACKENDS alias identically.
+
+    Added for issue #954: mongodb and mongodb-atlas are aliases for mongodb-ce.
+    The telemetry module branches in four places on storage_backend; if any
+    one of them was missed during the MONGODB_BACKENDS rollout, the
+    corresponding alias would behave wrongly. These tests lock in the new
+    routing by running the same assertion with each alias.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias", ["mongodb-ce", "mongodb", "mongodb-atlas", "documentdb"])
+    async def test_acquire_lock_hits_mongodb_branch_for_each_alias(self, alias):
+        """Every MongoDB-compatible alias must take the MongoDB lock path."""
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.storage_backend = alias
+
+            with patch(
+                "registry.repositories.documentdb.client.get_documentdb_client"
+            ) as mock_get_client:
+                mock_db = MagicMock()
+                mock_collection = MagicMock()
+                mock_db.__getitem__.return_value = mock_collection
+                mock_collection.find_one_and_update = AsyncMock(
+                    return_value={"_id": "telemetry_config"}
+                )
+                mock_get_client.return_value = mock_db
+
+                result = await _acquire_telemetry_lock("startup", 60)
+
+                assert result is True
+                # The MongoDB branch must have been taken: get_documentdb_client called
+                mock_get_client.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias", ["mongodb-ce", "mongodb", "mongodb-atlas", "documentdb"])
+    async def test_initialize_collection_runs_for_each_alias(self, alias):
+        """Every MongoDB-compatible alias must trigger _telemetry_state creation."""
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.storage_backend = alias
+
+            with patch(
+                "registry.repositories.documentdb.client.get_documentdb_client"
+            ) as mock_get_client:
+                mock_db = MagicMock()
+                mock_collection = MagicMock()
+                mock_db.list_collection_names = AsyncMock(return_value=[])
+                mock_db.create_collection = AsyncMock()
+                mock_db.__getitem__.return_value = mock_collection
+                mock_collection.find_one = AsyncMock(return_value=None)
+                mock_collection.insert_one = AsyncMock()
+                mock_get_client.return_value = mock_db
+
+                await _initialize_telemetry_collection()
+
+                # Every alias must reach the create_collection call
+                mock_db.create_collection.assert_called_once_with("_telemetry_state")

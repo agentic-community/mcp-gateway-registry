@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
-from registry.core.config import settings
+from registry.core.config import MONGODB_BACKENDS, settings
 from registry.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -261,7 +261,7 @@ async def _get_or_create_instance_id() -> str:
     Returns:
         UUID v4 string (e.g., "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
     """
-    if settings.storage_backend in ("mongodb-ce", "documentdb"):
+    if settings.storage_backend in MONGODB_BACKENDS:
         # MongoDB-based storage
         from registry.repositories.documentdb.client import get_documentdb_client
 
@@ -329,7 +329,7 @@ async def _acquire_telemetry_lock(event_type: str, interval_seconds: int) -> boo
     Returns:
         True if lock acquired (caller should send), False if already sent recently
     """
-    if settings.storage_backend not in ("mongodb-ce", "documentdb"):
+    if settings.storage_backend not in MONGODB_BACKENDS:
         # File-based storage: no multi-replica concerns, always allow
         return True
 
@@ -454,11 +454,10 @@ async def _build_heartbeat_payload() -> dict:
         logger.warning(f"[telemetry] Failed to get peer count: {e}")
         peers_count = 0
 
-    # Determine search backend from storage backend
-    # documentdb/mongodb-ce uses DocumentDB search, file uses FAISS
-    search_backend = (
-        "documentdb" if settings.storage_backend in ("documentdb", "mongodb-ce") else "faiss"
-    )
+    # Determine search backend from storage backend. All MongoDB-compatible
+    # aliases (documentdb / mongodb-ce / mongodb / mongodb-atlas) use the
+    # DocumentDB search repository; file uses FAISS.
+    search_backend = "documentdb" if settings.storage_backend in MONGODB_BACKENDS else "faiss"
 
     counts = await get_search_counts()
     registry_id = await _get_registry_id()
@@ -583,7 +582,7 @@ async def _initialize_telemetry_collection() -> None:
     Called during application startup to ensure MongoDB permissions are correct
     and avoid silent failures on first telemetry send.
     """
-    if settings.storage_backend not in ("mongodb-ce", "documentdb"):
+    if settings.storage_backend not in MONGODB_BACKENDS:
         return  # File-based storage, no collection needed
 
     try:

@@ -36,13 +36,18 @@ async def inspect_documentdb():
     print("=" * 80)
     print()
 
-    # Build connection string with appropriate auth mechanism
-    # Choose auth mechanism based on storage backend from environment
+    # Build connection string with appropriate auth mechanism.
+    # Intentionally inline (not imported from registry.core.config) because
+    # this script is invoked standalone from the container shell and we want
+    # it to run without the full app package on sys.path. Keep in sync with
+    # registry/core/config.py MONGODB_BACKENDS and utils/mongodb_connection.py.
+    # AWS DocumentDB v5.0 only supports SCRAM-SHA-1; every other
+    # MongoDB-compatible backend uses SCRAM-SHA-256.
     storage_backend = os.getenv("STORAGE_BACKEND", "documentdb")
-    if storage_backend == "mongodb-ce":
-        auth_mechanism = "SCRAM-SHA-256"
-    else:
+    if storage_backend == "documentdb":
         auth_mechanism = "SCRAM-SHA-1"
+    else:
+        auth_mechanism = "SCRAM-SHA-256"
 
     if username and password:
         connection_string = (

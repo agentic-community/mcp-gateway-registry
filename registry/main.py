@@ -61,6 +61,7 @@ from registry.auth.routes import router as auth_router
 
 # Import core configuration
 from registry.core.config import (
+    MONGODB_BACKENDS,
     RegistryMode,
     _print_config_warning_banner,
     _validate_mode_combination,
@@ -408,7 +409,7 @@ async def lifespan(app: FastAPI):
 
         # Get repository based on STORAGE_BACKEND configuration
         search_repo = get_search_repository()
-        backend_name = "DocumentDB" if settings.storage_backend == "documentdb" else "FAISS"
+        backend_name = "DocumentDB" if settings.storage_backend in MONGODB_BACKENDS else "FAISS"
 
         logger.info(f"🔍 Initializing {backend_name} search service...")
         await search_repo.initialize()
@@ -817,9 +818,8 @@ if settings.audit_log_enabled:
 
     # Get audit repository if MongoDB is enabled
     _audit_repository = None
-    _mongodb_enabled = settings.audit_log_mongodb_enabled and settings.storage_backend in (
-        "documentdb",
-        "mongodb-ce",
+    _mongodb_enabled = (
+        settings.audit_log_mongodb_enabled and settings.storage_backend in MONGODB_BACKENDS
     )
     if _mongodb_enabled:
         from registry.repositories.factory import get_audit_repository

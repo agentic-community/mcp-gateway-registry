@@ -4,7 +4,7 @@ Repository factory - creates concrete implementations based on configuration.
 
 import logging
 
-from ..core.config import settings
+from ..core.config import MONGODB_BACKENDS, settings
 from .app_log_repository import AppLogRepository
 from .audit_repository import AuditRepositoryBase
 from .interfaces import (
@@ -51,7 +51,7 @@ def get_server_repository() -> ServerRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating server repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.server_repository import DocumentDBServerRepository
 
         _server_repo = DocumentDBServerRepository()
@@ -73,7 +73,7 @@ def get_agent_repository() -> AgentRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating agent repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.agent_repository import DocumentDBAgentRepository
 
         _agent_repo = DocumentDBAgentRepository()
@@ -95,7 +95,7 @@ def get_scope_repository() -> ScopeRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating scope repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.scope_repository import DocumentDBScopeRepository
 
         _scope_repo = DocumentDBScopeRepository()
@@ -117,7 +117,7 @@ def get_security_scan_repository() -> SecurityScanRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating security scan repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.security_scan_repository import DocumentDBSecurityScanRepository
 
         _security_scan_repo = DocumentDBSecurityScanRepository()
@@ -139,7 +139,7 @@ def get_search_repository() -> SearchRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating search repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.search_repository import DocumentDBSearchRepository
 
         _search_repo = DocumentDBSearchRepository()
@@ -161,7 +161,7 @@ def get_federation_config_repository() -> FederationConfigRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating federation config repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.federation_config_repository import DocumentDBFederationConfigRepository
 
         _federation_config_repo = DocumentDBFederationConfigRepository()
@@ -183,7 +183,7 @@ def get_peer_federation_repository() -> PeerFederationRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating peer federation repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.peer_federation_repository import DocumentDBPeerFederationRepository
 
         _peer_federation_repo = DocumentDBPeerFederationRepository()
@@ -209,7 +209,7 @@ def get_audit_repository() -> AuditRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating audit repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .audit_repository import DocumentDBAuditRepository
 
         _audit_repo = DocumentDBAuditRepository()
@@ -231,7 +231,7 @@ def get_skill_repository() -> SkillRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating skill repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.skill_repository import DocumentDBSkillRepository
 
         _skill_repo = DocumentDBSkillRepository()
@@ -255,7 +255,7 @@ def get_skill_security_scan_repository() -> SkillSecurityScanRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating skill security scan repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.skill_security_scan_repository import DocumentDBSkillSecurityScanRepository
 
         _skill_security_scan_repo = DocumentDBSkillSecurityScanRepository()
@@ -277,7 +277,7 @@ def get_virtual_server_repository() -> VirtualServerRepositoryBase:
     backend = settings.storage_backend
     logger.info(f"Creating virtual server repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.virtual_server_repository import DocumentDBVirtualServerRepository
 
         _virtual_server_repo = DocumentDBVirtualServerRepository()
@@ -305,7 +305,7 @@ def get_backend_session_repository() -> BackendSessionRepositoryBase | None:
     backend = settings.storage_backend
     logger.info(f"Creating backend session repository with backend: {backend}")
 
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         from .documentdb.backend_session_repository import DocumentDBBackendSessionRepository
 
         _backend_session_repo = DocumentDBBackendSessionRepository()
@@ -347,7 +347,7 @@ def get_app_log_repository() -> AppLogRepository | None:
         return _app_log_repo
 
     backend = settings.storage_backend
-    if backend in ("documentdb", "mongodb-ce"):
+    if backend in MONGODB_BACKENDS:
         _app_log_repo = AppLogRepository()
         logger.info("Initialized application log repository (DocumentDB/MongoDB)")
     else:
