@@ -1260,6 +1260,14 @@ class GroupSummary(BaseModel):
     name: str = Field(..., description="Group name")
     path: str = Field(..., description="Group path")
     attributes: dict[str, Any] | None = Field(None, description="Group attributes")
+    is_idp_managed: bool | None = Field(
+        None,
+        description=(
+            "Whether the group is managed in the upstream identity provider. "
+            "None for legacy records that predate the flag; True means "
+            "PATCH/DELETE call the IdP, False means local-only. See issue #946."
+        ),
+    )
 
 
 class IdPM2MClient(BaseModel):
@@ -3054,13 +3062,23 @@ class RegistryClient:
         logger.info(f"Retrieved {result.total} Keycloak groups")
         return result
 
-    def create_keycloak_group(self, name: str, description: str | None = None) -> GroupSummary:
+    def create_keycloak_group(
+        self,
+        name: str,
+        description: str | None = None,
+        create_in_idp: bool = False,
+    ) -> GroupSummary:
         """
         Create a new Keycloak group (admin only).
 
         Args:
             name: Group name
             description: Optional group description
+            create_in_idp: When True, also creates the group in the configured
+                identity provider (Keycloak/Entra/Okta/Auth0) and persists
+                `is_idp_managed=True`. When False (default), the group is
+                local-only and PATCH/DELETE will not call the IdP. See
+                issue #946.
 
         Returns:
             GroupSummary with created group details
@@ -3068,9 +3086,14 @@ class RegistryClient:
         Raises:
             requests.HTTPError: If not authorized (403), already exists (400), or request fails
         """
-        logger.info(f"Creating Keycloak group: {name}")
+        logger.info(
+            f"Creating Keycloak group: {name} (create_in_idp={create_in_idp})"
+        )
 
-        data = {"name": name}
+        data: dict[str, Any] = {
+            "name": name,
+            "scope_config": {"create_in_idp": create_in_idp},
+        }
         if description:
             data["description"] = description
 
