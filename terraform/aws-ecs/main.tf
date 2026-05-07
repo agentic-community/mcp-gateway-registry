@@ -116,6 +116,11 @@ module "mcp_gateway" {
   documentdb_use_iam                = var.documentdb_use_iam
   documentdb_credentials_secret_arn = var.storage_backend == "documentdb" ? aws_secretsmanager_secret.documentdb_credentials.arn : ""
 
+  # Optional full MongoDB connection string override (PR #947). See variable
+  # docs in variables.tf. Leave both empty to use the DOCUMENTDB_* block above.
+  mongodb_connection_string            = var.mongodb_connection_string
+  mongodb_connection_string_secret_arn = var.mongodb_connection_string_secret_arn
+
   # Security scanning configuration
   security_scan_enabled         = var.security_scan_enabled
   security_scan_on_registration = var.security_scan_on_registration

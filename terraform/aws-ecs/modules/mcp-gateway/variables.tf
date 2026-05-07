@@ -451,6 +451,24 @@ variable "documentdb_credentials_secret_arn" {
   default     = ""
 }
 
+# PR #947: Optional full MongoDB connection string override. When set, takes
+# precedence over the documentdb_* variables above. Use for MongoDB Atlas
+# (mongodb+srv://), replica sets, or URI-level tuning not expressible via the
+# discrete variables. Prefer mongodb_connection_string_secret_arn when the
+# URI contains credentials to avoid storing secrets in Terraform state.
+variable "mongodb_connection_string" {
+  description = "Optional full MongoDB connection string override (plain text). Takes precedence over documentdb_* variables. Leave empty to use documentdb_* variables."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "mongodb_connection_string_secret_arn" {
+  description = "Optional Secrets Manager ARN for the full MongoDB connection string. Preferred over mongodb_connection_string when the URI contains credentials."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # CLOUDFRONT CONFIGURATION (CloudFront HTTPS Support feature)
 # =============================================================================

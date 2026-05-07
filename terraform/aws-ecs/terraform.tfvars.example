@@ -261,6 +261,25 @@ oauth_store_tokens_in_session = false
 # documentdb_shard_count = 1
 
 # ============================================================================
+# MONGODB CONNECTION STRING OVERRIDE (PR #947)
+# ============================================================================
+# Optional full MongoDB connection string override. When set, takes precedence
+# over the documentdb_* variables above. Use for MongoDB Atlas, replica sets,
+# or URI-level tuning not expressible via the discrete variables.
+#
+# Prefer mongodb_connection_string_secret_arn when the URI contains credentials
+# (the plain-text variable value lands in Terraform state).
+#
+# When both are empty (default), the registry uses the documentdb_* variables
+# and connects to the Amazon DocumentDB cluster provisioned by this module.
+#
+# Examples:
+#   mongodb_connection_string = "mongodb+srv://user:pass@cluster.mongodb.net/mcp_registry?retryWrites=true"
+#   mongodb_connection_string_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:mongodb-atlas-uri-XXXXXX"
+# mongodb_connection_string            = ""
+# mongodb_connection_string_secret_arn = ""
+
+# ============================================================================
 # REGISTRY STATIC TOKEN AUTH (IdP-independent API access)
 # ============================================================================
 

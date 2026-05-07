@@ -89,7 +89,7 @@ module "ecs_service_auth" {
         }
       ]
 
-      environment = [
+      environment = concat([
         {
           name  = "REGISTRY_URL"
           value = "https://${var.domain_name}"
@@ -334,7 +334,18 @@ module "ecs_service_auth" {
           name  = "METRICS_SERVICE_URL"
           value = var.enable_observability ? "http://metrics-service:8890" : ""
         }
-      ]
+        ],
+        # PR #947: MongoDB connection string override (plain-text variant).
+        # Only emitted when var.mongodb_connection_string is non-empty and a
+        # Secrets Manager ARN was not provided. When empty, the registry
+        # falls back to the DOCUMENTDB_* env vars above.
+        var.mongodb_connection_string != "" && var.mongodb_connection_string_secret_arn == "" ? [
+          {
+            name  = "MONGODB_CONNECTION_STRING"
+            value = var.mongodb_connection_string
+          }
+        ] : []
+      )
 
       secrets = concat(
         [
@@ -359,6 +370,14 @@ module "ecs_service_auth" {
             valueFrom = "${var.documentdb_credentials_secret_arn}:password::"
           }
         ],
+        # PR #947: MongoDB connection string override (Secrets Manager variant).
+        # Preferred when the URI contains credentials (avoids plain text in state).
+        var.mongodb_connection_string_secret_arn != "" ? [
+          {
+            name      = "MONGODB_CONNECTION_STRING"
+            valueFrom = var.mongodb_connection_string_secret_arn
+          }
+        ] : [],
         var.entra_enabled ? [
           {
             name      = "ENTRA_CLIENT_SECRET"
@@ -573,7 +592,7 @@ module "ecs_service_registry" {
         }
       ]
 
-      environment = [
+      environment = concat([
         {
           name  = "REGISTRY_URL"
           value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${module.alb.dns_name}"
@@ -1033,7 +1052,18 @@ module "ecs_service_registry" {
           name  = "GITHUB_API_BASE_URL"
           value = var.github_api_base_url
         },
-      ]
+        ],
+        # PR #947: MongoDB connection string override (plain-text variant).
+        # Only emitted when var.mongodb_connection_string is non-empty and a
+        # Secrets Manager ARN was not provided. When empty, the registry
+        # falls back to the DOCUMENTDB_* env vars above.
+        var.mongodb_connection_string != "" && var.mongodb_connection_string_secret_arn == "" ? [
+          {
+            name  = "MONGODB_CONNECTION_STRING"
+            value = var.mongodb_connection_string
+          }
+        ] : []
+      )
 
       secrets = concat(
         [
@@ -1058,6 +1088,14 @@ module "ecs_service_registry" {
             valueFrom = aws_secretsmanager_secret.embeddings_api_key.arn
           }
         ],
+        # PR #947: MongoDB connection string override (Secrets Manager variant).
+        # Preferred when the URI contains credentials (avoids plain text in state).
+        var.mongodb_connection_string_secret_arn != "" ? [
+          {
+            name      = "MONGODB_CONNECTION_STRING"
+            valueFrom = var.mongodb_connection_string_secret_arn
+          }
+        ] : [],
         var.storage_backend == "documentdb" ? [
           {
             name      = "DOCUMENTDB_USERNAME"
