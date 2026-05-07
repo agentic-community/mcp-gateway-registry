@@ -10,10 +10,14 @@
 
 #
 # Enable Rotation for DocumentDB Credentials
+# Gated on is_aws_documentdb. The rotation Lambda and its permissions are
+# also gated in secret-rotation.tf. Issue #955.
 #
 resource "aws_secretsmanager_secret_rotation" "documentdb_credentials" {
-  secret_id           = aws_secretsmanager_secret.documentdb_credentials.id
-  rotation_lambda_arn = aws_lambda_function.documentdb_rotation.arn
+  count = local.is_aws_documentdb ? 1 : 0
+
+  secret_id           = aws_secretsmanager_secret.documentdb_credentials[0].id
+  rotation_lambda_arn = aws_lambda_function.documentdb_rotation[0].arn
 
   rotation_rules {
     automatically_after_days = 30

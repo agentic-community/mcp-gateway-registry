@@ -37,6 +37,11 @@ resource "aws_iam_role" "rotation_lambda" {
 
 #
 # IAM Policy for Lambda to Rotate Secrets
+# The IAM role is shared across the DocumentDB rotation Lambda (gated on
+# is_aws_documentdb) and the RDS/Keycloak rotation Lambda (always created).
+# DocumentDB-specific resources are conditionally included so the policy
+# does not reference non-existent resources when DocumentDB is gated out.
+# Issue #955.
 #
 #checkov:skip=CKV_AWS_290:GetRandomPassword and EC2 network interface actions require wildcard resource per AWS API design
 #checkov:skip=CKV_AWS_355:GetRandomPassword and EC2 network interface actions require wildcard resource per AWS API design
@@ -46,74 +51,77 @@ resource "aws_iam_role_policy" "rotation_lambda" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "SecretsManagerAccess"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:DescribeSecret",
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:PutSecretValue",
-          "secretsmanager:UpdateSecretVersionStage"
-        ]
-        Resource = [
-          aws_secretsmanager_secret.documentdb_credentials.arn,
-          aws_secretsmanager_secret.keycloak_db_secret.arn
-        ]
-      },
-      {
-        Sid    = "GenerateRandomPassword"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetRandomPassword"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "KMSAccess"
-        Effect = "Allow"
-        Action = [
-          "kms:Decrypt",
-          "kms:DescribeKey",
-          "kms:GenerateDataKey"
-        ]
-        Resource = [
-          aws_kms_key.documentdb.arn,
-          aws_kms_key.rds.arn
-        ]
-      },
-      {
-        Sid    = "RDSAccess"
-        Effect = "Allow"
-        Action = [
-          "rds:DescribeDBInstances",
-          "rds:DescribeDBClusters",
-          "rds:ModifyDBCluster"
-        ]
-        Resource = aws_rds_cluster.keycloak.arn
-      },
-      {
+    Statement = concat(
+      [
+        {
+          Sid    = "SecretsManagerAccess"
+          Effect = "Allow"
+          Action = [
+            "secretsmanager:DescribeSecret",
+            "secretsmanager:GetSecretValue",
+            "secretsmanager:PutSecretValue",
+            "secretsmanager:UpdateSecretVersionStage"
+          ]
+          Resource = concat(
+            local.is_aws_documentdb ? [aws_secretsmanager_secret.documentdb_credentials[0].arn] : [],
+            [aws_secretsmanager_secret.keycloak_db_secret.arn],
+          )
+        },
+        {
+          Sid    = "GenerateRandomPassword"
+          Effect = "Allow"
+          Action = [
+            "secretsmanager:GetRandomPassword"
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "KMSAccess"
+          Effect = "Allow"
+          Action = [
+            "kms:Decrypt",
+            "kms:DescribeKey",
+            "kms:GenerateDataKey"
+          ]
+          Resource = concat(
+            local.is_aws_documentdb ? [aws_kms_key.documentdb[0].arn] : [],
+            [aws_kms_key.rds.arn],
+          )
+        },
+        {
+          Sid    = "RDSAccess"
+          Effect = "Allow"
+          Action = [
+            "rds:DescribeDBInstances",
+            "rds:DescribeDBClusters",
+            "rds:ModifyDBCluster"
+          ]
+          Resource = aws_rds_cluster.keycloak.arn
+        },
+        {
+          Sid    = "VPCNetworkInterface"
+          Effect = "Allow"
+          Action = [
+            "ec2:CreateNetworkInterface",
+            "ec2:DescribeNetworkInterfaces",
+            "ec2:DeleteNetworkInterface",
+            "ec2:AssignPrivateIpAddresses",
+            "ec2:UnassignPrivateIpAddresses"
+          ]
+          Resource = "*"
+        },
+      ],
+      # DocumentDBAccess statement only when the DocumentDB cluster exists.
+      local.is_aws_documentdb ? [{
         Sid    = "DocumentDBAccess"
         Effect = "Allow"
         Action = [
           "docdb:DescribeDBClusters",
           "docdb:ModifyDBCluster"
         ]
-        Resource = aws_docdb_cluster.registry.arn
-      },
-      {
-        Sid    = "VPCNetworkInterface"
-        Effect = "Allow"
-        Action = [
-          "ec2:CreateNetworkInterface",
-          "ec2:DescribeNetworkInterfaces",
-          "ec2:DeleteNetworkInterface",
-          "ec2:AssignPrivateIpAddresses",
-          "ec2:UnassignPrivateIpAddresses"
-        ]
-        Resource = "*"
-      }
-    ]
+        Resource = aws_docdb_cluster.registry[0].arn
+      }] : [],
+    )
   })
 }
 
@@ -143,12 +151,14 @@ resource "aws_security_group" "rotation_lambda" {
 }
 
 #
-# Lambda -> DocumentDB
+# Lambda -> DocumentDB (gated on is_aws_documentdb - issue #955)
 #
 resource "aws_vpc_security_group_egress_rule" "lambda_to_documentdb" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   security_group_id = aws_security_group.rotation_lambda.id
 
-  referenced_security_group_id = aws_security_group.documentdb.id
+  referenced_security_group_id = aws_security_group.documentdb[0].id
   from_port                    = 27017
   to_port                      = 27017
   ip_protocol                  = "tcp"
@@ -163,10 +173,12 @@ resource "aws_vpc_security_group_egress_rule" "lambda_to_documentdb" {
 }
 
 #
-# DocumentDB <- Lambda
+# DocumentDB <- Lambda (gated on is_aws_documentdb - issue #955)
 #
 resource "aws_vpc_security_group_ingress_rule" "documentdb_from_lambda" {
-  security_group_id = aws_security_group.documentdb.id
+  count = local.is_aws_documentdb ? 1 : 0
+
+  security_group_id = aws_security_group.documentdb[0].id
 
   referenced_security_group_id = aws_security_group.rotation_lambda.id
   from_port                    = 27017
@@ -247,6 +259,8 @@ resource "aws_vpc_security_group_egress_rule" "lambda_to_https" {
 #
 #checkov:skip=CKV_AWS_158:KMS encryption for CloudWatch logs not required in this deployment
 resource "aws_cloudwatch_log_group" "documentdb_rotation" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   name              = "/aws/lambda/${var.name}-rotate-documentdb"
   retention_in_days = 30
 
@@ -273,8 +287,12 @@ resource "aws_cloudwatch_log_group" "rds_rotation" {
 
 #
 # Lambda Function Package - DocumentDB Rotation
+# Gated via `count` on the data source so the archive is not built when
+# DocumentDB is not provisioned. Issue #955.
 #
 data "archive_file" "documentdb_rotation" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   type        = "zip"
   source_dir  = "${path.module}/lambda/rotate-documentdb"
   output_path = "${path.module}/.terraform/lambda/rotate-documentdb.zip"
@@ -290,18 +308,20 @@ data "archive_file" "rds_rotation" {
 }
 
 #
-# Lambda Function - DocumentDB Rotation
+# Lambda Function - DocumentDB Rotation (gated on is_aws_documentdb)
 #
 #checkov:skip=CKV_AWS_115:Reserved concurrency not needed for secret rotation Lambda
 #checkov:skip=CKV_AWS_116:DLQ not needed for synchronous secret rotation Lambda
 #checkov:skip=CKV_AWS_173:Lambda environment variables use default encryption
 #checkov:skip=CKV_AWS_272:Code signing not configured for internal rotation Lambdas
 resource "aws_lambda_function" "documentdb_rotation" {
-  filename         = data.archive_file.documentdb_rotation.output_path
+  count = local.is_aws_documentdb ? 1 : 0
+
+  filename         = data.archive_file.documentdb_rotation[0].output_path
   function_name    = "${var.name}-rotate-documentdb"
   role             = aws_iam_role.rotation_lambda.arn
   handler          = "index.lambda_handler"
-  source_code_hash = data.archive_file.documentdb_rotation.output_base64sha256
+  source_code_hash = data.archive_file.documentdb_rotation[0].output_base64sha256
   runtime          = "python3.13"
   timeout          = 300
   memory_size      = 256
@@ -384,13 +404,15 @@ resource "aws_lambda_function" "rds_rotation" {
 }
 
 #
-# Lambda Permission for Secrets Manager - DocumentDB
+# Lambda Permission for Secrets Manager - DocumentDB (gated on is_aws_documentdb)
 #
 #checkov:skip=CKV_AWS_364:Lambda resource-based policy does not use IAM policy document version field
 resource "aws_lambda_permission" "documentdb_rotation" {
+  count = local.is_aws_documentdb ? 1 : 0
+
   statement_id  = "AllowExecutionFromSecretsManager"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.documentdb_rotation.function_name
+  function_name = aws_lambda_function.documentdb_rotation[0].function_name
   principal     = "secretsmanager.amazonaws.com"
 }
 

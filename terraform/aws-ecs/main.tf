@@ -2,7 +2,10 @@
 # This Terraform configuration deploys the MCP Gateway to AWS ECS Fargate
 
 terraform {
-  required_version = ">= 1.0"
+  # 1.2 required for `precondition` blocks on modules (used in the
+  # mcp_gateway module to validate mongodb_connection_string* presence
+  # for non-documentdb MongoDB backends, issue #955).
+  required_version = ">= 1.2"
 
   required_providers {
     aws = {
@@ -108,13 +111,16 @@ module "mcp_gateway" {
   session_cookie_domain = var.session_cookie_domain
 
   # DocumentDB configuration
-  storage_backend                   = var.storage_backend
-  documentdb_endpoint               = aws_docdb_cluster.registry.endpoint
+  storage_backend = var.storage_backend
+  # Cluster endpoint + credentials secret are gated on is_aws_documentdb so
+  # that external-MongoDB (Atlas / self-managed) deployments do not require
+  # the AWS DocumentDB resources to exist (issue #955).
+  documentdb_endpoint               = local.is_aws_documentdb ? aws_docdb_cluster.registry[0].endpoint : ""
   documentdb_database               = var.documentdb_database
   documentdb_namespace              = var.documentdb_namespace
   documentdb_use_tls                = var.documentdb_use_tls
   documentdb_use_iam                = var.documentdb_use_iam
-  documentdb_credentials_secret_arn = var.storage_backend == "documentdb" ? aws_secretsmanager_secret.documentdb_credentials.arn : ""
+  documentdb_credentials_secret_arn = local.is_aws_documentdb ? aws_secretsmanager_secret.documentdb_credentials[0].arn : ""
 
   # Optional full MongoDB connection string override (PR #947). See variable
   # docs in variables.tf. Leave both empty to use the DOCUMENTDB_* block above.
@@ -173,13 +179,13 @@ module "mcp_gateway" {
   registration_webhook_timeout_seconds = var.registration_webhook_timeout_seconds
 
   # Registration gate / admission control (issue #809)
-  registration_gate_enabled          = var.registration_gate_enabled
-  registration_gate_url              = var.registration_gate_url
-  registration_gate_auth_type        = var.registration_gate_auth_type
-  registration_gate_auth_credential  = var.registration_gate_auth_credential
-  registration_gate_auth_header_name = var.registration_gate_auth_header_name
-  registration_gate_timeout_seconds  = var.registration_gate_timeout_seconds
-  registration_gate_max_retries      = var.registration_gate_max_retries
+  registration_gate_enabled              = var.registration_gate_enabled
+  registration_gate_url                  = var.registration_gate_url
+  registration_gate_auth_type            = var.registration_gate_auth_type
+  registration_gate_auth_credential      = var.registration_gate_auth_credential
+  registration_gate_auth_header_name     = var.registration_gate_auth_header_name
+  registration_gate_timeout_seconds      = var.registration_gate_timeout_seconds
+  registration_gate_max_retries          = var.registration_gate_max_retries
   registration_gate_oauth2_token_url     = var.registration_gate_oauth2_token_url
   registration_gate_oauth2_client_id     = var.registration_gate_oauth2_client_id
   registration_gate_oauth2_client_secret = var.registration_gate_oauth2_client_secret
@@ -220,8 +226,8 @@ module "mcp_gateway" {
   # Application log configuration
   app_log_centralized_enabled  = var.app_log_centralized_enabled
   app_log_centralized_ttl_days = var.app_log_centralized_ttl_days
-  app_log_level            = var.app_log_level
-  app_log_excluded_loggers = var.app_log_excluded_loggers
+  app_log_level                = var.app_log_level
+  app_log_excluded_loggers     = var.app_log_excluded_loggers
 
   # Deployment mode configuration
   deployment_mode = var.deployment_mode
@@ -264,6 +270,33 @@ module "mcp_gateway" {
   # Wait for S3 bucket policy to propagate (30s delay)
   # This prevents "Access Denied" errors when ALB tests write permissions
   depends_on = [time_sleep.wait_for_bucket_policy]
+}
+
+# When storage_backend is a non-documentdb MongoDB variant (mongodb-ce,
+# mongodb, mongodb-atlas), Terraform does not provision AWS DocumentDB, so
+# the registry MUST be given a MongoDB URI via mongodb_connection_string or
+# mongodb_connection_string_secret_arn. Enforce at plan time rather than at
+# apply/runtime. Implemented as a precondition on a terraform_data resource
+# because Terraform 1.11 does not yet support `lifecycle` blocks directly on
+# `module` references. Issue #955.
+resource "terraform_data" "mongodb_backend_uri_required" {
+  input = var.storage_backend
+
+  lifecycle {
+    precondition {
+      condition = !local.uses_external_mongodb || (
+        var.mongodb_connection_string != "" ||
+        var.mongodb_connection_string_secret_arn != ""
+      )
+      error_message = join(" ", [
+        "When storage_backend is one of mongodb-ce / mongodb / mongodb-atlas,",
+        "you must set either mongodb_connection_string or",
+        "mongodb_connection_string_secret_arn (prefer the _secret_arn form",
+        "for credentials). See terraform.tfvars.example and",
+        "docs/faq/configuring-mongodb-atlas-backend.md.",
+      ])
+    }
+  }
 }
 
 # =============================================================================
