@@ -14,7 +14,7 @@ dependencies = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-prometheus>=0.45b0",
     "opentelemetry-exporter-otlp>=1.20.0",
-    "python-multipart>=0.0.26",
+    "python-multipart>=0.0.27",
 ]
 
 [project.optional-dependencies]
