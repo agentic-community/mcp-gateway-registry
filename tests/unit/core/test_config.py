@@ -452,7 +452,7 @@ class TestSettingsPathsContainer:
 
     @patch.object(Settings, "is_local_dev", new_callable=lambda: property(lambda self: False))
     def test_log_dir_container(self, mock_is_local_dev) -> None:
-        """Test log_dir property in container mode."""
+        """Test log_dir property in container mode (issue #987 default)."""
         # Arrange
         settings = Settings()
 
@@ -460,12 +460,12 @@ class TestSettingsPathsContainer:
         result = settings.log_dir
 
         # Assert
-        expected = Path("/app/logs")
+        expected = Path("/var/log/containers/ai-registry")
         assert result == expected
 
     @patch.object(Settings, "is_local_dev", new_callable=lambda: property(lambda self: False))
     def test_log_file_path_container(self, mock_is_local_dev) -> None:
-        """Test log_file_path property in container mode."""
+        """Test log_file_path property in container mode (issue #987 default)."""
         # Arrange
         settings = Settings()
 
@@ -473,7 +473,7 @@ class TestSettingsPathsContainer:
         result = settings.log_file_path
 
         # Assert
-        expected = Path("/app/logs") / "registry.log"
+        expected = Path("/var/log/containers/ai-registry") / "registry.log"
         assert result == expected
 
     @patch.object(Settings, "is_local_dev", new_callable=lambda: property(lambda self: False))
@@ -993,3 +993,74 @@ class TestSettingsTabVisibilityStartupWarnings:
             log_tab_visibility_warnings(s)
 
         assert not any("SHOW_" in msg for msg in caplog.messages)
+
+
+# =============================================================================
+# TEST CLASS: APP_LOG_DIR and APP_LOG_FILE_FORMAT (Issue #987)
+# =============================================================================
+
+
+class TestAppLogDirValidator:
+    """Tests for the APP_LOG_DIR path validator added in issue #987."""
+
+    def test_none_value_accepted(self) -> None:
+        """APP_LOG_DIR unset should leave app_log_dir=None."""
+        settings = Settings(app_log_dir=None)
+        assert settings.app_log_dir is None
+
+    def test_empty_string_treated_as_unset(self) -> None:
+        """Empty string should be normalized to None (uses default)."""
+        settings = Settings(app_log_dir="")
+        assert settings.app_log_dir is None
+
+    def test_absolute_path_accepted(self) -> None:
+        """Absolute paths are the only supported form."""
+        settings = Settings(app_log_dir="/var/log/custom")
+        assert settings.app_log_dir == "/var/log/custom"
+
+    def test_relative_path_rejected(self) -> None:
+        """Relative paths should be rejected at startup."""
+        with pytest.raises(ValueError, match="absolute"):
+            Settings(app_log_dir="relative/path")
+
+    def test_path_with_dotdot_rejected(self) -> None:
+        """Paths containing '..' segments should be rejected (defense in depth)."""
+        with pytest.raises(ValueError, match="'\\.\\.'"):
+            Settings(app_log_dir="/var/log/../etc")
+
+    @patch.object(Settings, "is_local_dev", new_callable=lambda: property(lambda self: False))
+    def test_override_honored_by_log_dir_property(
+        self,
+        mock_is_local_dev,
+    ) -> None:
+        """Setting app_log_dir overrides the mode-based default."""
+        settings = Settings(app_log_dir="/custom/path")
+        assert settings.log_dir == Path("/custom/path")
+
+
+class TestAppLogFileFormatValidator:
+    """Tests for the APP_LOG_FILE_FORMAT validator added in issue #987."""
+
+    def test_json_accepted(self) -> None:
+        settings = Settings(app_log_file_format="json")
+        assert settings.app_log_file_format == "json"
+
+    def test_text_accepted(self) -> None:
+        settings = Settings(app_log_file_format="text")
+        assert settings.app_log_file_format == "text"
+
+    def test_case_insensitive(self) -> None:
+        settings = Settings(app_log_file_format="JSON")
+        assert settings.app_log_file_format == "json"
+
+    def test_whitespace_stripped(self) -> None:
+        settings = Settings(app_log_file_format="  text  ")
+        assert settings.app_log_file_format == "text"
+
+    def test_unknown_value_rejected(self) -> None:
+        with pytest.raises(ValueError, match="json.*text"):
+            Settings(app_log_file_format="yaml")
+
+    def test_default_is_json(self) -> None:
+        settings = Settings()
+        assert settings.app_log_file_format == "json"

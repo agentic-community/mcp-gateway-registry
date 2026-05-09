@@ -291,9 +291,13 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "title": "Application Logging",
         "order": 19,
         "fields": [
+            ("app_log_dir", "Log File Directory", False),
+            ("app_log_file_format", "Log File Format (json|text)", False),
             ("app_log_centralized_enabled", "Centralized Enabled", False),
             ("app_log_centralized_ttl_days", "Centralized TTL Days", False),
             ("app_log_level", "Log Level", False),
+            ("app_log_max_bytes", "Max Log File Size (bytes)", False),
+            ("app_log_backup_count", "Rotated Backup Count", False),
             ("app_log_excluded_loggers", "Excluded Loggers", False),
         ],
     },

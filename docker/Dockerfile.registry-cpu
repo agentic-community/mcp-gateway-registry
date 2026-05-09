@@ -6,7 +6,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies including nginx with lua module and Node.js
+# Install system dependencies including nginx with lua module and Node.js.
+# logrotate rotates /var/log/containers/ai-registry/nginx-*.log daily (issue #987).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     nginx-extras \
@@ -17,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     build-essential \
     ca-certificates \
+    logrotate \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean \
@@ -78,10 +80,13 @@ RUN mkdir -p /app/registry/models && \
     . .venv/bin/activate && \
     python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('/app/registry/models/all-MiniLM-L6-v2')"
 
-# Create logs and certs directories
+# Create logs and certs directories.
+# /app/logs is kept for audit logs; application logs now go to
+# /var/log/containers/ai-registry per issue #987.
 RUN mkdir -p /app/logs && \
     mkdir -p /app/certs && \
-    mkdir -p /app/security_scans
+    mkdir -p /app/security_scans && \
+    mkdir -p /var/log/containers/ai-registry
 
 # Create nginx lua directories and remove default sites (needed by entrypoint script)
 RUN mkdir -p /etc/nginx/lua/virtual_mappings && \
@@ -101,13 +106,17 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 COPY docker/registry-entrypoint.sh /app/registry-entrypoint.sh
 RUN chmod +x /app/registry-entrypoint.sh
 
+# Logrotate config for nginx logs (issue #987).
+# Invoked daily by the registry entrypoint's background loop.
+COPY docker/logrotate-nginx.conf /etc/logrotate.d/nginx-mcp
+
 # Create non-root user for security (CIS Docker Benchmark 4.1)
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
 
 # Set ownership for runtime-writable directories and entrypoint
 # Note: Use targeted chown instead of chown -R /app to avoid slow recursive
 # ownership change on .venv (thousands of files that don't need write access)
-RUN chown -R appuser:appuser /app/logs /app/certs /app/security_scans /app/registry /etc/nginx /var/log/nginx /var/lib/nginx /run/nginx && \
+RUN chown -R appuser:appuser /app/logs /app/certs /app/security_scans /app/registry /etc/nginx /var/log/nginx /var/log/containers/ai-registry /var/lib/nginx /run/nginx && \
     chown appuser:appuser /app /app/registry-entrypoint.sh
 
 # Switch to non-root user

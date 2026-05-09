@@ -49,9 +49,12 @@ RUN chmod +x /app/auth-entrypoint.sh
 COPY auth_server/ /app/
 COPY registry/ /app/registry/
 
-# Create logs and certs directories
+# Create logs and certs directories.
+# /app/logs is kept for audit logs; application logs now go to
+# /var/log/containers/ai-registry per issue #987.
 RUN mkdir -p /app/logs && \
-    mkdir -p /app/certs
+    mkdir -p /app/certs && \
+    mkdir -p /var/log/containers/ai-registry
 
 # Expose port
 EXPOSE 8888
@@ -64,7 +67,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
 
 # Set ownership of application files, venv, logs, certs, and entrypoint
-RUN chown -R appuser:appuser /app /app/.venv /app/logs /app/certs /app/auth-entrypoint.sh
+RUN chown -R appuser:appuser /app /app/.venv /app/logs /app/certs /var/log/containers/ai-registry /app/auth-entrypoint.sh
 
 # Bake the build version into the image so `docker inspect` and any future
 # version-reporting code path (issue #919) can read it. Requires

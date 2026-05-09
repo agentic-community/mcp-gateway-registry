@@ -484,6 +484,16 @@ else
     log "Container images built successfully with optimization"
 fi
 
+# Prepare host log directory used by registry, auth-server, and mcpgw
+# containers. See scripts/prepare-log-dirs.sh for details (Issue #987).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -x "${SCRIPT_DIR}/scripts/prepare-log-dirs.sh" ]; then
+    log "Preparing host log directory (/var/log/containers/ai-registry)..."
+    "${SCRIPT_DIR}/scripts/prepare-log-dirs.sh" || handle_error "Failed to prepare host log directory"
+else
+    log "WARNING: scripts/prepare-log-dirs.sh not found or not executable; skipping log-directory prep"
+fi
+
 # Start metrics service first to generate API keys
 log "Starting metrics service first..."
 $COMPOSE_CMD $COMPOSE_FILES up -d metrics-service || handle_error "Failed to start metrics service"

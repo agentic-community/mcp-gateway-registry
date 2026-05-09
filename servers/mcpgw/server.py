@@ -16,13 +16,17 @@ from typing import Any
 
 import httpx
 from fastmcp import Context, FastMCP
+from logging_setup import setup_mcpgw_logging
 from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
+_log_file = setup_mcpgw_logging()
 logger = logging.getLogger(__name__)
+logger.info(
+    "mcpgw logging configured: file=%s format=%s level=%s",
+    _log_file,
+    os.getenv("APP_LOG_FILE_FORMAT", "json"),
+    os.getenv("APP_LOG_LEVEL", "INFO"),
+)
 
 REGISTRY_URL = os.getenv("REGISTRY_BASE_URL", "http://localhost")
 

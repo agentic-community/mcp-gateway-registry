@@ -671,6 +671,8 @@ Transform how both autonomous AI agents and development teams access enterprise 
 
 Comprehensive real-time metrics and monitoring through Grafana dashboards with dual-path storage: SQLite for detailed historical analysis and OpenTelemetry (OTEL) export for integration with Prometheus, CloudWatch, Datadog, and other monitoring platforms. Track authentication events, tool executions, discovery queries, and system performance metrics. [Learn more](docs/OBSERVABILITY.md)
 
+**Log files**: registry, auth-server, and mcpgw write JSONL-formatted log files to `/var/log/containers/ai-registry/` on the Docker host, making them easy to ingest with Splunk Universal Forwarders or similar log shippers. See the [Logging Standard](docs/logging-standard.md) for the schema and Splunk props.conf recipe.
+
 <img src="docs/img/dashboard.png" alt="Grafana Metrics Dashboard" />
 <p><em>Real-time metrics and observability dashboard tracking server health, tool usage, and authentication events</em></p>
 </td>

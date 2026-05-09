@@ -82,6 +82,12 @@ HEALTHCHECK --interval=500s --timeout=10s --start-period=30s --retries=3 \
 # Switch to root to create entrypoint script
 USER root
 
+# Create /var/log/containers/ai-registry for file logging (issue #987).
+# Only mcpgw writes to this path; other MCP servers ignore it. Creating
+# the directory unconditionally keeps the image simple and costs nothing.
+RUN mkdir -p /var/log/containers/ai-registry && \
+    chown -R appuser:appuser /var/log/containers/ai-registry
+
 # Create entrypoint script that handles environment setup and runs server.py
 RUN echo '#!/bin/bash\n\
 set -e\n\

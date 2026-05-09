@@ -70,7 +70,9 @@ ENV PYTHONUNBUFFERED=1 \
 # Build argument for version
 ARG BUILD_VERSION="1.0.0"
 
-# Install runtime dependencies including nginx with lua module
+# Install runtime dependencies including nginx with lua module.
+# logrotate is used by the entrypoint's daily rotation loop for nginx logs
+# at /var/log/containers/ai-registry/nginx-*.log (issue #987).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     nginx-extras \
@@ -79,6 +81,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     openssl \
     ca-certificates \
+    logrotate \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -100,6 +103,10 @@ COPY --chown=appuser:appuser docker/nginx_rev_proxy_http_only.conf /app/docker/n
 COPY --chown=appuser:appuser docker/nginx_rev_proxy_http_and_https.conf /app/docker/nginx_rev_proxy_http_and_https.conf
 COPY --chown=appuser:appuser docker/lua/ /app/docker/lua/
 
+# Logrotate config for nginx logs (issue #987).
+# Invoked daily by the registry entrypoint's background loop.
+COPY docker/logrotate-nginx.conf /etc/logrotate.d/nginx-mcp
+
 # Copy entrypoint early (rarely changes)
 COPY --chown=appuser:appuser docker/registry-entrypoint.sh /app/registry-entrypoint.sh
 RUN chmod +x /app/registry-entrypoint.sh
@@ -118,6 +125,8 @@ COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/build /app/fr
 # Create directories and set ownership
 # Note: /app files already have correct ownership via --chown on COPY commands above.
 # Only chown directories that are created here (not covered by COPY --chown).
+# /app/logs is still created for audit logs (see settings.audit_log_path).
+# Application logs now go to /var/log/containers/ai-registry per issue #987.
 RUN mkdir -p /app/logs && \
     mkdir -p /app/certs && \
     mkdir -p /app/security_scans /app/skill_security_scans /app/agent_security_scans && \
@@ -125,8 +134,9 @@ RUN mkdir -p /app/logs && \
     rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default && \
     mkdir -p /var/lib/nginx/body /var/lib/nginx/proxy /var/lib/nginx/fastcgi /var/lib/nginx/uwsgi /var/lib/nginx/scgi && \
     mkdir -p /var/log/nginx && \
+    mkdir -p /var/log/containers/ai-registry && \
     mkdir -p /run/nginx && \
-    chown -R appuser:appuser /app/logs /app/certs /app/security_scans /app/skill_security_scans /app/agent_security_scans /etc/nginx /var/log/nginx /var/lib/nginx /run/nginx
+    chown -R appuser:appuser /app/logs /app/certs /app/security_scans /app/skill_security_scans /app/agent_security_scans /etc/nginx /var/log/nginx /var/log/containers/ai-registry /var/lib/nginx /run/nginx
 
 # Expose ports for nginx (HTTP/HTTPS on high ports for non-root) and registry
 EXPOSE 8080 8443 7860

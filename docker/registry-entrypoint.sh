@@ -355,5 +355,22 @@ sed -i 's|pid /run/nginx.pid;|pid /run/nginx/nginx.pid;|' /etc/nginx/nginx.conf
 nginx
 
 echo "Registry service fully started. Keeping container alive..."
+
+# --- Nginx log rotation loop (Issue #987) ---
+# Rotate /var/log/containers/ai-registry/nginx-*.log daily. logrotate is
+# invoked once per 24h in the background so we don't need cron.
+if [ -f /etc/logrotate.d/nginx-mcp ] && command -v logrotate > /dev/null 2>&1; then
+    (
+        while true; do
+            sleep 86400
+            logrotate /etc/logrotate.d/nginx-mcp || echo "WARN: logrotate run failed"
+        done
+    ) &
+    echo "Nginx log-rotation loop started (daily)."
+else
+    echo "WARN: /etc/logrotate.d/nginx-mcp missing or logrotate not installed; nginx logs will grow unbounded."
+fi
+
 # Keep the container running indefinitely
-tail -f /dev/null 
+tail -f /dev/null
+

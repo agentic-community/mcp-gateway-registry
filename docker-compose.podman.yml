@@ -165,6 +165,9 @@ services:
       - APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS=${APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS:-5.0}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
       - APP_LOG_EXCLUDED_LOGGERS=${APP_LOG_EXCLUDED_LOGGERS:-uvicorn.access,httpx,pymongo,motor}
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -173,11 +176,14 @@ services:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/agents:/app/registry/agents
       - ${HOME}/mcp-gateway/models:/app/registry/models
+      # Audit logs kept under ${HOME}/mcp-gateway/logs (legacy path)
       - ${HOME}/mcp-gateway/logs:/app/logs
       - ${HOME}/mcp-gateway/security_scans:/app/security_scans
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
+      # Application log files (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -312,10 +318,16 @@ services:
       - APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS=${APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS:-5.0}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
       - APP_LOG_EXCLUDED_LOGGERS=${APP_LOG_EXCLUDED_LOGGERS:-uvicorn.access,httpx,pymongo,motor}
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
     ports:
       - "8888:8888"
     volumes:
+      # Audit logs kept under ${HOME}/mcp-gateway/logs (legacy path)
       - ${HOME}/mcp-gateway/logs:/app/logs
+      # Application log files (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
       # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
     depends_on:
       metrics-service:
@@ -366,10 +378,18 @@ services:
       - HOST=0.0.0.0
       - PORT=8003
       - REGISTRY_BASE_URL=http://registry:8080
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
+      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
+      - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
+      # Application log file (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
       - "8003:8003"
     depends_on:

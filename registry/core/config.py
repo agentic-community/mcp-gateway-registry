@@ -452,6 +452,24 @@ class Settings(BaseSettings):
         default="uvicorn.access,httpx,pymongo,motor",
         description="Comma-separated logger names to exclude from MongoDB log writes",
     )
+    app_log_dir: str | None = Field(
+        default=None,
+        description=(
+            "Directory where service log files are written. "
+            "When unset, defaults to /var/log/containers/ai-registry in "
+            "containers and ./logs in local dev mode. "
+            "Each service writes {app_log_dir}/{service_name}.log."
+        ),
+    )
+    app_log_file_format: str = Field(
+        default="json",
+        description=(
+            "Format for service log files. 'json' emits JSON Lines per "
+            "docs/logging-standard.md (Splunk-friendly). 'text' emits the "
+            "legacy comma-separated format. Console/stdout format is not "
+            "affected by this setting."
+        ),
+    )
 
     # Audit Logging Configuration
     audit_log_enabled: bool = True  # Enable/disable audit logging globally
@@ -530,6 +548,48 @@ class Settings(BaseSettings):
             "fail startup with a clear error listing accepted values."
         ),
     )
+
+    @field_validator("app_log_dir", mode="before")
+    @classmethod
+    def _validate_app_log_dir(
+        cls,
+        v: str | None,
+    ) -> str | None:
+        """Reject non-absolute APP_LOG_DIR and paths containing '..'.
+
+        Operator-supplied config; we validate at startup to fail fast with a
+        clear message instead of letting the container silently fall back to
+        console-only logging after a mkdir error.
+        """
+        if v is None or v == "":
+            return None
+        if not isinstance(v, str):
+            raise ValueError(f"APP_LOG_DIR must be a string, got {type(v).__name__}")
+        if not v.startswith("/"):
+            raise ValueError(f"APP_LOG_DIR must be an absolute path, got {v!r}")
+        if ".." in Path(v).parts:
+            raise ValueError(f"APP_LOG_DIR must not contain '..' segments, got {v!r}")
+        return v
+
+    @field_validator("app_log_file_format", mode="before")
+    @classmethod
+    def _validate_app_log_file_format(
+        cls,
+        v: str,
+    ) -> str:
+        """Accept only 'json' (new default) or 'text' (legacy back-compat)."""
+        if v is None:
+            return "json"
+        if not isinstance(v, str):
+            raise ValueError(
+                f"APP_LOG_FILE_FORMAT must be a string, got {type(v).__name__}"
+            )
+        normalized = v.strip().lower()
+        if normalized not in ("json", "text"):
+            raise ValueError(
+                f"APP_LOG_FILE_FORMAT must be 'json' or 'text', got {v!r}"
+            )
+        return normalized
 
     @field_validator("storage_backend", mode="before")
     @classmethod
@@ -631,16 +691,33 @@ class Settings(BaseSettings):
 
     @property
     def log_dir(self) -> Path:
-        """Get log directory based on environment."""
+        """Resolve the directory where application .log files are written.
+
+        Resolution order:
+        1. APP_LOG_DIR override (if set) - used verbatim.
+        2. ./logs in local dev (when /app does not exist).
+        3. /var/log/containers/ai-registry in containers (issue #987).
+
+        Note: this is for the Python application logs (registry.log,
+        auth-server.log, ai-registry-tools.log). Audit logs still use
+        container_log_dir via the audit_log_path property and are not
+        affected by this setting.
+        """
+        if self.app_log_dir:
+            return Path(self.app_log_dir)
         if self.is_local_dev:
             return Path.cwd() / "logs"
-        return self.container_log_dir
+        return Path("/var/log/containers/ai-registry")
 
     @property
     def log_file_path(self) -> Path:
-        if self.is_local_dev:
-            return Path.cwd() / "logs" / "registry.log"
-        return self.container_log_dir / "registry.log"
+        """Resolve the full path to this service's .log file.
+
+        Kept for backwards compatibility with callers that import log_file_path
+        directly; most code should call setup_logging(service_name=...) instead,
+        which computes the same path via log_dir.
+        """
+        return self.log_dir / "registry.log"
 
     @property
     def faiss_index_path(self) -> Path:

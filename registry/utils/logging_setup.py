@@ -1,16 +1,69 @@
 """Shared logging configuration for registry and auth-server.
 
 Configures three output destinations:
-1. Console (stdout/stderr) - always enabled
-2. RotatingFileHandler - rotated log file
+1. Console (stdout/stderr) - always enabled, human-readable format
+2. RotatingFileHandler - rotated log file (JSONL by default, text if configured)
 3. MongoDBLogHandler - optional, writes to MongoDB application_logs collection
+
+The file format is controlled by settings.app_log_file_format:
+- "json" (default): JSON Lines per docs/logging-standard.md
+- "text": legacy comma-separated format (same as console)
+
+Console format always stays human-readable so `docker logs <container>` is
+skimmable without a JSON parser.
 """
 
+import json
 import logging
+import traceback
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s"
+
+
+class JsonlFormatter(logging.Formatter):
+    """Formats log records as JSON Lines (one JSON object per line).
+
+    Schema is documented in docs/logging-standard.md. Every record carries
+    eight mandatory fields; exception records add three more. Output is a
+    single line (newlines inside message text are JSON-escaped).
+    """
+
+    def __init__(
+        self,
+        service_name: str,
+    ) -> None:
+        super().__init__()
+        self._service_name = service_name
+
+    def format(
+        self,
+        record: logging.LogRecord,
+    ) -> str:
+        payload: dict = {
+            "timestamp": datetime.fromtimestamp(
+                record.created, tz=timezone.utc
+            ).isoformat(),
+            "service": self._service_name,
+            "level": record.levelname,
+            "logger": record.name,
+            "filename": record.filename,
+            "lineno": record.lineno,
+            "process_id": record.process,
+            "message": record.getMessage(),
+        }
+
+        if record.exc_info:
+            exc_type, exc_value, _ = record.exc_info
+            payload["exc_type"] = exc_type.__name__ if exc_type else "Unknown"
+            payload["exc_message"] = str(exc_value) if exc_value else ""
+            payload["stack_trace"] = "".join(
+                traceback.format_exception(*record.exc_info)
+            )
+
+        return json.dumps(payload, default=str, ensure_ascii=False)
 
 
 def setup_logging(
@@ -20,13 +73,14 @@ def setup_logging(
     """Configure root logger with console, file, and optional MongoDB handlers.
 
     Args:
-        service_name: Identifies this process in MongoDB log documents
-            (e.g. "registry", "auth-server").
+        service_name: Identifies this process in log records and in the
+            MongoDB application_logs collection (e.g. "registry", "auth-server").
         log_file: Explicit log file path. When ``None`` the path is derived
             from settings (``settings.log_dir / f"{service_name}.log"``).
 
     Returns:
-        The resolved log file path, or None if file logging was skipped.
+        The resolved log file path, or None if file logging was skipped
+        (typically due to a PermissionError on the target directory).
     """
     from ..core.config import MONGODB_BACKENDS, settings
 
@@ -38,12 +92,21 @@ def setup_logging(
     for handler in root.handlers[:]:
         root.removeHandler(handler)
 
-    formatter = logging.Formatter(LOG_FORMAT)
+    # Console always uses the human-readable text format so `docker logs`
+    # stays skimmable without a JSON parser.
+    console_formatter = logging.Formatter(LOG_FORMAT)
+
+    # File format is selected by settings (default JSONL, per issue #987).
+    file_formatter: logging.Formatter
+    if settings.app_log_file_format == "json":
+        file_formatter = JsonlFormatter(service_name=service_name)
+    else:
+        file_formatter = console_formatter
 
     # 1. Console handler
     console = logging.StreamHandler()
     console.setLevel(level)
-    console.setFormatter(formatter)
+    console.setFormatter(console_formatter)
     root.addHandler(console)
 
     # 2. RotatingFileHandler
@@ -63,12 +126,17 @@ def setup_logging(
                 encoding="utf-8",
             )
             file_handler.setLevel(level)
-            file_handler.setFormatter(formatter)
+            file_handler.setFormatter(file_formatter)
             root.addHandler(file_handler)
-        except PermissionError:
-            root.warning(
-                f"Cannot write to log file {resolved_log_file}, "
-                "continuing with console logging only"
+        except (PermissionError, OSError) as exc:
+            root.error(
+                "Cannot write to log file %s: %s. "
+                "Fix on host: sudo mkdir -p %s && sudo chown -R 1000:1000 %s. "
+                "Continuing with console-only logging.",
+                resolved_log_file,
+                exc,
+                resolved_log_file.parent,
+                resolved_log_file.parent,
             )
             resolved_log_file = None
 
@@ -90,7 +158,10 @@ def setup_logging(
                 excluded_loggers=excluded,
             )
             mongo_handler.setLevel(level)
-            mongo_handler.setFormatter(formatter)
+            # MongoDB handler writes structured documents via its own emit();
+            # the formatter set here is only used if emit() fails and falls
+            # back to default formatting. Plain text is fine for that case.
+            mongo_handler.setFormatter(console_formatter)
             root.addHandler(mongo_handler)
         except Exception as exc:
             root.warning(f"Failed to initialize MongoDB log handler: {exc}")
