@@ -1474,7 +1474,23 @@ module "ecs_service_mcpgw" {
         {
           name  = "REGISTRY_USERNAME"
           value = "admin"
-        }
+        },
+        # Application log configuration (issue #987). Matches the Docker
+        # Compose wiring for the mcpgw container; keeps behavior consistent
+        # across deployment surfaces. Values are consumed by
+        # servers/mcpgw/logging_setup.py.
+        {
+          name  = "APP_LOG_DIR"
+          value = var.app_log_dir
+        },
+        {
+          name  = "APP_LOG_FILE_FORMAT"
+          value = var.app_log_file_format
+        },
+        {
+          name  = "APP_LOG_LEVEL"
+          value = var.app_log_level
+        },
       ]
 
       secrets = []
