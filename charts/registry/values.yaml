@@ -118,6 +118,11 @@ app:
   appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
   appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
+  # Log file path and format (issue #987). On EKS, pod stdout is scraped by
+  # Splunk Connect for Kubernetes - these settings control the in-container
+  # file path for code-path consistency with Docker Compose deployments.
+  appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
+  appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
 
 # AWS Agent Registry Federation
 awsRegistry:

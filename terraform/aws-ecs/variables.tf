@@ -893,6 +893,28 @@ variable "app_log_excluded_loggers" {
   default     = "uvicorn.access,httpx,pymongo,motor"
 }
 
+variable "app_log_dir" {
+  description = "Directory where service log files are written. Defaults to /var/log/containers/ai-registry when empty. Must be an absolute path; '..' segments are rejected by the backend (issue #987). ECS tasks write to task-ephemeral storage, so this is mainly a code-path toggle on ECS."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.app_log_dir == "" || (startswith(var.app_log_dir, "/") && !strcontains(var.app_log_dir, ".."))
+    error_message = "app_log_dir must be empty (use default) or an absolute path without '..' segments"
+  }
+}
+
+variable "app_log_file_format" {
+  description = "On-disk format for service .log files: 'json' (default, JSON Lines per docs/logging-standard.md) or 'text' (legacy comma-separated). Console/stdout format is unaffected (issue #987)."
+  type        = string
+  default     = "json"
+
+  validation {
+    condition     = contains(["json", "text"], var.app_log_file_format)
+    error_message = "app_log_file_format must be one of: 'json', 'text'"
+  }
+}
+
 # =============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # =============================================================================

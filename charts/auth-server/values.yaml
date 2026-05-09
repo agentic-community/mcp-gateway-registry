@@ -59,6 +59,9 @@ app:
   appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
   appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
+  # Log file path and format (issue #987).
+  appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
+  appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
 
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, or cognito

@@ -951,6 +951,18 @@ variable "app_log_excluded_loggers" {
   default     = "uvicorn.access,httpx,pymongo,motor"
 }
 
+variable "app_log_dir" {
+  description = "Directory where service log files are written (issue #987). Empty string means use the backend default (/var/log/containers/ai-registry)."
+  type        = string
+  default     = ""
+}
+
+variable "app_log_file_format" {
+  description = "On-disk format for service .log files: 'json' (default) or 'text' (legacy). Console format is unaffected (issue #987)."
+  type        = string
+  default     = "json"
+}
+
 # =============================================================================
 # DEPLOYMENT MODE CONFIGURATION
 # =============================================================================

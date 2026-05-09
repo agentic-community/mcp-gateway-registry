@@ -279,6 +279,9 @@ registry:
       appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
       appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
       appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
+      # Log file path and format (issue #987). Propagated to auth-server via YAML anchor.
+      appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
+      appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
 
     # Demo server configuration
     disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server

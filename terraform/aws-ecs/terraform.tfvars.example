@@ -527,6 +527,21 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Default: "uvicorn.access,httpx,pymongo,motor"
 # app_log_excluded_loggers = "uvicorn.access,httpx,pymongo,motor"
 
+# Directory where service log files are written (issue #987).
+# Empty string uses the backend default: /var/log/containers/ai-registry.
+# Must be an absolute path when set; '..' segments are rejected.
+# On ECS, files land on task-ephemeral storage - the awslogs driver still
+# handles log shipping via CloudWatch. This variable primarily controls the
+# in-container path for code-path consistency with Docker Compose deployments.
+# Default: ""
+# app_log_dir = ""
+
+# On-disk format for service .log files: 'json' (JSON Lines per
+# docs/logging-standard.md) or 'text' (legacy comma-separated).
+# Console/stdout format is unaffected.
+# Default: "json"
+# app_log_file_format = "json"
+
 # ============================================================================
 # AUTHENTICATION PROVIDER CONFIGURATION
 # ============================================================================

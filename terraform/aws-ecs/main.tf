@@ -228,6 +228,8 @@ module "mcp_gateway" {
   app_log_centralized_ttl_days = var.app_log_centralized_ttl_days
   app_log_level                = var.app_log_level
   app_log_excluded_loggers     = var.app_log_excluded_loggers
+  app_log_dir                  = var.app_log_dir
+  app_log_file_format          = var.app_log_file_format
 
   # Deployment mode configuration
   deployment_mode = var.deployment_mode

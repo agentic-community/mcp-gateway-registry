@@ -15,3 +15,6 @@ data:
   APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS: {{ .Values.app.appLogMongodbFlushIntervalSeconds | default "5.0" | quote }}
   APP_LOG_LEVEL: {{ .Values.app.appLogLevel | default "INFO" | quote }}
   APP_LOG_EXCLUDED_LOGGERS: {{ .Values.app.appLogExcludedLoggers | default "uvicorn.access,httpx,pymongo,motor" | quote }}
+  # Issue #987: log file path + format. Empty APP_LOG_DIR lets the backend use its default.
+  APP_LOG_DIR: {{ .Values.app.appLogDir | default "" | quote }}
+  APP_LOG_FILE_FORMAT: {{ .Values.app.appLogFileFormat | default "json" | quote }}
