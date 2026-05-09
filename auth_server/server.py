@@ -48,8 +48,6 @@ from pydantic import (
 
 sys.path.insert(0, "/app")
 # Import MCP audit logging components
-from pathlib import Path as _LogPath
-
 from registry.audit.mcp_logger import MCPLogger
 from registry.audit.models import Identity, MCPServer
 from registry.audit.service import AuditLogger
@@ -61,10 +59,10 @@ from registry.repositories.factory import get_scope_repository
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
 
-_auth_log_file = _setup_logging(
-    service_name="auth-server",
-    log_file=_LogPath("/app/logs/auth-server.log") if _LogPath("/app").exists() else None,
-)
+# Let setup_logging resolve the file path from settings.log_dir /
+# {service_name}.log. Honors APP_LOG_DIR overrides and the new
+# /var/log/containers/ai-registry default introduced by issue #987.
+_auth_log_file = _setup_logging(service_name="auth-server")
 logger = logging.getLogger(__name__)
 logger.info(f"Auth-server logging configured. Writing to file: {_auth_log_file}")
 
