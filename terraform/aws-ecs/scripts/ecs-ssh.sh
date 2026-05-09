@@ -6,11 +6,13 @@
 # Supported service types:
 #   registry      - MCP Gateway Registry
 #   auth-server   - Auth Server
+#   mcpgw         - MCP Gateway Server (ai-registry-tools)
 #   keycloak      - Keycloak (if available)
 #
 # Examples:
 #   ./ecs-ssh.sh registry
 #   ./ecs-ssh.sh auth-server
+#   ./ecs-ssh.sh mcpgw
 #   ./ecs-ssh.sh auth-server mcp-gateway-ecs-cluster us-west-2
 
 set -e
@@ -19,8 +21,34 @@ set -e
 declare -A SERVICE_MAP=(
   [registry]="mcp-gateway-v2-registry:registry"
   [auth-server]="mcp-gateway-v2-auth:auth-server"
+  [mcpgw]="mcp-gateway-v2-mcpgw:mcpgw-server"
   [keycloak]="keycloak:keycloak"
 )
+
+_print_usage() {
+  cat <<EOF
+Usage: $(basename "$0") [service-type] [cluster-name] [region]
+
+Supported service types: ${!SERVICE_MAP[@]}
+
+Defaults:
+  cluster-name  mcp-gateway-ecs-cluster
+  region        us-east-1
+
+Examples:
+  $(basename "$0") registry
+  $(basename "$0") mcpgw
+  $(basename "$0") auth-server mcp-gateway-ecs-cluster us-west-2
+EOF
+}
+
+# Handle help flags before treating the first arg as a service type.
+case "${1:-}" in
+  -h|--help|help)
+    _print_usage
+    exit 0
+    ;;
+esac
 
 # Parameters
 SERVICE_TYPE="${1:-registry}"
@@ -31,6 +59,8 @@ REGION="${3:-us-east-1}"
 if [[ -z "${SERVICE_MAP[$SERVICE_TYPE]}" ]]; then
   echo "Error: Unknown service type '$SERVICE_TYPE'"
   echo "Supported types: ${!SERVICE_MAP[@]}"
+  echo ""
+  _print_usage
   exit 1
 fi
 
