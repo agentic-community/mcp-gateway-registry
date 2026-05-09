@@ -5,6 +5,11 @@ the AI Registry deployment. It is the reference document customers and their
 log-aggregation teams (Splunk, ELK, CloudWatch, etc.) can use to configure
 ingestion.
 
+> **Related:** For the Admin API / Log Viewer UI, MongoDB-based centralized log
+> retrieval across pods, and the full `APP_LOG_*` configuration table, see
+> [logging.md](logging.md). This document focuses specifically on the on-disk
+> file format and host paths consumed by external log shippers.
+
 Scope: Docker Compose deployments. Helm/EKS and Terraform/ECS deployments use
 their platform-native log collection (pod stdout via `/var/log/containers/` on
 the node for EKS; `awslogs` driver to CloudWatch for ECS) and are not affected

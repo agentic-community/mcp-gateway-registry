@@ -2,6 +2,8 @@
 
 The MCP Gateway Registry provides centralized application log collection, storage, and retrieval across all service instances. Logs from both the `registry` and `auth-server` services are written to a shared MongoDB/DocumentDB collection, enabling cross-pod log queries through the admin API and the Settings UI.
 
+> **Related:** For the on-disk JSON Lines (JSONL) log file format, host log paths (`/var/log/containers/ai-registry/<service>.log`), and Splunk Universal Forwarder ingestion recipe, see [logging-standard.md](logging-standard.md).
+
 ## Architecture
 
 ```
@@ -37,6 +39,8 @@ All parameters use the `APP_LOG_` prefix. The centralized (MongoDB) storage para
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `APP_LOG_DIR` | Directory where service `.log` files are written. Must be an absolute path; `..` segments are rejected. Empty uses the per-environment default. See [logging-standard.md](logging-standard.md). | `""` (resolves to `/var/log/containers/ai-registry` in containers, `./logs` in local dev) |
+| `APP_LOG_FILE_FORMAT` | On-disk format for service log files: `json` (JSON Lines, Splunk-friendly, see [logging-standard.md](logging-standard.md)) or `text` (legacy comma-separated). Console/stdout format is not affected. | `json` |
 | `APP_LOG_CENTRALIZED_ENABLED` | Write application logs to MongoDB/DocumentDB for centralized retrieval | `true` |
 | `APP_LOG_CENTRALIZED_TTL_DAYS` | Days to retain log entries before automatic deletion | `1` |
 | `APP_LOG_MAX_BYTES` | Maximum size per log file in bytes before rotation | `52428800` (50 MB) |
@@ -58,6 +62,10 @@ APP_LOG_CENTRALIZED_ENABLED=true
 
 # Retain logs for 1 day (default: 1)
 APP_LOG_CENTRALIZED_TTL_DAYS=1
+
+# On-disk log file path and format (see docs/logging-standard.md)
+APP_LOG_DIR=/var/log/containers/ai-registry
+APP_LOG_FILE_FORMAT=json
 
 # Optional overrides
 APP_LOG_MAX_BYTES=52428800
@@ -81,6 +89,10 @@ app_log_centralized_enabled = true
 # Retain logs for 1 day (default: 1)
 app_log_centralized_ttl_days = 1
 
+# On-disk log file path and format (see docs/logging-standard.md)
+app_log_dir          = ""        # empty = /var/log/containers/ai-registry
+app_log_file_format  = "json"    # "json" (default) or "text" (legacy)
+
 # Optional overrides
 app_log_max_bytes         = 52428800
 app_log_backup_count      = 5
@@ -101,6 +113,9 @@ registry:
   app:
     appLogCentralizedEnabled: "true"
     appLogCentralizedTtlDays: "1"
+    # On-disk log file path and format (see docs/logging-standard.md)
+    appLogDir: ""           # empty = /var/log/containers/ai-registry
+    appLogFileFormat: "json" # "json" (default) or "text" (legacy)
     appLogMaxBytes: "52428800"
     appLogBackupCount: "5"
     appLogMongodbBufferSize: "50"
