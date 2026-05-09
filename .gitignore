@@ -426,3 +426,7 @@ NEXT-STEPS-TELEMETRY.md
 .env.telemetry-test
 registry_metrics.csv
 .claude/skills/usage-report/known-internal-instances.md
+
+# Stress test generated data and results (may move to a separate repo later)
+tests/stress/data/
+tests/stress/results/
