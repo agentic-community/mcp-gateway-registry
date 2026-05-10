@@ -108,19 +108,22 @@ This produces a PNG with two subplots:
 
 ### Step 5b2: Generate Compute Platform Timeseries Chart
 
-Generate a second timeseries chart, parallel to the cloud-provider one, showing unique registry installs per **compute platform** (docker, kubernetes, ecs, ec2, etc.) over time. Same data-sourcing behavior (scans all CSV files across dated subdirectories):
+Generate a second timeseries chart, parallel to the cloud-provider one, showing unique registry installs per **compute platform** (docker, kubernetes, ecs, ec2, etc.) over time. Same data-sourcing behavior (scans all CSV files across dated subdirectories). Pass `--snapshots-table` to also emit a markdown per-snapshot table ready to embed in the report:
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/generate_compute_timeseries_chart.py \
   --csv-dir OUTPUT_DIR \
-  --output $DATE_DIR/compute-installs-timeseries-YYYY-MM-DD.png
+  --output $DATE_DIR/compute-installs-timeseries-YYYY-MM-DD.png \
+  --snapshots-table $DATE_DIR/compute-platform-snapshots-YYYY-MM-DD.md
 ```
 
-This produces a PNG with two subplots:
-- **Cumulative Unique Registry Installs per Compute Platform** -- running total of unique registry_ids per platform
-- **Daily Active Registry Installs per Compute Platform** -- unique registry_ids seen each day per platform
+This produces:
+- A PNG with two subplots:
+  - **Cumulative Unique Registry Installs per Compute Platform** -- running total of unique registry_ids per platform
+  - **Daily Active Registry Installs per Compute Platform** -- unique registry_ids seen each day per platform
+- A markdown file with the **Per-Platform Growth (Unique Installs)** table, one row per dated CSV snapshot, sorted **descending by date** (newest first, bolded). The column order is `docker | kubernetes | ecs | ec2 | unknown` when present, plus any other platforms alphabetically. Unique-instance counts per snapshot are computed directly from each dated CSV using the `compute` column (not `compute_platform` -- that's the schema key but not the CSV column name).
 
-Embed this chart in the report's "Deployment Distribution" section (or a dedicated "Compute Platform Growth" section) with a short narrative on which platforms are growing fastest in absolute and percentage terms.
+Embed the chart in the report's "Compute Platform Growth" section and drop the contents of the snapshots-table markdown file in under the "Per-Platform Growth (Unique Installs)" subheading. Add a short narrative on which platforms are growing fastest in absolute and percentage terms; the newest (bolded) row is the current total for the report.
 
 ### Step 5c: Generate Instance Lifetime Chart
 
@@ -439,6 +442,7 @@ Output saved to `/tmp/reports/2026-04-18/`.
     instance-distribution-2026-04-16.png
     registry-installs-timeseries-2026-04-16.png
     compute-installs-timeseries-2026-04-16.png
+    compute-platform-snapshots-2026-04-16.md
     instance-lifetime-2026-04-16.png
     tables-2026-04-16.md
     metrics-2026-04-16.json

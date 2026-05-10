@@ -13,6 +13,7 @@ import argparse
 import csv
 import logging
 import os
+import re
 from collections import defaultdict
 from datetime import datetime
 
@@ -158,6 +159,78 @@ def _compute_daily_unique_installs(
     return result
 
 
+def _compute_snapshot_table(
+    csv_files: list[str],
+) -> tuple[list[str], list[tuple[str, dict[str, int]]]]:
+    """Build per-snapshot unique-instance counts grouped by compute platform.
+
+    For each CSV file whose parent directory is named YYYY-MM-DD, read the file
+    and count unique registry_ids per compute value. Returns the ordered list
+    of platform columns and a list of (snapshot_date, counts_by_platform)
+    tuples sorted descending by date (newest first).
+    """
+    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    per_date: list[tuple[str, dict[str, int]]] = []
+    all_platforms: set[str] = set()
+    for csv_path in csv_files:
+        parent = os.path.basename(os.path.dirname(csv_path))
+        if not date_re.match(parent):
+            continue
+        seen: dict[str, str] = {}
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rid = (row.get("registry_id") or "").strip()
+                if not rid or rid.lower() == "null":
+                    continue
+                platform = row.get("compute") or "unknown"
+                seen[rid] = platform
+        counts: dict[str, int] = defaultdict(int)
+        for platform in seen.values():
+            counts[platform] += 1
+            all_platforms.add(platform)
+        per_date.append((parent, dict(counts)))
+
+    preferred_order = ["docker", "kubernetes", "ecs", "ec2", "unknown"]
+    columns = [p for p in preferred_order if p in all_platforms]
+    columns += sorted(p for p in all_platforms if p not in preferred_order)
+
+    per_date.sort(key=lambda item: item[0], reverse=True)
+    return columns, per_date
+
+
+def _write_snapshot_table(
+    columns: list[str],
+    rows: list[tuple[str, dict[str, int]]],
+    output_path: str,
+) -> None:
+    """Write a markdown per-platform snapshot table, sorted descending by date.
+
+    The newest row is bolded so future reports can drop it straight into the
+    "Per-Platform Growth (Unique Installs)" section.
+    """
+    header_cells = ["Date"] + columns + ["Total"]
+    align_cells = ["------"] + ["-----:"] * len(columns) + ["-----:"]
+    lines = [
+        "| " + " | ".join(header_cells) + " |",
+        "|" + "|".join(align_cells) + "|",
+    ]
+    for idx, (date_str, counts) in enumerate(rows):
+        total = sum(counts.values())
+        if idx == 0:
+            values = [f"**{counts.get(c, 0)}**" for c in columns]
+            lines.append(
+                f"| **{date_str}** | " + " | ".join(values) + f" | **{total}** |"
+            )
+        else:
+            values = [str(counts.get(c, 0)) for c in columns]
+            lines.append(f"| {date_str} | " + " | ".join(values) + f" | {total} |")
+
+    with open(output_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    logger.info(f"Per-platform snapshot table written to {output_path}")
+
+
 def _generate_chart(
     cumulative_data: dict[str, list[tuple[str, int]]],
     daily_data: dict[str, list[tuple[str, int]]],
@@ -245,6 +318,15 @@ def main() -> None:
         required=True,
         help="Path to save the output PNG",
     )
+    parser.add_argument(
+        "--snapshots-table",
+        default=None,
+        help=(
+            "Optional path to write a markdown per-platform snapshot table "
+            "(unique instance counts by compute platform, sorted descending "
+            "by date). Reads one CSV per dated subdirectory under --csv-dir."
+        ),
+    )
     args = parser.parse_args()
 
     if not os.path.isdir(args.csv_dir):
@@ -271,6 +353,15 @@ def main() -> None:
         raise SystemExit(1)
 
     _generate_chart(cumulative_data, daily_data, args.output)
+
+    if args.snapshots_table:
+        columns, rows = _compute_snapshot_table(csv_files)
+        if not rows:
+            logger.warning(
+                "No dated-subfolder CSVs found; skipping snapshot table output"
+            )
+        else:
+            _write_snapshot_table(columns, rows, args.snapshots_table)
 
 
 if __name__ == "__main__":
