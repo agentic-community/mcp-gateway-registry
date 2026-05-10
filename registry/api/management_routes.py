@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..audit.context import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
+from ..core.metrics import M2M_ORPHAN_CLEANUPS_TOTAL
+from ..repositories.documentdb.client import get_documentdb_client
 from ..schemas.management import (
     GroupCreateRequest,
     GroupDeleteResponse,
@@ -145,8 +148,6 @@ async def management_list_users(
 
     # Include M2M clients from MongoDB for all providers
     try:
-        from registry.repositories.documentdb.client import get_documentdb_client
-
         db = await get_documentdb_client()
         collection = db["idp_m2m_clients"]
 
@@ -220,8 +221,6 @@ async def management_create_m2m_user(
             from datetime import datetime
             from os import environ
 
-            from registry.repositories.documentdb.client import get_documentdb_client
-
             db = await get_documentdb_client()
             collection = db["idp_m2m_clients"]
 
@@ -289,6 +288,7 @@ async def management_create_human_user(
 @router.delete("/iam/users/{username}", response_model=UserDeleteResponse)
 async def management_delete_user(
     username: str,
+    request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """Delete a user by username (admin only)."""
@@ -306,27 +306,45 @@ async def management_delete_user(
             raise _translate_iam_error(exc) from exc
 
     # Also remove from MongoDB idp_m2m_clients (handles orphaned records
-    # that exist in MongoDB but not in the IdP)
+    # that exist in MongoDB but not in the IdP). Case-insensitive regex match
+    # keeps parity with the case-insensitive dedup used by the list handler.
     mongo_deleted = False
     try:
-        from registry.repositories.documentdb.client import get_documentdb_client
-
         db = await get_documentdb_client()
         collection = db["idp_m2m_clients"]
+        username_ci = re.compile(f"^{re.escape(username)}$", re.IGNORECASE)
         result = await collection.delete_one(
-            {"$or": [{"client_id": username}, {"name": username}]}
+            {"$or": [{"client_id": username_ci}, {"name": username_ci}]}
         )
         if result.deleted_count > 0:
             mongo_deleted = True
             logger.info(f"Removed M2M client '{username}' from MongoDB idp_m2m_clients")
     except Exception as e:
-        logger.warning(f"Failed to remove M2M client from MongoDB: {e}")
+        logger.warning(
+            f"Failed to remove M2M client '{username}' from MongoDB "
+            f"(idp_deleted={idp_deleted}): {e}"
+        )
 
     if not idp_deleted and not mongo_deleted:
         raise HTTPException(
             status_code=400,
             detail=f"User or M2M account '{username}' not found",
         )
+
+    if mongo_deleted:
+        M2M_ORPHAN_CLEANUPS_TOTAL.labels(idp_had_record=str(idp_deleted).lower()).inc()
+        if not idp_deleted:
+            set_audit_action(
+                request,
+                operation="delete",
+                resource_type="user",
+                resource_id=username,
+                description=(
+                    f"M2M orphan cleanup: removed '{username}' from MongoDB "
+                    f"idp_m2m_clients (not present in IdP)"
+                ),
+                idp_skip_reason="not_found",
+            )
 
     return UserDeleteResponse(username=username)
 
@@ -351,8 +369,6 @@ async def management_update_user_groups(
 
     # Check if this is an M2M account by looking it up in DocumentDB
     try:
-        from registry.repositories.documentdb.client import get_documentdb_client
-
         db = await get_documentdb_client()
         collection = db["idp_m2m_clients"]
 

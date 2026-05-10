@@ -65,3 +65,10 @@ telemetry_sends_total = Counter(
     "Total telemetry events sent",
     ["event", "status"],  # event: startup/heartbeat, status: success/timeout/error/2xx/4xx/5xx
 )
+
+# M2M orphan cleanup metrics (PR #942 follow-up)
+M2M_ORPHAN_CLEANUPS_TOTAL = Counter(
+    "m2m_orphan_cleanups_total",
+    "Total M2M orphan cleanup deletions from MongoDB idp_m2m_clients",
+    ["idp_had_record"],  # "true" when IdP also had the record, "false" for MongoDB-only orphans
+)

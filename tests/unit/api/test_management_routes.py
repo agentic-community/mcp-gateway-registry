@@ -279,6 +279,194 @@ class TestManagementListUsers:
         assert response.status_code == 502
         assert "Connection refused" in response.json()["detail"]
 
+    def test_dedup_skips_mongo_entries_matching_idp(self, test_client_admin):
+        """MongoDB entries whose client_id already appears in IdP are skipped.
+
+        Covers the dedup logic introduced in PR #942.
+        """
+        client, mock_iam = test_client_admin
+        mock_iam.list_users.return_value = [
+            {
+                "id": "svc-1",
+                "username": "service-1",
+                "email": "service-1@example.com",
+                "firstName": None,
+                "lastName": None,
+                "enabled": True,
+                "groups": [],
+            },
+        ]
+
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(
+            return_value=[{"client_id": "service-1", "name": "service-1"}]
+        )
+        mock_collection = MagicMock()
+        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_db = MagicMock()
+        mock_db.__getitem__.return_value = mock_collection
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.get("/api/management/iam/users")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["users"][0]["username"] == "service-1"
+
+    def test_dedup_case_insensitive(self, test_client_admin):
+        """Dedup matches usernames case-insensitively."""
+        client, mock_iam = test_client_admin
+        mock_iam.list_users.return_value = [
+            {
+                "id": "svc-1",
+                "username": "Service-1",
+                "email": "svc@example.com",
+                "firstName": None,
+                "lastName": None,
+                "enabled": True,
+                "groups": [],
+            },
+        ]
+
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(
+            return_value=[{"client_id": "service-1", "name": "service-1"}]
+        )
+        mock_collection = MagicMock()
+        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_db = MagicMock()
+        mock_db.__getitem__.return_value = mock_collection
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.get("/api/management/iam/users")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+
+
+# =============================================================================
+# TEST DELETE /management/iam/users/{username} - Delete User
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestManagementDeleteUser:
+    """Tests for DELETE /management/iam/users/{username} endpoint.
+
+    Covers the orphan-delete behavior introduced in PR #942.
+    """
+
+    @staticmethod
+    def _make_mock_db(deleted_count: int = 0):
+        """Build a mock MongoDB database whose delete_one returns deleted_count."""
+        delete_result = MagicMock()
+        delete_result.deleted_count = deleted_count
+        mock_collection = MagicMock()
+        mock_collection.delete_one = AsyncMock(return_value=delete_result)
+        mock_db = MagicMock()
+        mock_db.__getitem__.return_value = mock_collection
+        return mock_db, mock_collection
+
+    def test_deletes_idp_only_user(self, test_client_admin):
+        """IdP delete succeeds, MongoDB has no matching record - returns 200."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.return_value = True
+        mock_db, mock_collection = self._make_mock_db(deleted_count=0)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/human-user")
+
+        assert response.status_code == 200
+        mock_iam.delete_user.assert_called_once_with(username="human-user")
+        mock_collection.delete_one.assert_called_once()
+
+    def test_deletes_mongo_only_orphan(self, test_client_admin):
+        """IdP raises 'not found', MongoDB delete succeeds - returns 200."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.side_effect = Exception("User not found in IdP")
+        mock_db, mock_collection = self._make_mock_db(deleted_count=1)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/orphan-client")
+
+        assert response.status_code == 200
+        mock_collection.delete_one.assert_called_once()
+
+    def test_rejects_truly_missing_user(self, test_client_admin):
+        """IdP raises 'not found', MongoDB has no record - returns 400."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.side_effect = Exception("User not found")
+        mock_db, _ = self._make_mock_db(deleted_count=0)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/ghost-user")
+
+        assert response.status_code == 400
+        assert "not found" in response.json()["detail"].lower()
+
+    def test_propagates_non_not_found_idp_errors(self, test_client_admin):
+        """IdP raises '502 Bad Gateway' - error is propagated, MongoDB not touched."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.side_effect = Exception("502 Bad Gateway")
+        mock_db, mock_collection = self._make_mock_db(deleted_count=0)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/some-user")
+
+        assert response.status_code == 502
+        assert "Bad Gateway" in response.json()["detail"]
+        mock_collection.delete_one.assert_not_called()
+
+    def test_mongo_delete_filter_is_case_insensitive(self, test_client_admin):
+        """The MongoDB delete filter uses a case-insensitive regex match.
+
+        Covers the case-insensitive filter added as PR #942 follow-up (P1.3).
+        """
+        import re as _re
+
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.return_value = True
+        mock_db, mock_collection = self._make_mock_db(deleted_count=1)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/Mixed-Case")
+
+        assert response.status_code == 200
+        args, _kwargs = mock_collection.delete_one.call_args
+        filter_doc = args[0]
+        or_clauses = filter_doc["$or"]
+        patterns = [
+            clause.get("client_id") or clause.get("name")
+            for clause in or_clauses
+        ]
+        # Ensure each side of the $or is a compiled case-insensitive regex
+        assert all(isinstance(p, _re.Pattern) for p in patterns)
+        assert all(p.flags & _re.IGNORECASE for p in patterns)
+
 
 # =============================================================================
 # TEST GET /management/iam/groups - List Groups

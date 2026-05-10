@@ -12,6 +12,7 @@ that applies to all tests.
 
 import errno
 import os
+import uuid
 
 _original_stat = os.stat
 
@@ -84,6 +85,11 @@ def pytest_configure(config):
     # Disable TLS for local MongoDB in tests
     # (AWS DocumentDB requires TLS, but local MongoDB CE does not)
     os.environ["DOCUMENTDB_USE_TLS"] = "false"
+
+    # Use an isolated per-session database name so tests never share state
+    # with the production "mcp_registry" database on a developer's local MongoDB.
+    # See PR #942 follow-up (P1.2 in .scratchpad/pr-942/post-merge.md).
+    os.environ["DOCUMENTDB_DATABASE"] = f"test_{uuid.uuid4().hex[:8]}"
 
     # Disable registration gate for all tests by default
     # (dedicated gate tests mock settings directly)
@@ -234,6 +240,11 @@ def test_settings(tmp_path: Path) -> Settings:
         documentdb_port=27017,
         documentdb_use_tls=False,  # Disable TLS for local MongoDB in tests
         documentdb_direct_connection=True,  # Use direct connection for single-node MongoDB
+        # Use per-session isolated DB name set in pytest_configure to avoid
+        # sharing state with the production "mcp_registry" database.
+        documentdb_database=os.environ.get(
+            "DOCUMENTDB_DATABASE", f"test_{uuid.uuid4().hex[:8]}"
+        ),
     )
 
     # Patch path properties to use temp directories
