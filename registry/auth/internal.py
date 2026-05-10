@@ -130,7 +130,13 @@ def _validate_bearer_token(auth_header: str) -> str:
                 "verify_iss": True,
                 "verify_aud": True,
             },
-            leeway=30,
+            # Internal JWT TTL is 60 seconds (see _INTERNAL_JWT_TTL_SECONDS).
+            # Registry mints the token immediately before the HTTP POST and
+            # both services are co-located in the same cluster, so clocks
+            # are NTP-synced within milliseconds. A 5-second leeway covers
+            # realistic NTP jitter without extending the replay window by
+            # 50% of the TTL. Issue #998.
+            leeway=5,
         )
 
         token_use = claims.get("token_use")
