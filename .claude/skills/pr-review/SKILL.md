@@ -4,7 +4,7 @@ description: Review a GitHub pull request using multiple expert personas. Takes 
 license: Apache-2.0
 metadata:
   author: mcp-gateway-registry
-  version: "1.0"
+  version: "1.1"
 ---
 
 # PR Review Skill
@@ -50,6 +50,51 @@ Based on the files changed, determine which personas should review:
 | `.env.example` | Merge Specialist, **DevOps Engineer**, Chief Architect |
 
 **Note:** Merge Specialist and Chief Architect always participate in every review.
+
+### Step 2.5: Detect New or Modified Configuration Parameters (CRITICAL)
+
+Before running any reviews, determine whether this PR introduces or modifies any configuration parameters across the three deployment surfaces. If it does, the unified parameter reference must be updated in the same PR — missing updates are a **blocker**.
+
+**Detection command:**
+
+```bash
+# Any diff that touches one of the canonical parameter-carrying files triggers this check
+gh pr diff {pr-number} --name-only | grep -E \
+  -e '^\.env\.example$' \
+  -e '^docker-compose(\.|$)' \
+  -e '^terraform/aws-ecs/terraform\.tfvars\.example$' \
+  -e '^terraform/aws-ecs/variables\.tf$' \
+  -e '^terraform/aws-ecs/modules/.+/(variables|ecs-services)\.tf$' \
+  -e '^charts/.+/values\.yaml$' \
+  -e '^charts/.+/templates/(deployment|secret)\.yaml$' \
+  -e '^registry/core/config\.py$' \
+  -e '^registry/api/config_routes\.py$'
+```
+
+**If any files match**, every new or renamed parameter must be reflected in `docs/unified-parameter-reference.md`. Verify with:
+
+```bash
+# For each new parameter name, confirm the reference file mentions it
+for PARAM in $(gh pr diff {pr-number} | grep -E '^\+[A-Z_]{3,}=' | sed 's/^+//;s/=.*//' | sort -u); do
+  if ! grep -q "$PARAM" docs/unified-parameter-reference.md; then
+    echo "MISSING from unified-parameter-reference.md: $PARAM"
+  fi
+done
+```
+
+**Merge-blocking checks (add to the Merge Specialist review section):**
+
+- [ ] `docs/unified-parameter-reference.md` is included in the diff whenever any parameter-carrying file is touched.
+- [ ] Every new `.env` variable has a row, with Docker / Terraform / Helm columns filled (or explicitly blank with a justification in the PR description).
+- [ ] Every new Terraform variable appears in the reference.
+- [ ] Every new Helm value appears in the reference.
+- [ ] Secrets are flagged with **(secret)**.
+- [ ] New rows live in an existing logical group, or the PR adds a new group with a clear rationale.
+- [ ] Renamed parameters have the old row updated in place (not a duplicate).
+- [ ] Deleted parameters have their row removed (not left stale).
+- [ ] `registry/api/config_routes.py` `CONFIG_GROUPS` is updated so the parameter surfaces in `GET /api/config/full` and the System Config UI.
+
+If any of the above is missing, the review verdict is **REQUEST CHANGES** with a blocker titled "Unified parameter reference not updated".
 
 ### Step 3: Run Tests and Quality Checks
 
@@ -124,6 +169,19 @@ Generate the review document using this structure:
 | Linting | {PASS/FAIL} | {summary} |
 | Security Scan | {PASS/FAIL} | {summary} |
 
+### Configuration Parameter Surface Check
+
+*Only required when the PR touches any parameter-carrying file (see Step 2.5). Mark "Not Applicable" if the detection command returned no matches.*
+
+| Check | Status | Details |
+|-------|--------|---------|
+| Unified parameter reference updated (`docs/unified-parameter-reference.md`) | {PASS/FAIL/N/A} | {list of new/renamed/removed parameter names and which rows were added} |
+| Docker column populated (`.env.example`, `docker-compose*.yml`) | {PASS/FAIL/N/A} | — |
+| Terraform column populated (`variables.tf`, `terraform.tfvars.example`, module wiring) | {PASS/FAIL/N/A} | — |
+| Helm column populated (`charts/.../values.yaml`, stack values, templates) | {PASS/FAIL/N/A} | — |
+| `registry/api/config_routes.py` `CONFIG_GROUPS` updated | {PASS/FAIL/N/A} | — |
+| Secrets flagged with **(secret)** and wired through Secrets Manager / `secretKeyRef` | {PASS/FAIL/N/A} | — |
+
 ---
 
 ## Review Panel
@@ -175,6 +233,7 @@ Generate the review document using this structure:
 
 - [ ] {Action 1}
 - [ ] {Action 2}
+- [ ] (If config params changed) `docs/unified-parameter-reference.md` updated and all three surface columns consistent with the diff
 
 ### Post-Merge Actions
 

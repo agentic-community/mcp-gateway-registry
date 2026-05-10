@@ -4,7 +4,7 @@ description: "Design and document new features with GitHub issue, low-level desi
 license: Apache-2.0
 metadata:
   author: mcp-gateway-registry
-  version: "1.5"
+  version: "1.6"
 ---
 
 # New Feature Design Skill
@@ -648,7 +648,17 @@ Add to `registry/core/config.py`:
 
 ### Deployment Surface Checklist
 
-**CRITICAL:** Every new configuration parameter must be propagated to all three deployment surfaces. Use the checklist below and fill in the file-level details for each new parameter.
+**CRITICAL:** Every new configuration parameter must be propagated to all three deployment surfaces AND documented in the unified parameter reference. Use the checklist below and fill in the file-level details for each new parameter.
+
+#### Unified Parameter Reference (must be updated for every new parameter)
+
+The project maintains a single cross-surface mapping of every parameter at [`docs/unified-parameter-reference.md`](../../../docs/unified-parameter-reference.md). This is the authoritative index for how each logical parameter is named on each surface. **You must update it** whenever a parameter is added, renamed, removed, or re-scoped.
+
+| File | What to Add | Done? |
+|------|-------------|-------|
+| `docs/unified-parameter-reference.md` | Add one row per new parameter to the correct logical group table: parameter name, Docker `.env` var, Terraform `.tfvars` var, Helm values path, purpose. Mark secrets with **(secret)**. If no existing group fits, add a new group section and explain why in the PR description. If a surface legitimately does not expose the parameter, leave the cell blank and note the reason in the PR. | [ ] |
+
+Verification: `grep` the new variable name across [`.env.example`](../../../.env.example), [`terraform/aws-ecs/terraform.tfvars.example`](../../../terraform/aws-ecs/terraform.tfvars.example), [`charts/`](../../../charts/), AND `docs/unified-parameter-reference.md` — it must appear in all surfaces that the reference file claims it does.
 
 #### Docker Deployment (5 files)
 
@@ -676,10 +686,10 @@ Sensitive values (tokens, private keys) must use AWS Secrets Manager references.
 
 | File | What to Add | Done? |
 |------|-------------|-------|
-| `charts/registry/values.yaml` | Default value under the appropriate section | [ ] |
+| `charts/registry/values.yaml` (or the correct subchart) | Default value under the appropriate section | [ ] |
 | `charts/mcp-gateway-registry-stack/values.yaml` | Default value (stack-level chart) | [ ] |
-| `charts/registry/templates/secret.yaml` | Add variable if sensitive (base64-encoded) | [ ] |
-| `charts/registry/templates/deployment.yaml` | Map value to container env var (plain or secretKeyRef) | [ ] |
+| `charts/<subchart>/templates/secret.yaml` | Add variable if sensitive (base64-encoded), plus support `existingSecret` / `secretKeyRef` | [ ] |
+| `charts/<subchart>/templates/deployment.yaml` | Map value to container env var (plain or `secretKeyRef`) | [ ] |
 
 Sensitive values must support `secretKeyRef` for Kubernetes secrets.
 
@@ -692,7 +702,7 @@ New config params must appear on the System Config page in the UI. This requires
 | `registry/api/config_routes.py` | Add field to `CONFIG_GROUPS` dict with `(field_name, display_label, is_sensitive)`. Sensitive fields must have `is_sensitive=True` so they are masked via `_mask_sensitive_value()`. | [ ] |
 | Frontend (`ConfigPanel.tsx`) | Auto-renders fields from `/api/config/full`. Update only if the new parameters need special UI treatment (toggles, grouped display, color-coded status, etc.). | [ ] |
 
-Verify after deployment: navigate to the System Config page and confirm the new parameter(s) appear with correct values and labels. Sensitive values should be masked.
+Verify after deployment: navigate to the System Config page and confirm the new parameter(s) appear with correct values and labels. Sensitive values should be masked. The same data is also available programmatically via `GET /api/config/full` (admin auth required) and can be exported via `GET /api/config/export?format={env|json|tfvars|yaml}`.
 
 ## New Dependencies
 
@@ -1536,6 +1546,21 @@ uv run python registry_management.py {command} --invalid-flag bad-value
 ## 4. Deployment Surface Tests (Docker, ECS, Helm)
 
 *Include this section whenever the feature adds or modifies ANY config parameter (env var, setting, Terraform variable, Helm value, secret). Otherwise replace with: "**Not Applicable** - feature introduces no new config parameters. Verified by reviewing diff of `registry/core/config.py`."*
+
+### 4.0 Unified Parameter Reference Updated
+
+Before any surface-specific wiring tests, confirm the cross-surface index was updated.
+
+| Check | Verification Command |
+|-------|----------------------|
+| New parameter row(s) added to `docs/unified-parameter-reference.md` | `grep -n "<PARAM_NAME>" docs/unified-parameter-reference.md` |
+| Each cell points to a file that actually contains the variable | `grep -rn "<PARAM_NAME>" .env.example terraform/aws-ecs/terraform.tfvars.example charts/` |
+
+**Assertions:**
+- [ ] Parameter appears in `docs/unified-parameter-reference.md` in the correct group (or a new group is added with justification)
+- [ ] Docker, Terraform, and Helm cells for the new row are either filled in **or** explicitly blank with a note in the PR description
+- [ ] Secrets are flagged with **(secret)** in the reference
+- [ ] The `/api/config/full` endpoint returns the new parameter (sensitive values masked)
 
 ### 4.1 Docker Deployment Wiring
 

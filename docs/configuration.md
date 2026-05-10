@@ -2,6 +2,8 @@
 
 This document provides a comprehensive reference for all configuration files in the MCP Gateway Registry project. Each configuration file serves a specific purpose in the authentication and operation of the system.
 
+> **Looking for a parameter by name across deployment surfaces?** See [`unified-parameter-reference.md`](unified-parameter-reference.md) for a cross-surface index that maps every parameter to its Docker `.env` variable, Terraform `.tfvars` variable, and Helm `values.yaml` path.
+
 ## Configuration Files Overview
 
 | File | Purpose | Type | Location | Example File | User Modification |
