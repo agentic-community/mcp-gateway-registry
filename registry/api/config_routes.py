@@ -251,6 +251,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("telemetry_heartbeat_interval_minutes", "Heartbeat Interval (minutes)", False),
             ("telemetry_debug", "Debug Mode", False),
             ("telemetry_endpoint", "Collector Endpoint", False),
+            ("telemetry_imds_probe_disabled", "Telemetry: Disable IMDS Probe", False),
         ],
     },
     "demo_server": {

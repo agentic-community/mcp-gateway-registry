@@ -130,8 +130,52 @@ Telemetry events include a `schema_version` field. We bump it whenever fields ar
 |---------|---------------|---------|
 | `"1"` | Initial release | Original startup + heartbeat schema |
 | `"2"` | v1.0.22 | Added `embeddings_provider` to startup; added `embeddings_backend_kind` to both startup and heartbeat |
+| `"3"` | v1.23.0 | Added `cloud_detection_method` to both startup and heartbeat (issue #986) |
 
-Older registry versions continue to send schema v1 events; the collector accepts both versions side-by-side.
+Older registry versions continue to send schema v1/v2 events; the collector accepts all versions side-by-side.
+
+## Cloud Provider Detection
+
+Cloud detection cascades through env vars, DMI files, ECS task metadata, Kubernetes node-name heuristics, and (last resort) cloud IMDS endpoints. The first tier that produces a signal wins; the rest are skipped.
+
+| Method (`cloud_detection_method`) | Signal |
+|-----------------------------------|--------|
+| `env` | One of `AWS_REGION`, `AWS_DEFAULT_REGION`, `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`, `WEBSITE_INSTANCE_ID`, `AZURE_CLIENT_ID` is set |
+| `dmi` | `/sys/devices/virtual/dmi/id/{board_asset_tag,product_name,sys_vendor}` readable and matches known vendor strings |
+| `ecs_meta` | `ECS_CONTAINER_METADATA_URI_V4` or `ECS_CONTAINER_METADATA_URI` is set (AWS only) |
+| `k8s_heuristic` | `KUBERNETES_SERVICE_HOST` set and `NODE_NAME` matches a cloud-specific pattern (`*.compute.internal` for AWS, `gke-*` for GCP, `aks-*` for Azure) |
+| `imds` | Live HTTP probe to `http://169.254.169.254/` (AWS IMDSv2, Azure) or `http://metadata.google.internal/` (GCP). 300ms timeout per provider, tried sequentially AWS -> GCP -> Azure. Worst case: ~900ms once per process at startup. |
+| `unknown` | No signal fired. |
+
+### Zero-cost opt-in (no outbound network)
+
+Operators who want accurate telemetry without enabling IMDS probes can set any of the following env vars. Detection short-circuits at tier 1 (`env`) and never calls out:
+
+- `AWS_REGION=us-east-1`
+- `GOOGLE_CLOUD_PROJECT=my-project`
+- `AZURE_CLIENT_ID=00000000-0000-0000-0000-000000000000`
+
+### EKS IMDS hop-limit (the #1 operator trap)
+
+On EKS, IMDS probes from pods require the node's `httpPutResponseHopLimit` to be set to `2` (the AWS default is `1`). Without this, IMDSv2 requests originating from pods are dropped at the hypervisor and detection falls back to `unknown`.
+
+Fix options:
+
+- Set `--metadata-options '{"httpPutResponseHopLimit": 2}'` on your managed node group. See [AWS docs on IMDS hop-limit](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html#configuring-instance-metadata-options-put-response-hop-limit).
+- OR inject `AWS_REGION` directly into pod env via the downward API or a ConfigMap. Detection resolves at tier 1 without hitting IMDS.
+
+### What the IMDS probe does NOT do
+
+The probe checks whether the cloud metadata service responds at all. It does **not** read or emit the instance ID, region, availability zone, role ARN, tags, or any other metadata content.
+
+- AWS IMDSv2 token TTL is set to 1 second; the token value is discarded when the response goes out of scope.
+- The response body is never logged, persisted, or forwarded.
+- Only the detected cloud label (`aws`/`gcp`/`azure`) and the detection method (`env`/`dmi`/`ecs_meta`/`k8s_heuristic`/`imds`/`unknown`) are ever emitted.
+- No URLs, headers, or response content are logged on success OR failure; debug logs include only the exception type.
+
+### Opt-out of IMDS probing
+
+Set `MCP_TELEMETRY_IMDS_PROBE_DISABLED=1` to skip the IMDS tier. The env, DMI, ECS metadata, and k8s heuristic tiers still run. Setting `MCP_TELEMETRY_DISABLED=1` (the master switch) also disables IMDS probing since detection only runs as part of telemetry payload building.
 
 ## Startup Banner
 
@@ -156,6 +200,7 @@ When telemetry is enabled (the default), you will see this banner at startup:
 | `MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES` | Heartbeat send frequency in minutes | `1440` (24 hours) |
 | `MCP_TELEMETRY_ENDPOINT` | HTTPS URL for a self-hosted telemetry collector | _(built-in endpoint)_ |
 | `MCP_TELEMETRY_DEBUG` | Set to `true` to log payloads instead of sending | `false` |
+| `MCP_TELEMETRY_IMDS_PROBE_DISABLED` | Set to `1` to skip IMDS probing in cloud detection (env, DMI, ECS metadata, k8s heuristic tiers still run) | _(not set, probes enabled)_ |
 
 ### Docker Compose
 

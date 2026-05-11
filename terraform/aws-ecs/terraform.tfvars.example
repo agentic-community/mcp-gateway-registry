@@ -779,6 +779,10 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # Useful for verifying what data would be sent
 # telemetry_debug = "false"
 
+# Disable IMDS probing in cloud detection (issue #986, default: probes enabled).
+# Env-var, DMI, ECS-metadata, and Kubernetes heuristics still run when set.
+# mcp_telemetry_imds_probe_disabled = ""
+
 # ============================================================================
 # AWS REGISTRY FEDERATION (optional)
 # ============================================================================

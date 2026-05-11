@@ -887,7 +887,7 @@ class TestEmbeddingsTelemetryFields:
 
             assert payload["embeddings_provider"] == "litellm"
             assert payload["embeddings_backend_kind"] == "bedrock"
-            assert payload["schema_version"] == "2"
+            assert payload["schema_version"] == "3"
 
     @pytest.mark.asyncio
     async def test_startup_payload_omits_raw_model_name_and_dimensions(self):
@@ -970,7 +970,7 @@ class TestEmbeddingsTelemetryFields:
 
             assert payload["embeddings_provider"] == "sentence-transformers"
             assert payload["embeddings_backend_kind"] == "sentence-transformers"
-            assert payload["schema_version"] == "2"
+            assert payload["schema_version"] == "3"
 
             # Privacy assertions
             assert "embeddings_model_name" not in payload

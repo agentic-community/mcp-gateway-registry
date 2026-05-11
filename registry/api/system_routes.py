@@ -318,6 +318,25 @@ async def get_version():
     return {"version": __version__}
 
 
+@router.get("/api/system/telemetry-detection")
+async def get_telemetry_detection_info() -> dict:
+    """Return the telemetry cloud-detection result for the current process.
+
+    Reads from the cached result in the telemetry module; no additional probes
+    are triggered. Lets operators verify how their instance was classified
+    without tailing logs.
+
+    Returns:
+        Dictionary with:
+        - cloud: aws/gcp/azure/unknown
+        - cloud_detection_method: env/dmi/ecs_meta/k8s_heuristic/imds/unknown
+    """
+    from ..core.telemetry import _detect_cloud_provider_with_method
+
+    cloud, method = _detect_cloud_provider_with_method()
+    return {"cloud": cloud, "cloud_detection_method": method}
+
+
 @router.get("/api/stats")
 async def get_system_stats():
     """Get system statistics including uptime, deployment info, and registry metrics.

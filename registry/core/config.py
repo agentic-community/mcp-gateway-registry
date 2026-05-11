@@ -524,6 +524,15 @@ class Settings(BaseSettings):
         default=False,
         description="Log telemetry payloads instead of sending (for debugging)",
     )
+    telemetry_imds_probe_disabled: bool = Field(
+        default=False,
+        description=(
+            "Disable IMDS probing in cloud detection (opt-out). "
+            "When true, registry will only use env vars, DMI files, ECS "
+            "metadata URI, and k8s node-name heuristics to detect the cloud "
+            "provider. MCP_TELEMETRY_IMDS_PROBE_DISABLED=1"
+        ),
+    )
 
     # Demo server configuration
     disable_ai_registry_tools_server: bool = Field(

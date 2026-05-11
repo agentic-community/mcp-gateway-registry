@@ -290,6 +290,83 @@ def _build_embeddings_backend_breakdown_table(
     return "\n".join(lines), rows
 
 
+def _compute_cloud_detection_method_breakdown(
+    instances: list[dict],
+) -> list[dict]:
+    """Group unique instances by cloud_detection_method.
+
+    Each instance contributes its latest non-empty cloud_detection_method
+    value. Pre-v3 events (before issue #986 shipped) did not carry the
+    field, so those instances land in the "unknown" bucket until they
+    emit a new event.
+
+    Returns:
+        List of {"method": str, "instances": int, "percentage": str} rows,
+        sorted by instance count descending.
+    """
+    total = len(instances)
+    if total == 0:
+        return []
+
+    counts: dict[str, int] = defaultdict(int)
+    for inst in instances:
+        method = inst.get("cloud_detection_method") or "unknown"
+        counts[method] += 1
+
+    rows = [
+        {
+            "method": method,
+            "instances": count,
+            "percentage": _format_pct(count, total),
+        }
+        for method, count in counts.items()
+    ]
+    rows.sort(key=lambda r: r["instances"], reverse=True)
+    return rows
+
+
+def _build_cloud_detection_method_breakdown_table(
+    instances: list[dict],
+) -> tuple[str, list[dict]]:
+    """Build the Cloud Detection Method section markdown.
+
+    Returns:
+        Tuple of (markdown string, list of row dicts for JSON output).
+    """
+    rows = _compute_cloud_detection_method_breakdown(instances)
+    if not rows:
+        return "", []
+
+    total = sum(r["instances"] for r in rows)
+    lines = []
+    lines.append("## Cloud Detection Method")
+    lines.append("")
+    lines.append(
+        f"Unique instances grouped by `cloud_detection_method`. Total instances: {total}."
+    )
+    lines.append("")
+    lines.append("| Detection Method | Unique Instances | % of Fleet |")
+    lines.append("|------------------|------------------|------------|")
+    for row in rows:
+        lines.append(f"| `{row['method']}` | {row['instances']} | {row['percentage']} |")
+    lines.append("")
+
+    # Pre-v1.23 registries did not emit the field, so they all bucket as
+    # unknown during the rollout window.
+    top_method = rows[0]["method"]
+    top_count = rows[0]["instances"]
+    if top_method == "unknown" and top_count / total >= 0.5:
+        lines.append(
+            f"> **Note:** The `unknown` bucket dominates ({top_count}/{total} "
+            f"instances) because the `cloud_detection_method` field was added "
+            f"in schema v3 (registry v1.23.0+). Pre-v3 registries do not emit "
+            f"this field. The bucket will shrink as operators upgrade."
+        )
+        lines.append("")
+
+    return "\n".join(lines), rows
+
+
 def _build_most_active_table(
     instances: list[dict],
     internal_ids: set[str],
@@ -895,6 +972,9 @@ def _compute_instance_table(
         search_backend = _latest_nonempty(events, "search_backend")
         embeddings_provider = _latest_nonempty(events, "embeddings_provider")
         embeddings_backend_kind = _latest_nonempty(events, "embeddings_backend_kind")
+        # cloud_detection_method added in schema v3 (issue #986). Pre-v3
+        # instances produce empty values and land in the "unknown" bucket.
+        cloud_detection_method = _latest_nonempty(events, "cloud_detection_method")
 
         first_ts = events[0].get("ts", "")[:10]
         latest_ts = events[-1].get("ts", "")[:10]
@@ -904,6 +984,7 @@ def _compute_instance_table(
                 "registry_id": rid[:12] + "...",
                 "registry_id_full": rid,
                 "cloud": latest.get("cloud") or "unknown",
+                "cloud_detection_method": cloud_detection_method,
                 "compute": latest.get("compute") or "unknown",
                 "storage": latest.get("storage") or "unknown",
                 "auth": latest.get("auth") or "none",
@@ -1384,6 +1465,13 @@ def _build_markdown_tables(
     embeddings_md, embeddings_backend_rows = _build_embeddings_backend_breakdown_table(instances)
     if embeddings_md:
         lines.append(embeddings_md)
+
+    # Cloud Detection Method Breakdown (schema v3+, issue #986)
+    cloud_detection_md, cloud_detection_rows = _build_cloud_detection_method_breakdown_table(
+        instances
+    )
+    if cloud_detection_md:
+        lines.append(cloud_detection_md)
 
     # Search Usage
     lines.append("## Search Usage")

@@ -7,11 +7,14 @@ NOTE on embeddings_backend_kind: keep the regex allowlist here in sync with
 _BACKEND_KIND_PATTERNS in registry/core/telemetry.py. The return values of
 _derive_embeddings_backend_kind() must be a subset of the values this regex
 accepts.
+
+NOTE on cloud_detection_method: keep _CLOUD_DETECTION_METHOD_PATTERN in sync
+with the _DETECTION_METHOD_* constants in registry/core/telemetry.py.
 """
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Allowlist of values for embeddings_backend_kind across both StartupEvent
 # and HeartbeatEvent. Kept as a module-level constant so both models can
@@ -19,6 +22,36 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 _EMBEDDINGS_BACKEND_KIND_PATTERN = (
     r"^(sentence-transformers|bedrock|openai|azure-openai|voyage|cohere|other|unknown)$"
 )
+
+# Allowlist of values for cloud_detection_method. Added in schema v3
+# (issue #986).
+_CLOUD_DETECTION_METHOD_PATTERN = r"^(env|dmi|ecs_meta|k8s_heuristic|imds|unknown)$"
+
+
+def _check_cloud_detection_consistency(cloud: str, method: str | None) -> None:
+    """Reject payloads where cloud and cloud_detection_method are inconsistent.
+
+    Absent method (None) is always acceptable for backwards compatibility with
+    pre-v3 clients. We enforce only two rules that cannot be wrong:
+
+    - ecs_meta is AWS-only by construction.
+    - cloud=unknown iff method in (unknown, None).
+    """
+    if method is None:
+        return
+    if method == "ecs_meta" and cloud != "aws":
+        raise ValueError(
+            f"cloud_detection_method=ecs_meta requires cloud=aws, got cloud={cloud!r}"
+        )
+    if method == "unknown" and cloud != "unknown":
+        raise ValueError(
+            f"cloud_detection_method=unknown requires cloud=unknown, got cloud={cloud!r}"
+        )
+    if cloud == "unknown" and method not in ("unknown", None):
+        raise ValueError(
+            f"cloud=unknown requires cloud_detection_method in (unknown, None), "
+            f"got method={method!r}"
+        )
 
 
 class StartupEvent(BaseModel):
@@ -82,6 +115,14 @@ class StartupEvent(BaseModel):
         pattern=_EMBEDDINGS_BACKEND_KIND_PATTERN,
         description=("Derived coarse-grained embeddings backend category. Added in schema v2."),
     )
+    cloud_detection_method: str | None = Field(
+        default=None,
+        pattern=_CLOUD_DETECTION_METHOD_PATTERN,
+        description=(
+            "How the cloud value was detected. Added in schema v3 (issue #986). "
+            "None for pre-v3 clients."
+        ),
+    )
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")
@@ -94,6 +135,12 @@ class StartupEvent(BaseModel):
             raise ValueError(f"Invalid ISO 8601 timestamp: {e}") from e
         return v
 
+    @model_validator(mode="after")
+    def _validate_cloud_detection_consistency(self) -> "StartupEvent":
+        """Reject payloads where cloud and cloud_detection_method disagree."""
+        _check_cloud_detection_consistency(self.cloud, self.cloud_detection_method)
+        return self
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -104,6 +151,7 @@ class StartupEvent(BaseModel):
                 "os": "linux",
                 "arch": "x86_64",
                 "cloud": "aws",
+                "cloud_detection_method": "imds",
                 "compute": "ecs",
                 "mode": "with-gateway",
                 "registry_mode": "full",
@@ -165,6 +213,14 @@ class HeartbeatEvent(BaseModel):
         pattern=_EMBEDDINGS_BACKEND_KIND_PATTERN,
         description=("Derived coarse-grained embeddings backend category. Added in schema v2."),
     )
+    cloud_detection_method: str | None = Field(
+        default=None,
+        pattern=_CLOUD_DETECTION_METHOD_PATTERN,
+        description=(
+            "How the cloud value was detected. Added in schema v3 (issue #986). "
+            "None for pre-v3 clients."
+        ),
+    )
     uptime_hours: int = Field(..., ge=0, description="Instance uptime in hours")
     search_queries_total: int = Field(
         default=0, ge=0, description="Lifetime semantic search query count"
@@ -183,6 +239,12 @@ class HeartbeatEvent(BaseModel):
             raise ValueError(f"Invalid ISO 8601 timestamp: {e}") from e
         return v
 
+    @model_validator(mode="after")
+    def _validate_cloud_detection_consistency(self) -> "HeartbeatEvent":
+        """Reject payloads where cloud and cloud_detection_method disagree."""
+        _check_cloud_detection_consistency(self.cloud, self.cloud_detection_method)
+        return self
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -190,6 +252,7 @@ class HeartbeatEvent(BaseModel):
                 "registry_id": "c546a650-8af9-4721-9efb-7df221b2a0d9",
                 "v": "1.0.22",
                 "cloud": "aws",
+                "cloud_detection_method": "imds",
                 "compute": "ecs",
                 "servers_count": 15,
                 "agents_count": 8,

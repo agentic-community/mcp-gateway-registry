@@ -1099,6 +1099,12 @@ variable "telemetry_debug" {
   default     = "false"
 }
 
+variable "mcp_telemetry_imds_probe_disabled" {
+  description = "Disable IMDS probing in cloud detection (issue #986). Set to '1' to opt out. Env-var, DMI, ECS-metadata, and k8s heuristics still run."
+  type        = string
+  default     = ""
+}
+
 variable "disable_ai_registry_tools_server" {
   description = "Disable auto-registration of the built-in airegistry-tools server on startup. Set to 'true' for GitOps/production deployments."
   type        = string

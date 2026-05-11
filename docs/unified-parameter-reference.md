@@ -511,6 +511,7 @@ Used by `registry` and `mcpgw` services.
 | Heartbeat interval (min) | `MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES` | `mcp_telemetry_heartbeat_interval_minutes` | `registry.app.telemetryHeartbeatIntervalMinutes` | Default 1440. |
 | Collector endpoint | `MCP_TELEMETRY_ENDPOINT` | — | — | Self-hosted override. |
 | Debug mode | `TELEMETRY_DEBUG` | `telemetry_debug` | `registry.app.telemetryDebug` | Log payloads instead of send. |
+| Disable IMDS probe (cloud detection) | `MCP_TELEMETRY_IMDS_PROBE_DISABLED` | `mcp_telemetry_imds_probe_disabled` | `registry.app.mcpTelemetryImdsProbeDisabled` | Issue #986. Env/DMI/ECS/k8s tiers still run. |
 
 ---
 

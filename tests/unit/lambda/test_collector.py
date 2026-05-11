@@ -144,6 +144,101 @@ class TestSchemas:
         with pytest.raises(ValidationError):
             HeartbeatEvent(**payload)
 
+    # ---- Schema v3 cloud_detection_method backwards-compat + validator ----
+
+    @staticmethod
+    def _v2_startup_payload() -> dict:
+        """A minimal pre-v3 startup payload (no cloud_detection_method)."""
+        return {
+            "event": "startup",
+            "schema_version": "2",
+            "v": "1.0.22",
+            "py": "3.12",
+            "os": "linux",
+            "arch": "x86_64",
+            "cloud": "aws",
+            "compute": "ecs",
+            "mode": "with-gateway",
+            "registry_mode": "full",
+            "storage": "documentdb",
+            "auth": "keycloak",
+            "federation": True,
+            "ts": "2026-03-18T00:00:00Z",
+        }
+
+    @staticmethod
+    def _v2_heartbeat_payload() -> dict:
+        return {
+            "event": "heartbeat",
+            "schema_version": "2",
+            "v": "1.0.22",
+            "cloud": "aws",
+            "compute": "ecs",
+            "servers_count": 15,
+            "agents_count": 8,
+            "skills_count": 23,
+            "peers_count": 2,
+            "search_backend": "documentdb",
+            "embeddings_provider": "sentence-transformers",
+            "uptime_hours": 48,
+            "ts": "2026-03-18T12:00:00Z",
+        }
+
+    def test_startup_accepts_pre_v3_payload_without_detection_method(self):
+        """Pre-v3 clients must still validate after the v3 schema change."""
+        event = StartupEvent(**self._v2_startup_payload())
+        assert event.cloud_detection_method is None
+
+    def test_heartbeat_accepts_pre_v3_payload_without_detection_method(self):
+        event = HeartbeatEvent(**self._v2_heartbeat_payload())
+        assert event.cloud_detection_method is None
+
+    def test_startup_accepts_v3_payload_with_imds_method(self):
+        payload = self._v2_startup_payload()
+        payload["schema_version"] = "3"
+        payload["cloud_detection_method"] = "imds"
+        event = StartupEvent(**payload)
+        assert event.cloud_detection_method == "imds"
+
+    def test_startup_rejects_ecs_meta_with_non_aws_cloud(self):
+        payload = self._v2_startup_payload()
+        payload["schema_version"] = "3"
+        payload["cloud"] = "gcp"
+        payload["cloud_detection_method"] = "ecs_meta"
+        with pytest.raises(ValidationError):
+            StartupEvent(**payload)
+
+    def test_startup_rejects_unknown_method_with_known_cloud(self):
+        payload = self._v2_startup_payload()
+        payload["schema_version"] = "3"
+        payload["cloud"] = "aws"
+        payload["cloud_detection_method"] = "unknown"
+        with pytest.raises(ValidationError):
+            StartupEvent(**payload)
+
+    def test_startup_rejects_unknown_cloud_with_non_unknown_method(self):
+        payload = self._v2_startup_payload()
+        payload["schema_version"] = "3"
+        payload["cloud"] = "unknown"
+        payload["cloud_detection_method"] = "imds"
+        with pytest.raises(ValidationError):
+            StartupEvent(**payload)
+
+    def test_heartbeat_validator_enforces_same_rules(self):
+        payload = self._v2_heartbeat_payload()
+        payload["schema_version"] = "3"
+        payload["cloud"] = "azure"
+        payload["cloud_detection_method"] = "ecs_meta"
+        with pytest.raises(ValidationError):
+            HeartbeatEvent(**payload)
+
+    def test_invalid_detection_method_rejected_by_pattern(self):
+        payload = self._v2_startup_payload()
+        payload["schema_version"] = "3"
+        payload["cloud_detection_method"] = "wild-guess"
+        with pytest.raises(ValidationError):
+            StartupEvent(**payload)
+
 
 class TestIPHashing:
     """Test IP hashing for privacy-preserving rate limiting."""

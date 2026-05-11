@@ -10,6 +10,7 @@ Privacy-first design:
 """
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import json
@@ -30,50 +31,248 @@ logger = logging.getLogger(__name__)
 # Telemetry constants
 STARTUP_LOCK_INTERVAL_SECONDS = 60  # Don't send startup ping more than once per minute
 # HMAC signing key for telemetry requests.
-# This is NOT a secret — it's embedded in open-source code. Its purpose is to
+# This is NOT a secret - it's embedded in open-source code. Its purpose is to
 # raise the bar against casual abuse (random curl requests) by requiring
 # callers to compute a valid HMAC signature over the request body.
 TELEMETRY_SIGNING_KEY = "mcp-registry-telemetry-v1-a7f3b9c2e1d4"
 TELEMETRY_TIMEOUT_SECONDS = 5  # HTTP request timeout
 
+# Cloud-detection method labels. Keep in sync with the regex allowlist in
+# terraform/telemetry-collector/lambda/collector/schemas.py
+# (_CLOUD_DETECTION_METHOD_PATTERN).
+_DETECTION_METHOD_ENV = "env"
+_DETECTION_METHOD_DMI = "dmi"
+_DETECTION_METHOD_ECS_META = "ecs_meta"
+_DETECTION_METHOD_K8S_HEURISTIC = "k8s_heuristic"
+_DETECTION_METHOD_IMDS = "imds"
+_DETECTION_METHOD_UNKNOWN = "unknown"
 
-def _detect_cloud_provider() -> str:
-    """Detect the cloud provider where the registry is running.
+# Worst-case probe budget: three providers x 300ms each = 900ms once per process.
+_IMDS_PROBE_TIMEOUT_SECONDS = 0.3
 
-    Returns:
-        One of: aws, gcp, azure, or unknown
-    """
-    # AWS: check for AWS-specific env vars or DMI data
+
+def _detect_cloud_from_env() -> str | None:
+    """Return cloud label or None from cloud-specific env vars."""
     if os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION"):
         return "aws"
+    if os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCLOUD_PROJECT"):
+        return "gcp"
+    if os.getenv("WEBSITE_INSTANCE_ID") or os.getenv("AZURE_CLIENT_ID"):
+        return "azure"
+    return None
+
+
+def _detect_cloud_from_dmi() -> str | None:
+    """Return cloud label or None from DMI files."""
     try:
         with open("/sys/devices/virtual/dmi/id/board_asset_tag") as f:
             if f.read().strip().startswith("i-"):
                 return "aws"
-    except (FileNotFoundError, PermissionError):
+    except (FileNotFoundError, PermissionError, OSError):
         pass
-
-    # GCP: check for GCP-specific env vars
-    if os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCLOUD_PROJECT"):
-        return "gcp"
     try:
         with open("/sys/devices/virtual/dmi/id/product_name") as f:
             if "Google" in f.read():
                 return "gcp"
-    except (FileNotFoundError, PermissionError):
+    except (FileNotFoundError, PermissionError, OSError):
         pass
-
-    # Azure: check for Azure-specific env vars
-    if os.getenv("WEBSITE_INSTANCE_ID") or os.getenv("AZURE_CLIENT_ID"):
-        return "azure"
     try:
         with open("/sys/devices/virtual/dmi/id/sys_vendor") as f:
             if "Microsoft" in f.read():
                 return "azure"
-    except (FileNotFoundError, PermissionError):
+    except (FileNotFoundError, PermissionError, OSError):
         pass
+    return None
 
-    return "unknown"
+
+def _detect_cloud_from_k8s_heuristic() -> str | None:
+    """Infer cloud provider from Kubernetes node naming conventions.
+
+    Only fires when the process is clearly running in Kubernetes and NODE_NAME
+    is injected (usually via the downward API). Returns None if either signal
+    is absent or no known pattern matches.
+    """
+    if not os.getenv("KUBERNETES_SERVICE_HOST"):
+        return None
+
+    node_name = (os.getenv("NODE_NAME") or "").lower()
+    if not node_name:
+        return None
+
+    # EKS nodes typically end in *.compute.internal or *.ec2.internal.
+    if node_name.endswith(".compute.internal") or node_name.endswith(".ec2.internal"):
+        return "aws"
+
+    # GKE nodes typically follow gke-<cluster>-<pool>-<hash>-<hash>.
+    if node_name.startswith("gke-"):
+        return "gcp"
+
+    # AKS nodes typically follow aks-<pool>-<id>-vmss<n> or aks-agentpool-*.
+    if node_name.startswith("aks-"):
+        return "azure"
+
+    return None
+
+
+def _should_probe_imds() -> bool:
+    """Return True iff IMDS probing should run for this process."""
+    if not settings.telemetry_enabled:
+        return False
+    if getattr(settings, "telemetry_imds_probe_disabled", False):
+        return False
+    # Respect the env-var master switch too, in case settings was imported
+    # before MCP_TELEMETRY_DISABLED was set.
+    disabled_env = os.getenv("MCP_TELEMETRY_DISABLED", "").lower()
+    if disabled_env in ("1", "true", "yes"):
+        return False
+    return True
+
+
+def _probe_aws_imds(
+    client: httpx.Client,
+) -> bool:
+    """AWS IMDSv2 token PUT; True iff the token endpoint responded 200.
+
+    Does NOT read or log the token value. We only care whether the endpoint
+    was reachable. The token has a 1-second TTL and the response body is
+    discarded when the Response object goes out of scope.
+    """
+    resp = client.put(
+        "http://169.254.169.254/latest/api/token",
+        headers={"X-aws-ec2-metadata-token-ttl-seconds": "1"},
+    )
+    return resp.status_code == 200
+
+
+def _probe_gcp_metadata(
+    client: httpx.Client,
+) -> bool:
+    """GCP metadata server probe; True iff reachable with the required header."""
+    resp = client.get(
+        "http://metadata.google.internal/computeMetadata/v1/instance/zone",
+        headers={"Metadata-Flavor": "Google"},
+    )
+    return resp.status_code == 200
+
+
+def _probe_azure_imds(
+    client: httpx.Client,
+) -> bool:
+    """Azure IMDS probe; True iff reachable with the required header."""
+    resp = client.get(
+        "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+        headers={"Metadata": "true"},
+    )
+    return resp.status_code == 200
+
+
+def _probe_imds() -> str | None:
+    """Probe cloud metadata services sequentially. Returns cloud label or None.
+
+    Each probe has a fixed 300ms timeout. Worst case total: ~900ms (all three
+    fail). Never raises. Any exception from a probe is caught, logged at DEBUG
+    with the exception type only (no response body, no headers), and the
+    cascade continues to the next provider.
+
+    trust_env=False is load-bearing here: it tells httpx to ignore HTTP_PROXY /
+    HTTPS_PROXY / NO_PROXY env vars so we never route a 169.254.169.254 probe
+    through a corporate proxy.
+    """
+    try:
+        client_cm = httpx.Client(
+            timeout=_IMDS_PROBE_TIMEOUT_SECONDS,
+            trust_env=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[telemetry] imds client init failed: {type(e).__name__}")
+        return None
+
+    with client_cm as client:
+        for provider, probe_fn in (
+            ("aws", _probe_aws_imds),
+            ("gcp", _probe_gcp_metadata),
+            ("azure", _probe_azure_imds),
+        ):
+            try:
+                if probe_fn(client):
+                    return provider
+            except Exception as e:  # noqa: BLE001 - fail-silent on any probe error
+                # Log only the exception type. Never log the URL, headers, body,
+                # or stack trace - any of those could leak sensitive content if
+                # the underlying library is later changed.
+                logger.debug(
+                    f"[telemetry] imds probe {provider} failed: {type(e).__name__}"
+                )
+                continue
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def _detect_cloud_provider_with_method() -> tuple[str, str]:
+    """Detect cloud provider and return (cloud, detection_method).
+
+    Detection cascade, first match wins:
+      1. Cloud-specific env vars  -> method="env"
+      2. DMI files                -> method="dmi"
+      3. ECS task metadata URI    -> method="ecs_meta" (always aws)
+      4. Kubernetes node-name     -> method="k8s_heuristic"
+      5. IMDS HTTP probe          -> method="imds"
+      6. Fallback                 -> ("unknown", "unknown")
+
+    Cached for the lifetime of the process. Safe to call from any thread
+    after the first call completes.
+    """
+    cloud = _detect_cloud_from_env()
+    if cloud:
+        _log_detection_result(cloud, _DETECTION_METHOD_ENV)
+        return cloud, _DETECTION_METHOD_ENV
+
+    cloud = _detect_cloud_from_dmi()
+    if cloud:
+        _log_detection_result(cloud, _DETECTION_METHOD_DMI)
+        return cloud, _DETECTION_METHOD_DMI
+
+    if os.getenv("ECS_CONTAINER_METADATA_URI_V4") or os.getenv("ECS_CONTAINER_METADATA_URI"):
+        _log_detection_result("aws", _DETECTION_METHOD_ECS_META)
+        return "aws", _DETECTION_METHOD_ECS_META
+
+    cloud = _detect_cloud_from_k8s_heuristic()
+    if cloud:
+        _log_detection_result(cloud, _DETECTION_METHOD_K8S_HEURISTIC)
+        return cloud, _DETECTION_METHOD_K8S_HEURISTIC
+
+    if _should_probe_imds():
+        cloud = _probe_imds()
+        if cloud:
+            _log_detection_result(cloud, _DETECTION_METHOD_IMDS)
+            return cloud, _DETECTION_METHOD_IMDS
+
+    _log_detection_result("unknown", _DETECTION_METHOD_UNKNOWN)
+    return "unknown", _DETECTION_METHOD_UNKNOWN
+
+
+def _log_detection_result(cloud: str, method: str) -> None:
+    """Log the detection result once and increment the Prometheus counter.
+
+    We never log the contents of any IMDS response - only the final
+    classification and the method label.
+    """
+    logger.info(
+        f"[telemetry] cloud_detection: cloud={cloud}, method={method} "
+        "(see docs/TELEMETRY.md to improve classification)"
+    )
+    try:
+        from registry.core.metrics import CLOUD_DETECTION_TOTAL
+
+        CLOUD_DETECTION_TOTAL.labels(cloud=cloud, method=method).inc()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[telemetry] cloud_detection counter inc failed: {type(e).__name__}")
+
+
+def _detect_cloud_provider() -> str:
+    """Return just the cloud label. Kept for code that only needs the label."""
+    cloud, _ = _detect_cloud_provider_with_method()
+    return cloud
 
 
 def _detect_compute_platform() -> str:
@@ -378,16 +577,18 @@ async def _build_startup_payload() -> dict:
         settings.embeddings_provider,
         settings.embeddings_model_name,
     )
+    cloud, detection_method = _detect_cloud_provider_with_method()
 
     return {
         "event": "startup",
-        "schema_version": "2",
+        "schema_version": "3",
         "registry_id": registry_id,
         "v": __version__,
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
         "os": platform.system().lower(),  # linux, darwin, windows
         "arch": platform.machine(),  # x86_64, arm64, aarch64
-        "cloud": _detect_cloud_provider(),  # aws, gcp, azure, unknown
+        "cloud": cloud,  # aws, gcp, azure, unknown
+        "cloud_detection_method": detection_method,  # env, dmi, ecs_meta, k8s_heuristic, imds, unknown
         "compute": _detect_compute_platform(),  # ecs, eks, kubernetes, docker, ec2, unknown
         "mode": settings.deployment_mode.value,  # with-gateway, registry-only
         "registry_mode": settings.registry_mode.value,  # full, skills-only, etc.
@@ -465,13 +666,15 @@ async def _build_heartbeat_payload() -> dict:
         settings.embeddings_provider,
         settings.embeddings_model_name,
     )
+    cloud, detection_method = _detect_cloud_provider_with_method()
 
     return {
         "event": "heartbeat",
-        "schema_version": "2",
+        "schema_version": "3",
         "registry_id": registry_id,
         "v": __version__,
-        "cloud": _detect_cloud_provider(),
+        "cloud": cloud,
+        "cloud_detection_method": detection_method,
         "compute": _detect_compute_platform(),
         "servers_count": servers_count,
         "agents_count": agents_count,

@@ -1027,6 +1027,10 @@ module "ecs_service_registry" {
           name  = "TELEMETRY_DEBUG"
           value = var.telemetry_debug
         },
+        {
+          name  = "MCP_TELEMETRY_IMDS_PROBE_DISABLED"
+          value = var.mcp_telemetry_imds_probe_disabled
+        },
         # Demo server configuration
         {
           name  = "DISABLE_AI_REGISTRY_TOOLS_SERVER"

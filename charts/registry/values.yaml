@@ -95,6 +95,7 @@ app:
   mcpTelemetryOptOut: false  # Set to true to disable daily heartbeat only (startup ping still sent)
   telemetryHeartbeatIntervalMinutes: "1440"  # Heartbeat interval in minutes (default: 1440 = 24 hours)
   telemetryDebug: false  # Set to true to log payloads instead of sending
+  mcpTelemetryImdsProbeDisabled: false  # Set to true to disable IMDS probing in cloud detection (issue #986)
 
   # Demo server configuration
   disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
