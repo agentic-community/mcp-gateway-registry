@@ -1663,6 +1663,71 @@ These guidelines ensure consistent, maintainable, and modern Python code. Key pr
 - **Type Safety**: Clear type annotations with modern syntax
 
 Always prioritize simplicity and clarity over cleverness.
+
+## Deployment Surface Customization
+
+### Helm Charts
+
+Helm charts support `extraEnv` for injecting custom environment variables. The reserved names are read from `charts/*/reserved-env-names.txt` files using `.Files.Get` and `splitList` functions.
+
+**Example:**
+```yaml
+extraEnv:
+  - name: MY_CUSTOM_VAR
+    value: "my-value"
+  - name: MY_FLAG
+    value: "true"
+```
+
+**Reserved Names:** The following variables are managed by the deployment and cannot be overridden:
+- `DEPLOYMENT_MODE`, `REGISTRY_MODE`, `SECRET_KEY`, etc.
+
+See `charts/*/reserved-env-names.txt` for the complete list per service.
+
+### Docker Compose
+
+For Docker Compose deployments, you can inject custom environment variables by creating files in `${HOME}/mcp-gateway/extra_env/`:
+
+```bash
+# Create the extra_env directory
+mkdir -p ${HOME}/mcp-gateway/extra_env
+
+# Create your environment file
+cat > ${HOME}/mcp-gateway/extra_env/registry.env << EOF
+# Custom environment variables for the registry
+MY_FEATURE_FLAG=true
+CUSTOM_TIMEOUT=30
+EOF
+
+# Start the stack
+./build_and_run.sh
+```
+
+The `env_file:` entries are configured for `registry.env`, `auth-server.env`, and `mcpgw.env` with `required: false`, so missing files are allowed.
+
+**Preflight Validation:** Before starting containers, `build_and_run.sh` validates that no environment variable in your extra_env files conflicts with chart-managed reserved names. If a collision is found, deployment fails with a clear error message pointing to the exact line number and file.
+
+### Terraform / ECS
+
+For Terraform/ECS deployments, add `*_extra_env` variables to your `terraform.tfvars`:
+
+```hcl
+registry_extra_env = [
+  { name = "MY_FEATURE_FLAG", value = "true" },
+  { name = "CUSTOM_TIMEOUT", value = "30" },
+]
+
+auth_server_extra_env = [
+  { name = "MY_AUTH_VAR", value = "value" },
+]
+
+mcpgw_extra_env = [
+  { name = "MY_MCPGW_VAR", value = "test" },
+]
+```
+
+**Validation:** Terraform validates that none of the names conflict with reserved variables at `terraform plan` time using `file()` and `contains()` functions.
+
 ## Federated Registry Implementation Workflow
 
 When implementing the federated registry feature, follow this 3-agent workflow for each sub-feature:

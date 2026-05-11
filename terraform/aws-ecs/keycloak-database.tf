@@ -89,7 +89,7 @@ resource "aws_rds_cluster_instance" "keycloak" {
   engine             = aws_rds_cluster.keycloak.engine
   engine_version     = aws_rds_cluster.keycloak.engine_version
 
-  auto_minor_version_upgrade  = true
+  auto_minor_version_upgrade   = true
   performance_insights_enabled = false
 
   tags = local.common_tags

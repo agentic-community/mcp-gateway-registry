@@ -1141,3 +1141,25 @@ variable "github_api_base_url" {
   type        = string
   default     = "https://api.github.com"
 }
+
+# =============================================================================
+# EXTRA ENVIRONMENT VARIABLES (Issue #1000)
+# =============================================================================
+
+variable "registry_extra_env" {
+  description = "Extra environment variables for registry service. List of objects with 'name' and 'value' string fields."
+  type        = list(object({ name = string, value = string }))
+  default     = []
+}
+
+variable "auth_server_extra_env" {
+  description = "Extra environment variables for auth-server service. List of objects with 'name' and 'value' string fields."
+  type        = list(object({ name = string, value = string }))
+  default     = []
+}
+
+variable "mcpgw_extra_env" {
+  description = "Extra environment variables for mcpgw service. List of objects with 'name' and 'value' string fields."
+  type        = list(object({ name = string, value = string }))
+  default     = []
+}

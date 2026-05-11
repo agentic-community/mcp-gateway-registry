@@ -182,6 +182,13 @@ services:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
       - "7860:7860"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file:
+      - path: ${HOME}/mcp-gateway/extra_env/registry.env
+        required: false
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/agents:/app/registry/agents
@@ -194,10 +201,6 @@ services:
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     depends_on:
       auth-server:
         condition: service_started
@@ -327,16 +330,19 @@ services:
       - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
     ports:
       - "8888:8888"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file:
+      - path: ${HOME}/mcp-gateway/extra_env/auth-server.env
+        required: false
     volumes:
       # Audit logs kept under ${HOME}/mcp-gateway/logs (legacy path)
       - ${HOME}/mcp-gateway/logs:/app/logs
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
       # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     depends_on:
       metrics-service:
         condition: service_healthy
@@ -387,6 +393,13 @@ services:
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
       - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
       - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file:
+      - path: ${HOME}/mcp-gateway/extra_env/mcpgw.env
+        required: false
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models
@@ -395,10 +408,6 @@ services:
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
       - "8003:8003"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     depends_on:
       - registry
     restart: unless-stopped

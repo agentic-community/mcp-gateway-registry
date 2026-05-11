@@ -356,7 +356,9 @@ module "ecs_service_auth" {
             name  = "MONGODB_CONNECTION_STRING"
             value = var.mongodb_connection_string
           }
-        ] : []
+        ] : [],
+        # Extra environment variables from user (Issue #1000)
+        var.auth_server_extra_env
       )
 
       secrets = concat(
@@ -1090,7 +1092,9 @@ module "ecs_service_registry" {
             name  = "MONGODB_CONNECTION_STRING"
             value = var.mongodb_connection_string
           }
-        ] : []
+        ] : [],
+        # Extra environment variables from user (Issue #1000)
+        var.registry_extra_env
       )
 
       secrets = concat(
@@ -1478,7 +1482,7 @@ module "ecs_service_mcpgw" {
         }
       ]
 
-      environment = [
+      environment = concat([
         {
           name  = "PORT"
           value = "8003"
@@ -1510,8 +1514,16 @@ module "ecs_service_mcpgw" {
         {
           name  = "APP_LOG_LEVEL"
           value = var.app_log_level
-        },
-      ]
+        }
+        ],
+        # Extra environment variables from user (Issue #1000)
+        [
+          for env in var.mcpgw_extra_env : {
+            name  = env.name
+            value = env.value
+          }
+        ]
+      )
 
       secrets = []
 

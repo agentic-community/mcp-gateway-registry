@@ -1168,3 +1168,51 @@ variable "enable_waf" {
   type        = bool
   default     = false
 }
+
+# =============================================================================
+# EXTRA ENVIRONMENT VARIABLES (Issue #1000)
+# =============================================================================
+
+variable "registry_extra_env" {
+  description = "Extra environment variables for registry service. Array of objects with 'name' and 'value' fields. Reserved names are enforced at pre-deploy validation via build_and_run.sh (Docker) or the Terraform validation block in the module call. See charts/registry/reserved-env-names.txt for the complete list of reserved names."
+  type        = list(object({ name = string, value = string }))
+  default     = []
+
+  validation {
+    condition     = can(var.registry_extra_env)
+    error_message = "registry_extra_env must be a list of objects with 'name' and 'value' fields."
+  }
+
+  validation {
+    condition = alltrue([
+      for env in var.registry_extra_env : can(env.name) && can(env.value)
+    ])
+    error_message = "Each registry_extra_env entry must have 'name' and 'value' string fields."
+  }
+}
+
+variable "auth_server_extra_env" {
+  description = "Extra environment variables for auth-server service. Array of objects with 'name' and 'value' fields. Reserved names are enforced at pre-deploy validation via build_and_run.sh."
+  type        = list(object({ name = string, value = string }))
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for env in var.auth_server_extra_env : can(env.name) && can(env.value)
+    ])
+    error_message = "Each auth_server_extra_env entry must have 'name' and 'value' string fields."
+  }
+}
+
+variable "mcpgw_extra_env" {
+  description = "Extra environment variables for mcpgw service. Array of objects with 'name' and 'value' fields. Reserved names are enforced at pre-deploy validation via build_and_run.sh."
+  type        = list(object({ name = string, value = string }))
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for env in var.mcpgw_extra_env : can(env.name) && can(env.value)
+    ])
+    error_message = "Each mcpgw_extra_env entry must have 'name' and 'value' string fields."
+  }
+}

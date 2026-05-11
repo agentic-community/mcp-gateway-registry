@@ -7,6 +7,9 @@ Users must not supply these via .Values.extraEnv. The list is the union of:
   - every key the chart sources via `envFrom` from stack-level or
     per-chart secrets/configmaps.
 
+To update: edit charts/mcpgw/reserved-env-names.txt and run
+`helm dep update` on any parent chart that depends on this subchart.
+
 Sections (in order below):
   1. env: block (HOST, EMBEDDINGS_*, GITHUB_*)
   2. mcpgw per-chart secret
@@ -16,31 +19,8 @@ Over-rejection is preferred to under-rejection: a user attempting to
 inject one of these via extraEnv gets a clear template-render error.
 */}}
 {{- define "mcpgw.reservedEnvNames" -}}
-- HOST
-- EMBEDDINGS_API_KEY
-- GITHUB_APP_ID
-- GITHUB_APP_INSTALLATION_ID
-- GITHUB_EXTRA_HOSTS
-- GITHUB_API_BASE_URL
-- GITHUB_PAT
-- GITHUB_APP_PRIVATE_KEY
-- EMBEDDINGS_API_BASE
-- EMBEDDINGS_AWS_REGION
-- EMBEDDINGS_MODEL_DIMENSIONS
-- EMBEDDINGS_MODEL_NAME
-- EMBEDDINGS_PROVIDER
-- PORT
-- REGISTRY_BASE_URL
-- SECRET_KEY
-- ASOR_ACCESS_TOKEN
-- FEDERATION_CLIENT_ID
-- FEDERATION_CLIENT_SECRET
-- FEDERATION_ENCRYPTION_KEY
-- FEDERATION_STATIC_TOKEN
-- FEDERATION_STATIC_TOKEN_AUTH_ENABLED
-- FEDERATION_TOKEN_ENDPOINT
-- REGISTRY_ID
-- WORKDAY_TOKEN_URL
+{{- $content := .Files.Get "reserved-env-names.txt" -}}
+{{- compact (splitList "\n" $content) | toYaml -}}
 {{- end -}}
 
 {{/*

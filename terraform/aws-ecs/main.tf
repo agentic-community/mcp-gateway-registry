@@ -271,6 +271,11 @@ module "mcp_gateway" {
   github_extra_hosts         = var.github_extra_hosts
   github_api_base_url        = var.github_api_base_url
 
+  # Extra environment variables for custom configuration (Issue #1000)
+  registry_extra_env    = var.registry_extra_env
+  auth_server_extra_env = var.auth_server_extra_env
+  mcpgw_extra_env       = var.mcpgw_extra_env
+
   # Wait for S3 bucket policy to propagate (30s delay)
   # This prevents "Access Denied" errors when ALB tests write permissions
   depends_on = [time_sleep.wait_for_bucket_policy]
