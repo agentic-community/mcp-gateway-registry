@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.0.22-p1
+    tag: 1.23.0
     pullPolicy: IfNotPresent
 
 # Per-service image configuration
@@ -11,7 +11,7 @@ global:
 image:
   registry: ""      # Overrides global.image.registry when set
   repository: auth-server  # Image name within the registry
-  tag: ""           # Overrides global.image.tag when set
+  tag: 1.23.0
   pullPolicy: ""    # Overrides global.image.pullPolicy when set
 
 # Application configuration
