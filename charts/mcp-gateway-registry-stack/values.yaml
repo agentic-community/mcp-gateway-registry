@@ -62,6 +62,14 @@ global:
   # public ingress.
   ingress:
     inboundCidrs: # optional comma separated list of allowed inbound CIDR ranges
+    # Default ALB scheme applied to every ingress in the stack. Stack-level
+    # override of each subchart's own global.ingress.scheme. Individual
+    # ingresses can still override via <subchart>.ingress.scheme for cases
+    # where one ingress should be internal and another public.
+    # Use "internal" for VPC-private deployments (corporate VPN, regulated
+    # environments). Default "internet-facing" preserves the SaaS-default
+    # behavior.
+    scheme: internet-facing
     className: alb
     tls: true
     # Routing mode: "subdomain" or "path"

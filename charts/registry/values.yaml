@@ -6,6 +6,13 @@ global:
     tag: 1.23.0
     pullPolicy: IfNotPresent
 
+  ingress:
+    # Default ALB scheme for the registry's ingress when this subchart is
+    # deployed standalone. Overridden by mcp-gateway-registry-stack's
+    # global.ingress.scheme when deployed via the umbrella. Per-ingress
+    # override available at .ingress.scheme below.
+    scheme: internet-facing
+
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
 image:
@@ -227,6 +234,11 @@ resources:
 ingress:
   enabled: false
   className: alb
+  # ALB scheme for this specific ingress. Leave empty to fall back to
+  # global.ingress.scheme (chart-level default, or stack-level override
+  # when deployed via mcp-gateway-registry-stack), and finally to
+  # "internet-facing".
+  scheme: ""
   hostname: ""
   annotations: {}
   tls: false
