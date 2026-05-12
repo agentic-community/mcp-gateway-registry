@@ -541,6 +541,30 @@ Used only by the publish workflow; not by the running registry.
 
 ---
 
+## Group 29 — Extra Environment Variable Injection (Issue #1000)
+
+User-supplied environment variables passed to the registry, auth-server, and mcpgw containers *in addition to* the chart-managed variables. Each surface enforces a reserved-name list so users cannot override chart-managed values; the canonical list lives in `charts/<subchart>/reserved-env-names.txt` and is the shared source of truth across all three surfaces.
+
+| Parameter | Docker (`.env` / extra_env) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------------------|-----------------------|----------------------|---------|
+| Registry extra env | File: `${HOME}/mcp-gateway/extra_env/registry.env` (key=value per line; picked up via `env_file:` with `required: false`) | `registry_extra_env = [{ name, value }, ...]` **(sensitive)** | `registry.extraEnv: [{ name, value }]` / `registry.extraEnvFrom: [...]` | Inject custom env vars into the registry container. |
+| Auth-server extra env | File: `${HOME}/mcp-gateway/extra_env/auth-server.env` | `auth_server_extra_env = [{ name, value }, ...]` **(sensitive)** | `auth-server.extraEnv: [...]` / `auth-server.extraEnvFrom: [...]` | Inject custom env vars into the auth-server container. |
+| mcpgw extra env | File: `${HOME}/mcp-gateway/extra_env/mcpgw.env` | `mcpgw_extra_env = [{ name, value }, ...]` **(sensitive)** | `mcpgw.extraEnv: [...]` / `mcpgw.extraEnvFrom: [...]` | Inject custom env vars into the mcpgw container. |
+
+**Reserved names (shared across all three surfaces):**
+- `charts/registry/reserved-env-names.txt`
+- `charts/auth-server/reserved-env-names.txt`
+- `charts/mcpgw/reserved-env-names.txt`
+
+**Collision enforcement per surface:**
+- **Docker / Docker Compose**: `build_and_run.sh` runs `validate_extra_env` preflight on every start; rejects reserved-name collisions with the exact file and line number.
+- **Terraform / ECS**: `terraform plan` uses a `validation` block on each `*_extra_env` variable that reads the same `reserved-env-names.txt` via `file()` and rejects reserved names with `contains()`.
+- **Helm**: `registry.validateExtraEnv` / `auth-server.validateExtraEnv` / `mcpgw.validateExtraEnv` helpers in `_helpers.tpl` fail `helm template`/`install` with a clear error if a reserved name is supplied via `extraEnv`.
+
+**Secret handling:** For production secrets, prefer Kubernetes `extraEnvFrom` (Helm) or AWS Secrets Manager ARNs wired into the task definition's `secrets` block (Terraform; see `mongodb_connection_string_secret_arn` as a reference pattern) rather than passing plaintext values via `*_extra_env`. The `extra_env/*.env` files on the Docker surface are plaintext on disk and should not be used for production secrets.
+
+---
+
 ## Group 30 — Infrastructure-Only (Terraform and Helm) Parameters
 
 These have no `.env` equivalent because they describe the infrastructure, not the running registry.
