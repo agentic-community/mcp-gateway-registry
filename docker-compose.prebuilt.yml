@@ -187,7 +187,7 @@ services:
     cap_drop:
       - ALL
     env_file:
-      - path: ${HOME}/mcp-gateway/extra_env/registry.env
+      - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/registry.env
         required: false
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
@@ -335,7 +335,7 @@ services:
     cap_drop:
       - ALL
     env_file:
-      - path: ${HOME}/mcp-gateway/extra_env/auth-server.env
+      - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/auth-server.env
         required: false
     volumes:
       # Audit logs kept under ${HOME}/mcp-gateway/logs (legacy path)
@@ -398,7 +398,7 @@ services:
     cap_drop:
       - ALL
     env_file:
-      - path: ${HOME}/mcp-gateway/extra_env/mcpgw.env
+      - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/mcpgw.env
         required: false
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers

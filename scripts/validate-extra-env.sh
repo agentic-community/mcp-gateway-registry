@@ -20,7 +20,9 @@
 set -u
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXTRA_ENV_DIR="${MCP_EXTRA_ENV_DIR:-${HOME}/mcp-gateway/extra_env}"
+# Default to extra_env/ at the repo root so operators find it next to .env.
+# Override with MCP_EXTRA_ENV_DIR for non-default locations (CI, shared hosts).
+EXTRA_ENV_DIR="${MCP_EXTRA_ENV_DIR:-${REPO_ROOT}/extra_env}"
 
 # Log helper that matches build_and_run.sh's `log` if available, else falls
 # back to a plain echo so the script works standalone.

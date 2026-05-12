@@ -274,7 +274,7 @@ services:
     cap_drop:
       - ALL
     env_file:
-      - path: ${HOME}/mcp-gateway/extra_env/registry.env
+      - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/registry.env
         required: false
     volumes:
       # User-managed content (bind mounts)
@@ -451,7 +451,7 @@ services:
     cap_drop:
       - ALL
     env_file:
-      - path: ${HOME}/mcp-gateway/extra_env/auth-server.env
+      - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/auth-server.env
         required: false
     volumes:
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
@@ -518,7 +518,7 @@ services:
       - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
       - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
     env_file:
-      - path: ${HOME}/mcp-gateway/extra_env/mcpgw.env
+      - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/mcpgw.env
         required: false
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers

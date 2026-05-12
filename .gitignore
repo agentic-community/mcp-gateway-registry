@@ -141,8 +141,9 @@ celerybeat.pid
 .env.docker
 
 # Extra environment injection files (Issue #1000)
-# These live at ${HOME}/mcp-gateway/extra_env/ by default, but guard the repo
-# path in case a user drops the folder inside a working tree by mistake.
+# Default location is extra_env/ at the repo root; users can override the
+# path with MCP_EXTRA_ENV_DIR. Exclude the .env files themselves so
+# per-operator secrets never land in git.
 **/extra_env/*.env
 
 # Configuration files with sensitive data

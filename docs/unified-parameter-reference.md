@@ -547,9 +547,9 @@ User-supplied environment variables passed to the registry, auth-server, and mcp
 
 | Parameter | Docker (`.env` / extra_env) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------------------|-----------------------|----------------------|---------|
-| Registry extra env | File: `${HOME}/mcp-gateway/extra_env/registry.env` (key=value per line; picked up via `env_file:` with `required: false`) | `registry_extra_env = [{ name, value }, ...]` **(sensitive)** | `registry.extraEnv: [{ name, value }]` / `registry.extraEnvFrom: [...]` | Inject custom env vars into the registry container. |
-| Auth-server extra env | File: `${HOME}/mcp-gateway/extra_env/auth-server.env` | `auth_server_extra_env = [{ name, value }, ...]` **(sensitive)** | `auth-server.extraEnv: [...]` / `auth-server.extraEnvFrom: [...]` | Inject custom env vars into the auth-server container. |
-| mcpgw extra env | File: `${HOME}/mcp-gateway/extra_env/mcpgw.env` | `mcpgw_extra_env = [{ name, value }, ...]` **(sensitive)** | `mcpgw.extraEnv: [...]` / `mcpgw.extraEnvFrom: [...]` | Inject custom env vars into the mcpgw container. |
+| Registry extra env | File: `extra_env/registry.env` at the repo root (override with `$MCP_EXTRA_ENV_DIR`); key=value per line, picked up via `env_file:` with `required: false` | `registry_extra_env = [{ name, value }, ...]` **(sensitive)** | `registry.extraEnv: [{ name, value }]` / `registry.extraEnvFrom: [...]` | Inject custom env vars into the registry container. |
+| Auth-server extra env | File: `extra_env/auth-server.env` (same directory as above) | `auth_server_extra_env = [{ name, value }, ...]` **(sensitive)** | `auth-server.extraEnv: [...]` / `auth-server.extraEnvFrom: [...]` | Inject custom env vars into the auth-server container. |
+| mcpgw extra env | File: `extra_env/mcpgw.env` (same directory as above) | `mcpgw_extra_env = [{ name, value }, ...]` **(sensitive)** | `mcpgw.extraEnv: [...]` / `mcpgw.extraEnvFrom: [...]` | Inject custom env vars into the mcpgw container. |
 
 **Reserved names (shared across all three surfaces):**
 - `charts/registry/reserved-env-names.txt`

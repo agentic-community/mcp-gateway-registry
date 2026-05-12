@@ -1686,14 +1686,14 @@ See `charts/*/reserved-env-names.txt` for the complete list per service.
 
 ### Docker Compose
 
-For Docker Compose deployments, you can inject custom environment variables by creating files in `${HOME}/mcp-gateway/extra_env/`:
+For Docker Compose deployments, you can inject custom environment variables by creating files in `extra_env/` at the repo root (next to `.env`):
 
 ```bash
-# Create the extra_env directory
-mkdir -p ${HOME}/mcp-gateway/extra_env
+# Create the extra_env directory at the repo root
+mkdir -p extra_env
 
 # Create your environment file
-cat > ${HOME}/mcp-gateway/extra_env/registry.env << EOF
+cat > extra_env/registry.env << EOF
 # Custom environment variables for the registry
 MY_FEATURE_FLAG=true
 CUSTOM_TIMEOUT=30
@@ -1704,6 +1704,8 @@ EOF
 ```
 
 The `env_file:` entries are configured for `registry.env`, `auth-server.env`, and `mcpgw.env` with `required: false`, so missing files are allowed.
+
+**Overriding the path:** Both the preflight validator and the compose files resolve the extra_env directory from `$MCP_EXTRA_ENV_DIR`, falling back to `./extra_env` (relative to the repo root) when unset. Export `MCP_EXTRA_ENV_DIR` before running `build_and_run.sh` (or `docker compose` directly) to point both surfaces at an alternative location — e.g. a tmpfs for local testing or `/etc/mcp-gateway/extra_env` for a shared host deployment.
 
 **Compose version requirement:** The `env_file: [{ path, required }]` object form requires **Docker Compose v2.24 or newer** (Docker Desktop 4.27+) or **Podman Compose v1.0.7+**. Older versions silently ignore the `required` flag and will error out if the referenced file does not exist. Check with `docker compose version` or `podman-compose --version` before deploying.
 
