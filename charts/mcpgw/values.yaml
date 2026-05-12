@@ -21,7 +21,10 @@ app:
   envSecretName: mcpgw-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
   port: 8000
-  bindHost: "::"
+  # Server bind address. Default "0.0.0.0" works on all Kubernetes nodes.
+  # Set to "::" only for IPv6-only clusters (requires net.ipv6.bindv6only=0
+  # on the node). See docs/unified-parameter-reference.md Group 4.
+  bindHost: "0.0.0.0"
 
   # Registry connection — default is the standalone fallback. When this
   # subchart is deployed as part of mcp-gateway-registry-stack, the

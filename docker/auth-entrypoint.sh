@@ -97,7 +97,10 @@ while True:
     echo "MongoDB is ready."
 fi
 
-BIND_HOST="${BIND_HOST:-::}"
+# Default binds to all IPv4 interfaces inside the container. Operators who
+# need IPv6 dual-stack can set BIND_HOST=:: — but see docs/TELEMETRY.md for
+# the net.ipv6.bindv6only=0 host-side requirement.
+BIND_HOST="${BIND_HOST:-0.0.0.0}"
 
 echo "Starting Auth Server (host=$BIND_HOST)..."
 cd /app

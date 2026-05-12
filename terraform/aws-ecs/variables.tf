@@ -252,9 +252,9 @@ variable "session_cookie_domain" {
 }
 
 variable "bind_host" {
-  description = "Network bind address for registry and gateway services. Use '::' for dual-stack IPv4+IPv6 or '0.0.0.0' for IPv4 only."
+  description = "Network bind address for registry and gateway services. Default '0.0.0.0' (IPv4) works on all hosts. Set to '::' only for IPv6-only deployments (requires net.ipv6.bindv6only=0 on the host)."
   type        = string
-  default     = "::"
+  default     = "0.0.0.0"
 }
 
 # =============================================================================

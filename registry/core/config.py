@@ -60,8 +60,13 @@ class Settings(BaseSettings):
         extra="ignore",  # Ignore extra environment variables
     )
 
-    # Network binding: "::" for dual-stack IPv4+IPv6, "0.0.0.0" for IPv4 only
-    bind_host: str = "::"
+    # Network binding: default "0.0.0.0" binds to all IPv4 interfaces inside
+    # the container (works everywhere). Opt into IPv6 dual-stack by setting
+    # BIND_HOST=:: — but note that requires net.ipv6.bindv6only=0 on the host
+    # AND an IPv6 loopback in the container image, which the stock Docker
+    # image does not have. See docs/TELEMETRY.md and
+    # docs/unified-parameter-reference.md (Group 4) for details.
+    bind_host: str = "0.0.0.0"  # nosec B104 - bind to all IPv4 interfaces inside container
 
     # Auth settings
     secret_key: str = ""
