@@ -5,31 +5,6 @@
 {{- $imgPullPolicy := default .Values.global.image.pullPolicy .Values.image.pullPolicy }}
 {{- /* Fail-fast validation of user-supplied extraEnv */ -}}
 {{- include "mcpgw.validateExtraEnv" . -}}
-{{- /*
-  Multi-replica guard rail.
-  FastMCP OAuthProxy keeps DCR registrations, authorization codes,
-  transactions, and refresh-token metadata in per-replica in-memory
-  storage. Running multiple replicas without shared state breaks the
-  OAuth flow. Shared storage support is planned for a later phase; until
-  then, block this combination at template time.
-*/}}
-{{- if and (gt (int .Values.app.replicas) 1) .Values.app.oidcEnabled }}
-{{- fail "mcpgw: app.replicas > 1 with app.oidcEnabled=true is not yet supported. OAuthProxy state is not shared across replicas. Keep app.replicas=1 while oidcEnabled is true, or set oidcEnabled=false for multi-replica deployments." }}
-{{- end }}
-{{- /*
-  Resolve stateless HTTP mode.
-  Explicit override (app.statelessHttp) wins; otherwise auto-enable when
-  replicas > 1 and OIDC is not enabled. Stateless mode is required under
-  a round-robin LB because FastMCP's default StreamableHTTP transport
-  keeps per-session transport objects in memory on the replica that
-  handled the MCP `initialize` request.
-*/}}
-{{- $statelessHttp := false }}
-{{- if not (kindIs "invalid" .Values.app.statelessHttp) }}
-{{- $statelessHttp = .Values.app.statelessHttp }}
-{{- else if and (gt (int .Values.app.replicas) 1) (not .Values.app.oidcEnabled) }}
-{{- $statelessHttp = true }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -86,8 +61,6 @@ spec:
           env:
             - name: HOST
               value: {{ .Values.app.bindHost | quote }}
-            - name: MCPGW_STATELESS_HTTP
-              value: {{ $statelessHttp | quote }}
             {{- /* GitHub private repo auth (SKILL.md fetching) */}}
             {{- if .Values.app.githubAppId }}
             - name: GITHUB_APP_ID

@@ -35,10 +35,7 @@ MAX_QUERY_LENGTH: int = 500
 MIN_TOP_N: int = 1
 MAX_TOP_N: int = 50
 
-STATELESS_HTTP: bool = os.getenv("MCPGW_STATELESS_HTTP", "").lower() in ("true", "1", "yes")
-
 logger.info(f"Registry URL: {REGISTRY_URL}")
-logger.info(f"Stateless HTTP: {STATELESS_HTTP}")
 
 # ---------------------------------------------------------------------------
 # OAuth configuration (optional – enable via OIDC_ENABLED=true)
@@ -619,14 +616,12 @@ if __name__ == "__main__":
         # Use configurable host with secure default (127.0.0.1)
         # Set HOST=0.0.0.0 in environment for Docker deployments
         host = os.environ.get("HOST", "127.0.0.1")
-        logger.info(
-            f"Running in HTTP mode on {host}:{port} (stateless={STATELESS_HTTP})"
-        )
+        logger.info(f"Running in HTTP mode on {host}:{port} (stateless=True)")
         mcp.run(
             transport="streamable-http",
             host=host,
             port=int(port),
-            stateless_http=STATELESS_HTTP,
+            stateless_http=True,
         )
     else:
         logger.info("Running in stdio mode")

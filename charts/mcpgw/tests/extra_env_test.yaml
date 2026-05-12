@@ -42,23 +42,20 @@ tests:
               secretKeyRef:
                 name: my-secret
                 key: my-key
-      # Order: chart-managed env vars come first (HOST, MCPGW_STATELESS_HTTP),
-      # user extraEnv entries last. Indices shift whenever a conditional
-      # chart-managed env var is inserted; update these assertions AND
-      # the NOTE above whenever the set of chart-managed entries changes.
+      # Order: chart-managed env vars come first (HOST), user extraEnv
+      # entries last. Indices shift whenever a conditional chart-managed
+      # env var is inserted; update these assertions AND the NOTE above
+      # whenever the set of chart-managed entries changes.
       # NOTE: assumes no github* fields set (default values), so only
-      # HOST + MCPGW_STATELESS_HTTP render before extraEnv.
+      # HOST renders before extraEnv.
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: HOST
       - equal:
           path: spec.template.spec.containers[0].env[1].name
-          value: MCPGW_STATELESS_HTTP
-      - equal:
-          path: spec.template.spec.containers[0].env[2].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[3].name
+          path: spec.template.spec.containers[0].env[2].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -113,7 +110,7 @@ tests:
       - failedTemplate:
           errorPattern: "\"SECRET_KEY\" is a reserved variable"
 
-  - it: fails with a pointed OIDC_ENABLED error directing users to app.oidcEnabled
+  - it: fails with a pointed OIDC_ENABLED error pointing to issue #895 and extraEnvFrom
     set:
       app.secretKey: test-key
       extraEnv:
@@ -121,7 +118,7 @@ tests:
           value: "true"
     asserts:
       - failedTemplate:
-          errorPattern: "Set app.oidcEnabled=true in values.yaml instead"
+          errorPattern: "OIDC is not currently configurable through chart values"
 
   - it: fails on duplicate names within extraEnv
     set:
