@@ -1,0 +1,198 @@
+suite: multi-replica stateless HTTP
+templates:
+  - deployment.yaml
+  - poddisruptionbudget.yaml
+  - service.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: defaults to single replica with stateless disabled
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCPGW_STATELESS_HTTP
+            value: "false"
+
+  - it: auto-enables stateless when replicas > 1 and OIDC disabled
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 3
+      app.oidcEnabled: false
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCPGW_STATELESS_HTTP
+            value: "true"
+
+  - it: respects explicit statelessHttp=false override even with replicas > 1
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 3
+      app.oidcEnabled: false
+      app.statelessHttp: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCPGW_STATELESS_HTTP
+            value: "false"
+
+  - it: respects explicit statelessHttp=true override with single replica
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 1
+      app.statelessHttp: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCPGW_STATELESS_HTTP
+            value: "true"
+
+  - it: treats statelessHttp=empty-string as an explicit falsy override
+    # Guards the `kindIs "invalid"` branch: empty string is not null, so
+    # auto-derive is skipped and $statelessHttp takes the empty-string
+    # value as-is. The rendered env var value is "", which the Python
+    # side (STATELESS_HTTP = value in ("true","1","yes")) treats as
+    # false — matching the explicit-falsy intent.
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 3
+      app.oidcEnabled: false
+      app.statelessHttp: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCPGW_STATELESS_HTTP
+            value: ""
+
+  - it: fails template render when replicas > 1 and oidcEnabled true
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 2
+      app.oidcEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "app.replicas > 1 with app.oidcEnabled=true is not yet supported"
+
+  - it: allows single replica with oidcEnabled true
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 1
+      app.oidcEnabled: true
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCPGW_STATELESS_HTTP
+            value: "false"
+
+  - it: uses HTTP /health probes instead of TCP
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
+      - isNull:
+          path: spec.template.spec.containers[0].livenessProbe.tcpSocket
+      - isNull:
+          path: spec.template.spec.containers[0].readinessProbe.tcpSocket
+
+  - it: configures graceful shutdown with preStop hook and termination grace period
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 45
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command
+          value: ["sh", "-c", "sleep 5"]
+
+  - it: does not render PDB for single replica
+    template: poddisruptionbudget.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 1
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders PDB when replicas > 1
+    template: poddisruptionbudget.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 3
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: mcpgw-server
+
+  - it: does not render PDB when explicitly disabled
+    template: poddisruptionbudget.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 3
+      podDisruptionBudget.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: service does not set sessionAffinity by default
+    template: service.yaml
+    set:
+      app.secretKey: test-key
+    asserts:
+      - isNull:
+          path: spec.sessionAffinity
+
+  - it: service sets ClientIP sessionAffinity when requested
+    template: service.yaml
+    set:
+      app.secretKey: test-key
+      service.sessionAffinity: ClientIP
+    asserts:
+      - equal:
+          path: spec.sessionAffinity
+          value: ClientIP

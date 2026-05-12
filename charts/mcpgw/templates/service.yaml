@@ -9,6 +9,9 @@ metadata:
   {{- end }}
 spec:
   type: {{ .Values.service.type }}
+  {{- if and .Values.service.sessionAffinity (ne .Values.service.sessionAffinity "None") }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- end }}
   ports:
     - port: {{ .Values.service.port }}
       targetPort: http

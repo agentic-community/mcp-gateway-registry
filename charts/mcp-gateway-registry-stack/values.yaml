@@ -362,6 +362,13 @@ mcpgw:
   enabled: true # Set to true to deploy the MCPGW MCP server
   app:
     replicas: 1
+    # Set to true if the mcpgw OAuthProxy (OIDC_ENABLED=true in the
+    # shared secret / env) is enabled. Must match the runtime env the
+    # pod sees, otherwise the chart's multi-replica guard rail cannot
+    # correctly block the unsupported OIDC+multi-replica combination.
+    # Shared OAuth state storage is planned for a later phase; until
+    # then, keep replicas at 1 whenever OIDC is enabled.
+    oidcEnabled: false
 
   nodeSelector: {}
 

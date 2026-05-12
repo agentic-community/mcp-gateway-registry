@@ -18,6 +18,7 @@ import httpx
 from fastmcp import Context, FastMCP
 from logging_setup import setup_mcpgw_logging
 from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
+from starlette.responses import JSONResponse
 
 _log_file = setup_mcpgw_logging()
 logger = logging.getLogger(__name__)
@@ -34,7 +35,10 @@ MAX_QUERY_LENGTH: int = 500
 MIN_TOP_N: int = 1
 MAX_TOP_N: int = 50
 
+STATELESS_HTTP: bool = os.getenv("MCPGW_STATELESS_HTTP", "").lower() in ("true", "1", "yes")
+
 logger.info(f"Registry URL: {REGISTRY_URL}")
+logger.info(f"Stateless HTTP: {STATELESS_HTTP}")
 
 # ---------------------------------------------------------------------------
 # OAuth configuration (optional – enable via OIDC_ENABLED=true)
@@ -123,6 +127,13 @@ else:
     logger.info("OAuth disabled – using bearer-token passthrough with M2M for registry calls")
 
 mcp = FastMCP("mcpgw", auth=_auth_provider)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def _health(_):  # noqa: ANN001
+    """Local liveness/readiness probe. No external dependencies."""
+    return JSONResponse({"status": "ok"})
+
 
 if _auth_provider:
     from starlette.responses import RedirectResponse
@@ -608,8 +619,15 @@ if __name__ == "__main__":
         # Use configurable host with secure default (127.0.0.1)
         # Set HOST=0.0.0.0 in environment for Docker deployments
         host = os.environ.get("HOST", "127.0.0.1")
-        logger.info(f"Running in HTTP mode on {host}:{port}")
-        mcp.run(transport="streamable-http", host=host, port=int(port))
+        logger.info(
+            f"Running in HTTP mode on {host}:{port} (stateless={STATELESS_HTTP})"
+        )
+        mcp.run(
+            transport="streamable-http",
+            host=host,
+            port=int(port),
+            stateless_http=STATELESS_HTTP,
+        )
     else:
         logger.info("Running in stdio mode")
         mcp.run(transport="stdio")

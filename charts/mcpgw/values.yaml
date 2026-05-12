@@ -17,7 +17,27 @@ image:
 # Application configuration
 app:
   name: mcpgw-server
+  # Number of replicas. Multi-replica requires stateless MCP transport
+  # (auto-enabled when replicas > 1 and oidcEnabled is false).
+  # Multi-replica with oidcEnabled=true is not yet supported — the chart
+  # will fail template render. Shared OAuth state storage is planned for
+  # a later phase.
   replicas: 1
+  # Whether FastMCP OAuthProxy (OIDC) is enabled for this deployment.
+  # When true, OAuthProxy maintains in-memory session/DCR state that does
+  # not survive across replicas. Keep at 1 replica until shared storage is
+  # available. Set this to match the OIDC_ENABLED env var injected via the
+  # shared secret / extraEnv; the chart uses this flag to gate the
+  # multi-replica guard rail.
+  oidcEnabled: false
+  # Disables MCP session state (no mcp-session-id tracking, fresh transport
+  # per request). Required for multi-replica under round-robin load
+  # balancing when OAuthProxy is not in use. Auto-enabled by the chart
+  # when replicas > 1 and oidcEnabled is false; leave this null (or omit)
+  # to accept the auto-default. Set explicitly (true|false) only to
+  # override. Note: an empty string ("") is treated as an explicit falsy
+  # value, not an alias for null — use null to auto-derive.
+  statelessHttp: null
   envSecretName: mcpgw-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
   port: 8000
@@ -55,6 +75,21 @@ service:
   type: ClusterIP
   port: 8003
   annotations: {}
+  # Session affinity. Not the recommended path for multi-replica: use
+  # app.statelessHttp (auto-enabled when replicas > 1 and oidcEnabled is
+  # false) instead. sessionAffinity: ClientIP is documented as an interim
+  # option for OIDC-enabled deployments that need multi-replica before
+  # shared-storage support ships — note it breaks on pod restart and
+  # distributes load unevenly. Leave as "None" unless you know you want
+  # this trade-off.
+  sessionAffinity: None
+
+# PodDisruptionBudget. Only rendered when replicas > 1; protects against
+# voluntary disruptions (node drains, rolling deploys) taking the whole
+# gateway down.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 # Resource limits and requests
 resources:

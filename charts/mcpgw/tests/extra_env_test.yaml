@@ -42,15 +42,23 @@ tests:
               secretKeyRef:
                 name: my-secret
                 key: my-key
-      # Order: chart-managed HOST comes first, user extraEnv entries last.
+      # Order: chart-managed env vars come first (HOST, MCPGW_STATELESS_HTTP),
+      # user extraEnv entries last. Indices shift whenever a conditional
+      # chart-managed env var is inserted; update these assertions AND
+      # the NOTE above whenever the set of chart-managed entries changes.
+      # NOTE: assumes no github* fields set (default values), so only
+      # HOST + MCPGW_STATELESS_HTTP render before extraEnv.
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: HOST
       - equal:
           path: spec.template.spec.containers[0].env[1].name
-          value: MY_FLAG
+          value: MCPGW_STATELESS_HTTP
       - equal:
           path: spec.template.spec.containers[0].env[2].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[3].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -104,6 +112,16 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"SECRET_KEY\" is a reserved variable"
+
+  - it: fails with a pointed OIDC_ENABLED error directing users to app.oidcEnabled
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - name: OIDC_ENABLED
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "Set app.oidcEnabled=true in values.yaml instead"
 
   - it: fails on duplicate names within extraEnv
     set:
