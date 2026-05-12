@@ -494,59 +494,18 @@ else
     log "WARNING: scripts/prepare-log-dirs.sh not found or not executable; skipping log-directory prep"
 fi
 
-# Preflight validation for extra_env files
-validate_extra_env() {
-    local service_name="$1"
-    local reserved_file="$2"
-    local env_file="${HOME}/mcp-gateway/extra_env/${service_name}.env"
-
-    if [ ! -f "$env_file" ]; then
-        return 0  # No file, no validation needed
-    fi
-
-    # Read reserved names into an array for faster lookup
-    local -a reserved_names
-    while IFS= read -r name || [ -n "$name" ]; do
-        # Skip empty lines and comments
-        [[ -z "$name" || "$name" =~ ^# ]] && continue
-        reserved_names+=("$name")
-    done < "$reserved_file"
-
-    # Check each line in env file
-    local line_num=0
-    while IFS= read -r line || [ -n "$line" ]; do
-        line_num=$((line_num + 1))
-
-        # Skip empty lines and comments
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-
-        # Extract the key (everything before the first =)
-        local key="${line%%=*}"
-
-        # Skip lines that don't have = (invalid env format)
-        [[ "$key" == "$line" ]] && continue
-
-        # Check if key is reserved
-        for reserved in "${reserved_names[@]}"; do
-            if [[ "$key" == "$reserved" ]]; then
-                log "ERROR: extra_env/${service_name}.env line ${line_num} sets ${key}, which is a reserved variable managed by the deployment."
-                log "       Set it via the canonical path (settings / secret) instead. Reserved list: $(realpath "$reserved_file")."
-                return 1
-            fi
-        done
-    done < "$env_file"
-
-    return 0
-}
-
+# Preflight validation for extra_env files (Issue #1000).
+# Source scripts/validate-extra-env.sh so the same collision logic is shared
+# with CI and pre-commit hooks.
 validate_predeployment() {
     log "Running predeployment validations..."
 
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=scripts/validate-extra-env.sh
+    source "$script_dir/scripts/validate-extra-env.sh"
 
-    validate_extra_env "registry" "$script_dir/charts/registry/reserved-env-names.txt" || exit 1
-    validate_extra_env "auth-server" "$script_dir/charts/auth-server/reserved-env-names.txt" || exit 1
-    validate_extra_env "mcpgw" "$script_dir/charts/mcpgw/reserved-env-names.txt" || exit 1
+    validate_extra_env_all || exit 1
 
     log "Predeployment validations passed."
 }

@@ -822,3 +822,29 @@ aws_registry_federation_enabled = true
 # GitHub Enterprise Server support
 # github_extra_hosts  = "github.mycompany.com,raw.github.mycompany.com"
 # github_api_base_url = "https://github.mycompany.com/api/v3"
+
+# ============================================================================
+# EXTRA ENVIRONMENT VARIABLES (Issue #1000)
+# ============================================================================
+# Inject custom environment variables into the registry, auth-server, and
+# mcpgw ECS tasks in addition to the chart-managed variables. Reserved names
+# (anything the chart renders via env:/envFrom) are rejected at `terraform
+# plan` time by validation that reads charts/<subchart>/reserved-env-names.txt.
+#
+# For production secrets, prefer AWS Secrets Manager ARNs wired into the task
+# definition's secrets block (see mongodb_connection_string_secret_arn as a
+# reference pattern) over plaintext *_extra_env values — even with
+# sensitive=true, plaintext values live in Terraform state.
+#
+# registry_extra_env = [
+#   { name = "MY_FEATURE_FLAG", value = "true" },
+#   { name = "CUSTOM_TIMEOUT_SECONDS", value = "30" },
+# ]
+#
+# auth_server_extra_env = [
+#   { name = "MY_AUTH_VAR", value = "value" },
+# ]
+#
+# mcpgw_extra_env = [
+#   { name = "MY_MCPGW_VAR", value = "test" },
+# ]

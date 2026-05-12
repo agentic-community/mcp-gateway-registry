@@ -1705,7 +1705,9 @@ EOF
 
 The `env_file:` entries are configured for `registry.env`, `auth-server.env`, and `mcpgw.env` with `required: false`, so missing files are allowed.
 
-**Preflight Validation:** Before starting containers, `build_and_run.sh` validates that no environment variable in your extra_env files conflicts with chart-managed reserved names. If a collision is found, deployment fails with a clear error message pointing to the exact line number and file.
+**Compose version requirement:** The `env_file: [{ path, required }]` object form requires **Docker Compose v2.24 or newer** (Docker Desktop 4.27+) or **Podman Compose v1.0.7+**. Older versions silently ignore the `required` flag and will error out if the referenced file does not exist. Check with `docker compose version` or `podman-compose --version` before deploying.
+
+**Preflight Validation:** Before starting containers, `build_and_run.sh` validates that no environment variable in your extra_env files conflicts with chart-managed reserved names. If a collision is found, deployment fails with a clear error message pointing to the exact line number and file. The validator also warns on malformed lines (missing `=` or empty keys), normalizes names to upper-case before comparing (so `secret_key=foo` is still caught), and logs the per-service custom-variable count at startup. The same validator lives at `scripts/validate-extra-env.sh` and can be run standalone for CI or pre-commit use.
 
 ### Terraform / ECS
 

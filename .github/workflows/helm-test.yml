@@ -6,10 +6,12 @@ on:
     paths:
       - 'charts/**'
       - '.github/workflows/helm-test.yml'
+      - 'scripts/validate-extra-env.sh'
   pull_request:
     paths:
       - 'charts/**'
       - '.github/workflows/helm-test.yml'
+      - 'scripts/validate-extra-env.sh'
   workflow_dispatch:
 
 permissions:
@@ -188,11 +190,156 @@ jobs:
           done
           exit $failed
 
+  reserved-list-sync:
+    name: "Reserved Env Name List Sync"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Catches drift between chart-rendered env names and the shared
+    # reserved-env-names.txt files (Issue #1000). If a chart adds an env var
+    # to deployment.yaml but forgets to update the reserved list, this job
+    # fails with the missing name(s).
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        with:
+          version: '3.20.2'
+
+      - name: Add Helm repositories
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami || true
+          helm repo update
+
+      - name: Build dependencies for umbrella chart
+        run: |
+          helm dependency build charts/mcp-gateway-registry-stack
+
+      - name: Check rendered env names are in reserved-env-names.txt
+        run: |
+          python3 <<'PY'
+          import os
+          import subprocess
+          import sys
+          import yaml
+
+          # Render via the stack chart with keycloak auth plus federation
+          # enabled to exercise the superset of chart-managed env names
+          # (both direct env: entries and envFrom configmap/secret keys).
+          render_values = ",".join([
+              "global.authProvider.type=keycloak",
+              "global.secretKey=ci-test",
+              "keycloak.adminPassword=ci-test",
+              "registry.awsRegistry.federationEnabled=true",
+              "global.ingress.tls=false",
+              "global.ingress.routingMode=host",
+          ])
+
+          out = subprocess.run(
+              [
+                  "helm", "template", "ci",
+                  "charts/mcp-gateway-registry-stack",
+                  "--set", render_values,
+              ],
+              capture_output=True, text=True
+          )
+          if out.returncode != 0:
+              print(f"::error::helm template failed:\n{out.stderr[:2000]}")
+              sys.exit(2)
+
+          docs = [d for d in yaml.safe_load_all(out.stdout) if d]
+
+          # Build lookup for ConfigMap / Secret data keys so envFrom
+          # references can be expanded to the set of keys they inject.
+          configmap_keys = {}
+          secret_keys = {}
+          for d in docs:
+              kind = d.get("kind")
+              name = d.get("metadata", {}).get("name", "")
+              if kind == "ConfigMap":
+                  configmap_keys[name] = set((d.get("data") or {}).keys())
+              elif kind == "Secret":
+                  # stringData + data keys; keys are the env var names
+                  merged = set((d.get("data") or {}).keys()) | set((d.get("stringData") or {}).keys())
+                  secret_keys[name] = merged
+
+          # Map each rendered Deployment back to the subchart that owns it.
+          deployment_to_reserved = {
+              "registry": "charts/registry/reserved-env-names.txt",
+              "auth-server": "charts/auth-server/reserved-env-names.txt",
+              "mcpgw-server": "charts/mcpgw/reserved-env-names.txt",
+          }
+
+          rendered_by_chart = {name: set() for name in deployment_to_reserved}
+          for d in docs:
+              if d.get("kind") != "Deployment":
+                  continue
+              meta_name = d.get("metadata", {}).get("name", "")
+              if meta_name not in rendered_by_chart:
+                  continue
+              spec = d.get("spec", {}).get("template", {}).get("spec", {}) or {}
+              for c in spec.get("containers", []):
+                  # Direct env: entries.
+                  for e in c.get("env", []) or []:
+                      if e.get("name"):
+                          rendered_by_chart[meta_name].add(e["name"])
+                  # envFrom: union of the configmap/secret data keys.
+                  for ef in c.get("envFrom", []) or []:
+                      cm = ef.get("configMapRef", {}) or {}
+                      sec = ef.get("secretRef", {}) or {}
+                      if cm.get("name") in configmap_keys:
+                          rendered_by_chart[meta_name].update(configmap_keys[cm["name"]])
+                      if sec.get("name") in secret_keys:
+                          rendered_by_chart[meta_name].update(secret_keys[sec["name"]])
+
+          failed = False
+          summary_lines = ["## Reserved Env Name List Sync", ""]
+          for deployment, reserved_path in deployment_to_reserved.items():
+              rendered = rendered_by_chart[deployment]
+              if not rendered:
+                  print(f"::warning::No env names rendered for deployment={deployment}; skipping")
+                  summary_lines.append(f"- `{deployment}`: no env names rendered (skipped)")
+                  continue
+
+              with open(reserved_path) as f:
+                  reserved = {
+                      line.strip() for line in f
+                      if line.strip() and not line.strip().startswith("#")
+                  }
+
+              missing = sorted(rendered - reserved)
+              if missing:
+                  print(
+                      f"::error::{deployment}: the following env names render in "
+                      f"the deployment but are NOT in {reserved_path}:"
+                  )
+                  for name in missing:
+                      print(f"::error::  - {name}")
+                  summary_lines.append(
+                      f"- `{deployment}`: **FAIL** (missing from `{reserved_path}`: "
+                      f"{', '.join(missing)})"
+                  )
+                  failed = True
+              else:
+                  msg = (
+                      f"{deployment}: all {len(rendered)} rendered env names "
+                      f"are in {reserved_path}"
+                  )
+                  print(msg)
+                  summary_lines.append(f"- `{deployment}`: OK ({len(rendered)} names)")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(summary_lines) + "\n")
+
+          sys.exit(1 if failed else 0)
+          PY
+
   summary:
     name: "Helm Test Summary"
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint, template, kubeconform, dependency-check, unittest]
+    needs: [lint, template, kubeconform, dependency-check, unittest, reserved-list-sync]
     if: always()
 
     steps:
@@ -207,3 +354,4 @@ jobs:
           echo "| Kubeconform | ${{ needs.kubeconform.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Dependencies | ${{ needs.dependency-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Unit Tests | ${{ needs.unittest.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Reserved List Sync | ${{ needs.reserved-list-sync.result }} |" >> $GITHUB_STEP_SUMMARY
