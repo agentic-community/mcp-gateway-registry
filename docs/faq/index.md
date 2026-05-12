@@ -23,6 +23,10 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I monitor the health of MCP servers?](monitoring-server-health.md)
 - [How do I configure MongoDB Atlas instead of MongoDB CE?](configuring-mongodb-atlas-backend.md)
 
+## Deployment Customization
+
+- [How do I add custom environment variables to the registry, auth-server, or mcpgw services?](adding-custom-env-vars.md)
+
 ## Access Control and Visibility
 
 - [How do I restrict which agents a user can see based on their group?](group-restricted-agent-visibility.md)
