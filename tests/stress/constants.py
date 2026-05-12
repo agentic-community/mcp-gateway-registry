@@ -23,5 +23,5 @@ GITHUB_RAW_BASE: str = "https://raw.githubusercontent.com/anthropics/skills/main
 
 DEFAULT_BASE_URL: str = "http://localhost"
 DEFAULT_TOKEN_FILE: str = ".oauth-tokens/ingress.json"
-DEFAULT_CONCURRENCY: int = 10
+DEFAULT_CONCURRENCY: int = 3
 HTTP_TIMEOUT_SECONDS: float = 120.0

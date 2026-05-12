@@ -76,8 +76,12 @@ uv run python -m tests.stress.register_entities \
     --count 100 \
     --backend mongodb-ce \
     --base-url http://localhost \
-    --concurrency 10
+    --concurrency 3
 ```
+
+#### A note on `--concurrency`
+
+The default is **3**. Going higher overwhelms the registry quickly: every `POST /api/servers/register` triggers synchronous embedding compute, a full nginx config regeneration, and a security scan, so even at concurrency=10 we observed MongoDB `Connection reset by peer` cascades after the first ~30-50 successful registrations on a local `mongodb-ce` stack. Until those server-side bottlenecks are addressed (tracked as separate issues), keep concurrency low and let the run take longer. If the stack is sized for higher throughput (e.g. DocumentDB on real infra), raise the flag explicitly.
 
 Output schema (`tests/stress/results/<backend>/size-<count>/registration.json`):
 
@@ -105,6 +109,13 @@ Output schema (`tests/stress/results/<backend>/size-<count>/registration.json`):
 ```
 
 Re-running the loader against an already-populated registry marks each existing entity as `skipped` (not `failed`) — the script is idempotent. A run is considered successful when every entity type's `failure_rate < 0.01`.
+
+## Recommended runtime environment knobs
+
+The registry's continual MCP-server health-check loop (default 30 s) keeps auth-server and MongoDB busy at idle. With ~50+ registered servers this can be enough to starve the registration request path and produce nginx 504s on `/validate` subrequests. Two options before a stress run:
+
+- Set `HEALTH_CHECK_INTERVAL_SECONDS` to something large (e.g. `86400`) in `.env` to effectively disable the loop for the duration of the run, then `docker compose up -d registry` to pick it up.
+- Or accept the noise; the loader's `failures[]` array will capture the 504s with their payload filenames so you can re-run those specifically.
 
 ## Notes on data fidelity
 
