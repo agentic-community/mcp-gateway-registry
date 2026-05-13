@@ -139,19 +139,30 @@ def admin_user_context() -> dict[str, Any]:
         "groups": ["mcp-registry-admin"],
         "scopes": ["mcp-servers-unrestricted/read"],
         "accessible_servers": ["*"],
+        "accessible_tools": {"*": {"*"}},
         "accessible_agents": ["all"],
     }
 
 
 @pytest.fixture
 def regular_user_context() -> dict[str, Any]:
-    """Create regular user context with specific access."""
+    """Create regular user context with specific access.
+
+    Issue #1026: tool-level filter requires `accessible_tools` to be
+    populated alongside `accessible_servers`. This fixture grants the
+    per-server wildcard so tests that exercise pre-#1026 behavior keep
+    seeing every tool on the servers the user can access.
+    """
     return {
         "username": "regular_user",
         "is_admin": False,
         "groups": ["registry-users-lob1"],
         "scopes": ["registry-users-lob1"],
         "accessible_servers": ["currenttime", "mcpgw"],
+        "accessible_tools": {
+            "currenttime": {"*"},
+            "mcpgw": {"*"},
+        },
         "accessible_agents": ["/agents/code-reviewer", "/agents/test-agent"],
     }
 
@@ -165,6 +176,7 @@ def restricted_user_context() -> dict[str, Any]:
         "groups": [],
         "scopes": [],
         "accessible_servers": [],
+        "accessible_tools": {},
         "accessible_agents": [],
     }
 
@@ -178,6 +190,7 @@ def user_with_all_servers_context() -> dict[str, Any]:
         "groups": ["registry-users"],
         "scopes": ["registry-users"],
         "accessible_servers": ["all"],
+        "accessible_tools": {"*": {"*"}},
         "accessible_agents": [],
     }
 
