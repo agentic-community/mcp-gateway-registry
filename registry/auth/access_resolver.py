@@ -118,8 +118,25 @@ async def resolve_scope_access(
                     tools[server_name] = set()
                 continue
 
+            # Some UIs store a wildcard as a bare string ("*" or "all")
+            # instead of a single-item list. Treat both forms as wildcard
+            # so the resolver agrees with what auth_server's
+            # validate_server_tool_access already accepts.
+            if isinstance(tool_rules, str):
+                if tool_rules in _WILDCARD_VALUES:
+                    tools[server_name] = {"*"}
+                else:
+                    # Single tool name written as a bare string.
+                    existing_str = tools.get(server_name)
+                    if existing_str == {"*"}:
+                        continue
+                    merged_str = existing_str if existing_str is not None else set()
+                    merged_str.add(tool_rules)
+                    tools[server_name] = merged_str
+                continue
+
             if not isinstance(tool_rules, list):
-                # Malformed rule: treat as no allowlist on this server.
+                # Malformed rule (e.g. dict / int): treat as no allowlist.
                 if server_name not in tools:
                     tools[server_name] = set()
                 continue

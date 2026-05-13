@@ -249,11 +249,14 @@ async def test_resolve_scope_access_empty_tools_list_fails_closed(patched_factor
 
 
 @pytest.mark.asyncio
-async def test_resolve_scope_access_non_list_tools_ignored(patched_factory):
-    """A non-list `tools` value is treated as no allowlist; server is still added."""
+async def test_resolve_scope_access_non_list_non_string_tools_ignored(patched_factory):
+    """A `tools` value that is neither a string nor a list (e.g. dict) is
+    treated as no allowlist; the server is still added with an empty set
+    so subsequent rules can still merge into it.
+    """
     # Arrange
     patched_factory.get_server_scopes.return_value = [
-        {"server": "current_time", "methods": ["tools/call"], "tools": "oops"}
+        {"server": "current_time", "methods": ["tools/call"], "tools": {"oops": True}}
     ]
 
     # Act
@@ -414,3 +417,69 @@ async def test_audit_legacy_scopes_handles_repo_error(patched_factory, caplog):
     assert count == 0
     error_messages = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.ERROR]
     assert any("list_scope_names failed" in msg for msg in error_messages)
+
+
+# =============================================================================
+# Regression: DocumentDB rows where `tools` is a bare string instead of a list
+# (Issue #1026 — UI submits "*" rather than ["*"] when the user picks "All
+# tools"; auth_server's validate_server_tool_access already tolerates this
+# via Python's substring `in` check, so the resolver must agree).
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_resolve_scope_access_tools_wildcard_as_bare_string(monkeypatch):
+    """tools: "*" (string, not list) is treated as wildcard."""
+    # Arrange
+    mock_repo = AsyncMock()
+    mock_repo.get_server_scopes.return_value = [
+        {"server": "currenttime", "methods": ["all"], "tools": "*"},
+    ]
+    monkeypatch.setattr(
+        "registry.repositories.factory.get_scope_repository", lambda: mock_repo
+    )
+
+    # Act
+    access = await resolve_scope_access(["public-mcp-users"])
+
+    # Assert
+    assert access.servers == ["currenttime"]
+    assert access.tools == {"currenttime": {"*"}}
+
+
+@pytest.mark.asyncio
+async def test_resolve_scope_access_tools_all_as_bare_string(monkeypatch):
+    """tools: "all" (string) is treated as wildcard same as ["all"]."""
+    # Arrange
+    mock_repo = AsyncMock()
+    mock_repo.get_server_scopes.return_value = [
+        {"server": "currenttime", "methods": ["all"], "tools": "all"},
+    ]
+    monkeypatch.setattr(
+        "registry.repositories.factory.get_scope_repository", lambda: mock_repo
+    )
+
+    # Act
+    access = await resolve_scope_access(["s"])
+
+    # Assert
+    assert access.tools == {"currenttime": {"*"}}
+
+
+@pytest.mark.asyncio
+async def test_resolve_scope_access_tools_single_tool_as_bare_string(monkeypatch):
+    """tools: "foo" (string) is treated as a single-element allowlist."""
+    # Arrange
+    mock_repo = AsyncMock()
+    mock_repo.get_server_scopes.return_value = [
+        {"server": "currenttime", "methods": ["tools/call"], "tools": "current_time_by_timezone"},
+    ]
+    monkeypatch.setattr(
+        "registry.repositories.factory.get_scope_repository", lambda: mock_repo
+    )
+
+    # Act
+    access = await resolve_scope_access(["s"])
+
+    # Assert
+    assert access.tools == {"currenttime": {"current_time_by_timezone"}}
