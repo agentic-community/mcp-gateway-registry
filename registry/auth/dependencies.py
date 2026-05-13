@@ -5,6 +5,10 @@ from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..core.config import settings
+from .access_resolver import (
+    get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
+    resolve_scope_access,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -383,7 +387,12 @@ def _user_is_admin(
 
 async def get_user_accessible_servers(user_scopes: list[str]) -> list[str]:
     """
-    Get list of all servers the user has access to based on their scopes - queries repository directly.
+    Get list of all servers the user has access to based on their scopes.
+
+    Thin wrapper around `resolve_scope_access` to preserve the historical
+    signature used by `user_can_access_server`, tests, and CLI tooling.
+    The heavy lifting (scope repo walk, wildcard handling, fail-closed
+    semantics) lives in `registry.auth.access_resolver`.
 
     Args:
         user_scopes: List of user's scopes
@@ -391,21 +400,13 @@ async def get_user_accessible_servers(user_scopes: list[str]) -> list[str]:
     Returns:
         List of server names the user can access
     """
-    accessible_servers = set()
-
-    logger.info(f"DEBUG: get_user_accessible_servers called with scopes: {user_scopes}")
-
-    for scope in user_scopes:
-        logger.info(f"DEBUG: Processing scope: {scope}")
-        server_names = await get_servers_for_scope(scope)
-        logger.info(f"DEBUG: Scope {scope} maps to servers: {server_names}")
-        accessible_servers.update(server_names)
-
-    logger.info(f"DEBUG: Final accessible servers: {list(accessible_servers)}")
+    access = await resolve_scope_access(user_scopes)
     logger.debug(
-        f"User with scopes {user_scopes} has access to servers: {list(accessible_servers)}"
+        "User with scopes %s has access to servers: %s",
+        user_scopes,
+        access.servers,
     )
-    return list(accessible_servers)
+    return access.servers
 
 
 def user_can_modify_servers(user_groups: list[str], user_scopes: list[str]) -> bool:
@@ -502,8 +503,9 @@ async def enhanced_auth(
     # Get UI permissions
     ui_permissions = await get_ui_permissions_for_user(scopes)
 
-    # Get accessible servers (from server scopes)
-    accessible_servers = await get_user_accessible_servers(scopes)
+    # Resolve accessible servers + tools in one scope-repo pass (Issue #1026).
+    access = await resolve_scope_access(scopes)
+    accessible_servers = access.servers
 
     # Get accessible services (from UI permissions)
     accessible_services = get_accessible_services_for_user(ui_permissions)
@@ -521,6 +523,7 @@ async def enhanced_auth(
         "auth_method": auth_method,
         "provider": session_data.get("provider", "local"),
         "accessible_servers": accessible_servers,
+        "accessible_tools": access.tools,
         "accessible_services": accessible_services,
         "accessible_agents": accessible_agents,
         "ui_permissions": ui_permissions,
@@ -619,6 +622,7 @@ async def nginx_proxied_auth(
         if x_auth_method == "federation-static":
             # Federation static token: scoped access to federation/peer endpoints only
             accessible_servers = []
+            accessible_tools: dict[str, set[str]] = {}
             accessible_services = []
             accessible_agents = []
             ui_permissions = {}
@@ -628,7 +632,10 @@ async def nginx_proxied_auth(
             # Standard resolution for all auth methods including network-trusted
             # (Issue #779: network-trusted now carries per-key scopes from the
             # auth server instead of hard-coded admin).
-            accessible_servers = await get_user_accessible_servers(scopes)
+            # Resolve servers + tools in a single scope-repo pass (Issue #1026).
+            access = await resolve_scope_access(scopes)
+            accessible_servers = access.servers
+            accessible_tools = access.tools
 
             ui_permissions = await get_ui_permissions_for_user(scopes)
 
@@ -648,6 +655,7 @@ async def nginx_proxied_auth(
             "auth_method": x_auth_method or "keycloak",
             "provider": x_auth_method or "keycloak",  # Use actual auth method as provider
             "accessible_servers": accessible_servers,
+            "accessible_tools": accessible_tools,
             "accessible_services": accessible_services,
             "accessible_agents": accessible_agents,
             "ui_permissions": ui_permissions,

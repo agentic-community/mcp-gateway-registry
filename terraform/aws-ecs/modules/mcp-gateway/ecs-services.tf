@@ -341,6 +341,19 @@ module "ecs_service_auth" {
           name  = "APP_LOG_FILE_FORMAT"
           value = var.app_log_file_format
         },
+        # Tool-level access control (issue #1026)
+        {
+          name  = "MCP_TOOLS_LIST_FILTER_ENABLED"
+          value = tostring(var.mcp_tools_list_filter_enabled)
+        },
+        {
+          name  = "MCP_PROXY_MAX_BODY_BYTES"
+          value = tostring(var.mcp_proxy_max_body_bytes)
+        },
+        {
+          name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
+          value = var.tool_filter_audit_log_level
+        },
         # Metrics pipeline (only wired when observability is enabled)
         {
           name  = "METRICS_SERVICE_URL"
@@ -908,6 +921,15 @@ module "ecs_service_registry" {
         {
           name  = "APP_LOG_FILE_FORMAT"
           value = var.app_log_file_format
+        },
+        # Tool-level access control (issue #1026)
+        {
+          name  = "MCP_TOOLS_LIST_FILTER_ENABLED"
+          value = tostring(var.mcp_tools_list_filter_enabled)
+        },
+        {
+          name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
+          value = var.tool_filter_audit_log_level
         },
         {
           name  = "DEPLOYMENT_MODE"

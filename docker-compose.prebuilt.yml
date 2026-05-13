@@ -178,6 +178,9 @@ services:
       # Application file-log location (Issue #987) + format (json|text)
       - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
       - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
+      # Tool-level access control (Issue #1026)
+      - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
+      - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -328,6 +331,10 @@ services:
       # Application file-log location (Issue #987) + format (json|text)
       - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
       - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
+      # Tool-level access control (Issue #1026)
+      - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
+      - MCP_PROXY_MAX_BODY_BYTES=${MCP_PROXY_MAX_BODY_BYTES:-2097152}
+      - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
     ports:
       - "8888:8888"
     security_opt:

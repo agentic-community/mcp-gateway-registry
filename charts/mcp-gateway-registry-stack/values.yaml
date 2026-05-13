@@ -309,6 +309,10 @@ registry:
       appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
       appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
 
+    # Tool-level access control (issue #1026)
+    mcpToolsListFilterEnabled: true    # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
+    toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+
     # Demo server configuration
     disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
 
@@ -391,6 +395,11 @@ auth-server:
 
     # Application Log Configuration - reuses anchor from registry.app above
     <<: *appLogConfig
+
+    # Tool-level access control (issue #1026)
+    mcpToolsListFilterEnabled: true    # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
+    mcpProxyMaxBodyBytes: 2097152      # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
+    toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
   keycloak:
     enabled: true

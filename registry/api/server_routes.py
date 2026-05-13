@@ -14,6 +14,7 @@ from ..audit import set_audit_action
 from ..auth.csrf import generate_csrf_token, verify_csrf_token_flexible
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
+from ..auth.tool_filter import filter_tools_for_user
 from ..constants import VALID_AUTH_SCHEMES
 from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
@@ -470,6 +471,15 @@ async def get_servers_json(
                         }
                     )
 
+            # Issue #1026: prune the tool list to what this user can see and
+            # use the same filtered list for both num_tools and tool_list so
+            # the badge matches what's rendered.
+            _filtered_tools = filter_tools_for_user(
+                server_name,
+                server_info.get("tool_list") or [],
+                user_context or {},
+                endpoint="servers",
+            )
             service_data.append(
                 {
                     "id": server_info.get("id"),
@@ -479,7 +489,7 @@ async def get_servers_json(
                     "proxy_pass_url": server_info.get("proxy_pass_url", ""),
                     "is_enabled": is_enabled,
                     "tags": server_info.get("tags", []),
-                    "num_tools": server_info.get("num_tools", 0),
+                    "num_tools": len(_filtered_tools),
                     "license": server_info.get("license", "N/A"),
                     "health_status": normalized_status,
                     "last_checked_iso": health_data["last_checked_iso"],
@@ -496,7 +506,7 @@ async def get_servers_json(
                     "sync_metadata": server_info.get("sync_metadata"),
                     "auth_scheme": server_info.get("auth_scheme", "none"),
                     "auth_header_name": server_info.get("auth_header_name"),
-                    "tool_list": server_info.get("tool_list"),
+                    "tool_list": _filtered_tools,
                     # Federation and lifecycle metadata
                     "status": server_info.get("status", "active"),
                     "provider_organization": (
@@ -1851,18 +1861,32 @@ async def get_service_tools(
             # For '/all', we can use cached data to avoid too many MCP calls
             tool_list = server_info.get("tool_list")
 
-            if tool_list is not None and isinstance(tool_list, list):
-                # Add server information to each tool
-                server_tools = []
-                for tool in tool_list:
-                    # Create a copy of the tool with server info added
-                    tool_with_server = dict(tool)
-                    tool_with_server["server_path"] = path
-                    tool_with_server["server_name"] = server_info.get("server_name", "Unknown")
-                    server_tools.append(tool_with_server)
+            if tool_list is None or not isinstance(tool_list, list):
+                continue
 
-                all_tools.extend(server_tools)
-                all_servers_tools[path] = server_tools
+            server_name = server_info.get("server_name", "Unknown")
+            # Issue #1026: prune per-server before aggregation. Skip
+            # servers where the user has zero visible tools.
+            filtered_list = filter_tools_for_user(
+                server_name,
+                tool_list,
+                user_context,
+                endpoint="tools_all",
+            )
+            if not filtered_list:
+                continue
+
+            # Add server information to each tool
+            server_tools = []
+            for tool in filtered_list:
+                # Create a copy of the tool with server info added
+                tool_with_server = dict(tool)
+                tool_with_server["server_path"] = path
+                tool_with_server["server_name"] = server_name
+                server_tools.append(tool_with_server)
+
+            all_tools.extend(server_tools)
+            all_servers_tools[path] = server_tools
 
         return {"service_path": "all", "tools": all_tools, "servers": all_servers_tools}
 
@@ -1906,9 +1930,16 @@ async def get_service_tools(
             cached_tools = server_info.get("tool_list")
             if cached_tools is not None and isinstance(cached_tools, list):
                 logger.warning(f"Failed to fetch live tools for {service_path}, using cached tools")
+                # Issue #1026: filter cached fallback path
+                cached_filtered = filter_tools_for_user(
+                    server_info.get("server_name", ""),
+                    cached_tools,
+                    user_context,
+                    endpoint="tools_service",
+                )
                 return {
                     "service_path": service_path,
-                    "tools": cached_tools,
+                    "tools": cached_filtered,
                     "cached": True,
                 }
             raise HTTPException(
@@ -1941,7 +1972,14 @@ async def get_service_tools(
             else:
                 logger.error(f"Failed to save updated tool list for {service_path}")
 
-        return {"service_path": service_path, "tools": tool_list, "cached": False}
+        # Issue #1026: filter live tools before returning
+        filtered_tools = filter_tools_for_user(
+            server_info.get("server_name", ""),
+            tool_list,
+            user_context,
+            endpoint="tools_service",
+        )
+        return {"service_path": service_path, "tools": filtered_tools, "cached": False}
 
     except HTTPException:
         # Re-raise HTTP exceptions as-is
@@ -1954,7 +1992,14 @@ async def get_service_tools(
             logger.warning(
                 f"Error fetching live tools for {service_path}, falling back to cached tools: {e}"
             )
-            return {"service_path": service_path, "tools": cached_tools, "cached": True}
+            # Issue #1026: filter cached fallback path
+            cached_filtered = filter_tools_for_user(
+                server_info.get("server_name", ""),
+                cached_tools,
+                user_context,
+                endpoint="tools_service",
+            )
+            return {"service_path": service_path, "tools": cached_filtered, "cached": True}
         raise HTTPException(status_code=500, detail="Error fetching tools")
 
 

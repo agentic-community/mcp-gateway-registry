@@ -567,6 +567,31 @@ class Settings(BaseSettings):
         description="Disable auto-registration of the built-in airegistry-tools server on startup. Set DISABLE_AI_REGISTRY_TOOLS_SERVER=true to opt out.",
     )
 
+    # Tool-level access enforcement (Issue #1026)
+    mcp_tools_list_filter_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable filtering of MCP tools/list JSON-RPC responses per "
+            "user tool scope. REST endpoints always filter regardless."
+        ),
+    )
+    mcp_proxy_max_body_bytes: int = Field(
+        default=2 * 1024 * 1024,
+        ge=1024,
+        description=(
+            "Maximum buffered size for MCP tools/list upstream responses "
+            "before the proxy hop returns 413. Raise only for servers "
+            "with unusually large tool catalogs."
+        ),
+    )
+    tool_filter_audit_log_level: str = Field(
+        default="INFO",
+        description=(
+            "Launch-window override for tool-pruning audit log verbosity. "
+            "Valid values: DEBUG, INFO, WARNING."
+        ),
+    )
+
     @property
     def nginx_updates_enabled(self) -> bool:
         """Check if nginx updates should be performed."""

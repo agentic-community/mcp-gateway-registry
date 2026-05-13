@@ -554,6 +554,25 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             logger.error(f"Error getting all group mappings from DocumentDB: {e}", exc_info=True)
             return {}
 
+    async def list_scope_names(self) -> list[str]:
+        """List all scope names (_id values) in the mcp-scopes collection.
+
+        Used by the Issue #1026 legacy-scope startup audit. Projects only
+        the _id field so it is cheap even on large scope collections.
+        """
+        try:
+            collection = await self._get_collection()
+            cursor = collection.find({}, projection={"_id": 1})
+            scope_names: list[str] = []
+            async for doc in cursor:
+                scope_id = doc.get("_id")
+                if isinstance(scope_id, str):
+                    scope_names.append(scope_id)
+            return scope_names
+        except Exception as e:
+            logger.error(f"Error listing scope names from DocumentDB: {e}", exc_info=True)
+            return []
+
     async def add_server_to_multiple_scopes(
         self,
         server_path: str,

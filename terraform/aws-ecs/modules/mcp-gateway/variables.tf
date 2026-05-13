@@ -970,6 +970,28 @@ variable "app_log_file_format" {
 }
 
 # =============================================================================
+# TOOL-LEVEL ACCESS CONTROL (Issue #1026)
+# =============================================================================
+
+variable "mcp_tools_list_filter_enabled" {
+  description = "Enable filtering of MCP tools/list JSON-RPC responses against the per-user tool allowlist. Set to false to revert to pre-fix behavior on the MCP protocol path only. REST endpoints always filter regardless of this flag."
+  type        = bool
+  default     = true
+}
+
+variable "mcp_proxy_max_body_bytes" {
+  description = "Upper bound on a tools/list upstream response body (in bytes) that the auth-server proxy hop will buffer for filtering. Responses exceeding this return HTTP 413. Default 2097152 (2 MiB)."
+  type        = number
+  default     = 2097152
+}
+
+variable "tool_filter_audit_log_level" {
+  description = "Log level for tool-pruning audit lines during the launch window. Valid values: DEBUG, INFO, WARNING."
+  type        = string
+  default     = "INFO"
+}
+
+# =============================================================================
 # DEPLOYMENT MODE CONFIGURATION
 # =============================================================================
 

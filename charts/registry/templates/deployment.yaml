@@ -91,6 +91,11 @@ spec:
               value: {{ .Values.app.showAgentsTab | default true | quote }}
             - name: CODING_ASSISTANTS
               value: {{ .Values.app.codingAssistants | default "" | quote }}
+            # Tool-level access control (issue #1026)
+            - name: MCP_TOOLS_LIST_FILTER_ENABLED
+              value: {{ .Values.app.mcpToolsListFilterEnabled | toString | quote }}
+            - name: TOOL_FILTER_AUDIT_LOG_LEVEL
+              value: {{ .Values.app.toolFilterAuditLogLevel | default "INFO" | quote }}
             {{- if .Values.awsRegistry.federationEnabled }}
             - name: AWS_REGISTRY_FEDERATION_ENABLED
               value: "true"

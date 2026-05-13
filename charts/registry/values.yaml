@@ -140,6 +140,10 @@ app:
   appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
   appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
 
+  # Tool-level access control (issue #1026)
+  mcpToolsListFilterEnabled: true   # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
+  toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+
 # AWS Agent Registry Federation
 awsRegistry:
   federationEnabled: false  # Enable AWS Agent Registry federation (overrides MongoDB config on startup)

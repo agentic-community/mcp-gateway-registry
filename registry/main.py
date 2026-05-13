@@ -403,6 +403,20 @@ async def lifespan(app: FastAPI):
 
         await reload_scopes_from_repository()
 
+        # Issue #1026: audit scope rows that predate tool-level enforcement.
+        # Rows missing a `tools` key now fail closed for list/call; warn
+        # operators so they can migrate to tools: ["all"] if wildcard was
+        # intended before restricted users notice the change.
+        try:
+            from registry.auth.access_resolver import audit_legacy_scopes_on_startup
+
+            await audit_legacy_scopes_on_startup()
+        except Exception as audit_exc:
+            logger.warning(
+                "Legacy scope audit failed (non-fatal, continuing startup): %s",
+                audit_exc,
+            )
+
         # Initialize services in order
         logger.info("📚 Loading server definitions and state...")
         await server_service.load_servers_and_state()

@@ -83,6 +83,45 @@ DEFAULT_TOKEN_LIFETIME_HOURS = 8
 user_token_generation_counts = {}
 MAX_TOKENS_PER_USER_PER_HOUR = int(os.environ.get("MAX_TOKENS_PER_USER_PER_HOUR", "100"))
 
+# MCP tools/list filter configuration (Issue #1026).
+#
+# Prefer the canonical registry.core.config.settings fields when they
+# exist; fall back to env vars so this module stays importable during
+# the rollout window in which the Settings class may not yet carry the
+# new fields (parallel agent work).
+def _read_mcp_filter_enabled() -> bool:
+    try:
+        value = getattr(settings, "mcp_tools_list_filter_enabled", None)
+        if value is not None:
+            return bool(value)
+    except Exception:
+        pass
+    raw = os.getenv("MCP_TOOLS_LIST_FILTER_ENABLED", "true").lower()
+    return raw in ("true", "1", "yes")
+
+
+def _read_mcp_proxy_max_body_bytes() -> int:
+    default_bytes = 2 * 1024 * 1024
+    minimum_bytes = 1024
+    try:
+        value = getattr(settings, "mcp_proxy_max_body_bytes", None)
+        if value is not None:
+            candidate = int(value)
+            return max(candidate, minimum_bytes)
+    except Exception:
+        pass
+    raw = os.getenv("MCP_PROXY_MAX_BODY_BYTES")
+    if not raw:
+        return default_bytes
+    try:
+        candidate = int(raw)
+    except ValueError:
+        logging.warning(
+            f"Invalid MCP_PROXY_MAX_BODY_BYTES={raw!r}; using default {default_bytes}"
+        )
+        return default_bytes
+    return max(candidate, minimum_bytes)
+
 # Global scopes configuration (will be loaded during FastAPI startup)
 SCOPES_CONFIG = {}
 
@@ -868,6 +907,71 @@ async def validate_server_tool_access(
         logger.error(f"Error validating server/tool access: {e}")
         logger.info("=== VALIDATE_SERVER_TOOL_ACCESS END: ERROR ===")
         return False  # Deny access on error
+
+
+async def filter_tools_list_response(
+    server_name: str,
+    user_scopes: list[str],
+    tools_list: list[dict],
+) -> list[dict]:
+    """
+    Filter an upstream tools/list result array down to the tools the
+    caller is allowed to see.
+
+    For each tool, delegates to validate_server_tool_access using method
+    "tools/call" so the allowlist source of truth matches what actually
+    happens when the tool is invoked. Admin / wildcard handling is
+    inherited from validate_server_tool_access (server: "*" or "all", or
+    tools: ["*"] / ["all"]).
+
+    Args:
+        server_name: Name of the MCP server whose tools/list is being filtered.
+        user_scopes: Scopes resolved for the caller.
+        tools_list: The raw tools array from the upstream JSON-RPC result.
+
+    Returns:
+        A new list containing only the tool dicts the caller is allowed
+        to see. Malformed entries (non-dict, missing "name") are dropped
+        silently. Never raises.
+    """
+    before_count = len(tools_list) if isinstance(tools_list, list) else 0
+    kept: list[dict] = []
+
+    if not isinstance(tools_list, list):
+        logger.info(
+            f"filter_tools_list_response: server={server_name} before=0 after=0"
+        )
+        return kept
+
+    for tool in tools_list:
+        if not isinstance(tool, dict):
+            continue
+        tool_name = tool.get("name")
+        if not tool_name or not isinstance(tool_name, str):
+            continue
+        try:
+            allowed = await validate_server_tool_access(
+                server_name,
+                "tools/call",
+                tool_name,
+                user_scopes,
+            )
+        except Exception as exc:
+            # Fail closed on unexpected errors; drop the tool silently.
+            logger.error(
+                f"filter_tools_list_response: validation error for "
+                f"server={server_name} tool={tool_name}: {exc}"
+            )
+            continue
+        if allowed:
+            kept.append(tool)
+
+    after_count = len(kept)
+    logger.info(
+        f"filter_tools_list_response: server={server_name} "
+        f"before={before_count} after={after_count}"
+    )
+    return kept
 
 
 def validate_scope_subset(user_scopes: list[str], requested_scopes: list[str]) -> bool:
@@ -3599,3 +3703,329 @@ async def oauth2_logout(
             "success_redirect", "/login"
         )
         return RedirectResponse(url=redirect_url, status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# MCP tools/list filter proxy hop (Issue #1026)
+# ---------------------------------------------------------------------------
+#
+# nginx sends MCP POSTs that need tools/list filtering to this endpoint
+# instead of routing them directly to the upstream MCP server. The nginx
+# location block is expected to set two headers before forwarding:
+#
+#   X-Upstream-Url:  Full URL of the upstream MCP server to forward to.
+#   X-Scopes:        Space-separated user scopes (already populated by
+#                    the /validate auth_request hop). The proxy trusts
+#                    this header because it comes from the same nginx
+#                    pass that ran auth_request and can only have been
+#                    written after /validate accepted the caller.
+#
+# All headers from the incoming request (except hop-by-hop headers) are
+# forwarded to the upstream. For any JSON-RPC method other than
+# "tools/list", the upstream response body is returned unchanged ("uniform
+# proxy"). For tools/list, the response body is buffered (up to
+# MCP_PROXY_MAX_BODY_BYTES), filtered via filter_tools_list_response, and
+# returned with an updated result.tools array.
+
+
+_HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+        "content-length",
+    }
+)
+
+
+async def _read_bounded(
+    response: httpx.Response,
+    max_bytes: int,
+) -> bytes:
+    """Read upstream body in chunks, enforcing an upper size bound.
+
+    Raises HTTPException(413) if total bytes exceed max_bytes.
+    """
+    size = 0
+    chunks: list[bytes] = []
+    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Upstream tools/list response exceeded "
+                    f"{max_bytes} bytes; refusing to buffer."
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _forward_headers(
+    incoming: dict[str, str],
+) -> dict[str, str]:
+    """Copy incoming request headers, stripping hop-by-hop and proxy-hint
+    headers so httpx can set them correctly for the upstream connection.
+    """
+    forwarded: dict[str, str] = {}
+    for key, value in incoming.items():
+        lower = key.lower()
+        if lower in _HOP_BY_HOP_HEADERS:
+            continue
+        if lower in ("x-upstream-url",):
+            # Never leak this internal routing header to the upstream.
+            continue
+        forwarded[key] = value
+    return forwarded
+
+
+@app.post("/mcp-proxy/{server_name:path}")
+async def mcp_proxy(
+    server_name: str,
+    request: Request,
+):
+    """Forward an MCP JSON-RPC POST to the upstream and optionally filter
+    the tools/list result by the caller's tool allowlist.
+
+    nginx routes here after the /validate auth_request succeeds. Headers:
+      X-Upstream-Url: upstream MCP URL (required)
+      X-Scopes:       space-separated scopes (set by /validate response)
+
+    For methods other than "tools/list" or when filtering is disabled,
+    the upstream response is returned verbatim. For "tools/list", the
+    result.tools array is filtered using filter_tools_list_response.
+    """
+    upstream_url = request.headers.get("X-Upstream-Url")
+    if not upstream_url:
+        logger.warning(
+            f"mcp_proxy: missing X-Upstream-Url header for server={server_name}"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Missing X-Upstream-Url header",
+        )
+
+    raw_scopes = request.headers.get("X-Scopes", "")
+    user_scopes: list[str] = [s for s in raw_scopes.split() if s]
+
+    # Read the incoming body once; we forward it to the upstream.
+    try:
+        request_body = await request.body()
+    except Exception as exc:
+        logger.error(f"mcp_proxy: failed to read request body: {exc}")
+        raise HTTPException(status_code=400, detail="Invalid request body") from exc
+
+    # Determine the JSON-RPC method (best-effort; non-JSON bodies pass
+    # through as-is).
+    incoming_method: str | None = None
+    try:
+        if request_body:
+            incoming_payload = json.loads(request_body.decode("utf-8"))
+            if isinstance(incoming_payload, dict):
+                incoming_method = incoming_payload.get("method")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        incoming_method = None
+    except Exception as exc:
+        logger.debug(f"mcp_proxy: could not parse incoming body as JSON-RPC: {exc}")
+        incoming_method = None
+
+    filter_enabled = _read_mcp_filter_enabled()
+    max_body_bytes = _read_mcp_proxy_max_body_bytes()
+    forward_headers = _forward_headers(dict(request.headers))
+
+    logger.info(
+        f"mcp_proxy: server={server_name} method={incoming_method} "
+        f"filter_enabled={filter_enabled}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            async with client.stream(
+                "POST",
+                upstream_url,
+                content=request_body,
+                headers=forward_headers,
+                params=dict(request.query_params),
+            ) as upstream_response:
+                # Buffer with the same cap whether or not we filter, so a
+                # pathological upstream cannot DoS the proxy.
+                body_bytes = await _read_bounded(upstream_response, max_body_bytes)
+                status_code = upstream_response.status_code
+                content_type = upstream_response.headers.get(
+                    "content-type", "application/json"
+                )
+    except HTTPException:
+        raise
+    except httpx.TimeoutException as exc:
+        logger.error(f"mcp_proxy: upstream timeout for {upstream_url}: {exc}")
+        raise HTTPException(
+            status_code=504,
+            detail="Upstream MCP server timed out",
+        ) from exc
+    except httpx.HTTPError as exc:
+        logger.error(f"mcp_proxy: upstream error for {upstream_url}: {exc}")
+        raise HTTPException(
+            status_code=502,
+            detail="Upstream MCP server error",
+        ) from exc
+
+    # Only filter successful tools/list JSON responses.
+    should_filter = (
+        filter_enabled
+        and incoming_method == "tools/list"
+        and 200 <= status_code < 300
+        and "application/json" in content_type.lower()
+    )
+
+    if not should_filter:
+        return JSONResponse(
+            content=_safe_parse_body(body_bytes),
+            status_code=status_code,
+        )
+
+    try:
+        parsed = json.loads(body_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            f"mcp_proxy: tools/list upstream returned non-JSON body "
+            f"for server={server_name}: {exc}"
+        )
+        return JSONResponse(
+            content=_safe_parse_body(body_bytes),
+            status_code=status_code,
+        )
+
+    result = parsed.get("result") if isinstance(parsed, dict) else None
+    if isinstance(result, dict) and isinstance(result.get("tools"), list):
+        filtered = await filter_tools_list_response(
+            server_name,
+            user_scopes,
+            result["tools"],
+        )
+        result["tools"] = filtered
+        parsed["result"] = result
+
+    return JSONResponse(content=parsed, status_code=status_code)
+
+
+def _safe_parse_body(
+    body_bytes: bytes,
+) -> Any:
+    """Best-effort JSON parse for passthrough bodies.
+
+    Returns the decoded JSON object if possible, otherwise a wrapper
+    dict exposing the raw text. Keeps the proxy behavior lenient with
+    non-standard upstream responses.
+    """
+    try:
+        return json.loads(body_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"raw": body_bytes.decode("utf-8", errors="replace")}
+
+
+# ---------------------------------------------------------------------------
+# Startup: legacy-scope audit (Issue #1026, LLD Step 9)
+# ---------------------------------------------------------------------------
+
+
+async def _audit_legacy_scopes_on_startup() -> int:
+    """Emit one WARN per legacy scope row with a missing or invalid tools
+    allowlist.
+
+    Prefers the canonical helper from registry.auth.access_resolver when
+    it is importable; falls back to a local shim that uses the same
+    scope_repo auth_server already talks to. Never raises; returns the
+    number of warnings emitted so tests / startup logs can assert.
+    """
+    try:
+        from registry.auth.access_resolver import (
+            audit_legacy_scopes_on_startup as _canonical_audit,
+        )
+    except Exception:
+        _canonical_audit = None
+
+    if _canonical_audit is not None:
+        try:
+            return await _canonical_audit()
+        except Exception as exc:
+            logger.error(
+                f"Legacy scope audit (canonical) failed: {exc}",
+                exc_info=True,
+            )
+            return 0
+
+    # Local shim: same shape as the LLD helper, using list_groups to
+    # enumerate scope names.
+    warnings_emitted = 0
+    try:
+        scope_repo = get_scope_repository()
+    except Exception as exc:
+        logger.error(f"Legacy scope audit: cannot obtain scope repo: {exc}")
+        return 0
+
+    try:
+        groups = await scope_repo.list_groups()
+    except Exception as exc:
+        logger.error(f"Legacy scope audit: list_groups failed: {exc}")
+        return 0
+
+    for scope_name in groups.keys():
+        try:
+            rules = await scope_repo.get_server_scopes(scope_name)
+        except Exception as exc:
+            logger.warning(
+                f"Legacy scope audit: get_server_scopes({scope_name}) failed: {exc}"
+            )
+            continue
+        for rule in rules or []:
+            if not isinstance(rule, dict) or "server" not in rule:
+                continue
+            server_name = rule.get("server")
+            tools = rule.get("tools")
+            methods = rule.get("methods") or []
+            if tools is None:
+                logger.warning(
+                    f"legacy_scope_missing_tools scope={scope_name} "
+                    f"server={server_name} methods={methods} "
+                    "(post-upgrade this will deny all tools/list and "
+                    "tools/call; migrate to tools: ['all'] if wildcard "
+                    "was intended)"
+                )
+                warnings_emitted += 1
+            elif isinstance(tools, list) and not tools and (
+                "tools/call" in methods or "all" in methods or "*" in methods
+            ):
+                logger.warning(
+                    f"empty_tools_list_with_call_method scope={scope_name} "
+                    f"server={server_name}"
+                )
+                warnings_emitted += 1
+
+    if warnings_emitted:
+        logger.warning(
+            f"Legacy scope audit: {warnings_emitted} warnings. See log lines "
+            "above for specific scope/server pairs. Update the mcp-scopes "
+            "collection before upgrading."
+        )
+    else:
+        logger.info("Legacy scope audit: no issues found.")
+    return warnings_emitted
+
+
+@app.on_event("startup")
+async def _run_legacy_scope_audit_on_startup() -> None:
+    """Run the legacy-scope audit once during auth_server boot."""
+    try:
+        await _audit_legacy_scopes_on_startup()
+    except Exception as exc:
+        logger.error(
+            f"Legacy scope audit errored during startup: {exc}",
+            exc_info=True,
+        )

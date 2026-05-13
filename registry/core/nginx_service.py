@@ -1047,9 +1047,18 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             host_header = "$host"
             logger.info("Using original host for Host header: $host")
 
-        # Generate proxy_pass directive based on version routing
+        # Issue #1026 - route MCP traffic through auth_server proxy for tools/list filtering.
+        # All MCP POSTs go to auth-server:8888/mcp-proxy/{server_name} instead of the upstream
+        # directly. auth_server forwards the request to the original upstream (passed via
+        # X-Upstream-Url) and filters `tools/list` responses when MCP_TOOLS_LIST_FILTER_ENABLED
+        # is set. All other JSON-RPC methods are passed through unchanged, so the only latency
+        # impact is the extra hop. Nginx never inspects the body or flag; auth_server decides.
+        # We use the header strategy (X-Upstream-Url) so auth_server does not need a separate
+        # MongoDB lookup per request, and version-aware upstream selection stays in nginx.
+        mcp_proxy_target = "http://auth-server:8888/mcp-proxy/" + path.strip("/")
         if has_versions:
-            # Multi-version server: use map variable with fallback
+            # Multi-version server: use map variable with fallback, then proxy the selected
+            # upstream URL to auth_server via X-Upstream-Url so it knows where to forward.
             proxy_directive = f'''
         # Version routing - use header-based backend selection
         # If X-MCP-Server-Version header matches a version, use that backend
@@ -1059,17 +1068,23 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             set $backend_url $versioned_backend;
         }}
 
-        # Proxy to selected backend
-        proxy_pass $backend_url;'''
+        # Tell auth_server which upstream to forward to after filtering
+        proxy_set_header X-Upstream-Url $backend_url;
+
+        # Proxy to auth_server mcp-proxy hop (Issue #1026)
+        proxy_pass {mcp_proxy_target};'''
             version_headers = """
 
         # Add version info to response
         add_header X-MCP-Version-Routing "enabled" always;"""
         else:
-            # Single-version server: direct proxy_pass (existing behavior)
+            # Single-version server: forward the fixed upstream via X-Upstream-Url header.
             proxy_directive = f"""
-        # Proxy to MCP server
-        proxy_pass {proxy_pass_url};"""
+        # Tell auth_server which upstream to forward to after filtering
+        proxy_set_header X-Upstream-Url {proxy_pass_url};
+
+        # Proxy to auth_server mcp-proxy hop (Issue #1026)
+        proxy_pass {mcp_proxy_target};"""
             version_headers = ""
 
         # Common proxy settings

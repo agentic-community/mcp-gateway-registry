@@ -521,6 +521,24 @@ class FileScopeRepository(ScopeRepositoryBase):
             logger.error(f"Failed to get group mappings: {e}", exc_info=True)
             return {}
 
+    async def list_scope_names(
+        self,
+    ) -> list[str]:
+        """List all known scope names from the loaded file data.
+
+        Excludes the well-known non-scope sections 'UI-Scopes' and
+        'group_mappings'. Used by the Issue #1026 legacy-scope audit.
+        """
+        try:
+            return [
+                key
+                for key in self._scopes_data.keys()
+                if key not in ("UI-Scopes", "group_mappings")
+            ]
+        except Exception as e:
+            logger.error(f"Failed to list scope names: {e}", exc_info=True)
+            return []
+
     async def add_server_to_multiple_scopes(
         self,
         server_path: str,

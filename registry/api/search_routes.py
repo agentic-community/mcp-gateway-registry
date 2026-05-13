@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..audit import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
+from ..auth.tool_filter import filter_tools_for_user, tool_allowed_for_user
 from ..core.config import DeploymentMode, RegistryMode, settings
 from ..repositories.factory import get_search_repository
 from ..repositories.interfaces import SearchRepositoryBase
@@ -519,14 +520,25 @@ async def semantic_search(
         ):
             continue
 
+        # Issue #1026: prune matching_tools for this user before shaping
+        # the response. _tool_identity in the filter accepts both
+        # `tool_name` (search result shape) and `name`.
+        server_name_for_filter = server.get("server_name", "")
+        raw_matching_tools = server.get("matching_tools", [])
+        allowed_matching = filter_tools_for_user(
+            server_name_for_filter,
+            raw_matching_tools,
+            user_context,
+            endpoint="semantic_search",
+        )
         matching_tools = [
             MatchingToolResult(
-                tool_name=tool.get("tool_name", ""),
+                tool_name=tool.get("tool_name") or tool.get("name", ""),
                 description=tool.get("description"),
                 relevance_score=tool.get("relevance_score", 0.0),
                 match_context=tool.get("match_context"),
             )
-            for tool in server.get("matching_tools", [])
+            for tool in allowed_matching
         ]
 
         # Parse sync_metadata if present
@@ -549,13 +561,25 @@ async def semantic_search(
         server_ans_meta = server_full_info.get("ans_metadata") if server_full_info else None
         server_trust = _compute_trust_verified(server_ans_meta)
 
+        # Blocker 3 / Issue #1026: recompute num_tools against the full
+        # (filtered) tool_list so the UI badge matches the visible list
+        # rather than the pre-filter count.
+        full_tool_list = (server_full_info or {}).get("tool_list") or []
+        allowed_full = filter_tools_for_user(
+            server_name_for_filter,
+            full_tool_list,
+            user_context,
+            endpoint="semantic_search",
+        )
+        filtered_num_tools = len(allowed_full)
+
         filtered_servers.append(
             ServerSearchResult(
                 path=server_path,
                 server_name=server.get("server_name", ""),
                 description=server.get("description"),
                 tags=server.get("tags", []),
-                num_tools=server.get("num_tools", 0),
+                num_tools=filtered_num_tools,
                 is_enabled=server.get("is_enabled", False),
                 relevance_score=server.get("relevance_score", 0.0),
                 match_context=server.get("match_context"),
@@ -580,6 +604,10 @@ async def semantic_search(
         server_path = tool.get("server_path", "")
         server_name = tool.get("server_name", "")
         if not await _user_can_access_server(server_path, server_name, user_context):
+            continue
+
+        # Issue #1026: tool-level prune after server access check
+        if not tool_allowed_for_user(server_name, tool.get("tool_name", ""), user_context):
             continue
 
         # Get endpoint_url from filtered servers, or compute it if not available
@@ -689,11 +717,19 @@ async def semantic_search(
         ):
             continue
 
+        # Issue #1026: prune matching_tools before shaping the response.
+        vs_name_for_filter = vs.get("server_name", "")
+        allowed_vs_matching = filter_tools_for_user(
+            vs_name_for_filter,
+            vs.get("matching_tools", []),
+            user_context,
+            endpoint="semantic_search",
+        )
         # Build matching tools with schema lookup from backend servers
         # Only include tools that matched the search query
         matching_tools: list[MatchingToolResult] = []
-        for tool in vs.get("matching_tools", []):
-            tool_name = tool.get("tool_name", "")
+        for tool in allowed_vs_matching:
+            tool_name = tool.get("tool_name") or tool.get("name", "")
             # Look up the tool schema from the backend server
             input_schema = await _get_tool_schema_for_virtual_server(vs_path, tool_name)
             matching_tools.append(
@@ -715,13 +751,29 @@ async def semantic_search(
         )
 
         metadata = vs.get("metadata", {})
+        # Blocker 3 / Issue #1026: recompute num_tools for the virtual
+        # server against the filtered metadata tool_list (if present) so
+        # the badge matches the rendered list. Falls back to the metadata
+        # count when the virtual server has no enumerable tool_list.
+        vs_tool_list = metadata.get("tool_list") or []
+        if vs_tool_list:
+            allowed_vs_full = filter_tools_for_user(
+                vs_name_for_filter,
+                vs_tool_list,
+                user_context,
+                endpoint="semantic_search",
+            )
+            vs_num_tools = len(allowed_vs_full)
+        else:
+            vs_num_tools = metadata.get("num_tools", 0)
+
         filtered_virtual_servers.append(
             VirtualServerSearchResult(
                 path=vs_path,
                 server_name=vs.get("server_name", ""),
                 description=vs.get("description"),
                 tags=vs.get("tags", []),
-                num_tools=metadata.get("num_tools", 0),
+                num_tools=vs_num_tools,
                 backend_count=metadata.get("backend_count", 0),
                 backend_paths=metadata.get("backend_paths", []),
                 is_enabled=vs.get("is_enabled", False),

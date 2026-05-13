@@ -632,6 +632,22 @@ class ScopeRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_scope_names(self) -> list[str]:
+        """
+        List all known scope names (scope document ids).
+
+        Used by the startup legacy-scope audit (Issue #1026) to enumerate
+        scopes without loading their full bodies. Excludes well-known
+        non-scope sections like 'UI-Scopes' and 'group_mappings' in the
+        file backend; for DocumentDB this corresponds to the set of
+        `_id` values in the mcp-scopes collection.
+
+        Returns:
+            List of scope names. Returns an empty list on repository error.
+        """
+        pass
+
+    @abstractmethod
     async def add_server_to_multiple_scopes(
         self,
         server_path: str,

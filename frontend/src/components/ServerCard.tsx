@@ -793,6 +793,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                     </div>
                   );
                 })
+              ) : server.enabled && server.status === 'healthy' ? (
+                <p className="text-gray-500 dark:text-gray-300">
+                  No tools available to you on this server. Ask your administrator if you need access.
+                </p>
               ) : (
                 <p className="text-gray-500 dark:text-gray-300">No tools available for this server.</p>
               )}

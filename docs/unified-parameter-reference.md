@@ -328,6 +328,18 @@ Single URL; disables itself when unset.
 
 ---
 
+## Group 13a — Tool-level Access Enforcement (Issue #1026)
+
+Controls the per-user tool allowlist filter applied at the registry REST endpoints and the MCP `tools/list` JSON-RPC response. The allowlist is resolved from the `mcp-scopes` collection used by existing server-level access checks. All three values are non-sensitive.
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable MCP tools/list filter | `MCP_TOOLS_LIST_FILTER_ENABLED` | `mcp_tools_list_filter_enabled` | `auth-server.app.mcpToolsListFilterEnabled`, `registry.app.mcpToolsListFilterEnabled` | Master switch for the MCP protocol tools/list filter. Default `true`. REST endpoints always filter regardless of this flag. |
+| MCP proxy max body bytes | `MCP_PROXY_MAX_BODY_BYTES` | `mcp_proxy_max_body_bytes` | `auth-server.app.mcpProxyMaxBodyBytes` | Upper bound (bytes) the auth-server proxy hop buffers when filtering tools/list; oversize returns HTTP 413. Default `2097152` (2 MiB). |
+| Tool-filter audit log level | `TOOL_FILTER_AUDIT_LOG_LEVEL` | `tool_filter_audit_log_level` | `auth-server.app.toolFilterAuditLogLevel`, `registry.app.toolFilterAuditLogLevel` | Launch-window log level for prune audit lines: `DEBUG`, `INFO`, or `WARNING`. Default `INFO`; flip to `DEBUG` after two quiet weeks in production. |
+
+---
+
 ## Group 14 — GitHub Private Repo Access (for SKILL.md fetching)
 
 Only the Helm `mcpgw` subchart and Docker expose these today.

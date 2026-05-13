@@ -232,6 +232,11 @@ module "mcp_gateway" {
   app_log_dir                  = var.app_log_dir
   app_log_file_format          = var.app_log_file_format
 
+  # Tool-level access control (issue #1026)
+  mcp_tools_list_filter_enabled = var.mcp_tools_list_filter_enabled
+  mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
+  tool_filter_audit_log_level   = var.tool_filter_audit_log_level
+
   # Deployment mode configuration
   deployment_mode = var.deployment_mode
   registry_mode   = var.registry_mode

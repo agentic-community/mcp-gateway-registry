@@ -543,6 +543,29 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # app_log_file_format = "json"
 
 # ============================================================================
+# TOOL-LEVEL ACCESS CONTROL (Issue #1026)
+# ============================================================================
+# Controls for per-user tool allowlist filtering on the REST endpoints and
+# the MCP tools/list JSON-RPC response.
+
+# Enable filtering of MCP tools/list JSON-RPC responses against the per-user
+# tool allowlist. Set to false to revert to pre-fix behavior on the MCP
+# protocol path only; REST endpoints always filter regardless of this flag.
+# Default: true
+# mcp_tools_list_filter_enabled = true
+
+# Upper bound on a tools/list upstream response body (in bytes) that the
+# auth-server proxy hop will buffer for filtering. Responses exceeding this
+# return HTTP 413. Default 2097152 (2 MiB); raise only for servers with
+# unusually large tool catalogs.
+# mcp_proxy_max_body_bytes = 2097152
+
+# Log level for tool-pruning audit lines during the launch window.
+# Valid values: "DEBUG", "INFO", "WARNING". Default "INFO" during launch;
+# flip to "DEBUG" after two quiet weeks in production.
+# tool_filter_audit_log_level = "INFO"
+
+# ============================================================================
 # AUTHENTICATION PROVIDER CONFIGURATION
 # ============================================================================
 #

@@ -44,9 +44,10 @@ tests:
                 name: my-secret
                 key: my-key
       # Order: chart-managed feature flags come first (DEPLOYMENT_MODE is
-      # env[0]); CODING_ASSISTANTS is env[6]; KEYCLOAK_ADMIN_PASSWORD
-      # (conditional on keycloak provider) is env[7]; user extraEnv
-      # entries are appended at the end.
+      # env[0]); CODING_ASSISTANTS is env[6]; the tool-level access
+      # control pair (issue #1026) is env[7]/env[8];
+      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is
+      # env[9]; user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
       # (set at the suite level) and awsRegistry.federationEnabled=false.
@@ -65,12 +66,18 @@ tests:
           value: CODING_ASSISTANTS
       - equal:
           path: spec.template.spec.containers[0].env[7].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: MCP_TOOLS_LIST_FILTER_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[8].name
-          value: MY_FLAG
+          value: TOOL_FILTER_AUDIT_LOG_LEVEL
       - equal:
           path: spec.template.spec.containers[0].env[9].name
+          value: KEYCLOAK_ADMIN_PASSWORD
+      - equal:
+          path: spec.template.spec.containers[0].env[10].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[11].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

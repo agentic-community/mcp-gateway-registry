@@ -922,6 +922,38 @@ variable "app_log_file_format" {
 }
 
 # =============================================================================
+# TOOL-LEVEL ACCESS CONTROL (Issue #1026)
+# =============================================================================
+
+variable "mcp_tools_list_filter_enabled" {
+  description = "Enable filtering of MCP tools/list JSON-RPC responses against the per-user tool allowlist. Set to false to revert to pre-fix behavior on the MCP protocol path only. REST endpoints always filter regardless of this flag."
+  type        = bool
+  default     = true
+}
+
+variable "mcp_proxy_max_body_bytes" {
+  description = "Upper bound on a tools/list upstream response body (in bytes) that the auth-server proxy hop will buffer for filtering. Responses exceeding this return HTTP 413. Default 2097152 (2 MiB); raise only for servers with unusually large tool catalogs."
+  type        = number
+  default     = 2097152
+
+  validation {
+    condition     = var.mcp_proxy_max_body_bytes >= 1024
+    error_message = "mcp_proxy_max_body_bytes must be at least 1024"
+  }
+}
+
+variable "tool_filter_audit_log_level" {
+  description = "Log level for tool-pruning audit lines during the launch window. Valid values: DEBUG, INFO, WARNING. Default INFO during launch; flip to DEBUG after two quiet weeks in production."
+  type        = string
+  default     = "INFO"
+
+  validation {
+    condition     = contains(["DEBUG", "INFO", "WARNING"], var.tool_filter_audit_log_level)
+    error_message = "tool_filter_audit_log_level must be one of: DEBUG, INFO, WARNING"
+  }
+}
+
+# =============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # =============================================================================
 
