@@ -141,6 +141,64 @@ This produces a PNG with two panels:
 
 **Note**: Run this after Step 6 (telemetry analysis) since it reads the metrics JSON.
 
+### Step 5c2: Generate Customer-Active-Instances Chart
+
+Generate a chart of customer engagement over time, with three overlaid series:
+
+- **Daily Active Instances (DAI)** -- unique `registry_id`s that sent at least one event (startup OR heartbeat) on that day.
+- **7-day moving average (MA7)** -- trailing 7-day average of DAI.
+- **7-day consistency streak (S7)** -- unique `registry_id`s that sent at least one event on EACH of the 7 days in the window `[D-6..D]`.
+
+Customer-only: internal instances loaded from `known-internal-instances.md` are excluded so the numbers align with the Liveness section (which is also customer-only). A CSV sidecar of the per-day values is written alongside the PNG so the report narrative can quote exact numbers and future reports can diff against it.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_active_instances_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/active-instances-YYYY-MM-DD.png \
+  --internal-instances .claude/skills/usage-report/known-internal-instances.md \
+  --csv-out $DATE_DIR/active-instances-YYYY-MM-DD.csv
+```
+
+Same data-sourcing behavior as the other historical charts (scans all CSVs across dated subdirectories). Embed in the Liveness section under an "Engagement over Time" subheading.
+
+### Step 5c3: Generate LTV Infra-Spend Chart and Summary
+
+Compute daily and cumulative AWS customer infra spend (EC2 compute + Bedrock Titan embeddings). The script emits **two cost numbers framed as a range** so the report can be conservative about not over-estimating spend:
+
+- **All-days (upper bound):** charges every distinct (AWS customer instance, day) pair, including 1-day trial installs. Matches "every real AWS billing day this solution caused".
+- **Proven-persistence (lower bound):** charges an instance on day D only if it had events on D AND on any prior day. This excludes every instance's first-ever active day, so instances that phone home once and never again contribute $0. Gap-tolerant: if an instance is silent on day D-1 and comes back on D, it's still charged on D (because it had prior events on earlier days).
+
+Customer-only (internal UUIDs excluded), AWS-only (GCP/Azure/unknown excluded because we can't attribute their AWS-side usage). On the current fleet ~59% of AWS customer instances are "one-day wonders" — they show up once and never return — so the proven-persistence number is typically ~30% lower than all-days.
+
+**Cost model (per-compute-platform, grounded in deployment artefacts):**
+
+| Platform | Daily rate | Grounding |
+|---|---:|---|
+| `docker` | $3.99 | 1 × t3.xlarge on-demand ($0.1664/hr), customer VM |
+| `ecs` | $19.03 | From `terraform/aws-ecs/terraform.tfstate`: 10 Fargate tasks ($7.67) + DocumentDB db.t3.medium ($1.87) + RDS Aurora Serverless v2 avg 1 ACU ($2.88) + 2 ALBs ($1.35) + 3 NAT Gateways ($3.24) + 2 CloudFront ($0.50) + S3 logs ($0.05) + CloudWatch ($1.00) + EFS/SM/DT ($0.50) |
+| `kubernetes` | $11.17 | From `charts/` Helm defaults + aws-load-balancer-controller: EKS control plane ($2.40) + 2 × t3.large nodes ($3.99) + 4 ALB ingresses ($2.70) + 1 NAT Gateway ($1.08) + EBS ($0.50) + CloudWatch Container Insights ($0.30) + data transfer ($0.20) |
+| `ec2` / `unknown` / other | $3.99 | Docker-compose fallback (single VM) |
+
+Platform for a given instance is resolved via its **most-recent non-empty `compute` field**. If an instance migrates across platforms mid-window, it's billed at the latest platform's rate for the whole window.
+
+**Bedrock Titan embeddings:** only for instances whose latest `embeddings_backend_kind == "bedrock"`. Cost = `delta(search_queries_total)` on that day × 100 tokens/query × $0.00002 / 1K tokens. The delta is computed from the instance's own `search_queries_total` timeseries (monotonic counter), so we never double-count queries that were already charged on a previous day.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_ltv_spend.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/ltv-spend-YYYY-MM-DD.png \
+  --internal-instances .claude/skills/usage-report/known-internal-instances.md \
+  --csv-out $DATE_DIR/ltv-spend-YYYY-MM-DD.csv \
+  --summary-json $DATE_DIR/ltv-spend-YYYY-MM-DD.json
+```
+
+Outputs:
+- PNG chart with three panels: daily EC2 compute USD (all-days + proven overlay), daily Bedrock USD, cumulative LTV USD (both lines with shaded range between them).
+- CSV sidecar per day: `date, aws_instances, aws_instances_persistent, <platform>_instances[_persistent], bedrock_queries[_persistent], compute_usd[_persistent], bedrock_usd[_persistent], total_usd[_persistent], cum_total_usd[_persistent]`.
+- JSON summary with headline numbers under `yesterday.all_days` vs `yesterday.proven`, `last_7_days.{all_days_total_usd, proven_total_usd}`, `ltv.{all_days, proven}`, and per-platform LTV breakdown for both models.
+
+Embed the chart in the report's **Customer Infra Spend (AWS)** section. Include a single summary table that shows both numbers as a range (e.g. "yesterday: $292.67 – $346.01"), one short paragraph explaining the two counting rules, and the per-platform LTV breakdown (both models side by side). Flag clearly that the cost model is hypothetical (we don't actually bill these customers; these are "what it would cost them at list price").
+
 ### Step 5d: Fetch GitHub Repository Stats
 
 Collect community-growth signals for the upstream repo (`agentic-community/mcp-gateway-registry`) using the authenticated `gh` CLI. These numbers complement telemetry by showing project interest outside of deployed instances.
@@ -443,6 +501,11 @@ Output saved to `/tmp/reports/2026-04-18/`.
     registry-installs-timeseries-2026-04-16.png
     compute-installs-timeseries-2026-04-16.png
     compute-platform-snapshots-2026-04-16.md
+    active-instances-2026-04-16.png
+    active-instances-2026-04-16.csv
+    ltv-spend-2026-04-16.png
+    ltv-spend-2026-04-16.csv
+    ltv-spend-2026-04-16.json
     instance-lifetime-2026-04-16.png
     tables-2026-04-16.md
     metrics-2026-04-16.json
