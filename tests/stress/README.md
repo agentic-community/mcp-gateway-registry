@@ -33,25 +33,33 @@ Generated payloads land under `tests/stress/data/<entity>/<count>/`. Registratio
 
 ### Getting a JWT token
 
-1. Bring up the registry (`docker compose up -d`).
-2. Open the UI, log in, and click **Get JWT Token**.
-3. Save the downloaded file as `.oauth-tokens/ingress.json` (or anywhere `STRESS_TOKEN_FILE` points). The file is the nested-token JSON the CLI already consumes.
+For local stacks with the Keycloak setup that ships in this repo, you do not need to fetch a token manually — `run_stress_test.sh` checks for an existing JWT under `.oauth-tokens/` and regenerates one via `keycloak/setup/generate-agent-token.sh` when none is valid.
 
-The issued JWT is valid for 8 hours, comfortably longer than any single (backend, size) run. The loader auto-reloads from the file on a 401 and retries once.
+For deployed stacks (or any setup where the bundled Keycloak script can't reach the IdP), grab a token from the registry UI's **Get JWT Token** button, save it under `.oauth-tokens/`, and pass its path via `STRESS_TOKEN_FILE`. The file is the nested-token JSON the CLI already consumes; the script's auto-regenerate step is skipped when `STRESS_TOKEN_FILE` points at a valid file.
+
+Set `STRESS_SKIP_TOKEN_REFRESH=1` to disable the auto-regenerate step entirely (useful for CI / non-local stacks).
 
 ## Quick start
 
 ```bash
-# 1) Bring up the registry and grab a token (see Prerequisites)
+# 1) Bring up the registry
 docker compose up -d
-# ...then save .oauth-tokens/ingress.json
 
-# 2) Generate + register at size=100 against mongodb-ce
+# 2) Generate + register at size=100 against mongodb-ce.
+#    The script auto-fetches a JWT if none is found under .oauth-tokens/.
 bash tests/stress/run_stress_test.sh mongodb-ce 100
 
 # Results land at:
 #   tests/stress/data/{servers,agents,skills}/100/*.json
 #   tests/stress/results/mongodb-ce/size-100/registration.json
+```
+
+Against a deployed instance:
+
+```bash
+STRESS_BASE_URL=https://your-registry.example.com \
+STRESS_TOKEN_FILE=/path/to/that-deployment-token.json \
+  bash tests/stress/run_stress_test.sh mongodb-ce 100
 ```
 
 ## Running scripts individually

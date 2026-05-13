@@ -7,9 +7,14 @@
 # Usage:
 #   bash tests/stress/run_stress_test.sh <backend> <size>
 #
-# Env vars consumed:
+# Env vars consumed (all optional):
 #   STRESS_BASE_URL   - registry URL (default: http://localhost)
-#   STRESS_TOKEN_FILE - JWT token file (default: .oauth-tokens/ingress.json)
+#   STRESS_TOKEN_FILE - JWT token file. When unset, the script auto-detects an
+#                       existing file under .oauth-tokens/ and regenerates one
+#                       via keycloak/setup/generate-agent-token.sh if none is
+#                       found or all candidates are expired.
+#   STRESS_SKIP_TOKEN_REFRESH - set to any non-empty value to disable the
+#                       auto-regeneration step (use the detected file as-is).
 #   ANS_API_KEY / ANS_API_SECRET - required for the agents generator
 #   GITHUB_TOKEN      - optional; raises GitHub API rate limit for the skills generator
 
@@ -34,6 +39,84 @@ cd "$PROJECT_ROOT"
 
 BASE_URL="${STRESS_BASE_URL:-http://localhost}"
 
+# ---------------------------------------------------------------------------
+# Token resolution: pick an existing JWT file or generate one.
+# ---------------------------------------------------------------------------
+
+# Returns 0 if the JSON token file's "expires_at" is in the future (or absent).
+_token_file_valid() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" <<'PY' || return 1
+import json, sys
+from datetime import datetime, timezone
+try:
+    data = json.loads(open(sys.argv[1]).read())
+except Exception:
+    sys.exit(0)  # opaque file: assume valid, let the loader's 401 path handle it
+expires_at = data.get("expires_at")
+if not expires_at:
+    sys.exit(0)
+try:
+    exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+except Exception:
+    sys.exit(0)
+sys.exit(0 if exp > datetime.now(timezone.utc) else 1)
+PY
+  fi
+  return 0
+}
+
+_resolve_token_file() {
+  if [ -n "${STRESS_TOKEN_FILE:-}" ]; then
+    if _token_file_valid "$STRESS_TOKEN_FILE"; then
+      echo "$STRESS_TOKEN_FILE"
+      return 0
+    fi
+    echo "STRESS_TOKEN_FILE=$STRESS_TOKEN_FILE is missing or expired." >&2
+  fi
+
+  local candidates=(
+    ".oauth-tokens/ingress.json"
+    ".oauth-tokens/mcp-gateway-m2m-token.json"
+  )
+  for candidate in "${candidates[@]}"; do
+    if _token_file_valid "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  if [ -n "${STRESS_SKIP_TOKEN_REFRESH:-}" ]; then
+    echo "No valid token file found and STRESS_SKIP_TOKEN_REFRESH is set." >&2
+    return 1
+  fi
+
+  local generator="keycloak/setup/generate-agent-token.sh"
+  if [ ! -x "$generator" ] && [ ! -f "$generator" ]; then
+    echo "No valid token file and $generator is not available." >&2
+    return 1
+  fi
+
+  echo "No valid JWT token found; regenerating via $generator..." >&2
+  bash "$generator" >&2
+  local generated=".oauth-tokens/mcp-gateway-m2m-token.json"
+  if _token_file_valid "$generated"; then
+    echo "$generated"
+    return 0
+  fi
+  echo "Token regeneration did not produce a valid file at $generated." >&2
+  return 1
+}
+
+TOKEN_FILE="$(_resolve_token_file)"
+echo "Using JWT token file: $TOKEN_FILE"
+
+# ---------------------------------------------------------------------------
+# Run.
+# ---------------------------------------------------------------------------
+
 echo "[1/3] Generating data (size=$SIZE)..."
 uv run python -m tests.stress.generators.generate_servers --count "$SIZE"
 uv run python -m tests.stress.generators.generate_agents --count "$SIZE"
@@ -44,7 +127,8 @@ uv run python -m tests.stress.register_entities \
     --entity-type all \
     --count "$SIZE" \
     --backend "$BACKEND" \
-    --base-url "$BASE_URL"
+    --base-url "$BASE_URL" \
+    --token-file "$TOKEN_FILE"
 
 echo "[3/3] Phase 1 complete. Results at tests/stress/results/$BACKEND/size-$SIZE/registration.json"
 echo "Note: API/UI performance measurement and report builder are not yet implemented (Phases 2-4)."
