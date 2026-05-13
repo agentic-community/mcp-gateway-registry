@@ -54,6 +54,17 @@ bash tests/stress/run_stress_test.sh mongodb-ce 100
 #   tests/stress/results/mongodb-ce/size-100/registration.json
 ```
 
+For a friction-free demo on a local stack, scope the run to a single entity type via the optional 3rd positional argument (defaults to `all`):
+
+```bash
+# ~80 seconds, 98-99/100 registered, no server-side wedging:
+bash tests/stress/run_stress_test.sh mongodb-ce 100 skills
+
+# Other supported values: servers, agents, all (default)
+```
+
+`servers` and `agents` reliably wedge MongoDB CE on local Docker at any concurrency we've tried; they are useful for surfacing registry bottlenecks (which is the harness's job) but `skills` is the type to demo to a reviewer who wants to see a clean end-to-end run.
+
 Against a deployed instance:
 
 ```bash
