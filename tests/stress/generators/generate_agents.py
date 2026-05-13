@@ -58,29 +58,25 @@ def _slugify(name: str) -> str:
 
 
 def _ans_credentials() -> tuple[str, str, str]:
-    """Pick credentials and matching endpoint.
+    """Resolve ANS credentials and endpoint.
 
-    Prefers GODADDY_API_*_OTE (OTE test environment, customer-issued partner
-    creds) since that is the only public-facing host that exposes /v1/agents.
-    Falls back to ANS_API_* for backward compatibility with existing setups.
+    Uses the documented names from `docs/design/ans-integration.md`:
+    `ANS_API_KEY`, `ANS_API_SECRET`, and an optional `ANS_API_ENDPOINT`
+    override. The default endpoint is the production host
+    (`api.godaddy.com`); customer-tier credentials issued for the test
+    environment require `ANS_API_ENDPOINT=https://api.ote-godaddy.com`,
+    since /v1/agents on prod is gated behind GoDaddy's internal SSO.
     """
-    ote_key = os.getenv("GODADDY_API_KEY_OTE")
-    ote_secret = os.getenv("GODADDY_API_SECRET_OTE")
-    if ote_key and ote_secret:
-        endpoint = os.getenv("ANS_API_ENDPOINT", "https://api.ote-godaddy.com")
-        return ote_key, ote_secret, endpoint
-
     api_key = os.getenv("ANS_API_KEY")
     api_secret = os.getenv("ANS_API_SECRET")
-    if api_key and api_secret:
-        endpoint = os.getenv("ANS_API_ENDPOINT", ANS_DEFAULT_ENDPOINT)
-        return api_key, api_secret, endpoint
-
-    raise RuntimeError(
-        "ANS credentials not set. Provide either GODADDY_API_KEY_OTE + "
-        "GODADDY_API_SECRET_OTE (recommended -- targets api.ote-godaddy.com) "
-        "or ANS_API_KEY + ANS_API_SECRET. See docs/design/ans-integration.md."
-    )
+    if not api_key or not api_secret:
+        raise RuntimeError(
+            "ANS_API_KEY and ANS_API_SECRET must be set to generate agents. "
+            "See docs/design/ans-integration.md. For customer-tier credentials "
+            "also set ANS_API_ENDPOINT=https://api.ote-godaddy.com."
+        )
+    endpoint = os.getenv("ANS_API_ENDPOINT", ANS_DEFAULT_ENDPOINT)
+    return api_key, api_secret, endpoint
 
 
 def _fetch_ans_agents(cache_dir: Path) -> list[dict[str, Any]]:

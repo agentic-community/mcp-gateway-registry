@@ -24,9 +24,8 @@ Generated payloads land under `tests/stress/data/<entity>/<count>/`. Registratio
 
 | Variable | Required for | Notes |
 |---|---|---|
-| `GODADDY_API_KEY_OTE`, `GODADDY_API_SECRET_OTE` | `generate_agents.py` (preferred) | GoDaddy OTE customer credentials. The `/v1/agents` endpoint is gated behind an internal SSO realm on the production `api.godaddy.com` host; OTE (`api.ote-godaddy.com`) is the test environment where customer-issued partner keys actually work. |
-| `ANS_API_KEY`, `ANS_API_SECRET` | `generate_agents.py` (fallback) | Original variable names from `docs/design/ans-integration.md`. Used only when the `GODADDY_API_*_OTE` pair is not set. |
-| `ANS_API_ENDPOINT` | optional | Defaults to `https://api.ote-godaddy.com` when OTE creds are used, otherwise `https://api.godaddy.com`. |
+| `ANS_API_KEY`, `ANS_API_SECRET` | `generate_agents.py` | GoDaddy ANS credentials, per the variable names documented in `docs/design/ans-integration.md`. |
+| `ANS_API_ENDPOINT` | optional | Defaults to `https://api.godaddy.com` (production). **For customer-tier credentials, set this to `https://api.ote-godaddy.com`** — production's `/v1/agents` is gated behind GoDaddy's internal SSO and only accepts internally-provisioned keys, while OTE accepts customer-issued partner keys against the same API shape. |
 | `GITHUB_TOKEN` | optional | Avoids the 60 req/hr anonymous rate limit when fetching `anthropics/skills`. |
 | `STRESS_BASE_URL` | optional | Registry base URL (defaults to `http://localhost`). |
 | `STRESS_TOKEN_FILE` | optional | Path to the JWT token file (defaults to `.oauth-tokens/ingress.json`). |
