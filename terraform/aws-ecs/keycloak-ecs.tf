@@ -72,13 +72,20 @@ locals {
       name      = "KC_DB_URL"
       valueFrom = aws_ssm_parameter.keycloak_database_url.arn
     },
+    # Issue #1026: read DB username and password directly from the
+    # Secrets Manager secret managed by the rotation Lambda. Previously
+    # both came from SSM parameters that the rotation Lambda did not
+    # update, causing Keycloak to crash on every restart after a rotation
+    # because the password it sent no longer matched the password in
+    # Aurora. Sourcing from the Secrets Manager secret keeps Keycloak in
+    # lockstep with rotation.
     {
       name      = "KC_DB_USERNAME"
-      valueFrom = aws_ssm_parameter.keycloak_database_username.arn
+      valueFrom = "${aws_secretsmanager_secret.keycloak_db_secret.arn}:username::"
     },
     {
       name      = "KC_DB_PASSWORD"
-      valueFrom = aws_ssm_parameter.keycloak_database_password.arn
+      valueFrom = "${aws_secretsmanager_secret.keycloak_db_secret.arn}:password::"
     }
   ]
 }
@@ -160,9 +167,19 @@ resource "aws_iam_role_policy" "keycloak_task_exec_ssm_policy" {
         Resource = [
           aws_ssm_parameter.keycloak_admin.arn,
           aws_ssm_parameter.keycloak_admin_password.arn,
-          aws_ssm_parameter.keycloak_database_url.arn,
-          aws_ssm_parameter.keycloak_database_username.arn,
-          aws_ssm_parameter.keycloak_database_password.arn
+          aws_ssm_parameter.keycloak_database_url.arn
+        ]
+      },
+      {
+        # Issue #1026: KC_DB_USERNAME and KC_DB_PASSWORD now come from
+        # the Secrets Manager secret managed by the rotation Lambda
+        # rather than stale SSM parameters.
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.keycloak_db_secret.arn
         ]
       },
       {

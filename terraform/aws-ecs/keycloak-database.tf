@@ -282,18 +282,16 @@ resource "aws_ssm_parameter" "keycloak_database_url" {
   tags   = local.common_tags
 }
 
-resource "aws_ssm_parameter" "keycloak_database_username" {
-  name   = "/keycloak/database/username"
-  type   = "SecureString"
-  key_id = aws_kms_key.rds.id
-  value  = var.keycloak_database_username
-  tags   = local.common_tags
-}
-
-resource "aws_ssm_parameter" "keycloak_database_password" {
-  name   = "/keycloak/database/password"
-  type   = "SecureString"
-  key_id = aws_kms_key.rds.id
-  value  = var.keycloak_database_password
-  tags   = local.common_tags
-}
+# Issue #1026: SSM parameters /keycloak/database/username and
+# /keycloak/database/password were removed because Keycloak now reads
+# both values directly from the Secrets Manager secret keycloak/database
+# managed by the rotation Lambda. Keeping the SSM copies caused
+# password drift after every rotation because the Lambda only updates
+# the Secrets Manager value, leaving the SSM copy stale and forcing
+# Keycloak to crash on every restart with "Access denied for user
+# keycloak".
+#
+# The Secrets Manager secret aws_secretsmanager_secret.keycloak_db_secret
+# (defined above in this file) is the sole source of truth for both
+# fields, and the ECS task definition extracts them via the
+# valueFrom = "<secret-arn>:<key>::" syntax.
