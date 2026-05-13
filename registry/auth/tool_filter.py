@@ -113,12 +113,51 @@ def _emit_tool_filter_audit(
         logger.exception("tool_filter audit emission failed")
 
 
+def _lookup_allowlist(
+    accessible_tools: dict[str, set[str]],
+    *server_name_candidates: str | None,
+) -> set[str] | None:
+    """Look up a per-server allowlist, tolerating naming variants.
+
+    Scope rules may store a server under its technical name
+    ("airegistry-tools"), a path-style name with slashes
+    ("/airegistry-tools/"), or a display name ("AI Registry tools").
+    Callers pass as many candidate names as they have; we try each in
+    raw and slash-stripped form, and also try matching against the
+    slash-stripped forms of all existing keys.
+    """
+    if not accessible_tools:
+        return None
+
+    candidates: list[str] = []
+    for name in server_name_candidates:
+        if not name:
+            continue
+        candidates.append(name)
+        stripped = name.strip("/")
+        if stripped and stripped != name:
+            candidates.append(stripped)
+
+    for candidate in candidates:
+        if candidate in accessible_tools:
+            return accessible_tools[candidate]
+
+    normalized_store = {k.strip("/"): v for k, v in accessible_tools.items()}
+    for candidate in candidates:
+        stripped = candidate.strip("/")
+        if stripped in normalized_store:
+            return normalized_store[stripped]
+
+    return None
+
+
 def filter_tools_for_user(
     server_name: str,
     tools: list[dict[str, Any]] | None,
     user_context: dict,
     *,
     endpoint: str | None = None,
+    server_path: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return the subset of `tools` the user is allowed to see.
 
@@ -132,7 +171,9 @@ def filter_tools_for_user(
           allowlist.
 
     Args:
-        server_name: Name of the server whose tool list is being filtered.
+        server_name: Human-readable or technical server name. Either the
+            display name, the technical name, or a path form is accepted;
+            the lookup tolerates leading/trailing slashes.
         tools: The tool list to filter. None is treated as [].
         user_context: Request user context dict. Must contain
             `accessible_tools` as populated by
@@ -140,6 +181,10 @@ def filter_tools_for_user(
             `nginx_proxied_auth`.
         endpoint: Optional endpoint label used for audit events and
             metric/log labeling.
+        server_path: Optional registered path (for example
+            "/airegistry-tools/"). When provided, the lookup tries this
+            key first, because scope rules usually store the technical
+            name or path rather than the display name.
 
     Returns:
         The filtered list of tool dicts.
@@ -150,7 +195,7 @@ def filter_tools_for_user(
         return tools
 
     accessible_tools = user_context.get("accessible_tools") or {}
-    allow = accessible_tools.get(server_name)
+    allow = _lookup_allowlist(accessible_tools, server_path, server_name)
 
     # Missing entry or explicit empty set both mean fail-closed.
     if allow is None or allow == set():
@@ -211,11 +256,15 @@ def tool_allowed_for_user(
     server_name: str,
     tool_name: str,
     user_context: dict,
+    *,
+    server_path: str | None = None,
 ) -> bool:
     """Return True when the given tool is visible to the current user.
 
     Thin wrapper around `filter_tools_for_user` with a single-item list.
-    Used by the semantic-search top-level tool loop.
+    Used by the semantic-search top-level tool loop. When the caller
+    knows the registered server path, pass it via `server_path` so the
+    allowlist lookup can match either display name or technical path.
     """
     return bool(
         filter_tools_for_user(
@@ -223,5 +272,6 @@ def tool_allowed_for_user(
             [{"name": tool_name}],
             user_context,
             endpoint="semantic_search",
+            server_path=server_path,
         )
     )

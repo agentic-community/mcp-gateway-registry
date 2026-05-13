@@ -451,3 +451,68 @@ def test_tool_allowed_for_user_admin_bypass(mock_audit, admin_user_context):
 
     # Assert
     assert allowed is True
+
+
+# =============================================================================
+# Display-name / technical-name / path normalization (regression, Issue #1026
+# Section 1 live test)
+# =============================================================================
+
+
+@patch("registry.auth.tool_filter._emit_tool_filter_audit")
+def test_filter_matches_when_called_with_display_name_but_scope_uses_path(mock_audit):
+    """
+    Regression guard: scope rows are stored keyed on the technical path
+    (e.g. "airegistry-tools"), but registry endpoints pass the display
+    name ("AI Registry tools") when calling the filter. The lookup must
+    normalize slashes and fall through to the server_path candidate so
+    the allowlist still matches.
+    """
+    # Arrange
+    ctx = {
+        "username": "bob",
+        "is_admin": False,
+        "scopes": ["tla-consumer-restricted"],
+        "accessible_servers": ["airegistry-tools"],
+        "accessible_tools": {"airegistry-tools": {"intelligent_tool_finder"}},
+    }
+    tools = [
+        {"name": "intelligent_tool_finder"},
+        {"name": "list_services"},
+    ]
+
+    # Act - caller passes the display name plus technical server_path
+    result = filter_tools_for_user(
+        "AI Registry tools",
+        tools,
+        ctx,
+        endpoint="servers",
+        server_path="/airegistry-tools/",
+    )
+
+    # Assert
+    assert [t["name"] for t in result] == ["intelligent_tool_finder"]
+
+
+@patch("registry.auth.tool_filter._emit_tool_filter_audit")
+def test_filter_matches_when_scope_key_has_slashes_but_caller_passes_bare_name(mock_audit):
+    """Slash-stripped normalization works the other way round too."""
+    # Arrange: scope stored with path form
+    ctx = {
+        "username": "carol",
+        "is_admin": False,
+        "accessible_servers": ["/airegistry-tools/"],
+        "accessible_tools": {"/airegistry-tools/": {"intelligent_tool_finder"}},
+    }
+    tools = [{"name": "intelligent_tool_finder"}, {"name": "list_services"}]
+
+    # Act - caller has no path, just the technical name
+    result = filter_tools_for_user(
+        "airegistry-tools",
+        tools,
+        ctx,
+        endpoint="servers",
+    )
+
+    # Assert
+    assert [t["name"] for t in result] == ["intelligent_tool_finder"]

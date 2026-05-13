@@ -479,6 +479,7 @@ async def get_servers_json(
                 server_info.get("tool_list") or [],
                 user_context or {},
                 endpoint="servers",
+                server_path=path,
             )
             service_data.append(
                 {
@@ -1872,6 +1873,7 @@ async def get_service_tools(
                 tool_list,
                 user_context,
                 endpoint="tools_all",
+                server_path=path,
             )
             if not filtered_list:
                 continue
@@ -1936,6 +1938,7 @@ async def get_service_tools(
                     cached_tools,
                     user_context,
                     endpoint="tools_service",
+                    server_path=service_path,
                 )
                 return {
                     "service_path": service_path,
@@ -1978,6 +1981,7 @@ async def get_service_tools(
             tool_list,
             user_context,
             endpoint="tools_service",
+            server_path=service_path,
         )
         return {"service_path": service_path, "tools": filtered_tools, "cached": False}
 
@@ -1998,6 +2002,7 @@ async def get_service_tools(
                 cached_tools,
                 user_context,
                 endpoint="tools_service",
+                server_path=service_path,
             )
             return {"service_path": service_path, "tools": cached_filtered, "cached": True}
         raise HTTPException(status_code=500, detail="Error fetching tools")

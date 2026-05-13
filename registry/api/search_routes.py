@@ -524,12 +524,14 @@ async def semantic_search(
         # the response. _tool_identity in the filter accepts both
         # `tool_name` (search result shape) and `name`.
         server_name_for_filter = server.get("server_name", "")
+        server_path_for_filter = server.get("path", "")
         raw_matching_tools = server.get("matching_tools", [])
         allowed_matching = filter_tools_for_user(
             server_name_for_filter,
             raw_matching_tools,
             user_context,
             endpoint="semantic_search",
+            server_path=server_path_for_filter,
         )
         matching_tools = [
             MatchingToolResult(
@@ -570,6 +572,7 @@ async def semantic_search(
             full_tool_list,
             user_context,
             endpoint="semantic_search",
+            server_path=server_path_for_filter,
         )
         filtered_num_tools = len(allowed_full)
 
@@ -607,7 +610,12 @@ async def semantic_search(
             continue
 
         # Issue #1026: tool-level prune after server access check
-        if not tool_allowed_for_user(server_name, tool.get("tool_name", ""), user_context):
+        if not tool_allowed_for_user(
+            server_name,
+            tool.get("tool_name", ""),
+            user_context,
+            server_path=server_path,
+        ):
             continue
 
         # Get endpoint_url from filtered servers, or compute it if not available
@@ -724,6 +732,7 @@ async def semantic_search(
             vs.get("matching_tools", []),
             user_context,
             endpoint="semantic_search",
+            server_path=vs_path,
         )
         # Build matching tools with schema lookup from backend servers
         # Only include tools that matched the search query
@@ -762,6 +771,7 @@ async def semantic_search(
                 vs_tool_list,
                 user_context,
                 endpoint="semantic_search",
+                server_path=vs_path,
             )
             vs_num_tools = len(allowed_vs_full)
         else:
