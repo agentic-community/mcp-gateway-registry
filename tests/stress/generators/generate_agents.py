@@ -58,15 +58,29 @@ def _slugify(name: str) -> str:
 
 
 def _ans_credentials() -> tuple[str, str, str]:
+    """Pick credentials and matching endpoint.
+
+    Prefers GODADDY_API_*_OTE (OTE test environment, customer-issued partner
+    creds) since that is the only public-facing host that exposes /v1/agents.
+    Falls back to ANS_API_* for backward compatibility with existing setups.
+    """
+    ote_key = os.getenv("GODADDY_API_KEY_OTE")
+    ote_secret = os.getenv("GODADDY_API_SECRET_OTE")
+    if ote_key and ote_secret:
+        endpoint = os.getenv("ANS_API_ENDPOINT", "https://api.ote-godaddy.com")
+        return ote_key, ote_secret, endpoint
+
     api_key = os.getenv("ANS_API_KEY")
     api_secret = os.getenv("ANS_API_SECRET")
-    if not api_key or not api_secret:
-        raise RuntimeError(
-            "ANS_API_KEY and ANS_API_SECRET must be set to generate agents. "
-            "See docs/design/ans-integration.md."
-        )
-    endpoint = os.getenv("ANS_API_ENDPOINT", ANS_DEFAULT_ENDPOINT)
-    return api_key, api_secret, endpoint
+    if api_key and api_secret:
+        endpoint = os.getenv("ANS_API_ENDPOINT", ANS_DEFAULT_ENDPOINT)
+        return api_key, api_secret, endpoint
+
+    raise RuntimeError(
+        "ANS credentials not set. Provide either GODADDY_API_KEY_OTE + "
+        "GODADDY_API_SECRET_OTE (recommended -- targets api.ote-godaddy.com) "
+        "or ANS_API_KEY + ANS_API_SECRET. See docs/design/ans-integration.md."
+    )
 
 
 def _fetch_ans_agents(cache_dir: Path) -> list[dict[str, Any]]:
@@ -150,12 +164,27 @@ def _record_key(record: dict[str, Any]) -> str:
 
 
 def _base_name(record: dict[str, Any]) -> str:
+    """Derive a base name from an ANS record.
+
+    Prefers `agentDisplayName` (human-readable) when present. Falls back to
+    the last DNS-style component of `ansName` (e.g. for
+    `ans://v1.0.0.canary-ote.itest.example.com` returns `example`), then
+    `agentHost`, then `agentId`.
+    """
+    display = record.get("agentDisplayName")
+    if display:
+        return display
     ans_name = record.get("ansName") or ""
     if ans_name.startswith(ANS_NAME_PREFIX):
         ans_name = ans_name[len(ANS_NAME_PREFIX) :]
     if ans_name:
-        return ans_name.split(".")[-1] or ans_name
-    return record.get("name") or record.get("agentId") or "ans-agent"
+        parts = [p for p in ans_name.split(".") if p]
+        # Pick a meaningful component: skip semver prefix like "v1.0.0"
+        for part in reversed(parts):
+            if not re.fullmatch(r"v?\d+", part):
+                return part
+        return parts[-1] if parts else ans_name
+    return record.get("agentHost") or record.get("agentId") or "ans-agent"
 
 
 def _build_payload(
@@ -176,7 +205,7 @@ def _build_payload(
     url = None
     for ep in endpoints:
         if isinstance(ep, dict):
-            url = ep.get("url") or ep.get("endpoint")
+            url = ep.get("agentUrl") or ep.get("url") or ep.get("endpoint")
             if url:
                 break
     if not url:
@@ -186,7 +215,11 @@ def _build_payload(
     tags_in = record.get("tags") or []
     tags = [STRESS_TAG, *tags_in] if STRESS_TAG not in tags_in else list(tags_in)
 
-    description = record.get("description") or f"ANS-sourced stress test agent: {name}"
+    description = (
+        record.get("agentDescription")
+        or record.get("description")
+        or f"ANS-sourced stress test agent: {name}"
+    )
 
     payload: dict[str, Any] = {
         "protocolVersion": "1.0",
