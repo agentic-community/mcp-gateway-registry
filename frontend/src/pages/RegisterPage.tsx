@@ -80,6 +80,7 @@ interface ServerFormData {
   auth_scheme: string;
   auth_credential: string;
   auth_header_name: string;
+  custom_headers: Array<{ name: string; value: string }>;
   status: string;
   provider_organization: string;
   provider_url: string;
@@ -138,6 +139,7 @@ const initialServerForm: ServerFormData = {
   auth_scheme: 'none',
   auth_credential: '',
   auth_header_name: 'X-API-Key',
+  custom_headers: [],
   status: 'active',
   provider_organization: '',
   provider_url: '',
@@ -453,6 +455,9 @@ const RegisterPage: React.FC = () => {
       formData.append('tags', serverForm.tags);
       if (serverForm.metadata) {
         formData.append('metadata', serverForm.metadata);
+      }
+      if (serverForm.custom_headers && serverForm.custom_headers.length > 0) {
+        formData.append('custom_headers', JSON.stringify(serverForm.custom_headers));
       }
 
       // Add new lifecycle and federation fields
@@ -821,6 +826,69 @@ const RegisterPage: React.FC = () => {
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /sse endpoint path</p>
             </div>
           </>
+        )}
+
+        {/* Additional Headers (remote only) */}
+        {serverForm.deployment === 'remote' && (
+          <div className="md:col-span-2 mt-4">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
+              Additional Headers
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+              Fixed HTTP headers your MCP server requires beyond authentication.
+              Values are encrypted at rest and included in the Connect JSON.
+            </p>
+            {(serverForm.custom_headers || []).map((h, idx) => (
+              <div key={idx} className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  placeholder="X-My-Header"
+                  value={h.name}
+                  onChange={(e) => {
+                    const updated = [...serverForm.custom_headers];
+                    updated[idx] = { ...updated[idx], name: e.target.value };
+                    setServerForm(prev => ({ ...prev, custom_headers: updated }));
+                  }}
+                  className={inputClass}
+                />
+                <input
+                  type="text"
+                  placeholder="header value"
+                  value={h.value}
+                  onChange={(e) => {
+                    const updated = [...serverForm.custom_headers];
+                    updated[idx] = { ...updated[idx], value: e.target.value };
+                    setServerForm(prev => ({ ...prev, custom_headers: updated }));
+                  }}
+                  className={inputClass}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = serverForm.custom_headers.filter((_, i) => i !== idx);
+                    setServerForm(prev => ({ ...prev, custom_headers: updated }));
+                  }}
+                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            {(serverForm.custom_headers || []).length < 10 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setServerForm(prev => ({
+                    ...prev,
+                    custom_headers: [...(prev.custom_headers || []), { name: '', value: '' }],
+                  }));
+                }}
+                className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400"
+              >
+                + Add header
+              </button>
+            )}
+          </div>
         )}
 
         <div className="md:col-span-2">

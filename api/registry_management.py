@@ -597,6 +597,7 @@ def cmd_register(args: argparse.Namespace) -> int:
             source_created_at=config.get("source_created_at"),
             source_updated_at=config.get("source_updated_at"),
             external_tags=config.get("external_tags"),
+            custom_headers=config.get("custom_headers"),
         )
 
         client = _create_client(args)
@@ -1305,12 +1306,24 @@ def cmd_server_update_credential(args: argparse.Namespace) -> int:
             logger.error("--credential is required when --auth-scheme is not 'none'")
             return 1
 
+        # Parse --custom-header NAME=VALUE entries
+        custom_headers_list = None
+        if args.custom_header:
+            custom_headers_list = []
+            for entry in args.custom_header:
+                if "=" not in entry:
+                    logger.error(f"Invalid --custom-header format: '{entry}'. Expected NAME=VALUE")
+                    return 1
+                name, value = entry.split("=", 1)
+                custom_headers_list.append({"name": name.strip(), "value": value})
+
         client = _create_client(args)
         response = client.update_server_credential(
             service_path=args.path,
             auth_scheme=args.auth_scheme,
             auth_credential=args.credential,
             auth_header_name=args.auth_header_name,
+            custom_headers=custom_headers_list,
         )
 
         if args.json:
@@ -1328,6 +1341,49 @@ def cmd_server_update_credential(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Failed to update server credential: {e}")
+        return 1
+
+
+def cmd_server_connect_config(args: argparse.Namespace) -> int:
+    """
+    Fetch the connect-time configuration for a server.
+
+    Returns decrypted custom headers and auth metadata needed to
+    build a working client configuration.
+
+    Args:
+        args: Command arguments with path.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.get_server_connect_config(service_path=args.path)
+
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        else:
+            logger.info(f"\nConnect config for '{response.get('path')}':")
+            logger.info(f"  Server: {response.get('server_name')}")
+            logger.info(f"  Auth scheme: {response.get('auth_scheme', 'none')}")
+            if response.get("auth_header_name"):
+                logger.info(f"  Auth header: {response.get('auth_header_name')}")
+            custom_headers = response.get("custom_headers", [])
+            if custom_headers:
+                logger.info(f"  Custom headers ({len(custom_headers)}):")
+                for h in custom_headers:
+                    logger.info(f"    {h['name']}: {h['value']}")
+            else:
+                logger.info("  Custom headers: (none)")
+            failures = response.get("decrypt_failures", 0)
+            if failures > 0:
+                logger.warning(f"  Decrypt failures: {failures}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to fetch connect config: {e}")
         return 1
 
 
@@ -4798,7 +4854,26 @@ Examples:
     server_update_cred_parser.add_argument(
         "--auth-header-name", help="Custom header name (optional, for api_key scheme)"
     )
+    server_update_cred_parser.add_argument(
+        "--custom-header",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Add a custom header (repeatable). Example: --custom-header X-Tenant-Id=42",
+    )
     server_update_cred_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # Server connect-config command
+    server_connect_config_parser = subparsers.add_parser(
+        "server-connect-config",
+        help="Fetch the connect-time configuration (decrypted custom headers) for a server",
+    )
+    server_connect_config_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /my-server)"
+    )
+    server_connect_config_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON"
+    )
 
     # Server search command
     server_search_parser = subparsers.add_parser(
@@ -5651,6 +5726,7 @@ Examples:
         "security-scan": cmd_security_scan,
         "rescan": cmd_rescan,
         "server-update-credential": cmd_server_update_credential,
+        "server-connect-config": cmd_server_connect_config,
         "server-search": cmd_server_search,
         "list-versions": cmd_list_versions,
         "remove-version": cmd_remove_version,

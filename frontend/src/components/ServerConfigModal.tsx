@@ -65,6 +65,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   // While config is loading, default to with-gateway behavior (safer default)
   const isRegistryOnly = !configLoading && registryConfig?.deployment_mode === 'registry-only';
 
+  // Custom headers from connect-config endpoint
+  const [customHeaders, setCustomHeaders] = useState<Array<{name: string; value: string}>>([]);
+  const [connectConfigError, setConnectConfigError] = useState<string | null>(null);
+
   // Fetch JWT token when modal opens (only in gateway mode, and only for remote servers).
   // Local stdio servers don't go through the gateway — no token needed.
   useEffect(() => {
@@ -76,6 +80,41 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, isRegistryOnly, server.deployment]);
+
+  // Fetch custom headers when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    setConnectConfigError(null);
+    setCustomHeaders([]);
+    const serverPath = server.path.replace(/^\/+/, '');
+    // Fetch CSRF token first, then include it as header for the GET request
+    // (required by verify_csrf_token_header_only for cookie-authenticated sessions)
+    axios
+      .get('/api/auth/csrf-token')
+      .then(csrfResp => {
+        const csrfToken = csrfResp.data?.csrf_token;
+        const headers: Record<string, string> = {};
+        if (csrfToken) {
+          headers['X-CSRF-Token'] = csrfToken;
+        }
+        return axios.get(`/api/servers/${serverPath}/connect-config`, { headers });
+      })
+      .then(resp => {
+        setCustomHeaders(resp.data.custom_headers ?? []);
+        if (resp.data.decrypt_failures > 0) {
+          setConnectConfigError(
+            `${resp.data.decrypt_failures} custom header(s) could not be decrypted.`
+          );
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to fetch connect config", err);
+        setConnectConfigError(
+          "Could not load custom headers for this server. " +
+          "The copied configuration may be missing headers your server requires."
+        );
+      });
+  }, [isOpen, server.path]);
 
   const fetchJwtToken = async () => {
     setTokenLoading(true);
@@ -226,12 +265,14 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     // Use actual JWT token if available, otherwise show placeholder
     const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
 
-    // Build headers object with both gateway auth and server auth (if applicable)
+    // Build headers object: custom first, then auth_scheme, then gateway auth
     const buildHeaders = () => {
       const headers: Record<string, string> = {};
 
-      // Add gateway authentication header
-      headers['X-Authorization'] = `Bearer ${authToken}`;
+      // Custom headers go first so auth_scheme and gateway auth overwrite collisions
+      for (const h of customHeaders) {
+        headers[h.name] = h.value;
+      }
 
       // Add server authentication headers if server requires auth
       if (server.auth_scheme && server.auth_scheme !== 'none') {
@@ -242,6 +283,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           headers[headerName] = '[YOUR_API_KEY]';
         }
       }
+
+      // Add gateway authentication header last - cannot be overridden
+      headers['X-Authorization'] = `Bearer ${authToken}`;
 
       return headers;
     };
@@ -308,7 +352,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           },
         };
     }
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, jwtToken]);
+  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, jwtToken, customHeaders]);
 
   const generateGooseConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -358,8 +402,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
 
     const headerLines: string[] = [];
-    if (includeAuthHeaders) {
-      headerLines.push(`      X-Authorization: Bearer ${authToken}`);
+    // Custom headers first
+    for (const h of customHeaders) {
+      headerLines.push(`      ${h.name}: ${h.value}`);
     }
     if (server.auth_scheme && server.auth_scheme !== 'none') {
       if (server.auth_scheme === 'bearer') {
@@ -368,6 +413,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         const headerName = server.auth_header_name || 'X-API-Key';
         headerLines.push(`      ${headerName}: [YOUR_API_KEY]`);
       }
+    }
+    if (includeAuthHeaders) {
+      headerLines.push(`      X-Authorization: Bearer ${authToken}`);
     }
 
     const lines = [
@@ -386,7 +434,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     lines.push('    timeout: 300');
 
     return lines.join('\n');
-  }, [server.name, server.mcp_endpoint, server.proxy_pass_url, server.auth_scheme, server.description, server.path, server.auth_header_name, isRegistryOnly, jwtToken]);
+  }, [server.name, server.mcp_endpoint, server.proxy_pass_url, server.auth_scheme, server.description, server.path, server.auth_header_name, isRegistryOnly, jwtToken, customHeaders]);
 
   const generateClaudeCodeCommand = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -426,23 +474,28 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     // Build command with headers
     let command = `claude mcp add --transport http ${serverName} ${url}`;
 
-    if (includeAuthHeaders) {
-      // Add gateway auth header
-      command += ` \\\n  --header "X-Authorization: Bearer ${authToken}"`;
+    // Custom headers first
+    for (const h of customHeaders) {
+      command += ` \\\n  --header "${h.name}: ${h.value}"`;
+    }
 
-      // Add server auth header if applicable
-      if (server.auth_scheme && server.auth_scheme !== 'none') {
-        if (server.auth_scheme === 'bearer') {
-          command += ` \\\n  --header "Authorization: Bearer [YOUR_SERVER_AUTH_TOKEN]"`;
-        } else if (server.auth_scheme === 'api_key') {
-          const headerName = server.auth_header_name || 'X-API-Key';
-          command += ` \\\n  --header "${headerName}: [YOUR_API_KEY]"`;
-        }
+    // Server auth header
+    if (server.auth_scheme && server.auth_scheme !== 'none') {
+      if (server.auth_scheme === 'bearer') {
+        command += ` \\\n  --header "Authorization: Bearer [YOUR_SERVER_AUTH_TOKEN]"`;
+      } else if (server.auth_scheme === 'api_key') {
+        const headerName = server.auth_header_name || 'X-API-Key';
+        command += ` \\\n  --header "${headerName}: [YOUR_API_KEY]"`;
       }
     }
 
+    // Gateway auth header last
+    if (includeAuthHeaders) {
+      command += ` \\\n  --header "X-Authorization: Bearer ${authToken}"`;
+    }
+
     return command;
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, isRegistryOnly, jwtToken]);
+  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, isRegistryOnly, jwtToken, customHeaders]);
 
 
   const copyConfigToClipboard = useCallback(async () => {

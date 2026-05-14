@@ -29,6 +29,11 @@ _KEY_DERIVATION_ITERATIONS: int = 100_000
 PLAINTEXT_FIELD: str = "auth_credential"
 ENCRYPTED_FIELD: str = "auth_credential_encrypted"
 
+# Custom headers field names
+CUSTOM_HEADERS_PLAINTEXT_FIELD: str = "custom_headers"
+CUSTOM_HEADERS_ENCRYPTED_FIELD: str = "custom_headers_encrypted"
+CUSTOM_HEADER_NAMES_FIELD: str = "custom_header_names"
+
 
 def _derive_fernet_key(
     secret_key: str,
@@ -180,7 +185,89 @@ def strip_credentials_from_dict(
     """
     server_dict.pop(ENCRYPTED_FIELD, None)
     server_dict.pop(PLAINTEXT_FIELD, None)
+    server_dict.pop(CUSTOM_HEADERS_ENCRYPTED_FIELD, None)
+    server_dict.pop(CUSTOM_HEADERS_PLAINTEXT_FIELD, None)
     return server_dict
+
+
+def encrypt_custom_headers_in_server_dict(
+    server_dict: dict,
+) -> dict:
+    """Encrypt custom_headers values in a server dict before storage.
+
+    Reads server_dict['custom_headers'] (list of {name, value}),
+    encrypts each value, writes server_dict['custom_headers_encrypted']
+    and server_dict['custom_header_names']. Removes the plaintext field.
+
+    Args:
+        server_dict: Server config dictionary.
+
+    Returns:
+        Modified dict with encrypted headers (mutated in place).
+
+    Raises:
+        ValueError: If a value is present but encryption fails.
+    """
+    raw = server_dict.pop(CUSTOM_HEADERS_PLAINTEXT_FIELD, None)
+    if raw is None:
+        return server_dict
+    if not isinstance(raw, list):
+        raise ValueError("custom_headers must be a list")
+
+    encrypted_list = []
+    names = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("custom_headers entry must be an object")
+        name = item.get("name")
+        value = item.get("value")
+        if not name or not value:
+            raise ValueError("custom_headers entry requires non-empty name and value")
+        lower = name.lower()
+        if lower in seen:
+            raise ValueError(f"Duplicate custom header name: {name}")
+        seen.add(lower)
+        encrypted_list.append({"name": name, "value_encrypted": encrypt_credential(value)})
+        names.append(name)
+
+    server_dict[CUSTOM_HEADERS_ENCRYPTED_FIELD] = encrypted_list
+    server_dict[CUSTOM_HEADER_NAMES_FIELD] = names
+    server_dict["custom_headers_updated_at"] = datetime.now(UTC).isoformat()
+
+    logger.info(
+        f"Custom headers encrypted for storage "
+        f"(path: {server_dict.get('path', 'unknown')}, count: {len(names)})"
+    )
+    return server_dict
+
+
+def decrypt_custom_headers(
+    encrypted_list: list[dict] | None,
+) -> list[dict]:
+    """Decrypt a list of custom_headers_encrypted entries.
+
+    Args:
+        encrypted_list: Stored list of {name, value_encrypted} objects.
+
+    Returns:
+        List of {name, value} objects. Entries that fail to decrypt are
+        dropped and a warning is logged.
+    """
+    if not encrypted_list:
+        return []
+    out = []
+    for item in encrypted_list:
+        name = item.get("name")
+        encrypted = item.get("value_encrypted")
+        if not name or not encrypted:
+            continue
+        value = decrypt_credential(encrypted)
+        if value is not None:
+            out.append({"name": name, "value": value})
+        else:
+            logger.warning(f"Failed to decrypt custom header '{name}'; skipping.")
+    return out
 
 
 def _migrate_auth_type_to_auth_scheme(

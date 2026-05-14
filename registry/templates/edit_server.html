@@ -176,11 +176,58 @@
                 <input type="text" id="auth_header_name" name="auth_header_name" value="{{ server.auth_header_name | default('X-API-Key') }}" placeholder="X-API-Key">
                 <small style="color: #666;">The HTTP header name used to send the API key (default: X-API-Key)</small>
             </div>
+            <h4 style="margin-top: 24px;">Additional Headers</h4>
+            <small style="color: #666; display: block; margin-bottom: 12px;">Fixed HTTP headers your MCP server requires. Values are encrypted at rest.</small>
+            <div id="custom-headers-list">
+                {% for h in server.get('custom_header_names', []) %}
+                <div class="custom-header-row" style="display: flex; gap: 8px; margin-bottom: 8px;">
+                    <input type="text" class="ch-name" value="{{ h }}" placeholder="X-My-Header" style="flex: 1;" />
+                    <input type="password" class="ch-value" placeholder="Value unchanged" style="flex: 1;" />
+                    <button type="button" onclick="removeCustomHeaderRow(this)" style="color: red; border: none; background: none; cursor: pointer;">Remove</button>
+                </div>
+                {% endfor %}
+            </div>
+            <button type="button" onclick="addCustomHeaderRow()" style="margin-bottom: 16px; color: #2563eb; border: none; background: none; cursor: pointer;">+ Add header</button>
+            <input type="hidden" id="custom_headers_json" name="custom_headers" />
+
             <div class="form-actions">
                 <a href="{{ url_for('read_root') }}">Cancel</a>
                 <button type="submit">Save Changes</button>
             </div>
         </form>
     </div>
+<script>
+function addCustomHeaderRow() {
+    const list = document.getElementById('custom-headers-list');
+    const row = document.createElement('div');
+    row.className = 'custom-header-row';
+    row.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px;';
+    row.innerHTML = '<input type="text" class="ch-name" placeholder="X-My-Header" style="flex: 1;" />' +
+        '<input type="password" class="ch-value" placeholder="header value" style="flex: 1;" />' +
+        '<button type="button" onclick="removeCustomHeaderRow(this)" style="color: red; border: none; background: none; cursor: pointer;">Remove</button>';
+    list.appendChild(row);
+}
+
+function removeCustomHeaderRow(btn) {
+    btn.parentElement.remove();
+}
+
+document.querySelector('form').addEventListener('submit', function() {
+    const rows = document.querySelectorAll('.custom-header-row');
+    const headers = [];
+    rows.forEach(function(row) {
+        const name = row.querySelector('.ch-name').value.trim();
+        const value = row.querySelector('.ch-value').value;
+        if (name) {
+            headers.push({ name: name, value: value });
+        }
+    });
+    if (headers.length > 0) {
+        document.getElementById('custom_headers_json').value = JSON.stringify(headers);
+    } else {
+        document.getElementById('custom_headers_json').value = '';
+    }
+});
+</script>
 </body>
-</html> 
+</html>

@@ -12,6 +12,46 @@ from registry.schemas.registry_card import LifecycleStatus
 _IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
+_RFC7230_TOKEN_RE = re.compile(r"[A-Za-z0-9!#$%&'*+\-.^_`|~]+")
+
+
+class CustomHeader(BaseModel):
+    """A single user-defined HTTP header attached to an MCP server."""
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description="HTTP header name. Must be a valid RFC 7230 token.",
+    )
+    value: str = Field(
+        ...,
+        max_length=4096,
+        description="HTTP header value. Stored encrypted; never returned in list responses.",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not _RFC7230_TOKEN_RE.fullmatch(v):
+            raise ValueError("Header name contains invalid characters (must be RFC 7230 token)")
+        return v
+
+    @field_validator("value")
+    @classmethod
+    def _validate_value(cls, v: str) -> str:
+        if "\r" in v or "\n" in v:
+            raise ValueError("Header value cannot contain CR or LF")
+        return v
+
+
+class CustomHeaderEncrypted(BaseModel):
+    """Stored form: header name + Fernet-encrypted value."""
+
+    name: str
+    value_encrypted: str
+
+
 class ServerVersion(BaseModel):
     """Represents a single version of an MCP server.
 
@@ -261,6 +301,20 @@ class ServerInfo(BaseModel):
     )
     credential_updated_at: str | None = Field(
         default=None, description="ISO timestamp of last credential update."
+    )
+
+    # Custom HTTP headers (encrypted values, names public)
+    custom_header_names: list[str] = Field(
+        default_factory=list,
+        description="Names of custom HTTP headers defined for this server.",
+    )
+    custom_headers_encrypted: list[CustomHeaderEncrypted] | None = Field(
+        default=None,
+        description="List of {name, value_encrypted} pairs. Never serialized to API consumers.",
+    )
+    custom_headers_updated_at: str | None = Field(
+        default=None,
+        description="ISO timestamp of last custom-headers update.",
     )
 
     # Lifecycle and federation metadata fields

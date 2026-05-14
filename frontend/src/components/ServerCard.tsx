@@ -83,6 +83,7 @@ export interface Server {
   // Backend authentication
   auth_scheme?: string;
   auth_header_name?: string;
+  custom_header_names?: string[];
   // Lifecycle status
   lifecycle_status?: 'active' | 'deprecated' | 'draft' | 'beta';
   source_created_at?: string;

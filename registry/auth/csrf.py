@@ -154,3 +154,39 @@ async def verify_csrf_token_flexible(
         )
 
     logger.debug("CSRF token verified via flexible dependency")
+
+
+async def verify_csrf_token_header_only(
+    request: Request,
+) -> None:
+    """FastAPI dependency for GET endpoints that return sensitive data.
+
+    Behavior:
+    - If the request has no session cookie (e.g. Bearer-token client
+      like the CLI or an external integration), CSRF is skipped. Bearer
+      auth is already not accessible to browser XHR from a third-party
+      origin without the explicit token, so CSRF is not applicable.
+    - If the request carries a session cookie, the X-CSRF-Token header
+      MUST be present AND valid. Absent or invalid token returns 403.
+
+    Rationale: browsers attach cookies to cross-origin GET requests made
+    with credentials:"include" even without the CSRF header. Requiring
+    the header closes that read vector.
+    """
+    session_id = request.cookies.get(settings.session_cookie_name)
+    if not session_id:
+        return
+
+    token = request.headers.get("X-CSRF-Token")
+    if not token:
+        logger.warning("CSRF header missing on cookie-authenticated GET")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CSRF validation failed: X-CSRF-Token header required",
+        )
+    if not validate_csrf_token(token, session_id):
+        logger.warning("CSRF header invalid on cookie-authenticated GET")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CSRF validation failed: invalid token",
+        )

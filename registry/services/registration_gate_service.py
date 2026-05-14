@@ -45,6 +45,8 @@ SENSITIVE_FIELD_NAMES: set[str] = {
     "auth_credential",
     "auth_credential_encrypted",
     "auth_header_name",
+    "custom_headers",
+    "custom_headers_encrypted",
 }
 
 SENSITIVE_HEADERS: set[str] = {

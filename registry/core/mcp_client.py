@@ -96,6 +96,19 @@ def _build_headers_for_server(server_info: dict = None) -> dict[str, str]:
                     headers.update(header_dict)
                     logger.debug(f"Added server headers to MCP client: {header_dict}")
 
+        # Custom headers go first; auth_scheme below overwrites name collisions
+        encrypted_custom = server_info.get("custom_headers_encrypted")
+        if encrypted_custom:
+            from ..utils.credential_encryption import decrypt_custom_headers
+
+            decrypted = decrypt_custom_headers(encrypted_custom)
+            for entry in decrypted:
+                headers[entry["name"]] = entry["value"]
+            logger.debug(
+                f"Merged {len(decrypted)} custom headers into outbound request "
+                f"(names only): {[e['name'] for e in decrypted]}"
+            )
+
         # Inject auth header from encrypted credentials (if present)
         auth_scheme = server_info.get("auth_scheme", "none")
         encrypted_credential = server_info.get("auth_credential_encrypted")

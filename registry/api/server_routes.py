@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from ..audit import set_audit_action
-from ..auth.csrf import generate_csrf_token, verify_csrf_token_flexible
+from ..auth.csrf import generate_csrf_token, verify_csrf_token_flexible, verify_csrf_token_header_only
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..auth.tool_filter import filter_tools_for_user
@@ -184,6 +184,90 @@ async def _build_versions_list(
             )
 
     return versions
+
+
+def _parse_and_validate_custom_headers(
+    raw: str | None,
+    allow_empty_values: bool = False,
+) -> list[dict] | None:
+    """Parse and validate the custom_headers form field.
+
+    Args:
+        raw: JSON-encoded list of {name, value} objects, or None.
+        allow_empty_values: If True (edit flow), empty value strings mean
+            "preserve existing ciphertext by name."
+
+    Returns:
+        Validated list of {name, value} dicts, or None if input was None.
+
+    Raises:
+        HTTPException 400: for any parse or validation failure.
+    """
+    if raw is None:
+        return None
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON in custom_headers field",
+        )
+
+    if not isinstance(parsed, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="custom_headers must be a JSON array",
+        )
+
+    from ..constants import MAX_CUSTOM_HEADERS_PER_SERVER, RESERVED_CUSTOM_HEADER_NAMES
+    from ..core.schemas import CustomHeader
+
+    if len(parsed) > MAX_CUSTOM_HEADERS_PER_SERVER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Too many custom headers: got {len(parsed)}, "
+                f"maximum is {MAX_CUSTOM_HEADERS_PER_SERVER}"
+            ),
+        )
+
+    validated: list[dict] = []
+    seen_names: set[str] = set()
+    for raw_entry in parsed:
+        try:
+            ch = CustomHeader(**raw_entry)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid custom header: {e}",
+            )
+
+        if not allow_empty_values and ch.value == "":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Custom header '{ch.name}' has an empty value. Provide a non-empty value.",
+            )
+
+        lower = ch.name.lower()
+        if lower in RESERVED_CUSTOM_HEADER_NAMES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Header '{ch.name}' is managed by the gateway and cannot be set "
+                    f"as a custom header. Use the Backend Authentication (auth_scheme) "
+                    f"field for authorization headers."
+                ),
+            )
+        if lower in seen_names:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Duplicate custom header name: {ch.name}",
+            )
+        seen_names.add(lower)
+        validated.append({"name": ch.name, "value": ch.value})
+
+    return validated
 
 
 async def _perform_security_scan_on_registration(
@@ -739,6 +823,7 @@ async def register_service(
     auth_scheme: Annotated[str, Form()] = "none",
     auth_credential: Annotated[str | None, Form()] = None,
     auth_header_name: Annotated[str | None, Form()] = None,
+    custom_headers: Annotated[str | None, Form()] = None,
     service_status: Annotated[str | None, Form(alias="status")] = None,
     provider_organization: Annotated[str | None, Form()] = None,
     provider_url: Annotated[str | None, Form()] = None,
@@ -908,6 +993,21 @@ async def register_service(
                     detail="Failed to encrypt credential",
                 )
 
+    # Custom headers: validate and encrypt
+    validated_custom_headers = _parse_and_validate_custom_headers(custom_headers)
+    if validated_custom_headers:
+        from ..utils.credential_encryption import encrypt_custom_headers_in_server_dict
+
+        server_entry["custom_headers"] = validated_custom_headers
+        try:
+            encrypt_custom_headers_in_server_dict(server_entry)
+        except Exception as e:
+            logger.error(f"Failed to encrypt custom headers: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to encrypt custom headers",
+            )
+
     # Add lifecycle and federation fields
     if service_status:
         server_entry["status"] = service_status
@@ -1035,6 +1135,7 @@ async def internal_register_service(
     auth_scheme: Annotated[str, Form()] = "none",
     auth_credential: Annotated[str | None, Form()] = None,
     auth_header_name: Annotated[str | None, Form()] = None,
+    custom_headers: Annotated[str | None, Form()] = None,
     supported_transports: Annotated[str | None, Form()] = None,
     headers: Annotated[str | None, Form()] = None,
     tool_list_json: Annotated[str | None, Form()] = None,
@@ -1191,6 +1292,21 @@ async def internal_register_service(
                 content={
                     "error": "Credential encryption failed. Please ensure SECRET_KEY is configured.",
                 },
+            )
+
+    # Custom headers: validate and encrypt
+    validated_custom_headers = _parse_and_validate_custom_headers(custom_headers)
+    if validated_custom_headers:
+        from ..utils.credential_encryption import encrypt_custom_headers_in_server_dict
+
+        server_entry["custom_headers"] = validated_custom_headers
+        try:
+            encrypt_custom_headers_in_server_dict(server_entry)
+        except Exception as e:
+            logger.error(f"Failed to encrypt custom headers: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to encrypt custom headers"},
             )
 
     logger.warning(
@@ -1723,6 +1839,7 @@ async def edit_server_submit(
     auth_header_name: Annotated[str | None, Form()] = None,
     deployment: Annotated[str | None, Form()] = None,
     local_runtime: Annotated[str | None, Form()] = None,
+    custom_headers: Annotated[str | None, Form()] = None,
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Handle server edit form submission (requires modify_service UI permission).
@@ -1954,6 +2071,67 @@ async def edit_server_submit(
             # Clear credentials when switching to no auth
             updated_server_entry.pop("auth_credential_encrypted", None)
             updated_server_entry.pop("auth_header_name", None)
+
+    # Custom headers: partial-update merge with stored values
+    validated_custom = _parse_and_validate_custom_headers(
+        custom_headers, allow_empty_values=True
+    )
+    if validated_custom is not None:
+        from datetime import UTC, datetime
+
+        from ..utils.credential_encryption import (
+            decrypt_credential,
+            encrypt_custom_headers_in_server_dict,
+        )
+
+        if validated_custom == []:
+            updated_server_entry["custom_headers_encrypted"] = []
+            updated_server_entry["custom_header_names"] = []
+            updated_server_entry["custom_headers_updated_at"] = datetime.now(UTC).isoformat()
+        else:
+            # Re-fetch with credentials to access encrypted header values
+            server_info_with_creds = await server_service.get_server_info(
+                service_path, include_credentials=True
+            )
+            existing_by_name: dict[str, dict] = {
+                entry["name"]: entry
+                for entry in (
+                    (server_info_with_creds or {}).get("custom_headers_encrypted") or []
+                )
+            }
+            merged_plaintext: list[dict] = []
+            for entry in validated_custom:
+                name = entry["name"]
+                submitted_value = entry["value"]
+                if submitted_value == "":
+                    prior = existing_by_name.get(name)
+                    if prior is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=(
+                                f"Header '{name}' has no existing value to preserve; "
+                                f"provide a non-empty value or remove the row."
+                            ),
+                        )
+                    plaintext = decrypt_credential(prior["value_encrypted"])
+                    if plaintext is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Could not preserve existing value for header '{name}'.",
+                        )
+                    merged_plaintext.append({"name": name, "value": plaintext})
+                else:
+                    merged_plaintext.append({"name": name, "value": submitted_value})
+
+            updated_server_entry["custom_headers"] = merged_plaintext
+            try:
+                encrypt_custom_headers_in_server_dict(updated_server_entry)
+            except Exception as e:
+                logger.error(f"Failed to encrypt custom headers on edit: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to encrypt custom headers",
+                )
 
     # Update server
     success = await server_service.update_server(service_path, updated_server_entry)
@@ -3010,6 +3188,7 @@ async def register_service_api(
     auth_scheme: Annotated[str, Form()] = "none",
     auth_credential: Annotated[str | None, Form()] = None,
     auth_header_name: Annotated[str | None, Form()] = None,
+    custom_headers: Annotated[str | None, Form()] = None,
     supported_transports: Annotated[str | None, Form()] = None,
     headers: Annotated[str | None, Form()] = None,
     tool_list_json: Annotated[str | None, Form()] = None,
@@ -3280,6 +3459,21 @@ async def register_service_api(
                 content={
                     "error": "Credential encryption failed. Please ensure SECRET_KEY is configured.",
                 },
+            )
+
+    # Custom headers: validate and encrypt
+    validated_custom_headers = _parse_and_validate_custom_headers(custom_headers)
+    if validated_custom_headers:
+        from ..utils.credential_encryption import encrypt_custom_headers_in_server_dict
+
+        server_entry["custom_headers"] = validated_custom_headers
+        try:
+            encrypt_custom_headers_in_server_dict(server_entry)
+        except Exception as e:
+            logger.error(f"Failed to encrypt custom headers: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to encrypt custom headers"},
             )
 
     if metadata:
@@ -4803,6 +4997,66 @@ async def get_server_versions(
 
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.get("/servers/{service_path:path}/connect-config")
+async def get_server_connect_config(
+    request: Request,
+    service_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_header_only)] = None,
+):
+    """Return decrypted connect-time config for a server.
+
+    Includes the list of custom HTTP headers with their plaintext values,
+    ready to be rendered into the Connect-button JSON.
+    """
+    from ..utils.credential_encryption import decrypt_custom_headers
+
+    set_audit_action(
+        request,
+        "read",
+        "server.connect_config",
+        resource_id=service_path,
+        description=f"Fetch connect-config for {service_path}",
+    )
+
+    if not service_path.startswith("/"):
+        service_path = "/" + service_path
+
+    # Strip /connect-config suffix if path routing included it
+    if service_path.endswith("/connect-config"):
+        service_path = service_path[: -len("/connect-config")]
+
+    server_info = await server_service.get_server_info(
+        service_path, include_credentials=True
+    )
+    if not server_info:
+        raise HTTPException(status_code=404, detail="Service path not found")
+
+    if not user_context.get("is_admin"):
+        accessible_servers = user_context.get("accessible_servers", [])
+        has_access = await server_service.user_can_access_server_path(
+            service_path, accessible_servers
+        )
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
+
+    encrypted = server_info.get("custom_headers_encrypted") or []
+    custom_headers = decrypt_custom_headers(encrypted)
+    decrypt_failures = len(encrypted) - len(custom_headers)
+
+    return {
+        "path": service_path,
+        "server_name": server_info.get("server_name"),
+        "auth_scheme": server_info.get("auth_scheme", "none"),
+        "auth_header_name": server_info.get("auth_header_name"),
+        "custom_headers": custom_headers,
+        "decrypt_failures": decrypt_failures,
+    }
 
 
 # IMPORTANT: This catch-all route must remain AFTER all /servers/{path}/... suffixed routes

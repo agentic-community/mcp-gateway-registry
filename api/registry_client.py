@@ -105,6 +105,10 @@ class InternalServiceRegistration(BaseModel):
             "Serialized as a JSON-encoded form field on the wire."
         ),
     )
+    custom_headers: list[dict[str, str]] | None = Field(
+        None,
+        description="List of {name, value} custom header objects. Encrypted before storage.",
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1615,6 +1619,10 @@ class RegistryClient:
         if "local_runtime" in data and isinstance(data["local_runtime"], dict):
             data["local_runtime"] = json.dumps(data["local_runtime"])
 
+        # Convert custom_headers list to JSON string for form encoding
+        if "custom_headers" in data and isinstance(data["custom_headers"], list):
+            data["custom_headers"] = json.dumps(data["custom_headers"])
+
         response = self._make_request(method="POST", endpoint="/api/servers/register", data=data)
 
         logger.info(f"Service registered successfully: {registration.service_path}")
@@ -1671,6 +1679,7 @@ class RegistryClient:
         auth_scheme: str,
         auth_credential: str = None,
         auth_header_name: str = None,
+        custom_headers: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """
         Update authentication credentials for a server.
@@ -1680,6 +1689,7 @@ class RegistryClient:
             auth_scheme: Authentication scheme (none, bearer, api_key)
             auth_credential: New credential (required if auth_scheme is not 'none')
             auth_header_name: Custom header name (optional, for api_key)
+            custom_headers: List of {name, value} dicts for custom headers
 
         Returns:
             Response dict with message and updated auth details
@@ -1695,6 +1705,8 @@ class RegistryClient:
             payload["auth_credential"] = auth_credential
         if auth_header_name:
             payload["auth_header_name"] = auth_header_name
+        if custom_headers is not None:
+            payload["custom_headers"] = json.dumps(custom_headers)
 
         response = self._make_request(
             method="PATCH", endpoint=f"/api/servers{service_path}/auth-credential", data=payload
@@ -1703,6 +1715,35 @@ class RegistryClient:
         result = response.json()
         logger.info(f"Credential updated for {service_path}: scheme={result.get('auth_scheme')}")
         return result
+
+    def get_server_connect_config(
+        self,
+        service_path: str,
+    ) -> dict[str, Any]:
+        """
+        Fetch the connect-time configuration for a server.
+
+        Returns decrypted custom headers and auth metadata needed to
+        build a working client configuration.
+
+        Args:
+            service_path: Server path (e.g., /my-server)
+
+        Returns:
+            Dict with path, server_name, auth_scheme, auth_header_name,
+            custom_headers, and decrypt_failures.
+
+        Raises:
+            requests.HTTPError: If the request fails.
+        """
+        logger.info(f"Fetching connect config for: {service_path}")
+
+        response = self._make_request(
+            method="GET",
+            endpoint=f"/api/servers{service_path}/connect-config",
+        )
+
+        return response.json()
 
     def list_services(
         self,
