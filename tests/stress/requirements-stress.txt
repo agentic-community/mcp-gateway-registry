@@ -1,0 +1,13 @@
+# Python dependencies specific to the Phase 3 stress test harness
+# (UI performance measurement). Keep this list separate from the main
+# project's pyproject.toml so the registry's runtime image doesn't have
+# to install Playwright + Chromium.
+#
+# Setup:
+#   bash tests/stress/playwright_install.sh
+#
+# Or manually:
+#   uv pip install -r tests/stress/requirements-stress.txt
+#   uv run playwright install chromium
+
+playwright>=1.48.0
