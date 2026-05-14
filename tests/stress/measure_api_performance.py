@@ -7,10 +7,12 @@ times, and writes per-operation latency percentiles to:
 
   tests/stress/results/<backend>/size-<N>/api_perf.json
 
-This commit covers the list endpoints (servers, agents, skills) in three
-modes per type: first page (`limit=50`), max page (`limit=500`, the API's
-hard cap), and a pagination walkthrough (`offset=0,50,...`). Semantic
-search lands in the next commit.
+Operations covered:
+
+  - List endpoints (servers, agents, skills): first page (`limit=50`),
+    max page (`limit=500`, the API's hard cap), pagination walkthrough.
+  - Semantic search: each curated query iterated over k ∈ {5, 10, 50}
+    against `POST /api/search/semantic` with `include_draft: true`.
 
 Warmup handling
 ---------------
@@ -64,6 +66,7 @@ from tests.stress.config import (
 )
 from tests.stress.constants import BACKENDS, HTTP_TIMEOUT_SECONDS, TARGET_SIZES
 from tests.stress.generators._base import ensure_project_on_path
+from tests.stress.queries import Query, default_queries_path, load_queries
 
 ensure_project_on_path()
 
@@ -76,6 +79,16 @@ logger = logging.getLogger(__name__)
 
 
 WARMUP_STRATEGY: str = "discard_first_iteration"
+SEMANTIC_K_VALUES: tuple[int, ...] = (5, 10, 50)
+# Maps `queries.json` expected_entity_types values to the per-type result
+# arrays the registry's semantic-search response uses.
+EXPECTED_TYPE_TO_RESPONSE_KEY: dict[str, str] = {
+    "mcp_server": "servers",
+    "a2a_agent": "agents",
+    "skill": "skills",
+    "tool": "tools",
+    "virtual_server": "virtual_servers",
+}
 LIST_PAGE_LIMIT: int = 50
 # The registry's list endpoints enforce `limit <= 500` (Pydantic Field constraint
 # on the route handler). LLD §5.2 calls for an "all rows" measurement; at sizes
@@ -112,6 +125,10 @@ class OperationSummary(BaseModel):
     latency_ms: dict[str, float] = Field(default_factory=dict)
     error_count: int = 0
     notes: str | None = None
+    # Populated only for semantic_search operations:
+    query_id: str | None = None
+    k: int | None = None
+    expected_hits: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +430,122 @@ def _run_list_paginated(
     )
 
 
+def _count_expected_hits(
+    response_json: dict[str, Any],
+    expected_types: list[str],
+) -> int:
+    """Count entries in the response whose entity-type matches `expected_types`.
+
+    The registry's `/api/search/semantic` response groups results by entity type
+    into per-type arrays (`servers`, `agents`, `skills`, `tools`, `virtual_servers`).
+    We sum the lengths of the arrays the caller cares about.
+    """
+    total = 0
+    for et in expected_types:
+        key = EXPECTED_TYPE_TO_RESPONSE_KEY.get(et)
+        if not key:
+            continue
+        arr = response_json.get(key) or []
+        if isinstance(arr, list):
+            total += len(arr)
+    return total
+
+
+def _run_semantic_search(
+    client: httpx.Client,
+    base_url: str,
+    query: Query,
+    k: int,
+    iterations: int,
+    token_state: TokenState,
+) -> OperationSummary:
+    """Issue `iterations + 1` semantic-search requests for a (query, k) pair.
+
+    The first iteration is the warmup discard. `expected_hits` is captured
+    from the last successful response (it should be stable across iterations
+    against an unchanging corpus).
+    """
+    url = f"{base_url}/api/search/semantic"
+    body = {
+        "query": query.query,
+        "entity_types": query.expected_entity_types,
+        "max_results": k,
+        "include_disabled": False,
+        "include_draft": True,
+    }
+    records: list[CallRecord] = []
+    last_expected_hits: int | None = None
+
+    for i in range(iterations + 1):
+        start = time.perf_counter()
+        try:
+            resp = client.post(
+                url,
+                headers=token_state.headers(),
+                json=body,
+            )
+        except httpx.HTTPError as exc:
+            records.append(
+                CallRecord(
+                    iteration=i,
+                    status_code=None,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    error=f"http_error: {exc}",
+                )
+            )
+            continue
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        if resp.status_code == 401 and not token_state.refreshed:
+            try:
+                token_state.token = _refresh_token_via_keycloak(token_state.token_file)
+                token_state.refreshed = True
+                # retry once
+                start = time.perf_counter()
+                resp = client.post(url, headers=token_state.headers(), json=body)
+                elapsed_ms = (time.perf_counter() - start) * 1000
+            except Exception as exc:
+                records.append(
+                    CallRecord(
+                        iteration=i,
+                        status_code=401,
+                        latency_ms=elapsed_ms,
+                        error=f"token_refresh_failed: {exc}",
+                    )
+                )
+                continue
+
+        if resp.is_success:
+            try:
+                last_expected_hits = _count_expected_hits(resp.json(), query.expected_entity_types)
+            except Exception:
+                last_expected_hits = None
+            records.append(
+                CallRecord(
+                    iteration=i,
+                    status_code=resp.status_code,
+                    latency_ms=elapsed_ms,
+                    response_bytes=len(resp.content),
+                )
+            )
+        else:
+            records.append(
+                CallRecord(
+                    iteration=i,
+                    status_code=resp.status_code,
+                    latency_ms=elapsed_ms,
+                    error=_truncate(resp.text, 300),
+                )
+            )
+
+    summary = _summarize("semantic_search", "POST", "/api/search/semantic", records)
+    summary.query_id = query.id
+    summary.k = k
+    summary.expected_hits = last_expected_hits
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # Main.
 # ---------------------------------------------------------------------------
@@ -429,6 +562,13 @@ def _main(args: argparse.Namespace) -> int:
 
     output_dir = results_dir_for(args.backend, args.size, args.results_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        queries = load_queries(args.queries_file)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("%s", exc)
+        return 1
+    logger.info("Loaded %d curated queries from %s", len(queries), args.queries_file)
 
     operations: list[OperationSummary] = []
     overall_start = time.time()
@@ -447,6 +587,20 @@ def _main(args: argparse.Namespace) -> int:
                     client, args.base_url, entity, args.size, args.iterations, token_state
                 )
             )
+
+        for q in queries:
+            for k in SEMANTIC_K_VALUES:
+                logger.info(
+                    "Measuring semantic_search query_id=%s k=%d (iterations=%d)",
+                    q.id,
+                    k,
+                    args.iterations,
+                )
+                operations.append(
+                    _run_semantic_search(
+                        client, args.base_url, q, k, args.iterations, token_state
+                    )
+                )
 
     overall = {
         "backend": args.backend,
@@ -490,6 +644,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=50,
         help="Steady-state samples per operation (default: 50). "
         "The script issues `iterations + 1` requests per operation and discards the first.",
+    )
+    parser.add_argument(
+        "--queries-file",
+        type=Path,
+        default=default_queries_path(),
+        help="Curated query set (default: tests/stress/queries.json).",
     )
     parser.add_argument(
         "--results-dir",
