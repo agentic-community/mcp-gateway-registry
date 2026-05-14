@@ -547,6 +547,106 @@ def _run_semantic_search(
 
 
 # ---------------------------------------------------------------------------
+# Markdown writer.
+# ---------------------------------------------------------------------------
+
+
+def _fmt_ms(value: float | None) -> str:
+    """Format a latency_ms value for the Markdown report."""
+    if value is None:
+        return "n/a"
+    return f"{value:.1f}"
+
+
+def _build_api_perf_md(report: dict[str, Any]) -> str:
+    """Render the JSON report as a human-readable Markdown document.
+
+    The Markdown is the artifact reviewers will eyeball; the JSON is the
+    machine-readable source of truth that report_builder.py will consume
+    in Phase 4 to produce cross-(backend, size) and cross-backend tables.
+    """
+    operations: list[dict[str, Any]] = report.get("operations", [])
+    list_ops = [op for op in operations if op["name"].startswith("list_")]
+    search_ops = [op for op in operations if op["name"] == "semantic_search"]
+
+    lines: list[str] = []
+    lines.append(f"# API performance — {report['backend']} @ size={report['size']}")
+    lines.append("")
+    lines.append(f"- Iterations: **{report['iterations']}** "
+                 f"(samples per op after warmup discard)")
+    lines.append(f"- Warmup strategy: `{report['warmup_strategy']}` "
+                 "(first iteration timed but excluded from percentile math)")
+    lines.append(f"- Base URL: `{report['base_url']}`")
+    lines.append(f"- Collected at: `{report['collected_at']}`")
+    lines.append(f"- Wall clock: **{report['wall_clock_seconds']:.1f}** s")
+    lines.append("")
+
+    lines.append("## List endpoints")
+    lines.append("")
+    lines.append("| Operation | Samples | p50 ms | p95 ms | p99 ms | min ms | max ms | mean ms | errors |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+    for op in list_ops:
+        lat = op.get("latency_ms") or {}
+        lines.append(
+            "| `{name}` | {samples} | {p50} | {p95} | {p99} | {mn} | {mx} | {mean} | {err} |".format(
+                name=op["name"],
+                samples=op["samples"],
+                p50=_fmt_ms(lat.get("p50")),
+                p95=_fmt_ms(lat.get("p95")),
+                p99=_fmt_ms(lat.get("p99")),
+                mn=_fmt_ms(lat.get("min")),
+                mx=_fmt_ms(lat.get("max")),
+                mean=_fmt_ms(lat.get("mean")),
+                err=op.get("error_count", 0),
+            )
+        )
+    lines.append("")
+
+    notes = [op for op in list_ops if op.get("notes")]
+    if notes:
+        lines.append("### Notes")
+        for op in notes:
+            lines.append(f"- **`{op['name']}`**: {op['notes']}")
+        lines.append("")
+
+    lines.append("## Semantic search")
+    lines.append("")
+    lines.append("Query body sets `include_draft: true`; Phase 1 entities are registered as "
+                 "`status: draft`.")
+    lines.append("")
+    lines.append("| Query | k | Samples | p50 ms | p95 ms | p99 ms | mean ms | hits | errors |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+    for op in search_ops:
+        lat = op.get("latency_ms") or {}
+        lines.append(
+            "| `{qid}` | {k} | {samples} | {p50} | {p95} | {p99} | {mean} | {hits} | {err} |".format(
+                qid=op.get("query_id", "?"),
+                k=op.get("k", "?"),
+                samples=op["samples"],
+                p50=_fmt_ms(lat.get("p50")),
+                p95=_fmt_ms(lat.get("p95")),
+                p99=_fmt_ms(lat.get("p99")),
+                mean=_fmt_ms(lat.get("mean")),
+                hits=op.get("expected_hits", "?"),
+                err=op.get("error_count", 0),
+            )
+        )
+    lines.append("")
+
+    bad = [op for op in operations if op.get("error_count", 0) > 0]
+    if bad:
+        lines.append("## Operations with errors")
+        lines.append("")
+        for op in bad:
+            lines.append(f"- `{op['name']}`"
+                         + (f" query=`{op['query_id']}` k={op['k']}" if op.get("query_id") else "")
+                         + f": error_count={op['error_count']}, samples={op['samples']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Main.
 # ---------------------------------------------------------------------------
 
@@ -616,6 +716,10 @@ def _main(args: argparse.Namespace) -> int:
     out_file = output_dir / "api_perf.json"
     out_file.write_text(json.dumps(overall, indent=2, default=str))
     logger.info("Wrote api_perf report: %s", out_file)
+
+    md_file = output_dir / "api_perf.md"
+    md_file.write_text(_build_api_perf_md(overall))
+    logger.info("Wrote api_perf markdown: %s", md_file)
 
     # Surface obvious problems as non-zero exit code so CI can react.
     bad_ops = [op for op in operations if op.error_count > 0 or not op.latency_ms]

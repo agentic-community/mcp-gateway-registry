@@ -21,6 +21,11 @@
 #                       found or all candidates are expired.
 #   STRESS_SKIP_TOKEN_REFRESH - set to any non-empty value to disable the
 #                       auto-regeneration step (use the detected file as-is).
+#   STRESS_MEASURE_API - set to any non-empty value to chain Phase 2
+#                       (API performance measurement) after Phase 1.
+#                       Default: skipped.
+#   STRESS_MEASURE_ITERATIONS - iterations per API operation when
+#                       STRESS_MEASURE_API is set. Default: 50.
 #   ANS_API_KEY / ANS_API_SECRET - required for the agents generator
 #   GITHUB_TOKEN      - optional; raises GitHub API rate limit for the skills generator
 
@@ -149,4 +154,19 @@ uv run python -m tests.stress.register_entities \
     --token-file "$TOKEN_FILE"
 
 echo "[3/3] Phase 1 complete. Results at tests/stress/results/$BACKEND/size-$SIZE/registration.json"
-echo "Note: API/UI performance measurement and report builder are not yet implemented (Phases 2-4)."
+
+if [ -n "${STRESS_MEASURE_API:-}" ]; then
+  ITERATIONS="${STRESS_MEASURE_ITERATIONS:-50}"
+  echo
+  echo "[Phase 2] Measuring API performance (iterations=$ITERATIONS)..."
+  uv run python -m tests.stress.measure_api_performance \
+      --backend "$BACKEND" \
+      --size "$SIZE" \
+      --base-url "$BASE_URL" \
+      --iterations "$ITERATIONS" \
+      --token-file "$TOKEN_FILE"
+  echo "[Phase 2] Complete. Results at tests/stress/results/$BACKEND/size-$SIZE/api_perf.{json,md}"
+else
+  echo "Note: set STRESS_MEASURE_API=1 to also run Phase 2 (API performance) after registration."
+  echo "      UI performance measurement and report builder are not yet implemented (Phases 3-4)."
+fi
