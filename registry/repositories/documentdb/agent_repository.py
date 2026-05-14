@@ -144,6 +144,17 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
 
         collection = await self._get_collection()
 
+        # Preserve extra document fields (e.g. ans_metadata) that are not
+        # part of the AgentCard Pydantic model but stored on the document
+        # by other code paths (link_ans_to_agent, health checks). Without
+        # this, $set overwrites the entire document with only model fields
+        # and any extra fields are silently lost.
+        raw_doc = await collection.find_one({"_id": path})
+        extra_fields: dict[str, Any] = {}
+        if raw_doc:
+            model_keys = set(AgentCard.model_fields.keys()) | {"_id", "path", "updated_at"}
+            extra_fields = {k: v for k, v in raw_doc.items() if k not in model_keys}
+
         agent_dict = existing_agent.model_dump()
         agent_dict.update(updates)
         agent_dict["updated_at"] = datetime.utcnow()
@@ -156,6 +167,7 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
 
         update_dict = updated_agent.model_dump(mode="json")
         update_dict.pop("path", None)
+        update_dict.update(extra_fields)
 
         try:
             result = await collection.update_one({"_id": path}, {"$set": update_dict})

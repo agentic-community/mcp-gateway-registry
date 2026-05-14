@@ -203,11 +203,14 @@ async def _resolve_ans_id(
     headers = _build_auth_header()
     search_url = f"{settings.ans_api_endpoint}/v1/agents"
 
-    # Extract host from ANS URI (e.g. "ans://v1.0.0.tourist-guide.agentworks.fr"
-    # -> "tourist-guide.agentworks.fr") and use the agentHost query param for a
-    # single-request lookup instead of paginating through all 60k+ agents.
+    # Extract host from ANS URI. Format: "ans://v{major}.{minor}.{patch}.{host}"
+    # e.g. "ans://v1.0.0.tourist-guide.agentworks.fr" -> "tourist-guide.agentworks.fr"
+    # Use the agentHost query param for a single-request lookup instead of
+    # paginating through all 60k+ agents.
     try:
-        ans_host = ans_agent_id.split("//", 1)[1].split(".", 1)[1]
+        after_scheme = ans_agent_id.split("//", 1)[1]  # v1.0.0.tourist-guide.agentworks.fr
+        segments = after_scheme.split(".", 3)           # ['v1', '0', '0', 'tourist-guide...']
+        ans_host = segments[3] if len(segments) > 3 else None
     except (IndexError, ValueError):
         ans_host = None
 
