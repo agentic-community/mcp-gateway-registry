@@ -115,14 +115,21 @@ async def _perform_agent_security_scan_on_registration(
                 if "security-pending" not in current_tags:
                     current_tags.append("security-pending")
                     agent_card.tags = current_tags
-                    # Update agent with new tags
+                    # Issue #1033: update_agent (not register_agent) is the
+                    # right call here. The agent was already inserted by the
+                    # caller; calling register_agent again raises
+                    # "path '...' already exists" which silently swallows
+                    # the security-pending tag and leaves the agent without
+                    # the warning it earned.
                     agent_info = await agent_service.get_agent_info(path)
                     if agent_info:
                         updated_card = agent_info.model_dump()
                         updated_card["tags"] = current_tags
                         from ..schemas.agent_models import AgentCard as AgentCardModel
 
-                        await agent_service.register_agent(AgentCardModel(**updated_card))
+                        await agent_service.update_agent(
+                            path, AgentCardModel(**updated_card)
+                        )
                     logger.info(f"Added 'security-pending' tag to agent {path}")
 
             # Disable agent if configured

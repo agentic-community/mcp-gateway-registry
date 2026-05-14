@@ -1671,3 +1671,144 @@ class TestRatingRequestModel:
         # Arrange & Act & Assert
         with pytest.raises(ValidationError):
             RatingRequest(rating="invalid")
+
+
+# =============================================================================
+# Regression: post-registration security-scan must call update_agent, not
+# register_agent (Issue #1033). The agent already exists when this code path
+# runs; calling register_agent again raises "path '...' already exists" and
+# the security-pending tag never lands.
+# =============================================================================
+
+
+class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
+    """Regression for #1033."""
+
+    @pytest.mark.asyncio
+    async def test_unsafe_scan_uses_update_agent_for_security_pending_tag(
+        self,
+        sample_agent_card,
+    ):
+        """When the post-registration scan flags the agent unsafe and the
+        config requires the security-pending tag, the route must call
+        update_agent (which performs an in-place update) rather than
+        register_agent (which performs an INSERT and fails because the agent
+        already exists).
+        """
+        # Arrange
+        from registry.api.agent_routes import (
+            _perform_agent_security_scan_on_registration,
+        )
+
+        path = sample_agent_card.path
+        agent_card_dict = sample_agent_card.model_dump()
+
+        scan_result = MagicMock(
+            is_safe=False,
+            critical_issues=0,
+            high_severity=1,
+        )
+        scan_config = MagicMock(
+            enabled=True,
+            scan_on_registration=True,
+            add_security_pending_tag=True,
+            block_unsafe_agents=False,
+            analyzers=["yara", "spec"],
+            llm_api_key=None,
+            scan_timeout_seconds=30,
+        )
+
+        scanner_mock = MagicMock()
+        scanner_mock.get_scan_config.return_value = scan_config
+        scanner_mock.scan_agent = AsyncMock(return_value=scan_result)
+
+        existing_card_info = MagicMock()
+        existing_card_info.model_dump.return_value = agent_card_dict.copy()
+
+        service_mock = MagicMock(
+            get_agent_info=AsyncMock(return_value=existing_card_info),
+            register_agent=AsyncMock(),
+            update_agent=AsyncMock(),
+            toggle_agent=AsyncMock(),
+        )
+
+        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
+            "registry.services.agent_scanner.agent_scanner_service",
+            new=scanner_mock,
+        ):
+            # Act
+            still_enabled = await _perform_agent_security_scan_on_registration(
+                path,
+                sample_agent_card,
+                agent_card_dict,
+            )
+
+        # Assert
+        # update_agent must be the method used to persist the security-pending
+        # tag. register_agent must NOT be called inside this helper because
+        # the agent was already inserted by the caller.
+        assert service_mock.update_agent.await_count == 1
+        called_path, called_card = service_mock.update_agent.await_args.args
+        assert called_path == path
+        assert "security-pending" in called_card.tags
+        assert service_mock.register_agent.await_count == 0
+
+        # block_unsafe_agents was False, so the scan helper does not toggle
+        # off and returns True (agent stays enabled).
+        assert still_enabled is True
+        service_mock.toggle_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_safe_scan_does_not_call_update_agent(
+        self,
+        sample_agent_card,
+    ):
+        """A safe scan must not touch agent state at all (no tag updates,
+        no toggle). Guards the regression test above against false-positive
+        behavior on the safe path.
+        """
+        # Arrange
+        from registry.api.agent_routes import (
+            _perform_agent_security_scan_on_registration,
+        )
+
+        path = sample_agent_card.path
+        agent_card_dict = sample_agent_card.model_dump()
+
+        scan_result = MagicMock(is_safe=True, critical_issues=0, high_severity=0)
+        scan_config = MagicMock(
+            enabled=True,
+            scan_on_registration=True,
+            add_security_pending_tag=True,
+            block_unsafe_agents=True,
+            analyzers=["yara"],
+            llm_api_key=None,
+            scan_timeout_seconds=30,
+        )
+        scanner_mock = MagicMock()
+        scanner_mock.get_scan_config.return_value = scan_config
+        scanner_mock.scan_agent = AsyncMock(return_value=scan_result)
+
+        service_mock = MagicMock(
+            get_agent_info=AsyncMock(),
+            register_agent=AsyncMock(),
+            update_agent=AsyncMock(),
+            toggle_agent=AsyncMock(),
+        )
+
+        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
+            "registry.services.agent_scanner.agent_scanner_service",
+            new=scanner_mock,
+        ):
+            # Act
+            still_enabled = await _perform_agent_security_scan_on_registration(
+                path,
+                sample_agent_card,
+                agent_card_dict,
+            )
+
+        # Assert
+        assert still_enabled is True
+        service_mock.update_agent.assert_not_awaited()
+        service_mock.register_agent.assert_not_awaited()
+        service_mock.toggle_agent.assert_not_awaited()
