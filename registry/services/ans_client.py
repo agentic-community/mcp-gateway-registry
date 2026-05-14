@@ -203,12 +203,24 @@ async def _resolve_ans_id(
     headers = _build_auth_header()
     search_url = f"{settings.ans_api_endpoint}/v1/agents"
 
+    # Extract host from ANS URI (e.g. "ans://v1.0.0.tourist-guide.agentworks.fr"
+    # -> "tourist-guide.agentworks.fr") and use the agentHost query param for a
+    # single-request lookup instead of paginating through all 60k+ agents.
+    try:
+        ans_host = ans_agent_id.split("//", 1)[1].split(".", 1)[1]
+    except (IndexError, ValueError):
+        ans_host = None
+
     try:
         async with httpx.AsyncClient(timeout=settings.ans_api_timeout_seconds) as client:
+            params: dict[str, str | int] = {"limit": 10}
+            if ans_host:
+                params["agentHost"] = ans_host
+
             response = await client.get(
                 search_url,
                 headers=headers,
-                params={"limit": 100, "offset": 0},
+                params=params,
             )
             response.raise_for_status()
             data = response.json()
@@ -218,26 +230,6 @@ async def _resolve_ans_id(
                     agent_uuid = agent.get("agentId")
                     logger.info(f"Resolved ANS name '{ans_agent_id}' to UUID '{agent_uuid}'")
                     return agent_uuid
-
-            # Search remaining pages if needed
-            total_count = data.get("totalCount", 0)
-            offset = 100
-            while offset < total_count:
-                response = await client.get(
-                    search_url,
-                    headers=headers,
-                    params={"limit": 100, "offset": offset},
-                )
-                response.raise_for_status()
-                page_data = response.json()
-
-                for agent in page_data.get("agents", []):
-                    if agent.get("ansName") == ans_agent_id:
-                        agent_uuid = agent.get("agentId")
-                        logger.info(f"Resolved ANS name '{ans_agent_id}' to UUID '{agent_uuid}'")
-                        return agent_uuid
-
-                offset += 100
 
     except Exception as e:
         logger.error(f"Failed to resolve ANS name '{ans_agent_id}': {e}")
