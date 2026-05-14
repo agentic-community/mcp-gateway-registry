@@ -212,6 +212,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       argList: [] as string[],
       envRows: [] as { key: string; value: string; required: boolean }[],
     },
+    custom_headers: [] as Array<{ name: string; value: string }>,
   });
   const [editLoading, setEditLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -1055,6 +1056,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         status: serverDetails.status || 'active',
         deployment,
         local_runtime: buildLocalRuntimeForm(localRuntimeRaw),
+        custom_headers: (serverDetails.custom_header_names || []).map((name: string) => ({ name, value: '' })),
       });
     } catch (error) {
       console.error('Failed to fetch server details:', error);
@@ -1077,6 +1079,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         status: (server as any).status || 'active',
         deployment,
         local_runtime: buildLocalRuntimeForm(server.local_runtime),
+        custom_headers: [],
       });
     }
   }, []);
@@ -1201,6 +1204,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
       if (editForm.metadata) {
         params.append('metadata', editForm.metadata);
+      }
+
+      const headersToSend = editForm.custom_headers.filter(h => h.name.trim());
+      if (headersToSend.length > 0) {
+        params.append('custom_headers', JSON.stringify(headersToSend));
       }
 
       // Use the correct edit endpoint with the server path
@@ -3173,6 +3181,66 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   </div>
                 </div>
               )}
+
+              {/* Custom Headers */}
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+                  Additional Headers
+                </h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                  Fixed HTTP headers your MCP server requires beyond authentication. Leave value blank to keep existing encrypted value.
+                </p>
+                {editForm.custom_headers.map((h, idx) => (
+                  <div key={idx} className="flex gap-2 mb-2">
+                    <input
+                      type="text"
+                      placeholder="X-My-Header"
+                      value={h.name}
+                      onChange={(e) => {
+                        const updated = [...editForm.custom_headers];
+                        updated[idx] = { ...updated[idx], name: e.target.value };
+                        setEditForm(prev => ({ ...prev, custom_headers: updated }));
+                      }}
+                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500 text-sm"
+                    />
+                    <input
+                      type="text"
+                      placeholder="header value (blank = keep existing)"
+                      value={h.value}
+                      onChange={(e) => {
+                        const updated = [...editForm.custom_headers];
+                        updated[idx] = { ...updated[idx], value: e.target.value };
+                        setEditForm(prev => ({ ...prev, custom_headers: updated }));
+                      }}
+                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = editForm.custom_headers.filter((_, i) => i !== idx);
+                        setEditForm(prev => ({ ...prev, custom_headers: updated }));
+                      }}
+                      className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                {editForm.custom_headers.length < 10 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditForm(prev => ({
+                        ...prev,
+                        custom_headers: [...prev.custom_headers, { name: '', value: '' }],
+                      }));
+                    }}
+                    className="text-sm text-purple-600 hover:text-purple-800 dark:text-purple-400"
+                  >
+                    + Add header
+                  </button>
+                )}
+              </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
