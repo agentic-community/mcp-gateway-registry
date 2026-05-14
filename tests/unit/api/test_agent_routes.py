@@ -1759,6 +1759,84 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
         service_mock.toggle_agent.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_unsafe_scan_with_block_indexes_with_agent_card_model(
+        self,
+        sample_agent_card,
+    ):
+        """Regression for the secondary bug surfaced after #1033 was fixed:
+        when block_unsafe_agents=True, the route called
+        search_repo.index_agent(path, agent_card_dict, ...) which raised
+        `'dict' object has no attribute 'name'` because index_agent expects
+        an AgentCard model. The route must pass the AgentCard instance.
+        """
+        # Arrange
+        from registry.api.agent_routes import (
+            _perform_agent_security_scan_on_registration,
+        )
+
+        path = sample_agent_card.path
+        agent_card_dict = sample_agent_card.model_dump()
+
+        scan_result = MagicMock(
+            is_safe=False,
+            critical_issues=0,
+            high_severity=1,
+        )
+        scan_config = MagicMock(
+            enabled=True,
+            scan_on_registration=True,
+            add_security_pending_tag=True,
+            block_unsafe_agents=True,
+            analyzers=["yara", "spec"],
+            llm_api_key=None,
+            scan_timeout_seconds=30,
+        )
+        scanner_mock = MagicMock()
+        scanner_mock.get_scan_config.return_value = scan_config
+        scanner_mock.scan_agent = AsyncMock(return_value=scan_result)
+
+        existing_card_info = MagicMock()
+        existing_card_info.model_dump.return_value = agent_card_dict.copy()
+
+        service_mock = MagicMock(
+            get_agent_info=AsyncMock(return_value=existing_card_info),
+            register_agent=AsyncMock(),
+            update_agent=AsyncMock(),
+            toggle_agent=AsyncMock(),
+        )
+
+        search_repo_mock = MagicMock()
+        search_repo_mock.index_agent = AsyncMock()
+
+        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
+            "registry.services.agent_scanner.agent_scanner_service",
+            new=scanner_mock,
+        ), patch(
+            "registry.repositories.factory.get_search_repository",
+            return_value=search_repo_mock,
+        ):
+            # Act
+            still_enabled = await _perform_agent_security_scan_on_registration(
+                path,
+                sample_agent_card,
+                agent_card_dict,
+            )
+
+        # Assert - block_unsafe_agents=True path runs to completion without raising.
+        assert still_enabled is False
+        service_mock.toggle_agent.assert_awaited_once_with(path, False)
+
+        # The critical regression assertion: index_agent receives the
+        # AgentCard model, not the raw dict, so .name / .description /
+        # .tags lookups inside index_agent succeed.
+        assert search_repo_mock.index_agent.await_count == 1
+        called_path, called_card = search_repo_mock.index_agent.await_args.args
+        assert called_path == path
+        assert isinstance(called_card, AgentCard), (
+            f"index_agent was called with {type(called_card).__name__}, expected AgentCard"
+        )
+
+    @pytest.mark.asyncio
     async def test_safe_scan_does_not_call_update_agent(
         self,
         sample_agent_card,

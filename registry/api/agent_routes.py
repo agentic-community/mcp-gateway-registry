@@ -137,9 +137,15 @@ async def _perform_agent_security_scan_on_registration(
                 await agent_service.toggle_agent(path, False)
                 logger.warning(f"Disabled agent {path} due to failed security scan")
 
-                # Update search index with disabled state
+                # Update search index with disabled state.
+                # Issue #1033 follow-up: index_agent expects an AgentCard
+                # model (it reads .name / .description / .tags / .skills);
+                # passing the raw dict here raised
+                # `'dict' object has no attribute 'name'`. Use the model
+                # we already have, which carries the security-pending tag
+                # added a few lines above.
                 search_repo = get_search_repository()
-                await search_repo.index_agent(path, agent_card_dict, is_enabled=False)
+                await search_repo.index_agent(path, agent_card, is_enabled=False)
                 return False  # Agent disabled
 
         else:
