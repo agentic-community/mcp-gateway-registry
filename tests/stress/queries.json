@@ -1,0 +1,102 @@
+[
+  {
+    "id": "server-01",
+    "query": "github repository integration",
+    "expected_entity_types": ["mcp_server"]
+  },
+  {
+    "id": "server-02",
+    "query": "postgres database query",
+    "expected_entity_types": ["mcp_server"]
+  },
+  {
+    "id": "server-03",
+    "query": "ai image and video generation",
+    "expected_entity_types": ["mcp_server"]
+  },
+  {
+    "id": "server-04",
+    "query": "developer documentation lookup",
+    "expected_entity_types": ["mcp_server"]
+  },
+  {
+    "id": "server-05",
+    "query": "trading and financial market data",
+    "expected_entity_types": ["mcp_server"]
+  },
+  {
+    "id": "agent-01",
+    "query": "canary integration test agent",
+    "expected_entity_types": ["a2a_agent"]
+  },
+  {
+    "id": "agent-02",
+    "query": "agent verification and trust",
+    "expected_entity_types": ["a2a_agent"]
+  },
+  {
+    "id": "agent-03",
+    "query": "ANS registered agent identity",
+    "expected_entity_types": ["a2a_agent"]
+  },
+  {
+    "id": "agent-04",
+    "query": "AI assistant for testing",
+    "expected_entity_types": ["a2a_agent"]
+  },
+  {
+    "id": "agent-05",
+    "query": "demo agent for staging environment",
+    "expected_entity_types": ["a2a_agent"]
+  },
+  {
+    "id": "skill-01",
+    "query": "create powerpoint presentations",
+    "expected_entity_types": ["skill"]
+  },
+  {
+    "id": "skill-02",
+    "query": "edit word documents",
+    "expected_entity_types": ["skill"]
+  },
+  {
+    "id": "skill-03",
+    "query": "build an mcp server",
+    "expected_entity_types": ["skill"]
+  },
+  {
+    "id": "skill-04",
+    "query": "brand and visual identity guidelines",
+    "expected_entity_types": ["skill"]
+  },
+  {
+    "id": "skill-05",
+    "query": "generative algorithmic art",
+    "expected_entity_types": ["skill"]
+  },
+  {
+    "id": "mixed-01",
+    "query": "secure my container",
+    "expected_entity_types": ["mcp_server", "a2a_agent", "skill"]
+  },
+  {
+    "id": "mixed-02",
+    "query": "code review automation",
+    "expected_entity_types": ["mcp_server", "a2a_agent", "skill"]
+  },
+  {
+    "id": "mixed-03",
+    "query": "build a web application",
+    "expected_entity_types": ["mcp_server", "a2a_agent", "skill"]
+  },
+  {
+    "id": "mixed-04",
+    "query": "data analysis pipeline",
+    "expected_entity_types": ["mcp_server", "a2a_agent", "skill"]
+  },
+  {
+    "id": "mixed-05",
+    "query": "machine learning model training",
+    "expected_entity_types": ["mcp_server", "a2a_agent", "skill"]
+  }
+]
