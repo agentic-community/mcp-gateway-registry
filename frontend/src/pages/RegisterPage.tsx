@@ -110,6 +110,7 @@ interface AgentFormData {
   source_created_at: string;
   source_updated_at: string;
   skills: Record<string, unknown>[];
+  skills_json: string;
   default_input_modes: string[];
   default_output_modes: string[];
   security_schemes: Record<string, unknown> | null;
@@ -169,6 +170,7 @@ const initialAgentForm: AgentFormData = {
   source_created_at: '',
   source_updated_at: '',
   skills: [],
+  skills_json: '',
   default_input_modes: [],
   default_output_modes: [],
   security_schemes: null,
@@ -394,6 +396,9 @@ const RegisterPage: React.FC = () => {
             source_created_at: toDatetimeLocal(parsed.source_created_at) || prev.source_created_at,
             source_updated_at: toDatetimeLocal(parsed.source_updated_at) || prev.source_updated_at,
             skills: Array.isArray(parsed.skills) ? parsed.skills : prev.skills,
+            skills_json: Array.isArray(parsed.skills)
+              ? JSON.stringify(parsed.skills, null, 2)
+              : prev.skills_json,
             default_input_modes: parsed.defaultInputModes || parsed.default_input_modes || prev.default_input_modes,
             default_output_modes: parsed.defaultOutputModes || parsed.default_output_modes || prev.default_output_modes,
             security_schemes: parsed.securitySchemes || parsed.security_schemes || prev.security_schemes,
@@ -504,6 +509,20 @@ const RegisterPage: React.FC = () => {
 
     if (!validateAgentForm()) return;
 
+    let parsedSkills = agentForm.skills;
+    if (agentForm.skills_json.trim()) {
+      try {
+        parsedSkills = JSON.parse(agentForm.skills_json);
+      } catch {
+        setErrors(prev => ({ ...prev, skills_json: 'Invalid JSON format' }));
+        return;
+      }
+      if (!Array.isArray(parsedSkills)) {
+        setErrors(prev => ({ ...prev, skills_json: 'Skills must be a JSON array' }));
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
@@ -528,7 +547,7 @@ const RegisterPage: React.FC = () => {
         source_created_at: agentForm.source_created_at || undefined,
         source_updated_at: agentForm.source_updated_at || undefined,
         ans_agent_id: agentForm.ans_agent_id || undefined,
-        skills: agentForm.skills.length > 0 ? agentForm.skills : undefined,
+        skills: parsedSkills.length > 0 ? parsedSkills : undefined,
         defaultInputModes: agentForm.default_input_modes.length > 0 ? agentForm.default_input_modes : undefined,
         defaultOutputModes: agentForm.default_output_modes.length > 0 ? agentForm.default_output_modes : undefined,
         securitySchemes: agentForm.security_schemes || undefined,
@@ -1124,6 +1143,33 @@ const RegisterPage: React.FC = () => {
           />
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             Custom key-value pairs for organization, compliance, or integration purposes
+          </p>
+        </div>
+
+        <div className="md:col-span-2">
+          <label className={labelClass}>Skills (JSON array, optional)</label>
+          <textarea
+            className={`${inputClass} font-mono text-xs ${errors.skills_json ? 'border-red-500 dark:border-red-400' : ''}`}
+            rows={8}
+            value={agentForm.skills_json}
+            onChange={(e) => {
+              const value = e.target.value;
+              setAgentForm(prev => ({ ...prev, skills_json: value }));
+              if (errors.skills_json) {
+                setErrors(prev => {
+                  const next = { ...prev };
+                  delete next.skills_json;
+                  return next;
+                });
+              }
+            }}
+            placeholder='[{"id": "skill-1", "name": "My Skill", "description": "What this skill does"}]'
+          />
+          {errors.skills_json && (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.skills_json}</p>
+          )}
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Each skill needs at least: id, name, description.
           </p>
         </div>
 
