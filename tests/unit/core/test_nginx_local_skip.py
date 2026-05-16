@@ -8,6 +8,18 @@ from registry.constants import HealthStatus
 from registry.core.nginx_service import NginxConfigService
 
 
+@pytest.fixture(autouse=True)
+def mock_atomic_write():
+    """Stub _atomic_write_text so tests don't touch the real config path (#1044).
+
+    Tests can declare this fixture as a parameter to inspect what was
+    written: each call is _atomic_write_text(path, content), so
+    mock_atomic_write.call_args_list[i][0][1] is the content string.
+    """
+    with patch("registry.core.nginx_service._atomic_write_text") as m:
+        yield m
+
+
 @pytest.fixture
 def nginx_service():
     with patch("registry.core.nginx_service.Path") as mock_path_class:
@@ -31,7 +43,9 @@ def mock_health_service():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_local_server_excluded_from_location_blocks(nginx_service, mock_health_service):
+async def test_local_server_excluded_from_location_blocks(
+    nginx_service, mock_health_service, mock_atomic_write
+):
     """Local servers must not produce a proxy_pass location block."""
     template_content = "server { {{LOCATION_BLOCKS}} }"
     servers = {
@@ -53,27 +67,15 @@ async def test_local_server_excluded_from_location_blocks(nginx_service, mock_he
         "/local": HealthStatus.LOCAL,
     }
 
-    captured_writes: list[str] = []
-
-    def _open_side_effect(path, *args, **kwargs):
-        m = mock_open(read_data=template_content)()
-        original_write = m.write
-
-        def write(content):
-            captured_writes.append(content)
-            return original_write(content)
-
-        m.write = write
-        return m
-
-    with patch("builtins.open", side_effect=_open_side_effect):
+    with patch("builtins.open", mock_open(read_data=template_content)):
         with patch("registry.health.service.health_service", mock_health_service):
             with patch.object(nginx_service, "get_additional_server_names", return_value=""):
                 with patch.object(nginx_service, "reload_nginx", return_value=True):
                     with patch("os.environ.get", return_value="http://keycloak:8080"):
                         await nginx_service.generate_config_async(servers)
 
-    rendered = "\n".join(captured_writes)
+    # Inspect what was passed to _atomic_write_text
+    rendered = "\n".join(call.args[1] for call in mock_atomic_write.call_args_list)
     # Remote upstream should appear in the config; local server's path must NOT.
     assert "http://upstream" in rendered or "/remote" in rendered
     # Critically, the local server should not produce a proxy_pass block keyed on its path

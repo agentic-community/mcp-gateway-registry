@@ -392,7 +392,8 @@ class HealthMonitoringService:
                     server_info = await server_service.get_server_info(path)
                     if server_info:
                         enabled_servers[path] = server_info
-                await nginx_service.generate_config_async(enabled_servers)
+                async with nginx_service.reload_lock:
+                    await nginx_service.generate_config_async(enabled_servers)
                 logger.info("Nginx configuration regenerated due to health status changes")
             except Exception as e:
                 logger.error(
@@ -1291,7 +1292,8 @@ class HealthMonitoringService:
                     server_info = await server_service.get_server_info(path)
                     if server_info:
                         enabled_servers[path] = server_info
-                await nginx_service.generate_config_async(enabled_servers)
+                async with nginx_service.reload_lock:
+                    await nginx_service.generate_config_async(enabled_servers)
                 logger.info(
                     f"Nginx configuration regenerated due to status change for {service_path}: {previous_status} -> {current_status}"
                 )

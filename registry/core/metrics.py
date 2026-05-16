@@ -29,6 +29,16 @@ NGINX_UPDATES_SKIPPED = Counter(
     ["operation"],  # generate_config, reload
 )
 
+# Counter for nginx config file writes (issue #1044)
+# status="success" when atomic write completes; status="failure" when temp file
+# creation, write, or os.replace raises. Lets operators detect disk-full,
+# permission, or replace failures (page on rate-of-change > 0).
+NGINX_CONFIG_WRITES = Counter(
+    "nginx_config_writes_total",
+    "Total nginx config file writes performed by the registry, by outcome.",
+    ["status"],  # success, failure
+)
+
 # Counter for blocked requests due to registry mode
 MODE_BLOCKED_REQUESTS = Counter(
     "registry_mode_blocked_requests_total",

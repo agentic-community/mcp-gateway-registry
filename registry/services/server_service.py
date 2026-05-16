@@ -160,8 +160,9 @@ class ServerService:
                         service_path: await self.get_server_info(service_path)
                         for service_path in await self.get_enabled_services()
                     }
-                    await nginx_service.generate_config_async(enabled_servers)
-                    nginx_service.reload_nginx()
+                    async with nginx_service.reload_lock:
+                        await nginx_service.generate_config_async(enabled_servers)
+                        nginx_service.reload_nginx()
                     logger.info(f"Regenerated nginx config due to server update: {path}")
                 except Exception as e:
                     logger.error(
@@ -183,8 +184,9 @@ class ServerService:
                     service_path: await self.get_server_info(service_path)
                     for service_path in await self.get_enabled_services()
                 }
-                await nginx_service.generate_config_async(enabled_servers)
-                nginx_service.reload_nginx()
+                async with nginx_service.reload_lock:
+                    await nginx_service.generate_config_async(enabled_servers)
+                    nginx_service.reload_nginx()
             except Exception as e:
                 logger.error(f"Failed to update nginx configuration after toggle: {e}")
 
@@ -490,8 +492,9 @@ class ServerService:
                     service_path: await self.get_server_info(service_path)
                     for service_path in await self.get_enabled_services()
                 }
-                await nginx_service.generate_config_async(enabled_servers)
-                nginx_service.reload_nginx()
+                async with nginx_service.reload_lock:
+                    await nginx_service.generate_config_async(enabled_servers)
+                    nginx_service.reload_nginx()
                 logger.info("Regenerated nginx config due to state reload")
             except Exception as e:
                 logger.error(f"Failed to regenerate nginx configuration after state reload: {e}")
@@ -895,8 +898,9 @@ class ServerService:
                 if server_info:
                     enabled_servers[service_path] = server_info
 
-            await nginx_service.generate_config_async(enabled_servers)
-            nginx_service.reload_nginx()
+            async with nginx_service.reload_lock:
+                await nginx_service.generate_config_async(enabled_servers)
+                nginx_service.reload_nginx()
             logger.info("Regenerated nginx config after version change")
 
         except Exception as e:

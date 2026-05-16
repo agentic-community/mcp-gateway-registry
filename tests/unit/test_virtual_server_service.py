@@ -1373,17 +1373,24 @@ class TestNginxReloadLock:
 
     @pytest.mark.asyncio
     async def test_reload_lock_exists(self):
-        """Test that the module-level nginx reload lock is an asyncio.Lock."""
+        """The reload lock now lives on the shared NginxConfigService singleton."""
         import asyncio
 
-        from registry.services.virtual_server_service import _nginx_reload_lock
+        from registry.core.nginx_service import nginx_service
 
-        assert isinstance(_nginx_reload_lock, asyncio.Lock)
+        assert isinstance(nginx_service.reload_lock, asyncio.Lock)
 
     @pytest.mark.asyncio
     async def test_concurrent_reloads_are_serialized(self, service):
-        """Test that concurrent nginx reloads are serialized by the lock."""
+        """Test that concurrent nginx reloads are serialized by the lock.
+
+        Patch only the methods being exercised - keep the real
+        nginx_service singleton (and its real reload_lock) so the lock
+        actually serializes the calls.
+        """
         import asyncio
+
+        from registry.core.nginx_service import nginx_service
 
         call_order = []
 
@@ -1393,16 +1400,11 @@ class TestNginxReloadLock:
             call_order.append("end")
             return True
 
-        mock_nginx = AsyncMock()
-        mock_nginx.generate_config_async = mock_generate
         mock_server_svc = AsyncMock()
         mock_server_svc.get_enabled_services = AsyncMock(return_value=[])
 
         with (
-            patch(
-                "registry.core.nginx_service.nginx_service",
-                mock_nginx,
-            ),
+            patch.object(nginx_service, "generate_config_async", mock_generate),
             patch(
                 "registry.services.server_service.server_service",
                 mock_server_svc,

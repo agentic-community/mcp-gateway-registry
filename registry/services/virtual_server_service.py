@@ -51,8 +51,9 @@ logger = logging.getLogger(__name__)
 # Singleton instance
 _virtual_server_service: Optional["VirtualServerService"] = None
 
-# Lock to serialize nginx config regeneration across concurrent mutations
-_nginx_reload_lock = asyncio.Lock()
+# Note: the nginx reload lock now lives on the shared NginxConfigService
+# singleton (see registry/core/nginx_service.py), so every call site - not
+# just virtual servers - can serialize regen+reload through it. See #1044.
 
 
 def _generate_path_from_name(
@@ -615,9 +616,10 @@ class VirtualServerService:
             The CRUD operation itself has already succeeded at this point,
             so callers should treat False as a non-fatal warning.
         """
-        async with _nginx_reload_lock:
+        from ..core.nginx_service import nginx_service
+
+        async with nginx_service.reload_lock:
             try:
-                from ..core.nginx_service import nginx_service
                 from ..services.server_service import server_service
 
                 # Get currently enabled servers for the full config generation

@@ -355,7 +355,8 @@ async def _perform_security_scan_on_registration(
 
                     if server_info:
                         enabled_servers[server_path] = server_info
-                await nginx_service.generate_config_async(enabled_servers)
+                async with nginx_service.reload_lock:
+                    await nginx_service.generate_config_async(enabled_servers)
         else:
             logger.info(f"Server {path} passed security scan")
 
@@ -787,7 +788,8 @@ async def toggle_service_route(
 
         if server_info:
             enabled_servers[path] = server_info
-    await nginx_service.generate_config_async(enabled_servers)
+    async with nginx_service.reload_lock:
+        await nginx_service.generate_config_async(enabled_servers)
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(service_path)
@@ -1084,7 +1086,8 @@ async def register_service(
 
         if server_info:
             enabled_servers[server_path] = server_info
-    await nginx_service.generate_config_async(enabled_servers)
+    async with nginx_service.reload_lock:
+        await nginx_service.generate_config_async(enabled_servers)
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
@@ -1394,7 +1397,8 @@ async def internal_register_service(
 
         if server_info:
             enabled_servers[server_path] = server_info
-    await nginx_service.generate_config_async(enabled_servers)
+    async with nginx_service.reload_lock:
+        await nginx_service.generate_config_async(enabled_servers)
 
     logger.warning(
         "INTERNAL REGISTER: Broadcasting health status update"
@@ -1583,7 +1587,8 @@ async def internal_remove_service(
 
         if server_info:
             enabled_servers[server_path] = server_info
-    await nginx_service.generate_config_async(enabled_servers)
+    async with nginx_service.reload_lock:
+        await nginx_service.generate_config_async(enabled_servers)
 
     logger.warning("INTERNAL REMOVE: Broadcasting health status update")  # TODO: replace with debug
 
@@ -1714,7 +1719,8 @@ async def internal_toggle_service(
 
         if server_info:
             enabled_servers[path] = server_info
-    await nginx_service.generate_config_async(enabled_servers)
+    async with nginx_service.reload_lock:
+        await nginx_service.generate_config_async(enabled_servers)
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(service_path)
@@ -2160,7 +2166,8 @@ async def edit_server_submit(
 
         if server_info:
             enabled_servers[path] = server_info
-    await nginx_service.generate_config_async(enabled_servers)
+    async with nginx_service.reload_lock:
+        await nginx_service.generate_config_async(enabled_servers)
 
     logger.info(f"Server '{name}' ({service_path}) updated by user '{user_context['username']}'")
 
@@ -2516,7 +2523,8 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
 
             if path_server_info:
                 enabled_servers[path] = path_server_info
-        await nginx_service.generate_config_async(enabled_servers)
+        async with nginx_service.reload_lock:
+            await nginx_service.generate_config_async(enabled_servers)
 
     except Exception as e:
         logger.error(f"ERROR during manual refresh check for {service_path}: {e}")
@@ -3805,7 +3813,8 @@ async def toggle_service_api(
 
         if server_info:
             enabled_servers[server_path] = server_info
-    await nginx_service.generate_config_async(enabled_servers)
+    async with nginx_service.reload_lock:
+        await nginx_service.generate_config_async(enabled_servers)
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
@@ -3941,7 +3950,8 @@ async def remove_service_api(
 
         if server_info:
             enabled_servers[server_path] = server_info
-    await nginx_service.generate_config_async(enabled_servers)
+    async with nginx_service.reload_lock:
+        await nginx_service.generate_config_async(enabled_servers)
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)

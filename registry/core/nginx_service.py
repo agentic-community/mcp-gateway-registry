@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -12,9 +13,107 @@ import httpx
 from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
 
 from .config import settings
-from .metrics import NGINX_UPDATES_SKIPPED
+from .metrics import NGINX_CONFIG_WRITES, NGINX_UPDATES_SKIPPED
 
 logger = logging.getLogger(__name__)
+
+
+# Default mode applied to a fresh nginx config file when no destination
+# exists yet. Subsequent writes preserve whatever mode the destination
+# currently has so an operator's chmod isn't silently reverted.
+DEFAULT_NGINX_CONFIG_MODE: int = 0o644
+
+
+def _atomic_write_text(
+    path: Path,
+    content: str,
+) -> None:
+    """Write content to path atomically (issue #1044).
+
+    Writes to a temporary file in the same directory as ``path`` and uses
+    ``os.replace()`` to swap it into place. ``os.replace()`` is atomic on POSIX
+    when source and destination are on the same filesystem, so any reader
+    (including ``nginx -t``) sees either the old config or the new one - never
+    a truncated mid-write file.
+
+    The temp file's mode is set to match the destination's existing mode, or
+    ``DEFAULT_NGINX_CONFIG_MODE`` when the destination does not yet exist.
+    Without this, ``tempfile.NamedTemporaryFile`` defaults to ``0o600`` and
+    silently tightens permissions across atomic writes.
+
+    On any failure the temp file is removed and the destination is left
+    unchanged. ``NGINX_CONFIG_WRITES`` is incremented with
+    ``status="success"`` or ``status="failure"`` accordingly.
+
+    Args:
+        path: Destination path.
+        content: Text content to write.
+
+    Raises:
+        OSError: If the temp file cannot be created, written, or replaced.
+    """
+    dest_dir = path.parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if path.exists():
+        target_mode = path.stat().st_mode & 0o777
+    else:
+        target_mode = DEFAULT_NGINX_CONFIG_MODE
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=dest_dir,
+        prefix=f".{path.name}.tmp.",
+        delete=False,
+        encoding="utf-8",
+    )
+    tmp_path = Path(tmp.name)
+    try:
+        tmp.write(content)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp.close()
+        os.chmod(tmp_path, target_mode)
+        os.replace(tmp_path, path)
+        NGINX_CONFIG_WRITES.labels(status="success").inc()
+    except Exception:
+        NGINX_CONFIG_WRITES.labels(status="failure").inc()
+        try:
+            tmp.close()
+        except Exception:
+            pass
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _cleanup_stale_temp_files(config_path: Path) -> None:
+    """Remove leftover ``.{config_name}.tmp.*`` files from a crashed write.
+
+    On a clean write, the temp file is renamed away by ``os.replace()``. If the
+    process was killed mid-write (SIGKILL, OOM kill, host reboot), a temp file
+    matching ``.{config_name}.tmp.*`` can remain. Container restarts on
+    ECS/EKS typically clean this up naturally, but long-lived hosts (local
+    dev, EC2 without container ephemerality) need explicit cleanup.
+
+    Best-effort: logs warnings but does not raise on failure.
+    """
+    dest_dir = config_path.parent
+    pattern = f".{config_path.name}.tmp.*"
+    try:
+        leftovers = list(dest_dir.glob(pattern))
+    except OSError as e:
+        logger.warning(f"Could not scan {dest_dir} for stale temp files: {e}")
+        return
+
+    for stale in leftovers:
+        try:
+            stale.unlink()
+            logger.info(f"Removed stale nginx config temp file: {stale}")
+        except OSError as e:
+            logger.warning(f"Failed to remove stale temp file {stale}: {e}")
 
 
 def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]:
@@ -64,6 +163,17 @@ class NginxConfigService:
     """Service for generating Nginx configuration for registered servers."""
 
     def __init__(self):
+        # Contract: every call site that invokes generate_config_async() or
+        # reload_nginx() (directly or transitively) MUST acquire this lock for
+        # the duration of those calls. The lock prevents:
+        #   1. Two writers racing on the nginx config path (lost-update).
+        #   2. nginx -t in one writer reading a partial file written by another.
+        #   3. Two `nginx -s reload` signals in flight simultaneously.
+        # The lock is intentionally coarse-grained because regen + reload is
+        # bounded (~150-300ms) and infrequent (tens per minute). See issue
+        # #1044 and .scratchpad/issue-1044/lld.md for the full rationale.
+        self.reload_lock: asyncio.Lock = asyncio.Lock()
+
         # Determine which template to use based on SSL certificate availability
         ssl_cert_path = Path(REGISTRY_CONSTANTS.SSL_CERT_PATH)
         ssl_key_path = Path(REGISTRY_CONSTANTS.SSL_KEY_PATH)
@@ -507,9 +617,10 @@ class NginxConfigService:
             root_path = os.environ.get("ROOT_PATH", "").rstrip("/")
             config_content = config_content.replace("{{ROOT_PATH}}", root_path)
 
-            # Write config file
-            with open(settings.nginx_config_path, "w") as f:
-                f.write(config_content)
+            # Write config file atomically (temp file + os.replace) so
+            # nginx -t and concurrent writers never see a truncated file.
+            # See issue #1044.
+            _atomic_write_text(settings.nginx_config_path, config_content)
 
             logger.info(
                 f"Generated Nginx configuration with {len(location_blocks)} location blocks and additional server names: {additional_server_names}"

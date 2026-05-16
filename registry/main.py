@@ -689,6 +689,13 @@ async def lifespan(app: FastAPI):
                 f"Registration gate connectivity check failed (continuing with startup): {e}"
             )
 
+        # Clean up any stale nginx config temp files left behind by a
+        # SIGKILL-interrupted previous run (issue #1044). Best-effort: this
+        # is a no-op on fresh container filesystems.
+        from registry.core.nginx_service import _cleanup_stale_temp_files
+
+        _cleanup_stale_temp_files(settings.nginx_config_path)
+
         # Always generate nginx configuration at startup to ensure placeholders are replaced
         # In registry-only mode, generate base config without MCP server location blocks
         if settings.nginx_updates_enabled:
@@ -699,11 +706,13 @@ async def lifespan(app: FastAPI):
                 server_info = await server_service.get_server_info(path)
                 if server_info:
                     enabled_servers[path] = server_info
-            await nginx_service.generate_config_async(enabled_servers)
+            async with nginx_service.reload_lock:
+                await nginx_service.generate_config_async(enabled_servers)
         else:
             logger.info("Generating base Nginx configuration (registry-only mode)...")
             # Generate base config with empty location blocks but substitute all placeholders
-            await nginx_service.generate_config_async({}, force_base_config=True)
+            async with nginx_service.reload_lock:
+                await nginx_service.generate_config_async({}, force_base_config=True)
 
         logger.info("✅ All services initialized successfully!")
 

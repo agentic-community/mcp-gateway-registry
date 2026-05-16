@@ -454,7 +454,8 @@ async def remove_anthropic_server(
                 enabled_servers = {
                     p: info for p, info in all_servers.items() if info.get("is_enabled", False)
                 }
-                await nginx_service.generate_config_async(enabled_servers)
+                async with nginx_service.reload_lock:
+                    await nginx_service.generate_config_async(enabled_servers)
     except Exception as e:
         logger.error(f"Failed to remove server from mcp_servers_default: {e}")
 

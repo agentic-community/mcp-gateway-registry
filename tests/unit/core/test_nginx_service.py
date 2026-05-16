@@ -19,6 +19,24 @@ from registry.core.nginx_service import NginxConfigService
 # =============================================================================
 
 
+@pytest.fixture(autouse=True)
+def mock_atomic_write():
+    """Stub _atomic_write_text so tests don't touch /etc/nginx (#1044).
+
+    The real helper does tempfile + os.replace against
+    settings.nginx_config_path. In unit tests the path is a fixture
+    string ('/etc/nginx/conf.d/nginx_rev_proxy.conf') that the test
+    user typically can't write to. Patching here keeps every test
+    that reaches generate_config_async hermetic.
+
+    Tests that need to inspect what was written can declare this
+    fixture as a parameter and read mock_atomic_write.call_args_list -
+    each call is (path, content).
+    """
+    with patch("registry.core.nginx_service._atomic_write_text") as mock_write:
+        yield mock_write
+
+
 @pytest.fixture
 def nginx_service():
     """Create a NginxConfigService instance."""
@@ -607,8 +625,7 @@ def test_create_location_block_direct_transport(nginx_service):
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keycloak_parsing(
-    nginx_service, sample_servers, mock_health_service
-):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
     """Test Keycloak URL parsing in configuration generation."""
     template_content = """
 server {
@@ -640,9 +657,9 @@ server {
                             assert result is True
 
                             # Verify file was written with parsed Keycloak values
-                            write_calls = list(mock_file().write.call_args_list)
+                            write_calls = list(mock_atomic_write.call_args_list)
                             assert len(write_calls) > 0
-                            written_content = write_calls[0][0][0]
+                            written_content = write_calls[0][0][1]
                             # Verify the template variables were substituted with
                             # the parsed Keycloak URL components
                             parsed_keycloak = urlparse("https://keycloak.example.com:8443")
@@ -692,8 +709,7 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_strips_keycloak_locations_for_entra(
-    nginx_service, sample_servers, mock_health_service
-):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
     """Test that Keycloak location blocks are stripped when AUTH_PROVIDER is entra."""
     template_content = """
 server {
@@ -738,9 +754,9 @@ server {
                             assert result is True
 
                             # Verify the written config does not contain keycloak locations
-                            write_calls = mock_file().write.call_args_list
+                            write_calls = mock_atomic_write.call_args_list
                             assert len(write_calls) > 0
-                            written_content = write_calls[0][0][0]
+                            written_content = write_calls[0][0][1]
                             assert "/keycloak/" not in written_content
                             assert "/realms/" not in written_content
                             assert "KEYCLOAK_LOCATIONS_START" not in written_content
@@ -749,8 +765,7 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keeps_keycloak_locations_for_keycloak(
-    nginx_service, sample_servers, mock_health_service
-):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
     """Test that Keycloak location blocks are kept when AUTH_PROVIDER is keycloak."""
     template_content = """
 server {
@@ -795,9 +810,9 @@ server {
                             assert result is True
 
                             # Verify the written config contains keycloak locations with substituted values
-                            write_calls = mock_file().write.call_args_list
+                            write_calls = mock_atomic_write.call_args_list
                             assert len(write_calls) > 0
-                            written_content = write_calls[0][0][0]
+                            written_content = write_calls[0][0][1]
                             assert "/keycloak/" in written_content
                             assert "/realms/" in written_content
                             # Verify the template variables were substituted with
@@ -810,8 +825,7 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_strips_keycloak_locations_for_cognito(
-    nginx_service, sample_servers, mock_health_service
-):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
     """Test that Keycloak location blocks are stripped when AUTH_PROVIDER is cognito."""
     template_content = """
 server {
@@ -848,17 +862,16 @@ server {
 
                             assert result is True
 
-                            write_calls = mock_file().write.call_args_list
+                            write_calls = mock_atomic_write.call_args_list
                             assert len(write_calls) > 0
-                            written_content = write_calls[0][0][0]
+                            written_content = write_calls[0][0][1]
                             assert "/keycloak/" not in written_content
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keycloak_https_default_port(
-    nginx_service, sample_servers, mock_health_service
-):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
     """Test Keycloak URL parsing defaults to port 443 for HTTPS without explicit port."""
     template_content = """
 server {
@@ -887,7 +900,7 @@ server {
                             result = await nginx_service.generate_config_async(sample_servers)
 
                             assert result is True
-                            written_content = mock_file().write.call_args_list[0][0][0]
+                            written_content = mock_atomic_write.call_args_list[0][0][1]
                             assert "https" in written_content
                             assert "443" in written_content
 
@@ -895,8 +908,7 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keycloak_hostname_fallback(
-    nginx_service, sample_servers, mock_health_service
-):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
     """Test Keycloak hostname fallback when hostname resolves to bare 'keycloak'."""
     template_content = """
 server {
@@ -925,7 +937,7 @@ server {
                             result = await nginx_service.generate_config_async(sample_servers)
 
                             assert result is True
-                            written_content = mock_file().write.call_args_list[0][0][0]
+                            written_content = mock_atomic_write.call_args_list[0][0][1]
                             # Should still contain keycloak as the host (netloc fallback)
                             assert "keycloak" in written_content
 
@@ -933,8 +945,7 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keycloak_url_parse_exception(
-    nginx_service, sample_servers, mock_health_service
-):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
     """Test Keycloak URL parsing falls back to defaults on exception."""
     template_content = """
 server {
@@ -968,7 +979,7 @@ server {
                                 result = await nginx_service.generate_config_async(sample_servers)
 
                                 assert result is True
-                                written_content = mock_file().write.call_args_list[0][0][0]
+                                written_content = mock_atomic_write.call_args_list[0][0][1]
                                 # Should fall back to defaults
                                 assert "http" in written_content
                                 assert "keycloak" in written_content

@@ -193,7 +193,8 @@ async def reconcile_anthropic_servers(
             enabled_servers = {
                 p: info for p, info in all_servers.items() if info.get("is_enabled", False)
             }
-            await nginx_service.generate_config_async(enabled_servers)
+            async with nginx_service.reload_lock:
+                await nginx_service.generate_config_async(enabled_servers)
             logger.info("Reconciliation: nginx config regenerated")
         except Exception as e:
             logger.error(f"Reconciliation: failed to regenerate nginx config: {e}")
