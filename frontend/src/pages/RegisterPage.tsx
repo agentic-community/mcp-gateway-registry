@@ -17,6 +17,7 @@ import {
   type LocalRuntimeFormData,
   initialLocalRuntime,
   buildLocalRuntimeJson,
+  buildLocalRuntimeForm,
 } from '../utils/localRuntime';
 import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 
@@ -331,12 +332,25 @@ const RegisterPage: React.FC = () => {
             }
           };
 
+          // Resolve deployment first; the form's validator branches on it
+          // (remote requires proxy_pass_url; local requires local_runtime).
+          const parsedDeployment: 'remote' | 'local' =
+            parsed.deployment === 'local' ? 'local' : 'remote';
+
           setServerForm(prev => ({
             ...prev,
             name: parsed.server_name || parsed.name || prev.name,
             description: parsed.description || prev.description,
             path: parsed.path || prev.path,
+            deployment: parsedDeployment,
+            // Local servers must use auth_scheme='none' (the backend forces
+            // this; mirror it on the form so validation doesn't trip on a
+            // stale 'bearer'/'api_key' default).
+            auth_scheme: parsedDeployment === 'local' ? 'none' : (parsed.auth_scheme || prev.auth_scheme),
             proxy_pass_url: parsed.proxy_pass_url || parsed.proxyPassUrl || prev.proxy_pass_url,
+            local_runtime: parsedDeployment === 'local'
+              ? buildLocalRuntimeForm(parsed.local_runtime)
+              : prev.local_runtime,
             tags: Array.isArray(parsed.tags) ? parsed.tags.join(',') : (parsed.tags || prev.tags),
             visibility: parsed.visibility || prev.visibility,
             repository_url: parsed.repository_url || parsed.repositoryUrl || prev.repository_url,
