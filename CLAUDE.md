@@ -593,11 +593,11 @@ Run the complete test suite with parallel execution:
 # Run all tests in parallel (using 8 workers)
 uv run pytest tests/ -n 8
 
-# Expected output (as of 2026-01-06):
-# - 701 passed
-# - 57 skipped
-# - Coverage: ~39.50%
-# - Execution time: ~30 seconds
+# Expected output:
+# - 3000+ tests passing
+# - Some tests skipped (known integration limitations)
+# - Coverage: above the configured minimum (~35%)
+# - Execution time: a few minutes (well under the 30-minute CI timeout)
 ```
 
 #### Test Execution Options
