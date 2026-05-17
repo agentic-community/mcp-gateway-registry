@@ -480,7 +480,7 @@ else
     fi
 
     # Build with parallel jobs and build cache
-    $COMPOSE_CMD $COMPOSE_FILES build --parallel --progress=auto || handle_error "Compose build failed"
+    $COMPOSE_CMD $COMPOSE_FILES build --parallel --progress=auto --build-arg BUILD_VERSION="$BUILD_VERSION" || handle_error "Compose build failed"
     log "Container images built successfully with optimization"
 fi
 
