@@ -31,7 +31,7 @@ import uvicorn
 import yaml
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Cookie, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
 
@@ -3885,9 +3885,14 @@ async def mcp_proxy(
     )
 
     if not should_filter:
-        return JSONResponse(
-            content=_safe_parse_body(body_bytes),
+        # Forward the upstream body and content_type unchanged. Many MCP
+        # servers reply with text/event-stream (SSE) rather than plain JSON;
+        # wrapping that in {"raw": "..."} via JSONResponse breaks every
+        # MCP client that expects either JSON-RPC or SSE.
+        return Response(
+            content=body_bytes,
             status_code=status_code,
+            media_type=content_type,
         )
 
     try:
