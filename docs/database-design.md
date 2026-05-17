@@ -91,6 +91,7 @@ All collections are suffixed with the configured namespace (e.g., `_default`, `_
 4. **mcp_embeddings_1536_{namespace}** - Vector embeddings
 5. **mcp_security_scans_{namespace}** - Security scan results
 6. **mcp_federation_config_{namespace}** - Federation configuration
+7. **oauth_sessions_{namespace}** - Server-side OAuth session records (cookie-based browser login)
 
 **Key Differences:**
 
@@ -413,6 +414,83 @@ Stores federation configuration for external registries (Anthropic, ASOR).
 **Indexes:**
 
 - `_id` (unique) - Single config per namespace
+
+---
+
+### 7. OAuth Sessions
+
+**Collection:** `oauth_sessions_{namespace}`
+
+Stores the server-side session record for browser-based logins. Introduced
+in [PR #1042](https://github.com/agentic-community/mcp-gateway-registry/pull/1042)
+to keep the browser cookie payload small (a single signed `session_id`)
+regardless of how many groups the user belongs to. The auth-server writes
+records on a successful OAuth callback; the registry reads on every
+authenticated request.
+
+See [docs/design/session-flow-cookie-based.md](design/session-flow-cookie-based.md)
+for the end-to-end browser login flow that uses this collection.
+
+**Document Structure:**
+
+```json
+{
+  "_id": "ObjectId('...')",
+  "session_id": "94780545a5b374024e91881e18ada42dfa17161c2cd03aca5b24b4320556bb4d",
+  "username": "alice@example.com",
+  "email": "alice@example.com",
+  "name": "Alice Example",
+  "groups": ["504c300b-d7a5-4731-b5ea-e4999a1e2496"],
+  "provider": "entra",
+  "auth_method": "oauth2",
+  "created_at": "ISODate('2026-05-17T15:29:27.090Z')",
+  "expires_at": "ISODate('2026-05-17T23:29:27.090Z')",
+  "id_token_encrypted": "BinData(0, '<12-byte nonce || AES-GCM ciphertext>')"
+}
+```
+
+**Field notes:**
+
+- `session_id` — 64-character hex string (32 bytes from `secrets.token_hex(32)`).
+  Primary lookup key; the only thing the browser cookie actually carries.
+- `groups` — IdP-provided group claims (Entra group object IDs, Cognito
+  group names, Keycloak group paths, etc.). May be empty.
+- `provider` — One of `cognito`, `keycloak`, `okta`, `auth0`, `entra`.
+  Used at logout time to redirect back to the right IdP.
+- `id_token_encrypted` — Optional. The OIDC `id_token` encrypted at rest
+  with AES-GCM. The 12-byte random nonce is prepended to the ciphertext.
+  Encryption key is derived from `SECRET_KEY` via HKDF-SHA256 with the
+  fixed info string `mcp-gateway-session-id-token-encryption`. Used only
+  at logout to populate `id_token_hint` for SSO termination at the IdP.
+- Username, email, name, and groups are stored in plaintext — they were
+  already client-visible in the previous in-cookie payload, so encrypting
+  them adds operational cost (debugging, audit) for no real
+  threat-model gain. The `id_token` is the only true bearer credential.
+
+**Indexes:**
+
+- `_id` (default) — ObjectId primary key.
+- `ux_session_id` (unique) on `session_id` — every session_id resolves to
+  at most one record; collision prevention.
+- `ttl_expires_at` on `expires_at` with `expireAfterSeconds=0` — MongoDB's
+  TTL monitor automatically deletes the document at the time stored in
+  `expires_at`. Cleanup runs every ~60 seconds.
+
+**Lifecycle:**
+
+| Event | What happens |
+|-------|--------------|
+| OAuth callback succeeds | auth-server inserts the record, returns `Set-Cookie: <session_id signed>`. |
+| Authenticated request | Registry resolves cookie → `session_id` → `find_one({session_id})`. One indexed PK lookup per request. |
+| TTL expiry | MongoDB auto-deletes via the TTL index. Subsequent reads return None → 401 → redirect to `/login`. |
+| Logout | Registry calls `delete_session(session_id)` *before* clearing the cookie, closing the cookie-replay window. |
+| Suspected leak | Operator drops the entire collection — every active session invalidated at once. See [docs/operations/incident-response.md](operations/incident-response.md). |
+
+**Code references:**
+
+- Writer: [auth_server/session_store.py](../auth_server/session_store.py) (create / resolve / delete + index management).
+- Reader: [registry/auth/session_store.py](../registry/auth/session_store.py) (resolve / delete only).
+- Crypto: [registry/auth/session_crypto.py](../registry/auth/session_crypto.py) (HKDF-derived AES-GCM cipher, shared by writer and reader).
 
 ---
 
