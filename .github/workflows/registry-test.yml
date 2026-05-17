@@ -31,6 +31,22 @@ jobs:
         python-version: ["3.14"]
       fail-fast: false
 
+    services:
+      mongodb:
+        image: mongo:8.2
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping:1})' --quiet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DOCUMENTDB_HOST: localhost
+      DOCUMENTDB_PORT: "27017"
+      APP_LOG_MONGODB_ENABLED: "false"
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
