@@ -147,6 +147,14 @@ module "ecs_service_auth" {
           value = var.entra_client_id
         },
         {
+          name  = "ENTRA_LOGIN_BASE_URL"
+          value = var.entra_login_base_url
+        },
+        {
+          name  = "ENTRA_GRAPH_BASE_URL"
+          value = var.entra_graph_base_url
+        },
+        {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
         },
@@ -675,6 +683,14 @@ module "ecs_service_registry" {
         {
           name  = "ENTRA_CLIENT_ID"
           value = var.entra_client_id
+        },
+        {
+          name  = "ENTRA_LOGIN_BASE_URL"
+          value = var.entra_login_base_url
+        },
+        {
+          name  = "ENTRA_GRAPH_BASE_URL"
+          value = var.entra_graph_base_url
         },
         {
           name  = "IDP_GROUP_FILTER_PREFIX"

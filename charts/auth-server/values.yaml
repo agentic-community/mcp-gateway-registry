@@ -91,6 +91,7 @@ entra:
   clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET"  # Key within the existing secret
   tenantId: ""
   loginBaseUrl: ""  # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com)
+  graphBaseUrl: ""  # Optional override for Microsoft Graph base URL. Leave unset on standard deployments — auto-inferred from loginBaseUrl. Set only for proxied or air-gapped deployments.
 
 # Okta integration (used when authProvider.type = "okta")
 okta:

@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
+from prometheus_client import Counter
 from pymongo import ReadPreference, WriteConcern
 
 from ..repositories.documentdb.client import get_collection_name, get_documentdb_client
@@ -22,6 +23,17 @@ logger = logging.getLogger(__name__)
 COLLECTION_BASE_NAME: str = "oauth_sessions"
 
 _collection: AsyncIOMotorCollection | None = None
+
+# Outcome counter for resolve_session calls. Labels:
+#   hit          — record found, valid, returned
+#   miss         — empty session_id or no document found
+#   expired      — document exists but expires_at <= now
+#   store_error  — read raised (network blip, replica lag, etc.)
+session_store_resolve_total = Counter(
+    "registry_session_store_resolve_total",
+    "Outcome of session_store.resolve_session calls",
+    ["result"],
+)
 
 
 async def _get_collection() -> AsyncIOMotorCollection:
@@ -47,6 +59,7 @@ async def _get_collection() -> AsyncIOMotorCollection:
 async def resolve_session(session_id: str) -> dict[str, Any] | None:
     """Hydrate a session record by id, decrypting id_token if present."""
     if not session_id:
+        session_store_resolve_total.labels(result="miss").inc()
         return None
 
     try:
@@ -54,9 +67,11 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
         doc = await collection.find_one({"session_id": session_id})
     except Exception as e:
         logger.warning(f"Session store read failed: {e}")
+        session_store_resolve_total.labels(result="store_error").inc()
         return None
 
     if not doc:
+        session_store_resolve_total.labels(result="miss").inc()
         return None
 
     expires_at = doc.get("expires_at")
@@ -64,6 +79,7 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=UTC)
         if expires_at <= datetime.now(UTC):
+            session_store_resolve_total.labels(result="expired").inc()
             return None
 
     result: dict[str, Any] = {
@@ -83,6 +99,7 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
         except Exception as e:
             logger.warning(f"Failed to decrypt id_token for session: {e}")
 
+    session_store_resolve_total.labels(result="hit").inc()
     return result
 
 

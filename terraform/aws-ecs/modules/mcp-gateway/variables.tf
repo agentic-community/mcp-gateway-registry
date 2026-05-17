@@ -536,6 +536,18 @@ variable "entra_client_secret" {
   sensitive   = true
 }
 
+variable "entra_login_base_url" {
+  description = "Entra ID login base URL. Override only for sovereign clouds. Empty default uses public cloud."
+  type        = string
+  default     = ""
+}
+
+variable "entra_graph_base_url" {
+  description = "Microsoft Graph base URL override. Leave empty on standard deployments — auto-inferred from entra_login_base_url."
+  type        = string
+  default     = ""
+}
+
 variable "idp_group_filter_prefix" {
   description = "Comma-separated list of prefixes to filter IdP groups in IAM > Groups page (e.g., 'mcp-,registry-'). Applies to all identity providers."
   type        = string

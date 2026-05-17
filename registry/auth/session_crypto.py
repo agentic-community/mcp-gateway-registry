@@ -14,6 +14,14 @@ Sensitivity model:
   - `id_token` is the only true bearer credential and is encrypted with
     AES-GCM. Rotating SECRET_KEY invalidates stored id_tokens — the same
     blast radius as cookie rotation today.
+
+Key rotation:
+  The AES-GCM cipher is cached in a process-wide singleton on first use
+  (see ``_aesgcm`` below). Rotating ``SECRET_KEY`` therefore requires a
+  process restart, not a SIGHUP-style config reload — a hot reload would
+  keep using the old key for the lifetime of the cached cipher. Operators
+  who rotate ``SECRET_KEY`` must restart all auth_server and registry
+  replicas to pick up the new key.
 """
 
 import os

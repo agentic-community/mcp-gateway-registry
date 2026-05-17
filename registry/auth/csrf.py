@@ -138,8 +138,8 @@ async def verify_csrf_token_flexible(
         try:
             form_data = await request.form()
             csrf_token = form_data.get("csrf_token")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Form body parsing failed (likely non-form request): {e}")
 
     if not csrf_token:
         logger.warning("CSRF validation failed: no token provided (session-based request)")

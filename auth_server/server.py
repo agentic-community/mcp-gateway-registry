@@ -109,8 +109,8 @@ def _read_mcp_proxy_max_body_bytes() -> int:
         if value is not None:
             candidate = int(value)
             return max(candidate, minimum_bytes)
-    except Exception:
-        pass
+    except (TypeError, ValueError) as e:
+        logger.debug(f"settings.mcp_proxy_max_body_bytes parse failed, falling back to env: {e}")
     raw = os.getenv("MCP_PROXY_MAX_BODY_BYTES")
     if not raw:
         return default_bytes

@@ -605,6 +605,12 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 #   - Azure Germany: https://login.microsoftonline.de
 # entra_login_base_url = "https://login.microsoftonline.com"
 
+# Microsoft Graph Base URL (optional)
+# Leave unset on standard Entra deployments — auto-inferred from entra_login_base_url
+# via the documented sovereign-cloud mapping. Set explicitly only for proxied or
+# air-gapped deployments.
+# entra_graph_base_url = "https://graph.microsoft.com"
+
 # IdP Group Filter Prefix (optional, comma-separated, applies to all identity providers)
 # Only groups whose name starts with any of these prefixes are shown in IAM > Groups
 # Example with single prefix:

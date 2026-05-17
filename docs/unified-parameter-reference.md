@@ -121,7 +121,7 @@ Internal and external URLs for the auth server, plus internal JWT signing.
 | Auth server external URL | `AUTH_SERVER_EXTERNAL_URL` | — (from domain config) | `auth-server.app.externalUrl` | Public URL for browser redirects. |
 | Internal JWT issuer | (constant in code) | — | `auth-server.app.jwtIssuer` | `iss` claim on internal service JWTs. |
 | Internal JWT audience | (constant in code) | — | `auth-server.app.jwtAudience` | `aud` claim on internal service JWTs. |
-| App secret key **(secret)** | `SECRET_KEY` (required) | `secret_key` via `TF_VAR_*` / Secrets Manager (required) | `global.secretKey` (Helm chart auto-generates at install time if unset) | JWT signing + session-cookie signing + at-rest encryption of OAuth `id_token`. **Required** — auth_server and registry refuse to start without it (the previous per-replica random fallback caused `BadSignature` across replicas). Must be identical across all auth_server and registry replicas. Rotating invalidates stored creds and active sessions. |
+| App secret key **(secret)** | `SECRET_KEY` (required) | `secret_key` via `TF_VAR_*` / Secrets Manager (required) | `global.secretKey` (Helm chart auto-generates at install time if unset) | JWT signing + session-cookie signing + at-rest encryption of OAuth `id_token`. **Required** — auth_server and registry refuse to start without it (the previous per-replica random fallback caused `BadSignature` across replicas). Must be identical across all auth_server and registry replicas. Rotating invalidates stored creds and active sessions; rotation requires a process restart, not a SIGHUP reload. **Must be high-entropy (32+ bytes from a CSPRNG)** — read access to the `oauth_sessions_*` collection is equivalent to credential compromise unless this key is strong and never written to a logged location. Generate with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'`. |
 
 ---
 
@@ -275,6 +275,7 @@ Single URL; disables itself when unset.
 | Client secret **(secret)** | `ENTRA_CLIENT_SECRET` | `entra_client_secret` | `auth-server.entra.clientSecret` / `registry.entra.clientSecret` | — |
 | Enabled flag | `ENTRA_ENABLED` | — | — | — |
 | Login base URL | `ENTRA_LOGIN_BASE_URL` | `entra_login_base_url` | `auth-server.entra.loginBaseUrl` | Sovereign clouds. |
+| Graph base URL | `ENTRA_GRAPH_BASE_URL` | `entra_graph_base_url` | `auth-server.entra.graphBaseUrl` | Optional override for Microsoft Graph base URL. Leave unset on standard Entra deployments — auto-inferred from `ENTRA_LOGIN_BASE_URL` via the documented sovereign-cloud mapping. Set explicitly only for proxied or air-gapped deployments. |
 | Admin group id | `ENTRA_GROUP_ADMIN_ID` | — | `global.authProvider.entra.adminGroupId` | — |
 | Users group id | `ENTRA_GROUP_USERS_ID` | — | — | — |
 

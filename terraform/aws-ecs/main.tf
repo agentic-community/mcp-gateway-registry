@@ -141,6 +141,8 @@ module "mcp_gateway" {
   entra_tenant_id         = var.entra_tenant_id
   entra_client_id         = var.entra_client_id
   entra_client_secret     = var.entra_client_secret
+  entra_login_base_url    = var.entra_login_base_url
+  entra_graph_base_url    = var.entra_graph_base_url
   idp_group_filter_prefix = var.idp_group_filter_prefix
 
   # Okta configuration

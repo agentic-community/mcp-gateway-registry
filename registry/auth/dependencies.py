@@ -628,6 +628,18 @@ async def nginx_proxied_auth(
             f"groups: {groups}, scopes: {scopes}"
         )
 
+        # Defaulting auth_method/provider when X-Auth-Method is absent is a
+        # legacy fallback for misconfigured nginx (the auth_server should
+        # always set this header). Warn so operators can fix the upstream
+        # config rather than seeing every header-auth request silently
+        # labeled "keycloak" in audit logs.
+        if not x_auth_method:
+            logger.warning(
+                f"nginx-proxied auth for {username}: X-Auth-Method header missing; "
+                "defaulting to 'keycloak' (audit logs may be inaccurate). "
+                "Verify auth_server is setting X-Auth-Method on proxied requests."
+            )
+
         user_context = await _derive_user_context(
             username=username,
             groups=groups,
