@@ -1,5 +1,11 @@
 # Cookie Security Design
 
+> **See also:** [session-flow-cookie-based.md](session-flow-cookie-based.md)
+> for the end-to-end browser login flow under the post-#1042 server-side
+> session store. This document focuses on cross-subdomain cookie domain
+> mechanics; the linked doc covers what's *in* the cookie and how the
+> session record is laid out server-side.
+
 ## Overview
 
 This document explains the design decisions behind the session cookie security implementation in the MCP Gateway Registry, particularly regarding the use of domain cookies for cross-subdomain authentication.
