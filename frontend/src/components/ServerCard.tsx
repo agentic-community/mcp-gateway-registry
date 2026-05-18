@@ -29,6 +29,7 @@ import { ANSBadge } from './ANSBadge';
 import ServerDetailsModal from './ServerDetailsModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { formatRelativeTime } from '../utils/dateUtils';
+import { normalizeHealthStatus } from '../utils/healthStatus';
 import { useAuth } from '../contexts/AuthContext';
 import type { LocalRuntime } from '../types/server';
 
@@ -275,10 +276,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
       // Update just this server instead of triggering global refresh
       if (onServerUpdate && response.data) {
         const updates: Partial<Server> = {
-          status: response.data.status === 'healthy' ? 'healthy' :
-                  response.data.status === 'healthy-auth-expired' ? 'healthy-auth-expired' :
-                  response.data.status === 'unhealthy' ? 'unhealthy' :
-                  response.data.status === 'local' ? 'local' : 'unknown',
+          status: normalizeHealthStatus(response.data.status),
           last_checked_time: response.data.last_checked_iso,
           num_tools: response.data.num_tools
         };
@@ -352,9 +350,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
           description: serverData.description,
           enabled: serverData.is_enabled,
           tags: serverData.tags,
-          status: serverData.health_status === 'healthy' ? 'healthy' :
-                  serverData.health_status === 'healthy-auth-expired' ? 'healthy-auth-expired' :
-                  serverData.health_status === 'unhealthy' ? 'unhealthy' : 'unknown',
+          status: normalizeHealthStatus(serverData.health_status),
           last_checked_time: serverData.last_checked_iso,
           num_tools: serverData.num_tools,
           proxy_pass_url: serverData.proxy_pass_url,
@@ -900,7 +896,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                     </div>
                   );
                 })
-              ) : server.enabled && server.status === 'healthy' ? (
+              ) : server.enabled && (server.status === 'healthy' || server.status === 'healthy-auth-expired') ? (
                 <p className="text-gray-500 dark:text-gray-300">
                   No tools available to you on this server. Ask your administrator if you need access.
                 </p>

@@ -1005,7 +1005,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       ))}
                     </ul>
                   </div>
-                ) : server.is_enabled && server.health_status === 'healthy' ? (
+                ) : server.is_enabled && (server.health_status === 'healthy' || server.health_status === 'healthy-auth-expired') ? (
                   <div className="mt-4 border-t border-dashed border-gray-200 dark:border-gray-700 pt-3">
                     <p className="text-sm text-gray-500 dark:text-gray-300">
                       No tools available to you on this server. Ask your administrator if you need access.

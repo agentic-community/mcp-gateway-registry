@@ -58,7 +58,7 @@ export interface Skill {
   auth_header_name?: string;
   num_stars?: number;
   status?: 'active' | 'draft' | 'deprecated' | 'beta';
-  health_status?: 'healthy' | 'unhealthy' | 'unknown';
+  health_status?: string;
   last_checked_time?: string;
   created_at?: string;
   updated_at?: string;

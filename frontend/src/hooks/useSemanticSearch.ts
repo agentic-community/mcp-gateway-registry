@@ -30,7 +30,7 @@ export interface SemanticServerHit {
   tags: string[];
   num_tools: number;
   is_enabled: boolean;
-  health_status?: 'healthy' | 'unhealthy' | 'unknown';
+  health_status?: string;
   relevance_score: number;
   match_context?: string;
   matching_tools: MatchingToolHit[];
@@ -90,7 +90,7 @@ export interface SemanticSkillHit {
   visibility?: string;
   owner?: string;
   is_enabled?: boolean;
-  health_status?: 'healthy' | 'unhealthy' | 'unknown';
+  health_status?: string;
   last_checked_time?: string;
   relevance_score: number;
   match_context?: string;

@@ -136,8 +136,12 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
   const [loadingToolCheck, setLoadingToolCheck] = useState(false);
   const [toolCheckResult, setToolCheckResult] = useState<any>(null);
   const [loadingHealthCheck, setLoadingHealthCheck] = useState(false);
+  const toSkillHealth = (raw: string | undefined): 'healthy' | 'unhealthy' | 'unknown' => {
+    if (raw === 'healthy' || raw === 'unhealthy' || raw === 'unknown') return raw;
+    return 'unknown';
+  };
   const [healthStatus, setHealthStatus] = useState<'healthy' | 'unhealthy' | 'unknown'>(
-    skill.health_status || 'unknown'
+    toSkillHealth(skill.health_status)
   );
   const [lastCheckedTime, setLastCheckedTime] = useState<string | null>(
     skill.last_checked_time || null
@@ -148,7 +152,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
 
   // Sync health status from props when skill changes
   useEffect(() => {
-    setHealthStatus(skill.health_status || 'unknown');
+    setHealthStatus(toSkillHealth(skill.health_status));
     setLastCheckedTime(skill.last_checked_time || null);
   }, [skill.health_status, skill.last_checked_time]);
 
