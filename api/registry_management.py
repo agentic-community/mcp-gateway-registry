@@ -664,19 +664,26 @@ def cmd_list(args: argparse.Namespace) -> int:
 
         for server in response.servers:
             status_icon = "✓" if server.is_enabled else "✗"
-            health_icon = {
-                "healthy": "🟢",
-                "unhealthy": "🔴",
-                "unknown": "⚪",
-                "disabled": "⚫",
-            }.get(server.health_status.value, "⚪")
+            status = server.health_status
+            if status.startswith("healthy"):
+                health_icon = "🟢"
+            elif status.startswith("unhealthy"):
+                health_icon = "🔴"
+            elif status == "checking":
+                health_icon = "🟡"
+            elif status == "local":
+                health_icon = "🔵"
+            elif status == "disabled":
+                health_icon = "⚫"
+            else:
+                health_icon = "⚪"
 
             lifecycle = f" [{server.status}]" if server.status != "active" else ""
             print(f"{status_icon} {health_icon} {server.path}{lifecycle}")
             print(f"   Name: {server.display_name}")
             print(f"   Description: {server.description}")
             print(f"   Enabled: {server.is_enabled}")
-            print(f"   Health: {server.health_status.value}")
+            print(f"   Health: {server.health_status}")
             if server.status != "active":
                 print(f"   Lifecycle: {server.status}")
             print()

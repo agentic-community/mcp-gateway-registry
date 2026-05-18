@@ -120,7 +120,7 @@ class Server(BaseModel):
     display_name: str = Field(..., description="Service display name")
     description: str = Field(..., description="Service description")
     is_enabled: bool = Field(..., description="Whether service is enabled")
-    health_status: HealthStatus = Field(..., description="Health status")
+    health_status: str = Field(..., description="Health status")
     status: str = Field(
         default="active",
         description="Lifecycle status (active, deprecated, draft, beta)",
