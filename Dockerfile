@@ -6,8 +6,11 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies including nginx with lua module
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies including nginx with lua module.
+# apt-get upgrade pulls in security patches against the base image's
+# already-installed packages (e.g. libc6 / glibc CVE updates) that would
+# otherwise stay at whatever version was baked into python:3.14-slim.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     nginx \
     nginx-extras \
     lua-cjson \

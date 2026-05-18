@@ -5,8 +5,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies.
+# apt-get upgrade pulls in security patches against the base image's
+# already-installed packages (e.g. libc6 / glibc CVE updates) that would
+# otherwise stay at whatever version was baked into python:3.14-slim.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

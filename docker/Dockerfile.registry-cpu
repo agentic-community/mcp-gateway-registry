@@ -8,7 +8,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Install system dependencies including nginx with lua module and Node.js.
 # logrotate rotates /var/log/containers/ai-registry/nginx-*.log daily (issue #987).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade pulls in security patches against the base image's
+# already-installed packages (e.g. libc6 / glibc CVE updates) that would
+# otherwise stay at whatever version was baked into python:3.14-slim.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     nginx \
     nginx-extras \
     lua-cjson \
