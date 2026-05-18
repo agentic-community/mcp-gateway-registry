@@ -1345,6 +1345,22 @@ class TestPathAutoGenerationCollision:
 class TestNginxReloadLock:
     """Tests verifying nginx reload lock serializes concurrent operations."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_nginx_reload_lock(self):
+        # The nginx_service singleton is instantiated at module-import time and
+        # its asyncio.Lock is therefore bound to whichever event loop existed
+        # when the singleton was first imported. pytest-asyncio creates a fresh
+        # event loop per test (function scope), so a lock created in test A's
+        # loop fails with "bound to a different event loop" when test B tries
+        # to acquire it. Replace the lock with a fresh one bound to *this*
+        # test's loop. Issue #1072.
+        import asyncio
+
+        from registry.core.nginx_service import nginx_service
+
+        nginx_service.reload_lock = asyncio.Lock()
+        yield
+
     @pytest.fixture
     def mock_vs_repo(self):
         """Create mock virtual server repository."""
