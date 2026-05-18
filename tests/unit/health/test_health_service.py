@@ -128,16 +128,33 @@ async def test_ws_manager_broadcast_update_no_connections(ws_manager):
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_ws_manager_broadcast_update_rate_limiting(ws_manager, mock_websocket, mock_settings):
-    """Test that broadcasts are rate-limited."""
-    mock_settings.websocket_broadcast_interval_ms = 1000  # 1 second
+    """Test that broadcasts are rate-limited.
 
-    with patch("registry.health.service.settings", mock_settings):
+    The clock is mocked so the test does not depend on real wall-clock
+    timing. Without the mock, a slow CI runner could spend more than the
+    rate-limit interval (1s) between the two awaits, the second broadcast
+    would go through (clearing pending_updates), and the assertion would
+    fail intermittently. This was a known flake on main.
+    """
+    mock_settings.websocket_broadcast_interval_ms = 1000  # 1 second
+    ws_manager.min_broadcast_interval = 1.0
+
+    with (
+        patch("registry.health.service.settings", mock_settings),
+        patch("registry.health.service.time") as mock_time,
+    ):
+        # First call sees t=100; second call sees t=100.1 (well within the 1s
+        # window). Use a list-driven side_effect so each call to time()
+        # returns the next scripted value.
+        mock_time.side_effect = [100.0, 100.0, 100.1, 100.1]
+
         ws_manager.connections.add(mock_websocket)
 
-        # First broadcast should go through
+        # First broadcast should go through (clock=100, last=0, delta=100s > 1s)
         await ws_manager.broadcast_update("test-path", {"status": "healthy"})
 
-        # Immediate second broadcast should be queued (not sent)
+        # Immediate second broadcast should be queued (clock=100.1,
+        # last=100, delta=0.1s < 1s).
         await ws_manager.broadcast_update("test-path-2", {"status": "unhealthy"})
 
         # Check that update was queued
