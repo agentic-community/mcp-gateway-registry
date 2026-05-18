@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.0
+    tag: 1.24.1
     pullPolicy: IfNotPresent
 
   ingress:
