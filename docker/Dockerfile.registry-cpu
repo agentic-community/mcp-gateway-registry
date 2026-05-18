@@ -31,7 +31,7 @@ ARG BUILD_VERSION="1.0.0"
 ENV BUILD_VERSION=$BUILD_VERSION
 
 # Install uv and create venv
-RUN pip install uv && uv venv .venv --python 3.14
+RUN pip install uv==0.11.14 && uv venv .venv --python 3.14
 
 # Copy dependency manifests FIRST so the install layer is cached on the
 # (pyproject, lock) pair, not on source changes. The root pyproject.toml

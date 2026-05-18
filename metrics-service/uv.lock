@@ -6,9 +6,6 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
-[options]
-exclude-newer = "2026-05-07T17:46:43Z"
-
 [[package]]
 name = "aiosqlite"
 version = "0.22.1"

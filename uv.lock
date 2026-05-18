@@ -6,9 +6,6 @@ resolution-markers = [
     "sys_platform == 'darwin'",
 ]
 
-[options]
-exclude-newer = "2026-05-07T17:46:43Z"
-
 [[package]]
 name = "aiofiles"
 version = "25.1.0"

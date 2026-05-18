@@ -2,9 +2,6 @@ version = 1
 revision = 3
 requires-python = ">=3.14"
 
-[options]
-exclude-newer = "2026-05-07T17:46:43Z"
-
 [[package]]
 name = "aiofile"
 version = "3.9.0"

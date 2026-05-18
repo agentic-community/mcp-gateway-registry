@@ -23,7 +23,7 @@ RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
 WORKDIR /app
 
 # Install uv as root (global tool)
-RUN pip install uv
+RUN pip install uv==0.11.14
 
 # Create /app directory with correct ownership from the start
 RUN chown appuser:appuser /app
