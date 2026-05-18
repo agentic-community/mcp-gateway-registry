@@ -3,6 +3,14 @@
 This page documents incident-response procedures for the MCP Gateway Registry.
 Each section is a self-contained runbook intended to be useful at 2am.
 
+> **Environment-portability note.** The `mongosh` examples below
+> illustrate the local compose-stack workflow. **On EKS and ECS
+> deployments these instructions are directional only** — adapt the
+> connection patterns (kubectl exec, ECS exec, DocumentDB endpoint
+> with TLS) to your environment. The procedures (which collection to
+> drop, what each rotation invalidates) apply across deployments;
+> the *invocation* differs.
+
 ---
 
 ## Suspected credential leak: invalidate all active sessions

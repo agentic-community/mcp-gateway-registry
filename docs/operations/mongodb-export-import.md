@@ -4,6 +4,14 @@ This runbook covers exporting and importing MongoDB / DocumentDB
 collections used by the MCP Gateway Registry. Each section is a
 self-contained procedure intended to be useful at 2am.
 
+> **Environment-portability note.** The commands below were validated
+> against the local `docker compose` stack with MongoDB CE running
+> in the `mcp-mongodb` container. **On EKS and ECS deployments these
+> instructions are directional only** — adapt the connection
+> patterns (kubectl exec, ECS exec, DocumentDB endpoint with TLS)
+> to your environment. Treat the procedures as the right shape; the
+> exact invocation will differ.
+
 The registry stores all per-namespace state under collections suffixed
 with the deployment's `documentdb_namespace` (default: `default`). The
 suffix is appended at write time by

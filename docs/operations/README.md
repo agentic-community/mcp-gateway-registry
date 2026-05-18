@@ -18,16 +18,24 @@ links into the underlying code or configuration.
   `mongorestore` (BSON, full-fidelity backups), namespace-scoped
   per-tenant operations, and the caveats around encrypted fields and
   index restoration.
+- [audit-log-export.md](audit-log-export.md) — Query and export the
+  `audit_events_*` collection for compliance review and security
+  investigations. Two paths: REST API (recommended, admin-required)
+  and direct MongoDB (operator escape hatch). Some sections are
+  marked DRAFT — the direct-MongoDB paths are fully validated; the
+  REST API admin-bootstrap and the disable-shipping path are not.
+- [rotate-secrets.md](rotate-secrets.md) — Rotation procedures for
+  `SECRET_KEY`, federation static tokens, IdP client secrets, and
+  M2M client secrets. Documents what each rotation invalidates and
+  the rollout sequence across replicas. DRAFT — destructive steps
+  were not exercised in the validation pass. Dry-run in non-prod
+  first.
 
 ## Planned runbooks
 
 The following are tracked under [#1056](https://github.com/agentic-community/mcp-gateway-registry/issues/1056)
 for future PRs:
 
-- `audit-log-export.md` — query and export `audit_events_*` for
-  compliance review.
-- `rotate-secrets.md` — rotation procedure for `SECRET_KEY`,
-  federation tokens, IdP secrets.
 - `telemetry-otlp-forwarding.md` — wire registry traces and metrics
   to an external OTLP collector.
 - `backup-and-restore.md` — full-database backup procedures and
