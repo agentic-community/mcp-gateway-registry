@@ -49,20 +49,45 @@ def _get_latest_per_instance(
 
     Rows without a registry_id are excluded since they cannot be reliably
     deduplicated and would inflate the instance count.
-    """
-    instance_latest: dict[str, dict[str, str]] = {}
 
+    NOTE: Heartbeat events do not carry the `auth` field (the heartbeat
+    schema only emits runtime metrics, not deployment shape for that
+    column). For the latest-per-instance row we therefore copy the auth
+    value forward from the most recent event that did populate it -- which
+    is almost always a startup event. Without this patch any instance
+    whose latest event is a heartbeat would get auth="" and end up
+    mislabeled as "no auth provider".
+    """
+    rows_sorted = sorted(rows, key=lambda r: r.get("ts", ""))
+
+    instance_latest: dict[str, dict[str, str]] = {}
+    instance_latest_auth: dict[str, str] = {}
     skipped = 0
-    for row in rows:
+    for row in rows_sorted:
         rid = (row.get("registry_id") or "").strip()
         if not rid:
             skipped += 1
             continue
 
-        ts = row.get("ts", "")
+        # Track latest event in general (for cloud/compute/etc which heartbeat
+        # events DO carry).
         existing = instance_latest.get(rid)
-        if existing is None or ts > existing.get("ts", ""):
+        if existing is None or row.get("ts", "") > existing.get("ts", ""):
             instance_latest[rid] = row
+
+        # Separately track the most recent non-empty auth value, since
+        # heartbeats leave it empty.
+        auth = (row.get("auth") or "").strip()
+        if auth:
+            instance_latest_auth[rid] = auth
+
+    # Stitch the latest auth back onto the latest-event row so downstream
+    # code can keep using a single row per instance.
+    for rid, latest in instance_latest.items():
+        if rid in instance_latest_auth:
+            latest = dict(latest)
+            latest["auth"] = instance_latest_auth[rid]
+            instance_latest[rid] = latest
 
     logger.info(
         f"Deduplicated {len(rows)} events to {len(instance_latest)} unique instances "
@@ -94,7 +119,12 @@ def _compute_distributions(
         storage = row.get("storage", "unknown") or "unknown"
         dimensions["Storage Backend"][storage] += 1
 
-        auth = row.get("auth", "none") or "none"
+        # auth comes from the most recent startup event for the instance;
+        # see _get_latest_per_instance. If it is genuinely missing (e.g.
+        # an instance that only ever sent heartbeats during the window)
+        # bucket it as "unknown" rather than "none" so it does not get
+        # confused with deployments that explicitly set auth_provider=none.
+        auth = (row.get("auth") or "").strip() or "unknown"
         dimensions["Auth Provider"][auth] += 1
 
         arch = row.get("arch", "unknown") or "unknown"
@@ -141,11 +171,51 @@ def _plot_single_facet(
     ax.set_xlim(0, max_count * 1.4)
 
 
+def _filter_rows_active_on_date(
+    rows: list[dict[str, str]],
+    active_date: str,
+) -> list[dict[str, str]]:
+    """Restrict the row set to instances that had an event on active_date.
+
+    Returns ALL events for the surviving registry_ids (not just the ones on
+    that day) so the latest-per-instance and auth-stitching logic in
+    _get_latest_per_instance still work. Without this, an instance that
+    last sent a startup event two weeks ago and only sent heartbeats on
+    active_date would lose its auth value.
+    """
+    active_ids: set[str] = set()
+    for row in rows:
+        if (row.get("ts") or "")[:10] != active_date:
+            continue
+        rid = (row.get("registry_id") or "").strip()
+        if rid:
+            active_ids.add(rid)
+
+    if not active_ids:
+        logger.warning(
+            f"No instances reported on {active_date}; returning empty row set",
+        )
+        return []
+
+    kept = [r for r in rows if (r.get("registry_id") or "").strip() in active_ids]
+    logger.info(
+        f"Active on {active_date}: {len(active_ids)} unique instances "
+        f"(filtered {len(rows)} -> {len(kept)} events for those instances' full history)"
+    )
+    return kept
+
+
 def _generate_chart(
     rows: list[dict[str, str]],
     output_path: str,
+    active_on_date: str | None = None,
 ) -> None:
-    """Generate and save the faceted distribution chart."""
+    """Generate and save the faceted distribution chart.
+
+    When active_on_date (YYYY-MM-DD) is provided, the chart shows only
+    those instances that reported at least one event on that date. The
+    title is annotated to make this explicit.
+    """
     instances = _get_latest_per_instance(rows)
     total = len(instances)
 
@@ -154,8 +224,12 @@ def _generate_chart(
     sns.set_theme(style="whitegrid")
 
     fig, axes = plt.subplots(2, 3, figsize=(FIGURE_WIDTH, FIGURE_HEIGHT))
+    if active_on_date:
+        title_suffix = f"\n(Active on {active_on_date}: {total} unique instances)"
+    else:
+        title_suffix = f"\n({total} unique instances)"
     fig.suptitle(
-        f"{CHART_TITLE}\n({total} unique instances)",
+        f"{CHART_TITLE}{title_suffix}",
         fontsize=14,
         fontweight="bold",
         y=0.98,
@@ -197,6 +271,16 @@ def main() -> None:
         required=True,
         help="Path to save the output PNG",
     )
+    parser.add_argument(
+        "--active-on-date",
+        default=None,
+        help=(
+            "Optional YYYY-MM-DD. When provided, the chart is restricted to "
+            "instances that had at least one event on that date. Use the last "
+            "complete day (typically today - 1) to get a 'who is currently "
+            "deployed' snapshot rather than 'who has ever been deployed'."
+        ),
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.csv):
@@ -209,7 +293,13 @@ def main() -> None:
         logger.error("No data in CSV file")
         raise SystemExit(1)
 
-    _generate_chart(rows, args.output)
+    if args.active_on_date:
+        rows = _filter_rows_active_on_date(rows, args.active_on_date)
+        if not rows:
+            logger.error(f"No instances active on {args.active_on_date}")
+            raise SystemExit(1)
+
+    _generate_chart(rows, args.output, active_on_date=args.active_on_date)
 
 
 if __name__ == "__main__":

@@ -178,11 +178,60 @@ class HeartbeatEvent(BaseModel):
     - Search backend usage
     - Embeddings provider
     - Instance uptime
+    - Deployment-shape fields (auth, arch, os, py, mode, registry_mode,
+      storage, federation) -- added in schema v4. Pre-v4 clients omit
+      these and the report's analyzer treats the absence as "unknown
+      auth/arch/etc" rather than mislabeling the instance.
     """
 
     event: str = Field(..., pattern="^heartbeat$")
     registry_id: str | None = Field(default=None, max_length=36, description="Registry card UUID")
     v: str = Field(..., min_length=1, max_length=200, description="Registry version")
+    # Deployment-shape fields (schema v4+). Optional because pre-v4 clients
+    # (the existing fleet) don't send them; the heartbeat schema before v4
+    # only carried runtime metrics. By accepting them here, an instance whose
+    # last startup event predates the report window can still contribute its
+    # auth/arch/etc to the analyzer instead of falling into the unknown
+    # bucket. See registry/core/telemetry.py:_build_heartbeat_payload.
+    py: str | None = Field(
+        default=None,
+        pattern=r"^\d+\.\d+$",
+        description="Python version (major.minor). Added in schema v4.",
+    )
+    os: str | None = Field(
+        default=None,
+        pattern="^(linux|darwin|windows)$",
+        description="Operating system. Added in schema v4.",
+    )
+    arch: str | None = Field(
+        default=None,
+        max_length=20,
+        description="CPU architecture. Added in schema v4.",
+    )
+    mode: str | None = Field(
+        default=None,
+        pattern="^(with-gateway|registry-only)$",
+        description="Deployment mode. Added in schema v4.",
+    )
+    registry_mode: str | None = Field(
+        default=None,
+        pattern="^(full|skills-only|mcp-servers-only|agents-only)$",
+        description="Registry operating mode. Added in schema v4.",
+    )
+    storage: str | None = Field(
+        default=None,
+        pattern="^(file|documentdb|mongodb-ce)$",
+        description="Storage backend. Added in schema v4.",
+    )
+    auth: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Auth provider. Added in schema v4.",
+    )
+    federation: bool | None = Field(
+        default=None,
+        description="Federation enabled. Added in schema v4.",
+    )
     cloud: str = Field(
         default="unknown",
         pattern="^(aws|gcp|azure|unknown)$",

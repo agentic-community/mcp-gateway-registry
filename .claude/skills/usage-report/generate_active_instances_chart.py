@@ -172,14 +172,29 @@ def _date_range(
 
 def _compute_series(
     by_day: dict[str, set[str]],
-) -> tuple[list[str], list[int], list[float | None], list[int | None]]:
-    """Compute DAI, MA7, and 7-day consistency streak series.
+) -> tuple[
+    list[str],
+    list[int],
+    list[float | None],
+    list[int | None],
+    list[int],
+    list[int],
+]:
+    """Compute DAI, MA7, S7, plus the two denominators for percentage views.
 
-    Returns a tuple of (dates, dai, ma7, streak7). ma7 and streak7 contain
-    None for the first 6 days (insufficient window).
+    Returns (dates, dai, ma7, streak7, cumulative_installs, likely_alive_7d):
+      cumulative_installs[i] = count of distinct registry_ids ever seen on
+        full_dates[0..i]. The cumulative install funnel through day i.
+      likely_alive_7d[i]      = count of distinct registry_ids that sent any
+        event in the trailing 7 days [i-6..i]. Mirrors the "Likely Alive"
+        tier from analyze_liveness.py and acts as the denominator for an
+        engagement-of-currently-active-fleet view.
+
+    ma7 and streak7 contain None for the first 6 days (insufficient window).
+    cumulative_installs and likely_alive_7d are populated for every day.
     """
     if not by_day:
-        return [], [], [], []
+        return [], [], [], [], [], []
 
     sorted_dates = sorted(by_day.keys())
     full_dates = _date_range(sorted_dates[0], sorted_dates[-1])
@@ -203,7 +218,21 @@ def _compute_series(
             common = set.intersection(*window_sets) if window_sets else set()
             streak7.append(len(common))
 
-    return full_dates, dai, ma7, streak7
+    cumulative_installs: list[int] = []
+    seen_ever: set[str] = set()
+    for i in range(len(full_dates)):
+        seen_ever.update(by_day.get(full_dates[i], set()))
+        cumulative_installs.append(len(seen_ever))
+
+    likely_alive_7d: list[int] = []
+    for i in range(len(full_dates)):
+        start_idx = max(0, i - 6)
+        union: set[str] = set()
+        for j in range(start_idx, i + 1):
+            union.update(by_day.get(full_dates[j], set()))
+        likely_alive_7d.append(len(union))
+
+    return full_dates, dai, ma7, streak7, cumulative_installs, likely_alive_7d
 
 
 def _write_csv_sidecar(
@@ -211,16 +240,39 @@ def _write_csv_sidecar(
     dai: list[int],
     ma7: list[float | None],
     streak7: list[int | None],
+    cumulative_installs: list[int],
+    likely_alive_7d: list[int],
     path: str,
 ) -> None:
-    """Write the daily series as a CSV sidecar next to the chart."""
+    """Write the daily series as a CSV sidecar next to the chart.
+
+    Columns:
+      date, daily_active, ma7, streak7,
+      cumulative_installs       -- distinct registry_ids ever seen by this day
+      dai_pct_of_total          -- DAI / cumulative_installs (engagement of full funnel)
+      likely_alive_7d           -- distinct registry_ids active in trailing 7d
+      dai_pct_of_likely_alive   -- DAI / likely_alive_7d (engagement of currently-active fleet)
+    """
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["date", "daily_active", "ma7", "streak7"])
+        w.writerow([
+            "date",
+            "daily_active",
+            "ma7",
+            "streak7",
+            "cumulative_installs",
+            "dai_pct_of_total",
+            "likely_alive_7d",
+            "dai_pct_of_likely_alive",
+        ])
         for i, d in enumerate(dates):
             ma_cell = "" if ma7[i] is None else f"{ma7[i]:.2f}"
             s_cell = "" if streak7[i] is None else str(streak7[i])
-            w.writerow([d, dai[i], ma_cell, s_cell])
+            cum = cumulative_installs[i]
+            la = likely_alive_7d[i]
+            pct_total = f"{(100.0 * dai[i] / cum):.1f}" if cum else ""
+            pct_alive = f"{(100.0 * dai[i] / la):.1f}" if la else ""
+            w.writerow([d, dai[i], ma_cell, s_cell, cum, pct_total, la, pct_alive])
     logger.info(f"CSV sidecar written to {path}")
 
 
@@ -322,7 +374,7 @@ def main() -> None:
     unique_rows = _dedupe_by_id_ts(all_rows)
     by_day = _build_daily_index(unique_rows, internal_ids, args.exclude_incomplete_day)
 
-    dates, dai, ma7, streak7 = _compute_series(by_day)
+    dates, dai, ma7, streak7, cumulative, likely_alive = _compute_series(by_day)
     if not dates:
         logger.error("No customer events found after filtering")
         raise SystemExit(1)
@@ -330,7 +382,9 @@ def main() -> None:
     _generate_chart(dates, dai, ma7, streak7, args.output)
 
     if args.csv_out:
-        _write_csv_sidecar(dates, dai, ma7, streak7, args.csv_out)
+        _write_csv_sidecar(
+            dates, dai, ma7, streak7, cumulative, likely_alive, args.csv_out
+        )
 
 
 if __name__ == "__main__":

@@ -887,7 +887,7 @@ class TestEmbeddingsTelemetryFields:
 
             assert payload["embeddings_provider"] == "litellm"
             assert payload["embeddings_backend_kind"] == "bedrock"
-            assert payload["schema_version"] == "3"
+            assert payload["schema_version"] == "4"
 
     @pytest.mark.asyncio
     async def test_startup_payload_omits_raw_model_name_and_dimensions(self):
@@ -956,6 +956,13 @@ class TestEmbeddingsTelemetryFields:
             mock_settings.embeddings_provider = "sentence-transformers"
             mock_settings.embeddings_model_name = "all-MiniLM-L6-v2"
             mock_settings.embeddings_model_dimensions = 384
+            # Deployment-shape fields the v4 heartbeat payload now reads.
+            # Without these the payload would contain MagicMock objects and
+            # fail json.dumps below.
+            mock_settings.deployment_mode = MagicMock(value="with-gateway")
+            mock_settings.registry_mode = MagicMock(value="full")
+            mock_settings.auth_provider = "keycloak"
+            mock_settings.federation_static_token_auth_enabled = False
 
             # Mock repository methods
             for repo_mock in (mock_server_repo, mock_agent_repo, mock_skill_repo):
@@ -970,7 +977,12 @@ class TestEmbeddingsTelemetryFields:
 
             assert payload["embeddings_provider"] == "sentence-transformers"
             assert payload["embeddings_backend_kind"] == "sentence-transformers"
-            assert payload["schema_version"] == "3"
+            assert payload["schema_version"] == "4"
+            # New v4 deployment-shape fields surface on heartbeat too.
+            assert payload["auth"] == "keycloak"
+            assert payload["mode"] == "with-gateway"
+            assert payload["storage"] == "documentdb"
+            assert payload["federation"] is False
 
             # Privacy assertions
             assert "embeddings_model_name" not in payload

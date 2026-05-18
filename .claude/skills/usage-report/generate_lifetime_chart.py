@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 CHART_TITLE: str = "AI Registry -- Instance Lifetime Distribution"
-FIGURE_WIDTH: int = 12
+FIGURE_WIDTH: int = 16
 FIGURE_HEIGHT: int = 6
 
 
@@ -53,11 +53,11 @@ def _generate_chart(
     """Generate and save the lifetime density chart."""
     sns.set_theme(style="whitegrid")
 
-    fig, (ax_hist, ax_bar) = plt.subplots(
+    fig, (ax_hist, ax_box, ax_bar) = plt.subplots(
         1,
-        2,
+        3,
         figsize=(FIGURE_WIDTH, FIGURE_HEIGHT),
-        gridspec_kw={"width_ratios": [3, 2]},
+        gridspec_kw={"width_ratios": [3, 1, 2]},
     )
 
     fig.suptitle(
@@ -125,6 +125,53 @@ def _generate_chart(
         horizontalalignment="right",
         bbox={"boxstyle": "round,pad=0.5", "facecolor": "wheat", "alpha": 0.8},
     )
+
+    # Middle panel: boxplot of instance ages
+    box_color = sns.color_palette("Blues_d")[2]
+    sns.boxplot(
+        y=ages,
+        ax=ax_box,
+        color=box_color,
+        width=0.5,
+        fliersize=4,
+    )
+    # Overlay individual points so the cluster at 0 is visible
+    sns.stripplot(
+        y=ages,
+        ax=ax_box,
+        color=sns.color_palette("deep")[3],
+        size=2.5,
+        alpha=0.4,
+        jitter=0.15,
+    )
+
+    # Quartile annotations
+    if ages:
+        sorted_ages = sorted(ages)
+        n = len(sorted_ages)
+        median = sorted_ages[n // 2] if n % 2 else (sorted_ages[n // 2 - 1] + sorted_ages[n // 2]) / 2
+        q1 = sorted_ages[n // 4]
+        q3 = sorted_ages[(3 * n) // 4]
+        box_stats = (
+            f"Q1: {q1} d\n"
+            f"Median: {median:.1f} d\n"
+            f"Q3: {q3} d\n"
+            f"Max: {max_age} d"
+        )
+        ax_box.text(
+            0.95,
+            0.97,
+            box_stats,
+            transform=ax_box.transAxes,
+            fontsize=9,
+            verticalalignment="top",
+            horizontalalignment="right",
+            bbox={"boxstyle": "round,pad=0.4", "facecolor": "wheat", "alpha": 0.8},
+        )
+
+    ax_box.set_ylabel("Instance Age (days)", fontsize=11)
+    ax_box.set_title("Age Spread", fontsize=12, fontweight="bold")
+    ax_box.set_xticks([])
 
     # Right panel: horizontal bar showing age buckets
     buckets = {

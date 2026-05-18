@@ -129,16 +129,58 @@ def _compute_stickiness(
     instance_lifetime: list[dict],
     internal_ids: set[str],
 ) -> dict:
-    """Compute stickiness metrics: 3+ day non-internal instances and longest-running."""
+    """Compute stickiness metrics for the customer (non-internal) fleet.
+
+    Returns:
+      sticky_3plus_days: count of instances with age_days >= 3 (legacy)
+      one_day_wonders / one_day_wonder_pct: instances seen on exactly one
+        calendar day, never seen again
+      lifetime_bucket_counts / lifetime_bucket_pct: nested dict with the
+        thresholds 3, 7, 14, 30 -> count and pct of customers whose
+        age_days >= threshold. Used to track the customer-retention curve
+        over time.
+      longest_non_internal_*: the customer instance with the largest
+        age_days value
+    """
     non_internal = [
         inst for inst in instance_lifetime if not _is_internal(inst["registry_id"], internal_ids)
     ]
     sticky = [inst for inst in non_internal if inst["age_days"] >= 3]
+    # One-day wonders: customer instances whose first_seen and last_seen fall on
+    # the same calendar day (age_days == 0). These represent "tried it once and
+    # never came back" deployments and are worth tracking as a leading
+    # indicator of evaluation-to-persistence conversion.
+    one_day_wonders = [inst for inst in non_internal if inst["age_days"] == 0]
+    total_non_internal = len(non_internal)
+    one_day_wonder_pct = (
+        round(100.0 * len(one_day_wonders) / total_non_internal, 1)
+        if total_non_internal
+        else 0.0
+    )
+    # Lifetime buckets (cumulative thresholds): for each threshold, what
+    # share of customer instances have an age_days >= that threshold? These
+    # form the survival curve we want to chart over time. Capped at >= 30
+    # days (no separate ">30" bucket).
+    lifetime_thresholds = [3, 7, 14, 30]
+    lifetime_bucket_counts = {
+        threshold: sum(1 for inst in non_internal if inst["age_days"] >= threshold)
+        for threshold in lifetime_thresholds
+    }
+    lifetime_bucket_pct = {
+        threshold: (
+            round(100.0 * count / total_non_internal, 1) if total_non_internal else 0.0
+        )
+        for threshold, count in lifetime_bucket_counts.items()
+    }
     longest = max(non_internal, key=lambda x: x["age_days"]) if non_internal else None
 
     return {
         "sticky_3plus_days": len(sticky),
-        "total_non_internal": len(non_internal),
+        "total_non_internal": total_non_internal,
+        "one_day_wonders": len(one_day_wonders),
+        "one_day_wonder_pct": one_day_wonder_pct,
+        "lifetime_bucket_counts": lifetime_bucket_counts,
+        "lifetime_bucket_pct": lifetime_bucket_pct,
         "longest_non_internal_id": longest["registry_id"] if longest else None,
         "longest_non_internal_days": longest["age_days"] if longest else 0,
     }
@@ -737,6 +779,7 @@ def _build_exec_summary_md(
     current_cloud_installs: dict[str, int],
     previous_cloud_installs: dict[str, int] | None,
     cloud_last_event: dict[str, dict[str, str]] | None = None,
+    stickiness: dict | None = None,
 ) -> str:
     """Build the executive summary markdown section with comparison."""
     lines = []
@@ -779,6 +822,22 @@ def _build_exec_summary_md(
             f"{curr['latest_ts'][:10]}."
         )
     lines.append("")
+
+    # One-day-wonder line: customers who tried it once and never came back.
+    # Always render this when stickiness data is available, regardless of
+    # whether there is a previous report to compare against.
+    if stickiness and stickiness.get("total_non_internal", 0) > 0:
+        odw_count = stickiness.get("one_day_wonders", 0)
+        odw_pct = stickiness.get("one_day_wonder_pct", 0.0)
+        odw_total = stickiness.get("total_non_internal", 0)
+        lines.append(
+            f"**{odw_pct}% of customer instances ({odw_count} of {odw_total}) "
+            f"are one-day wonders** -- their startup or heartbeat events fall "
+            f"on a single calendar day and that registry_id is never seen "
+            f"again. These represent operators trying out the solution once, "
+            f"out of curiosity, and not coming back."
+        )
+        lines.append("")
 
     if previous_metrics is None:
         lines.append("*No previous report available for comparison.*")
@@ -979,6 +1038,13 @@ def _compute_instance_table(
         first_ts = events[0].get("ts", "")[:10]
         latest_ts = events[-1].get("ts", "")[:10]
 
+        # auth: heartbeat events don't carry the field, so picking
+        # latest.get("auth") would be empty for any instance whose latest
+        # event is a heartbeat -- mislabeling 80%+ of customers as "none"
+        # auth provider when really we just lack the field on that event.
+        # Use _latest_nonempty to walk back to the most recent startup event.
+        auth = _latest_nonempty(events, "auth")
+
         result.append(
             {
                 "registry_id": rid[:12] + "...",
@@ -987,7 +1053,7 @@ def _compute_instance_table(
                 "cloud_detection_method": cloud_detection_method,
                 "compute": latest.get("compute") or "unknown",
                 "storage": latest.get("storage") or "unknown",
-                "auth": latest.get("auth") or "none",
+                "auth": auth,
                 "federation": latest.get("federation", "").strip().lower() == "true",
                 "arch": latest.get("arch") or "unknown",
                 "mode": latest.get("mode") or "unknown",
@@ -1017,6 +1083,9 @@ def _compute_unidentified_profiles(
     unidentified = [r for r in rows if not r.get("registry_id", "").strip()]
 
     # Group by (cloud, compute, arch, storage, auth, mode)
+    # Note: heartbeat events don't carry the `auth` field, so an empty
+    # auth here means "we don't know" not "no auth provider configured".
+    # Use "unknown" rather than "none" so we don't mislabel.
     profiles = defaultdict(list)
     for row in unidentified:
         key = (
@@ -1024,7 +1093,7 @@ def _compute_unidentified_profiles(
             row.get("compute") or "unknown",
             row.get("arch") or "unknown",
             row.get("storage") or "unknown",
-            row.get("auth") or "none",
+            row.get("auth") or "unknown",
             row.get("mode") or "unknown",
         )
         profiles[key].append(row)
@@ -1781,6 +1850,10 @@ def main() -> None:
         if previous_metrics:
             previous_cloud_installs = previous_metrics.get("per_cloud_unique_installs", None)
 
+    # Compute stickiness BEFORE the exec-summary build so the one-day-wonder
+    # line can be emitted in the lead paragraph.
+    stickiness = _compute_stickiness(instance_lifetime, internal_ids)
+
     # Build executive summary
     exec_summary_md = _build_exec_summary_md(
         metrics,
@@ -1788,9 +1861,8 @@ def main() -> None:
         cloud_installs,
         previous_cloud_installs,
         cloud_last_event=cloud_last_event,
+        stickiness=stickiness,
     )
-
-    stickiness = _compute_stickiness(instance_lifetime, internal_ids)
 
     upgrade_trajectories = _compute_upgrade_trajectories(rows, internal_ids)
 

@@ -82,15 +82,26 @@ First, ensure matplotlib and seaborn are available on the system Python:
 /usr/bin/python3 -c "import matplotlib, seaborn" 2>/dev/null || pip install --break-system-packages matplotlib seaborn
 ```
 
-Then generate the **instance-based** deployment distribution chart (counts unique registry instances, not events):
+Then generate the **instance-based** deployment distribution chart (counts unique registry instances, not events). Run it twice -- once for the cumulative install base, once filtered to the previous complete day -- so the report can show "everyone who ever installed" alongside "who is running it right now":
 
 ```bash
+# Cumulative -- all customers ever
 /usr/bin/python3 .claude/skills/usage-report/generate_instance_distribution_chart.py \
   --csv $DATE_DIR/registry_metrics.csv \
   --output $DATE_DIR/instance-distribution-YYYY-MM-DD.png
+
+# Active-yesterday -- only customers that reported on the last complete day.
+# Pass YYYY-MM-DD - 1 (the previous day relative to report date) so today's
+# partial-day undercount doesn't bias the picture.
+/usr/bin/python3 .claude/skills/usage-report/generate_instance_distribution_chart.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output $DATE_DIR/instance-distribution-active-PREVIOUS-YYYY-MM-DD.png \
+  --active-on-date PREVIOUS-YYYY-MM-DD
 ```
 
-This produces a single faceted PNG with 6 subplots: Cloud Provider, Compute Platform, Storage Backend, Auth Provider, Architecture, and Deployment Mode. Each subplot shows unique instance counts and percentages.
+Each invocation produces a faceted PNG with 6 subplots: Cloud Provider, Compute Platform, Storage Backend, Auth Provider, Architecture, and Deployment Mode. Each subplot shows unique instance counts and percentages. The `--active-on-date` form filters the row set to instances that had at least one event on the given date (heartbeat or startup), then runs the same six-panel breakdown on that subset; the chart title is annotated to make the filter explicit.
+
+In the report, embed both PNGs in the "Deployment Distribution (by Unique Instances)" section and add a short narrative pointing out where the two views diverge -- typically the active-yesterday view shifts toward Kubernetes (vs Docker), enterprise IdP (vs the long-tail), and AWS dominance.
 
 ### Step 5b: Generate Timeseries Chart
 
@@ -139,11 +150,27 @@ Generate a density plot showing the distribution of instance lifetimes (age in d
   --output $DATE_DIR/instance-lifetime-YYYY-MM-DD.png
 ```
 
-This produces a PNG with two panels:
+This produces a PNG with three panels:
 - **Age Distribution** -- histogram with KDE density overlay showing instance ages in days, with stats annotation (mean, max, multi-day vs single-day counts)
+- **Age Spread** -- boxplot with Q1/median/Q3/max annotated and individual points overlaid, useful for spotting outliers and the long-tail of long-lived deployments
 - **Age Buckets** -- horizontal bar chart grouping instances into age ranges (0 days, 1-2 days, 3-5 days, etc.) with counts and percentages
 
 **Note**: Run this after Step 6 (telemetry analysis) since it reads the metrics JSON.
+
+### Step 5c-ts: Generate Lifetime-Bucket Retention Chart
+
+Plot per-snapshot **lifetime retention percentages** (one-day wonders vs >=3 / >=7 / >=14 / >=30 day cohorts) over time. Reads every `metrics-*.json` file under the base output directory and recomputes the buckets retroactively, so it works on snapshots that predate the `lifetime_bucket_pct` field. Produces a PNG plus a per-snapshot CSV sidecar that future reports can diff against.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_lifetime_buckets_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/lifetime-buckets-YYYY-MM-DD.png \
+  --csv-out $DATE_DIR/lifetime-buckets-YYYY-MM-DD.csv
+```
+
+Embed the chart in the report directly below the Registry Instance Lifetime section, alongside a narrative that quotes the latest CSV row (the report-date snapshot) and contrasts it with the earliest snapshot to show whether the customer-retention curve is improving over time.
+
+**Note**: Run this after Step 6 since it depends on `instance_lifetime` + `internal_instance_ids` keys in `metrics-*.json`.
 
 ### Step 5c2: Generate Customer-Active-Instances Chart
 
@@ -154,6 +181,12 @@ Generate a chart of customer engagement over time, with three overlaid series:
 - **7-day consistency streak (S7)** -- unique `registry_id`s that sent at least one event on EACH of the 7 days in the window `[D-6..D]`.
 
 Customer-only: internal instances loaded from `known-internal-instances.md` are excluded so the numbers align with the Liveness section (which is also customer-only). A CSV sidecar of the per-day values is written alongside the PNG so the report narrative can quote exact numbers and future reports can diff against it.
+
+The CSV also includes two **DAI percentage** columns derived from the same per-day registry-id sets:
+- `cumulative_installs`, `dai_pct_of_total` -- DAI / cumulative_installs through that day; the engagement rate of the full install funnel ever recorded
+- `likely_alive_7d`, `dai_pct_of_likely_alive` -- DAI / unique-active-in-trailing-7d; the engagement rate of the currently-active fleet (analog of a DAU/WAU ratio)
+
+Both percentages should be quoted side-by-side in the report's "DAI as a percentage of total installs" subsection so the reader sees the funnel-engagement number (low, because of one-day wonders) and the active-fleet engagement number (the healthier B2B-style read) together.
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/generate_active_instances_chart.py \
@@ -349,12 +382,17 @@ Lead with new installs since last report, total unique installs, dominant cloud/
 
 Include an **instance stickiness** line: "N instances have been running for 3+ days (up/down from M in the previous report). The longest-running non-internal instance is `REGISTRY_ID` at D days (previously P days)." This signals real adoption beyond one-time trials.
 
+Include a **one-day-wonder** line. The exec-summary builder in `analyze_telemetry.py` already emits this sentence automatically when `stickiness` is supplied: e.g. "59.8% of customer instances (277 of 463) are one-day wonders -- their startup or heartbeat events fall on a single calendar day and that registry_id is never seen again. These represent operators trying out the solution once, out of curiosity, and not coming back." Compare against the previous report's `stickiness.one_day_wonder_pct` to show the trend (the goal is to drive this number down).
+
 These numbers are pre-computed by `analyze_telemetry.py` (when `--internal-instances` is provided) and available in `metrics-YYYY-MM-DD.json` under the `stickiness` key:
 - `stickiness.sticky_3plus_days`: count of non-internal instances where age_days >= 3
+- `stickiness.one_day_wonders`: count of non-internal instances with age_days == 0
+- `stickiness.one_day_wonder_pct`: percentage form of the above
+- `stickiness.lifetime_bucket_counts` / `lifetime_bucket_pct`: cumulative thresholds at 3, 7, 14, 30 days; both the count and pct of customers whose age_days is at least each threshold (the customer survival curve)
 - `stickiness.longest_non_internal_id`: registry_id with max age_days (filtered)
 - `stickiness.longest_non_internal_days`: max age_days value
 
-Compare both numbers against the same `stickiness` values from the previous report's `metrics-*.json`.
+Compare these against the same `stickiness` values from the previous report's `metrics-*.json`.
 
 ![Registry Installs Timeseries](registry-installs-timeseries-YYYY-MM-DD.png)
 

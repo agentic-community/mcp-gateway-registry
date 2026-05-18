@@ -69,13 +69,29 @@ STARTUP_COLUMNS = [
     "source_ip_hash",
 ]
 
-# Column order for heartbeat events
+# Column order for heartbeat events.
+#
+# Schema v4+ (registry v1.24.0+) adds the deployment-shape fields
+# (py/os/arch/mode/registry_mode/storage/auth/federation) to heartbeat
+# payloads so long-lived instances whose original startup event predates
+# the report window can still contribute that metadata. Pre-v4 clients
+# leave these blank in the CSV (the export uses extrasaction="ignore"
+# but Pydantic emits None for unset optional fields, so the column
+# header is always present).
 HEARTBEAT_COLUMNS = [
     "event",
     "registry_id",
     "v",
+    "py",
+    "os",
+    "arch",
     "cloud",
     "compute",
+    "mode",
+    "registry_mode",
+    "storage",
+    "auth",
+    "federation",
     "servers_count",
     "agents_count",
     "skills_count",

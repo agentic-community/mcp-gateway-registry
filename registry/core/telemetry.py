@@ -581,7 +581,7 @@ async def _build_startup_payload() -> dict:
 
     return {
         "event": "startup",
-        "schema_version": "3",
+        "schema_version": "4",
         "registry_id": registry_id,
         "v": __version__,
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
@@ -670,9 +670,22 @@ async def _build_heartbeat_payload() -> dict:
 
     return {
         "event": "heartbeat",
-        "schema_version": "3",
+        "schema_version": "4",
         "registry_id": registry_id,
         "v": __version__,
+        # Deployment-shape fields (schema v4+). Carrying them on every
+        # heartbeat lets the analyzer attribute auth/arch/etc to long-lived
+        # instances whose original startup event predates the report
+        # collection window. Without this, those instances fall into the
+        # "unknown" bucket on the report's auth and architecture panels.
+        "py": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "os": platform.system().lower(),
+        "arch": platform.machine(),
+        "mode": settings.deployment_mode.value,
+        "registry_mode": settings.registry_mode.value,
+        "storage": settings.storage_backend,
+        "auth": settings.auth_provider,
+        "federation": settings.federation_static_token_auth_enabled,
         "cloud": cloud,
         "cloud_detection_method": detection_method,
         "compute": _detect_compute_platform(),

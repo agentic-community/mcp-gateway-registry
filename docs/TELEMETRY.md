@@ -75,10 +75,14 @@ Host: m3ijrhd020.execute-api.us-east-1.amazonaws.com
 Content-Type: application/json
 X-Telemetry-Signature: 5b7e1a...d4f2c3
 
-{"agents_count":8,"cloud":"aws","compute":"ecs","embeddings_backend_kind":"sentence-transformers","embeddings_provider":"sentence-transformers","event":"heartbeat","peers_count":2,"registry_id":"c546a650-8af9-4721-9efb-7df221b2a0d9","schema_version":"2","search_backend":"documentdb","search_queries_1h":3,"search_queries_24h":12,"search_queries_total":150,"servers_count":15,"skills_count":23,"ts":"2026-03-18T12:00:00+00:00","uptime_hours":48,"v":"1.0.22"}
+{"agents_count":8,"arch":"x86_64","auth":"keycloak","cloud":"aws","compute":"ecs","embeddings_backend_kind":"sentence-transformers","embeddings_provider":"sentence-transformers","event":"heartbeat","federation":true,"mode":"with-gateway","os":"linux","peers_count":2,"py":"3.12","registry_id":"c546a650-8af9-4721-9efb-7df221b2a0d9","registry_mode":"full","schema_version":"4","search_backend":"documentdb","search_queries_1h":3,"search_queries_24h":12,"search_queries_total":150,"servers_count":15,"skills_count":23,"storage":"documentdb","ts":"2026-03-18T12:00:00+00:00","uptime_hours":48,"v":"1.0.22"}
 ```
 
-Registries running versions earlier than v1.0.22 emit `schema_version":"1"` events without `embeddings_backend_kind`. The collector accepts both versions.
+Schema versions:
+- `"1"` (pre-v1.0.22): no `embeddings_backend_kind`
+- `"2"` (v1.0.22+): adds `embeddings_backend_kind`
+- `"3"` (v1.23.0+): adds `cloud_detection_method`
+- `"4"` (this version): adds `auth`, `arch`, `os`, `py`, `mode`, `registry_mode`, `storage`, `federation` to **heartbeat** events. Startup payload shape is unchanged from v3 -- the bump just signals to downstream tooling that heartbeats now carry the same deployment-shape fields. The collector accepts all four versions.
 
 Notes:
 - JSON body keys are sorted alphabetically (`sort_keys=True`) and compact (`separators=(",",":")`) for deterministic HMAC computation

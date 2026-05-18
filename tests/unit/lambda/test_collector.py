@@ -239,6 +239,41 @@ class TestSchemas:
         with pytest.raises(ValidationError):
             StartupEvent(**payload)
 
+    # ---- Schema v4 deployment-shape fields on heartbeat events ----
+
+    def test_heartbeat_accepts_v4_payload_with_deployment_shape(self):
+        """Schema v4 heartbeat carries auth/arch/os/py/mode/registry_mode/storage/federation."""
+        payload = self._v2_heartbeat_payload()
+        payload["schema_version"] = "4"
+        payload["py"] = "3.12"
+        payload["os"] = "linux"
+        payload["arch"] = "x86_64"
+        payload["mode"] = "with-gateway"
+        payload["registry_mode"] = "full"
+        payload["storage"] = "documentdb"
+        payload["auth"] = "keycloak"
+        payload["federation"] = True
+        event = HeartbeatEvent(**payload)
+        assert event.auth == "keycloak"
+        assert event.arch == "x86_64"
+        assert event.federation is True
+        assert event.mode == "with-gateway"
+
+    def test_heartbeat_v4_fields_are_optional(self):
+        """Pre-v4 clients omit the new fields; the schema must still accept them."""
+        event = HeartbeatEvent(**self._v2_heartbeat_payload())
+        assert event.auth is None
+        assert event.arch is None
+        assert event.federation is None
+
+    def test_heartbeat_rejects_invalid_auth_storage(self):
+        """v4 fields are still validated when present (storage pattern, etc)."""
+        payload = self._v2_heartbeat_payload()
+        payload["schema_version"] = "4"
+        payload["storage"] = "redis"  # not in the allowed pattern
+        with pytest.raises(ValidationError):
+            HeartbeatEvent(**payload)
+
 
 class TestIPHashing:
     """Test IP hashing for privacy-preserving rate limiting."""
