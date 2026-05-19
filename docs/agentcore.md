@@ -36,7 +36,7 @@ uv run python -m cli.agentcore list
 ```
 
 The sync command:
-1. Discovers all READY gateways and runtimes via AWS Bedrock AgentCore API
+1. Discovers all READY gateways and runtimes via the Amazon Bedrock AgentCore API
 2. Registers each gateway as an MCP Server and each runtime as an MCP Server (protocol=MCP) or A2A Agent (protocol=HTTP/A2A)
 3. Writes `token_refresh_manifest.json` listing all CUSTOM_JWT gateways that need token refresh
 
@@ -64,6 +64,8 @@ Secret resolution priority:
 2. Cognito auto-retrieval via AWS API (Cognito only)
 3. Vendor-specific env var: `AUTH0_CLIENT_SECRET`, etc.
 
+**Microsoft Entra gateways** also need an `allowedAudience` configured on the AgentCore gateway's `customJWTAuthorizer`. The token refresher automatically derives the OAuth2 `scope` parameter as `<allowedAudience>/.default`, which Entra requires for the `client_credentials` grant. If `allowedAudience` is empty, the token request will fail with `AADSTS900144: scope is required`.
+
 ### Step 3: Run Token Refresher
 
 The token refresher reads the manifest, resolves secrets, fetches OAuth2 tokens, PATCHes them into the registry, and triggers a security rescan for each updated server (enabled by default, requires admin privileges on the registry token):
@@ -83,15 +85,28 @@ uv run python -m cli.agentcore.token_refresher \
     --loop --interval 2700
 ```
 
-Or set up a cron job:
+Or set up a cron job. Cron does not support shell line continuations, so the entire command must be on a single line. The cleanest pattern is a small wrapper script invoked from the crontab:
 
 ```bash
-# Refresh every 45 minutes (tokens typically expire in 60 min)
-*/45 * * * * cd /app && uv run python -m cli.agentcore.token_refresher \
+# /usr/local/bin/refresh-agentcore-tokens.sh
+#!/bin/bash
+cd /app
+uv run python -m cli.agentcore.token_refresher \
     --manifest token_refresh_manifest.json \
     --registry-url https://registry.example.com \
-    --token-file .token \
-    >> /var/log/token-refresher.log 2>&1
+    --token-file .token
+```
+
+```cron
+# /etc/cron.d/agentcore-token-refresher
+# Refresh every 45 minutes (tokens typically expire in 60 min)
+*/45 * * * * root /usr/local/bin/refresh-agentcore-tokens.sh >> /var/log/token-refresher.log 2>&1
+```
+
+If you prefer to inline the command, keep it on one physical line:
+
+```cron
+*/45 * * * * root cd /app && uv run python -m cli.agentcore.token_refresher --manifest token_refresh_manifest.json --registry-url https://registry.example.com --token-file .token >> /var/log/token-refresher.log 2>&1
 ```
 
 ### Scanner CLI Reference
@@ -185,6 +200,7 @@ uv run python -m cli.agentcore.token_refresher \
 # Enable debug logging
 uv run python -m cli.agentcore.token_refresher \
     --manifest token_refresh_manifest.json \
+    --registry-url https://registry.example.com \
     --token-file .token \
     --debug
 ```
@@ -320,7 +336,7 @@ This approach is useful when:
 ### How It Works
 
 1. **Create a JSON config file** describing the gateway or agent (path, proxy URL, auth scheme, tags, tool list)
-2. **Register with the CLI**: `./cli/service_mgmt.sh add gateway-config.json`
+2. **Register with the CLI**: `./cli/service_mgmt.sh add gateway-config.json` (this script prints a deprecation banner pointing to `api/registry_management.py register`; the banner is informational and the `add` command still works)
 3. **Provide a JWT token** when calling the gateway -- the IdP does not matter, just provide a valid bearer token at call time via `--token-file`
 4. **Refresh the token** when it expires -- how you obtain the token is up to you (curl, SDK, script)
 
@@ -338,11 +354,9 @@ The identity provider is irrelevant for manual registration. The registry uses p
   "auth_scheme": "bearer",
   "supported_transports": ["streamable-http"],
   "tags": ["bedrock", "agentcore", "customer-support"],
-  "headers": [
-    {
-      "Authorization": "Bearer $CUSTOMER_SUPPORT_AUTH_TOKEN"
-    }
-  ],
+  "headers": {
+    "Authorization": "Bearer REPLACE_WITH_VALID_JWT"
+  },
   "num_tools": 2,
   "is_python": false,
   "tool_list": [
@@ -372,6 +386,7 @@ The identity provider is irrelevant for manual registration. The registry uses p
 | `auth_provider` | Set to `bedrock-agentcore` for passthrough authentication -- the registry forwards the bearer token without validating it |
 | `tags` | Searchable tags used by `intelligent_tool_finder` for hybrid search (semantic + tag-based) |
 | `tool_list` | Tool definitions with names, descriptions, and JSON schemas. Enables the registry to catalog tools for dynamic discovery by AI agents |
+| `headers` | Optional JSON object of header name -> value pairs used for the security scan and as defaults for the registered service. Replace `REPLACE_WITH_VALID_JWT` with a real bearer token before registering -- shell-style `$VAR` references inside the JSON file are not expanded |
 
 ### Register and Call
 

@@ -231,10 +231,52 @@ def _get_token_endpoint(
         return None
 
 
+def _build_scope(
+    idp_vendor: str,
+    allowed_audience: str | list[str] | None,
+) -> str | None:
+    """Derive the OAuth2 ``scope`` parameter for the token request.
+
+    Microsoft Entra requires ``scope=<audience>/.default`` on the
+    client_credentials grant; without it Entra returns
+    ``AADSTS900144: scope is required``. Other vendors (Cognito, Auth0,
+    Okta, Keycloak) do not require a scope for client_credentials and
+    will work with ``None``.
+
+    Args:
+        idp_vendor: Detected IdP vendor name.
+        allowed_audience: ``allowedAudience`` from the gateway's
+            customJWTAuthorizer config -- string or list-of-strings.
+
+    Returns:
+        Scope string to send in the token request, or None to omit it.
+    """
+    if idp_vendor != "entra":
+        return None
+
+    audience: str | None = None
+    if isinstance(allowed_audience, str):
+        audience = allowed_audience
+    elif isinstance(allowed_audience, list) and allowed_audience:
+        audience = allowed_audience[0]
+
+    if not audience:
+        logger.warning(
+            "Entra gateway has no allowedAudience -- token request will likely fail "
+            "(Entra requires scope=<audience>/.default for client_credentials)"
+        )
+        return None
+
+    if audience.endswith("/.default"):
+        return audience
+    return f"{audience.rstrip('/')}/.default"
+
+
 def _request_token(
     token_endpoint: str,
     client_id: str,
     client_secret: str,
+    scope: str | None = None,
 ) -> str | None:
     """Request access token via OAuth2 client_credentials grant.
 
@@ -242,19 +284,25 @@ def _request_token(
         token_endpoint: OAuth2 token endpoint URL.
         client_id: OAuth2 client ID.
         client_secret: OAuth2 client secret.
+        scope: Optional OAuth2 scope parameter. Required for Entra
+            (``<audience>/.default``); omitted for other vendors.
 
     Returns:
         Access token string, or None on failure.
     """
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    if scope:
+        data["scope"] = scope
+
     try:
         response = requests.post(
             token_endpoint,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
+            data=data,
             timeout=TOKEN_REQUEST_TIMEOUT,
         )
         response.raise_for_status()
@@ -478,8 +526,9 @@ def refresh_all(
             failure_count += 1
             continue
 
-        # Step 3: Request token
-        token = _request_token(token_endpoint, client_id, client_secret)
+        # Step 3: Request token (Entra requires scope=<audience>/.default)
+        scope = _build_scope(idp_vendor, entry.get("allowed_audience"))
+        token = _request_token(token_endpoint, client_id, client_secret, scope=scope)
         if not token:
             failure_count += 1
             continue
@@ -528,6 +577,16 @@ def refresh_all(
 
 def main() -> None:
     """Parse arguments and run token refresh."""
+    # Load .env before anything reads os.environ so OAUTH_CLIENT_SECRET_*,
+    # AUTH0_CLIENT_SECRET, OKTA_CLIENT_SECRET, etc. resolve from the project
+    # .env file without requiring the caller to export them.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
     parser = argparse.ArgumentParser(
         description="Refresh auth tokens for AgentCore CUSTOM_JWT gateways",
         formatter_class=argparse.RawDescriptionHelpFormatter,

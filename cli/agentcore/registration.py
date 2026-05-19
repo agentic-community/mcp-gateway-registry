@@ -294,6 +294,10 @@ class RegistrationBuilder:
         if protocol == "A2A":
             tags.append("a2a")
 
+        # Registry AgentCreate requires supported_protocol with values "a2a" or "other".
+        # Map AgentCore serverProtocol -> registry supported_protocol.
+        supported_protocol = "a2a" if protocol == "A2A" else "other"
+
         return AgentRegistration(
             name=display,
             description=runtime.get("description", f"AgentCore Agent: {display}"),
@@ -301,6 +305,7 @@ class RegistrationBuilder:
             path=path,
             version="1.0.0",
             tags=tags,
+            supported_protocol=supported_protocol,
             # Agent validator accepts: public, private, group-restricted (not "internal").
             # MCP Servers use "internal" but A2A Agents use "public" as the default,
             # so we map "internal" -> "public" for Agent registrations.
@@ -487,6 +492,14 @@ class SyncOrchestrator:
                 "gateway_arn": gateway.get("gatewayArn", ""),
                 "discovery_url": discovery_url,
                 "allowed_clients": jwt_config.get("allowedClients", []),
+                # AgentCore returns either ``allowedAudience`` (singular) or
+                # ``allowedAudiences`` depending on the API version. Capture
+                # whichever is present so the token refresher can derive the
+                # OAuth2 ``scope`` value (Entra requires ``<aud>/.default``).
+                "allowed_audience": (
+                    jwt_config.get("allowedAudience")
+                    or jwt_config.get("allowedAudiences", [])
+                ),
                 "idp_vendor": _detect_idp_vendor(discovery_url),
             }
         )
