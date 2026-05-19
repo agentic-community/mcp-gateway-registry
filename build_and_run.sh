@@ -562,7 +562,7 @@ for service in $METRICS_SERVICES; do
     fi
     
     # Get current value
-    CURRENT_VALUE=$(eval echo "\$$ENV_VAR_NAME")
+    CURRENT_VALUE=$(eval echo "\${$ENV_VAR_NAME:-}")
     
     # Generate token only if it doesn't exist or is empty
     if [ -z "$CURRENT_VALUE" ] || [ "$CURRENT_VALUE" = "" ]; then
