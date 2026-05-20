@@ -14,6 +14,8 @@
 # Optional flags (override env-var defaults; flag wins over env):
 #   --token-file PATH    JWT token file. Default: $STRESS_TOKEN_FILE or .token.
 #   --base-url URL       Registry base URL. Default: $STRESS_BASE_URL or http://localhost.
+#   --skip-generate      Skip payload generation (step 1/3), go straight to registration.
+#                        Use when the data files already exist from a previous run.
 #
 # The storage backend (mongodb-ce, documentdb, etc.) is auto-detected from the
 # registry's GET /api/stats endpoint. No need to specify it manually.
@@ -62,6 +64,7 @@ fi
 # Flag overrides for token file and base URL. CLI takes precedence over env.
 TOKEN_FILE_FLAG=""
 BASE_URL_FLAG=""
+SKIP_GENERATE=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --token-file)
@@ -78,6 +81,10 @@ while [ $# -gt 0 ]; do
       ;;
     --base-url=*)
       BASE_URL_FLAG="${1#--base-url=}"
+      shift
+      ;;
+    --skip-generate)
+      SKIP_GENERATE=true
       shift
       ;;
     *)
@@ -216,15 +223,19 @@ echo "Detected backend: $BACKEND"
 # Run.
 # ---------------------------------------------------------------------------
 
-echo "[1/3] Generating data (size=$SIZE, entity-type=$ENTITY_TYPE)..."
-if [ "$ENTITY_TYPE" = "all" ] || [ "$ENTITY_TYPE" = "servers" ]; then
-  uv run python -m tests.stress.generators.generate_servers --count "$SIZE"
-fi
-if [ "$ENTITY_TYPE" = "all" ] || [ "$ENTITY_TYPE" = "agents" ]; then
-  uv run python -m tests.stress.generators.generate_agents --count "$SIZE"
-fi
-if [ "$ENTITY_TYPE" = "all" ] || [ "$ENTITY_TYPE" = "skills" ]; then
-  uv run python -m tests.stress.generators.generate_skills --count "$SIZE"
+if [ "$SKIP_GENERATE" = true ]; then
+  echo "[1/3] Skipping generation (--skip-generate). Using existing data files."
+else
+  echo "[1/3] Generating data (size=$SIZE, entity-type=$ENTITY_TYPE)..."
+  if [ "$ENTITY_TYPE" = "all" ] || [ "$ENTITY_TYPE" = "servers" ]; then
+    uv run python -m tests.stress.generators.generate_servers --count "$SIZE"
+  fi
+  if [ "$ENTITY_TYPE" = "all" ] || [ "$ENTITY_TYPE" = "agents" ]; then
+    uv run python -m tests.stress.generators.generate_agents --count "$SIZE"
+  fi
+  if [ "$ENTITY_TYPE" = "all" ] || [ "$ENTITY_TYPE" = "skills" ]; then
+    uv run python -m tests.stress.generators.generate_skills --count "$SIZE"
+  fi
 fi
 
 echo "[2/3] Registering entities against backend=$BACKEND base_url=$BASE_URL..."

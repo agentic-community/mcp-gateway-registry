@@ -218,6 +218,7 @@ async def _register_one(
     async with sem:
         try:
             raw = json.loads(payload_file.read_text())
+            raw.setdefault("status", "active")
             body = ops.payload_transform(raw)
         except Exception as exc:
             return RegistrationRecord(
@@ -228,7 +229,7 @@ async def _register_one(
             )
 
         url = f"{base_url.rstrip('/')}{ops.endpoint}"
-        return await _post_with_retry(
+        result = await _post_with_retry(
             client=client,
             url=url,
             body=body,
@@ -237,6 +238,38 @@ async def _register_one(
             token_getter=token_getter,
             token_refresher=token_refresher,
         )
+
+        # Enable the entity after successful registration (all types default to disabled)
+        if result.outcome == "success":
+            path = raw.get("path") or raw.get("service_path", "")
+            if not path.startswith("/"):
+                path = "/" + path
+            if path:
+                auth_header = {"Authorization": f"Bearer {token_getter()}"}
+                if ops.entity_type == "servers":
+                    await client.post(
+                        f"{base_url.rstrip('/')}/api/servers/toggle",
+                        headers={**auth_header, "Content-Type": "application/x-www-form-urlencoded"},
+                        content=f"path={path}&new_state=true",
+                    )
+                elif ops.entity_type == "agents":
+                    agent_path = path.lstrip("/")
+                    await client.post(
+                        f"{base_url.rstrip('/')}/api/agents/{agent_path}/toggle",
+                        headers=auth_header,
+                        params={"enabled": "true"},
+                    )
+                elif ops.entity_type == "skills":
+                    skill_path = path.lstrip("/")
+                    if skill_path.startswith("skills/"):
+                        skill_path = skill_path[len("skills/"):]
+                    await client.post(
+                        f"{base_url.rstrip('/')}/api/skills/{skill_path}/toggle",
+                        headers={**auth_header, "Content-Type": "application/json"},
+                        json={"enabled": True},
+                    )
+
+        return result
 
 
 async def _post_with_retry(

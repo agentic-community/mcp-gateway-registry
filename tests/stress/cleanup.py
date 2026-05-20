@@ -233,7 +233,10 @@ async def _delete_skills(
         if not skill_path:
             failed += 1
             continue
+        # Strip the leading "/skills/" prefix since the API endpoint is /api/skills/{name}
         url_path = skill_path.lstrip("/")
+        if url_path.startswith("skills/"):
+            url_path = url_path[len("skills/"):]
         resp = await client.delete(
             f"{base_url}/api/skills/{url_path}",
             headers=headers,

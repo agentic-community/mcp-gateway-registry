@@ -179,6 +179,13 @@ class NginxConfigService:
         # endpoints on every scheduler tick). Invalidated by mark_dirty().
         self._cached_server_names: str | None = None
 
+        # Minimum interval between nginx reload signals. Prevents cascading
+        # SIGHUP when many flush_now() calls land in rapid succession (e.g.
+        # bulk toggle during stress tests). nginx needs time for worker
+        # processes to shut down before accepting another reload.
+        self._min_reload_interval_seconds: float = 3.0
+        self._last_reload_time: float = 0.0
+
         # Determine which template to use based on SSL certificate availability
         ssl_cert_path = Path(REGISTRY_CONSTANTS.SSL_CERT_PATH)
         ssl_key_path = Path(REGISTRY_CONSTANTS.SSL_KEY_PATH)
@@ -698,18 +705,35 @@ class NginxConfigService:
             NGINX_UPDATES_SKIPPED.labels(operation="reload").inc()
             return True
 
+        # Rate-limit reload signals. nginx needs time for worker processes to
+        # gracefully shut down before accepting another SIGHUP. Without this
+        # guard, rapid-fire flush_now() calls (e.g. bulk toggle) can spawn
+        # multiple master processes and leave workers in "shutting down" limbo.
+        import time as _time
+
+        now = _time.monotonic()
+        elapsed = now - self._last_reload_time
+        if elapsed < self._min_reload_interval_seconds and not force:
+            logger.debug(
+                "Skipping nginx reload (%.1fs since last, min interval %.1fs)",
+                elapsed,
+                self._min_reload_interval_seconds,
+            )
+            return True
+
         try:
             import subprocess  # nosec B404
 
             # Test the configuration first before reloading
-            test_result = subprocess.run(["nginx", "-t"], capture_output=True, text=True)  # nosec B603 B607 - hardcoded command
+            test_result = subprocess.run(["nginx", "-t"], capture_output=True, text=True, timeout=5)  # nosec B603 B607 - hardcoded command
             if test_result.returncode != 0:
                 logger.error(f"Nginx configuration test failed: {test_result.stderr}")
                 logger.info("Skipping Nginx reload due to configuration errors")
                 return False
 
-            result = subprocess.run(["nginx", "-s", "reload"], capture_output=True, text=True)  # nosec B603 B607 - hardcoded command
+            result = subprocess.run(["nginx", "-s", "reload"], capture_output=True, text=True, timeout=5)  # nosec B603 B607 - hardcoded command
             if result.returncode == 0:
+                self._last_reload_time = _time.monotonic()
                 logger.info("Nginx configuration reloaded successfully")
                 return True
             else:
@@ -1474,7 +1498,7 @@ async def _fetch_all_enabled_servers() -> dict[str, Any]:
 
 # Module-level singleton
 nginx_reload_scheduler = NginxReloadScheduler(
-    debounce_seconds=float(os.getenv("NGINX_RELOAD_DEBOUNCE_SECONDS", "2.0")),
+    debounce_seconds=float(os.getenv("NGINX_RELOAD_DEBOUNCE_SECONDS", "5.0")),
     poll_external=os.getenv("NGINX_RELOAD_POLL_EXTERNAL", "true").lower()
     in ("1", "true", "yes", "on"),
 )

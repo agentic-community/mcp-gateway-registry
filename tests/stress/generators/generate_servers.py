@@ -108,18 +108,24 @@ def _build_payload(
         name = base_name
         path = base_path
 
-    tags = list(transformed.get("tags") or [])
+    # Filter out tags that the frontend treats as "external registry" markers
+    EXTERNAL_REGISTRY_TAGS = {"anthropic-registry", "workday-asor", "asor", "federated"}
+    tags = [t for t in (transformed.get("tags") or []) if t not in EXTERNAL_REGISTRY_TAGS]
     if STRESS_TAG not in tags:
         tags.append(STRESS_TAG)
+
+    # Preserve the original proxy_pass_url from the Anthropic registry when available
+    original_url = transformed.get("proxy_pass_url") or transformed.get("remote_url")
+    proxy_url = original_url or f"http://stress-test-{abs(hash(path)) % 100000:05d}.invalid:8100"
 
     payload: dict[str, Any] = {
         "server_name": name,
         "description": transformed.get("description") or f"Stress-test MCP server: {name}",
         "path": path,
-        "proxy_pass_url": f"http://stress-test-{abs(hash(path)) % 100000:05d}.invalid:8100",
+        "proxy_pass_url": proxy_url,
         "supported_transports": transformed.get("supported_transports") or ["streamable-http"],
         "tags": tags,
-        "status": "draft",
+        "status": "active",
         "visibility": "public",
     }
     return payload
