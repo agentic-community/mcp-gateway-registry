@@ -210,6 +210,15 @@ def mock_nginx_service():
 
 
 @pytest.fixture
+def mock_nginx_reload_scheduler():
+    """Mock nginx_reload_scheduler dependency."""
+    mock_scheduler = MagicMock()
+    mock_scheduler.mark_dirty = MagicMock()
+    mock_scheduler.flush_now = AsyncMock()
+    return mock_scheduler
+
+
+@pytest.fixture
 def mock_templates():
     """Mock Jinja2 templates."""
     mock = MagicMock(spec=Jinja2Templates)
@@ -241,6 +250,7 @@ def test_client_admin(
     mock_faiss_service,
     mock_health_service,
     mock_nginx_service,
+    mock_nginx_reload_scheduler,
     mock_security_scanner_service,
     mock_auth_admin,
     admin_user_context,
@@ -259,6 +269,7 @@ def test_client_admin(
         patch("registry.search.service.faiss_service", mock_faiss_service),
         patch("registry.health.service.health_service", mock_health_service),
         patch("registry.core.nginx_service.nginx_service", mock_nginx_service),
+        patch("registry.core.nginx_service.nginx_reload_scheduler", mock_nginx_reload_scheduler),
         patch("registry.api.server_routes.security_scanner_service", mock_security_scanner_service),
         patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
         patch("registry.api.server_routes.enhanced_auth", mock_enhanced_auth_func),
@@ -283,6 +294,7 @@ def test_client_regular(
     mock_faiss_service,
     mock_health_service,
     mock_nginx_service,
+    mock_nginx_reload_scheduler,
     mock_security_scanner_service,
     mock_auth_regular,
     regular_user_context,
@@ -299,6 +311,7 @@ def test_client_regular(
         patch("registry.search.service.faiss_service", mock_faiss_service),
         patch("registry.health.service.health_service", mock_health_service),
         patch("registry.core.nginx_service.nginx_service", mock_nginx_service),
+        patch("registry.core.nginx_service.nginx_reload_scheduler", mock_nginx_reload_scheduler),
         patch("registry.api.server_routes.security_scanner_service", mock_security_scanner_service),
         patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
         patch("registry.api.server_routes.enhanced_auth", mock_enhanced_auth_func),
@@ -596,6 +609,7 @@ class TestToggleService:
         mock_server_service,
         mock_faiss_service,
         mock_nginx_service,
+        mock_nginx_reload_scheduler,
         mock_health_service,
         sample_server_info,
     ):
@@ -618,7 +632,7 @@ class TestToggleService:
             assert data["service_path"] == "/test-server"
             mock_server_service.toggle_service.assert_called_once_with("/test-server", True)
             mock_faiss_service.add_or_update_service.assert_called_once()
-            mock_nginx_service.generate_config_async.assert_called_once()
+            mock_nginx_reload_scheduler.flush_now.assert_called()
 
     def test_toggle_service_off_success(
         self,
@@ -740,6 +754,7 @@ class TestRegisterService:
         mock_server_service,
         mock_faiss_service,
         mock_nginx_service,
+        mock_nginx_reload_scheduler,
         mock_health_service,
     ):
         """Test successful service registration."""
@@ -774,7 +789,7 @@ class TestRegisterService:
             assert data["service"]["server_name"] == "New Server"
             mock_server_service.register_server.assert_called_once()
             mock_faiss_service.add_or_update_service.assert_called_once()
-            mock_nginx_service.generate_config_async.assert_called_once()
+            mock_nginx_reload_scheduler.mark_dirty.assert_called()
 
     def test_register_service_no_permission(self, test_client_regular, mock_server_service):
         """Test registration fails when user lacks register_service permission."""

@@ -1,7 +1,7 @@
 """Unit tests for virtual server service layer."""
 
 import logging
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -1131,21 +1131,15 @@ class TestNginxReloadFailureHandling:
     @pytest.mark.asyncio
     async def test_trigger_nginx_reload_returns_false_on_exception(self, service):
         """Test that _trigger_nginx_reload returns False when an exception occurs."""
-        mock_nginx = AsyncMock()
-        mock_server_svc = AsyncMock()
-        mock_server_svc.get_enabled_services = AsyncMock(
+        mock_scheduler = MagicMock()
+        mock_scheduler.mark_dirty = MagicMock()
+        mock_scheduler.flush_now = AsyncMock(
             side_effect=RuntimeError("connection refused"),
         )
 
-        with (
-            patch(
-                "registry.core.nginx_service.nginx_service",
-                mock_nginx,
-            ),
-            patch(
-                "registry.services.server_service.server_service",
-                mock_server_svc,
-            ),
+        with patch(
+            "registry.core.nginx_service.nginx_reload_scheduler",
+            mock_scheduler,
         ):
             result = await service._trigger_nginx_reload()
 
@@ -1154,20 +1148,16 @@ class TestNginxReloadFailureHandling:
     @pytest.mark.asyncio
     async def test_trigger_nginx_reload_logs_error_on_failure(self, service, caplog):
         """Test that _trigger_nginx_reload logs error when it fails."""
-        mock_nginx = AsyncMock()
-        mock_server_svc = AsyncMock()
-        mock_server_svc.get_enabled_services = AsyncMock(
+        mock_scheduler = MagicMock()
+        mock_scheduler.mark_dirty = MagicMock()
+        mock_scheduler.flush_now = AsyncMock(
             side_effect=RuntimeError("connection refused"),
         )
 
         with (
             patch(
-                "registry.core.nginx_service.nginx_service",
-                mock_nginx,
-            ),
-            patch(
-                "registry.services.server_service.server_service",
-                mock_server_svc,
+                "registry.core.nginx_service.nginx_reload_scheduler",
+                mock_scheduler,
             ),
             caplog.at_level(logging.ERROR),
         ):
@@ -1181,24 +1171,19 @@ class TestNginxReloadFailureHandling:
     @pytest.mark.asyncio
     async def test_trigger_nginx_reload_returns_true_on_success(self, service):
         """Test that _trigger_nginx_reload returns True on success."""
-        mock_nginx = AsyncMock()
-        mock_nginx.generate_config_async = AsyncMock(return_value=True)
-        mock_server_svc = AsyncMock()
-        mock_server_svc.get_enabled_services = AsyncMock(return_value=[])
+        mock_scheduler = MagicMock()
+        mock_scheduler.mark_dirty = MagicMock()
+        mock_scheduler.flush_now = AsyncMock()
 
-        with (
-            patch(
-                "registry.core.nginx_service.nginx_service",
-                mock_nginx,
-            ),
-            patch(
-                "registry.services.server_service.server_service",
-                mock_server_svc,
-            ),
+        with patch(
+            "registry.core.nginx_service.nginx_reload_scheduler",
+            mock_scheduler,
         ):
             result = await service._trigger_nginx_reload()
 
         assert result is True
+        mock_scheduler.mark_dirty.assert_called_once()
+        mock_scheduler.flush_now.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_delete_succeeds_when_nginx_reload_fails(

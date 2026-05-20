@@ -1047,17 +1047,16 @@ class TestToggleService:
         # Mock list_all to return empty dict (no enabled servers)
         mock_server_repository.list_all.return_value = {}
 
-        # Mock nginx service
-        with patch("registry.core.nginx_service.nginx_service") as mock_nginx_service:
-            mock_nginx_service.generate_config_async = AsyncMock()
+        # Mock nginx reload scheduler
+        with patch("registry.core.nginx_service.nginx_reload_scheduler") as mock_scheduler:
+            mock_scheduler.mark_dirty = MagicMock()
             # Act
             result = await server_service.toggle_service(path, True)
 
             # Assert
             assert result is True
             mock_server_repository.set_state.assert_called_once_with(path, True)
-            mock_nginx_service.generate_config_async.assert_called_once()
-            mock_nginx_service.reload_nginx.assert_called_once()
+            mock_scheduler.mark_dirty.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_toggle_service_disable_calls_repository(
@@ -1074,16 +1073,16 @@ class TestToggleService:
         # Mock list_all to return empty dict (no enabled servers)
         mock_server_repository.list_all.return_value = {}
 
-        # Mock nginx service
-        with patch("registry.core.nginx_service.nginx_service") as mock_nginx_service:
-            mock_nginx_service.generate_config_async = AsyncMock()
+        # Mock nginx reload scheduler
+        with patch("registry.core.nginx_service.nginx_reload_scheduler") as mock_scheduler:
+            mock_scheduler.mark_dirty = MagicMock()
             # Act
             result = await server_service.toggle_service(path, False)
 
             # Assert
             assert result is True
             mock_server_repository.set_state.assert_called_once_with(path, False)
-            mock_nginx_service.generate_config_async.assert_called_once()
+            mock_scheduler.mark_dirty.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_toggle_service_nonexistent_server_fails(
