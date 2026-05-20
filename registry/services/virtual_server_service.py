@@ -616,29 +616,19 @@ class VirtualServerService:
             The CRUD operation itself has already succeeded at this point,
             so callers should treat False as a non-fatal warning.
         """
-        from ..core.nginx_service import nginx_service
+        from ..core.nginx_service import nginx_reload_scheduler
 
-        async with nginx_service.reload_lock:
-            try:
-                from ..services.server_service import server_service
-
-                # Get currently enabled servers for the full config generation
-                enabled_paths = await server_service.get_enabled_services()
-                enabled_servers = {}
-                for path in enabled_paths:
-                    server_info = await server_service.get_server_info(path)
-                    if server_info:
-                        enabled_servers[path] = server_info
-
-                await nginx_service.generate_config_async(enabled_servers)
-                logger.info("Nginx configuration regenerated for virtual server change")
-                return True
-            except Exception as e:
-                logger.error(
-                    f"Failed to regenerate nginx config after virtual server change: {e}",
-                    exc_info=True,
-                )
-                return False
+        try:
+            nginx_reload_scheduler.mark_dirty()
+            await nginx_reload_scheduler.flush_now()
+            logger.info("Nginx configuration regenerated for virtual server change")
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to regenerate nginx config after virtual server change: {e}",
+                exc_info=True,
+            )
+            return False
 
 
 def get_virtual_server_service() -> VirtualServerService:

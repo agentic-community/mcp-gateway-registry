@@ -347,16 +347,10 @@ async def _perform_security_scan_on_registration(
                 search_repo = get_search_repository()
                 await search_repo.index_server(path, server_entry, is_enabled=False)
 
-                # Regenerate Nginx config to remove disabled server
-                enabled_servers = {}
+                # Signal nginx config needs regeneration (debounced)
+                from ..core.nginx_service import nginx_reload_scheduler
 
-                for server_path in await server_service.get_enabled_services():
-                    server_info = await server_service.get_server_info(server_path)
-
-                    if server_info:
-                        enabled_servers[server_path] = server_info
-                async with nginx_service.reload_lock:
-                    await nginx_service.generate_config_async(enabled_servers)
+                nginx_reload_scheduler.mark_dirty()
         else:
             logger.info(f"Server {path} passed security scan")
 
@@ -784,16 +778,11 @@ async def toggle_service_route(
     search_repo = get_search_repository()
     await search_repo.index_server(service_path, server_info, new_state)
 
-    # Regenerate Nginx configuration
-    enabled_servers = {}
+    # Flush nginx config immediately (toggle must take effect before response)
+    from ..core.nginx_service import nginx_reload_scheduler
 
-    for path in await server_service.get_enabled_services():
-        server_info = await server_service.get_server_info(path)
-
-        if server_info:
-            enabled_servers[path] = server_info
-    async with nginx_service.reload_lock:
-        await nginx_service.generate_config_async(enabled_servers)
+    nginx_reload_scheduler.mark_dirty()
+    await nginx_reload_scheduler.flush_now()
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(service_path)
@@ -1082,16 +1071,10 @@ async def register_service(
     is_enabled = await server_service.is_service_enabled(path)
     await faiss_service.add_or_update_service(path, server_entry, is_enabled)
 
-    # Regenerate Nginx configuration
-    enabled_servers = {}
+    # Signal nginx config needs regeneration (debounced, not immediate)
+    from ..core.nginx_service import nginx_reload_scheduler
 
-    for server_path in await server_service.get_enabled_services():
-        server_info = await server_service.get_server_info(server_path)
-
-        if server_info:
-            enabled_servers[server_path] = server_info
-    async with nginx_service.reload_lock:
-        await nginx_service.generate_config_async(enabled_servers)
+    nginx_reload_scheduler.mark_dirty()
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
@@ -1389,20 +1372,10 @@ async def internal_register_service(
     is_enabled = await server_service.is_service_enabled(path)
     await faiss_service.add_or_update_service(path, server_entry, is_enabled)
 
-    logger.warning(
-        "INTERNAL REGISTER: Regenerating Nginx configuration"
-    )  # TODO: replace with debug
+    # Signal nginx config needs regeneration (debounced, not immediate)
+    from ..core.nginx_service import nginx_reload_scheduler
 
-    # Regenerate Nginx configuration
-    enabled_servers = {}
-
-    for server_path in await server_service.get_enabled_services():
-        server_info = await server_service.get_server_info(server_path)
-
-        if server_info:
-            enabled_servers[server_path] = server_info
-    async with nginx_service.reload_lock:
-        await nginx_service.generate_config_async(enabled_servers)
+    nginx_reload_scheduler.mark_dirty()
 
     logger.warning(
         "INTERNAL REGISTER: Broadcasting health status update"
@@ -1583,16 +1556,11 @@ async def internal_remove_service(
 
     logger.warning("INTERNAL REMOVE: Regenerating Nginx configuration")  # TODO: replace with debug
 
-    # Regenerate Nginx configuration
-    enabled_servers = {}
+    # Flush nginx config immediately (delete must take effect before response)
+    from ..core.nginx_service import nginx_reload_scheduler
 
-    for server_path in await server_service.get_enabled_services():
-        server_info = await server_service.get_server_info(server_path)
-
-        if server_info:
-            enabled_servers[server_path] = server_info
-    async with nginx_service.reload_lock:
-        await nginx_service.generate_config_async(enabled_servers)
+    nginx_reload_scheduler.mark_dirty()
+    await nginx_reload_scheduler.flush_now()
 
     logger.warning("INTERNAL REMOVE: Broadcasting health status update")  # TODO: replace with debug
 
@@ -1715,16 +1683,11 @@ async def internal_toggle_service(
     search_repo = get_search_repository()
     await search_repo.index_server(service_path, server_info, new_state)
 
-    # Regenerate Nginx configuration
-    enabled_servers = {}
+    # Flush nginx config immediately (toggle must take effect before response)
+    from ..core.nginx_service import nginx_reload_scheduler
 
-    for path in await server_service.get_enabled_services():
-        server_info = await server_service.get_server_info(path)
-
-        if server_info:
-            enabled_servers[path] = server_info
-    async with nginx_service.reload_lock:
-        await nginx_service.generate_config_async(enabled_servers)
+    nginx_reload_scheduler.mark_dirty()
+    await nginx_reload_scheduler.flush_now()
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(service_path)
@@ -2165,16 +2128,11 @@ async def edit_server_submit(
     except Exception as e:
         logger.warning(f"Failed to update search index for '{service_path}': {e}")
 
-    # Regenerate Nginx configuration
-    enabled_servers = {}
+    # Flush nginx config immediately (edit must take effect before response)
+    from ..core.nginx_service import nginx_reload_scheduler
 
-    for path in await server_service.get_enabled_services():
-        server_info = await server_service.get_server_info(path)
-
-        if server_info:
-            enabled_servers[path] = server_info
-    async with nginx_service.reload_lock:
-        await nginx_service.generate_config_async(enabled_servers)
+    nginx_reload_scheduler.mark_dirty()
+    await nginx_reload_scheduler.flush_now()
 
     logger.info(f"Server '{name}' ({service_path}) updated by user '{user_context['username']}'")
 
@@ -2521,17 +2479,11 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
             f"Manual refresh health check for {service_path} completed. Status: {health_status}"
         )
 
-        # Regenerate Nginx config after manual refresh
-        logger.info(f"Regenerating Nginx config after manual refresh for {service_path}...")
-        enabled_servers = {}
+        # Flush nginx config immediately (manual refresh should take effect now)
+        from ..core.nginx_service import nginx_reload_scheduler
 
-        for path in await server_service.get_enabled_services():
-            path_server_info = await server_service.get_server_info(path)
-
-            if path_server_info:
-                enabled_servers[path] = path_server_info
-        async with nginx_service.reload_lock:
-            await nginx_service.generate_config_async(enabled_servers)
+        nginx_reload_scheduler.mark_dirty()
+        await nginx_reload_scheduler.flush_now()
 
     except Exception as e:
         logger.error(f"ERROR during manual refresh check for {service_path}: {e}")
@@ -3812,16 +3764,11 @@ async def toggle_service_api(
     search_repo = get_search_repository()
     await search_repo.index_server(path, server_info, new_state)
 
-    # Regenerate Nginx configuration
-    enabled_servers = {}
+    # Flush nginx config immediately (toggle must take effect before response)
+    from ..core.nginx_service import nginx_reload_scheduler
 
-    for server_path in await server_service.get_enabled_services():
-        server_info = await server_service.get_server_info(server_path)
-
-        if server_info:
-            enabled_servers[server_path] = server_info
-    async with nginx_service.reload_lock:
-        await nginx_service.generate_config_async(enabled_servers)
+    nginx_reload_scheduler.mark_dirty()
+    await nginx_reload_scheduler.flush_now()
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
@@ -3949,16 +3896,11 @@ async def remove_service_api(
     # Remove from FAISS index
     await faiss_service.remove_service(path)
 
-    # Regenerate Nginx configuration
-    enabled_servers = {}
+    # Flush nginx config immediately (delete must take effect before response)
+    from ..core.nginx_service import nginx_reload_scheduler
 
-    for server_path in await server_service.get_enabled_services():
-        server_info = await server_service.get_server_info(server_path)
-
-        if server_info:
-            enabled_servers[server_path] = server_info
-    async with nginx_service.reload_lock:
-        await nginx_service.generate_config_async(enabled_servers)
+    nginx_reload_scheduler.mark_dirty()
+    await nginx_reload_scheduler.flush_now()
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)

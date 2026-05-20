@@ -62,11 +62,17 @@ def _fetch_skill_records(cache_dir: Path) -> list[dict[str, Any]]:
         return cached
 
     headers = {"Accept": "application/vnd.github+json"}
-    github_token = os.getenv("GITHUB_TOKEN")
+    # Accept either GITHUB_TOKEN (the documented stress-test name) or
+    # GITHUB_PAT (the project's existing convention used elsewhere in .env)
+    # so we don't force users to duplicate the same secret under two names.
+    github_token = os.getenv("GITHUB_TOKEN") or os.getenv("GITHUB_PAT")
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
     else:
-        logger.warning("GITHUB_TOKEN not set. GitHub anonymous rate limit (60 req/hr) may apply.")
+        logger.warning(
+            "Neither GITHUB_TOKEN nor GITHUB_PAT is set. "
+            "GitHub anonymous rate limit (60 req/hr) may apply."
+        )
 
     with httpx.Client(timeout=60.0) as client:
         resp = client.get(GITHUB_TREE_API, headers=headers)

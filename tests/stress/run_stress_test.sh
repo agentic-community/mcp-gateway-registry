@@ -5,40 +5,88 @@
 # (Phases 2-4 of the lld-stress-test.md plan).
 #
 # Usage:
-#   bash tests/stress/run_stress_test.sh <backend> <size> [entity-type]
+#   bash tests/stress/run_stress_test.sh <size> [entity-type] [flags]
 #
-# entity-type defaults to "all". Pass `servers`, `agents`, or `skills` to scope
-# the run to a single type. Only that type's generator and registration step
-# run, which is the smallest-possible self-contained demo on a local stack
-# (`skills` is the safe bet -- the other two reliably crash `mongodb-ce` under
-# Docker; see .scratchpad/registry-bottleneck-findings.md, Findings 1-5).
+# Positional args:
+#   size         100 | 500 | 1000
+#   entity-type  servers | agents | skills | all   (default: all)
+#
+# Optional flags (override env-var defaults; flag wins over env):
+#   --token-file PATH    JWT token file. Default: $STRESS_TOKEN_FILE or .token.
+#   --base-url URL       Registry base URL. Default: $STRESS_BASE_URL or http://localhost.
+#
+# The storage backend (mongodb-ce, documentdb, etc.) is auto-detected from the
+# registry's GET /api/stats endpoint. No need to specify it manually.
+#
+# `skills` is the safe single-type demo on a local stack. `servers` and `agents`
+# reliably crash `mongodb-ce` under Docker; see
+# .scratchpad/registry-bottleneck-findings.md, Findings 1-5.
 #
 # Env vars consumed (all optional):
 #   STRESS_BASE_URL   - registry URL (default: http://localhost)
-#   STRESS_TOKEN_FILE - JWT token file. When unset, the script auto-detects an
-#                       existing file under .oauth-tokens/ and regenerates one
-#                       via keycloak/setup/generate-agent-token.sh if none is
-#                       found or all candidates are expired.
-#   STRESS_SKIP_TOKEN_REFRESH - set to any non-empty value to disable the
-#                       auto-regeneration step (use the detected file as-is).
+#   STRESS_TOKEN_FILE - JWT token file (default: .token in the repo root).
+#                       Accepts two formats:
+#                         (a) the nested JSON shape produced by the registry UI's
+#                             "Get JWT Token" button, one of:
+#                                 {"access_token": "..."}
+#                                 {"tokens": {"access_token": "..."}}
+#                                 {"token_data": {"access_token": "..."}}
+#                         (b) plain-text: the file contains nothing but the
+#                             raw JWT string.
+#                       This script does NOT auto-generate tokens. Get one from
+#                       the registry UI, save it to .token (or any path you set
+#                       via STRESS_TOKEN_FILE), and re-run.
 #   STRESS_MEASURE_API - set to any non-empty value to chain Phase 2
 #                       (API performance measurement) after Phase 1.
 #                       Default: skipped.
 #   STRESS_MEASURE_ITERATIONS - iterations per API operation when
 #                       STRESS_MEASURE_API is set. Default: 50.
 #   ANS_API_KEY / ANS_API_SECRET - required for the agents generator
-#   GITHUB_TOKEN      - optional; raises GitHub API rate limit for the skills generator
+#   GITHUB_TOKEN / GITHUB_PAT - optional; raises GitHub API rate limit for the
+#                       skills generator. Either name works.
 
 set -euo pipefail
 
-BACKEND="${1:?must pass backend (mongodb-ce|documentdb)}"
-SIZE="${2:?must pass size (100|500|1000)}"
-ENTITY_TYPE="${3:-all}"
+SIZE="${1:?must pass size (100|500|1000)}"
+ENTITY_TYPE="all"
 
-case "$BACKEND" in
-  mongodb-ce|documentdb) ;;
-  *) echo "Unknown backend: $BACKEND (must be mongodb-ce or documentdb)" >&2; exit 1 ;;
-esac
+# Optional 2nd positional: entity-type (servers|agents|skills|all).
+# We only consume it as positional when it doesn't start with `--`, otherwise
+# treat the rest of argv as flags.
+shift 1
+if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+  ENTITY_TYPE="$1"
+  shift
+fi
+
+# Flag overrides for token file and base URL. CLI takes precedence over env.
+TOKEN_FILE_FLAG=""
+BASE_URL_FLAG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --token-file)
+      TOKEN_FILE_FLAG="${2:?--token-file requires a path}"
+      shift 2
+      ;;
+    --token-file=*)
+      TOKEN_FILE_FLAG="${1#--token-file=}"
+      shift
+      ;;
+    --base-url)
+      BASE_URL_FLAG="${2:?--base-url requires a URL}"
+      shift 2
+      ;;
+    --base-url=*)
+      BASE_URL_FLAG="${1#--base-url=}"
+      shift
+      ;;
+    *)
+      echo "Unknown flag: $1" >&2
+      echo "Supported flags: --token-file PATH, --base-url URL" >&2
+      exit 1
+      ;;
+  esac
+done
 
 case "$SIZE" in
   100|500|1000) ;;
@@ -54,81 +102,115 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 cd "$PROJECT_ROOT"
 
-BASE_URL="${STRESS_BASE_URL:-http://localhost}"
+# Source .env so generators pick up ANS_API_KEY, GITHUB_PAT, etc.
+if [ -f ".env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+# Precedence: --base-url flag > $STRESS_BASE_URL > default.
+BASE_URL="${BASE_URL_FLAG:-${STRESS_BASE_URL:-http://localhost}}"
 
 # ---------------------------------------------------------------------------
-# Token resolution: pick an existing JWT file or generate one.
+# Token resolution: confirm the user-supplied (or default) token file exists
+# and parses. We do NOT auto-generate tokens here -- the user is expected to
+# grab one from the registry UI's "Get JWT Token" button.
 # ---------------------------------------------------------------------------
 
-# Returns 0 if the JSON token file's "expires_at" is in the future (or absent).
-_token_file_valid() {
-  local file="$1"
-  [ -f "$file" ] || return 1
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$file" <<'PY' || return 1
+# Precedence: --token-file flag > $STRESS_TOKEN_FILE > default (.token).
+TOKEN_FILE="${TOKEN_FILE_FLAG:-${STRESS_TOKEN_FILE:-.token}}"
+
+_token_resolution_help() {
+  cat >&2 <<EOF
+Get a JWT for the stress test by either:
+  1. Open the registry UI, click "Get JWT Token", and save the downloaded
+     JSON file as .token in the repo root, OR
+  2. Save the raw JWT string (just the eyJ... token, nothing else) to .token.
+
+Both formats are accepted. Override the path via STRESS_TOKEN_FILE if you
+want to keep the file elsewhere.
+EOF
+}
+
+if [ ! -f "$TOKEN_FILE" ]; then
+  echo "Token file not found: $TOKEN_FILE" >&2
+  _token_resolution_help
+  exit 1
+fi
+
+# Validate that the file contains either a parseable JSON object with an
+# access_token, OR a non-empty plain-text token. This mirrors the loader's
+# accepted formats so we fail fast with a clear message instead of waiting
+# for a 401 from the registry.
+if ! python3 - "$TOKEN_FILE" <<'PY'
 import json, sys
-from datetime import datetime, timezone
+path = sys.argv[1]
+raw = open(path).read()
 try:
-    data = json.loads(open(sys.argv[1]).read())
+    data = json.loads(raw)
 except Exception:
-    sys.exit(0)  # opaque file: assume valid, let the loader's 401 path handle it
-expires_at = data.get("expires_at")
-if not expires_at:
-    sys.exit(0)
-try:
-    exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-except Exception:
-    sys.exit(0)
-sys.exit(0 if exp > datetime.now(timezone.utc) else 1)
+    if raw.strip():
+        sys.exit(0)
+    print(f"Token file is empty: {path}", file=sys.stderr)
+    sys.exit(1)
+token = (
+    data.get("access_token")
+    or data.get("tokens", {}).get("access_token")
+    or data.get("token_data", {}).get("access_token")
+)
+if not token:
+    print(
+        f"Token file {path} is JSON but has no access_token field "
+        "(checked: access_token, tokens.access_token, token_data.access_token)",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 PY
-  fi
-  return 0
-}
+then
+  _token_resolution_help
+  exit 1
+fi
 
-_resolve_token_file() {
-  if [ -n "${STRESS_TOKEN_FILE:-}" ]; then
-    if _token_file_valid "$STRESS_TOKEN_FILE"; then
-      echo "$STRESS_TOKEN_FILE"
-      return 0
-    fi
-    echo "STRESS_TOKEN_FILE=$STRESS_TOKEN_FILE is missing or expired." >&2
-  fi
-
-  local candidates=(
-    ".oauth-tokens/ingress.json"
-    ".oauth-tokens/mcp-gateway-m2m-token.json"
-  )
-  for candidate in "${candidates[@]}"; do
-    if _token_file_valid "$candidate"; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-
-  if [ -n "${STRESS_SKIP_TOKEN_REFRESH:-}" ]; then
-    echo "No valid token file found and STRESS_SKIP_TOKEN_REFRESH is set." >&2
-    return 1
-  fi
-
-  local generator="keycloak/setup/generate-agent-token.sh"
-  if [ ! -x "$generator" ] && [ ! -f "$generator" ]; then
-    echo "No valid token file and $generator is not available." >&2
-    return 1
-  fi
-
-  echo "No valid JWT token found; regenerating via $generator..." >&2
-  bash "$generator" >&2
-  local generated=".oauth-tokens/mcp-gateway-m2m-token.json"
-  if _token_file_valid "$generated"; then
-    echo "$generated"
-    return 0
-  fi
-  echo "Token regeneration did not produce a valid file at $generated." >&2
-  return 1
-}
-
-TOKEN_FILE="$(_resolve_token_file)"
 echo "Using JWT token file: $TOKEN_FILE"
+
+# ---------------------------------------------------------------------------
+# Auto-detect backend from the registry's GET /api/stats endpoint.
+# ---------------------------------------------------------------------------
+
+# Extract the raw JWT string from the token file (handles both JSON and plain text).
+JWT_TOKEN=$(python3 - "$TOKEN_FILE" <<'PY'
+import json, sys
+path = sys.argv[1]
+raw = open(path).read()
+try:
+    data = json.loads(raw)
+except Exception:
+    print(raw.strip())
+    sys.exit(0)
+token = (
+    data.get("access_token")
+    or data.get("tokens", {}).get("access_token")
+    or data.get("token_data", {}).get("access_token")
+)
+print(token)
+PY
+)
+
+echo "Detecting storage backend from $BASE_URL/api/stats..."
+STATS_RESPONSE=$(curl -sf -H "Authorization: Bearer $JWT_TOKEN" "$BASE_URL/api/stats" 2>&1) || {
+  echo "Failed to reach $BASE_URL/api/stats. Is the registry running?" >&2
+  echo "Response: $STATS_RESPONSE" >&2
+  exit 1
+}
+
+BACKEND=$(echo "$STATS_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin)['database_status']['backend'])")
+if [ -z "$BACKEND" ]; then
+  echo "Could not detect backend from /api/stats response." >&2
+  exit 1
+fi
+echo "Detected backend: $BACKEND"
 
 # ---------------------------------------------------------------------------
 # Run.

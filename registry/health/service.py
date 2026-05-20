@@ -386,18 +386,13 @@ class HealthMonitoringService:
             try:
                 from ..core.nginx_service import nginx_service
 
-                # Build enabled_servers dict with proper async/await
-                enabled_servers = {}
-                for path in await server_service.get_enabled_services():
-                    server_info = await server_service.get_server_info(path)
-                    if server_info:
-                        enabled_servers[path] = server_info
-                async with nginx_service.reload_lock:
-                    await nginx_service.generate_config_async(enabled_servers)
-                logger.info("Nginx configuration regenerated due to health status changes")
+                from registry.core.nginx_service import nginx_reload_scheduler
+
+                nginx_reload_scheduler.mark_dirty()
+                logger.info("Nginx config marked dirty due to health status changes")
             except Exception as e:
                 logger.error(
-                    f"Failed to regenerate nginx configuration after health status change: {e}"
+                    f"Failed to mark nginx config dirty after health status change: {e}"
                 )
 
     async def _check_single_service(
@@ -1284,22 +1279,15 @@ class HealthMonitoringService:
         # Regenerate nginx configuration if status changed
         if previous_status != current_status:
             try:
-                from ..core.nginx_service import nginx_service
+                from registry.core.nginx_service import nginx_reload_scheduler
 
-                # Build enabled_servers dict with proper async/await
-                enabled_servers = {}
-                for path in await server_service.get_enabled_services():
-                    server_info = await server_service.get_server_info(path)
-                    if server_info:
-                        enabled_servers[path] = server_info
-                async with nginx_service.reload_lock:
-                    await nginx_service.generate_config_async(enabled_servers)
+                nginx_reload_scheduler.mark_dirty()
                 logger.info(
-                    f"Nginx configuration regenerated due to status change for {service_path}: {previous_status} -> {current_status}"
+                    f"Nginx config marked dirty due to status change for {service_path}: {previous_status} -> {current_status}"
                 )
             except Exception as e:
                 logger.error(
-                    f"Failed to regenerate nginx configuration after immediate health check: {e}"
+                    f"Failed to mark nginx config dirty after immediate health check: {e}"
                 )
 
         return current_status, last_checked_time

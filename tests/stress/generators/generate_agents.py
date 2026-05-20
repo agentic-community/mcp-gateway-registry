@@ -97,6 +97,7 @@ def _fetch_ans_agents(cache_dir: Path) -> list[dict[str, Any]]:
     all_records: list[dict[str, Any]] = []
     offset = 0
     total_count: int | None = None
+    max_records = 10_000
 
     with httpx.Client(timeout=60.0) as client:
         while True:
@@ -111,6 +112,9 @@ def _fetch_ans_agents(cache_dir: Path) -> list[dict[str, Any]]:
                 logger.info("ANS reports totalCount=%d", total_count)
 
             offset += ANS_PAGE_LIMIT
+            if len(all_records) >= max_records:
+                logger.info("Reached %d records cap, stopping pagination", max_records)
+                break
             if total_count and offset >= total_count:
                 break
             if not total_count and len(agents) < ANS_PAGE_LIMIT:

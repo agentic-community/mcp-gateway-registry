@@ -6,7 +6,7 @@ EntityType = Literal["servers", "agents", "skills"]
 
 ENTITY_TYPES: tuple[EntityType, ...] = ("servers", "agents", "skills")
 TARGET_SIZES: tuple[int, ...] = (100, 500, 1000)
-BACKENDS: tuple[str, ...] = ("mongodb-ce", "documentdb")
+BACKENDS: tuple[str, ...] = ("mongodb-ce", "documentdb", "mongodb", "mongodb-atlas", "file")
 
 STRESS_TAG: str = "stress-test"
 STRESS_SUFFIX_TEMPLATE: str = "-stress-{index:05d}"
@@ -22,6 +22,6 @@ GITHUB_TREE_API: str = "https://api.github.com/repos/anthropics/skills/git/trees
 GITHUB_RAW_BASE: str = "https://raw.githubusercontent.com/anthropics/skills/main"
 
 DEFAULT_BASE_URL: str = "http://localhost"
-DEFAULT_TOKEN_FILE: str = ".oauth-tokens/ingress.json"
+DEFAULT_TOKEN_FILE: str = ".token"
 DEFAULT_CONCURRENCY: int = 3
 HTTP_TIMEOUT_SECONDS: float = 120.0

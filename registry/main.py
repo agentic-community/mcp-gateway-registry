@@ -714,7 +714,20 @@ async def lifespan(app: FastAPI):
             async with nginx_service.reload_lock:
                 await nginx_service.generate_config_async({}, force_base_config=True)
 
-        logger.info("✅ All services initialized successfully!")
+        # Start the debounced nginx reload scheduler (issue #1087).
+        # Seed the hash from the config just written so the first tick doesn't
+        # trigger a redundant reload.
+        from registry.core.nginx_service import nginx_reload_scheduler
+
+        try:
+            startup_config = settings.nginx_config_path.read_text()
+            nginx_reload_scheduler.seed_hash(startup_config)
+        except Exception:
+            pass
+
+        await nginx_reload_scheduler.start()
+
+        logger.info("All services initialized successfully!")
 
         # Initialize and send anonymous startup telemetry (opt-out: MCP_TELEMETRY_DISABLED=1)
         await initialize_telemetry()
@@ -750,9 +763,14 @@ async def lifespan(app: FastAPI):
             logger.info("📝 Closing audit logger...")
             await audit_logger.close()
 
+        # Stop the debounced nginx reload scheduler
+        from registry.core.nginx_service import nginx_reload_scheduler
+
+        await nginx_reload_scheduler.stop()
+
         # Shutdown services gracefully
         await health_service.shutdown()
-        logger.info("✅ Shutdown completed successfully!")
+        logger.info("Shutdown completed successfully!")
     except Exception as e:
         logger.error(f"❌ Error during shutdown: {e}", exc_info=True)
 

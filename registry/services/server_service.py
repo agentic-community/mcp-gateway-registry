@@ -153,21 +153,9 @@ class ServerService:
 
             # Regenerate nginx config if enabled
             if await self._repo.get_state(path):
-                try:
-                    from ..core.nginx_service import nginx_service
+                from ..core.nginx_service import nginx_reload_scheduler
 
-                    enabled_servers = {
-                        service_path: await self.get_server_info(service_path)
-                        for service_path in await self.get_enabled_services()
-                    }
-                    async with nginx_service.reload_lock:
-                        await nginx_service.generate_config_async(enabled_servers)
-                        nginx_service.reload_nginx()
-                    logger.info(f"Regenerated nginx config due to server update: {path}")
-                except Exception as e:
-                    logger.error(
-                        f"Failed to regenerate nginx configuration after server update: {e}"
-                    )
+                nginx_reload_scheduler.mark_dirty()
 
         return result
 
@@ -176,19 +164,9 @@ class ServerService:
         result = await self._repo.set_state(path, enabled)
 
         if result:
-            # Trigger nginx config regeneration
-            try:
-                from ..core.nginx_service import nginx_service
+            from ..core.nginx_service import nginx_reload_scheduler
 
-                enabled_servers = {
-                    service_path: await self.get_server_info(service_path)
-                    for service_path in await self.get_enabled_services()
-                }
-                async with nginx_service.reload_lock:
-                    await nginx_service.generate_config_async(enabled_servers)
-                    nginx_service.reload_nginx()
-            except Exception as e:
-                logger.error(f"Failed to update nginx configuration after toggle: {e}")
+            nginx_reload_scheduler.mark_dirty()
 
         return result
 
@@ -485,19 +463,9 @@ class ServerService:
                 f"Service state changes detected: {len(previous_enabled_services)} -> {len(current_enabled_services)} enabled services"
             )
 
-            try:
-                from ..core.nginx_service import nginx_service
+            from ..core.nginx_service import nginx_reload_scheduler
 
-                enabled_servers = {
-                    service_path: await self.get_server_info(service_path)
-                    for service_path in await self.get_enabled_services()
-                }
-                async with nginx_service.reload_lock:
-                    await nginx_service.generate_config_async(enabled_servers)
-                    nginx_service.reload_nginx()
-                logger.info("Regenerated nginx config due to state reload")
-            except Exception as e:
-                logger.error(f"Failed to regenerate nginx configuration after state reload: {e}")
+            nginx_reload_scheduler.mark_dirty()
         else:
             logger.info("No service state changes detected after reload")
 
@@ -888,24 +856,10 @@ class ServerService:
         return {"path": path, "default_version": active_server.get("version"), "versions": versions}
 
     async def _regenerate_nginx_config(self) -> None:
-        """Regenerate nginx configuration for all enabled servers."""
-        try:
-            from ..core.nginx_service import nginx_service
+        """Signal nginx config needs regeneration (debounced)."""
+        from ..core.nginx_service import nginx_reload_scheduler
 
-            enabled_servers = {}
-            for service_path in await self.get_enabled_services():
-                server_info = await self.get_server_info(service_path)
-                if server_info:
-                    enabled_servers[service_path] = server_info
-
-            async with nginx_service.reload_lock:
-                await nginx_service.generate_config_async(enabled_servers)
-                nginx_service.reload_nginx()
-            logger.info("Regenerated nginx config after version change")
-
-        except Exception as e:
-            logger.error(f"Failed to regenerate nginx configuration: {e}")
-            raise
+        nginx_reload_scheduler.mark_dirty()
 
 
 # Global service instance

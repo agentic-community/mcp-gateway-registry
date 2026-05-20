@@ -27,40 +27,54 @@ Generated payloads land under `tests/stress/data/<entity>/<count>/`. Registratio
 | Variable | Required for | Notes |
 |---|---|---|
 | `ANS_API_KEY`, `ANS_API_SECRET` | `generate_agents.py` | GoDaddy ANS credentials, per the variable names documented in `docs/design/ans-integration.md`. |
-| `ANS_API_ENDPOINT` | optional | Defaults to `https://api.godaddy.com` (production). **For customer-tier credentials, set this to `https://api.ote-godaddy.com`** — production's `/v1/agents` is gated behind GoDaddy's internal SSO and only accepts internally-provisioned keys, while OTE accepts customer-issued partner keys against the same API shape. |
-| `GITHUB_TOKEN` | optional | Avoids the 60 req/hr anonymous rate limit when fetching `anthropics/skills`. |
+| `ANS_API_ENDPOINT` | optional | Defaults to `https://api.godaddy.com` (production). **For customer-tier credentials, set this to `https://api.ote-godaddy.com`** (production's `/v1/agents` is gated behind GoDaddy's internal SSO and only accepts internally-provisioned keys, while OTE accepts customer-issued partner keys against the same API shape). |
+| `GITHUB_TOKEN` or `GITHUB_PAT` | optional | Avoids the 60 req/hr anonymous rate limit when fetching `anthropics/skills`. Either name works; `GITHUB_PAT` matches the project's existing convention used elsewhere in `.env`. |
 | `STRESS_BASE_URL` | optional | Registry base URL (defaults to `http://localhost`). |
-| `STRESS_TOKEN_FILE` | optional | Path to the JWT token file (defaults to `.oauth-tokens/ingress.json`). |
+| `STRESS_TOKEN_FILE` | optional | Path to the JWT token file (defaults to `.token` in the repo root). |
 | `STRESS_RESULTS_DIR` | optional | Override the results directory. |
 
 ### Getting a JWT token
 
-For local stacks with the Keycloak setup that ships in this repo, you do not need to fetch a token manually — `run_stress_test.sh` checks for an existing JWT under `.oauth-tokens/` and regenerates one via `keycloak/setup/generate-agent-token.sh` when none is valid.
+The stress-test runner does **not** auto-generate tokens. Get one yourself and put it where the script can find it:
 
-For deployed stacks (or any setup where the bundled Keycloak script can't reach the IdP), grab a token from the registry UI's **Get JWT Token** button, save it under `.oauth-tokens/`, and pass its path via `STRESS_TOKEN_FILE`. The file is the nested-token JSON the CLI already consumes; the script's auto-regenerate step is skipped when `STRESS_TOKEN_FILE` points at a valid file.
+1. Open the registry UI and click **Get JWT Token**.
+2. Save the downloaded file as `.token` in the repo root (the default location), or save the raw JWT string (just the `eyJ...` token, nothing else) to `.token`. Both formats are accepted.
+3. Override the path with `--token-file /path/to/your-token-file` or `STRESS_TOKEN_FILE=/path/to/your-token-file` if you want to keep it elsewhere.
 
-Set `STRESS_SKIP_TOKEN_REFRESH=1` to disable the auto-regenerate step entirely (useful for CI / non-local stacks).
+Accepted file shapes:
+
+- Nested JSON (what the **Get JWT Token** button produces): one of `{"access_token": "..."}`, `{"tokens": {"access_token": "..."}}`, or `{"token_data": {"access_token": "..."}}`.
+- Plain text: the file contains nothing but the raw JWT string.
 
 ## Quick start
 
-```bash
-# 1) Bring up the registry
-docker compose up -d
+### 1. Start the registry
 
-# 2) Generate + register at size=100 against mongodb-ce.
-#    The script auto-fetches a JWT if none is found under .oauth-tokens/.
-bash tests/stress/run_stress_test.sh mongodb-ce 100
+| Environment | How to start |
+|---|---|
+| Local (Docker Compose) | `./build_and_run.sh` |
+| EKS (Kubernetes) | Deploy via `charts/` Helm charts |
+| ECS (AWS Fargate) | Deploy via `terraform/aws-ecs/` |
+
+### 2. Run the stress test
+
+```bash
+bash tests/stress/run_stress_test.sh 100 \
+    --base-url http://localhost \
+    --token-file .token
 
 # Results land at:
 #   tests/stress/data/{servers,agents,skills}/100/*.json
-#   tests/stress/results/mongodb-ce/size-100/registration.json
+#   tests/stress/results/<detected-backend>/size-100/registration.json
 ```
 
-For a friction-free demo on a local stack, scope the run to a single entity type via the optional 3rd positional argument (defaults to `all`):
+For a friction-free demo, scope the run to a single entity type via the optional 2nd positional argument (defaults to `all`):
 
 ```bash
 # ~80 seconds, 98-99/100 registered, no server-side wedging:
-bash tests/stress/run_stress_test.sh mongodb-ce 100 skills
+bash tests/stress/run_stress_test.sh 100 skills \
+    --base-url http://localhost \
+    --token-file .token
 
 # Other supported values: servers, agents, all (default)
 ```
@@ -76,10 +90,13 @@ After the registry is populated (Phase 1), measure steady-state per-request late
 uv run python -m tests.stress.measure_api_performance \
     --backend mongodb-ce --size 100 \
     --iterations 50 \
-    --token-file .oauth-tokens/mcp-gateway-m2m-token.json
+    --base-url http://localhost \
+    --token-file .token
 
 # Chained from the orchestrator (after Phase 1 finishes):
-STRESS_MEASURE_API=1 bash tests/stress/run_stress_test.sh mongodb-ce 100 skills
+STRESS_MEASURE_API=1 bash tests/stress/run_stress_test.sh 100 skills \
+    --base-url http://localhost \
+    --token-file .token
 ```
 
 What it measures (per `lld-stress-test.md` §5):
@@ -112,12 +129,18 @@ tests/stress/results/<backend>/size-<N>/
 
 On a 401, the script invokes `keycloak/setup/generate-agent-token.sh` once and retries. Subsequent 401s fail the operation. No pre-emptive refresh.
 
-Against a deployed instance:
+Against a deployed instance, either set the env vars or pass the flags:
 
 ```bash
+# Env-var form
 STRESS_BASE_URL=https://your-registry.example.com \
 STRESS_TOKEN_FILE=/path/to/that-deployment-token.json \
-  bash tests/stress/run_stress_test.sh mongodb-ce 100
+  bash tests/stress/run_stress_test.sh 100
+
+# Flag form (CLI takes precedence over env vars)
+bash tests/stress/run_stress_test.sh 100 skills \
+    --base-url https://your-registry.example.com \
+    --token-file /path/to/that-deployment-token.json
 ```
 
 ## Running scripts individually

@@ -186,18 +186,15 @@ async def reconcile_anthropic_servers(
             errors.append(f"Error removing {path}: {e}")
             logger.error(f"Reconciliation: error removing server {path}: {e}")
 
-    # Step 5: Regenerate nginx config if any servers were removed
-    if removed and nginx_service and not skip_nginx_regen:
+    # Step 5: Signal nginx config needs regeneration if any servers were removed
+    if removed and not skip_nginx_regen:
         try:
-            all_servers = await server_repo.list_all()
-            enabled_servers = {
-                p: info for p, info in all_servers.items() if info.get("is_enabled", False)
-            }
-            async with nginx_service.reload_lock:
-                await nginx_service.generate_config_async(enabled_servers)
-            logger.info("Reconciliation: nginx config regenerated")
+            from registry.core.nginx_service import nginx_reload_scheduler
+
+            nginx_reload_scheduler.mark_dirty()
+            logger.info("Reconciliation: nginx config marked dirty")
         except Exception as e:
-            logger.error(f"Reconciliation: failed to regenerate nginx config: {e}")
+            logger.error(f"Reconciliation: failed to mark nginx config dirty: {e}")
 
     elapsed = time.time() - start_time
 

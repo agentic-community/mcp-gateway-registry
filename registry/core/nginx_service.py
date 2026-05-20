@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -174,6 +175,10 @@ class NginxConfigService:
         # #1044 and .scratchpad/issue-1044/lld.md for the full rationale.
         self.reload_lock: asyncio.Lock = asyncio.Lock()
 
+        # Cache for get_additional_server_names (avoids hitting metadata
+        # endpoints on every scheduler tick). Invalidated by mark_dirty().
+        self._cached_server_names: str | None = None
+
         # Determine which template to use based on SSL certificate availability
         ssl_cert_path = Path(REGISTRY_CONSTANTS.SSL_CERT_PATH)
         ssl_key_path = Path(REGISTRY_CONSTANTS.SSL_KEY_PATH)
@@ -325,6 +330,19 @@ class NginxConfigService:
             logger.error(f"Failed to generate Nginx configuration: {e}", exc_info=True)
             return False
 
+    async def render_config(
+        self,
+        servers: dict[str, dict[str, Any]],
+    ) -> str | None:
+        """Render the nginx config string without writing to disk or reloading.
+
+        Returns the rendered config text, or None if nginx updates are disabled.
+        Used by NginxReloadScheduler for hash-based change detection.
+        """
+        if not settings.nginx_updates_enabled:
+            return None
+        return await self._render_config_impl(servers)
+
     async def generate_config_async(
         self, servers: dict[str, dict[str, Any]], force_base_config: bool = False
     ) -> bool:
@@ -348,10 +366,40 @@ class NginxConfigService:
             return True
 
         try:
+            config_content = await self._render_config_impl(servers)
+            if config_content is None:
+                return False
+
+            # Write virtual server Lua mapping files (side effect, not part of render)
+            await self._commit_virtual_server_mappings()
+
+            _atomic_write_text(settings.nginx_config_path, config_content)
+
+            logger.info(
+                f"Generated Nginx configuration with location blocks "
+                f"and additional server names"
+            )
+
+            self.reload_nginx(force=force_base_config)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to generate Nginx configuration: {e}", exc_info=True)
+            return False
+
+    async def _render_config_impl(
+        self,
+        servers: dict[str, dict[str, Any]],
+    ) -> str | None:
+        """Internal: render the full nginx config content string.
+
+        Returns the rendered string, or None if the template is missing.
+        """
+        try:
             # Read template
             if not self.nginx_template_path.exists():
                 logger.warning(f"Nginx template not found at {self.nginx_template_path}")
-                return False
+                return None
 
             with open(self.nginx_template_path) as f:
                 template_content = f.read()
@@ -494,8 +542,10 @@ class NginxConfigService:
                     "Registry-only mode: generating base nginx config without MCP server location blocks"
                 )
 
-            # Fetch additional server names (custom domains/IPs)
-            additional_server_names = await self.get_additional_server_names()
+            # Fetch additional server names (cached to avoid per-tick metadata calls)
+            if self._cached_server_names is None:
+                self._cached_server_names = await self.get_additional_server_names()
+            additional_server_names = self._cached_server_names
 
             # Get API version from constants
             api_version = REGISTRY_CONSTANTS.ANTHROPIC_API_VERSION
@@ -604,9 +654,6 @@ class NginxConfigService:
 
                 config_content = config_content.replace("{{VIRTUAL_SERVER_BLOCKS}}", virtual_blocks)
 
-                # Write mapping JSON files for Lua router
-                await self._write_virtual_server_mappings(virtual_servers)
-
                 logger.info(
                     f"Generated virtual server config with {len(virtual_servers)} virtual servers"
                 )
@@ -617,24 +664,26 @@ class NginxConfigService:
             root_path = os.environ.get("ROOT_PATH", "").rstrip("/")
             config_content = config_content.replace("{{ROOT_PATH}}", root_path)
 
-            # Write config file atomically (temp file + os.replace) so
-            # nginx -t and concurrent writers never see a truncated file.
-            # See issue #1044.
-            _atomic_write_text(settings.nginx_config_path, config_content)
-
-            logger.info(
-                f"Generated Nginx configuration with {len(location_blocks)} location blocks and additional server names: {additional_server_names}"
-            )
-
-            # Automatically reload nginx after generating config
-            # Use force=True when generating base config to ensure nginx picks up changes
-            self.reload_nginx(force=force_base_config)
-
-            return True
+            return config_content
 
         except Exception as e:
-            logger.error(f"Failed to generate Nginx configuration: {e}", exc_info=True)
-            return False
+            logger.error(f"Failed to render Nginx configuration: {e}", exc_info=True)
+            return None
+
+    async def _commit_virtual_server_mappings(self) -> None:
+        """Write Lua mapping JSON files for virtual servers.
+
+        Separated from _render_config_impl so that rendering is pure (no disk
+        side effects) and mappings are only written when config actually changes.
+        """
+        try:
+            from registry.repositories.factory import get_virtual_server_repository
+
+            virtual_repo = get_virtual_server_repository()
+            virtual_servers = await virtual_repo.list_enabled()
+            await self._write_virtual_server_mappings(virtual_servers)
+        except Exception as e:
+            logger.error(f"Failed to write virtual server mappings: {e}")
 
     def reload_nginx(self, force: bool = False) -> bool:
         """Reload Nginx configuration (if running in appropriate environment).
@@ -1313,3 +1362,119 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
 # Global nginx service instance
 nginx_service = NginxConfigService()
+
+
+class NginxReloadScheduler:
+    """Coalesces multiple nginx reload requests into periodic batched reloads.
+
+    Instead of reloading nginx on every server registration, callers invoke
+    mark_dirty() which sets a boolean flag. A background task wakes every
+    debounce_seconds, checks if the flag is set (or polls the DB for external
+    changes in multi-replica deployments), regenerates the config if the
+    rendered output differs from the last-applied version, and reloads nginx
+    once.
+
+    See issue #1087 and .scratchpad/lld-nginx-debounced-reload.md.
+    """
+
+    def __init__(
+        self,
+        debounce_seconds: float = 2.0,
+        poll_external: bool = True,
+    ) -> None:
+        self._dirty: bool = False
+        self._debounce_seconds = debounce_seconds
+        self._poll_external = poll_external
+        self._task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event = asyncio.Event()
+        self._last_config_hash: str = ""
+        self._flush_lock: asyncio.Lock = asyncio.Lock()
+
+    def mark_dirty(self) -> None:
+        """Signal that nginx config needs regeneration. Non-blocking."""
+        self._dirty = True
+        nginx_service._cached_server_names = None
+
+    def seed_hash(self, config_text: str) -> None:
+        """Set the initial config hash after startup generation.
+
+        Prevents a redundant reload on the first scheduler tick.
+        """
+        self._last_config_hash = hashlib.sha256(config_text.encode()).hexdigest()
+
+    async def start(self) -> None:
+        """Start the background flush loop. Call once at app startup."""
+        self._task = asyncio.create_task(self._flush_loop())
+        logger.info(
+            "NginxReloadScheduler started (debounce=%.1fs, poll_external=%s)",
+            self._debounce_seconds,
+            self._poll_external,
+        )
+
+    async def stop(self) -> None:
+        """Gracefully stop the flush loop. Performs one final flush if dirty."""
+        self._stop_event.set()
+        if self._task:
+            await self._task
+
+    async def flush_now(self) -> None:
+        """Force an immediate regen+reload. Used for toggle/delete where the
+        change must be reflected before the HTTP response returns."""
+        await self._do_reload_if_changed()
+
+    async def _flush_loop(self) -> None:
+        while not self._stop_event.is_set():
+            await asyncio.sleep(self._debounce_seconds)
+            if self._dirty or self._poll_external:
+                await self._do_reload_if_changed()
+
+        if self._dirty:
+            await self._do_reload_if_changed()
+
+    async def _do_reload_if_changed(self) -> None:
+        async with self._flush_lock:
+            self._dirty = False
+            try:
+                enabled_servers = await _fetch_all_enabled_servers()
+                config_text = await nginx_service.render_config(enabled_servers)
+                if config_text is None:
+                    return
+
+                new_hash = hashlib.sha256(config_text.encode()).hexdigest()
+                if new_hash == self._last_config_hash:
+                    return
+
+                # Config changed: write virtual server Lua mappings, then nginx config
+                await nginx_service._commit_virtual_server_mappings()
+
+                async with nginx_service.reload_lock:
+                    _atomic_write_text(settings.nginx_config_path, config_text)
+                    nginx_service.reload_nginx()
+                self._last_config_hash = new_hash
+                logger.info(
+                    "Debounced nginx reload completed (hash=%s)",
+                    new_hash[:12],
+                )
+            except Exception as e:
+                logger.error("Debounced nginx reload failed: %s", e)
+                self._dirty = True
+
+
+async def _fetch_all_enabled_servers() -> dict[str, Any]:
+    """Fetch all enabled servers from the DB for nginx config generation."""
+    from registry.services.server_service import server_service
+
+    enabled_servers: dict[str, Any] = {}
+    for path in await server_service.get_enabled_services():
+        info = await server_service.get_server_info(path)
+        if info:
+            enabled_servers[path] = info
+    return enabled_servers
+
+
+# Module-level singleton
+nginx_reload_scheduler = NginxReloadScheduler(
+    debounce_seconds=float(os.getenv("NGINX_RELOAD_DEBOUNCE_SECONDS", "2.0")),
+    poll_external=os.getenv("NGINX_RELOAD_POLL_EXTERNAL", "true").lower()
+    in ("1", "true", "yes", "on"),
+)
