@@ -353,11 +353,16 @@ class HealthMonitoringService:
         # Track if any status changed to minimize broadcasts
         status_changed = False
 
-        # Perform actual health checks concurrently for better performance
+        # Perform health checks in staggered batches to avoid CPU/network spikes.
+        # With 100+ servers, firing all checks at once causes connection storms
+        # and timeout cascades. Batches of 10 with a short pause between them
+        # spreads the load across the interval window.
+        HEALTH_CHECK_BATCH_SIZE = 10
+        HEALTH_CHECK_BATCH_DELAY_SECONDS = 0.5
+
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(settings.health_check_timeout_seconds)
         ) as client:
-            # Batch process enabled services
             check_tasks = []
             for service_path in enabled_services:
                 server_info = await server_service.get_server_info(
@@ -365,18 +370,25 @@ class HealthMonitoringService:
                 )
                 if server_info and server_info.get("proxy_pass_url"):
                     check_tasks.append(
-                        self._check_single_service(client, service_path, server_info)
+                        (service_path, server_info)
                     )
 
-            # Execute all health checks concurrently
-            if check_tasks:
-                results = await asyncio.gather(*check_tasks, return_exceptions=True)
+            # Execute health checks in staggered batches
+            for batch_start in range(0, len(check_tasks), HEALTH_CHECK_BATCH_SIZE):
+                batch = check_tasks[batch_start:batch_start + HEALTH_CHECK_BATCH_SIZE]
+                batch_coros = [
+                    self._check_single_service(client, path, info)
+                    for path, info in batch
+                ]
+                results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
-                # Check if any status changed
                 for result in results:
-                    if isinstance(result, bool) and result:  # True indicates status changed
+                    if isinstance(result, bool) and result:
                         status_changed = True
-                        break
+
+                # Pause between batches to avoid CPU/connection spikes
+                if batch_start + HEALTH_CHECK_BATCH_SIZE < len(check_tasks):
+                    await asyncio.sleep(HEALTH_CHECK_BATCH_DELAY_SECONDS)
 
         # Only broadcast if something actually changed
         if status_changed:

@@ -651,6 +651,21 @@ def _build_api_perf_md(report: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _detect_backend(
+    base_url: str,
+    token: str,
+) -> str:
+    """Auto-detect storage backend from the registry's /api/stats endpoint."""
+    import httpx as _httpx
+
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = _httpx.get(f"{base_url.rstrip('/')}/api/stats", headers=headers, timeout=10)
+    resp.raise_for_status()
+    backend = resp.json()["database_status"]["backend"]
+    logger.info("Auto-detected backend: %s", backend)
+    return backend
+
+
 def _main(args: argparse.Namespace) -> int:
     token_file: Path = args.token_file
     try:
@@ -659,6 +674,15 @@ def _main(args: argparse.Namespace) -> int:
         logger.error("%s", exc)
         return 1
     token_state = TokenState(token, token_file)
+
+    # Auto-detect backend if not provided
+    if args.backend is None:
+        try:
+            args.backend = _detect_backend(args.base_url, token)
+        except Exception as exc:
+            logger.error("Failed to auto-detect backend: %s", exc)
+            logger.error("Provide --backend explicitly or ensure the registry is reachable.")
+            return 1
 
     output_dir = results_dir_for(args.backend, args.size, args.results_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -739,7 +763,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         description="Measure steady-state per-request latency against a populated registry.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--backend", choices=BACKENDS, required=True)
+    parser.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        default=None,
+        help="Storage backend. Auto-detected from /api/stats if not provided.",
+    )
     parser.add_argument("--size", type=int, required=True, choices=TARGET_SIZES)
     parser.add_argument("--base-url", default=default_base_url())
     parser.add_argument(
