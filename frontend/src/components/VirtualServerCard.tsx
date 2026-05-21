@@ -179,7 +179,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                 onClick={() => setShowConfig(true)}
                 className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-700/50 rounded-lg transition-all duration-200 flex-shrink-0 border border-green-200 dark:border-green-700"
                 title="Get connection details and mcp.json configuration"
-                aria-label={`Connect to ${server.name}`}
+                aria-label={`Connect to ${server.server_name}`}
               >
                 <LinkIcon className="h-3.5 w-3.5" />
                 Connect

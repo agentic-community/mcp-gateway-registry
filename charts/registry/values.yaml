@@ -24,7 +24,7 @@ image:
 # Application configuration
 app:
   name: registry
-  replicas: 1
+  replicas: 2
   envSecretName: registry-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
 
