@@ -322,6 +322,10 @@ Single gateway supporting both autonomous AI agents (machine-to-machine) and AI 
 
 The MCP Gateway & Registry provides a unified platform for both autonomous AI agents and AI coding assistants to access enterprise-curated tools through a centralized gateway with comprehensive authentication and governance.
 
+The solution consists of four core components: an **Nginx reverse proxy** that handles TLS termination, auth validation, and dynamic routing to backend MCP servers; a **Registry API** (FastAPI) that manages the catalog of servers, agents, and skills with semantic search; an **Auth Server** that integrates with enterprise identity providers (Keycloak, Entra ID, Okta, Auth0, Cognito) for OAuth2/OIDC flows; and a **MongoDB/DocumentDB data layer** that stores all configuration, embeddings, sessions, and audit records.
+
+For detailed architecture diagrams at multiple levels of depth (executive overview through security threat model), see [Architecture Diagrams](docs/architecture-diagrams.md).
+
 ```mermaid
 flowchart TB
     subgraph Human_Users["Human Users"]
