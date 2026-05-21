@@ -1330,7 +1330,34 @@ Include a category only when it is relevant to the feature. Mark a category "Not
 | Backwards Compatibility Tests | Feature changes an existing endpoint, schema, CLI command, config default, or data model |
 | UX Tests | Feature adds/changes any UI surface (web UI, CLI output formatting, error messages shown to users) |
 | Deployment Surface Tests (Docker, ECS, Helm) | Feature adds or modifies **any** config parameter (env var, setting, Terraform variable, Helm value, secret) across Docker, ECS/Terraform, or Helm/EKS deployments |
+| Nginx Routing / MCP Proxy Tests | Feature touches nginx config generation (`nginx_service.py`), auth server mcp-proxy (`/mcp-proxy/`), or any proxy_pass/location-block logic |
 | E2E API Tests | Feature adds a new user-visible workflow that spans multiple endpoints or services |
+
+### CRITICAL: Nginx Routing Safety
+
+Any change that impacts nginx routing (in `registry/core/nginx_service.py`, `auth_server/server.py` mcp-proxy, or nginx template files) MUST include an end-to-end MCP client connectivity test. This is because:
+
+1. **Health checks do not exercise the nginx proxy path.** They call backends directly (127.0.0.1), so a broken proxy_pass goes undetected by monitoring.
+2. **The REST API does not use the MCP proxy path.** UI and API tests pass even when MCP routing is broken.
+3. **Only real MCP clients** (Roo Code, Claude Code, Cursor) connecting through the gateway exercise the full path: CloudFront -> ALB -> nginx location block -> auth_request -> mcp-proxy hop -> upstream backend.
+
+**Required test for any nginx routing change:**
+
+```bash
+# Verify ai-registry-tools (mcpgw) is reachable through the full proxy chain
+TOKEN="<valid JWT>"
+curl -X POST \
+  -H "X-Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}' \
+  "https://<registry-url>/airegistry-tools/mcp"
+
+# Expected: 200 OK with JSON-RPC response containing serverInfo
+# Failure: 502/404/405 or "Upstream MCP server error"
+```
+
+This test must pass on all deployment surfaces (Docker Compose, ECS, EKS) before merging. The `airegistry-tools` server is the canary for MCP proxy routing because it is always registered and always healthy.
 
 ### Testing Plan Template
 
