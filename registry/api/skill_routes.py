@@ -107,7 +107,7 @@ async def discover_skills(
     tags: list[str] | None = Query(None, description="Filter by tags"),
     compatibility: str | None = Query(None, description="Filter by compatibility"),
     page: int = Query(0, ge=0),
-    page_size: int = Query(100, ge=1, le=500),
+    page_size: int = Query(100, ge=1, le=2000),
 ) -> DiscoveryResponse:
     """Discovery endpoint optimized for coding assistants.
 
@@ -161,7 +161,7 @@ async def list_skills(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     include_disabled: bool = Query(False, description="Include disabled skills"),
     tag: str | None = Query(None, description="Filter by tag"),
-    limit: int = Query(20, ge=1, le=500, description="Number of skills to return (max 500)"),
+    limit: int = Query(20, ge=1, le=2000, description="Number of skills to return (max 2000)"),
     offset: int = Query(0, ge=0, description="Number of skills to skip"),
 ) -> dict:
     """List all registered skills with visibility filtering and pagination."""

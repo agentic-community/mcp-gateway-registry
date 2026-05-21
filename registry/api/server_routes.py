@@ -500,7 +500,7 @@ async def get_servers_json(
         None,
         description="Lexical substring search across server name, description, tags, and metadata",
     ),
-    limit: int = Query(20, ge=1, le=500, description="Number of servers to return (max 500)"),
+    limit: int = Query(20, ge=1, le=2000, description="Number of servers to return (max 2000)"),
     offset: int = Query(0, ge=0, description="Number of servers to skip"),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):

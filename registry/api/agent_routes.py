@@ -619,7 +619,7 @@ async def list_agents(
         alias="allowed_groups",
         description="Filter by allowed_groups (comma-separated). Returns only group-restricted agents whose allowed_groups intersect with the given values.",
     ),
-    limit: int = Query(20, ge=1, le=500, description="Number of agents to return (max 500)"),
+    limit: int = Query(20, ge=1, le=2000, description="Number of agents to return (max 2000)"),
     offset: int = Query(0, ge=0, description="Number of agents to skip"),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
