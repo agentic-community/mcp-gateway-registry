@@ -569,8 +569,17 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         path: str,
         server_info: dict[str, Any],
         is_enabled: bool = False,
+        skip_if_unchanged: bool = False,
     ) -> None:
-        """Index a server for search."""
+        """Index a server for search.
+
+        Args:
+            skip_if_unchanged: When True (used during startup), skip embedding
+                generation if the existing document has the same content hash.
+                This avoids redundant embedding API calls on every boot.
+        """
+        import hashlib
+
         collection = await self._get_collection()
 
         text_parts = [
@@ -593,6 +602,25 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 text_parts.append(f"{key}: {value}")
 
         text_for_embedding = " ".join(filter(None, text_parts))
+        content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
+
+        # Skip re-embedding if content hasn't changed (startup optimization)
+        if skip_if_unchanged:
+            existing = await collection.find_one(
+                {"_id": path},
+                {"content_hash": 1, "is_enabled": 1, "embedding": 1},
+            )
+            if (
+                existing
+                and existing.get("content_hash") == content_hash
+                and existing.get("embedding")
+            ):
+                # Content unchanged and embedding exists; just update is_enabled if needed
+                if existing.get("is_enabled") != is_enabled:
+                    await collection.update_one(
+                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
+                    )
+                return
 
         # Flatten metadata into a searchable text field for keyword matching
         metadata_text = flatten_metadata_to_text(metadata)
@@ -619,6 +647,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "is_enabled": is_enabled,
             "status": server_info.get("status", "active"),
             "text_for_embedding": text_for_embedding,
+            "content_hash": content_hash,
             "embedding": embedding,
             "embedding_metadata": embedding_config.get_embedding_metadata(),
             "tools": [
@@ -645,8 +674,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         path: str,
         agent_card: AgentCard,
         is_enabled: bool = False,
+        skip_if_unchanged: bool = False,
     ) -> None:
         """Index an agent for search."""
+        import hashlib
+
         collection = await self._get_collection()
 
         text_parts = [
@@ -670,6 +702,23 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     text_parts.append(skill.description)
 
         text_for_embedding = " ".join(filter(None, text_parts))
+        content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
+
+        if skip_if_unchanged:
+            existing = await collection.find_one(
+                {"_id": path},
+                {"content_hash": 1, "is_enabled": 1, "embedding": 1},
+            )
+            if (
+                existing
+                and existing.get("content_hash") == content_hash
+                and existing.get("embedding")
+            ):
+                if existing.get("is_enabled") != is_enabled:
+                    await collection.update_one(
+                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
+                    )
+                return
 
         try:
             model = await self._get_embedding_model()
@@ -697,6 +746,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "is_enabled": is_enabled,
             "status": getattr(agent_card, "status", "active"),
             "text_for_embedding": text_for_embedding,
+            "content_hash": content_hash,
             "embedding": embedding,
             "embedding_metadata": embedding_config.get_embedding_metadata(),
             "capabilities": agent_card.capabilities or [],
@@ -715,6 +765,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         path: str,
         skill: Any,
         is_enabled: bool = False,
+        skip_if_unchanged: bool = False,
     ) -> None:
         """Index a skill for semantic search.
 
@@ -722,7 +773,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             path: Skill path (e.g., /skills/pdf-processing)
             skill: SkillCard object
             is_enabled: Whether skill is enabled
+            skip_if_unchanged: Skip embedding if content hash matches existing doc
         """
+        import hashlib
+
         collection = await self._get_collection()
 
         # Compose text for embedding
@@ -749,6 +803,23 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 text_parts.append(extra_text)
 
         text_for_embedding = " ".join(filter(None, text_parts))
+        content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
+
+        if skip_if_unchanged:
+            existing = await collection.find_one(
+                {"_id": path},
+                {"content_hash": 1, "is_enabled": 1, "embedding": 1},
+            )
+            if (
+                existing
+                and existing.get("content_hash") == content_hash
+                and existing.get("embedding")
+            ):
+                if existing.get("is_enabled") != is_enabled:
+                    await collection.update_one(
+                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
+                    )
+                return
 
         # Generate embedding
         try:
@@ -800,6 +871,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             else None,
             "status": getattr(skill, "status", "active"),
             "text_for_embedding": text_for_embedding,
+            "content_hash": content_hash,
             "embedding": embedding,
             "embedding_metadata": embedding_config.get_embedding_metadata(),
             "metadata": {

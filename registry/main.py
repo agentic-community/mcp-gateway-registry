@@ -430,11 +430,13 @@ async def lifespan(app: FastAPI):
 
         logger.info(f"📊 Updating {backend_name} index with all registered services...")
         all_servers = await server_service.get_all_servers()
+        skipped = 0
         for service_path, server_info in all_servers.items():
             is_enabled = await server_service.is_service_enabled(service_path)
             try:
-                await search_repo.index_server(service_path, server_info, is_enabled)
-                logger.debug(f"Updated {backend_name} index for service: {service_path}")
+                await search_repo.index_server(
+                    service_path, server_info, is_enabled, skip_if_unchanged=True
+                )
             except Exception as e:
                 logger.error(
                     f"Failed to update {backend_name} index for service {service_path}: {e}",
@@ -451,8 +453,9 @@ async def lifespan(app: FastAPI):
         for agent_card in all_agents:
             is_enabled = await agent_service.is_agent_enabled(agent_card.path)
             try:
-                await search_repo.index_agent(agent_card.path, agent_card, is_enabled)
-                logger.debug(f"Updated {backend_name} index for agent: {agent_card.path}")
+                await search_repo.index_agent(
+                    agent_card.path, agent_card, is_enabled, skip_if_unchanged=True
+                )
             except Exception as e:
                 logger.error(
                     f"Failed to update {backend_name} index for agent {agent_card.path}: {e}",
@@ -468,8 +471,9 @@ async def lifespan(app: FastAPI):
         all_skills = await skill_repo.list_all(skip=0, limit=10000)
         for skill_card in all_skills:
             try:
-                await search_repo.index_skill(skill_card.path, skill_card, skill_card.is_enabled)
-                logger.debug(f"Updated {backend_name} index for skill: {skill_card.path}")
+                await search_repo.index_skill(
+                    skill_card.path, skill_card, skill_card.is_enabled, skip_if_unchanged=True
+                )
             except Exception as e:
                 logger.error(
                     f"Failed to update {backend_name} index for skill {skill_card.path}: {e}",
