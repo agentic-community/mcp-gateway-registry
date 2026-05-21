@@ -3737,6 +3737,15 @@ _HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
     }
 )
 
+_RESPONSE_FRAMING_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+        "connection",
+    }
+)
+
 
 async def _read_bounded(
     response: httpx.Response,
@@ -3777,6 +3786,17 @@ def _forward_headers(
             continue
         forwarded[key] = value
     return forwarded
+
+
+def _passthrough_response_headers(
+    upstream_headers: dict[str, str],
+) -> dict[str, str]:
+    """Preserve upstream end-to-end headers while letting Starlette frame the body."""
+    return {
+        key: value
+        for key, value in upstream_headers.items()
+        if key.lower() not in _RESPONSE_FRAMING_HEADERS
+    }
 
 
 @app.post("/mcp-proxy/{server_name:path}")
@@ -3848,6 +3868,7 @@ async def mcp_proxy(
                 # pathological upstream cannot DoS the proxy.
                 body_bytes = await _read_bounded(upstream_response, max_body_bytes)
                 status_code = upstream_response.status_code
+                upstream_headers = dict(upstream_response.headers)
                 content_type = upstream_response.headers.get("content-type", "application/json")
     except HTTPException:
         raise
@@ -3881,6 +3902,7 @@ async def mcp_proxy(
             content=body_bytes,
             status_code=status_code,
             media_type=content_type,
+            headers=_passthrough_response_headers(upstream_headers),
         )
 
     try:
@@ -3892,6 +3914,7 @@ async def mcp_proxy(
         return JSONResponse(
             content=_safe_parse_body(body_bytes),
             status_code=status_code,
+            headers=_passthrough_response_headers(upstream_headers),
         )
 
     result = parsed.get("result") if isinstance(parsed, dict) else None
@@ -3904,7 +3927,11 @@ async def mcp_proxy(
         result["tools"] = filtered
         parsed["result"] = result
 
-    return JSONResponse(content=parsed, status_code=status_code)
+    return JSONResponse(
+        content=parsed,
+        status_code=status_code,
+        headers=_passthrough_response_headers(upstream_headers),
+    )
 
 
 def _safe_parse_body(

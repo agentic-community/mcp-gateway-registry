@@ -413,6 +413,129 @@ class TestRateLimiting:
         assert f"{username}:{old_hour}" not in user_token_generation_counts
 
 
+class TestMcpProxyResponseHeaders:
+    """Regression tests for streamable-http MCP response headers."""
+
+    class _FakeUpstreamResponse:
+        def __init__(
+            self,
+            body: bytes,
+            headers: dict[str, str],
+            status_code: int = 200,
+        ):
+            self._body = body
+            self.headers = headers
+            self.status_code = status_code
+
+        async def aiter_bytes(self, chunk_size: int):
+            yield self._body
+
+    class _FakeStream:
+        def __init__(self, response):
+            self.response = response
+
+        async def __aenter__(self):
+            return self.response
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeAsyncClient:
+        def __init__(self, response):
+            self.response = response
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return TestMcpProxyResponseHeaders._FakeStream(self.response)
+
+    def test_passthrough_response_headers_preserves_mcp_session_id(self):
+        import auth_server.server as server_module
+
+        headers = server_module._passthrough_response_headers(
+            {
+                "content-type": "application/json",
+                "Mcp-Session-Id": "session-123",
+                "Retry-After": "2",
+                "content-length": "999",
+                "transfer-encoding": "chunked",
+                "connection": "keep-alive",
+                "content-encoding": "gzip",
+            }
+        )
+
+        assert headers["Mcp-Session-Id"] == "session-123"
+        assert headers["Retry-After"] == "2"
+        assert headers["content-type"] == "application/json"
+        assert "content-length" not in {key.lower() for key in headers}
+        assert "transfer-encoding" not in {key.lower() for key in headers}
+        assert "connection" not in {key.lower() for key in headers}
+        assert "content-encoding" not in {key.lower() for key in headers}
+
+    def test_mcp_proxy_preserves_session_header_on_passthrough_response(self):
+        import auth_server.server as server_module
+
+        upstream = self._FakeUpstreamResponse(
+            b'{"jsonrpc":"2.0","id":1,"result":{}}',
+            {
+                "content-type": "application/json",
+                "Mcp-Session-Id": "session-123",
+                "content-length": "999",
+            },
+        )
+
+        with patch(
+            "auth_server.server.httpx.AsyncClient",
+            return_value=self._FakeAsyncClient(upstream),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/test-server",
+                headers={"X-Upstream-Url": "https://upstream.example/mcp"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            )
+
+        assert response.status_code == 200
+        assert response.headers["mcp-session-id"] == "session-123"
+        assert response.json()["result"] == {}
+        assert response.headers["content-length"] != "999"
+
+    def test_mcp_proxy_preserves_session_header_when_tools_filter_disabled(self):
+        import auth_server.server as server_module
+
+        upstream = self._FakeUpstreamResponse(
+            b'{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}',
+            {
+                "content-type": "application/json",
+                "Mcp-Session-Id": "session-abc",
+                "transfer-encoding": "chunked",
+            },
+        )
+
+        with (
+            patch("auth_server.server._read_mcp_filter_enabled", return_value=False),
+            patch(
+                "auth_server.server.httpx.AsyncClient",
+                return_value=self._FakeAsyncClient(upstream),
+            ),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/test-server",
+                headers={"X-Upstream-Url": "https://upstream.example/mcp"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            )
+
+        assert response.status_code == 200
+        assert response.headers["mcp-session-id"] == "session-abc"
+        assert response.json()["result"]["tools"] == []
+        assert "transfer-encoding" not in response.headers
+
+
 # =============================================================================
 # SESSION COOKIE VALIDATION TESTS
 # =============================================================================
