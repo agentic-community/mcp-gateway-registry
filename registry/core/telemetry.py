@@ -641,7 +641,7 @@ async def _build_heartbeat_payload() -> dict:
 
     try:
         skill_repo = get_skill_repository()
-        skills = await skill_repo.list_all()
+        skills = await skill_repo.list_all(skip=0, limit=10000)
         skills_count = len(skills)
     except Exception as e:
         logger.warning(f"[telemetry] Failed to get skill count: {e}")
