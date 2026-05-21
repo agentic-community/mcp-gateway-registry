@@ -428,59 +428,59 @@ async def lifespan(app: FastAPI):
         logger.info(f"🔍 Initializing {backend_name} search service...")
         await search_repo.initialize()
 
-        logger.info(f"📊 Updating {backend_name} index with all registered services...")
-        all_servers = await server_service.get_all_servers()
-        skipped = 0
-        for service_path, server_info in all_servers.items():
-            is_enabled = await server_service.is_service_enabled(service_path)
-            try:
-                await search_repo.index_server(
-                    service_path, server_info, is_enabled, skip_if_unchanged=True
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to update {backend_name} index for service {service_path}: {e}",
-                    exc_info=True,
-                )
+        # For DocumentDB, embeddings are persisted in the collection and survive
+        # restarts. Only FAISS (in-memory) needs a full re-index on every boot.
+        if settings.storage_backend not in MONGODB_BACKENDS:
+            logger.info(f"📊 Rebuilding in-memory {backend_name} index from DB...")
+            all_servers = await server_service.get_all_servers()
+            for service_path, server_info in all_servers.items():
+                is_enabled = await server_service.is_service_enabled(service_path)
+                try:
+                    await search_repo.index_server(service_path, server_info, is_enabled)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to index service {service_path}: {e}",
+                        exc_info=True,
+                    )
+            logger.info(f"✅ {backend_name} index rebuilt with {len(all_servers)} services")
 
-        logger.info(f"✅ {backend_name} index updated with {len(all_servers)} services")
+            logger.info("📋 Loading agent cards and state...")
+            await agent_service.load_agents_and_state()
 
-        logger.info("📋 Loading agent cards and state...")
-        await agent_service.load_agents_and_state()
+            all_agents = await agent_service.list_agents()
+            for agent_card in all_agents:
+                is_enabled = await agent_service.is_agent_enabled(agent_card.path)
+                try:
+                    await search_repo.index_agent(agent_card.path, agent_card, is_enabled)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to index agent {agent_card.path}: {e}",
+                        exc_info=True,
+                    )
+            logger.info(f"✅ {backend_name} index rebuilt with {len(all_agents)} agents")
 
-        logger.info(f"📊 Updating {backend_name} index with all registered agents...")
-        all_agents = await agent_service.list_agents()
-        for agent_card in all_agents:
-            is_enabled = await agent_service.is_agent_enabled(agent_card.path)
-            try:
-                await search_repo.index_agent(
-                    agent_card.path, agent_card, is_enabled, skip_if_unchanged=True
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to update {backend_name} index for agent {agent_card.path}: {e}",
-                    exc_info=True,
-                )
+            from registry.repositories.factory import get_skill_repository
 
-        logger.info(f"✅ {backend_name} index updated with {len(all_agents)} agents")
-
-        logger.info(f"📊 Updating {backend_name} index with all registered skills...")
-        from registry.repositories.factory import get_skill_repository
-
-        skill_repo = get_skill_repository()
-        all_skills = await skill_repo.list_all(skip=0, limit=10000)
-        for skill_card in all_skills:
-            try:
-                await search_repo.index_skill(
-                    skill_card.path, skill_card, skill_card.is_enabled, skip_if_unchanged=True
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to update {backend_name} index for skill {skill_card.path}: {e}",
-                    exc_info=True,
-                )
-
-        logger.info(f"✅ {backend_name} index updated with {len(all_skills)} skills")
+            skill_repo = get_skill_repository()
+            all_skills = await skill_repo.list_all(skip=0, limit=10000)
+            for skill_card in all_skills:
+                try:
+                    await search_repo.index_skill(
+                        skill_card.path, skill_card, skill_card.is_enabled
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to index skill {skill_card.path}: {e}",
+                        exc_info=True,
+                    )
+            logger.info(f"✅ {backend_name} index rebuilt with {len(all_skills)} skills")
+        else:
+            logger.info(
+                f"✅ {backend_name} search index is persistent, skipping startup re-index"
+            )
+            # Still need to load agent state (in-memory service cache)
+            logger.info("📋 Loading agent cards and state...")
+            await agent_service.load_agents_and_state()
 
         logger.info("🏥 Initializing health monitoring service...")
         await health_service.initialize()
