@@ -1284,3 +1284,27 @@ variable "mcpgw_extra_env" {
     error_message = "mcpgw_extra_env contains one or more reserved environment variable names that are managed by the chart. See charts/mcpgw/reserved-env-names.txt for the full list. Configure reserved variables via their canonical Terraform variable or Helm value instead."
   }
 }
+
+variable "autoscaling_min_capacity" {
+  description = "Minimum number of ECS tasks for the registry service (autoscaling floor). Set to 2+ for production workloads with concurrent search traffic."
+  type        = number
+  default     = 2
+}
+
+variable "autoscaling_max_capacity" {
+  description = "Maximum number of ECS tasks for the registry service (autoscaling ceiling). The service scales up to this count under sustained CPU/memory pressure."
+  type        = number
+  default     = 4
+}
+
+variable "autoscaling_target_cpu" {
+  description = "Target CPU utilization percentage for autoscaling. Scale-up triggers when average CPU exceeds this threshold."
+  type        = number
+  default     = 70
+}
+
+variable "autoscaling_target_memory" {
+  description = "Target memory utilization percentage for autoscaling. Scale-up triggers when average memory exceeds this threshold."
+  type        = number
+  default     = 80
+}

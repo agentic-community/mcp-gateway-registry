@@ -34,6 +34,28 @@ def _require_admin(user_context: dict) -> None:
         )
 
 
+@router.get("/telemetry/info")
+async def get_telemetry_info(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+):
+    """Return the current deployment info (same shape as the heartbeat payload).
+
+    Does NOT send the heartbeat to the collector. Use this to inspect what
+    the registry would report: version, cloud, compute platform, storage
+    backend, auth provider, architecture, embeddings config, and aggregate
+    counts. Useful for benchmarking tools that need to record the hardware
+    and software configuration alongside performance results.
+    """
+    _require_admin(user_context)
+
+    from registry.core.telemetry import _build_heartbeat_payload
+
+    payload = await _build_heartbeat_payload()
+    payload.pop("event", None)
+    payload.pop("registry_id", None)
+    return payload
+
+
 @router.post("/telemetry/heartbeat")
 async def force_heartbeat(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,

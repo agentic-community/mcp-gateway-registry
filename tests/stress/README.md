@@ -4,7 +4,7 @@ Tracks [Issue #997](https://github.com/agentic-community/mcp-gateway-registry/is
 
 This directory contains the registry stress test harness. The goal is to register 100/500/1000 MCP servers, A2A agents, and Agent Skills against a running registry and measure API + UI performance on both `mongodb-ce` and DocumentDB backends.
 
-**Current status: Phase 1 + Phase 2** — data generators, bulk registration, and API performance measurement. UI performance measurement and report builder are tracked separately (Phases 3-4).
+**Current status: Phase 1 + Phase 2a + Phase 2b** — data generators, bulk registration, serial API latency measurement, and concurrent search scaling. UI performance measurement and report builder are tracked separately (Phases 3-4).
 
 ## What ships in Phase 1
 
@@ -14,9 +14,11 @@ This directory contains the registry stress test harness. The goal is to registe
 | `generators/generate_agents.py` | Page the GoDaddy ANS catalog and write per-agent payload JSONs. |
 | `generators/generate_skills.py` | Walk the `anthropics/skills` repo via GitHub trees API and write per-skill payload JSONs. |
 | `register_entities.py` | Async bulk-register the generated payloads against a running registry. |
-| `measure_api_performance.py` | Phase 2: measure steady-state per-request latency for list endpoints + semantic search. |
-| `queries.json` | Curated 20-query set used by the Phase 2 semantic-search measurements. |
-| `run_stress_test.sh` | Orchestrator that runs all three generators then the loader. Optionally chains Phase 2 via `STRESS_MEASURE_API=1`. |
+| `measure_api_performance.py` | Phase 2a: measure steady-state per-request latency for list endpoints + semantic search (serial). |
+| `measure_search_concurrency.py` | Phase 2b: measure semantic search latency under concurrent load (1, 10, 100 parallel). |
+| `queries.json` | Curated 20-query set used by the Phase 2a/2b semantic-search measurements. |
+| `run_stress_test.sh` | Orchestrator that runs all three generators then the loader. Optionally chains Phase 2a via `STRESS_MEASURE_API=1`. |
+| `cleanup.py` | Delete all stress-test entities (identified by `stress-test` tag) from the registry. |
 
 Generated payloads land under `tests/stress/data/<entity>/<count>/`. Registration aggregates land under `tests/stress/results/<backend>/size-<count>/registration.json`. Both paths are already in `.gitignore` (lines 431-432) and are **not** committed.
 
@@ -118,12 +120,80 @@ Two files per `(backend, size)` run, alongside the Phase 1 `registration.json`:
 
 ```
 tests/stress/results/<backend>/size-<N>/
-  registration.json        # Phase 1
-  api_perf.json            # Phase 2 (machine-readable)
-  api_perf.md              # Phase 2 (human-readable)
+  registration.json          # Phase 1
+  api_perf.json              # Phase 2a (machine-readable)
+  api_perf.md                # Phase 2a (human-readable)
+  search_concurrency.json    # Phase 2b (machine-readable)
+  search_concurrency.md      # Phase 2b (human-readable)
 ```
 
-`api_perf.md` is what you give a reviewer. `api_perf.json` is what Phase 4's `report_builder.py` will consume to produce the cross-size and cross-backend roll-ups.
+`api_perf.md` and `search_concurrency.md` are what you give a reviewer. All JSON files include a `registry_info` block with the deployment snapshot (version, cloud, compute, storage, auth, embeddings config) captured from `GET /api/registry/telemetry/info` at test start.
+
+## Phase 2b — Search concurrency measurement
+
+After Phase 2a (or independently), measure semantic search latency under concurrent load:
+
+```bash
+uv run python -m tests.stress.measure_search_concurrency \
+    --base-url https://d2xl2zfuhgc4l0.cloudfront.net \
+    --token-file .token \
+    --iterations 50
+```
+
+What it measures:
+
+- **Concurrency=1**: Baseline single-user search latency (should match Phase 2a serial results).
+- **Concurrency=10**: 10 simultaneous search requests per iteration. Simulates a small team using search at the same time.
+- **Concurrency=100**: 100 simultaneous search requests per iteration. Simulates burst load from agent-driven discovery workflows.
+
+Each level runs `iterations + 1` batches (first discarded as warmup). Each batch fires `concurrency` simultaneous `POST /api/search/semantic` requests using the 20 curated queries from `queries.json` with `k=5`. The output reports p50/p90/p95/p99 latency and throughput (requests per second) per concurrency level.
+
+The key scaling metric: if p99 at concurrency=100 is less than 2x the p99 at concurrency=1, the search backend scales well under concurrent load.
+
+## Full Benchmark Sequence
+
+The complete benchmark flow against a deployed registry (3 commands):
+
+```bash
+# 1. Register 100 servers + agents + skills (skip generation if data exists)
+bash tests/stress/run_stress_test.sh 100 \
+    --base-url https://d2xl2zfuhgc4l0.cloudfront.net \
+    --token-file .token \
+    --skip-generate
+
+# 2. Measure API list + serial search latency
+uv run python -m tests.stress.measure_api_performance \
+    --size 100 \
+    --base-url https://d2xl2zfuhgc4l0.cloudfront.net \
+    --iterations 50 \
+    --token-file .token
+
+# 3. Measure search concurrency scaling
+uv run python -m tests.stress.measure_search_concurrency \
+    --base-url https://d2xl2zfuhgc4l0.cloudfront.net \
+    --token-file .token \
+    --iterations 50
+```
+
+After all three tests complete, generate the benchmark report using the `/benchmark-report` Claude skill (or run the script directly):
+
+```bash
+# 4. Generate benchmark report (reads all JSON results, outputs to docs/benchmarks/)
+/usr/bin/python3 .claude/skills/benchmark-report/generate_benchmark_report.py \
+    --results-dir tests/stress/results/documentdb/size-100
+```
+
+The report is written to `docs/benchmarks/benchmark-{date}-{compute}-{backend}-{instances}x.md` and includes the deployment configuration, all latency tables, and scaling analysis. Commit this file to the repo as a historical benchmark record.
+
+To clean up after testing:
+
+```bash
+uv run python -m tests.stress.cleanup \
+    --base-url https://d2xl2zfuhgc4l0.cloudfront.net \
+    --token-file .token
+```
+
+`api_perf.md` and `search_concurrency.md` are quick human-readable summaries. The `docs/benchmarks/` report is the canonical record that combines all three phases with the deployment configuration.
 
 ### Token refresh
 

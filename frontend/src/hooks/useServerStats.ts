@@ -120,20 +120,20 @@ export const useServerStats = (): UseServerStatsReturn => {
       const fetchPromises: Promise<any>[] = [];
 
       if (serversEnabled) {
-        fetchPromises.push(axios.get('/api/servers?limit=500').catch(() => ({ data: { servers: [] } })));
+        fetchPromises.push(axios.get('/api/servers?limit=2000').catch(() => ({ data: { servers: [] } })));
       } else {
         fetchPromises.push(Promise.resolve({ data: { servers: [] } }));
       }
 
       if (agentsEnabled) {
-        fetchPromises.push(axios.get('/api/agents?limit=500').catch(() => ({ data: { agents: [] } })));
+        fetchPromises.push(axios.get('/api/agents?limit=2000').catch(() => ({ data: { agents: [] } })));
       } else {
         fetchPromises.push(Promise.resolve({ data: { agents: [] } }));
       }
 
       // Fetch skills for stats if skills are enabled
       if (skillsEnabled) {
-        fetchPromises.push(axios.get('/api/skills?include_disabled=true&limit=500').catch(() => ({ data: { skills: [] } })));
+        fetchPromises.push(axios.get('/api/skills?include_disabled=true&limit=2000').catch(() => ({ data: { skills: [] } })));
       } else {
         fetchPromises.push(Promise.resolve({ data: { skills: [] } }));
       }

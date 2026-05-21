@@ -61,6 +61,7 @@ from tests.stress.config import (
     default_base_url,
     default_results_dir,
     default_token_file,
+    fetch_registry_info,
     project_root,
     results_dir_for,
 )
@@ -726,6 +727,8 @@ def _main(args: argparse.Namespace) -> int:
                     )
                 )
 
+    registry_info = fetch_registry_info(args.base_url, token_state.token)
+
     overall = {
         "backend": args.backend,
         "size": args.size,
@@ -734,6 +737,7 @@ def _main(args: argparse.Namespace) -> int:
         "base_url": args.base_url,
         "collected_at": datetime.now(UTC).isoformat(),
         "wall_clock_seconds": time.time() - overall_start,
+        "registry_info": registry_info,
         "operations": [op.model_dump() for op in operations],
     }
 

@@ -37,6 +37,7 @@ from tests.stress.config import (
     default_data_dir,
     default_results_dir,
     default_token_file,
+    fetch_registry_info,
     results_dir_for,
 )
 from tests.stress.constants import (
@@ -513,12 +514,15 @@ async def _main_async(args: argparse.Namespace) -> int:
             )
             per_entity[entity_type] = aggregate.model_dump()
 
+    registry_info = fetch_registry_info(base_url, token)
+
     overall = {
         "backend": args.backend,
         "size": args.count,
         "base_url": base_url,
         "concurrency": args.concurrency,
         "wall_clock_seconds": time.time() - overall_start,
+        "registry_info": registry_info,
         "entity_types": per_entity,
     }
 

@@ -529,11 +529,12 @@ module "ecs_service_registry" {
   source  = "terraform-aws-modules/ecs/aws//modules/service"
   version = "~> 6.0"
 
-  name                     = "${local.name_prefix}-registry"
-  cluster_arn              = var.ecs_cluster_arn
-  cpu                      = tonumber(var.cpu)
-  memory                   = tonumber(var.memory)
-  desired_count            = var.enable_autoscaling ? var.autoscaling_min_capacity : var.registry_replicas
+  name                               = "${local.name_prefix}-registry"
+  cluster_arn                        = var.ecs_cluster_arn
+  cpu                                = tonumber(var.cpu)
+  memory                             = tonumber(var.memory)
+  desired_count                      = var.enable_autoscaling ? var.autoscaling_min_capacity : var.registry_replicas
+  health_check_grace_period_seconds  = 900
   enable_autoscaling       = var.enable_autoscaling
   autoscaling_min_capacity = var.autoscaling_min_capacity
   autoscaling_max_capacity = var.autoscaling_max_capacity
