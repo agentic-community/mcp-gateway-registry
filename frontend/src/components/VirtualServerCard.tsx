@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
   PencilIcon,
   TrashIcon,
-  CogIcon,
+  LinkIcon,
   WrenchScrewdriverIcon,
   XMarkIcon,
   ChevronDownIcon,
@@ -174,13 +174,15 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                 </button>
               )}
 
-              {/* Configuration Generator Button */}
+              {/* Connect Button */}
               <button
                 onClick={() => setShowConfig(true)}
-                className="p-2 text-gray-400 hover:text-green-600 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-700/50 rounded-lg transition-all duration-200"
-                title="Copy mcp.json configuration"
+                className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-700/50 rounded-lg transition-all duration-200 flex-shrink-0 border border-green-200 dark:border-green-700"
+                title="Get connection details and mcp.json configuration"
+                aria-label={`Connect to ${server.name}`}
               >
-                <CogIcon className="h-4 w-4" />
+                <LinkIcon className="h-3.5 w-3.5" />
+                Connect
               </button>
 
               {canModify && (
