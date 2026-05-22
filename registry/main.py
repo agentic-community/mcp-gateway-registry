@@ -20,8 +20,10 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
+import httpx
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from registry.api.agent_routes import router as agent_router
 from registry.api.ans_routes import router as ans_router
@@ -960,6 +962,31 @@ app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card
 
 # Register well-known discovery router
 app.include_router(wellknown_router, prefix="/.well-known", tags=["Discovery"])
+
+# Expose in-process Prometheus metrics (issue #867).
+# NOTE: Must be registered before the SPA catch-all route below — Starlette evaluates
+# routes in order, and the catch-all raises 404 for api/ paths rather than falling through.
+# NOTE: Unauthenticated. Accessible through NGINX. See docs/OBSERVABILITY.md for operator guidance.
+# NOTE: Single-process only. If uvicorn is ever run with --workers N, each worker has its own
+# REGISTRY. To aggregate across workers set PROMETHEUS_MULTIPROC_DIR.
+# See https://prometheus.github.io/client_python/multiprocess/
+# NOTE: Unauthenticated. Accessible through NGINX. See docs/OBSERVABILITY.md for operator guidance.
+@app.get("/api/metrics", include_in_schema=False)
+async def metrics_endpoint() -> Response:
+    local_metrics = generate_latest()
+
+    metrics_url = os.getenv("METRICS_PROMETHEUS_URL", "http://metrics-service:9465/metrics")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(metrics_url)
+            if resp.status_code == 200:
+                combined = local_metrics + resp.content
+            else:
+                combined = local_metrics
+    except Exception:
+        combined = local_metrics
+
+    return Response(combined, media_type=CONTENT_TYPE_LATEST)
 
 
 # Customize OpenAPI schema to add security schemes

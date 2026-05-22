@@ -947,6 +947,87 @@ docker compose logs metrics-service | grep -i otel
 | faiss_search_time_ms | REAL | Time for FAISS search |
 | created_at | TEXT | Record creation time |
 
+## Registry In-Process Metrics (`/api/metrics`)
+
+The registry process exposes its own Prometheus metrics at `/api/metrics` (issue #867). This endpoint is served directly by the FastAPI app and returns all in-process counters and gauges in Prometheus text exposition format.
+
+### Endpoint Details
+
+| Property | Value |
+|----------|-------|
+| Path | `GET /api/metrics` |
+| Authentication | None (unauthenticated) |
+| Content-Type | `text/plain; version=0.0.4; charset=utf-8` |
+| Scrape interval | 10s (configured in `config/prometheus.yml`) |
+
+### Auth Posture
+
+This endpoint is unauthenticated. It is scraped by the Prometheus container over the internal Docker network (`registry:7860`). It is also accessible externally through NGINX at `http://yourdomain/api/metrics`.
+
+**Security note for public deployments:** If your registry is internet-facing, consider restricting access at the NGINX or load-balancer level. Example NGINX snippet:
+
+```nginx
+location = /api/metrics {
+    allow 10.0.0.0/8;   # internal only — adjust to your network
+    deny all;
+    proxy_pass http://127.0.0.1:7860;
+}
+```
+
+### Counters and Gauges Exposed
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `registry_logout_id_token_hint_present_total` | Counter | — | Logouts where id_token hint was present |
+| `registry_logout_id_token_hint_missing_total` | Counter | — | Logouts where id_token hint was missing |
+| `registry_logout_jwt_validation_failed_total` | Counter | — | Logout JWT validation failures |
+| `registry_logout_url_length_warning_total` | Counter | — | Logout URLs exceeding recommended length |
+| `mcp_config_view_requests_total` | Counter | `user_type` | Config view API calls |
+| `mcp_config_export_requests_total` | Counter | `format`, `includes_sensitive` | Config export requests |
+| `registry_deployment_mode_info` | Gauge | `deployment_mode`, `registry_mode` | Current deployment mode |
+| `registry_nginx_updates_skipped_total` | Counter | `operation` | NGINX update skips |
+| `nginx_config_writes_total` | Counter | `status` | NGINX config file writes |
+| `registry_mode_blocked_requests_total` | Counter | `path_category`, `mode` | Requests blocked by registry mode |
+| `peer_sync_failures_total` | Counter | `peer_id`, `failure_type` | Federation peer sync failures |
+| `peer_token_missing_total` | Gauge | — | Peers missing federation tokens |
+| `peer_sync_duration_seconds` | Gauge | `peer_id`, `success` | Peer sync operation duration |
+| `app_log_mongodb_flush_failures_total` | Counter | `service` | MongoDB log flush failures |
+| `telemetry_sends_total` | Counter | `event`, `status` | Telemetry events sent |
+| `m2m_orphan_cleanups_total` | Counter | `idp_had_record` | M2M orphan token cleanups |
+| `mcp_registry_cloud_detection_total` | Counter | `cloud`, `method` | Cloud provider detection outcomes |
+| `m2m_management_requests_total` | Counter | `operation`, `outcome` | M2M management API calls |
+
+Python process metrics (`process_resident_memory_bytes`, GC stats, etc.) are also included automatically by the default collector.
+
+### Sample PromQL Queries
+
+```
+# Logout event rate (5-minute window)
+rate(registry_logout_id_token_hint_present_total[5m])
+
+# Config view request rate by user type
+rate(mcp_config_view_requests_total[5m])
+
+# M2M management error rate
+rate(m2m_management_requests_total{outcome!="success"}[5m])
+
+# Peer sync failure rate
+rate(peer_sync_failures_total[5m])
+
+# Current deployment mode
+registry_deployment_mode_info
+```
+
+### Activating the Scrape Job
+
+After deploying this change, restart Prometheus to pick up the new scrape job:
+
+```bash
+docker compose restart prometheus
+```
+
+Then verify the target is up at `http://localhost:9090/targets` — the `mcp-registry` job should show **State: UP**.
+
 ## Additional Resources
 
 - [Prometheus Documentation](https://prometheus.io/docs/)

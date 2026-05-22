@@ -12,4 +12,12 @@ scrape_configs:
       - targets: ['metrics-service:9465']
     scrape_interval: 10s
     metrics_path: /metrics
+
+  # Scrape in-process counters from the registry FastAPI app (issue #867).
+  # Requires the registry container to be on the same Docker network as Prometheus.
+  - job_name: 'mcp-registry'
+    static_configs:
+      - targets: ['registry:7860']
+    scrape_interval: 10s
+    metrics_path: /api/metrics
     
