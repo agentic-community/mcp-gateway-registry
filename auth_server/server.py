@@ -1959,41 +1959,54 @@ async def validate_request(request: Request):
 
             # Get authentication provider based on AUTH_PROVIDER environment variable
             try:
-                auth_provider = get_auth_provider()
-                logger.info(f"Using authentication provider: {auth_provider.__class__.__name__}")
+                # Try self-signed token first (tokens minted by this auth server).
+                # This must run before provider-specific validation because the
+                # Connect button generates locally-signed JWTs with iss=mcp-auth-server
+                # regardless of the configured auth provider (Entra, Okta, etc.).
+                try:
+                    unverified = jwt.decode(access_token, options={"verify_signature": False})
+                    if unverified.get("iss") == JWT_ISSUER:
+                        validation_result = validator.validate_self_signed_token(access_token)
+                        logger.info("Token validated as self-signed (iss=mcp-auth-server)")
+                except Exception as e:
+                    logger.debug(f"Self-signed check failed, continuing to provider: {e}")
 
-                # Provider-specific validation
-                if hasattr(auth_provider, "validate_token"):
-                    # For Keycloak, no additional headers needed
-                    validation_result = auth_provider.validate_token(access_token)
-                    logger.info(
-                        f"Token validation successful using {auth_provider.__class__.__name__}"
-                    )
-                else:
-                    # Fallback to old validation for compatibility
-                    if not user_pool_id:
-                        logger.warning("Missing X-User-Pool-Id header for Cognito validation")
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Missing X-User-Pool-Id header",
-                            headers={"Connection": "close"},
+                if not validation_result:
+                    auth_provider = get_auth_provider()
+                    logger.info(f"Using authentication provider: {auth_provider.__class__.__name__}")
+
+                    # Provider-specific validation
+                    if hasattr(auth_provider, "validate_token"):
+                        # For Keycloak, no additional headers needed
+                        validation_result = auth_provider.validate_token(access_token)
+                        logger.info(
+                            f"Token validation successful using {auth_provider.__class__.__name__}"
                         )
+                    else:
+                        # Fallback to old validation for compatibility
+                        if not user_pool_id:
+                            logger.warning("Missing X-User-Pool-Id header for Cognito validation")
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Missing X-User-Pool-Id header",
+                                headers={"Connection": "close"},
+                            )
 
-                    if not client_id:
-                        logger.warning("Missing X-Client-Id header for Cognito validation")
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Missing X-Client-Id header",
-                            headers={"Connection": "close"},
+                        if not client_id:
+                            logger.warning("Missing X-Client-Id header for Cognito validation")
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Missing X-Client-Id header",
+                                headers={"Connection": "close"},
+                            )
+
+                        # Use old validator for backward compatibility
+                        validation_result = validator.validate_token(
+                            access_token=access_token,
+                            user_pool_id=user_pool_id,
+                            client_id=client_id,
+                            region=region,
                         )
-
-                    # Use old validator for backward compatibility
-                    validation_result = validator.validate_token(
-                        access_token=access_token,
-                        user_pool_id=user_pool_id,
-                        client_id=client_id,
-                        region=region,
-                    )
 
             except Exception as e:
                 logger.error(f"Authentication provider error: {e}")
