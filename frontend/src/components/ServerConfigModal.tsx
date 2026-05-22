@@ -254,13 +254,15 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     } else if (isRegistryOnly && server.proxy_pass_url) {
       url = server.proxy_pass_url;
     } else {
-      // Gateway URL = origin + ROOT_PATH + server.path + "/mcp".
-      // getBaseURL() returns the registry's ROOT_PATH (e.g. "/registry"
-      // in path routing mode, "" in subdomain mode), read from the
-      // <base> tag the server injected into index.html.
+      // Gateway URL = origin + ROOT_PATH + server.path + optional "/mcp".
+      // Only append /mcp if the proxy_pass_url does NOT already end with a
+      // known MCP transport path (/mcp, /sse, /v1, etc.). When the upstream
+      // already includes the full endpoint path, appending /mcp would double it.
       const baseUrl = `${window.location.origin}${getBaseURL()}`;
       const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-      url = `${baseUrl}${cleanPath}/mcp`;
+      const proxyUrl = server.proxy_pass_url || '';
+      const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
+      url = hasMcpPath ? `${baseUrl}${cleanPath}` : `${baseUrl}${cleanPath}/mcp`;
     }
 
     // In registry-only mode, don't include gateway auth headers
@@ -399,7 +401,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     } else {
       const baseUrl = `${window.location.origin}${getBaseURL()}`;
       const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-      url = `${baseUrl}${cleanPath}/mcp`;
+      const proxyUrl = server.proxy_pass_url || '';
+      const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
+      url = hasMcpPath ? `${baseUrl}${cleanPath}` : `${baseUrl}${cleanPath}/mcp`;
     }
 
     const includeAuthHeaders = !isRegistryOnly;
@@ -469,7 +473,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     } else {
       const baseUrl = `${window.location.origin}${getBaseURL()}`;
       const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-      url = `${baseUrl}${cleanPath}/mcp`;
+      const proxyUrl = server.proxy_pass_url || '';
+      const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
+      url = hasMcpPath ? `${baseUrl}${cleanPath}` : `${baseUrl}${cleanPath}/mcp`;
     }
 
     const includeAuthHeaders = !isRegistryOnly;
