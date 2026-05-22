@@ -236,7 +236,7 @@ async def list_services(ctx: Context | None = None) -> dict[str, Any]:
         headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{REGISTRY_URL}/api/servers", headers=headers)
+            response = await client.get(f"{REGISTRY_URL}/api/servers", headers=headers, params={"limit": 2000})
             response.raise_for_status()
             data = response.json()
 
@@ -302,7 +302,7 @@ async def list_agents(ctx: Context | None = None) -> dict[str, Any]:
         headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{REGISTRY_URL}/api/agents", headers=headers)
+            response = await client.get(f"{REGISTRY_URL}/api/agents", headers=headers, params={"limit": 2000})
             response.raise_for_status()
             data = response.json()
 
@@ -355,7 +355,7 @@ async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
         headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{REGISTRY_URL}/api/skills", headers=headers)
+            response = await client.get(f"{REGISTRY_URL}/api/skills", headers=headers, params={"limit": 2000})
             response.raise_for_status()
             data = response.json()
 
