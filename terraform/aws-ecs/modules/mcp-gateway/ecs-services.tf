@@ -1322,6 +1322,21 @@ resource "aws_vpc_security_group_ingress_rule" "registry_to_auth" {
 }
 
 
+# Allow auth server to communicate with mcpgw on port 8003
+# Required for the mcp-proxy hop (PR #1026): auth server intercepts MCP
+# requests to filter tools/list responses, then forwards to the upstream.
+resource "aws_vpc_security_group_ingress_rule" "auth_to_mcpgw" {
+  security_group_id            = module.ecs_service_mcpgw.security_group_id
+  referenced_security_group_id = module.ecs_service_auth.security_group_id
+  from_port                    = 8003
+  to_port                      = 8003
+  ip_protocol                  = "tcp"
+  description                  = "Allow auth server mcp-proxy to reach mcpgw"
+
+  tags = local.common_tags
+}
+
+
 # ECS Service: CurrentTime MCP Server
 #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "ecs_service_currenttime" {
