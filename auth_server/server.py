@@ -3857,6 +3857,8 @@ async def mcp_proxy(
                 body_bytes = await _read_bounded(upstream_response, max_body_bytes)
                 status_code = upstream_response.status_code
                 content_type = upstream_response.headers.get("content-type", "application/json")
+                # Capture MCP session headers before the response stream closes
+                upstream_headers = dict(upstream_response.headers)
     except HTTPException:
         raise
     except httpx.TimeoutException as exc:
@@ -3880,6 +3882,14 @@ async def mcp_proxy(
         and "application/json" in content_type.lower()
     )
 
+    # Forward key MCP response headers from the upstream (especially
+    # Mcp-Session-Id which the client needs for subsequent requests).
+    response_headers: dict[str, str] = {}
+    for hdr in ("mcp-session-id", "x-mcp-session-id"):
+        val = upstream_headers.get(hdr)
+        if val:
+            response_headers[hdr] = val
+
     if not should_filter:
         # Forward the upstream body and content_type unchanged. Many MCP
         # servers reply with text/event-stream (SSE) rather than plain JSON;
@@ -3889,6 +3899,7 @@ async def mcp_proxy(
             content=body_bytes,
             status_code=status_code,
             media_type=content_type,
+            headers=response_headers,
         )
 
     try:
@@ -3900,6 +3911,7 @@ async def mcp_proxy(
         return JSONResponse(
             content=_safe_parse_body(body_bytes),
             status_code=status_code,
+            headers=response_headers,
         )
 
     result = parsed.get("result") if isinstance(parsed, dict) else None
@@ -3912,7 +3924,7 @@ async def mcp_proxy(
         result["tools"] = filtered
         parsed["result"] = result
 
-    return JSONResponse(content=parsed, status_code=status_code)
+    return JSONResponse(content=parsed, status_code=status_code, headers=response_headers)
 
 
 def _safe_parse_body(
