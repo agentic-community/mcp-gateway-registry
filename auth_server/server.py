@@ -3820,9 +3820,12 @@ async def mcp_proxy(
     # path after /mcp-proxy/ (e.g. "airegistry-tools/mcp"). The first segment
     # is the registered server name; everything after is the sub-path that must
     # be appended to the upstream URL so the backend receives the correct route.
+    # Skip if the upstream URL already ends with the sub-path (e.g. proxy_pass_url
+    # is https://docs.mcp.cloudflare.com/mcp and sub_path is also /mcp).
     if "/" in server_name:
-        sub_path = server_name.split("/", 1)[1]
-        upstream_url = upstream_url.rstrip("/") + "/" + sub_path
+        sub_path = server_name.split("/", 1)[1].lstrip("/")
+        if sub_path and not upstream_url.rstrip("/").endswith("/" + sub_path):
+            upstream_url = upstream_url.rstrip("/") + "/" + sub_path
 
     raw_scopes = request.headers.get("X-Scopes", "")
     user_scopes: list[str] = [s for s in raw_scopes.split() if s]
