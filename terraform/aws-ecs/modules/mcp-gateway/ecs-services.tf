@@ -1473,7 +1473,7 @@ module "ecs_service_mcpgw" {
   cluster_arn              = var.ecs_cluster_arn
   cpu                      = "512"
   memory                   = "1024"
-  desired_count            = var.enable_autoscaling ? var.autoscaling_min_capacity : var.mcpgw_replicas
+  desired_count            = var.mcpgw_replicas
   enable_autoscaling       = var.enable_autoscaling
   autoscaling_min_capacity = var.autoscaling_min_capacity
   autoscaling_max_capacity = var.autoscaling_max_capacity
