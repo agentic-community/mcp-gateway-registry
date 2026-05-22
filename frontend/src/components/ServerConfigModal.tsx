@@ -124,7 +124,11 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         description: `Generated for MCP configuration (${server.name})`,
         expires_in_hours: 8,
       };
-      if (server.path) {
+      // ai-registry-tools (mcpgw) needs a user token because it calls registry
+      // APIs internally (/api/search/semantic, /api/servers, etc.) which require
+      // broader scopes than a resource-bound token provides.
+      const isRegistryTools = server.path?.replace(/^\//, '').startsWith('airegistry-tools');
+      if (server.path && !isRegistryTools) {
         body.resource = { type: resourceType, id: server.path };
       }
       const response = await axios.post('/api/tokens/generate', body, {
