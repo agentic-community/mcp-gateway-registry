@@ -25,11 +25,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Default GitHub hosts that receive auth headers
+# Default GitHub hosts that receive auth headers.
+# api.github.com is included so resource discovery's Trees API calls
+# (registry.services.skill_service._discover_skill_resources) authenticate
+# correctly against private repos and avoid the unauthenticated rate limit.
 _DEFAULT_GITHUB_HOSTS: frozenset[str] = frozenset(
     {
         "github.com",
         "raw.githubusercontent.com",
+        "api.github.com",
     }
 )
 

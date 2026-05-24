@@ -10,6 +10,7 @@ Simplified design:
 import hashlib
 import ipaddress
 import logging
+import re
 import socket
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -235,30 +236,144 @@ _LANG_BY_EXT: dict[str, str] = {
 }
 
 
+# SKILL.md URL path patterns. Public GitHub blob and raw URLs differ;
+# enterprise GitHub instances mirror the public path layout.
+_BLOB_PATH_PATTERN = re.compile(r"^/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$")
+_RAW_PATH_PATTERN = re.compile(r"^/([^/]+)/([^/]+)/refs/heads/([^/]+)/(.+)$")
+
+
+def _api_base_for_skill_host(
+    hostname: str,
+) -> str | None:
+    """Map a SKILL.md hostname (raw or blob, public or GHES) to its REST API base.
+
+    Public GitHub maps to https://api.github.com.  GHES maps to the
+    configured ``settings.github_api_base_url`` only when the configured
+    host matches the SKILL.md host (modulo the optional ``raw.`` prefix).
+
+    Returns None when the hostname is not a recognised GitHub instance.
+    """
+    hostname_lower = hostname.lower()
+    if hostname_lower in ("github.com", "raw.githubusercontent.com"):
+        return "https://api.github.com"
+
+    if "github" not in hostname_lower:
+        return None
+
+    skill_host = hostname_lower[4:] if hostname_lower.startswith("raw.") else hostname_lower
+    configured = settings.github_api_base_url.rstrip("/")
+    configured_host = (urlparse(configured).hostname or "").lower()
+    if configured_host and configured_host == skill_host:
+        return configured
+
+    return None
+
+
 def _resolve_tree_api(
     skill_md_url: str,
 ) -> tuple[str, str, str, str] | None:
-    """Resolve a tree/directory listing API endpoint for a skill URL.
+    """Resolve the GitHub/GHES Trees API endpoint for a SKILL.md URL.
 
-    Returns (tree_api_url, encoded_project, ref, skill_dir) or None
-    when no hosting-platform provider handles the URL.  Override or
-    extend this function to add support for specific Git platforms.
+    Parses both blob-style URLs (``github.com/{owner}/{repo}/blob/{ref}/...``)
+    and raw-content URLs (``raw.githubusercontent.com/{owner}/{repo}/refs/heads/{ref}/...``),
+    plus the corresponding GHES variants.
 
-    .. note::
-       **This is intentionally a stub.**  The default implementation
-       always returns ``None``, which means :func:`_discover_skill_resources`
-       will not find any companion files until a deployment provides a
-       platform-specific implementation (e.g. GitHub Trees API, GitLab
-       Repository Tree, Bitbucket source listing).
+    Returns:
+        (tree_api_url, encoded_project, ref, skill_dir) when the URL is a
+        recognised GitHub/GHES SKILL.md URL, else None.
 
-       Multi-file resource support is fully wired through the rest of the
-       stack (manifest storage, ``/content?resource=...`` serving, drift
-       detection); only the discovery step is gated on this hook.
-       Replace this function — or monkey-patch it from a deployment
-       module — with a provider that returns the tuple described above
-       to enable resource discovery for your hosting platform.
+        - ``tree_api_url``: full Trees API URL with ``recursive=1``.
+        - ``encoded_project``: ``{owner}/{repo}`` (kept for backward compat
+          with the documented contract; GitHub's API uses owner+repo
+          separately so callers can ignore this).
+        - ``ref``: branch name resolved from the SKILL.md URL.
+        - ``skill_dir``: directory portion of the path leading up to
+          ``SKILL.md`` (``""`` when SKILL.md is at the repo root).
     """
-    return None
+    parsed = urlparse(skill_md_url)
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return None
+
+    match = _BLOB_PATH_PATTERN.match(parsed.path) or _RAW_PATH_PATTERN.match(parsed.path)
+    if not match:
+        return None
+
+    owner, repo, ref, file_path = match.groups()
+    skill_dir = file_path.rsplit("/", 1)[0] if "/" in file_path else ""
+
+    api_base = _api_base_for_skill_host(hostname)
+    if not api_base:
+        return None
+
+    tree_url = f"{api_base}/repos/{owner}/{repo}/git/trees/{ref}?recursive=1"
+    return tree_url, f"{owner}/{repo}", ref, skill_dir
+
+
+# Files that live in the skill folder but should never be classified as
+# resources (the SKILL.md itself, plus standard repo metadata).
+_SKILL_DIR_EXCLUDED_FILENAMES: frozenset[str] = frozenset({
+    "SKILL.MD",
+    "README.MD",
+    "LICENSE",
+    "LICENSE.TXT",
+    "LICENSE.MD",
+})
+
+
+def _classify_resource(
+    path: str,
+    skill_dir: str,
+) -> str | None:
+    """Classify a file's resource type given its repo-relative path.
+
+    Two-tier classification:
+      1. Subfolder convention (Anthropic style): if the immediate parent
+         directory is one of references/scripts/agents/assets, use that.
+      2. Flat-skill fallback: when the file lives directly under
+         ``skill_dir`` (no recognised subfolder), classify by extension:
+         ``.py``/``.sh``/``.bash``/``.js``/``.ts`` -> script,
+         ``.md``/``.txt``/``.rst``                 -> reference,
+         everything else                           -> asset.
+
+    Returns None when the file should be excluded from the manifest
+    (e.g. nested test/ directories or build outputs that don't fit the
+    convention).
+    """
+    parts = path.split("/")
+
+    # Subfolder convention -- works regardless of nesting depth.
+    if len(parts) >= 2:
+        subdir = parts[-2]
+        resource_type = _RESOURCE_TYPE_MAP.get(subdir)
+        if resource_type:
+            return resource_type
+
+    # Flat-skill fallback: only files DIRECTLY under skill_dir qualify.
+    # We don't want to vacuum up nested test/, build/, __pycache__/ trees.
+    parent = "/".join(parts[:-1])
+    if parent != skill_dir:
+        return None
+
+    name = parts[-1]
+    if "." not in name:
+        return None
+    ext = "." + name.rsplit(".", 1)[-1].lower()
+
+    if ext in {".py", ".sh", ".bash", ".js", ".ts"}:
+        return "script"
+    if ext in {".md", ".txt", ".rst"}:
+        return "reference"
+    return "asset"
+
+
+def _bucket_for_type(
+    manifest: "SkillResourceManifest",
+    resource_type: str,
+) -> "list[SkillResource] | None":
+    """Return the manifest list corresponding to a resource type."""
+    attr = "references" if resource_type == "reference" else f"{resource_type}s"
+    return getattr(manifest, attr, None)
 
 
 async def _discover_skill_resources(
@@ -269,9 +384,16 @@ async def _discover_skill_resources(
 ) -> "SkillResourceManifest | None":
     """Discover companion resource files in the skill directory.
 
-    Calls the hosting platform's tree/directory listing API to find files
-    alongside SKILL.md and classifies them into the resource manifest.
-    Returns None when the platform is not recognised or on any failure.
+    Calls the hosting platform's tree/directory listing API (currently
+    GitHub / GHES via :func:`_resolve_tree_api`) to find files alongside
+    SKILL.md and classifies them into the resource manifest.
+
+    Classification falls back to extension-based heuristics for skills
+    that keep all files at the skill root (no references/ scripts/ etc.
+    subfolders).  See :func:`_classify_resource`.
+
+    Returns None when the platform is not recognised, the tree fetch
+    fails, or no files classify as resources.
     """
     from ..schemas.skill_models import SkillResource, SkillResourceManifest
 
@@ -286,14 +408,31 @@ async def _discover_skill_resources(
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(tree_url, headers=headers)
+            # Merge global GitHub auth headers (PAT / GitHub App) so private
+            # repos and rate-limited public repos work.
+            github_headers = await _github_auth.get_auth_headers(tree_url)
+            merged_headers = {**github_headers, **headers}
+            resp = await client.get(tree_url, headers=merged_headers)
             if resp.status_code >= 400:
                 logger.warning("Resource discovery failed: HTTP %s for %s", resp.status_code, tree_url)
                 return None
-            items = resp.json()
+            payload = resp.json()
     except Exception as e:
         logger.warning("Resource discovery error for %s: %s", tree_url, e)
         return None
+
+    # GitHub's Trees API returns {"sha": ..., "url": ..., "tree": [...], "truncated": bool}.
+    # Extract the file list from the "tree" key; fall back to top-level list
+    # so a future hosting-platform provider that returns a bare array still works.
+    if isinstance(payload, dict):
+        items = payload.get("tree")
+        if payload.get("truncated"):
+            logger.warning(
+                "Trees API response truncated for %s; manifest may be incomplete",
+                tree_url,
+            )
+    else:
+        items = payload
 
     if not isinstance(items, list):
         return None
@@ -303,20 +442,32 @@ async def _discover_skill_resources(
         if item.get("type") != "blob":
             continue
         path = item.get("path", "")
-        name = item.get("name", "")
-        if name.upper() == "SKILL.MD" or name.upper() == "README.MD" or name.upper() == "LICENSE.TXT":
+        if not path:
             continue
 
-        parts = path.split("/")
-        if len(parts) < 2:
+        # Restrict to files inside the skill directory so we don't
+        # surface unrelated repo content.
+        if skill_dir_prefix and not path.startswith(skill_dir_prefix):
             continue
-        subdir = parts[-2]  # immediate parent directory
-        resource_type = _RESOURCE_TYPE_MAP.get(subdir)
+
+        # Skip the SKILL.md itself and standard repo metadata files.
+        name = path.rsplit("/", 1)[-1]
+        if name.upper() in _SKILL_DIR_EXCLUDED_FILENAMES:
+            continue
+
+        # Drop hidden files / directories (e.g. __pycache__/, .DS_Store)
+        # WITHIN the skill folder. Don't reject parts of the path that
+        # appear in skill_dir itself (e.g. ".claude/skills/usage-report"
+        # is a perfectly valid skill location).
+        relative_path = path[len(skill_dir_prefix):] if path.startswith(skill_dir_prefix) else path
+        if any(part.startswith(".") or part.startswith("__") for part in relative_path.split("/")):
+            continue
+
+        resource_type = _classify_resource(path, skill_dir)
         if not resource_type:
             continue
 
         ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
-        relative_path = path[len(skill_dir_prefix):] if path.startswith(skill_dir_prefix) else path
 
         resource = SkillResource(
             path=relative_path,
@@ -325,7 +476,7 @@ async def _discover_skill_resources(
             language=_LANG_BY_EXT.get(ext),
         )
 
-        bucket = getattr(manifest, f"{resource_type}s" if resource_type != "reference" else "references", None)
+        bucket = _bucket_for_type(manifest, resource_type)
         if bucket is not None:
             bucket.append(resource)
 
