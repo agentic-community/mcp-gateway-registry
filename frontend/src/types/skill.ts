@@ -24,6 +24,31 @@ export interface SkillRequirement {
 
 
 /**
+ * A single classified file inside a skill's resource manifest.
+ * Mirrors registry/schemas/skill_models.py::SkillResource.
+ */
+export interface SkillResource {
+  path: string;
+  type: 'script' | 'reference' | 'asset' | 'agent';
+  size_bytes: number;
+  description?: string | null;
+  language?: string | null;
+}
+
+
+/**
+ * Per-skill manifest of companion resources discovered alongside SKILL.md.
+ * Mirrors registry/schemas/skill_models.py::SkillResourceManifest.
+ */
+export interface SkillResourceManifest {
+  scripts: SkillResource[];
+  references: SkillResource[];
+  assets: SkillResource[];
+  agents: SkillResource[];
+}
+
+
+/**
  * Skill interface representing an Agent Skill.
  */
 /**
@@ -62,4 +87,5 @@ export interface Skill {
   last_checked_time?: string;
   created_at?: string;
   updated_at?: string;
+  resource_manifest?: SkillResourceManifest | null;
 }

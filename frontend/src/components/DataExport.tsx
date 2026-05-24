@@ -7,6 +7,7 @@ import {
 } from '@heroicons/react/24/outline';
 import axios from 'axios';
 import JSZip from 'jszip';
+import { triggerBlobDownload } from '../utils/blobDownload';
 
 
 interface ExportableCollection {
@@ -201,21 +202,6 @@ async function _fetchAllPages(
 }
 
 
-function _triggerBlobDownload(
-  blob: Blob,
-  filename: string,
-): void {
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', filename);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
-}
-
-
 async function _recordAuditEvent(
   exportType: string,
   collections: string[],
@@ -311,7 +297,7 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
       const data = await _fetchAllPages(collection);
       const dateSuffix = _buildDateSuffix();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      _triggerBlobDownload(blob, `${collection.filename}-export-${dateSuffix}.json`);
+      triggerBlobDownload(blob, `${collection.filename}-export-${dateSuffix}.json`);
       await _recordAuditEvent('single', [collection.id]);
       onShowToast(`Downloaded ${collection.label} (${data.length} records)`, 'success');
     } catch (err: any) {
@@ -341,7 +327,7 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
 
     try {
       const blob = await zip.generateAsync({ type: 'blob' });
-      _triggerBlobDownload(blob, `registry-export-${dateSuffix}.zip`);
+      triggerBlobDownload(blob, `registry-export-${dateSuffix}.zip`);
       const exportedIds = EXPORTABLE_COLLECTIONS
         .filter((c) => !failedIds.includes(c.id))
         .map((c) => c.id);

@@ -27,6 +27,7 @@ import StarRatingWidget from './StarRatingWidget';
 import SecurityScanModal from './SecurityScanModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
+import SkillResources from './SkillResources';
 
 /**
  * Props for the SkillCard component.
@@ -761,6 +762,14 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                         </table>
                       </div>
                     )}
+                    {/* Resources section (self-gated: hidden for federated skills,
+                        empty manifests, and skills without manifests). */}
+                    <SkillResources
+                      skill={skill}
+                      skillApiPath={skillApiPath}
+                      authToken={authToken}
+                      skillMdContent={skillMdContent}
+                    />
                     {/* Markdown Body */}
                     <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-amber-800 dark:prose-headings:text-amber-200 prose-a:text-amber-600 dark:prose-a:text-amber-400 prose-code:bg-gray-100 dark:prose-code:bg-gray-900 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
