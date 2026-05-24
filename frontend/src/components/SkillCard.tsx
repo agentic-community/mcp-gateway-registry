@@ -21,7 +21,7 @@ import {
   ShieldCheckIcon,
   ShieldExclamationIcon,
 } from '@heroicons/react/24/outline';
-import { Skill } from '../types/skill';
+import { Skill, SkillResourceManifest } from '../types/skill';
 import StatusBadge from './StatusBadge';
 import StarRatingWidget from './StarRatingWidget';
 import SecurityScanModal from './SecurityScanModal';
@@ -132,6 +132,10 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
   const [showDetails, setShowDetails] = useState(false);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [skillMdContent, setSkillMdContent] = useState<string | null>(null);
+  // resource_manifest is exposed by /content but NOT by the listing schema
+  // (SkillInfo). Capture it from the same /content fetch the modal already
+  // makes so the Resources section can render against the modal-scoped data.
+  const [resourceManifest, setResourceManifest] = useState<SkillResourceManifest | null>(null);
 
   useEscapeKey(() => setShowDetails(false), showDetails);
   const [loadingToolCheck, setLoadingToolCheck] = useState(false);
@@ -211,6 +215,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
     setShowDetails(true);
     setLoadingDetails(true);
     setSkillMdContent(null);
+    setResourceManifest(null);
 
     try {
       // Fetch SKILL.md content via backend proxy to avoid CORS issues
@@ -220,6 +225,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
         headers ? { headers } : undefined
       );
       setSkillMdContent(response.data.content);
+      setResourceManifest(response.data.resource_manifest ?? null);
     } catch (error: any) {
       console.error('Failed to fetch SKILL.md content:', error);
       const detail = error.response?.data?.detail;
@@ -763,12 +769,18 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                       </div>
                     )}
                     {/* Resources section (self-gated: hidden for federated skills,
-                        empty manifests, and skills without manifests). */}
+                        empty manifests, and skills without manifests).
+
+                        The manifest is sourced from the /content fetch above
+                        because the listing schema (SkillInfo) intentionally
+                        omits resource_manifest to keep the listing payload
+                        small; only the full SkillCard exposes it. */}
                     <SkillResources
                       skill={skill}
                       skillApiPath={skillApiPath}
                       authToken={authToken}
                       skillMdContent={skillMdContent}
+                      resourceManifest={resourceManifest}
                     />
                     {/* Markdown Body */}
                     <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-amber-800 dark:prose-headings:text-amber-200 prose-a:text-amber-600 dark:prose-a:text-amber-400 prose-code:bg-gray-100 dark:prose-code:bg-gray-900 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900">

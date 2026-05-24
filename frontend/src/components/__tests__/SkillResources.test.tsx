@@ -61,12 +61,22 @@ function makeManifest(overrides: Partial<SkillResourceManifest> = {}): SkillReso
 }
 
 
-function defaultProps(skillOverrides: Partial<Skill> = {}, skillMdContent = '# SKILL\n') {
+function defaultProps(
+  skillOverrides: Partial<Skill> & { resource_manifest?: SkillResourceManifest | null } = {},
+  skillMdContent = '# SKILL\n',
+) {
+  // The `resource_manifest` field used to live on the Skill prop; it's now
+  // a separate prop sourced from the /content fetch (the listing schema
+  // doesn't include it). Tests still pass it via the skillOverrides bag for
+  // brevity; we lift it out here so the helper still works without
+  // updating every call site.
+  const { resource_manifest, ...rest } = skillOverrides;
   return {
-    skill: makeSkill(skillOverrides),
+    skill: makeSkill(rest),
     skillApiPath: '/doc-coauthor',
     authToken: 'test-token',
     skillMdContent,
+    resourceManifest: resource_manifest ?? null,
   };
 }
 

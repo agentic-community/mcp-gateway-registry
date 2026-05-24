@@ -424,6 +424,11 @@ export interface SkillResourcesProps {
   // and we'd rather widen here than force callers to coalesce.
   authToken: string | null | undefined;
   skillMdContent: string | null;
+  // Manifest captured from the /content API response. Passed in explicitly
+  // because the skills LISTING schema (SkillInfo) intentionally omits
+  // resource_manifest -- so skill.resource_manifest is undefined in the
+  // Discover view and we can't read it off the skill prop.
+  resourceManifest: SkillResourceManifest | null;
 }
 
 
@@ -439,11 +444,12 @@ export default function SkillResources({
   skillApiPath,
   authToken,
   skillMdContent,
+  resourceManifest,
 }: SkillResourcesProps): React.ReactElement | null {
   // Federated skills are excluded for v1 (LLD Resolution #1).
   if (skill.registry_name && skill.registry_name !== 'local') return null;
-  if (!skill.resource_manifest) return null;
-  if (!_hasAnyResource(skill.resource_manifest)) return null;
+  if (!resourceManifest) return null;
+  if (!_hasAnyResource(resourceManifest)) return null;
 
   return (
     <SkillResourcesInner
@@ -451,7 +457,7 @@ export default function SkillResources({
       skillApiPath={skillApiPath}
       authToken={authToken ?? null}
       skillMdContent={skillMdContent}
-      manifest={skill.resource_manifest}
+      manifest={resourceManifest}
     />
   );
 }
