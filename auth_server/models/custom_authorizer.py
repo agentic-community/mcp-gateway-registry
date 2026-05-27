@@ -7,7 +7,7 @@ and any code that constructs or validates authorizer payloads.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
@@ -90,7 +90,7 @@ class CustomAuthContext(BaseModel):
     """Context metadata attached to every outbound authorization request."""
 
     timestamp: str = Field(
-        default_factory=lambda: datetime.utcnow().isoformat(),
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
         description="Timestamp of the authorization call",
     )
     request_id: str = Field(..., description="Unique request ID for correlation and debugging")
