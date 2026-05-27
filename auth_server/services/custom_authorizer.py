@@ -38,6 +38,8 @@ from models.custom_authorizer import (
     NativeAuthResult,
 )
 
+from registry.utils.request_utils import get_client_ip
+
 if TYPE_CHECKING:
     from fastapi import Request
 
@@ -293,8 +295,6 @@ def build_custom_auth_payload(
     Returns:
         A fully-populated ``CustomAuthorizerPayload``.
     """
-    from registry.utils.request_utils import get_client_ip
-
     raw_headers = dict(request.headers)
     safe_headers = mask_sensitive_headers(raw_headers)
 
