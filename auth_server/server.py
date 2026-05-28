@@ -40,6 +40,14 @@ from metrics_middleware import add_auth_metrics_middleware
 
 # Import provider factory
 from providers.factory import get_auth_provider
+# Import custom authorizer module for external authorization integration
+from custom_authorizer import (
+    AuthorizerMode,
+    get_authorizer_mode,
+    get_custom_authorizer_client,
+    build_custom_auth_payload,
+    validate_custom_authorizer_config,
+)
 from pydantic import (
     BaseModel,
     Field,
@@ -1055,6 +1063,13 @@ async def lifespan(app: FastAPI):
     # Runs after scopes are loaded so map_groups_to_scopes can resolve groups.
     await _build_static_token_map()
 
+    # Validate custom authorizer configuration (Issue #358)
+    try:
+        validate_custom_authorizer_config()
+    except ValueError as e:
+        logger.error(f"Custom authorizer configuration error: {e}")
+        raise
+
     yield
 
     # Shutdown: Add cleanup code here if needed in the future
@@ -1696,6 +1711,84 @@ async def validate_request(request: Request):
     mcp_session_id = request.headers.get("Mcp-Session-Id")
 
     try:
+        # === CUSTOM AUTHORIZER: Check for custom-only mode (Issue #358) ===
+        # If AUTHORIZER_MODE=custom, skip ALL native validation and call custom authorizer only.
+        authorizer_mode = get_authorizer_mode()
+        if authorizer_mode == AuthorizerMode.CUSTOM:
+            logger.info(f"[CUSTOM MODE] Request {request_id} skipping native auth, calling custom authorizer only")
+            try:
+                client = get_custom_authorizer_client()
+                if not client:
+                    logger.error("AUTHORIZER_MODE=custom but client is None")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Custom authorizer not configured",
+                        headers={"Connection": "close"},
+                    )
+
+                # Build payload with native_auth_result=None (no native auth in custom mode)
+                payload = build_custom_auth_payload(
+                    request=request,
+                    native_auth_result=None,
+                    request_id=request_id,
+                )
+                result = await client.authorize(payload)
+
+                if not result.authorized:
+                    error_msg = "Custom authorizer denied access"
+                    if result.error:
+                        error_msg = f"{error_msg}: {result.error.message if hasattr(result.error, 'message') else str(result.error)}"
+                    logger.warning(f"[CUSTOM MODE] {error_msg} for request {request_id}")
+                    raise HTTPException(
+                        status_code=403,
+                        detail=error_msg,
+                        headers={"Connection": "close"},
+                    )
+
+                # Custom mode: use default admin identity since native auth was skipped
+                logger.info(f"[CUSTOM MODE] Request {request_id} authorized by custom authorizer")
+                response_data = {
+                    "valid": True,
+                    "username": "custom-authorized-user",
+                    "client_id": "custom-authorizer",
+                    "scopes": [
+                        "mcp-servers-unrestricted/read",
+                        "mcp-servers-unrestricted/execute",
+                        "mcp-agents-unrestricted/read",
+                        "mcp-agents-unrestricted/execute",
+                    ],
+                    "method": "custom",
+                    "groups": ["mcp-registry-admin"],
+                    "server_name": None,
+                    "tool_name": None,
+                }
+
+                # Include custom authorizer metadata in response for logging
+                if result.metadata:
+                    response_data["custom_authorizer_metadata"] = result.metadata
+
+                response = JSONResponse(content=response_data, status_code=200)
+                response.headers["X-User"] = "custom-authorized-user"
+                response.headers["X-Username"] = "custom-authorized-user"
+                response.headers["X-Client-Id"] = "custom-authorizer"
+                response.headers["X-Scopes"] = " ".join(response_data["scopes"])
+                response.headers["X-Auth-Method"] = "custom"
+                response.headers["X-Server-Name"] = ""
+                response.headers["X-Tool-Name"] = ""
+                return response
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[CUSTOM MODE] Custom authorizer error: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Custom authorizer unavailable: {e}",
+                    headers={"Connection": "close"},
+                )
+
+        # === END CUSTOM MODE ===
+
         # Extract headers
         # Check for X-Authorization first (custom header used by this gateway)
         # Only if X-Authorization is not present, check standard Authorization header
@@ -2323,6 +2416,62 @@ async def validate_request(request: Request):
                 detail="Token has an unrecognized token_kind claim",
                 headers={"Connection": "close"},
             )
+
+        # === CUSTOM AUTHORIZER: Check for both mode (Issue #358) ===
+        # After native validation passes, consult custom authorizer as a final gate.
+        if authorizer_mode == AuthorizerMode.BOTH:
+            logger.info(f"[BOTH MODE] Request {request_id} passed native auth, calling custom authorizer")
+            try:
+                client = get_custom_authorizer_client()
+                if not client:
+                    logger.error("AUTHORIZER_MODE=both but client is None")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Custom authorizer not configured",
+                        headers={"Connection": "close"},
+                    )
+
+                # Build native auth result dict for payload
+                native_auth = {
+                    "valid": True,
+                    "username": validation_result.get("username"),
+                    "scopes": user_scopes,
+                    "groups": validation_result.get("groups", []),
+                    "auth_method": validation_result.get("method"),
+                    "client_id": validation_result.get("client_id"),
+                }
+
+                # Build payload with native auth result
+                payload = build_custom_auth_payload(
+                    request=request,
+                    native_auth_result=native_auth,
+                    request_id=request_id,
+                )
+                result = await client.authorize(payload)
+
+                if not result.authorized:
+                    error_msg = "Custom authorizer denied access"
+                    if result.error:
+                        error_msg = f"{error_msg}: {result.error.message if hasattr(result.error, 'message') else str(result.error)}"
+                    logger.warning(f"[BOTH MODE] {error_msg} for request {request_id}")
+                    raise HTTPException(
+                        status_code=403,
+                        detail=error_msg,
+                        headers={"Connection": "close"},
+                    )
+
+                logger.info(f"[BOTH MODE] Request {request_id} authorized by both native and custom authorizer")
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[BOTH MODE] Custom authorizer error: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Custom authorizer unavailable: {e}",
+                    headers={"Connection": "close"},
+                )
+        # === END BOTH MODE ===
 
         # Prepare JSON response data
         response_data = {
