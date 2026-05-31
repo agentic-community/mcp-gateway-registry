@@ -707,6 +707,66 @@ variable "auth0_management_api_token" {
   sensitive   = true
 }
 
+# =============================================================================
+# PINGFEDERATE CONFIGURATION
+# =============================================================================
+
+variable "pingfederate_enabled" {
+  description = "Enable PingFederate as authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "pingfederate_base_url" {
+  description = "PingFederate runtime base URL (internal, server-to-server), e.g. https://pf.example.com:9031"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_external_url" {
+  description = "PingFederate external URL (browser-facing, for auth redirects)"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_client_id" {
+  description = "PingFederate OAuth client ID for the gateway web app"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_client_secret" {
+  description = "PingFederate OAuth client secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pingfederate_m2m_client_id" {
+  description = "PingFederate M2M client ID (defaults to web client if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_m2m_client_secret" {
+  description = "PingFederate M2M client secret (defaults to web client secret if empty)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pingfederate_application_id_uri" {
+  description = "Optional resource-server identifier accepted as the JWT aud claim"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_groups_claim" {
+  description = "JWT claim name carrying group memberships (default: groups)"
+  type        = string
+  default     = "groups"
+}
+
 variable "registry_static_token_auth_enabled" {
   description = "Enable static token auth for Registry API (IdP-independent access using REGISTRY_API_TOKEN)"
   type        = bool

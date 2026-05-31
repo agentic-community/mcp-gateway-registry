@@ -121,7 +121,7 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default")))
+          value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default"))))
         },
         {
           name  = "KEYCLOAK_URL"
@@ -215,6 +215,35 @@ module "ecs_service_auth" {
         {
           name  = "AUTH0_ENABLED"
           value = tostring(var.auth0_enabled)
+        },
+        # PingFederate configuration
+        {
+          name  = "PINGFEDERATE_ENABLED"
+          value = tostring(var.pingfederate_enabled)
+        },
+        {
+          name  = "PINGFEDERATE_BASE_URL"
+          value = var.pingfederate_base_url
+        },
+        {
+          name  = "PINGFEDERATE_EXTERNAL_URL"
+          value = var.pingfederate_external_url
+        },
+        {
+          name  = "PINGFEDERATE_CLIENT_ID"
+          value = var.pingfederate_client_id
+        },
+        {
+          name  = "PINGFEDERATE_M2M_CLIENT_ID"
+          value = var.pingfederate_m2m_client_id
+        },
+        {
+          name  = "PINGFEDERATE_APPLICATION_ID_URI"
+          value = var.pingfederate_application_id_uri
+        },
+        {
+          name  = "PINGFEDERATE_GROUPS_CLAIM"
+          value = var.pingfederate_groups_claim
         },
         {
           name  = "SCOPES_CONFIG_PATH"
@@ -470,6 +499,16 @@ module "ecs_service_auth" {
             name      = "AUTH0_M2M_CLIENT_SECRET"
             valueFrom = aws_secretsmanager_secret.auth0_m2m_client_secret[0].arn
           }
+        ] : [],
+        var.pingfederate_enabled ? [
+          {
+            name      = "PINGFEDERATE_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.pingfederate_client_secret[0].arn
+          },
+          {
+            name      = "PINGFEDERATE_M2M_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.pingfederate_m2m_client_secret[0].arn
+          },
         ] : [],
         var.enable_observability ? [
           {
@@ -738,7 +777,7 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default")))
+          value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default"))))
         },
         {
           name  = "ENTRA_ENABLED"
@@ -812,6 +851,35 @@ module "ecs_service_registry" {
         {
           name  = "AUTH0_MANAGEMENT_API_TOKEN"
           value = var.auth0_management_api_token
+        },
+        # PingFederate configuration
+        {
+          name  = "PINGFEDERATE_ENABLED"
+          value = tostring(var.pingfederate_enabled)
+        },
+        {
+          name  = "PINGFEDERATE_BASE_URL"
+          value = var.pingfederate_base_url
+        },
+        {
+          name  = "PINGFEDERATE_EXTERNAL_URL"
+          value = var.pingfederate_external_url
+        },
+        {
+          name  = "PINGFEDERATE_CLIENT_ID"
+          value = var.pingfederate_client_id
+        },
+        {
+          name  = "PINGFEDERATE_M2M_CLIENT_ID"
+          value = var.pingfederate_m2m_client_id
+        },
+        {
+          name  = "PINGFEDERATE_APPLICATION_ID_URI"
+          value = var.pingfederate_application_id_uri
+        },
+        {
+          name  = "PINGFEDERATE_GROUPS_CLAIM"
+          value = var.pingfederate_groups_claim
         },
         {
           name  = "AWS_REGION"
@@ -1355,6 +1423,16 @@ module "ecs_service_registry" {
             name      = "AUTH0_M2M_CLIENT_SECRET"
             valueFrom = aws_secretsmanager_secret.auth0_m2m_client_secret[0].arn
           }
+        ] : [],
+        var.pingfederate_enabled ? [
+          {
+            name      = "PINGFEDERATE_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.pingfederate_client_secret[0].arn
+          },
+          {
+            name      = "PINGFEDERATE_M2M_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.pingfederate_m2m_client_secret[0].arn
+          },
         ] : [],
         var.enable_observability ? [
           {

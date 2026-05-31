@@ -7,6 +7,7 @@ from .entra import EntraIdProvider
 from .factory import get_auth_provider
 from .keycloak import KeycloakProvider
 from .okta import OktaProvider
+from .pingfederate import PingFederateProvider
 
 __all__ = [
     "Auth0Provider",
@@ -15,5 +16,6 @@ __all__ = [
     "EntraIdProvider",
     "KeycloakProvider",
     "OktaProvider",
+    "PingFederateProvider",
     "get_auth_provider",
 ]

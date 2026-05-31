@@ -2,7 +2,8 @@
 #
 # This file defines three main top-level groups:
 # 1. UI-Scopes: Agent registry permissions (list, get, publish, modify, delete agents) and MCP service access
-# 2. group_mappings: Maps IdP groups to scope names (supports both Keycloak group names and Entra ID Object IDs)
+# 2. group_mappings: Maps IdP groups to scope names (supports Keycloak group names, Entra ID Object IDs,
+#    and PingFederate groups from the JWT ATM extended attribute contract)
 # 3. Individual group scopes: Detailed MCP server method/tool access for each group
 #
 # Each group has two types of permissions:

@@ -961,3 +961,16 @@ aws_registry_federation_enabled = true
 # mcpgw_extra_env = [
 #   { name = "MY_MCPGW_VAR", value = "test" },
 # ]
+
+# ============================================================================
+# PINGFEDERATE IdP (opt-in)
+# ============================================================================
+# pingfederate_enabled              = false
+# pingfederate_base_url             = ""
+# pingfederate_external_url         = ""
+# pingfederate_client_id            = ""
+# pingfederate_client_secret        = ""
+# pingfederate_m2m_client_id        = ""
+# pingfederate_m2m_client_secret    = ""
+# pingfederate_application_id_uri   = ""
+# pingfederate_groups_claim         = "groups"

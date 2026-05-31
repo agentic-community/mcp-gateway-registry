@@ -663,7 +663,7 @@ async def _build_startup_payload() -> dict:
         "mode": settings.deployment_mode.value,  # with-gateway, registry-only
         "registry_mode": settings.registry_mode.value,  # full, skills-only, etc.
         "storage": settings.storage_backend,  # file, documentdb, mongodb-ce
-        "auth": settings.auth_provider,  # cognito, keycloak, entra, github, google
+        "auth": settings.auth_provider,  # cognito, keycloak, entra, okta, auth0, pingfederate
         "federation": settings.federation_static_token_auth_enabled,
         "embeddings_provider": settings.embeddings_provider,
         "embeddings_backend_kind": embeddings_backend_kind,

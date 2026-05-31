@@ -133,6 +133,19 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
                     ("entra_group_admin_id", "Admin Group ID", False),
                 ],
             },
+            {
+                "id": "pingfederate",
+                "title": "PingFederate",
+                "fields": [
+                    ("pingfederate_enabled", "Enabled", False),
+                    ("pingfederate_base_url", "Base URL", False),
+                    ("pingfederate_client_id", "Client ID", False),
+                    ("pingfederate_client_secret", "Client Secret", True),
+                    ("pingfederate_m2m_client_id", "M2M Client ID", False),
+                    ("pingfederate_m2m_client_secret", "M2M Client Secret", True),
+                    ("pingfederate_groups_claim", "Groups Claim Name", False),
+                ],
+            },
         ],
     },
     "embeddings": {

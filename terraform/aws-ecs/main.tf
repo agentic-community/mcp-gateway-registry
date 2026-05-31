@@ -174,6 +174,17 @@ module "mcp_gateway" {
   auth0_m2m_client_secret    = var.auth0_m2m_client_secret
   auth0_management_api_token = var.auth0_management_api_token
 
+  # PingFederate configuration
+  pingfederate_enabled              = var.pingfederate_enabled
+  pingfederate_base_url             = var.pingfederate_base_url
+  pingfederate_external_url         = var.pingfederate_external_url
+  pingfederate_client_id            = var.pingfederate_client_id
+  pingfederate_client_secret        = var.pingfederate_client_secret
+  pingfederate_m2m_client_id        = var.pingfederate_m2m_client_id
+  pingfederate_m2m_client_secret    = var.pingfederate_m2m_client_secret
+  pingfederate_application_id_uri   = var.pingfederate_application_id_uri
+  pingfederate_groups_claim         = var.pingfederate_groups_claim
+
   # Registry static token auth
   registry_static_token_auth_enabled = var.registry_static_token_auth_enabled
   registry_api_token                 = var.registry_api_token

@@ -175,6 +175,16 @@ services:
       - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
       - AUTH0_M2M_CLIENT_ID=${AUTH0_M2M_CLIENT_ID:-}
       - AUTH0_M2M_CLIENT_SECRET=${AUTH0_M2M_CLIENT_SECRET:-}
+      # PingFederate configuration
+      - PINGFEDERATE_BASE_URL=${PINGFEDERATE_BASE_URL:-}
+      - PINGFEDERATE_EXTERNAL_URL=${PINGFEDERATE_EXTERNAL_URL:-}
+      - PINGFEDERATE_CLIENT_ID=${PINGFEDERATE_CLIENT_ID:-}
+      - PINGFEDERATE_CLIENT_SECRET=${PINGFEDERATE_CLIENT_SECRET:-}
+      - PINGFEDERATE_M2M_CLIENT_ID=${PINGFEDERATE_M2M_CLIENT_ID:-}
+      - PINGFEDERATE_M2M_CLIENT_SECRET=${PINGFEDERATE_M2M_CLIENT_SECRET:-}
+      - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
+      - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
+      - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
       # External Registry Configuration
       - EXTERNAL_REGISTRY_TAGS=${EXTERNAL_REGISTRY_TAGS:-anthropic-registry,workday-asor}
       - ASOR_ACCESS_TOKEN=${ASOR_ACCESS_TOKEN}
@@ -450,6 +460,16 @@ services:
       - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
       - AUTH0_M2M_CLIENT_ID=${AUTH0_M2M_CLIENT_ID:-}
       - AUTH0_M2M_CLIENT_SECRET=${AUTH0_M2M_CLIENT_SECRET:-}
+      # PingFederate configuration
+      - PINGFEDERATE_BASE_URL=${PINGFEDERATE_BASE_URL:-}
+      - PINGFEDERATE_EXTERNAL_URL=${PINGFEDERATE_EXTERNAL_URL:-}
+      - PINGFEDERATE_CLIENT_ID=${PINGFEDERATE_CLIENT_ID:-}
+      - PINGFEDERATE_CLIENT_SECRET=${PINGFEDERATE_CLIENT_SECRET:-}
+      - PINGFEDERATE_M2M_CLIENT_ID=${PINGFEDERATE_M2M_CLIENT_ID:-}
+      - PINGFEDERATE_M2M_CLIENT_SECRET=${PINGFEDERATE_M2M_CLIENT_SECRET:-}
+      - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
+      - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
+      - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
       # Storage Backend Configuration
       - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
@@ -765,6 +785,29 @@ services:
       retries: 3
       start_period: 60s
 
+  pingfederate:
+    image: pingidentity/pingfederate:13.0.2
+    container_name: pingfederate
+    profiles: ["pingfederate"]
+    environment:
+      - PING_IDENTITY_ACCEPT_EULA=${PING_IDENTITY_ACCEPT_EULA}
+      - PING_IDENTITY_DEVOPS_USER=${PING_IDENTITY_DEVOPS_USER}
+      - PING_IDENTITY_DEVOPS_KEY=${PING_IDENTITY_DEVOPS_KEY}
+      - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
+      - SERVER_PROFILE_PATH=getting-started/pingfederate
+    ports:
+      - "9031:9031"
+      - "9999:9999"
+    volumes:
+      - pingfederate-data:/opt/out/instance/server/default/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -ksf https://localhost:9031/pf/heartbeat.ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+
 volumes:
   ssl_data:
   keycloak_db_data:
@@ -773,6 +816,7 @@ volumes:
   grafana-data:
   mongodb-data:
   mongodb-config:
+  pingfederate-data:
   # Application logs and scans (managed by containers, proper permissions)
   registry-logs:
   registry-scans:

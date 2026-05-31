@@ -31,6 +31,10 @@ resource "aws_iam_policy" "ecs_secrets_access" {
             aws_secretsmanager_secret.auth0_client_secret[0].arn,
             aws_secretsmanager_secret.auth0_m2m_client_secret[0].arn
           ] : [],
+          var.pingfederate_enabled ? [
+            aws_secretsmanager_secret.pingfederate_client_secret[0].arn,
+            aws_secretsmanager_secret.pingfederate_m2m_client_secret[0].arn,
+          ] : [],
           var.enable_observability ? [aws_secretsmanager_secret.metrics_api_key[0].arn] : [],
           var.enable_observability && var.otel_otlp_endpoint != "" ? [aws_secretsmanager_secret.otlp_exporter_headers[0].arn] : []
         )

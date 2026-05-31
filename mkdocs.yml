@@ -107,6 +107,7 @@ nav:
     - Registry API Authentication: registry-api-auth.md
     - IAM Settings UI: iam-settings-ui.md
     - Amazon Cognito Setup: cognito.md
+    - PingFederate Setup: pingfederate.md
     - Access Control & Scopes: scopes.md
     - JWT Token Vending: jwt-token-vending.md
     - Security Policy: SECURITY.md

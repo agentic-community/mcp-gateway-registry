@@ -3513,6 +3513,41 @@ async def oauth2_callback(
                 logger.info(f"Raw user info from {provider}: {user_info}")
                 mapped_user = map_user_info(user_info, provider_config)
                 logger.info(f"Mapped user info from userInfo: {mapped_user}")
+        elif provider == "pingfederate":
+            # For PingFederate, decode the ID token to get groups
+            try:
+                if "id_token" in token_data:
+                    import jwt
+
+                    id_token_claims = jwt.decode(
+                        token_data["id_token"], options={"verify_signature": False}
+                    )
+                    logger.info(f"PingFederate ID token claims: {id_token_claims}")
+
+                    groups_claim_name = os.getenv("PINGFEDERATE_GROUPS_CLAIM", "groups")
+                    mapped_user = {
+                        "username": id_token_claims.get("preferred_username")
+                        or id_token_claims.get("email")
+                        or id_token_claims.get("sub"),
+                        "email": id_token_claims.get("email"),
+                        "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
+                        "groups": id_token_claims.get(groups_claim_name, []),
+                    }
+                    logger.info(f"User extracted from PingFederate ID token: {mapped_user}")
+                else:
+                    logger.warning(
+                        "No ID token found in PingFederate response, falling back to userInfo"
+                    )
+                    raise ValueError("Missing ID token")
+
+            except Exception as e:
+                logger.warning(
+                    f"PingFederate ID token parsing failed: {e}, falling back to userInfo endpoint"
+                )
+                user_info = await get_user_info(token_data["access_token"], provider_config)
+                logger.info(f"Raw user info from {provider}: {user_info}")
+                mapped_user = map_user_info(user_info, provider_config)
+                logger.info(f"Mapped user info from userInfo: {mapped_user}")
         else:
             # For other providers, use userInfo endpoint
             user_info = await get_user_info(token_data["access_token"], provider_config)

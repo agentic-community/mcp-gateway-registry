@@ -329,6 +329,57 @@ resource "aws_secretsmanager_secret_version" "auth0_m2m_client_secret" {
 }
 
 
+# =============================================================================
+# PINGFEDERATE SECRETS
+# =============================================================================
+
+# PingFederate client secret
+#checkov:skip=CKV2_AWS_57:IdP client secret managed in PingFederate admin console
+resource "aws_secretsmanager_secret" "pingfederate_client_secret" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-pingfederate-client-secret-"
+  description             = "PingFederate client secret for OAuth authentication"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "pingfederate_client_secret" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.pingfederate_client_secret[0].id
+  secret_string = var.pingfederate_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# PingFederate M2M client secret
+#checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in PingFederate admin console
+resource "aws_secretsmanager_secret" "pingfederate_m2m_client_secret" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-pingfederate-m2m-client-secret-"
+  description             = "PingFederate M2M client secret for service account operations"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "pingfederate_m2m_client_secret" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.pingfederate_m2m_client_secret[0].id
+  secret_string = var.pingfederate_m2m_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+
 # Metrics API key (for metrics-service authentication)
 resource "random_password" "metrics_api_key" {
   count   = var.enable_observability ? 1 : 0
