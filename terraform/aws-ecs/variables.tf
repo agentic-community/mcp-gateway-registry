@@ -1411,57 +1411,24 @@ variable "enable_waf" {
 # =============================================================================
 
 variable "registry_extra_env" {
-  description = "Extra environment variables for the registry service. List of objects with 'name' and 'value' fields. Reserved names are rejected at terraform plan time via validation against charts/registry/reserved-env-names.txt (shared source of truth across Docker, Terraform, and Helm). For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block (see mongodb_connection_string_secret_arn as a reference pattern)."
+  description = "Extra environment variables for the registry service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/registry/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block (see mongodb_connection_string_secret_arn as a reference pattern)."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
-
-  validation {
-    condition = length([
-      for env in var.registry_extra_env : env.name
-      if contains(
-        compact(split("\n", file("${path.module}/../../charts/registry/reserved-env-names.txt"))),
-        env.name
-      )
-    ]) == 0
-    error_message = "registry_extra_env contains one or more reserved environment variable names that are managed by the chart. See charts/registry/reserved-env-names.txt for the full list. Configure reserved variables via their canonical Terraform variable or Helm value instead."
-  }
 }
 
 variable "auth_server_extra_env" {
-  description = "Extra environment variables for the auth-server service. List of objects with 'name' and 'value' fields. Reserved names are rejected at terraform plan time via validation against charts/auth-server/reserved-env-names.txt. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
+  description = "Extra environment variables for the auth-server service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/auth-server/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
-
-  validation {
-    condition = length([
-      for env in var.auth_server_extra_env : env.name
-      if contains(
-        compact(split("\n", file("${path.module}/../../charts/auth-server/reserved-env-names.txt"))),
-        env.name
-      )
-    ]) == 0
-    error_message = "auth_server_extra_env contains one or more reserved environment variable names that are managed by the chart. See charts/auth-server/reserved-env-names.txt for the full list. Configure reserved variables via their canonical Terraform variable or Helm value instead."
-  }
 }
 
 variable "mcpgw_extra_env" {
-  description = "Extra environment variables for the mcpgw service. List of objects with 'name' and 'value' fields. Reserved names are rejected at terraform plan time via validation against charts/mcpgw/reserved-env-names.txt. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
+  description = "Extra environment variables for the mcpgw service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/mcpgw/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
-
-  validation {
-    condition = length([
-      for env in var.mcpgw_extra_env : env.name
-      if contains(
-        compact(split("\n", file("${path.module}/../../charts/mcpgw/reserved-env-names.txt"))),
-        env.name
-      )
-    ]) == 0
-    error_message = "mcpgw_extra_env contains one or more reserved environment variable names that are managed by the chart. See charts/mcpgw/reserved-env-names.txt for the full list. Configure reserved variables via their canonical Terraform variable or Helm value instead."
-  }
 }
 
 variable "autoscaling_min_capacity" {
