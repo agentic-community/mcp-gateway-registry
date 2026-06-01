@@ -41,7 +41,7 @@ from metrics_middleware import add_auth_metrics_middleware
 # Import provider factory
 from providers.factory import get_auth_provider
 # Import custom authorizer models and services for external authorization integration
-from models.custom_authorizer import AuthorizerMode
+from models.custom_authorizer import AuthorizerMode, NativeAuthResult
 from services.custom_authorizer import (
     get_authorizer_mode,
     get_custom_authorizer_client,
@@ -2432,14 +2432,14 @@ async def validate_request(request: Request):
                     )
 
                 # Build native auth result dict for payload
-                native_auth = {
-                    "valid": True,
-                    "username": validation_result.get("username"),
-                    "scopes": user_scopes,
-                    "groups": validation_result.get("groups", []),
-                    "auth_method": validation_result.get("method"),
-                    "client_id": validation_result.get("client_id"),
-                }
+                native_auth = NativeAuthResult(
+                    valid=True,
+                    username=validation_result.get("username"),
+                    scopes=user_scopes,
+                    groups=validation_result.get("groups", []),
+                    auth_method=validation_result.get("method"),
+                    client_id=validation_result.get("client_id"),
+                )
 
                 # Build payload with native auth result
                 payload = build_custom_auth_payload(
