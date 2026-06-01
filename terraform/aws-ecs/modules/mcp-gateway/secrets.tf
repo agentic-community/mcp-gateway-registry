@@ -333,7 +333,7 @@ resource "aws_secretsmanager_secret_version" "auth0_m2m_client_secret" {
 # PINGFEDERATE SECRETS
 # =============================================================================
 
-# PingFederate client secret
+# PingFederate client secret (for OAuth authentication)
 #checkov:skip=CKV2_AWS_57:IdP client secret managed in PingFederate admin console
 resource "aws_secretsmanager_secret" "pingfederate_client_secret" {
   count = var.pingfederate_enabled ? 1 : 0
@@ -356,7 +356,7 @@ resource "aws_secretsmanager_secret_version" "pingfederate_client_secret" {
   }
 }
 
-# PingFederate M2M client secret
+# PingFederate M2M client secret (for service account operations)
 #checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in PingFederate admin console
 resource "aws_secretsmanager_secret" "pingfederate_m2m_client_secret" {
   count = var.pingfederate_enabled ? 1 : 0

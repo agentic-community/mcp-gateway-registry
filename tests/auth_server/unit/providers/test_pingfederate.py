@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import jwt as pyjwt
 import pytest
+import requests
 
 from auth_server.providers.pingfederate import PingFederateProvider
 
@@ -207,7 +208,7 @@ class TestPingFederateDiscovery:
     @patch("auth_server.providers.pingfederate.requests.get")
     def test_discovery_failure_raises(self, mock_get):
         """Test discovery fetch failure raises ValueError."""
-        mock_get.side_effect = Exception("Connection refused")
+        mock_get.side_effect = requests.ConnectionError("Connection refused")
 
         provider = _create_provider()
         with pytest.raises(ValueError, match="OpenID configuration retrieval failed"):
@@ -789,7 +790,7 @@ class TestPingFederateCodeExchange:
         mock_discovery_response.raise_for_status.return_value = None
         mock_get.return_value = mock_discovery_response
 
-        mock_post.side_effect = Exception("Connection refused")
+        mock_post.side_effect = requests.ConnectionError("Connection refused")
 
         provider = _create_provider()
         with pytest.raises(ValueError, match="Token exchange failed"):
