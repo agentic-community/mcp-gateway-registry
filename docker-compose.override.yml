@@ -7,7 +7,7 @@ services:
   cedar-authorizer:
     image: python:3.14-slim
     command: >
-      sh -c "pip install fastapi uvicorn pydantic -q &&
+      sh -c "pip install fastapi uvicorn pydantic cedarpy -q &&
              uvicorn app:app --host 0.0.0.0 --port 8090"
     volumes:
       - ./cedar-authorizer/app.py:/app/app.py:ro

@@ -1,39 +1,35 @@
 // MCP Gateway Registry — Cedar Authorization Policies
 //
+// Evaluated by the cedarpy engine (Rust Cedar Policy bindings).
 // These policies are evaluated against every request that passes through
 // the auth-server /validate endpoint when AUTHORIZER_MODE=custom or AUTHORIZER_MODE=both.
 //
-// Principal attributes available:
-//   principal.username  — authenticated username
-//   principal.groups    — list of group names (e.g. ["mcp-registry-admins"])
-//   principal.scopes    — list of OAuth2 scopes
-//   principal.auth_method — authentication method (keycloak, cognito, …)
+// Entity model:
+//   Principal  — attrs: username (String), groups (Set<String>), scopes (Set<String>)
+//   Action     — entity ID is the HTTP method: "GET", "POST", "PUT", "DELETE", "PATCH"
+//   Resource   — attrs: path (String)
 //
-// Resource attributes available:
-//   resource.path       — request path (e.g. "/api/servers")
-//   resource.method     — HTTP method (GET, POST, PUT, DELETE, PATCH)
+// In BOTH mode, principal attributes come from the native JWT (real user identity).
+// In CUSTOM mode, principal is anonymous with empty groups/scopes.
 //
-// Action represents the HTTP method as a string (Action::"GET", Action::"POST", etc.)
-//
-// Note: This file uses a practical Cedar subset. Supported constructs:
-//   permit/forbid with principal/action/resource conditions
-//   when { } clauses with: .like, ==, !=, &&, ||, !, in, principal.groups.contains()
+// Decision logic: default-deny; permit fires → allow; forbid overrides permit.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PERMIT rules
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Admins can perform any action on any resource.
+// Rule 1: Admins can perform any action on any resource.
 permit(
     principal,
     action,
     resource
 )
 when {
-    principal.groups.contains("mcp-registry-admins")
+    principal.groups.contains("mcp-registry-admins") ||
+    principal.groups.contains("registry-admins")
 };
 
-// LOB1 users can read any resource and invoke MCP tool endpoints.
+// Rule 2: LOB1 users can read any resource.
 permit(
     principal,
     action == Action::"GET",
@@ -43,17 +39,17 @@ when {
     principal.groups.contains("registry-users-lob1")
 };
 
+// Rule 3: LOB1 users can POST to any resource.
 permit(
     principal,
     action == Action::"POST",
     resource
 )
 when {
-    principal.groups.contains("registry-users-lob1") &&
-    resource.path.like("*/mcp/*")
+    principal.groups.contains("registry-users-lob1")
 };
 
-// LOB2 users have read-only access.
+// Rule 4: LOB2 users have read-only access.
 permit(
     principal,
     action == Action::"GET",
@@ -63,7 +59,7 @@ when {
     principal.groups.contains("registry-users-lob2")
 };
 
-// M2M service accounts (any client with the m2m-servers-unrestricted scope) get full access.
+// Rule 5: M2M service accounts with unrestricted scopes get full access.
 permit(
     principal,
     action,
@@ -78,23 +74,25 @@ when {
 // FORBID rules — evaluated after all permits; a forbid overrides any permit.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Block write access to the admin API for non-admins.
+// Rule 6: Block all access to the admin API for non-admins.
 forbid(
     principal,
     action,
     resource
 )
 when {
-    resource.path.like("/api/admin/*") &&
-    !principal.groups.contains("mcp-registry-admins")
+    resource.path like "/api/admin*" &&
+    !principal.groups.contains("mcp-registry-admins") &&
+    !principal.groups.contains("registry-admins")
 };
 
-// Block DELETE on servers/agents for non-admins.
+// Rule 7: Block DELETE on any resource for non-admins.
 forbid(
     principal,
     action == Action::"DELETE",
     resource
 )
 when {
-    !principal.groups.contains("mcp-registry-admins")
+    !principal.groups.contains("mcp-registry-admins") &&
+    !principal.groups.contains("registry-admins")
 };

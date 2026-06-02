@@ -2,18 +2,13 @@
 """
 Cedar Policy-based Custom Authorizer for MCP Gateway Registry.
 
-Implements the custom authorizer webhook contract using a Cedar policy engine.
-Policies are loaded from `policies.cedar` at startup and hot-reloaded on change.
+Implements the custom authorizer webhook contract using the **cedarpy** library,
 
-The evaluator supports a practical Cedar subset:
-  - permit / forbid rules
-  - principal.groups.contains(), principal.scopes.contains()
-  - action == Action::"METHOD"
-  - resource.path.like("pattern")  (fnmatch-style globs)
-  - when { } clauses with &&, ||, ! operators
+Policies are loaded from a `.cedar` file at startup and hot-reloaded
+when the file changes on disk.
 
 Usage:
-    pip install fastapi uvicorn pydantic watchfiles
+    pip install fastapi uvicorn pydantic cedarpy
     uvicorn app:app --host 0.0.0.0 --port 8090
 
 Configuration (environment variables):
@@ -21,16 +16,14 @@ Configuration (environment variables):
     API_KEY         If set, requests must carry Authorization: Bearer <API_KEY>.
 """
 
-import fnmatch
 import logging
 import os
-import re
 import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cedarpy import AuthzResult, Decision, is_authorized
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
@@ -46,6 +39,7 @@ API_KEY: str = os.environ.get("API_KEY", "").strip()
 # ─────────────────────────────────────────────────────────────────────────────
 # Webhook contract models (mirror of auth_server/models/custom_authorizer.py)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class CustomAuthRequest(BaseModel):
     method: str
@@ -91,171 +85,31 @@ class CustomAuthorizerResponse(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cedar policy parser
+# Cedar policy engine (backed by cedarpy / Rust Cedar)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_RULE_RE = re.compile(
-    r"(permit|forbid)\s*\(\s*principal[^,)]*,\s*action[^,)]*,\s*resource[^)]*\)"
-    r"(?:\s*when\s*\{([^}]*)\})?",
-    re.DOTALL,
-)
-_COMMENT_RE = re.compile(r"//[^\n]*")
-
-
-def _strip_comments(text: str) -> str:
-    return _COMMENT_RE.sub("", text)
-
-
-def _parse_action_condition(action_clause: str) -> str | None:
-    """Extract the HTTP method from an action clause like `action == Action::"GET"`."""
-    m = re.search(r'action\s*==\s*Action::"(\w+)"', action_clause)
-    return m.group(1).upper() if m else None
-
-
-def _parse_rules(policy_text: str) -> list[dict]:
-    """Parse Cedar policies into a list of rule dicts."""
-    clean = _strip_comments(policy_text)
-    rules: list[dict] = []
-    for m in _RULE_RE.finditer(clean):
-        effect = m.group(1)          # "permit" or "forbid"
-        full_head = m.group(0)
-        when_body = (m.group(2) or "").strip()
-        action_clause = re.search(r"action[^,)]*", full_head)
-        action_method = _parse_action_condition(action_clause.group(0)) if action_clause else None
-        rules.append({"effect": effect, "action_method": action_method, "when": when_body})
-    return rules
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Cedar when-clause evaluator
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _evaluate_condition(expr: str, ctx: dict) -> bool:
-    """
-    Evaluate a Cedar when-clause expression against a context dict.
-
-    Supported patterns:
-      principal.groups.contains("name")
-      principal.scopes.contains("name")
-      resource.path.like("glob/*")
-      action == Action::"METHOD"  (always true here — pre-filtered by action_method)
-      !<expr>
-      <expr> && <expr>
-      <expr> || <expr>
-    """
-    expr = expr.strip()
-    if not expr:
-        return True
-
-    # Strip outer parentheses
-    while expr.startswith("(") and expr.endswith(")"):
-        inner = expr[1:-1]
-        if _balanced(inner):
-            expr = inner.strip()
-        else:
-            break
-
-    # Logical NOT
-    if expr.startswith("!"):
-        return not _evaluate_condition(expr[1:], ctx)
-
-    # Split on && / || respecting parenthesis depth
-    for op, split_fn in [("&&", all), ("||", any)]:
-        parts = _split_logical(expr, op)
-        if len(parts) > 1:
-            return split_fn(_evaluate_condition(p, ctx) for p in parts)
-
-    # Leaf expressions
-    principal = ctx.get("principal", {})
-    resource = ctx.get("resource", {})
-    action = ctx.get("action", "")
-
-    # principal.groups.contains("value")
-    m = re.match(r'principal\.groups\.contains\("([^"]+)"\)', expr)
-    if m:
-        return m.group(1) in principal.get("groups", [])
-
-    # principal.scopes.contains("value")
-    m = re.match(r'principal\.scopes\.contains\("([^"]+)"\)', expr)
-    if m:
-        return m.group(1) in principal.get("scopes", [])
-
-    # resource.path.like("glob")
-    m = re.match(r'resource\.path\.like\("([^"]+)"\)', expr)
-    if m:
-        return fnmatch.fnmatch(resource.get("path", ""), m.group(1).replace("*", "**").replace("**", "*"))
-
-    # action == Action::"METHOD"
-    m = re.match(r'action\s*==\s*Action::"(\w+)"', expr)
-    if m:
-        return m.group(1).upper() == action.upper()
-
-    logger.warning("Unrecognised Cedar expression (treating as false): %r", expr)
-    return False
-
-
-def _balanced(s: str) -> bool:
-    depth = 0
-    for ch in s:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth < 0:
-                return False
-    return depth == 0
-
-
-def _split_logical(expr: str, op: str) -> list[str]:
-    """Split expr on `op` (&&  or ||) respecting parenthesis depth."""
-    parts: list[str] = []
-    depth = 0
-    current: list[str] = []
-    i = 0
-    while i < len(expr):
-        if expr[i] == "(":
-            depth += 1
-            current.append(expr[i])
-        elif expr[i] == ")":
-            depth -= 1
-            current.append(expr[i])
-        elif depth == 0 and expr[i : i + len(op)] == op:
-            parts.append("".join(current).strip())
-            current = []
-            i += len(op)
-            continue
-        else:
-            current.append(expr[i])
-        i += 1
-    parts.append("".join(current).strip())
-    return parts
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Policy engine
-# ─────────────────────────────────────────────────────────────────────────────
 
 class CedarPolicyEngine:
-    """Loads Cedar policies from a file and evaluates is_authorized requests."""
+    """Loads Cedar policies from a file and evaluates authorization via cedarpy."""
 
     def __init__(self, policy_file: str) -> None:
         self._policy_file = Path(policy_file)
-        self._rules: list[dict] = []
+        self._policies: str = ""
         self._mtime: float = 0.0
         self._lock = threading.Lock()
         self._reload()
 
     def _reload(self) -> None:
+        """Reload policies from disk if the file has changed."""
         try:
             mtime = self._policy_file.stat().st_mtime
             if mtime == self._mtime:
                 return
             text = self._policy_file.read_text()
-            rules = _parse_rules(text)
             with self._lock:
-                self._rules = rules
+                self._policies = text
                 self._mtime = mtime
-            logger.info("Loaded %d Cedar rules from %s", len(rules), self._policy_file)
+            logger.info("Loaded Cedar policies from %s (%d bytes)", self._policy_file, len(text))
         except FileNotFoundError:
             logger.error("Policy file not found: %s", self._policy_file)
         except Exception as e:
@@ -268,38 +122,72 @@ class CedarPolicyEngine:
         resource: dict,
     ) -> tuple[bool, str]:
         """
-        Return (authorized, matched_rule).
+        Evaluate a request against loaded Cedar policies via cedarpy.
 
-        Cedar semantics: default-deny; a request is authorized only when at
-        least one permit fires AND no forbid fires.
+        Returns (authorized, matched_info).
         """
         self._reload()
-        ctx = {"principal": principal, "action": action, "resource": resource}
-        permit_matched: str | None = None
-        forbid_matched: str | None = None
 
         with self._lock:
-            rules = list(self._rules)
+            policies = self._policies
 
-        for rule in rules:
-            # Action pre-filter
-            if rule["action_method"] and rule["action_method"] != action.upper():
-                continue
+        if not policies:
+            return False, "no-policies-loaded"
 
-            # When-clause evaluation
-            if not _evaluate_condition(rule["when"], ctx):
-                continue
+        # Build the principal identifier — use username or "anonymous"
+        username = principal.get("username") or "anonymous"
+        groups: list[str] = principal.get("groups", [])
+        scopes: list[str] = principal.get("scopes", [])
+        path: str = resource.get("path", "/")
 
-            if rule["effect"] == "permit" and permit_matched is None:
-                permit_matched = f"permit(action={rule['action_method'] or '*'}, when={rule['when'][:60]})"
-            elif rule["effect"] == "forbid" and forbid_matched is None:
-                forbid_matched = f"forbid(action={rule['action_method'] or '*'}, when={rule['when'][:60]})"
+        # Cedar entities: typed objects with attributes
+        entities = [
+            {
+                "uid": {"__entity": {"type": "Principal", "id": username}},
+                "attrs": {
+                    "groups": groups,
+                    "scopes": scopes,
+                    "username": username,
+                },
+                "parents": [],
+            },
+            {
+                "uid": {"__entity": {"type": "Resource", "id": path}},
+                "attrs": {
+                    "path": path,
+                },
+                "parents": [],
+            },
+        ]
 
-        if forbid_matched:
-            return False, forbid_matched
-        if permit_matched:
-            return True, permit_matched
-        return False, "no-matching-permit (default-deny)"
+        # Cedar request: references entities by type::"id"
+        cedar_request = {
+            "principal": f'Principal::"{username}"',
+            "action": f'Action::"{action}"',
+            "resource": f'Resource::"{path}"',
+            "context": {},
+        }
+
+        try:
+            result: AuthzResult = is_authorized(cedar_request, policies, entities)
+
+            if result.allowed:
+                reasons = list(result.diagnostics.reasons)
+                reason_str = ", ".join(reasons) if reasons else "permit-matched"
+                return True, reason_str
+
+            # Denied: check for errors vs normal deny
+            errors = list(result.diagnostics.errors)
+            if errors:
+                error_str = "; ".join(errors)
+                logger.warning("Cedar evaluation errors: %s", error_str)
+                return False, f"evaluation-error: {error_str}"
+
+            return False, "no-matching-permit (default-deny)"
+
+        except Exception as e:
+            logger.error("Cedar evaluation failed: %s", e, exc_info=True)
+            return False, f"engine-error: {e}"
 
 
 _engine = CedarPolicyEngine(POLICIES_FILE)
@@ -310,7 +198,7 @@ _engine = CedarPolicyEngine(POLICIES_FILE)
 
 app = FastAPI(
     title="Cedar Policy Authorizer",
-    description="MCP Gateway custom authorizer backed by Cedar policies.",
+    description="MCP Gateway custom authorizer backed by the Cedar Policy engine (cedarpy).",
     version="1.0.0",
 )
 
@@ -335,7 +223,7 @@ async def authorize(
     _verify_api_key(authorization)
 
     # Build evaluation context from the native auth result (available in BOTH mode)
-    # or from request headers (CUSTOM mode, where native_auth_result is None).
+    # or default to anonymous (CUSTOM mode, where native_auth_result is None).
     native = payload.native_auth_result
     principal = {
         "username": (native.username or "") if native else "",
@@ -347,7 +235,6 @@ async def authorize(
     action = payload.request.method.upper()
     resource = {
         "path": payload.request.path,
-        "method": action,
     }
 
     logger.info(
@@ -359,16 +246,16 @@ async def authorize(
         payload.context.request_id,
     )
 
-    authorized, matched_rule = _engine.is_authorized(principal, action, resource)
+    authorized, matched_info = _engine.is_authorized(principal, action, resource)
     decision_label = "AUTHORIZED" if authorized else "DENIED"
-    logger.info("%s — rule: %s", decision_label, matched_rule)
+    logger.info("%s — %s", decision_label, matched_info)
 
     if authorized:
         return CustomAuthorizerResponse(
             authorized=True,
             metadata={
-                "engine": "cedar-subset",
-                "matched_rule": matched_rule,
+                "engine": "cedarpy",
+                "matched_rule": matched_info,
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 "policies_file": POLICIES_FILE,
             },
@@ -378,7 +265,7 @@ async def authorize(
         authorized=False,
         error=CustomAuthErrorDetail(
             code="CEDAR_DENY",
-            message=f"Access denied by Cedar policy: {matched_rule}",
+            message=f"Access denied by Cedar policy: {matched_info}",
             details={
                 "username": principal["username"],
                 "groups": principal["groups"],
@@ -387,8 +274,8 @@ async def authorize(
             },
         ),
         metadata={
-            "engine": "cedar-subset",
-            "matched_rule": matched_rule,
+            "engine": "cedarpy",
+            "matched_rule": matched_info,
             "evaluated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -399,6 +286,7 @@ async def health() -> dict:
     return {
         "status": "healthy",
         "version": "1.0.0",
+        "engine": "cedarpy",
         "policies_file": POLICIES_FILE,
-        "rules_loaded": len(_engine._rules),
+        "policies_loaded": bool(_engine._policies),
     }
