@@ -326,6 +326,22 @@ cognito:
   domain: ""  # Optional: custom Cognito domain
   region: "us-east-1"  # AWS region for the User Pool
 
+# PingFederate integration (used when authProvider.type = "pingfederate")
+pingfederate:
+  enabled: false
+  baseUrl: ""             # Internal URL (server-to-server), e.g. https://pf:9031
+  externalUrl: ""         # Browser-facing URL, e.g. https://pf.example.com:9031
+  clientId: ""
+  clientSecret: ""
+  clientSecretExistingSecret: ""
+  clientSecretExistingSecretKey: "PINGFEDERATE_CLIENT_SECRET"
+  m2mClientId: ""
+  m2mClientSecret: ""
+  m2mClientSecretExistingSecret: ""
+  m2mClientSecretExistingSecretKey: "PINGFEDERATE_M2M_CLIENT_SECRET"
+  applicationIdUri: ""
+  groupsClaim: "groups"
+
 # Service configuration
 service:
   type: ClusterIP
