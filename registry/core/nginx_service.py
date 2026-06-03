@@ -573,6 +573,18 @@ class NginxConfigService:
                 logger.info(
                     f"AUTH_PROVIDER is '{auth_provider}', removed Keycloak location blocks from nginx config"
                 )
+
+            # Strip PingFederate location blocks from nginx config when not using PingFederate
+            if auth_provider != "pingfederate":
+                template_content = re.sub(
+                    r"    # \{\{PINGFEDERATE_LOCATIONS_START\}\}.*?# \{\{PINGFEDERATE_LOCATIONS_END\}\}\n?",
+                    "",
+                    template_content,
+                    flags=re.DOTALL,
+                )
+                logger.info(
+                    f"AUTH_PROVIDER is '{auth_provider}', removed PingFederate location blocks from nginx config"
+                )
                 keycloak_scheme = "http"
                 keycloak_host = "keycloak"
                 keycloak_port = "8080"
@@ -631,6 +643,18 @@ class NginxConfigService:
             config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
             config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
             config_content = config_content.replace("{{KEYCLOAK_PORT}}", keycloak_port)
+
+            import os
+            pingfederate_url = os.environ.get("PINGFEDERATE_BASE_URL", "http://pingfederate:9032")
+            from urllib.parse import urlparse
+
+            pf_parsed = urlparse(pingfederate_url)
+            pf_scheme = pf_parsed.scheme or "http"
+            pf_host = pf_parsed.hostname or "pingfederate"
+            pf_port = str(pf_parsed.port or ("443" if pf_scheme == "https" else "9032"))
+            config_content = config_content.replace("{{PINGFEDERATE_SCHEME}}", pf_scheme)
+            config_content = config_content.replace("{{PINGFEDERATE_HOST}}", pf_host)
+            config_content = config_content.replace("{{PINGFEDERATE_PORT}}", pf_port)
 
             # Generate registry-only block (503 response for MCP proxy requests)
             registry_only_block = self._generate_registry_only_block()

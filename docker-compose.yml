@@ -786,7 +786,7 @@ services:
       start_period: 60s
 
   pingfederate:
-    image: pingidentity/pingfederate:13.0.2
+    image: pingidentity/pingfederate:latest
     container_name: pingfederate
     profiles: ["pingfederate"]
     environment:
@@ -794,12 +794,14 @@ services:
       - PING_IDENTITY_DEVOPS_USER=${PING_IDENTITY_DEVOPS_USER}
       - PING_IDENTITY_DEVOPS_KEY=${PING_IDENTITY_DEVOPS_KEY}
       - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
-      - SERVER_PROFILE_PATH=getting-started/pingfederate
+      - SERVER_PROFILE_PATH=baseline/pingfederate
     ports:
       - "9031:9031"
+      - "9032:9032"
       - "9999:9999"
     volumes:
       - pingfederate-data:/opt/out/instance/server/default/data
+      - ./pingfederate/config/run.properties:/opt/staging/instance/bin/run.properties
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -ksf https://localhost:9031/pf/heartbeat.ping || exit 1"]
