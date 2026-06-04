@@ -55,12 +55,24 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # Replace :latest (or any existing tag) with the release version
-          # only on UNCOMMENTED image_uri lines. Commented-out lines (starting
-          # with #) are example placeholders and must not be modified.
-          sed -i "/^[^#]*image_uri/s|\(image_uri.*:\)[^\"]*\"|\1${VERSION}\"|" \
-            terraform/aws-ecs/terraform.tfvars.example
-          echo "Updated terraform/aws-ecs/terraform.tfvars.example"
+          # Replace any pinned version tag on UNCOMMENTED image_uri lines, AND
+          # on commented `image_uri` lines that already pin a semver tag (e.g.
+          # `# foo_image_uri = "...:1.24.3"`). Commented placeholder lines that
+          # use `:latest` or symbolic tags like `:YOUR_VERSION` are deliberately
+          # left alone so they remain instructional. Skipping commented semver-
+          # pinned lines was a footgun: stale examples like `:1.24.3` would
+          # never be bumped, and the auto-PR body would over-claim updates that
+          # never actually happened.
+          FILE=terraform/aws-ecs/terraform.tfvars.example
+
+          # 1. Uncommented image_uri lines: replace any tag.
+          sed -i "/^[^#]*image_uri/s|\(image_uri.*:\)[^\"]*\"|\1${VERSION}\"|" "$FILE"
+
+          # 2. Commented image_uri lines pinned to a semver: replace tag.
+          #    Match `:1.2.3` or `:1.2.3-anything` followed by `"` only.
+          sed -i -E "/^#.*image_uri/s|(image_uri.*:)[0-9]+\\.[0-9]+\\.[0-9]+[A-Za-z0-9._-]*(\")|\\1${VERSION}\\2|" "$FILE"
+
+          echo "Updated $FILE"
 
       - name: Check for changes
         id: update
