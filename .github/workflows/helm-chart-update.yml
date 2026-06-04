@@ -51,28 +51,28 @@ jobs:
             echo "Updated $VALUES_FILE"
           done
 
-      - name: Update image tags in terraform.tfvars.example
+      - name: Update public ECR image defaults in Terraform variables.tf
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # Replace any pinned version tag on UNCOMMENTED image_uri lines, AND
-          # on commented `image_uri` lines that already pin a semver tag (e.g.
-          # `# foo_image_uri = "...:1.24.3"`). Commented placeholder lines that
-          # use `:latest` or symbolic tags like `:YOUR_VERSION` are deliberately
-          # left alone so they remain instructional. Skipping commented semver-
-          # pinned lines was a footgun: stale examples like `:1.24.3` would
-          # never be bumped, and the auto-PR body would over-claim updates that
-          # never actually happened.
-          FILE=terraform/aws-ecs/terraform.tfvars.example
-
-          # 1. Uncommented image_uri lines: replace any tag.
-          sed -i "/^[^#]*image_uri/s|\(image_uri.*:\)[^\"]*\"|\1${VERSION}\"|" "$FILE"
-
-          # 2. Commented image_uri lines pinned to a semver: replace tag.
-          #    Match `:1.2.3` or `:1.2.3-anything` followed by `"` only.
-          sed -i -E "/^#.*image_uri/s|(image_uri.*:)[0-9]+\\.[0-9]+\\.[0-9]+[A-Za-z0-9._-]*(\")|\\1${VERSION}\\2|" "$FILE"
-
-          echo "Updated $FILE"
+          # Bump the `default = "public.ecr.aws/p3v1o3c6/<service>:<version>"`
+          # lines in the Terraform variable declarations. These defaults are
+          # what `terraform apply` uses when the operator does not set the
+          # corresponding variable in their `terraform.tfvars`, so they
+          # decide what image a fresh ECS deployment pulls. They MUST track
+          # the latest released version.
+          #
+          # `terraform.tfvars.example` is intentionally NOT touched here.
+          # That file is documentation only (Terraform never reads it). Its
+          # commented-out lines stay as `:latest` placeholders that operators
+          # uncomment and edit in their own `terraform.tfvars` if they want
+          # to override the default with a custom-built image.
+          for VARS_FILE in \
+            terraform/aws-ecs/variables.tf \
+            terraform/aws-ecs/modules/mcp-gateway/variables.tf; do
+            sed -i -E "s|(public\\.ecr\\.aws/p3v1o3c6/[a-zA-Z0-9._-]+:)[0-9]+\\.[0-9]+\\.[0-9]+[A-Za-z0-9._-]*|\\1${VERSION}|g" "$VARS_FILE"
+            echo "Updated $VARS_FILE"
+          done
 
       - name: Check for changes
         id: update
@@ -172,7 +172,8 @@ jobs:
             - `charts/auth-server/values.yaml`
             - `charts/registry/values.yaml`
             - `charts/mcpgw/values.yaml`
-            - `terraform/aws-ecs/terraform.tfvars.example`
+            - `terraform/aws-ecs/variables.tf`
+            - `terraform/aws-ecs/modules/mcp-gateway/variables.tf`
           labels: release
 
       - name: Comment on PR with missing env vars
