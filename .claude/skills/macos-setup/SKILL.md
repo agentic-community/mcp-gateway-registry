@@ -662,7 +662,7 @@ Registration CLI: [`api/registry_management.py`](https://github.com/agentic-comm
 cd "${INSTALL_DIR}"
 
 # Verify token file exists for test-agent
-TOKEN_FILE=".oauth-tokens/agent-test-agent-m2m.env"
+TOKEN_FILE=".oauth-tokens/agent-test-agent-m2m-token.json"
 if [ ! -f "$TOKEN_FILE" ]; then
     echo "ERROR: Token file not found: $TOKEN_FILE"
     ls .oauth-tokens/
@@ -688,7 +688,7 @@ Verify the server was registered:
 cd "${INSTALL_DIR}"
 
 uv run python api/registry_management.py \
-    --token-file ".oauth-tokens/agent-test-agent-m2m.env" \
+    --token-file ".oauth-tokens/agent-test-agent-m2m-token.json" \
     --registry-url http://localhost \
     list 2>/dev/null | grep -i cloudflare && echo "Cloudflare server confirmed in registry" || echo "WARNING: Cloudflare server not found in list"
 ```
@@ -737,7 +737,7 @@ done
 echo ""
 echo "=== Registered Servers ==="
 uv run python api/registry_management.py \
-    --token-file ".oauth-tokens/agent-test-agent-m2m.env" \
+    --token-file ".oauth-tokens/agent-test-agent-m2m-token.json" \
     --registry-url http://localhost \
     list 2>/dev/null || echo "Could not retrieve server list"
 ```
