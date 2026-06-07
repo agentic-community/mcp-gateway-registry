@@ -2,10 +2,22 @@ import asyncio
 import json
 import logging
 import os
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Cookie,
+    Depends,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -22,12 +34,21 @@ from ..auth.tool_filter import filter_tools_for_user
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
+from ..schemas.server_update_models import (
+    SERVER_REGISTRANT_ONLY_FIELDS,
+    ServerCardPatch,
+    ServerUpdateRequest,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
 from ..services.webhook_service import send_registration_webhook
-from ..utils.credential_encryption import encrypt_credential_in_server_dict
+from ..utils.credential_encryption import (
+    encrypt_credential_in_server_dict,
+    strip_credentials_from_dict,
+)
 from ..utils.metadata import flatten_metadata_to_text
+from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +169,25 @@ def _validate_visibility_and_groups(
         )
 
     return normalized, allowed_groups_list
+
+
+def _coerce_metadata_to_dict(parsed_metadata: Any, path: str) -> dict[str, Any]:
+    """Coerce parsed JSON metadata to a dict, with a warning on non-dict input.
+
+    ServerInfo.metadata is declared dict[str, Any]; arrays / scalars / None
+    all violate that invariant. PR #1175 fixed the None case for #1165; this
+    helper extends it to every non-dict shape so storage stays consistent
+    regardless of input. Non-dict input is silently coerced to {} (lenient,
+    matching the PR's intent) and logged so the coercion is observable.
+    """
+    if isinstance(parsed_metadata, dict):
+        return parsed_metadata
+    logger.warning(
+        "metadata for %s coerced to {}: expected JSON object, got %s",
+        path,
+        type(parsed_metadata).__name__,
+    )
+    return {}
 
 
 async def _build_versions_list(
@@ -668,6 +708,11 @@ async def get_servers_json(
                     "auth_scheme": server_info.get("auth_scheme", "none"),
                     "auth_header_name": server_info.get("auth_header_name"),
                     "tool_list": _filtered_tools,
+                    # Access control. Default absent to "public" for servers
+                    # stored before the write-side fix always persisted the
+                    # field (#1181). Matches the convention used by agents,
+                    # search, and federation responses.
+                    "visibility": server_info.get("visibility") or "public",
                     # Federation and lifecycle metadata
                     "status": server_info.get("status", "active"),
                     "provider_organization": (
@@ -838,6 +883,124 @@ from ..schemas.duplicate_check_models import (
     ServerDuplicateCheckRequest,
 )
 from ..services.duplicate_check_service import get_duplicate_check_service
+
+
+def _normalize_server_path(path: str) -> str:
+    """Normalize a server path to canonical form.
+
+    Ensures leading slash and strips a trailing slash unless the path is
+    just "/". Used by PUT/PATCH server endpoints so callers can pass
+    path with or without slashes.
+
+    Args:
+        path: Raw path from the URL.
+
+    Returns:
+        Canonical path string.
+    """
+    if not path.startswith("/"):
+        path = "/" + path
+    if len(path) > 1 and path.endswith("/"):
+        path = path.rstrip("/")
+    return path
+
+
+def _to_dt(value: Any) -> datetime | None:
+    """Coerce a stored timestamp value into a datetime.
+
+    Server documents may carry timestamps as either ISO-8601 strings
+    (with optional trailing 'Z') or pre-parsed datetime instances,
+    depending on the storage backend. ETag/If-Match comparisons need a
+    datetime, so this helper normalises both forms.
+
+    Args:
+        value: The stored timestamp value (string, datetime, or None).
+
+    Returns:
+        A datetime, or None if the input is None or unparseable.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _check_server_permission(
+    permission: str,
+    server_name: str,
+    user_context: dict[str, Any],
+) -> None:
+    """Check whether the user has the requested UI permission for a server.
+
+    Mirrors `_check_agent_permission` in agent_routes.py so PUT/PATCH on
+    servers behaves the same way as PUT/PATCH on agents.
+
+    Args:
+        permission: UI permission name (e.g., "modify_service").
+        server_name: Display name of the server, used for the 403 detail.
+        user_context: Authenticated user context.
+
+    Raises:
+        HTTPException: 403 if the user lacks the permission.
+    """
+    from ..auth.dependencies import user_has_ui_permission_for_service
+
+    if not user_has_ui_permission_for_service(
+        permission,
+        server_name,
+        user_context.get("ui_permissions", {}),
+    ):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to perform {permission} "
+            f"on server {server_name} without permission"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You do not have permission to {permission} for {server_name}",
+        )
+
+
+def _merge_server_update(
+    existing: dict[str, Any],
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    """Layer an incoming update over an existing server, re-pinning read-only fields.
+
+    Used by both PUT and PATCH handlers. Defence-in-depth: even if the
+    Pydantic models accept a registrant-only field, this helper restores
+    the stored value before persistence. Tag-shaped CSV strings are
+    normalised to lists so downstream search/index code stays simple.
+
+    Args:
+        existing: Server dict fetched from storage (with credentials).
+        incoming: Incoming update dict (already validated).
+
+    Returns:
+        A new merged dict; ``existing`` and ``incoming`` are not mutated.
+    """
+    merged: dict[str, Any] = {**existing, **incoming}
+
+    # Re-pin every registrant-only field from the existing record.
+    for field in SERVER_REGISTRANT_ONLY_FIELDS:
+        if field in existing:
+            merged[field] = existing[field]
+        else:
+            merged.pop(field, None)
+
+    # Normalise CSV-shaped tag fields to lists for downstream consistency.
+    for tag_field in ("tags", "external_tags"):
+        value = merged.get(tag_field)
+        if isinstance(value, str):
+            merged[tag_field] = [t.strip() for t in value.split(",") if t.strip()]
+
+    merged["updated_at"] = datetime.now(UTC).isoformat()
+    return merged
 
 
 def _check_register_permission(
@@ -1035,6 +1198,7 @@ async def register_service(
         "allowed_groups": allowed_groups_list,
         "deployment": deployment,
         "registered_by": user_context["username"],
+        "metadata": {},
     }
 
     # Deployment-specific fields
@@ -1052,7 +1216,8 @@ async def register_service(
         try:
             import json
 
-            server_entry["metadata"] = json.loads(metadata)
+            parsed_metadata = json.loads(metadata)
+            server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1338,6 +1503,7 @@ async def internal_register_service(
         "tool_list": tool_list,
         "visibility": visibility,
         "allowed_groups": allowed_groups_list,
+        "metadata": {},
     }
 
     # Add optional fields if provided
@@ -1349,9 +1515,8 @@ async def internal_register_service(
         server_entry["auth_header_name"] = auth_header_name
     if metadata:
         try:
-            server_entry["metadata"] = (
-                json.loads(metadata) if isinstance(metadata, str) else metadata
-            )
+            parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+            server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             return JSONResponse(
                 status_code=400,
@@ -3444,6 +3609,7 @@ async def register_service_api(
         "tool_list": tool_list,
         "deployment": deployment,
         "registered_by": user_context.get("username"),
+        "metadata": {},
     }
 
     # Deployment-specific fields
@@ -3467,13 +3633,15 @@ async def register_service_api(
         if sse_endpoint:
             server_entry["sse_endpoint"] = sse_endpoint
 
-    # Visibility and access control
-    if visibility and visibility != "public":
-        server_entry["visibility"] = visibility
-    if allowed_groups:
-        groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
-        if groups_list:
-            server_entry["allowed_groups"] = groups_list
+    # Visibility and access control. Mirror the legacy POST /register
+    # handler: normalize and validate the value (rejecting unknown values
+    # and enforcing 'group-restricted' carries at least one group), then
+    # always persist it so GET responses don't surface a misleading null
+    # when the caller chose the default "public".
+    visibility, allowed_groups_list = _validate_visibility_and_groups(visibility, allowed_groups)
+    server_entry["visibility"] = visibility
+    if allowed_groups_list:
+        server_entry["allowed_groups"] = allowed_groups_list
 
     if version:
         server_entry["version"] = version
@@ -3561,9 +3729,8 @@ async def register_service_api(
 
     if metadata:
         try:
-            server_entry["metadata"] = (
-                json.loads(metadata) if isinstance(metadata, str) else metadata
-            )
+            parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+            server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             return JSONResponse(
                 status_code=400,
@@ -5131,6 +5298,340 @@ async def get_server_connect_config(
 
 
 # IMPORTANT: This catch-all route must remain AFTER all /servers/{path}/... suffixed routes
+
+
+@router.put("/servers/{path:path}")
+async def update_server_endpoint(
+    http_request: Request,
+    path: str,
+    body: ServerUpdateRequest,
+    response: Response,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+):
+    """Replace a registered server's mutable metadata.
+
+    Registrant-only fields (timestamps, identity anchors, deployment,
+    credential blobs) are preserved from storage even if a client sends
+    them. Auth/credential mutation goes through
+    PATCH /api/servers/{path}/auth-credential.
+
+    Concurrency: when ``If-Match`` is supplied the request is rejected
+    with 412 if the stored ``updated_at`` no longer matches.
+    """
+    path = _normalize_server_path(path)
+
+    existing = await server_service.get_server_info(path, include_credentials=True)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}'",
+        )
+
+    set_audit_action(
+        http_request,
+        "update",
+        "server",
+        resource_id=path,
+        description=f"Update server {existing.get('server_name', path)}",
+        metadata={"had_if_match": if_match is not None},
+    )
+
+    sync_metadata = existing.get("sync_metadata") or {}
+    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
+        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+        logger.warning(
+            f"User {user_context['username']} attempted to update federated server {path} "
+            f"from {source_peer}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Server '{path}' is synced from {source_peer} and cannot be "
+                f"updated locally. Update at the source registry, or remove "
+                f"the peer federation."
+            ),
+        )
+
+    _check_server_permission(
+        "modify_service",
+        existing.get("server_name", path),
+        user_context,
+    )
+
+    if (
+        not user_context.get("is_admin")
+        and existing.get("registered_by") != user_context["username"]
+    ):
+        logger.warning(
+            f"User {user_context['username']} attempted to update server {path} "
+            f"owned by {existing.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update servers you registered",
+        )
+
+    client_ts = parse_if_match(if_match)
+    if client_ts is not None:
+        server_ts = updated_ms(
+            _to_dt(existing.get("updated_at")),
+            _to_dt(existing.get("registered_at")),
+        )
+        if client_ts != server_ts:
+            logger.warning(
+                "update_server_endpoint if_match_mismatch path=%s user=%s "
+                "client_ts=%d server_ts=%d",
+                path,
+                user_context["username"],
+                client_ts,
+                server_ts,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current server version",
+            )
+
+    incoming = body.model_dump(exclude_unset=False, mode="json")
+    if body.provider is not None:
+        incoming["provider"] = body.provider.model_dump()
+
+    merged = _merge_server_update(existing, incoming)
+
+    gate_result = await check_registration_gate(
+        asset_type="server",
+        operation="update",
+        source_api=f"/api/servers/{path}",
+        registration_payload=merged,
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied server update '{path}': {gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
+
+    success = await server_service.update_server(path, merged)
+    if not success:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Failed to save server"},
+        )
+
+    if existing.get("deployment") != "local" and existing.get("proxy_pass_url") != merged.get(
+        "proxy_pass_url"
+    ):
+        asyncio.create_task(
+            _perform_security_scan_on_registration(
+                path,
+                merged.get("proxy_pass_url"),
+                merged,
+                merged.get("headers") or [],
+            )
+        )
+
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="update",
+            registration_type="server",
+            card_data=strip_credentials_from_dict(dict(merged)),
+            performed_by=user_context.get("username"),
+        )
+    )
+
+    fresh = await server_service.get_server_info(path)
+    if fresh is None:
+        # Concurrent delete is unlikely but defensible.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}' after update",
+        )
+
+    response.headers["ETag"] = weak_etag_for_timestamp(
+        _to_dt(fresh.get("updated_at")),
+        _to_dt(fresh.get("registered_at")),
+    )
+
+    logger.info(
+        "update_server_endpoint success path=%s user=%s if_match_supplied=%s",
+        path,
+        user_context["username"],
+        if_match is not None,
+    )
+
+    return fresh
+
+
+@router.patch("/servers/{path:path}")
+async def patch_server_endpoint(
+    http_request: Request,
+    path: str,
+    patch_body: ServerCardPatch,
+    response: Response,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+):
+    """Apply an RFC 7396 JSON Merge Patch to a server's metadata.
+
+    Only fields explicitly supplied are changed. Registrant-only fields
+    are rejected by the ServerCardPatch validator before this handler
+    runs; this handler additionally re-pins them defensively.
+
+    Auth/credential mutation goes through
+    PATCH /api/servers/{path}/auth-credential.
+    """
+    path = _normalize_server_path(path)
+
+    existing = await server_service.get_server_info(path, include_credentials=True)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}'",
+        )
+
+    set_audit_action(
+        http_request,
+        "update",
+        "server",
+        resource_id=path,
+        description=f"Patch server {existing.get('server_name', path)}",
+        metadata={"had_if_match": if_match is not None},
+    )
+
+    sync_metadata = existing.get("sync_metadata") or {}
+    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
+        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+        logger.warning(
+            f"User {user_context['username']} attempted to patch federated server {path} "
+            f"from {source_peer}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Server '{path}' is synced from {source_peer} and cannot be "
+                f"patched locally. Patch at the source registry, or remove "
+                f"the peer federation."
+            ),
+        )
+
+    _check_server_permission(
+        "modify_service",
+        existing.get("server_name", path),
+        user_context,
+    )
+
+    if (
+        not user_context.get("is_admin")
+        and existing.get("registered_by") != user_context["username"]
+    ):
+        logger.warning(
+            f"User {user_context['username']} attempted to patch server {path} "
+            f"owned by {existing.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only patch servers you registered",
+        )
+
+    client_ts = parse_if_match(if_match)
+    if client_ts is not None:
+        server_ts = updated_ms(
+            _to_dt(existing.get("updated_at")),
+            _to_dt(existing.get("registered_at")),
+        )
+        if client_ts != server_ts:
+            logger.warning(
+                "patch_server_endpoint if_match_mismatch path=%s user=%s client_ts=%d server_ts=%d",
+                path,
+                user_context["username"],
+                client_ts,
+                server_ts,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current server version",
+            )
+
+    patch_dict = patch_body.model_dump(exclude_unset=True, by_alias=False, mode="json")
+    if not patch_dict:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty patch body",
+        )
+
+    merged = _merge_server_update(existing, patch_dict)
+
+    gate_result = await check_registration_gate(
+        asset_type="server",
+        operation="update",
+        source_api=f"/api/servers/{path}",
+        registration_payload=merged,
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied server patch '{path}': {gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
+
+    success = await server_service.update_server(path, merged)
+    if not success:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Failed to save server"},
+        )
+
+    if (
+        "proxy_pass_url" in patch_dict
+        and existing.get("deployment") != "local"
+        and existing.get("proxy_pass_url") != merged.get("proxy_pass_url")
+    ):
+        asyncio.create_task(
+            _perform_security_scan_on_registration(
+                path,
+                merged.get("proxy_pass_url"),
+                merged,
+                merged.get("headers") or [],
+            )
+        )
+
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="update",
+            registration_type="server",
+            card_data=strip_credentials_from_dict(dict(merged)),
+            performed_by=user_context.get("username"),
+        )
+    )
+
+    fresh = await server_service.get_server_info(path)
+    if fresh is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}' after patch",
+        )
+
+    response.headers["ETag"] = weak_etag_for_timestamp(
+        _to_dt(fresh.get("updated_at")),
+        _to_dt(fresh.get("registered_at")),
+    )
+
+    logger.info(
+        "patch_server_endpoint success path=%s user=%s if_match_supplied=%s",
+        path,
+        user_context["username"],
+        if_match is not None,
+    )
+
+    return fresh
+
+
 @router.get("/servers/{path:path}")
 async def get_server(
     request: Request,
@@ -5194,6 +5695,19 @@ async def get_server(
     if not user_context.get("is_admin"):
         if settings.deployment_mode != DeploymentMode.REGISTRY_ONLY:
             server_info.pop("proxy_pass_url", None)
+
+    # Normalize visibility for servers stored before the write-side fix
+    # always persisted the field (#1181). Matches the default-on-read
+    # pattern already used by agents, search, and federation responses.
+    server_info.setdefault("visibility", "public")
+
+    # Normalize metadata for servers stored before the write-side fix
+    # always persisted the field (#1165). The list endpoint already does
+    # this via server_info.get("metadata", {}); mirror it here so the
+    # single-GET contract matches and clients never have to special-case
+    # absent vs empty.
+    if not isinstance(server_info.get("metadata"), dict):
+        server_info["metadata"] = {}
 
     return JSONResponse(
         status_code=200,

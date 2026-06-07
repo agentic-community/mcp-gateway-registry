@@ -831,8 +831,8 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # mcp_advertised_scopes = "profile email offline_access"
 
 # Container image URIs for observability services (required when enable_observability = true)
-# metrics_service_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-metrics-service:1.24.3"
-# grafana_image_uri         = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-grafana:1.24.3"
+# metrics_service_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-metrics-service:latest"
+# grafana_image_uri         = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-grafana:latest"
 
 # Grafana admin password (REQUIRED when enable_observability = true)
 # IMPORTANT: You MUST set a strong, random password. Do NOT use "admin" or any weak default.

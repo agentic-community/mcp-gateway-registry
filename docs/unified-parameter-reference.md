@@ -134,6 +134,7 @@ Affects only `with-gateway` deployments (nginx reverse proxy).
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Extra nginx `server_name` entries | `GATEWAY_ADDITIONAL_SERVER_NAMES` | — | — (ingress annotations handle this) | Space-separated list of additional hostnames / IPs to accept. |
 | Server bind address (IPv6 opt-in) | `BIND_HOST` (and `HOST` for currenttime/mcpgw) | `bind_host` | `mcpgw.app.bindHost` | Default `0.0.0.0` (IPv4) works everywhere. Set to `::` only for IPv6-only deployments — requires `net.ipv6.bindv6only=0` on the host AND an IPv6 loopback in the container. Issue #863 / PR #864. Local-dev `uvicorn` direct invocation and `servers/currenttime` keep the safer `127.0.0.1` default. |
+| Nginx IPv6 listeners (opt-in) | `NGINX_ENABLE_IPV6` | — | via `extraEnv` | Default `false` keeps the in-pod nginx reverse proxy's IPv4-only `listen` directives, which work on every host (binding `[::]` fails where IPv6 is unavailable). Set to `true` on IPv6-only / dual-stack clusters so the entrypoint adds `listen [::]:8080;` (and `[::]:8443 ssl;`), letting the load balancer and kubelet readiness probe reach the pod over IPv6. Nginx counterpart to `BIND_HOST=::`. |
 
 ---
 

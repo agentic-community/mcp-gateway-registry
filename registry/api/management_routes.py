@@ -79,6 +79,38 @@ def _normalize_agent_path(path: str) -> str:
     return path
 
 
+# Spellings of the "all agents" wildcard that clients may submit. They all
+# coerce to the canonical "all" before storage so the resolver / filter at
+# registry/api/agent_routes.py and registry/services/visibility.py (both of
+# which only check for the literal "all") work uniformly. Without this
+# coercion, "*" passed through `_normalize_agent_path` becomes "/*" - a
+# literal path no agent has, so the group grants access to nothing.
+_AGENT_WILDCARDS: frozenset[str] = frozenset({"all", "*", "/*"})
+
+
+def _coerce_agent_wildcard(value: str) -> str | None:
+    """Return canonical "all" if value is a known agent wildcard, else None."""
+    if isinstance(value, str) and value.strip() in _AGENT_WILDCARDS:
+        return "all"
+    return None
+
+
+def _normalize_agent_entries(values: list) -> list:
+    """Normalize a list of agent identifiers. Wildcards collapse to "all",
+    literal paths get a leading slash via `_normalize_agent_path`. Duplicate
+    canonical values are dropped so ["*", "all"] becomes ["all"]."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        if not raw:
+            continue
+        canonical = _coerce_agent_wildcard(raw) or _normalize_agent_path(raw)
+        if canonical not in seen:
+            seen.add(canonical)
+            out.append(canonical)
+    return out
+
+
 def _normalize_agent_paths_in_scope_config(
     agent_access: list | None,
     ui_permissions: dict | None,
@@ -86,7 +118,10 @@ def _normalize_agent_paths_in_scope_config(
     """
     Normalize agent paths in agent_access and ui_permissions.
 
-    Ensures all agent paths have leading slashes for consistent matching.
+    Ensures all agent paths have leading slashes for consistent matching,
+    and that every spelling of the "all agents" wildcard collapses to the
+    canonical "all" string the downstream filter and visibility checks
+    look for.
 
     Args:
         agent_access: List of agent paths
@@ -97,16 +132,13 @@ def _normalize_agent_paths_in_scope_config(
     """
     # Normalize agent_access
     if agent_access:
-        agent_access = [_normalize_agent_path(p) for p in agent_access if p]
+        agent_access = _normalize_agent_entries(agent_access)
 
     # Normalize agent-related ui_permissions
     if ui_permissions:
         for key in ["list_agents", "get_agent", "publish_agent", "modify_agent", "delete_agent"]:
             if key in ui_permissions and isinstance(ui_permissions[key], list):
-                # Don't normalize "all" - it's a special value
-                ui_permissions[key] = [
-                    p if p == "all" else _normalize_agent_path(p) for p in ui_permissions[key] if p
-                ]
+                ui_permissions[key] = _normalize_agent_entries(ui_permissions[key])
 
     return agent_access, ui_permissions
 

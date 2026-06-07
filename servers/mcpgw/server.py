@@ -142,6 +142,10 @@ mcp = FastMCP(
         "Start with search_registry to find relevant AI assets by describing "
         "what you need in natural language. Once you find a useful MCP server, "
         "you can connect to it directly via its endpoint URL. "
+        "For Claude Code, add the server with: "
+        "claude mcp add --transport http --scope user <name> <endpoint_url>. "
+        "Adding a server usually requires restarting the AI assistant session "
+        "for the new tools to take effect. "
         "For skills, use get_skill_content to retrieve the full instructions."
     ),
     auth=_auth_provider,
@@ -542,6 +546,13 @@ async def search_registry(
     - Tools: individual capabilities within servers, with inputSchema
     - Agents: autonomous agents with a URL you can delegate tasks to
     - Skills: workflow instructions (use get_skill_content to fetch the full markdown)
+
+    When a useful MCP server is found, use the endpoint_url to add it to
+    the AI assistant's MCP configuration so its tools become available.
+    For Claude Code, run:
+      claude mcp add --transport http --scope user <server-name> <endpoint_url>
+    Note: adding a server usually requires restarting the AI assistant
+    session for the new tools to take effect.
 
     Examples:
         "search documentation" -> finds doc search servers

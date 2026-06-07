@@ -183,6 +183,21 @@ class ServerDetailResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class ServerUpdateResponse(BaseModel):
+    """Response from PUT/PATCH /api/servers/{path}.
+
+    Returns the updated server document. Extra fields are allowed so
+    callers tolerate added server-side fields without breaking.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    path: str | None = None
+    server_name: str | None = None
+    description: str | None = None
+    updated_at: str | None = None
+
+
 class ServerListResponse(BaseModel):
     """Server list response model."""
 
@@ -1600,6 +1615,7 @@ class RegistryClient:
 
         # Determine content type based on endpoint
         # Agent, Management, Search, Federation, Skills, Virtual Servers, Registry Card, version, and group import endpoints use JSON
+        # PUT/PATCH on /api/servers/{path} (issue #1164) also use JSON
         # Server registration uses form data
         if (
             endpoint.startswith("/api/agents")
@@ -1616,6 +1632,7 @@ class RegistryClient:
             or endpoint == "/api/servers/groups/import"
             or "/auth-credential" in endpoint
             or "/versions" in endpoint
+            or (method in ("PUT", "PATCH") and endpoint.startswith("/api/servers/"))
         ):
             # Send as JSON for agent, management, search, federation, and import endpoints
             response = requests.request(
@@ -1809,6 +1826,97 @@ class RegistryClient:
         )
 
         return response.json()
+
+    def update_server(
+        self,
+        path: str,
+        body: dict[str, Any],
+        if_match: str | None = None,
+    ) -> ServerUpdateResponse:
+        """Full-replacement update via PUT /api/servers/{path}.
+
+        Replaces the server's mutable metadata. Identity anchors and
+        server-managed fields (timestamps, deployment, credentials) are
+        preserved by the server even if absent or supplied. Auth/credential
+        mutation must go through PATCH /api/servers/{path}/auth-credential.
+
+        Args:
+            path: Server path with or without leading slash (e.g.
+                "/my-server" or "my-server").
+            body: Full ServerUpdateRequest body as a dict. Required keys
+                include server_name and description.
+            if_match: Optional weak ETag (e.g. ``W/"<epoch_ms>"``) from a
+                prior GET/PUT/PATCH for optimistic concurrency. When
+                supplied and stale, the server returns 412.
+
+        Returns:
+            ServerUpdateResponse with the updated server document.
+
+        Raises:
+            requests.HTTPError: 400 empty/malformed body, 403 unauthorized
+                or federated, 404 not found, 412 precondition failed,
+                422 validation error.
+        """
+        normalized = path if path.startswith("/") else f"/{path}"
+        logger.info(f"Updating server: {normalized}")
+        logger.debug(f"Update body: {json.dumps(body, indent=2, default=str)}")
+
+        extra_headers = {"If-Match": if_match} if if_match else None
+        response = self._make_request(
+            method="PUT",
+            endpoint=f"/api/servers{normalized}",
+            data=body,
+            extra_headers=extra_headers,
+        )
+
+        result = ServerUpdateResponse(**response.json())
+        logger.info(f"Server updated successfully: {normalized}")
+        return result
+
+    def patch_server(
+        self,
+        path: str,
+        patch: dict[str, Any],
+        if_match: str | None = None,
+    ) -> ServerUpdateResponse:
+        """Partial update via PATCH /api/servers/{path} (RFC 7396 JSON Merge Patch).
+
+        Only the keys present in ``patch`` are changed; everything else is
+        left untouched. Registrant-only fields (timestamps, identity
+        anchors, deployment, credentials) are rejected by the server with
+        a 422.
+
+        Args:
+            path: Server path with or without leading slash.
+            patch: Mapping of fields to change. A JSON null clears an
+                optional field.
+            if_match: Optional weak ETag from a prior GET/PUT/PATCH for
+                optimistic concurrency. When supplied and stale, the
+                server returns 412.
+
+        Returns:
+            ServerUpdateResponse with the updated server document.
+
+        Raises:
+            requests.HTTPError: 400 empty/malformed patch, 403 unauthorized
+                or federated, 404 not found, 412 precondition failed,
+                422 validation error.
+        """
+        normalized = path if path.startswith("/") else f"/{path}"
+        logger.info(f"Patching server: {normalized}")
+        logger.debug(f"Patch body: {json.dumps(patch, indent=2, default=str)}")
+
+        extra_headers = {"If-Match": if_match} if if_match else None
+        response = self._make_request(
+            method="PATCH",
+            endpoint=f"/api/servers{normalized}",
+            data=patch,
+            extra_headers=extra_headers,
+        )
+
+        result = ServerUpdateResponse(**response.json())
+        logger.info(f"Server patched successfully: {normalized}")
+        return result
 
     def list_services(
         self,

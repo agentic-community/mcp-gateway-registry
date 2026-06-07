@@ -37,7 +37,9 @@ class TestResolveTreeApi:
         result = _resolve_tree_api(url)
         assert result is not None
         tree_url, project, ref, skill_dir = result
-        assert tree_url == "https://api.github.com/repos/anthropics/skills/git/trees/main?recursive=1"
+        assert (
+            tree_url == "https://api.github.com/repos/anthropics/skills/git/trees/main?recursive=1"
+        )
         assert project == "anthropics/skills"
         assert ref == "main"
         assert skill_dir == "example"
@@ -47,7 +49,9 @@ class TestResolveTreeApi:
         result = _resolve_tree_api(url)
         assert result is not None
         tree_url, _, ref, skill_dir = result
-        assert tree_url == "https://api.github.com/repos/anthropics/skills/git/trees/main?recursive=1"
+        assert (
+            tree_url == "https://api.github.com/repos/anthropics/skills/git/trees/main?recursive=1"
+        )
         assert ref == "main"
         assert skill_dir == "example"
 
@@ -208,6 +212,12 @@ class TestDiscoverSkillResources:
             response = MagicMock()
             response.status_code = 200
             response.json = MagicMock()
+            # Empty dict so the GitLab pagination loop never starts: a bare
+            # MagicMock would make .get("x-next-page", "") return a truthy
+            # sentinel, and because json() returns one shared list the loop's
+            # payload.extend(payload) would double the list every iteration and
+            # OOM the worker.
+            response.headers = {}
 
             client_instance = MagicMock()
             client_instance.get = AsyncMock(return_value=response)
@@ -226,16 +236,18 @@ class TestDiscoverSkillResources:
         mock_github_auth,
         mock_async_client,
     ):
-        mock_async_client.json.return_value = _trees_payload([
-            {"type": "blob", "path": "example/SKILL.md", "size": 1000},
-            {"type": "blob", "path": "example/references/arch.md", "size": 200},
-            {"type": "blob", "path": "example/scripts/run.sh", "size": 300},
-            {"type": "blob", "path": "example/agents/coder.md", "size": 400},
-            {"type": "blob", "path": "example/assets/diagram.png", "size": 500},
-            # Tree entries other than the skill folder must be ignored.
-            {"type": "blob", "path": "other-skill/SKILL.md", "size": 999},
-            {"type": "tree", "path": "example/references", "size": 0},
-        ])
+        mock_async_client.json.return_value = _trees_payload(
+            [
+                {"type": "blob", "path": "example/SKILL.md", "size": 1000},
+                {"type": "blob", "path": "example/references/arch.md", "size": 200},
+                {"type": "blob", "path": "example/scripts/run.sh", "size": 300},
+                {"type": "blob", "path": "example/agents/coder.md", "size": 400},
+                {"type": "blob", "path": "example/assets/diagram.png", "size": 500},
+                # Tree entries other than the skill folder must be ignored.
+                {"type": "blob", "path": "other-skill/SKILL.md", "size": 999},
+                {"type": "tree", "path": "example/references", "size": 0},
+            ]
+        )
 
         manifest = await _discover_skill_resources(
             "https://github.com/foo/bar/blob/main/example/SKILL.md",
@@ -252,16 +264,22 @@ class TestDiscoverSkillResources:
         mock_async_client,
     ):
         # Mirrors the agentic-community/mcp-gateway-registry usage-report layout.
-        mock_async_client.json.return_value = _trees_payload([
-            {"type": "blob", "path": ".claude/skills/usage-report/SKILL.md", "size": 1000},
-            {"type": "blob", "path": ".claude/skills/usage-report/analyze.py", "size": 200},
-            {"type": "blob", "path": ".claude/skills/usage-report/install.sh", "size": 50},
-            {"type": "blob", "path": ".claude/skills/usage-report/notes.md", "size": 80},
-            {"type": "blob", "path": ".claude/skills/usage-report/style.css", "size": 60},
-            # Hidden / pycache content should be filtered.
-            {"type": "blob", "path": ".claude/skills/usage-report/__pycache__/x.pyc", "size": 90},
-            {"type": "blob", "path": ".claude/skills/usage-report/.DS_Store", "size": 5},
-        ])
+        mock_async_client.json.return_value = _trees_payload(
+            [
+                {"type": "blob", "path": ".claude/skills/usage-report/SKILL.md", "size": 1000},
+                {"type": "blob", "path": ".claude/skills/usage-report/analyze.py", "size": 200},
+                {"type": "blob", "path": ".claude/skills/usage-report/install.sh", "size": 50},
+                {"type": "blob", "path": ".claude/skills/usage-report/notes.md", "size": 80},
+                {"type": "blob", "path": ".claude/skills/usage-report/style.css", "size": 60},
+                # Hidden / pycache content should be filtered.
+                {
+                    "type": "blob",
+                    "path": ".claude/skills/usage-report/__pycache__/x.pyc",
+                    "size": 90,
+                },
+                {"type": "blob", "path": ".claude/skills/usage-report/.DS_Store", "size": 5},
+            ]
+        )
 
         manifest = await _discover_skill_resources(
             "https://raw.githubusercontent.com/agentic-community/mcp-gateway-registry/"
@@ -278,12 +296,14 @@ class TestDiscoverSkillResources:
         mock_github_auth,
         mock_async_client,
     ):
-        mock_async_client.json.return_value = _trees_payload([
-            {"type": "blob", "path": "x/SKILL.md", "size": 100},
-            {"type": "blob", "path": "x/README.md", "size": 100},
-            {"type": "blob", "path": "x/LICENSE", "size": 100},
-            {"type": "blob", "path": "x/run.py", "size": 100},
-        ])
+        mock_async_client.json.return_value = _trees_payload(
+            [
+                {"type": "blob", "path": "x/SKILL.md", "size": 100},
+                {"type": "blob", "path": "x/README.md", "size": 100},
+                {"type": "blob", "path": "x/LICENSE", "size": 100},
+                {"type": "blob", "path": "x/run.py", "size": 100},
+            ]
+        )
         manifest = await _discover_skill_resources(
             "https://github.com/foo/bar/blob/main/x/SKILL.md",
         )
@@ -296,10 +316,12 @@ class TestDiscoverSkillResources:
         mock_github_auth,
         mock_async_client,
     ):
-        mock_async_client.json.return_value = _trees_payload([
-            {"type": "blob", "path": "x/SKILL.md", "size": 100},
-            {"type": "blob", "path": "x/Makefile", "size": 100},  # no extension
-        ])
+        mock_async_client.json.return_value = _trees_payload(
+            [
+                {"type": "blob", "path": "x/SKILL.md", "size": 100},
+                {"type": "blob", "path": "x/Makefile", "size": 100},  # no extension
+            ]
+        )
         result = await _discover_skill_resources(
             "https://github.com/foo/bar/blob/main/x/SKILL.md",
         )
@@ -350,16 +372,53 @@ class TestDiscoverSkillResources:
         assert manifest is not None
         assert {r.path for r in manifest.scripts} == {"r.py"}
 
+    async def test_gitlab_pagination_is_bounded_by_page_cap(
+        self,
+        mock_github_auth,
+    ):
+        # A GitLab server that always echoes x-next-page must not loop forever:
+        # discovery stops after MAX_GITLAB_TREE_PAGES fetches.
+        from registry.services.skill_service import MAX_GITLAB_TREE_PAGES
+
+        response = MagicMock()
+        response.status_code = 200
+        # Fresh list per call: real httpx parses a new list each response, so
+        # the loop's payload.extend(page_payload) appends distinct objects. A
+        # shared return_value list would make payload.extend(payload) double the
+        # list every iteration (exponential blow-up) and OOM before the cap.
+        response.json = MagicMock(
+            side_effect=lambda: [{"type": "blob", "path": "x/r.py", "size": 100}]
+        )
+        response.headers = {"x-next-page": "9"}  # never empty -> would loop forever without the cap
+
+        client_instance = MagicMock()
+        client_instance.get = AsyncMock(return_value=response)
+        client_instance.__aenter__ = AsyncMock(return_value=client_instance)
+        client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "registry.services.skill_service.httpx.AsyncClient",
+            return_value=client_instance,
+        ):
+            await _discover_skill_resources(
+                "https://gitlab.example.com/g/r/-/raw/main/skills/demo/SKILL.md",
+            )
+
+        # 1 initial fetch + MAX_GITLAB_TREE_PAGES paginated fetches, no more.
+        assert client_instance.get.await_count == MAX_GITLAB_TREE_PAGES + 1
+
     async def test_github_auth_headers_merged_into_request(
         self,
         mock_github_auth,
         mock_async_client,
     ):
         mock_github_auth.get_auth_headers.return_value = {"Authorization": "Bearer ghs_xxx"}
-        mock_async_client.json.return_value = _trees_payload([
-            {"type": "blob", "path": "x/SKILL.md", "size": 100},
-            {"type": "blob", "path": "x/r.py", "size": 100},
-        ])
+        mock_async_client.json.return_value = _trees_payload(
+            [
+                {"type": "blob", "path": "x/SKILL.md", "size": 100},
+                {"type": "blob", "path": "x/r.py", "size": 100},
+            ]
+        )
 
         await _discover_skill_resources(
             "https://github.com/foo/bar/blob/main/x/SKILL.md",

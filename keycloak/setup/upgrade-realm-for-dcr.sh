@@ -216,7 +216,7 @@ configure_dcr_allowed_scopes() {
 
     local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-        jq -c '[.[].name]')
+        jq -c '[.[].name] + ["openid"]')
 
     _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
     _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1

@@ -666,6 +666,7 @@ async def get_config() -> dict[str, Any]:
     return {
         "deployment_mode": settings.deployment_mode.value,
         "registry_mode": settings.registry_mode.value,
+        "auth_provider": settings.auth_provider,
         "nginx_updates_enabled": settings.nginx_updates_enabled,
         "registration_gate_enabled": settings.registration_gate_enabled,
         "dedup_registration_hint_enabled": settings.dedup_registration_hint_enabled,

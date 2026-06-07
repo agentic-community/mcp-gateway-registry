@@ -11,7 +11,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -59,6 +58,11 @@ from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import flatten_metadata_to_text
 from ..utils.request_utils import get_client_ip
+from ._etag_utils import (
+    parse_if_match,
+    updated_ms,
+    weak_etag_for_timestamp,
+)
 
 
 def get_search_repo() -> SearchRepositoryBase:
@@ -238,40 +242,22 @@ def _normalize_path(
 def _weak_etag_for(agent_card: AgentCard) -> str:
     """Weak ETag derived from updated_at epoch milliseconds.
 
-    Weak validator because JSON serialization is not byte-stable, but
-    updated_at reliably changes on every persisted mutation.
+    Thin wrapper over the shared helper to preserve agent-specific call sites.
     """
-    ts = agent_card.updated_at or agent_card.registered_at
-    epoch_ms = int(ts.timestamp() * 1000) if ts else 0
-    return f'W/"{epoch_ms}"'
+    return weak_etag_for_timestamp(agent_card.updated_at, agent_card.registered_at)
 
 
 def _parse_if_match(if_match: str | None) -> int | None:
-    """Parse a weak ETag of the form W/"<epoch_ms>" into its int.
-
-    Returns None if if_match is None. Raises HTTPException(400) on malformed
-    input, including the strong-ETag form. Strong form is explicitly rejected
-    rather than silently ignored so clients that think they set a precondition
-    see the error rather than getting last-write-wins.
-    """
-    if if_match is None:
-        return None
-    s = if_match.strip()
-    if s.startswith('"') and s.endswith('"'):
-        raise HTTPException(
-            status_code=400,
-            detail='Strong ETag not supported; use weak form W/"<epoch_ms>"',
-        )
-    m = re.fullmatch(r'W/"(\d+)"', s)
-    if not m:
-        raise HTTPException(status_code=400, detail="Malformed If-Match header")
-    return int(m.group(1))
+    """Parse a weak If-Match header. Thin wrapper over the shared helper."""
+    return parse_if_match(if_match)
 
 
 def _agent_updated_ms(agent_card: AgentCard) -> int:
-    """Epoch-ms of the card's updated_at (or registered_at fallback, else 0)."""
-    ts = agent_card.updated_at or agent_card.registered_at
-    return int(ts.timestamp() * 1000) if ts else 0
+    """Epoch-ms of the card's updated_at (or registered_at fallback, else 0).
+
+    Thin wrapper over the shared helper to preserve agent-specific call sites.
+    """
+    return updated_ms(agent_card.updated_at, agent_card.registered_at)
 
 
 def _hash_items(items: list[AgentBatchItem]) -> str:

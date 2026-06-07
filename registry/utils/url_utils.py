@@ -257,9 +257,18 @@ def extract_repository_url(
 def derive_resource_url(skill_md_url: str, resource_path: str) -> str:
     """Derive a resource URL by replacing the filename in a SKILL.md URL.
 
-    Works by stripping the filename from the base URL and appending the
-    requested resource path.
+    Tries platform-specific derivation first (e.g. GitLab API v4), then
+    falls back to simple path replacement.
     """
+    try:
+        from .gitlab_url_utils import derive_gitlab_resource_url
+
+        gitlab_url = derive_gitlab_resource_url(skill_md_url, resource_path)
+        if gitlab_url:
+            return gitlab_url
+    except ImportError:
+        pass
+
     if "/SKILL.md" in skill_md_url:
         base = skill_md_url.rsplit("/SKILL.md", 1)[0]
         return f"{base}/{resource_path}"

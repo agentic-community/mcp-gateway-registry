@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.2"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.4"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.2"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.4"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.2"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.4"
 }
 
 variable "enable_demo_servers" {

@@ -374,7 +374,6 @@ charts/*/Chart.lock
 # Claude
 .claude/*
 !.claude/skills/
-.claude/skills/search-registry/
 .token?
 
 # Telemetry collector build artifacts and state

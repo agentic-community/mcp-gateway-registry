@@ -222,6 +222,20 @@ else
     echo "HTTP + HTTPS Nginx configuration installed."
 fi
 
+# Optionally add IPv6 listeners for IPv6-only / dual-stack clusters (opt-in).
+# The conf templates ship IPv4-only listen directives so they keep working on
+# IPv4-only hosts where binding [::] would fail. Operators on IPv6-only or
+# dual-stack Kubernetes clusters set NGINX_ENABLE_IPV6=true so the load
+# balancer and kubelet readiness probe can reach the pod over IPv6. This is
+# the nginx counterpart to the app's BIND_HOST=:: support.
+if [ "${NGINX_ENABLE_IPV6:-false}" = "true" ]; then
+    echo "NGINX_ENABLE_IPV6=true: adding IPv6 listen directives to nginx config..."
+    sed -i 's|listen 8080;|listen 8080;\
+    listen [::]:8080;|' "$NGINX_CONFIG_PATH"
+    sed -i 's|listen 8443 ssl;|listen 8443 ssl;\
+    listen [::]:8443 ssl;|' "$NGINX_CONFIG_PATH"
+fi
+
 # --- Embeddings Configuration ---
 # Get embeddings configuration from environment or use defaults
 EMBEDDINGS_PROVIDER="${EMBEDDINGS_PROVIDER:-sentence-transformers}"

@@ -5,6 +5,8 @@ This module provides helper functions for setting audit action context
 in route handlers, which is then captured by the AuditMiddleware.
 """
 
+from typing import Any
+
 from fastapi import Request
 
 
@@ -15,6 +17,7 @@ def set_audit_action(
     resource_id: str | None = None,
     description: str | None = None,
     idp_skip_reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """
     Set audit action context on the request for the AuditMiddleware.
@@ -31,6 +34,9 @@ def set_audit_action(
         idp_skip_reason: When an IdP admin call was intentionally skipped, the
             reason. One of: 'local_only', 'forbidden', 'not_found'.
             See issue #946.
+        metadata: Optional structured dimensions to record alongside the action
+            (e.g., `{'had_if_match': True}`). Persisted on the audit event
+            for later analysis.
 
     Example:
         @router.post("/servers")
@@ -44,6 +50,7 @@ def set_audit_action(
         "resource_id": resource_id,
         "description": description,
         "idp_skip_reason": idp_skip_reason,
+        "metadata": metadata or {},
     }
 
 

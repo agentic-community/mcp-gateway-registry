@@ -1178,3 +1178,115 @@ class TestManagementHelpers:
 
         assert exc_info.value.status_code == 403
         assert "Administrator permissions" in exc_info.value.detail
+
+
+# =============================================================================
+# TESTS - agent_access / ui_permissions wildcard normalization (#1189 follow-up)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestAgentWildcardNormalization:
+    """The agent-access wildcard convention is the literal string "all".
+    Clients may submit "*" (from the PR #1191 dropdown's prior shape),
+    "all" (admin scope convention), or "/*" (pre-fix UI artifact). All
+    three must collapse to "all" before storage so the downstream filter
+    at agent_routes.py and visibility.py (both of which only match
+    "all") grant access correctly.
+
+    Pre-fix, "_normalize_agent_path" prepended a slash to "*" -> "/*",
+    which the resolver treated as a literal path. The group then
+    silently filtered every agent.
+    """
+
+    def test_coerce_wildcard_recognizes_all(self):
+        from registry.api.management_routes import _coerce_agent_wildcard
+        assert _coerce_agent_wildcard("all") == "all"
+
+    def test_coerce_wildcard_recognizes_star(self):
+        from registry.api.management_routes import _coerce_agent_wildcard
+        assert _coerce_agent_wildcard("*") == "all"
+
+    def test_coerce_wildcard_recognizes_slash_star(self):
+        from registry.api.management_routes import _coerce_agent_wildcard
+        assert _coerce_agent_wildcard("/*") == "all"
+
+    def test_coerce_wildcard_strips_whitespace(self):
+        from registry.api.management_routes import _coerce_agent_wildcard
+        assert _coerce_agent_wildcard("  *  ") == "all"
+
+    def test_coerce_wildcard_rejects_literal_paths(self):
+        from registry.api.management_routes import _coerce_agent_wildcard
+        assert _coerce_agent_wildcard("/flight-booking") is None
+        assert _coerce_agent_wildcard("agents/foo") is None
+
+    def test_coerce_wildcard_rejects_non_strings(self):
+        from registry.api.management_routes import _coerce_agent_wildcard
+        assert _coerce_agent_wildcard(None) is None
+        assert _coerce_agent_wildcard(42) is None
+        assert _coerce_agent_wildcard([]) is None
+
+    def test_normalize_agent_access_star_collapses_to_all(self):
+        from registry.api.management_routes import _normalize_agent_paths_in_scope_config
+
+        agent_access, _ = _normalize_agent_paths_in_scope_config(["*"], None)
+        assert agent_access == ["all"]
+
+    def test_normalize_agent_access_slash_star_collapses_to_all(self):
+        """Existing broken scopes have '/*' stored. Saving the group
+        again must auto-repair to 'all'."""
+        from registry.api.management_routes import _normalize_agent_paths_in_scope_config
+
+        agent_access, _ = _normalize_agent_paths_in_scope_config(["/*"], None)
+        assert agent_access == ["all"]
+
+    def test_normalize_agent_access_preserves_literal_paths(self):
+        from registry.api.management_routes import _normalize_agent_paths_in_scope_config
+
+        agent_access, _ = _normalize_agent_paths_in_scope_config(
+            ["flight-booking", "/jewel-homes-support"], None
+        )
+        assert agent_access == ["/flight-booking", "/jewel-homes-support"]
+
+    def test_normalize_agent_access_dedupes_wildcards(self):
+        """A caller passing both 'all' and '*' must not produce ['all', 'all']."""
+        from registry.api.management_routes import _normalize_agent_paths_in_scope_config
+
+        agent_access, _ = _normalize_agent_paths_in_scope_config(["*", "all"], None)
+        assert agent_access == ["all"]
+
+    def test_normalize_agent_access_mixed_wildcard_and_paths(self):
+        from registry.api.management_routes import _normalize_agent_paths_in_scope_config
+
+        agent_access, _ = _normalize_agent_paths_in_scope_config(
+            ["*", "flight-booking"], None
+        )
+        assert agent_access == ["all", "/flight-booking"]
+
+    def test_normalize_ui_permissions_collapses_wildcards(self):
+        """ui_permissions previously only special-cased 'all'. After the
+        fix, '*' and '/*' there must collapse the same way."""
+        from registry.api.management_routes import _normalize_agent_paths_in_scope_config
+
+        _, ui_permissions = _normalize_agent_paths_in_scope_config(
+            None,
+            {
+                "list_agents": ["*"],
+                "get_agent": ["/*"],
+                "modify_agent": ["all", "/foo"],
+            },
+        )
+        assert ui_permissions["list_agents"] == ["all"]
+        assert ui_permissions["get_agent"] == ["all"]
+        assert ui_permissions["modify_agent"] == ["all", "/foo"]
+
+    def test_normalize_handles_none_and_empty(self):
+        from registry.api.management_routes import _normalize_agent_paths_in_scope_config
+
+        agent_access, ui_permissions = _normalize_agent_paths_in_scope_config(None, None)
+        assert agent_access is None
+        assert ui_permissions is None
+
+        agent_access, _ = _normalize_agent_paths_in_scope_config([], None)
+        assert agent_access == []

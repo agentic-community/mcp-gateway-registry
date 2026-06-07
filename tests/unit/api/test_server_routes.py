@@ -154,6 +154,11 @@ def mock_faiss_service():
     mock_service = MagicMock()
     mock_service.add_or_update_service = AsyncMock()
     mock_service.remove_service = AsyncMock()
+    # POST /api/servers/register schedules `asyncio.create_task(save_data())`
+    # after a successful registration; if save_data is a plain MagicMock the
+    # call returns a non-coroutine and create_task() raises, turning a 201
+    # into a 500.
+    mock_service.save_data = AsyncMock()
     return mock_service
 
 
@@ -935,6 +940,153 @@ class TestRegisterService:
             # Verify path was normalized
             call_args = mock_server_service.register_server.call_args[0][0]
             assert call_args["path"] == "/new-server"
+
+    def test_register_service_metadata_omitted_defaults_to_empty_dict(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+        mock_nginx_reload_scheduler,
+        mock_health_service,
+    ):
+        """Test that omitting metadata persists an empty dict, not None."""
+        # Arrange
+        mock_server_service.register_server.return_value = {
+            "success": True,
+            "message": "Server registered successfully",
+            "is_new_version": False,
+        }
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            # Act - register without the metadata field
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "No Metadata Server",
+                    "description": "Test",
+                    "path": "/no-metadata",
+                    "proxy_pass_url": "http://localhost:9000",
+                },
+            )
+
+            # Assert - metadata is always a dict in the persisted entry
+            assert response.status_code == 201
+            server_entry = mock_server_service.register_server.call_args[0][0]
+            assert server_entry["metadata"] == {}
+
+    def test_register_service_empty_metadata_defaults_to_empty_dict(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+        mock_nginx_reload_scheduler,
+        mock_health_service,
+    ):
+        """Test that an empty metadata JSON object is accepted."""
+        # Arrange
+        mock_server_service.register_server.return_value = {
+            "success": True,
+            "message": "Server registered successfully",
+            "is_new_version": False,
+        }
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            # Act - register with an explicit empty metadata object
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Empty Metadata Server",
+                    "description": "Test",
+                    "path": "/empty-metadata",
+                    "proxy_pass_url": "http://localhost:9000",
+                    "metadata": "{}",
+                },
+            )
+
+            # Assert
+            assert response.status_code == 201
+            server_entry = mock_server_service.register_server.call_args[0][0]
+            assert server_entry["metadata"] == {}
+
+    def test_register_service_metadata_preserved_when_provided(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+        mock_nginx_reload_scheduler,
+        mock_health_service,
+    ):
+        """Test that populated metadata is preserved."""
+        # Arrange
+        mock_server_service.register_server.return_value = {
+            "success": True,
+            "message": "Server registered successfully",
+            "is_new_version": False,
+        }
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            # Act - register with populated metadata
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Metadata Server",
+                    "description": "Test",
+                    "path": "/with-metadata",
+                    "proxy_pass_url": "http://localhost:9000",
+                    "metadata": '{"team": "platform", "tier": "gold"}',
+                },
+            )
+
+            # Assert
+            assert response.status_code == 201
+            server_entry = mock_server_service.register_server.call_args[0][0]
+            assert server_entry["metadata"] == {"team": "platform", "tier": "gold"}
+
+    def test_register_service_metadata_json_null_defaults_to_empty_dict(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+        mock_nginx_reload_scheduler,
+        mock_health_service,
+    ):
+        """Test that metadata sent as the JSON string 'null' coerces to {}."""
+        # Arrange
+        mock_server_service.register_server.return_value = {
+            "success": True,
+            "message": "Server registered successfully",
+            "is_new_version": False,
+        }
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            # Act - a truthy form value that parses to None must not persist None
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Null Metadata Server",
+                    "description": "Test",
+                    "path": "/null-metadata",
+                    "proxy_pass_url": "http://localhost:9000",
+                    "metadata": "null",
+                },
+            )
+
+            # Assert
+            assert response.status_code == 201
+            server_entry = mock_server_service.register_server.call_args[0][0]
+            assert server_entry["metadata"] == {}
 
 
 # =============================================================================
@@ -2001,3 +2153,341 @@ class TestClearSecurityPendingLocal:
         assert response.status_code == 200
         # update_server NOT called — we short-circuit.
         mock_server_service.update_server.assert_not_called()
+
+
+# =============================================================================
+# TESTS — POST /api/servers/register visibility round-trip (Issue #1181)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServerRegisterVisibility:
+    """Regression coverage for #1181.
+
+    The newer POST /api/servers/register handler previously dropped
+    visibility="public" entirely (never persisted), skipped validation,
+    and the matching GET responses surfaced absent visibility as null.
+    These tests pin the corrected behaviour.
+    """
+
+    _BASE_FORM = {
+        "name": "Vis Server",
+        "description": "Visibility round-trip test",
+        "path": "/vis-server",
+        "proxy_pass_url": "http://localhost:9000",
+    }
+
+    def test_register_persists_visibility_public(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "visibility": "public"},
+        )
+        assert response.status_code == 201
+        # The handler builds a server_entry dict and passes it to register_server.
+        # That dict must carry visibility="public" — never omitted.
+        call_args = mock_server_service.register_server.call_args
+        server_entry = call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+        assert server_entry["visibility"] == "public"
+
+    def test_register_rejects_invalid_visibility(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "visibility": "garbage"},
+        )
+        assert response.status_code == 400
+        assert "visibility" in response.json()["detail"].lower()
+        mock_server_service.register_server.assert_not_called()
+
+    def test_register_rejects_group_restricted_without_groups(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "visibility": "group-restricted"},
+        )
+        assert response.status_code == 400
+        assert "allowed_group" in response.json()["detail"].lower()
+        mock_server_service.register_server.assert_not_called()
+
+    def test_register_persists_group_restricted_with_groups(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={
+                **self._BASE_FORM,
+                "visibility": "group-restricted",
+                "allowed_groups": "engineering,platform-team",
+            },
+        )
+        assert response.status_code == 201
+        call_args = mock_server_service.register_server.call_args
+        server_entry = call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+        assert server_entry["visibility"] == "group-restricted"
+        assert server_entry["allowed_groups"] == ["engineering", "platform-team"]
+
+
+# =============================================================================
+# TESTS — GET endpoints normalize absent visibility to "public" (Issue #1181)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServerGetVisibilityNormalization:
+    """Servers stored before #1181's write-side fix have no visibility key.
+
+    GET responses must default the field to "public" so clients never see
+    a misleading null. The list endpoint historically did not include the
+    field at all; #1181 adds it.
+    """
+
+    _LEGACY_DOC = {
+        "server_name": "Legacy Server",
+        "description": "Pre-#1181 row with no visibility key",
+        "path": "/legacy",
+        "proxy_pass_url": "http://localhost:9000",
+        "is_enabled": True,
+        # Note: no 'visibility' key — this is the legacy shape under test.
+    }
+
+    def test_get_server_defaults_absent_visibility_to_public(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_server_info.return_value = {**self._LEGACY_DOC}
+
+        response = test_client_admin.get("/api/servers/legacy")
+        assert response.status_code == 200
+        assert response.json()["visibility"] == "public"
+
+    def test_list_servers_defaults_absent_visibility_to_public(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=({"/legacy": {**self._LEGACY_DOC}}, 1)
+        )
+
+        response = test_client_admin.get("/api/servers")
+        assert response.status_code == 200
+        servers = response.json()["servers"]
+        assert len(servers) == 1
+        assert servers[0]["visibility"] == "public"
+
+
+# =============================================================================
+# TESTS — Metadata round-trip on POST /api/servers/register (Issue #1165 follow-up)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServersRegisterAPIMetadata:
+    """Mirrors the metadata matrix that PR #1175 added for POST /api/register
+    onto the newer POST /api/servers/register. The fix in #1175 lands in
+    three handlers but only the legacy one was covered; this class closes
+    that gap and also pins the non-dict guard added as a #1165 follow-up.
+    """
+
+    _BASE_FORM = {
+        "name": "Meta Server",
+        "description": "Metadata round-trip test",
+        "path": "/meta-server",
+        "proxy_pass_url": "http://localhost:9000",
+    }
+
+    @staticmethod
+    def _stored(mock_server_service):
+        call_args = mock_server_service.register_server.call_args
+        return call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+
+    def test_register_metadata_omitted_defaults_to_empty_dict(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post("/api/servers/register", data=self._BASE_FORM)
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {}
+
+    def test_register_metadata_empty_json_object_defaults_to_empty_dict(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "metadata": "{}"},
+        )
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {}
+
+    def test_register_metadata_preserved_when_provided(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "metadata": '{"team": "platform", "tier": "gold"}'},
+        )
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {
+            "team": "platform",
+            "tier": "gold",
+        }
+
+    def test_register_metadata_json_null_defaults_to_empty_dict(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "metadata": "null"},
+        )
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {}
+
+    def test_register_metadata_array_coerced_to_empty_dict(
+        self, test_client_admin, mock_server_service, caplog
+    ):
+        with caplog.at_level("WARNING", logger="registry.api.server_routes"):
+            response = test_client_admin.post(
+                "/api/servers/register",
+                data={**self._BASE_FORM, "metadata": "[]"},
+            )
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {}
+        assert any("coerced to {}" in rec.message for rec in caplog.records)
+
+    def test_register_metadata_scalar_coerced_to_empty_dict(
+        self, test_client_admin, mock_server_service, caplog
+    ):
+        with caplog.at_level("WARNING", logger="registry.api.server_routes"):
+            response = test_client_admin.post(
+                "/api/servers/register",
+                data={**self._BASE_FORM, "metadata": "42"},
+            )
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {}
+        assert any("coerced to {}" in rec.message for rec in caplog.records)
+
+
+# =============================================================================
+# TESTS — Metadata round-trip on POST /api/internal/register (#1165 follow-up)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestInternalRegisterMetadata:
+    """Same metadata matrix for the internal register endpoint."""
+
+    _BASE_FORM = {
+        "name": "Internal Meta Server",
+        "description": "Internal metadata test",
+        "path": "/internal-meta-server",
+        "proxy_pass_url": "http://localhost:9000",
+    }
+
+    @staticmethod
+    def _stored(mock_server_service):
+        call_args = mock_server_service.register_server.call_args
+        return call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+
+    def _post(self, client, payload):
+        with (
+            patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
+            patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
+        ):
+            token = generate_internal_token(subject="test-service", purpose="test")
+            return client.post(
+                "/api/internal/register",
+                data=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    def test_internal_register_metadata_omitted_defaults_to_empty_dict(
+        self, test_client_no_auth, mock_server_service
+    ):
+        response = self._post(test_client_no_auth, self._BASE_FORM)
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {}
+
+    def test_internal_register_metadata_preserved_when_provided(
+        self, test_client_no_auth, mock_server_service
+    ):
+        response = self._post(
+            test_client_no_auth,
+            {**self._BASE_FORM, "metadata": '{"owner": "ops"}'},
+        )
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {"owner": "ops"}
+
+    def test_internal_register_metadata_json_null_defaults_to_empty_dict(
+        self, test_client_no_auth, mock_server_service
+    ):
+        response = self._post(test_client_no_auth, {**self._BASE_FORM, "metadata": "null"})
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {}
+
+    def test_internal_register_metadata_array_coerced_to_empty_dict(
+        self, test_client_no_auth, mock_server_service, caplog
+    ):
+        with caplog.at_level("WARNING", logger="registry.api.server_routes"):
+            response = self._post(test_client_no_auth, {**self._BASE_FORM, "metadata": "[]"})
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == {}
+        assert any("coerced to {}" in rec.message for rec in caplog.records)
+
+
+# =============================================================================
+# TESTS — Read-side metadata normalization on GET /api/servers/{path} (#1165 follow-up)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServerGetMetadataNormalization:
+    """Single-GET on a legacy doc with no metadata key historically omitted
+    the field entirely, while the list endpoint emitted metadata: {}. The
+    read-side default closes that contract gap. Mirrors the visibility
+    normalization pattern from #1181/#1186.
+    """
+
+    _LEGACY_DOC = {
+        "server_name": "Legacy Server",
+        "description": "Pre-#1165 row with no metadata key",
+        "path": "/legacy-meta",
+        "proxy_pass_url": "http://localhost:9000",
+        "is_enabled": True,
+        # No 'metadata' key — this is the legacy shape under test.
+    }
+
+    def test_get_server_defaults_absent_metadata_to_empty_dict(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_server_info.return_value = {**self._LEGACY_DOC}
+
+        response = test_client_admin.get("/api/servers/legacy-meta")
+        assert response.status_code == 200
+        body = response.json()
+        assert "metadata" in body
+        assert body["metadata"] == {}
+
+    def test_get_server_coerces_non_dict_metadata_to_empty_dict(
+        self, test_client_admin, mock_server_service
+    ):
+        """A stored row with metadata=[] or metadata=42 must not leak the bad
+        shape into the response — the read path coerces to {} to match the
+        ServerInfo type invariant."""
+        mock_server_service.get_server_info.return_value = {
+            **self._LEGACY_DOC,
+            "metadata": [],
+        }
+
+        response = test_client_admin.get("/api/servers/legacy-meta")
+        assert response.status_code == 200
+        assert response.json()["metadata"] == {}

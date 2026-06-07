@@ -342,9 +342,19 @@ const RegisterPage: React.FC = () => {
         const parsed = JSON.parse(content);
         setJsonContent(JSON.stringify(parsed, null, 2));
 
-        // Detect upstream MCP Registry server.json schema
-        const isMcpRegistrySchema = typeof parsed.$schema === 'string'
-          && parsed.$schema.includes('modelcontextprotocol/registry');
+        // Detect upstream MCP Registry server.json schema. The $schema field
+        // is optional in the spec, so also fire on structural canonical signals
+        // (reverse-DNS name, remotes[], packages[], or namespaced _meta).
+        const reverseDnsName = typeof parsed.name === 'string'
+          && /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/.test(parsed.name);
+        const hasNamespacedMeta = parsed._meta && typeof parsed._meta === 'object'
+          && Object.keys(parsed._meta).some(k => k.includes('/'));
+        const isMcpRegistrySchema = (typeof parsed.$schema === 'string'
+            && parsed.$schema.includes('modelcontextprotocol/registry'))
+          || Array.isArray(parsed.remotes)
+          || Array.isArray(parsed.packages)
+          || hasNamespacedMeta
+          || reverseDnsName;
 
         if (isMcpRegistrySchema) {
           setMcpRegistryNotice(
@@ -352,6 +362,36 @@ const RegisterPage: React.FC = () => {
             'Additional fields (repository, packages, remotes, _meta) will be stored ' +
             'in the metadata field and preserved in the database.'
           );
+          // Unpack the registry's own internal _meta block (if any) into
+          // bespoke top-level fields. Convention: any _meta key ending in
+          // '/internal' is treated as our own previously-exported state.
+          // Merge order: later blocks override earlier ones; existing
+          // top-level fields win over _meta (caller intent > round-trip state).
+          if (parsed._meta && typeof parsed._meta === 'object') {
+            const internalBlocks = Object.entries(parsed._meta)
+              .filter(([k]) => /\/internal$/.test(k))
+              .map(([, v]) => v)
+              .filter((v): v is Record<string, any> =>
+                v !== null && typeof v === 'object' && !Array.isArray(v));
+            const merged = internalBlocks.reduce<Record<string, any>>(
+              (acc, b) => ({ ...acc, ...b }), {});
+            for (const key of [
+              'path', 'tags', 'license', 'deployment', 'proxy_pass_url',
+              'supported_transports', 'auth_scheme', 'auth_provider',
+              'visibility', 'allowed_groups', 'status',
+              'provider_organization', 'provider_url',
+            ]) {
+              if (parsed[key] === undefined && merged[key] !== undefined) {
+                parsed[key] = merged[key];
+              }
+            }
+            // Nested metadata under _meta.<vendor>/internal.metadata is
+            // free-form vendor data — surface it to the form's metadata field
+            // unless the upload already supplied one.
+            if (parsed.metadata === undefined && merged.metadata !== undefined) {
+              parsed.metadata = merged.metadata;
+            }
+          }
           // Transform upstream fields to populate the form correctly
           if (!parsed.server_name && !parsed.name && parsed.title) {
             parsed.name = parsed.title;
@@ -385,7 +425,9 @@ const RegisterPage: React.FC = () => {
           if (parsed.$schema) upstreamSpec.$schema = parsed.$schema;
           upstreamSpec.original_name = parsed.name || parsed.title;
 
-          const existingMetadata = parsed.metadata || {};
+          const existingMetadata = (typeof parsed.metadata === 'object' && parsed.metadata !== null)
+            ? parsed.metadata
+            : {};
           parsed.metadata = { ...existingMetadata, mcp_registry_spec: upstreamSpec };
         } else {
           setMcpRegistryNotice(null);
