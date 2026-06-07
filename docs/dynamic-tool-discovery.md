@@ -6,6 +6,7 @@ The MCP Gateway & Registry provides a powerful **Dynamic Tool Discovery and Invo
 
 - [Overview](#overview)
 - [How It Works](#how-it-works)
+- [Discovery Receipts and Context Budgets](#discovery-receipts-and-context-budgets)
 - [Architecture](#architecture)
 - [Usage Examples](#usage-examples)
 - [Agent Integration](#agent-integration)
@@ -35,6 +36,61 @@ The dynamic tool discovery process follows these steps:
 5. **Tool Invocation**: Agent uses the discovered tool information to invoke the appropriate MCP tool
 
 ![Dynamic Tool Discovery Flow](img/dynamic-tool-discovery-demo.gif)
+
+## Discovery Receipts and Context Budgets
+
+Dynamic discovery reduces up-front context bloat, but operators still need to know which tool surface an agent actually saw. For production or multi-tenant use, emit a small discovery receipt alongside normal audit logs so each run can be reviewed without replaying raw prompts or tool payloads.
+
+A useful receipt answers four questions:
+
+1. **What was requested?** The natural-language discovery query and correlation identifiers.
+2. **What was exposed?** The services/tools returned to the agent, with scores and the configured `top_k_services` / `top_n_tools` limits.
+3. **What stayed out?** The count or categories of candidate tools that were intentionally withheld because they were outside the current intent, policy scope, or result budget.
+4. **What happened next?** Whether a discovered tool was invoked, skipped, denied, or fell back to another path.
+
+Example shape:
+
+```json
+{
+  "event": "tool.discovery_receipt",
+  "request_id": "req_123",
+  "session_id": "sess_456",
+  "query": "weather forecast for tomorrow",
+  "limits": {
+    "top_k_services": 3,
+    "top_n_tools": 1
+  },
+  "exposed_tools": [
+    {
+      "service_path": "/weather",
+      "tool_name": "get_forecast",
+      "similarity_score": 0.91
+    }
+  ],
+  "withheld": {
+    "candidate_tool_count": 42,
+    "reason": "outside_intent_or_budget"
+  },
+  "invocation": {
+    "tool_name": "get_forecast",
+    "status": "ok",
+    "args_shape": {
+      "fields": ["location", "days"],
+      "redacted": true
+    },
+    "result_shape": "forecast",
+    "duration_ms": 245
+  },
+  "stop_reason": "tool_invoked"
+}
+```
+
+Keep discovery receipts compact and privacy-safe:
+
+- Store shapes, counts, categories, scores, and correlation IDs; avoid raw user prompts beyond the discovery query unless your retention policy allows them.
+- Redact tool arguments and results by default. The receipt should show the class of data used, not copy sensitive payloads into observability storage.
+- Keep metrics lower-cardinality than receipts. Good metric labels include service family, status, and stop reason; avoid labels such as raw query text, user IDs, arguments, or result values.
+- Treat withheld tools as a first-class signal. If many tools are repeatedly withheld for the same task, split services, improve descriptions, or adjust discovery limits.
 
 ## Architecture
 
