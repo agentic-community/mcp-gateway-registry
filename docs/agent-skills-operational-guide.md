@@ -482,6 +482,45 @@ uv run python api/registry_management.py \
   --visibility public
 ```
 
+### Register a Reviewed OpenClaw Social Automation Skill
+
+Use the same flow for external skills that need operator review before they
+can affect a social account. Start with private or group visibility, run the
+health and security checks, and only make the skill public after reviewing the
+scan result and required approvals.
+
+```bash
+# Register TweetClaw for reviewed OpenClaw X/Twitter workflows
+uv run python api/registry_management.py \
+  --registry-url "$REGISTRY_URL" \
+  --token-file "$TOKEN_FILE" \
+  skill-register \
+  --name tweetclaw \
+  --url "https://github.com/Xquik-dev/tweetclaw/blob/master/skills/tweetclaw/SKILL.md" \
+  --description "Review OpenClaw X/Twitter workflows for search, posting, replies, media, DMs, monitors, webhooks, and giveaway draws" \
+  --tags openclaw,twitter,x,automation,social-media \
+  --visibility private
+
+# Confirm the source is reachable and scan the skill before widening access
+uv run python api/registry_management.py \
+  --registry-url "$REGISTRY_URL" \
+  --token-file "$TOKEN_FILE" \
+  skill-health --path tweetclaw
+
+uv run python api/registry_management.py \
+  --registry-url "$REGISTRY_URL" \
+  --token-file "$TOKEN_FILE" \
+  skill-rescan --path tweetclaw
+```
+
+TweetClaw is an OpenClaw plugin skill, so MCP Gateway Registry stores,
+indexes, scans, and governs access to the SKILL.md file. OpenClaw remains the
+runtime that installs and executes `@xquik/tweetclaw`. Treat posting, replies,
+DMs, media uploads, monitors, webhooks, and giveaway draws as approval-worthy
+social-account actions. Read-only search, user lookup, follower export, and
+similar evidence collection can stay lower risk when your local policy allows
+it.
+
 ### Other Skill CLI Commands
 
 ```bash
