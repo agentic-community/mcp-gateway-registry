@@ -378,7 +378,7 @@ Log: `{ 6, "Embeddings Model Download", DONE/FAILED, "~/mcp-gateway/models/all-M
 if [ ! -d /var/log/containers/ai-registry ]; then
     sudo mkdir -p /var/log/containers/ai-registry
     sudo chown "$(whoami)" /var/log/containers/ai-registry
-fis
+fi
 ```
 
 Log: `{ 7, "Directory Creation", DONE, "~/mcp-gateway/{servers,models,auth_server,secrets/fininfo,logs,ssl}" }`
