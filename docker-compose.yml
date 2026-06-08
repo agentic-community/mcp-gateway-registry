@@ -321,7 +321,7 @@ services:
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       - ${HOME}/.aws:/root/.aws:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
-      - ${HOME}/mcp-gateway/logs:/var/log/containers/ai-registry
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
       # Audit logs + security scans (named volumes, unchanged)
       - registry-logs:/app/logs
       - registry-scans:/app/security_scans
@@ -503,7 +503,7 @@ services:
         required: false
     volumes:
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
-      - ${HOME}/mcp-gateway/logs:/var/log/containers/ai-registry
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
       # Audit logs (named volume, unchanged)
       - auth-logs:/app/logs
       # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
@@ -584,7 +584,7 @@ services:
       - ${HOME}/mcp-gateway/models:/app/registry/models
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
-      - ${HOME}/mcp-gateway/logs:/var/log/containers/ai-registry
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
       - "8003:8003"
     depends_on:
