@@ -591,6 +591,12 @@ variable "idp_group_filter_prefix" {
   default     = ""
 }
 
+variable "idp_user_group_fallback_enabled_providers" {
+  description = "Comma-separated list of IdP providers (e.g. pingfederate) for which the registry's local idp_user_groups collection is consulted to populate empty JWT groups claims. Empty list disables the fallback for all providers. Default: pingfederate."
+  type        = string
+  default     = "pingfederate"
+}
+
 # =============================================================================
 # OKTA CONFIGURATION
 # =============================================================================
@@ -765,6 +771,29 @@ variable "pingfederate_groups_claim" {
   description = "JWT claim name carrying group memberships (default: groups)"
   type        = string
   default     = "groups"
+}
+
+# -----------------------------------------------------------------------------
+# PINGFEDERATE ADMIN API (registry only)
+# -----------------------------------------------------------------------------
+
+variable "pf_admin_url" {
+  description = "PingFederate admin API URL (used by registry to create OAuth clients and PCV users)"
+  type        = string
+  default     = "https://pingfederate:9999"
+}
+
+variable "pf_admin_user" {
+  description = "PingFederate admin API username"
+  type        = string
+  default     = "administrator"
+}
+
+variable "pf_admin_pass" {
+  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production."
+  type        = string
+  default     = "2FederateM0re"
+  sensitive   = true
 }
 
 variable "registry_static_token_auth_enabled" {

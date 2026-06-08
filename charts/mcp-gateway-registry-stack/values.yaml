@@ -401,6 +401,26 @@ registry:
   # Example: "mcp-,registry-,ai-"
   idpGroupFilterPrefix: ""
 
+  # IdP user-to-group fallback (issue #1127)
+  # Comma-separated list of IdP providers (e.g. pingfederate) for which the
+  # registry's local idp_user_groups collection is consulted to populate empty
+  # JWT groups claims. Empty string disables the fallback for all providers.
+  # Forwarded to both the registry and auth-server subcharts.
+  # Default: "pingfederate"
+  idpUserGroupFallbackEnabledProviders: "pingfederate"
+
+  # PingFederate Admin API (registry only).
+  # Used by the registry to call the PF admin API to create OAuth clients
+  # and Simple PCV users at runtime. The PASS is sensitive; the URL and
+  # USER are not. To source PF_ADMIN_PASS from an existing K8s Secret,
+  # set passwordExistingSecret instead of password.
+  pingfederateAdmin:
+    url: "https://pingfederate:9999"
+    user: "administrator"
+    password: ""
+    passwordExistingSecret: ""
+    passwordExistingSecretKey: "PF_ADMIN_PASS"
+
   ingress:
     enabled: true
     ingressClassName: alb
@@ -506,6 +526,14 @@ auth-server:
     clientSecret: ""
     domain: ""  # Optional: custom Cognito domain
     region: "us-east-1"
+
+  # IdP user-to-group fallback (issue #1127)
+  # Comma-separated list of IdP providers (e.g. pingfederate) for which the
+  # registry's local idp_user_groups collection is consulted to populate empty
+  # JWT groups claims. Empty string disables the fallback for all providers.
+  # Keep in sync with registry.idpUserGroupFallbackEnabledProviders above.
+  # Default: "pingfederate"
+  idpUserGroupFallbackEnabledProviders: "pingfederate"
 
   nodeSelector: {}
 

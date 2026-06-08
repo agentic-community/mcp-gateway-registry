@@ -379,6 +379,29 @@ resource "aws_secretsmanager_secret_version" "pingfederate_m2m_client_secret" {
   }
 }
 
+# PingFederate Admin API password (used by registry to call PF admin API)
+#checkov:skip=CKV2_AWS_57:PingFederate admin password managed in PingFederate admin console
+resource "aws_secretsmanager_secret" "pf_admin_pass" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-pf-admin-pass-"
+  description             = "PingFederate admin API password used by registry to create OAuth clients and PCV users"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "pf_admin_pass" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.pf_admin_pass[0].id
+  secret_string = var.pf_admin_pass
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
 
 # Metrics API key (for metrics-service authentication)
 resource "random_password" "metrics_api_key" {

@@ -684,6 +684,21 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Example with multiple prefixes:
 # idp_group_filter_prefix = "mcp-,registry-,ai-"
 
+# IdP User-to-Group Fallback Providers (issue #1127, comma-separated)
+# Comma-separated list of IdP providers (e.g. pingfederate) for which the
+# registry's local idp_user_groups collection is consulted to populate empty
+# JWT groups claims. Set to "" to disable the fallback for all providers.
+# Default: "pingfederate"
+# idp_user_group_fallback_enabled_providers = "pingfederate"
+
+# PingFederate Admin API (registry only)
+# Used by the registry to call the PF admin API to create OAuth clients and
+# Simple PCV users at runtime. PF_ADMIN_PASS is wired through AWS Secrets
+# Manager. Defaults are dev-only — override in production.
+# pf_admin_url  = "https://pingfederate:9999"
+# pf_admin_user = "administrator"
+# pf_admin_pass = "change-password-to-some-secret-password"
+
 # ============================================================================
 # OKTA CONFIGURATION (Alternative to Keycloak)
 # ============================================================================

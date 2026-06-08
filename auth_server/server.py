@@ -189,6 +189,20 @@ REGISTRY_API_TOKEN: str = os.environ.get("REGISTRY_API_TOKEN", "")
 # Issue #779: multiple static API keys with per-key groups.
 _REGISTRY_API_KEYS_RAW: str = os.environ.get("REGISTRY_API_KEYS", "").strip()
 
+# Issue #1127: user-to-group fallback via DocumentDB.
+# When a user JWT validated by one of these providers carries an empty
+# groups claim, look the user up in the idp_user_groups collection and use
+# the groups stored there. CSV, case-insensitive; default covers
+# PingFederate which does not always emit a groups claim.
+_IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS_RAW: str = os.environ.get(
+    "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", "pingfederate"
+)
+IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS: list[str] = [
+    p.strip().lower()
+    for p in _IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS_RAW.split(",")
+    if p.strip()
+]
+
 # Validate configuration: static token auth requires at least one token source
 if _registry_static_token_requested and not REGISTRY_API_TOKEN and not _REGISTRY_API_KEYS_RAW:
     logging.error(
@@ -2138,6 +2152,57 @@ async def validate_request(request: Request):
             logger.warning(f"Failed to enrich groups from MongoDB: {e}")
             # Don't fail validation if enrichment fails
 
+        # Issue #1127: enrich user groups from idp_user_groups collection if
+        # the validated user token has no groups claim (e.g., PingFederate
+        # without the custom ATM groups attribute). Gated per-provider via
+        # IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS so unrelated IdPs are not
+        # affected.
+        try:
+            from mongodb_groups_enrichment import (
+                enrich_user_groups_from_mongodb,
+                should_enrich_user_groups,
+            )
+
+            # Read provider and username from the inner `data` dict first.
+            # For session_cookie / oauth2 paths the outer `method` is the
+            # transport ("session_cookie"), while `data.provider` is the
+            # actual IdP ("pingfederate", "keycloak", ...) — that's what we
+            # need to match against the enabled-providers allowlist. Same
+            # for the username: outer `username` may be a hashed session
+            # subject (e.g. "user_8c6976e5"), while `data.username` is the
+            # IdP-side login id (e.g. "admin"). Fall back to the outer
+            # values for direct-token paths where there's no `data`.
+            data = validation_result.get("data") or {}
+            user_provider = data.get("provider") or validation_result.get("method")
+            username_for_lookup = data.get("username") or validation_result.get(
+                "username", ""
+            )
+            current_user_groups = validation_result.get("groups", [])
+
+            if should_enrich_user_groups(
+                username_for_lookup,
+                current_user_groups,
+                user_provider,
+                IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS,
+            ):
+                enriched_user_groups = await enrich_user_groups_from_mongodb(
+                    username_for_lookup,
+                    current_user_groups,
+                    user_provider,
+                )
+
+                if enriched_user_groups != current_user_groups:
+                    validation_result["groups"] = enriched_user_groups
+                    logger.info(
+                        "Enriched user '%s' (provider=%s) from idp_user_groups: %s",
+                        username_for_lookup,
+                        user_provider,
+                        enriched_user_groups,
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to enrich user groups from MongoDB: {e}")
+            # Don't fail validation if enrichment fails
+
         # Parse server and tool information from original URL if available
         server_name = server_name_from_url  # Use the server_name we extracted earlier
         tool_name = None
@@ -2177,10 +2242,29 @@ async def validate_request(request: Request):
         # For providers that use groups (Keycloak, Entra ID, Cognito, Okta, Auth0), map groups to scopes
         user_groups = validation_result.get("groups", [])
         auth_method = validation_result.get("method", "")
+        existing_scopes = validation_result.get("scopes", []) or []
         if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0"]:
             # Map IdP groups to scopes using the group mappings (query DocumentDB)
             user_scopes = await map_groups_to_scopes(user_groups)
             logger.info(f"Mapped {auth_method} groups {user_groups} to scopes: {user_scopes}")
+        elif (
+            user_groups
+            and not existing_scopes
+            and (validation_result.get("data") or {}).get("provider") == "pingfederate"
+        ):
+            # Issue #1127: PingFederate user-group fallback enrichment runs
+            # AFTER initial validation, so session_cookie scopes were
+            # computed from empty groups. Re-map now using the enriched
+            # groups. Gated on (a) groups present from enrichment, (b)
+            # initial scope mapping returned empty (so we don't re-run for
+            # already-resolved sessions), (c) inner provider is exactly
+            # "pingfederate" — keeps Keycloak/Okta/etc. completely
+            # unchanged.
+            user_scopes = await map_groups_to_scopes(user_groups)
+            logger.info(
+                f"Re-mapped pingfederate groups {user_groups} to scopes: {user_scopes} "
+                f"after fallback enrichment (transport={auth_method})"
+            )
         else:
             user_scopes = validation_result.get("scopes", [])
         if server_name:
@@ -3555,6 +3639,48 @@ async def oauth2_callback(
             mapped_user = map_user_info(user_info, provider_config)
             logger.info(f"Mapped user info: {mapped_user}")
 
+        # Issue #1127: PingFederate (and any IdP in the fallback allow-list)
+        # may return an empty groups claim because group memberships are not
+        # configured in the IdP's user store. Enrich groups from the
+        # idp_user_groups MongoDB collection BEFORE we persist the session
+        # so downstream consumers (`enhanced_auth`, the audit page, etc.)
+        # that read groups directly from the session see the right value.
+        # The /validate endpoint also runs this enrichment, so existing
+        # sessions remain consistent.
+        session_groups = mapped_user.get("groups", []) or []
+        try:
+            from mongodb_groups_enrichment import (
+                enrich_user_groups_from_mongodb,
+                should_enrich_user_groups,
+            )
+
+            if should_enrich_user_groups(
+                mapped_user["username"],
+                session_groups,
+                provider,
+                IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS,
+            ):
+                enriched = await enrich_user_groups_from_mongodb(
+                    mapped_user["username"],
+                    session_groups,
+                    provider,
+                )
+                if enriched != session_groups:
+                    logger.info(
+                        "Session groups enriched at OAuth2 callback for user "
+                        "'%s' (provider=%s): %s -> %s",
+                        mapped_user["username"],
+                        provider,
+                        session_groups,
+                        enriched,
+                    )
+                    session_groups = enriched
+        except Exception as e:
+            logger.warning(
+                f"Session-time group enrichment failed for "
+                f"{mapped_user['username']} (provider={provider}): {e}"
+            )
+
         # Persist the full session record server-side and put only an opaque
         # session_id in the browser cookie. This prevents cookie-size failures
         # for IdPs that return large groups claims (e.g. Entra ID with many
@@ -3568,7 +3694,7 @@ async def oauth2_callback(
             username=mapped_user["username"],
             email=mapped_user.get("email"),
             name=mapped_user.get("name"),
-            groups=mapped_user.get("groups", []),
+            groups=session_groups,
             provider=provider,
             auth_method="oauth2",
             max_age_seconds=session_max_age,

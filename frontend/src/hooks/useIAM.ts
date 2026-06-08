@@ -275,3 +275,163 @@ export async function deleteM2MClient(clientId: string): Promise<void> {
     `/api/iam/m2m-clients/${encodeURIComponent(clientId)}`
   );
 }
+
+// ─── IdP User-Group (idp_user_groups) Types ────────────────────
+// Mirrors registry/schemas/idp_user_group.py IdPUserGroup / Create / Patch / ListResponse.
+// Used by the auth server as a fallback authorization database for IdPs that
+// do NOT carry group memberships in JWTs (e.g. PingFederate). See issue #1127.
+
+export interface IdPUserGroup {
+  username: string;
+  groups: string[];
+  enabled: boolean;
+  provider: string;
+  email?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateUserGroupPayload {
+  username: string;
+  groups: string[];
+  email?: string;
+}
+
+export interface PatchUserGroupPayload {
+  groups?: string[];
+  email?: string | null;
+  enabled?: boolean;
+}
+
+export interface UserGroupListResponse {
+  total: number;
+  limit: number;
+  skip: number;
+  items: IdPUserGroup[];
+}
+
+export interface ListUserGroupsParams {
+  skip?: number;
+  limit?: number;
+  provider?: string;
+  q?: string;
+}
+
+export async function listUserGroups(
+  params: ListUserGroupsParams = {}
+): Promise<UserGroupListResponse> {
+  // Strip undefined/empty values so we don't send empty query params.
+  const cleaned: Record<string, string | number> = {};
+  if (params.skip !== undefined) cleaned.skip = params.skip;
+  if (params.limit !== undefined) cleaned.limit = params.limit;
+  if (params.provider) cleaned.provider = params.provider;
+  if (params.q) cleaned.q = params.q;
+
+  const res = await axios.get<UserGroupListResponse>(
+    '/api/iam/user-groups',
+    { params: cleaned }
+  );
+  return res.data;
+}
+
+export async function createUserGroup(
+  payload: CreateUserGroupPayload
+): Promise<IdPUserGroup> {
+  // Backend defaults provider to "manual" for hand-registered records, so we
+  // do not send it from the client (the schema does not accept it).
+  const res = await axios.post<IdPUserGroup>('/api/iam/user-groups', payload);
+  return res.data;
+}
+
+export async function getUserGroup(username: string): Promise<IdPUserGroup> {
+  const res = await axios.get<IdPUserGroup>(
+    `/api/iam/user-groups/${encodeURIComponent(username)}`
+  );
+  return res.data;
+}
+
+export async function updateUserGroup(
+  username: string,
+  patch: PatchUserGroupPayload
+): Promise<IdPUserGroup> {
+  // Mirrors backend's model_dump(exclude_unset=True): callers should only pass
+  // fields that actually changed so unset fields are not written.
+  const res = await axios.patch<IdPUserGroup>(
+    `/api/iam/user-groups/${encodeURIComponent(username)}`,
+    patch
+  );
+  return res.data;
+}
+
+export async function deleteUserGroup(username: string): Promise<void> {
+  await axios.delete(
+    `/api/iam/user-groups/${encodeURIComponent(username)}`
+  );
+}
+
+// Issue #1127: companion endpoint that creates the user inside PingFederate's
+// Simple Password Credential Validator. The registry does not store this
+// password; it is forwarded once to the auth server which calls the
+// PingFederate admin API. Caller invokes this AFTER the registry-side
+// idp_user_groups record was created successfully.
+export async function createPingFederateUser(
+  username: string,
+  password: string
+): Promise<void> {
+  await axios.post(
+    `/api/iam/user-groups/${encodeURIComponent(username)}/pingfederate-user`,
+    { password }
+  );
+}
+
+// ─── Hook: useUserGroups ────────────────────────────────────────
+
+export interface UseUserGroupsParams extends ListUserGroupsParams {}
+
+export function useUserGroups(params: UseUserGroupsParams = {}) {
+  const [data, setData] = useState<UserGroupListResponse>({
+    total: 0,
+    limit: params.limit ?? 25,
+    skip: params.skip ?? 0,
+    items: [],
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Stable dependency string -- avoids re-running fetch on every render when
+  // callers pass a fresh object literal.
+  const paramsKey = JSON.stringify({
+    skip: params.skip,
+    limit: params.limit,
+    provider: params.provider,
+    q: params.q,
+  });
+
+  const fetchUserGroups = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await listUserGroups(params);
+      setData(res);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to load user groups');
+    } finally {
+      setIsLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramsKey]);
+
+  useEffect(() => {
+    fetchUserGroups();
+  }, [fetchUserGroups]);
+
+  return {
+    data,
+    items: data.items,
+    total: data.total,
+    isLoading,
+    error,
+    refetch: fetchUserGroups,
+  };
+}

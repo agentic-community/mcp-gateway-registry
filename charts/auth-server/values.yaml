@@ -150,6 +150,13 @@ pingfederate:
   applicationIdUri: ""
   groupsClaim: "groups"
 
+# IdP user-to-group fallback (issue #1127)
+# Comma-separated list of IdP providers (e.g. pingfederate) for which the
+# registry's local idp_user_groups collection is consulted to populate empty
+# JWT groups claims. Empty string disables the fallback for all providers.
+# Default: "pingfederate"
+idpUserGroupFallbackEnabledProviders: "pingfederate"
+
 # Service configuration
 service:
   type: ClusterIP

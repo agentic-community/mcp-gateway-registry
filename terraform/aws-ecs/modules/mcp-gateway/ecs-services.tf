@@ -167,6 +167,10 @@ module "ecs_service_auth" {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
         },
+        {
+          name  = "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS"
+          value = var.idp_user_group_fallback_enabled_providers
+        },
         # Okta configuration
         {
           name  = "OKTA_ENABLED"
@@ -803,6 +807,10 @@ module "ecs_service_registry" {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
         },
+        {
+          name  = "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS"
+          value = var.idp_user_group_fallback_enabled_providers
+        },
         # Okta configuration
         {
           name  = "OKTA_ENABLED"
@@ -880,6 +888,15 @@ module "ecs_service_registry" {
         {
           name  = "PINGFEDERATE_GROUPS_CLAIM"
           value = var.pingfederate_groups_claim
+        },
+        # PingFederate Admin API (registry only; PF_ADMIN_PASS via Secrets Manager below)
+        {
+          name  = "PF_ADMIN_URL"
+          value = var.pf_admin_url
+        },
+        {
+          name  = "PF_ADMIN_USER"
+          value = var.pf_admin_user
         },
         {
           name  = "AWS_REGION"
@@ -1432,6 +1449,10 @@ module "ecs_service_registry" {
           {
             name      = "PINGFEDERATE_M2M_CLIENT_SECRET"
             valueFrom = aws_secretsmanager_secret.pingfederate_m2m_client_secret[0].arn
+          },
+          {
+            name      = "PF_ADMIN_PASS"
+            valueFrom = aws_secretsmanager_secret.pf_admin_pass[0].arn
           },
         ] : [],
         var.enable_observability ? [

@@ -622,7 +622,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-blue-50 dark:bg-blue-900/20 p-4 text-sm text-gray-700 dark:text-gray-300 space-y-2">
           <p>
             <strong>Create M2M Account</strong> creates a new client application inside
-            your IdP (Keycloak, Entra, Okta, Auth0) via its Admin API and returns the
+            your IdP (Keycloak, Entra, Okta, Auth0, PingFederate) via its Admin API and returns the
             client secret. Use this if your registry has an IdP Admin API token
             configured.
           </p>

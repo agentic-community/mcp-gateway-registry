@@ -82,6 +82,12 @@ services:
       - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
       - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
       - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
+      # PingFederate Admin API (registry only)
+      - PF_ADMIN_URL=${PF_ADMIN_URL:-https://pingfederate:9999}
+      - PF_ADMIN_USER=${PF_ADMIN_USER:-administrator}
+      - PF_ADMIN_PASS=${PF_ADMIN_PASS:-2FederateM0re}
+      # IdP user-to-group fallback (issue #1127)
+      - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # External Registry Configuration
       - EXTERNAL_REGISTRY_TAGS=${EXTERNAL_REGISTRY_TAGS:-anthropic-registry,workday-asor}
       - ASOR_ACCESS_TOKEN=${ASOR_ACCESS_TOKEN}
@@ -334,6 +340,8 @@ services:
       - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
       - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
       - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
+      # IdP user-to-group fallback (issue #1127)
+      - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Storage Backend Configuration
       - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)

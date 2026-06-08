@@ -133,3 +133,97 @@ def should_enrich_groups(validation_result: dict) -> bool:
     client_id = validation_result.get("client_id")
 
     return is_valid and not groups and client_id is not None
+
+
+async def enrich_user_groups_from_mongodb(
+    username: str,
+    current_groups: list[str],
+    provider: str,
+) -> list[str]:
+    """Enrich user groups from DocumentDB/MongoDB if current groups are empty.
+
+    Mirrors enrich_groups_from_mongodb but reads the idp_user_groups
+    collection and looks up by username. Used as a fallback when an IdP's
+    user JWT does not carry a groups claim (e.g., PingFederate without the
+    custom ATM groups attribute).
+
+    Works with both AWS DocumentDB and MongoDB Community Edition.
+
+    Args:
+        username: Username (sub or preferred_username) from the JWT token
+        current_groups: Current groups from JWT token
+        provider: IdP name the token came from (e.g., "pingfederate"), used
+            for logging and future per-provider scoping; the lookup itself
+            is by username only.
+
+    Returns:
+        Enriched groups list (either from MongoDB or original)
+    """
+    # If groups already exist in token (non-empty array), use them
+    if current_groups:
+        logger.debug(f"User {username} has groups in token: {current_groups}")
+        return current_groups
+
+    logger.info(
+        f"User {username} (provider={provider}) has no groups in token, querying database"
+    )
+
+    # Try to fetch groups from DocumentDB/MongoDB
+    try:
+        db = await _get_mongodb()
+        collection = db["idp_user_groups"]
+
+        doc = await collection.find_one({"username": username})
+
+        if doc:
+            db_groups = doc.get("groups", [])
+            if db_groups:
+                logger.info(
+                    f"Enriched groups for user {username} from database: {db_groups}"
+                )
+                return db_groups
+            else:
+                logger.debug(f"User {username} found in database but has no groups")
+        else:
+            logger.debug(f"User {username} not found in idp_user_groups database")
+
+    except Exception as e:
+        logger.warning(f"Failed to query database for user groups enrichment: {e}")
+        # Don't fail token validation if database is unavailable
+
+    # Return original empty groups if no enrichment possible
+    return current_groups
+
+
+def should_enrich_user_groups(
+    username: str,
+    current_groups: list[str],
+    provider: str | None,
+    enabled_providers: list[str],
+) -> bool:
+    """Check if user groups should be enriched from MongoDB.
+
+    Args:
+        username: Username from validated token
+        current_groups: Current groups from validated token
+        provider: IdP that issued the token (e.g., "pingfederate"); may be None
+        enabled_providers: Lowercase list of providers for which user-group
+            fallback is enabled. Compared case-insensitively.
+
+    Returns:
+        True iff provider is enabled, current groups are empty, and username
+        is non-empty.
+    """
+    if not provider:
+        return False
+
+    if provider.lower() not in enabled_providers:
+        return False
+
+    if current_groups:
+        return False
+
+    if not username:
+        return False
+
+    return True

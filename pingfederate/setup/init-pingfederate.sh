@@ -63,7 +63,7 @@ echo "Callback:     $PF_CALLBACK_URL"
 echo ""
 
 # Step 1: Wait for PingFederate
-echo "[1/7] Waiting for PingFederate to be healthy..."
+echo "[1/8] Waiting for PingFederate to be healthy..."
 MAX_WAIT=300
 ELAPSED=0
 while ! curl -ksf "https://localhost:9031/pf/heartbeat.ping" > /dev/null 2>&1; do
@@ -78,7 +78,7 @@ done
 echo "  PingFederate is healthy."
 
 # Step 2: Extract TLS cert and create CA bundle
-echo "[2/7] Extracting PingFederate TLS certificate..."
+echo "[2/8] Extracting PingFederate TLS certificate..."
 echo | openssl s_client -connect localhost:9031 -servername localhost 2>/dev/null \
     | openssl x509 > /tmp/pf-cert.pem 2>/dev/null
 cat /etc/ssl/certs/ca-certificates.crt /tmp/pf-cert.pem \
@@ -86,7 +86,7 @@ cat /etc/ssl/certs/ca-certificates.crt /tmp/pf-cert.pem \
 echo "  CA bundle written to pingfederate/setup/pingfederate-ca-bundle.pem"
 
 # Step 3: Set base URL
-echo "[3/7] Setting federation base URL to: $PF_EXTERNAL_URL"
+echo "[3/8] Setting federation base URL to: $PF_EXTERNAL_URL"
 SETTINGS=$(pf_api GET "/serverSettings")
 UPDATED=$(echo "$SETTINGS" | python3 -c "
 import json, sys
@@ -98,7 +98,7 @@ pf_api PUT "/serverSettings" "$UPDATED" > /dev/null
 echo "  Done."
 
 # Step 4: Add groups scope
-echo "[4/7] Configuring OAuth scopes..."
+echo "[4/8] Configuring OAuth scopes..."
 AUTH_SETTINGS=$(pf_api GET "/oauth/authServerSettings")
 UPDATED=$(echo "$AUTH_SETTINGS" | python3 -c "
 import json, sys
@@ -112,7 +112,7 @@ pf_api PUT "/oauth/authServerSettings" "$UPDATED" > /dev/null
 echo "  Done (groups scope added)."
 
 # Step 5: Add test users to simple PCV and switch HTMLFormPD to use it
-echo "[5/7] Adding test users and configuring adapter..."
+echo "[5/8] Adding test users and configuring adapter..."
 PCV=$(pf_api GET "/passwordCredentialValidators/simple")
 UPDATED=$(echo "$PCV" | python3 -c "
 import json, sys
@@ -149,7 +149,7 @@ pf_api PUT "/idp/adapters/HTMLFormPD" "$UPDATED" > /dev/null
 echo "  HTMLFormPD adapter switched to simple PCV."
 
 # Step 6: Create OAuth client
-echo "[6/7] Creating OAuth client: $PF_CLIENT_ID"
+echo "[6/8] Creating OAuth client: $PF_CLIENT_ID"
 if pf_exists "/oauth/clients/${PF_CLIENT_ID}"; then
     echo "  Already exists, updating..."
     pf_api PUT "/oauth/clients/${PF_CLIENT_ID}" "{
@@ -175,7 +175,7 @@ fi
 echo "  Done."
 
 # Step 7: Wire auth policy + adapter mapping + access token mapping
-echo "[7/7] Wiring authentication policy and token mappings..."
+echo "[7/8] Wiring authentication policy and token mappings..."
 
 # Set HTMLFormPD as default auth source
 pf_api PUT "/authenticationPolicies/default" '{
@@ -233,10 +233,54 @@ else
     echo "  Access token mapping already exists."
 fi
 
+# Step 8: Seed registry's idp_user_groups collection so PingFederate's
+# test users (whose JWTs come back with empty `groups`) get mapped to
+# real registry groups. The auth-server enrichment looks up by username
+# at JWT-validation time and uses these `groups` when the token's
+# groups claim is empty (issue #1127).
+#
+# - admin    -> registry-admins  (full registry admin, matches scripts/registry-admins.json)
+# - testuser -> public-mcp-users (read-only MCP server access)
+echo "[8/8] Seeding registry idp_user_groups for test users..."
+MONGO_DB="${DOCUMENTDB_DATABASE:-mcp_registry}"
+MONGO_CONTAINER="mcp-mongodb"
+if docker ps --format "{{.Names}}" | grep -q "^${MONGO_CONTAINER}$"; then
+    docker exec "${MONGO_CONTAINER}" mongosh --quiet --eval "
+db = db.getSiblingDB('${MONGO_DB}');
+const now = new Date();
+[
+  {username: 'admin',    groups: ['registry-admins'],   email: null},
+  {username: 'testuser', groups: ['public-mcp-users'],  email: null}
+].forEach(function(u) {
+    db.idp_user_groups.updateOne(
+        {username: u.username},
+        {\$set: {
+            username: u.username,
+            groups: u.groups,
+            email: u.email,
+            enabled: true,
+            provider: 'pingfederate',
+            created_by: 'init-pingfederate.sh',
+            updated_at: now
+        }, \$setOnInsert: {created_at: now}},
+        {upsert: true}
+    );
+});
+print('  idp_user_groups seeded for admin and testuser.');
+" || echo "  Warning: failed to seed idp_user_groups (auth-server enrichment will return empty groups)."
+else
+    echo "  Warning: ${MONGO_CONTAINER} container not running; skipping idp_user_groups seed."
+    echo "           Start the stack and re-run this script to seed."
+fi
+
 echo ""
 echo "=== PingFederate initialization complete ==="
 echo ""
 echo "Test users: admin/admin123, testuser/changeme, joe/2FederateM0re"
+echo ""
+echo "Registry group mappings:"
+echo "  admin    -> registry-admins"
+echo "  testuser -> public-mcp-users"
 echo ""
 echo "IMPORTANT: Restart auth-server to pick up the CA bundle:"
 echo "  docker compose up -d --build auth-server"

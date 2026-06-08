@@ -183,6 +183,21 @@ spec:
                   name: {{ .Values.pingfederate.m2mClientSecretExistingSecret }}
                   key: {{ .Values.pingfederate.m2mClientSecretExistingSecretKey }}
             {{- end }}
+            # PingFederate Admin API (registry only). URL and USER are not secrets.
+            # PASS comes from the chart-managed secret via envFrom unless
+            # passwordExistingSecret is set, in which case we explicitly source it
+            # from the external secret (mirrors PINGFEDERATE_CLIENT_SECRET pattern).
+            - name: PF_ADMIN_URL
+              value: {{ .Values.pingfederateAdmin.url | quote }}
+            - name: PF_ADMIN_USER
+              value: {{ .Values.pingfederateAdmin.user | quote }}
+            {{- if .Values.pingfederateAdmin.passwordExistingSecret }}
+            - name: PF_ADMIN_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pingfederateAdmin.passwordExistingSecret }}
+                  key: {{ .Values.pingfederateAdmin.passwordExistingSecretKey }}
+            {{- end }}
             {{- if eq (.Values.global.authProvider.type | default "keycloak") "pingfederate" }}
             - name: PINGFEDERATE_ENABLED
               value: "true"

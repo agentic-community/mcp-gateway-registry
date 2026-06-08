@@ -314,7 +314,7 @@ class PingFederateProvider(AuthProvider):
                 logger.warning(
                     "PingFederate token has no '%s' claim for sub=%s. "
                     "Verify JWT ATM extended attribute contract maps groups. "
-                    "See docs/pingfederate.md 'Configure custom groups scope'.",
+                    "See docs/idp/pingfederate.md 'Configure custom groups scope'.",
                     self.groups_claim,
                     claims.get("sub", "<unknown>"),
                 )
@@ -370,7 +370,7 @@ class PingFederateProvider(AuthProvider):
         # Try to fetch fresh JWKS with retry
         # Do not introduce a verify=False parameter; if TLS verification fails
         # on dev containers, fix the CA bundle (see REQUESTS_CA_BUNDLE in
-        # docs/pingfederate.md).
+        # docs/idp/pingfederate.md).
         max_retries = 2
         last_error = None
 

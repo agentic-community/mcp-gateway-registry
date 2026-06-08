@@ -158,6 +158,8 @@ services:
       - ENTRA_APPLICATION_ID_URI=${ENTRA_APPLICATION_ID_URI:-}
       # IdP group filtering (applies to all identity providers)
       - IDP_GROUP_FILTER_PREFIX=${IDP_GROUP_FILTER_PREFIX:-}
+      # IdP user-to-group fallback (issue #1127)
+      - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Okta configuration
       - OKTA_DOMAIN=${OKTA_DOMAIN:-}
       - OKTA_CLIENT_ID=${OKTA_CLIENT_ID:-}
@@ -185,6 +187,10 @@ services:
       - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
       - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
       - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
+      # PingFederate Admin API (registry only)
+      - PF_ADMIN_URL=${PF_ADMIN_URL:-https://pingfederate:9999}
+      - PF_ADMIN_USER=${PF_ADMIN_USER:-administrator}
+      - PF_ADMIN_PASS=${PF_ADMIN_PASS:-2FederateM0re}
       # External Registry Configuration
       - EXTERNAL_REGISTRY_TAGS=${EXTERNAL_REGISTRY_TAGS:-anthropic-registry,workday-asor}
       - ASOR_ACCESS_TOKEN=${ASOR_ACCESS_TOKEN}
@@ -443,6 +449,8 @@ services:
       - ENTRA_APPLICATION_ID_URI=${ENTRA_APPLICATION_ID_URI:-}
       # IdP group filtering (applies to all identity providers)
       - IDP_GROUP_FILTER_PREFIX=${IDP_GROUP_FILTER_PREFIX:-}
+      # IdP user-to-group fallback (issue #1127)
+      - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Okta configuration
       - OKTA_DOMAIN=${OKTA_DOMAIN:-}
       - OKTA_CLIENT_ID=${OKTA_CLIENT_ID:-}

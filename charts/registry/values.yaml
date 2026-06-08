@@ -285,6 +285,13 @@ entra:
 # Example: "mcp-,registry-,ai-"
 idpGroupFilterPrefix: ""
 
+# IdP user-to-group fallback (issue #1127)
+# Comma-separated list of IdP providers (e.g. pingfederate) for which the
+# registry's local idp_user_groups collection is consulted to populate empty
+# JWT groups claims. Empty string disables the fallback for all providers.
+# Default: "pingfederate"
+idpUserGroupFallbackEnabledProviders: "pingfederate"
+
 # Okta integration (used when authProvider.type = "okta" in standalone deployment)
 okta:
   domain: ""  # e.g., dev-123456.okta.com
@@ -341,6 +348,19 @@ pingfederate:
   m2mClientSecretExistingSecretKey: "PINGFEDERATE_M2M_CLIENT_SECRET"
   applicationIdUri: ""
   groupsClaim: "groups"
+
+# PingFederate Admin API (registry only).
+# Used by the registry to call the PingFederate admin API to create OAuth
+# clients and Simple PCV users at runtime. The PASS is sensitive; the URL
+# and USER are not.
+pingfederateAdmin:
+  url: "https://pingfederate:9999"
+  user: "administrator"
+  # Set passwordExistingSecret to source PF_ADMIN_PASS from an existing
+  # K8s Secret instead of values.yaml. When set, `password` is ignored.
+  password: ""                       # plain-text fallback; ignored when passwordExistingSecret is set
+  passwordExistingSecret: ""         # name of existing secret (optional)
+  passwordExistingSecretKey: "PF_ADMIN_PASS"
 
 # Service configuration
 service:

@@ -36,6 +36,7 @@ from registry.api.internal_routes import router as internal_router
 from registry.api.log_routes import router as log_router
 from registry.api.m2m_management_routes import router as m2m_management_router
 from registry.api.embeddings_admin_routes import router as embeddings_admin_router
+from registry.api.iam_user_groups_routes import router as iam_user_groups_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
 from registry.api.peer_management_routes import router as peer_management_router
@@ -1094,6 +1095,11 @@ app.include_router(auth0_m2m_router, prefix="/api", tags=["Auth0 M2M"])
 # Does not require IdP Admin API token. Gated by feature flag.
 if settings.m2m_direct_registration_enabled:
     app.include_router(m2m_management_router, prefix="/api", tags=["M2M Management"])
+
+# Direct user-to-group fallback registration API (issue #1127). The router
+# already declares its full /api/iam/user-groups prefix and tag, so include
+# it without an additional prefix override.
+app.include_router(iam_user_groups_router)
 
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])

@@ -48,14 +48,17 @@ tests:
       # UI_TITLE is env[8]; the tool-level access control pair (issue #1026)
       # is env[9]/env[10]; MCP_ADVERTISED_SCOPES is env[11];
       # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[12];
-      # user extraEnv entries are appended at the end.
+      # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
+      # env[13]/env[14]; user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
-      # (set at the suite level) and awsRegistry.federationEnabled=false.
-      # Enabling federation or changing the auth provider shifts these
-      # indices. If you add a new conditional env block between the
-      # SHOW_*_TAB entries and KEYCLOAK_ADMIN_PASSWORD, update the
-      # expected index below.
+      # (set at the suite level), awsRegistry.federationEnabled=false, and
+      # pingfederateAdmin.passwordExistingSecret=""  (so PF_ADMIN_PASS is
+      # NOT explicitly emitted into env: — it comes via envFrom from the
+      # chart-managed secret instead). Enabling federation, changing the
+      # auth provider, or setting pingfederateAdmin.passwordExistingSecret
+      # shifts these indices. If you add a new unconditional env block
+      # before the extraEnv append, update the expected indices below.
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: NODE_NAME
@@ -82,9 +85,15 @@ tests:
           value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[13].name
-          value: MY_FLAG
+          value: PF_ADMIN_URL
       - equal:
           path: spec.template.spec.containers[0].env[14].name
+          value: PF_ADMIN_USER
+      - equal:
+          path: spec.template.spec.containers[0].env[15].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[16].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
