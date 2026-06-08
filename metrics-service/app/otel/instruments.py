@@ -33,13 +33,13 @@ class MetricsInstruments:
 
         # Histogram instruments for duration tracking
         self.auth_histogram = self.meter.create_histogram(
-            name="mcp_auth_request_duration_seconds",
+            name="mcpgw_registry_auth_request_duration_seconds",
             description="Duration of authentication requests in seconds",
             unit="s",
         )
 
         self.discovery_histogram = self.meter.create_histogram(
-            name="mcp_tool_discovery_duration_seconds",
+            name="mcpgw_registry_tool_discovery_duration_seconds",
             description="Duration of tool discovery requests in seconds",
             unit="s",
         )
@@ -51,7 +51,7 @@ class MetricsInstruments:
         )
 
         self.latency_histogram = self.meter.create_histogram(
-            name="mcp_protocol_latency_seconds",
+            name="mcpgw_registry_protocol_latency_seconds",
             description="Latency between MCP protocol steps in seconds",
             unit="s",
         )

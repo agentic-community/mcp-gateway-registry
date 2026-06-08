@@ -99,8 +99,14 @@ tests:
           path: data.KEYCLOAK_URL
           value: aHR0cDovL3Rlc3Qta2V5Y2xvYWstaGVhZGxlc3MuZGVmYXVsdC5zdmMuY2x1c3Rlci5sb2NhbDo4MDgw
 
-  # KEYCLOAK_EXTERNAL_URL includes /keycloak path in both routing modes.
-  - it: KEYCLOAK_EXTERNAL_URL has /keycloak path in subdomain mode
+  # KEYCLOAK_EXTERNAL_URL is the BARE host (no /keycloak suffix). Keycloak
+  # emits issuer claims and discovery-doc `issuer` fields without the
+  # /keycloak prefix because the registry pod's nginx strips /keycloak/
+  # before forwarding. auth-server's bearer-token issuer-allowlist check
+  # must equal what Keycloak actually emits, otherwise DCR'd MCP clients
+  # 401 on /validate. Browser auth redirects land on /realms/.../auth
+  # (handled by the registry nginx /realms/ location).
+  - it: KEYCLOAK_EXTERNAL_URL is bare mcpregistry.<domain> in subdomain mode
     templates:
       - templates/oauth-provider-secret.yaml
     set:
@@ -112,10 +118,10 @@ tests:
     asserts:
       - equal:
           path: data.KEYCLOAK_EXTERNAL_URL
-          # base64 of https://mcpregistry.example.com/keycloak
-          value: aHR0cHM6Ly9tY3ByZWdpc3RyeS5leGFtcGxlLmNvbS9rZXljbG9haw==
+          # base64 of https://mcpregistry.example.com
+          value: aHR0cHM6Ly9tY3ByZWdpc3RyeS5leGFtcGxlLmNvbQ==
 
-  - it: KEYCLOAK_EXTERNAL_URL is <domain>/keycloak in path mode (not /registry/keycloak)
+  - it: KEYCLOAK_EXTERNAL_URL is bare <domain> in path mode (no /keycloak, no /registry)
     templates:
       - templates/oauth-provider-secret.yaml
     set:
@@ -127,8 +133,8 @@ tests:
     asserts:
       - equal:
           path: data.KEYCLOAK_EXTERNAL_URL
-          # base64 of https://example.com/keycloak
-          value: aHR0cHM6Ly9leGFtcGxlLmNvbS9rZXljbG9haw==
+          # base64 of https://example.com
+          value: aHR0cHM6Ly9leGFtcGxlLmNvbQ==
 
   # AUTH_SERVER_EXTERNAL_URL is the bare registry host — no /registry
   # path prefix in path mode, no /auth-server anywhere.

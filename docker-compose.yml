@@ -121,6 +121,23 @@ services:
       - METRICS_SERVICE_URL=http://metrics-service:8890
       - METRICS_API_KEY=${METRICS_API_KEY_REGISTRY}
       - METRICS_API_KEY_NGINX=${METRICS_API_KEY_REGISTRY}
+      # OTel-native metrics emission (issue #1122)
+      # METRICS_LEGACY_HTTP_POST=true ALSO posts to metrics-service (one-release transition).
+      # Default false: native OTel emission only; metrics-service does not receive POSTs.
+      - METRICS_LEGACY_HTTP_POST=${METRICS_LEGACY_HTTP_POST:-false}
+      - OTEL_METRIC_EXPORT_INTERVAL_MS=${OTEL_METRIC_EXPORT_INTERVAL_MS:-15000}
+      # Bind the OTel exporter-prometheus listener so the in-cluster Prometheus
+      # can scrape the registry directly. Compose binds to 127.0.0.1 by default
+      # (Prometheus reaches it via service DNS; not exposed to other networks).
+      - OTEL_EXPORTER_PROMETHEUS_HOST=${OTEL_EXPORTER_PROMETHEUS_HOST:-0.0.0.0}
+      - OTEL_EXPORTER_PROMETHEUS_PORT=${OTEL_EXPORTER_PROMETHEUS_PORT:-9464}
+      # Standard OTel SDK env vars. Setting OTEL_EXPORTER_OTLP_ENDPOINT activates
+      # the OTLP push exporter (and triggers the entrypoint to wrap uvicorn with
+      # opentelemetry-instrument). Default empty: pull-only via :9464.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      - OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
+      - OTEL_SERVICE_NAME=mcp-gateway-registry
       # Keycloak configuration
       - AUTH_PROVIDER=${AUTH_PROVIDER:-cognito}
       - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-false}
@@ -228,6 +245,13 @@ services:
       - REGISTRATION_WEBHOOK_AUTH_HEADER=${REGISTRATION_WEBHOOK_AUTH_HEADER:-Authorization}
       - REGISTRATION_WEBHOOK_AUTH_TOKEN=${REGISTRATION_WEBHOOK_AUTH_TOKEN:-}
       - REGISTRATION_WEBHOOK_TIMEOUT_SECONDS=${REGISTRATION_WEBHOOK_TIMEOUT_SECONDS:-10}
+      # Agent Batch API (issue #956)
+      - BATCH_WORKER_ENABLED=${BATCH_WORKER_ENABLED:-true}
+      - BATCH_MAX_OPERATIONS_PER_JOB=${BATCH_MAX_OPERATIONS_PER_JOB:-1000}
+      - BATCH_MAX_CONCURRENT_JOBS_PER_USER=${BATCH_MAX_CONCURRENT_JOBS_PER_USER:-3}
+      - BATCH_JOB_RETENTION_DAYS=${BATCH_JOB_RETENTION_DAYS:-7}
+      - BATCH_WORKER_POLL_INTERVAL_SECONDS=${BATCH_WORKER_POLL_INTERVAL_SECONDS:-1.0}
+      - BATCH_MAX_REQUEST_BYTES=${BATCH_MAX_REQUEST_BYTES:-4194304}
       # Registration Gate (Admission Control)
       - REGISTRATION_GATE_ENABLED=${REGISTRATION_GATE_ENABLED:-false}
       - REGISTRATION_GATE_URL=${REGISTRATION_GATE_URL:-}
@@ -258,6 +282,7 @@ services:
       - MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=${MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES:-1440}
       - TELEMETRY_DEBUG=${TELEMETRY_DEBUG:-false}
       - MCP_TELEMETRY_IMDS_PROBE_DISABLED=${MCP_TELEMETRY_IMDS_PROBE_DISABLED:-}
+      - MCP_CLOUD_PROVIDER=${MCP_CLOUD_PROVIDER:-}
       - DISABLE_AI_REGISTRY_TOOLS_SERVER=${DISABLE_AI_REGISTRY_TOOLS_SERVER:-false}
       # Application Log Configuration (Issue #886)
       - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
@@ -381,6 +406,15 @@ services:
       # Metrics configuration
       - METRICS_SERVICE_URL=http://metrics-service:8890
       - METRICS_API_KEY=${METRICS_API_KEY_AUTH_SERVER}
+      # OTel-native metrics emission (issue #1122)
+      - METRICS_LEGACY_HTTP_POST=${METRICS_LEGACY_HTTP_POST:-false}
+      - OTEL_METRIC_EXPORT_INTERVAL_MS=${OTEL_METRIC_EXPORT_INTERVAL_MS:-15000}
+      - OTEL_EXPORTER_PROMETHEUS_HOST=${OTEL_EXPORTER_PROMETHEUS_HOST:-0.0.0.0}
+      - OTEL_EXPORTER_PROMETHEUS_PORT=${OTEL_EXPORTER_PROMETHEUS_PORT:-9464}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      - OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
+      - OTEL_SERVICE_NAME=mcp-auth-server
       # Keycloak configuration
       - AUTH_PROVIDER=${AUTH_PROVIDER:-cognito}  # 'cognito' or 'keycloak'
       - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-true}  # Enable Keycloak by default
@@ -530,6 +564,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8003
       - REGISTRY_BASE_URL=http://registry:8080
+      - REGISTRY_EXTERNAL_URL=${REGISTRY_URL:-http://localhost}
       # Application file-log location (Issue #987) + format (json|text)
       - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
       - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
@@ -537,6 +572,15 @@ services:
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
       - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
       - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
+      # OTel-native metrics emission (issue #1122)
+      - METRICS_LEGACY_HTTP_POST=${METRICS_LEGACY_HTTP_POST:-false}
+      - OTEL_METRIC_EXPORT_INTERVAL_MS=${OTEL_METRIC_EXPORT_INTERVAL_MS:-15000}
+      - OTEL_EXPORTER_PROMETHEUS_HOST=${OTEL_EXPORTER_PROMETHEUS_HOST:-0.0.0.0}
+      - OTEL_EXPORTER_PROMETHEUS_PORT=${OTEL_EXPORTER_PROMETHEUS_PORT:-9464}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      - OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
+      - OTEL_SERVICE_NAME=mcp-mcpgw
     env_file:
       - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/mcpgw.env
         required: false
@@ -584,9 +628,41 @@ services:
       timeout: 10s
       retries: 3
 
+  # OpenTelemetry Collector (Issue #1122)
+  # Receives OTLP from registry/auth-server/mcpgw on :4317, re-exports as
+  # Prometheus on :8889, and logs everything via the debug exporter.
+  # Used for local verification; the OTLP push pipeline is also exercised
+  # on ECS via per-task ADOT sidecars and on EKS via the operator's own
+  # collector.
+  #
+  # For a graphical trace UI (Jaeger, Tempo, etc.), see the "Adding a
+  # graphical trace UI" section of docs/OBSERVABILITY.md for the small
+  # config additions you can drop in.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.153.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./config/otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC (services push here)
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus exporter on the collector itself
+      - "13133:13133" # health_check extension
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
   # Prometheus for metrics collection
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.11.3
     ports:
       - "9090:9090"
     volumes:
@@ -599,6 +675,10 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--storage.tsdb.retention.time=200h'
       - '--web.enable-lifecycle'
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
   # Grafana for metrics visualization
@@ -616,6 +696,10 @@ services:
       - ./config/grafana/datasources:/etc/grafana/provisioning/datasources
     depends_on:
       - prometheus
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
   # PostgreSQL database for Keycloak
@@ -664,7 +748,7 @@ services:
 
       # Logging
       KC_LOG_LEVEL: INFO
-      
+
     ports:
       - "8080:8080"
     security_opt:

@@ -96,23 +96,29 @@ keycloak_database_username = "keycloak"
 keycloak_database_password = "CHANGE-ME-DB-PASSWORD"
 
 # ============================================================================
-# CONTAINER IMAGE URIS (REQUIRED)
+# CONTAINER IMAGES (Optional - pre-built public ECR images used by default)
 # ============================================================================
+# Core services (registry, auth-server, mcpgw) default to pre-built images
+# from public.ecr.aws/p3v1o3c6/. No build step is required for a standard
+# deployment. Override below only if using custom-built images from your
+# private ECR (run `make build-push` first):
+#
+# registry_image_uri    = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-registry:latest"
+# auth_server_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-auth-server:latest"
+# mcpgw_image_uri       = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-mcpgw:latest"
 
-# Registry image from ECR
-registry_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-registry:latest"
-
-# Auth server image from ECR
-auth_server_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-auth-server:latest"
-
-# MCP Server images from ECR
-currenttime_image_uri         = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-currenttime:latest"
-mcpgw_image_uri               = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-mcpgw:latest"
-realserverfaketools_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-realserverfaketools:latest"
-
-# A2A Agent images from ECR
-flight_booking_agent_image_uri   = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-flight-booking-agent:latest"
-travel_assistant_agent_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-travel-assistant-agent:latest"
+# ============================================================================
+# DEMO SERVERS (Optional - disabled by default)
+# ============================================================================
+# To deploy demo MCP servers and A2A agents, set enable_demo_servers = true
+# and provide image URIs. These images are NOT available on public ECR and
+# must be built from source (run `make build-push`).
+#
+# enable_demo_servers = true
+# currenttime_image_uri            = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-currenttime:latest"
+# realserverfaketools_image_uri    = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-realserverfaketools:latest"
+# flight_booking_agent_image_uri   = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-flight-booking-agent:latest"
+# travel_assistant_agent_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-travel-assistant-agent:latest"
 
 # ============================================================================
 # OPTIONAL: ADDITIONAL CONFIGURATION
@@ -226,6 +232,36 @@ session_cookie_domain = ""
 # embeddings_model_dimensions = 1536
 # embeddings_aws_region       = "us-east-1"
 # embeddings_api_key          = ""  # Empty for Bedrock (uses IAM)
+
+# ============================================================================
+# REGISTRATION DEDUPLICATION
+# ============================================================================
+#
+# Advisory checks that surface likely-duplicate entities (servers, agents,
+# skills) when a user registers a new one. The /api/<entity>/check-duplicates
+# endpoints are always available for CI / federation / CLI callers regardless
+# of the hint flag; the flag only controls whether the registration UI
+# pre-flights the check. This feature never blocks registration. All defaults
+# shown below — uncomment only to override.
+#
+# dedup_registration_hint_enabled = true
+# dedup_score_threshold           = 0.7
+# dedup_max_suggestions           = 3
+
+# ============================================================================
+# STORAGE BACKEND
+# ============================================================================
+# Selects where the registry stores servers, agents, scopes, and embeddings.
+# Default: "documentdb" (provisions an Amazon DocumentDB cluster in this state).
+# Accepted values:
+#   "documentdb"    - Provision AWS DocumentDB (this module manages the cluster).
+#                     NOTE: DocumentDB is not available in every region - verify
+#                     your aws_region supports it before deploying.
+#   "file"          - JSON files only, no DocumentDB provisioned (local/dev).
+#   "mongodb-ce" / "mongodb" / "mongodb-atlas"
+#                   - External MongoDB you already own. No DocumentDB provisioned.
+#                     Requires mongodb_connection_string or *_secret_arn (see below).
+storage_backend = "documentdb"
 
 # ============================================================================
 # DOCUMENTDB ELASTIC CLUSTER CONFIGURATION
@@ -348,6 +384,36 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 
 # Timeout for webhook HTTP calls in seconds. Default: 10
 # registration_webhook_timeout_seconds = 10
+
+# ============================================================================
+# AGENT BATCH API (Issue #956)
+# ============================================================================
+
+# Async batch register/patch/replace/delete for agent cards, drained by an
+# in-process worker. v1 single-worker constraint: exactly one ECS task should
+# set batch_worker_enabled = true.
+# batch_worker_enabled = true
+
+# Max items allowed in one batch submission. Default: 1000
+# batch_max_operations_per_job = 1000
+
+# Max active (queued/running) batch jobs per submitter. Default: 3
+# batch_max_concurrent_jobs_per_user = 3
+
+# Retention window (days) for batch job documents in MongoDB. Default: 7
+# batch_job_retention_days = 7
+
+# How often the worker polls MongoDB for queued jobs. Default: 1.0
+# batch_worker_poll_interval_seconds = 1.0
+
+# Max request body size (bytes) accepted by the batch endpoint. Default: 4194304 (4 MiB)
+# batch_max_request_bytes = 4194304
+
+# How long a claimed job stays owned before lease expires. Default: 60
+# batch_worker_lease_ttl_seconds = 60
+
+# Interval at which the worker renews the lease. Should be below TTL. Default: 15
+# batch_worker_lease_heartbeat_seconds = 15
 
 # ============================================================================
 # REGISTRATION GATE / ADMISSION CONTROL (Issue #809)
@@ -717,8 +783,8 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 #     - Nginx config is NOT updated on server changes
 #     - Frontend shows direct connection mode (proxy_pass_url)
 #     - Use when registry is separate from gateway infrastructure
-# Default: "with-gateway" (uncomment to change)
-deployment_mode = "registry-only"
+# Default: "with-gateway" (uncomment and set to "registry-only" to change)
+# deployment_mode = "registry-only"
 
 # REGISTRY_MODE controls which features are enabled (informational - for UI feature flags)
 # This setting affects the /api/config response which the frontend can use
@@ -754,6 +820,15 @@ deployment_mode = "registry-only"
 # When false, no observability resources are created
 # Default: true
 # enable_observability = true
+
+# Override the scopes_supported array advertised in the gateway's
+# /.well-known/oauth-protected-resource document. Required when the IdP's
+# RFC 7591 DCR rejects scopes that don't exist as client-scope objects in
+# the realm — e.g. Keycloak rejects the gateway's logical group names like
+# 'mcp-registry-admin' because they are not Keycloak client-scopes. Default
+# ("profile email offline_access") is the safe set of OIDC scopes that all
+# major IdPs ship with by default.
+# mcp_advertised_scopes = "profile email offline_access"
 
 # Container image URIs for observability services (required when enable_observability = true)
 # metrics_service_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-metrics-service:latest"
@@ -816,6 +891,10 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # Disable IMDS probing in cloud detection (issue #986, default: probes enabled).
 # Env-var, DMI, ECS-metadata, and Kubernetes heuristics still run when set.
 # mcp_telemetry_imds_probe_disabled = ""
+
+# Override the cloud auto-detection cascade (issue #1120). Useful for
+# on-premises or non-standard deployments. Leave empty to use auto-detection.
+# mcp_cloud_provider = "on_premises"
 
 # ============================================================================
 # AWS REGISTRY FEDERATION (optional)

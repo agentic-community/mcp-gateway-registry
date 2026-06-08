@@ -19,6 +19,17 @@ data:
   {{- if .Values.app.otelExporterOtlpMetricsTemporalityPreference }}
   OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: {{ .Values.app.otelExporterOtlpMetricsTemporalityPreference | quote }}
   {{- end }}
+  # OTel-native metric emission (Issue #1122)
+  METRICS_LEGACY_HTTP_POST: {{ .Values.app.metricsLegacyHttpPost | default false | quote }}
+  {{- if .Values.app.otelMetricExportIntervalMs }}
+  OTEL_METRIC_EXPORT_INTERVAL_MS: {{ .Values.app.otelMetricExportIntervalMs | quote }}
+  {{- end }}
+  {{- if .Values.app.otelExporterPrometheusHost }}
+  OTEL_EXPORTER_PROMETHEUS_HOST: {{ .Values.app.otelExporterPrometheusHost | quote }}
+  {{- end }}
+  {{- if .Values.app.otelExporterPrometheusPort }}
+  OTEL_EXPORTER_PROMETHEUS_PORT: {{ .Values.app.otelExporterPrometheusPort | quote }}
+  {{- end }}
   {{- if .Values.app.mcpTelemetryDisabled }}
   MCP_TELEMETRY_DISABLED: {{ .Values.app.mcpTelemetryDisabled | quote }}
   {{- end }}
@@ -33,6 +44,9 @@ data:
   {{- end }}
   {{- if .Values.app.mcpTelemetryImdsProbeDisabled }}
   MCP_TELEMETRY_IMDS_PROBE_DISABLED: {{ .Values.app.mcpTelemetryImdsProbeDisabled | quote }}
+  {{- end }}
+  {{- if .Values.app.mcpCloudProvider }}
+  MCP_CLOUD_PROVIDER: {{ .Values.app.mcpCloudProvider | quote }}
   {{- end }}
   {{- if .Values.app.disableAiRegistryToolsServer }}
   DISABLE_AI_REGISTRY_TOOLS_SERVER: {{ .Values.app.disableAiRegistryToolsServer | quote }}

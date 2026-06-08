@@ -233,6 +233,7 @@ class TestPayloadBuilding:
             mock_settings.federation_static_token_auth_enabled = False
             mock_settings.embeddings_provider = "sentence-transformers"
             mock_settings.embeddings_model_name = "all-MiniLM-L6-v2"
+            mock_settings.mcp_cloud_provider = None
 
             payload = await _build_startup_payload()
             payload_str = json.dumps(payload)
@@ -913,6 +914,7 @@ class TestEmbeddingsTelemetryFields:
             mock_settings.embeddings_provider = "litellm"
             mock_settings.embeddings_model_name = "bedrock/amazon.titan-embed-text-v2:0"
             mock_settings.embeddings_model_dimensions = 1024
+            mock_settings.mcp_cloud_provider = None
 
             payload = await _build_startup_payload()
 
@@ -963,6 +965,7 @@ class TestEmbeddingsTelemetryFields:
             mock_settings.registry_mode = MagicMock(value="full")
             mock_settings.auth_provider = "keycloak"
             mock_settings.federation_static_token_auth_enabled = False
+            mock_settings.mcp_cloud_provider = None
 
             # Mock repository methods
             for repo_mock in (mock_server_repo, mock_agent_repo, mock_skill_repo):

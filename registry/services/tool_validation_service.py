@@ -71,6 +71,7 @@ class ToolValidationService:
         # Get all servers
         server_repo = self._get_server_repo()
         servers_dict = await server_repo.list_all()
+        server_states = await server_repo.get_all_states() if enabled_only else {}
 
         logger.debug(f"Retrieved {len(servers_dict)} servers from repository")
 
@@ -81,8 +82,7 @@ class ToolValidationService:
         for server_path, server_info in servers_dict.items():
             # Check if server is enabled
             if enabled_only:
-                is_enabled = await server_repo.get_state(server_path)
-                if not is_enabled:
+                if not server_states.get(server_path, False):
                     logger.debug(f"Skipping disabled server: {server_path}")
                     continue
 
@@ -158,6 +158,7 @@ class ToolValidationService:
 
         server_repo = self._get_server_repo()
         servers_dict = await server_repo.list_all()
+        server_states = await server_repo.get_all_states()
 
         logger.debug(f"Retrieved {len(servers_dict)} servers from repository")
 
@@ -170,7 +171,7 @@ class ToolValidationService:
             }
 
             for server_path, server_info in servers_dict.items():
-                is_enabled = await server_repo.get_state(server_path)
+                is_enabled = server_states.get(server_path, False)
                 tool_list = server_info.get("tool_list", [])
 
                 for tool in tool_list:

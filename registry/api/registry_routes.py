@@ -10,10 +10,11 @@ Spec: https://raw.githubusercontent.com/modelcontextprotocol/registry/refs/heads
 
 import logging
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 
 from ..auth.dependencies import nginx_proxied_auth
 from ..constants import REGISTRY_CONSTANTS, DeploymentType
@@ -96,7 +97,7 @@ async def list_servers(
             continue
 
         # Fetch enabled status before health check to avoid race condition (Issue #612)
-        is_enabled = await server_service.is_service_enabled(path)
+        is_enabled = server_info.get("is_enabled", False)
 
         # Add health status with current enabled state
         health_data = health_service._get_service_health_data(
@@ -694,3 +695,136 @@ async def patch_registry_card(
         "message": "Registry card updated successfully",
         "registry_card": saved_dict,
     }
+
+
+class BannerStateResponse(BaseModel):
+    """Response for GET /api/registry/banner-state."""
+
+    should_show: bool = Field(..., description="True iff the banner should render.")
+    last_cloud: str = Field(..., description="Most recently resolved cloud value.")
+    last_detection_method: str = Field(..., description="Most recently resolved detection method.")
+    hint_set: bool = Field(..., description="True iff cloud_provider_hint is non-null.")
+
+
+class CloudProviderHintRequest(BaseModel):
+    """Request body for POST /api/registry/cloud-provider-hint."""
+
+    hint: Literal["aws", "azure", "gcp", "on_premises", "other", "declined"] = Field(
+        ...,
+        description="Operator's banner answer. Includes cloud providers for cases where auto-detection failed.",
+    )
+
+
+@router.get("/banner-state", response_model=BannerStateResponse)
+async def get_banner_state(
+    user_context: dict = Depends(nginx_proxied_auth),
+) -> BannerStateResponse:
+    """Return whether the cloud-provider confirmation banner should render.
+
+    Admin only. Called once per page load by the React frontend.
+    """
+    if not user_context.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+    from registry.core.telemetry import _resolve_cloud
+
+    repo = get_registry_card_repository()
+    card = await repo.get()
+    hint_set = bool(card and card.cloud_provider_hint)
+    last_cloud, last_method = await _resolve_cloud()
+    should_show = last_cloud == "unknown" and last_method == "unknown" and not hint_set
+
+    if should_show:
+        logger.info("[banner] cloud-provider banner will render for admin session")
+
+    return BannerStateResponse(
+        should_show=should_show,
+        last_cloud=last_cloud,
+        last_detection_method=last_method,
+        hint_set=hint_set,
+    )
+
+
+async def _audit_cloud_hint_set(
+    request: Request,
+    user_context: dict,
+    hint: str,
+) -> None:
+    """Emit an audit log entry for a cloud-provider hint write."""
+    import uuid as _uuid
+
+    from ..audit.models import (
+        Action,
+        Identity,
+        RegistryApiAccessRecord,
+    )
+    from ..audit.models import Request as AuditRequest
+    from ..audit.models import Response as AuditResponse
+
+    audit_logger = getattr(request.app.state, "audit_logger", None)
+    if not audit_logger:
+        return
+    try:
+        client_ip = request.client.host if request.client else "unknown"
+        record = RegistryApiAccessRecord(
+            timestamp=datetime.now(UTC),
+            request_id=str(_uuid.uuid4()),
+            identity=Identity(
+                username=user_context.get("username", "unknown"),
+                auth_method=user_context.get("auth_method", "unknown"),
+                is_admin=True,
+                credential_type="session_cookie",
+            ),
+            request=AuditRequest(
+                method="POST",
+                path="/api/registry/cloud-provider-hint",
+                client_ip=client_ip,
+            ),
+            response=AuditResponse(status_code=204, duration_ms=0),
+            action=Action(
+                operation="write",
+                resource_type="registry_card",
+                description=f"Set cloud_provider_hint to {hint!r}",
+            ),
+        )
+        await audit_logger.log_event(record)
+    except Exception as e:
+        logger.warning(f"[banner] audit log for hint set failed: {type(e).__name__}")
+
+
+@router.post("/cloud-provider-hint", status_code=204)
+async def set_cloud_provider_hint(
+    payload: CloudProviderHintRequest,
+    request: Request,
+    user_context: dict = Depends(nginx_proxied_auth),
+) -> None:
+    """Persist the operator's cloud-provider banner answer.
+
+    Admin only. Returns 204 on success. Returns 409 if hint already set.
+    """
+    if not user_context.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+    repo = get_registry_card_repository()
+    card = await repo.get()
+    if card is None:
+        raise HTTPException(status_code=404, detail="Registry card not found")
+    if card.cloud_provider_hint:
+        raise HTTPException(
+            status_code=409,
+            detail="Cloud provider hint is already set",
+        )
+
+    card.cloud_provider_hint = payload.hint
+    await repo.save(card)
+
+    from registry.core.telemetry import _invalidate_hint_cache
+
+    _invalidate_hint_cache()
+
+    logger.info(
+        f"[banner] cloud_provider_hint persisted: {payload.hint!r} "
+        f"(registry_id={str(card.id)[:8]})"
+    )
+
+    await _audit_cloud_hint_set(request, user_context, payload.hint)

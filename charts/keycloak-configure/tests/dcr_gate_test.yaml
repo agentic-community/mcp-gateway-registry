@@ -1,0 +1,50 @@
+suite: DCR realm-config gating via dcr.enabled
+templates:
+  - templates/job.yaml
+  - templates/configmap.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: defaults dcr.enabled=true and exposes ENABLE_DCR_CONFIG=true on the Job
+    templates:
+      - templates/job.yaml
+    asserts:
+      - isKind:
+          of: Job
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENABLE_DCR_CONFIG
+            value: "true"
+
+  - it: dcr.enabled=false sets ENABLE_DCR_CONFIG=false on the Job
+    templates:
+      - templates/job.yaml
+    set:
+      dcr:
+        enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENABLE_DCR_CONFIG
+            value: "false"
+
+  - it: configmap script gates the four DCR setup calls behind ENABLE_DCR_CONFIG
+    templates:
+      - templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["script.sh"]
+          # Bash conditional that gates the four DCR setup calls.
+          pattern: 'if \[ "\$\{ENABLE_DCR_CONFIG:-false\}" = "true" \]; then'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'setup_dcr_groups_mapper "\$TOKEN"'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'configure_dcr_allowed_scopes "\$TOKEN"'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'configure_dcr_trusted_hosts "\$TOKEN"'

@@ -27,21 +27,26 @@ The registry implements hybrid search that combines semantic (vector) search wit
                     v                                   v
            +------------------+               +-------------------+
            |  Vector Search   |               |  Keyword Match    |
-           |  (Cosine Sim)    |               |  (Regex on path,  |
-           |                  |               |   name, desc,     |
-           |                  |               |   tags, metadata, |
-           |                  |               |   tools)          |
+           |  (per entity     |               |  (Regex on path,  |
+           |   type pipeline) |               |   name, desc,     |
+           |  servers: k=30   |               |   tags, metadata, |
+           |  agents:  k=30   |               |   tools)          |
+           |  skills:  k=30   |               |                   |
+           |  virtual: k=30   |               |                   |
            +--------+---------+               +---------+---------+
                     |                                   |
-                    | semantic_score                    | text_boost
+                    | Merged ranked list                | Ranked list #2
+                    | (by cosine sim)                   | (by text_boost)
                     |                                   |
                     +----------------+------------------+
                                      |
                                      v
                           +---------------------+
-                          |  Score Combination  |
-                          |  relevance_score =  |
-                          |  semantic + boost   |
+                          | Reciprocal Rank     |
+                          | Fusion (RRF, k=60)  |
+                          | score = sum of      |
+                          | 1/(k + rank) across |
+                          | both lists          |
                           +----------+----------+
                                      |
                                      v
@@ -55,19 +60,18 @@ The registry implements hybrid search that combines semantic (vector) search wit
                                      |
                                      v
                           +---------------------+
-                          |  Result Grouping    |
-                          |  - servers          |
-                          |  - agents           |
-                          |  - virtual_servers  |
-                          |  - skills           |
+                          |  Score Normalization|
+                          |  Min-max to [0, 1]  |
+                          |  Drop < 20% floor   |
                           +----------+----------+
                                      |
                                      v
                           +---------------------+
-                          |  Tool Extraction    |
-                          |  Extract matching   |
-                          |  tools from servers |
-                          |  -> tools[]         |
+                          |  Result Grouping    |
+                          |  + Tool Scoring     |
+                          |  (independent per   |
+                          |   tool keyword      |
+                          |   match strength)   |
                           +---------------------+
 ```
 
@@ -100,20 +104,31 @@ When a search query arrives:
 - Each query keyword is matched independently using case-insensitive regex
 - Keyword matches from both vector results and separate keyword query are merged, with the highest boost per document kept
 
-### 3. Score Combination
+### 3. Score Fusion: Reciprocal Rank Fusion (RRF)
 
-The final relevance score combines both approaches:
+The two retrieval signals (vector similarity and keyword matching) are combined using **Reciprocal Rank Fusion** (RRF), the industry standard used by Elasticsearch, OpenSearch, MongoDB Atlas, and Azure AI Search.
+
+**Why RRF instead of additive scoring:**
+- Vector scores (cosine, 0-1) and keyword scores (text_boost, 0-40+) are on incomparable scales
+- Naive addition saturates all scores to 1.0 after clamping (this was the previous bug)
+- RRF operates on rank positions, not raw scores, sidestepping the normalization problem entirely
+
+**Formula:**
 
 ```
-normalized_vector_score = (cosine_similarity + 1.0) / 2.0   # Map [-1,1] to [0,1]
-text_boost_contribution = text_boost * 0.1                   # Scale boost down
-relevance_score = normalized_vector_score + text_boost_contribution
-relevance_score = clamp(relevance_score, 0.0, 1.0)
+RRF_score(doc) = 1/(k + rank_in_vector_list) + 1/(k + rank_in_keyword_list)
 ```
 
-The multiplier `0.1` is consistent across both DocumentDB and MongoDB CE search paths.
+Where `k = 60` (sensitivity constant). Rank starts at 1 for the top result in each list.
 
-Text boost values (cumulative per keyword match):
+**Properties:**
+- A document ranked #1 in both lists gets the maximum score: `2/(60+1) = 0.0328`
+- A document in only one list (e.g., no embedding) still gets a score from that list
+- No tuning required; k=60 works across all query types
+
+**Configuration:** Set `SEARCH_FUSION_METHOD=legacy` to revert to the previous additive formula. Default is `rrf`.
+
+**Text boost values** (used to build the keyword-ranked list):
 | Match Location | Boost Value |
 |----------------|-------------|
 | Path           | +5.0        |
@@ -123,25 +138,45 @@ Text boost values (cumulative per keyword match):
 | Metadata       | +1.0        |
 | Tool (each)    | +1.0        |
 
+### 3a. Score Normalization
+
+After ranking is finalized, RRF scores (which are small numbers like 0.01-0.03) are normalized for display:
+
+1. **Min-max scaling**: Map to [0, 1] where the top result = 1.0
+2. **Floor filter**: Results below 20% normalized score are dropped (too weakly related to show)
+
+This ensures the API returns meaningful 0-1 scores that the UI can display as percentages.
+
+### 3b. Tool Scoring
+
+Tools within matched servers are scored independently based on how well their name and description match the query tokens:
+
+```
+tool_score = keyword_match_quality(tool_name, tool_description, query_tokens)
+```
+
+Only tools with a non-zero match score are included in results. Tools that don't match the query are excluded even if their parent server matched. This replaces the previous approach where all tools inherited a hardcoded 0.8 score from the server.
+
 ### 4. Score-Before-Filter Pattern
 
-All candidate results are scored before applying the distribution filter. This ensures the highest-scoring documents are selected:
+All candidate results are ranked before applying the distribution filter:
 
-1. Vector search returns candidates (up to `k` results)
-2. Keyword search returns additional matches (merged by highest boost per document)
-3. Every candidate receives a hybrid score (vector + text boost)
-4. All candidates are sorted by hybrid score descending
-5. The `_distribute_results()` function selects up to `max_results` items using global ranking with competitive soft caps (see [Result Distribution](#result-distribution) below)
+1. Vector search returns candidates sorted by cosine similarity (ranked list #1)
+2. Keyword search returns matches sorted by text_boost (ranked list #2)
+3. RRF merges both lists into a single ranking by ordinal position
+4. The `_distribute_results()` function selects up to `max_results` items using global ranking with competitive soft caps (see [Result Distribution](#result-distribution) below)
+5. Score normalization maps to [0, 1] and drops results below 20% floor
 
-This prevents lower-scoring documents from consuming a slot before higher-scoring documents are evaluated.
+Documents only in one list (e.g., no embedding, only keyword match) are not penalized. They receive their keyword rank contribution and can still appear in results.
 
 ### 5. Diagnostic Logging
 
-Both search paths emit a `Score for` log line for every candidate, enabling search quality debugging:
+Both search paths emit RRF diagnostic log lines:
 
 ```
-Score for 'Context7' (type=mcp_server): vector=0.3412, normalized_vector=0.6706,
-  text_boost=8.0, boost_contrib=0.8000, final=1.0000
+RRF inputs: 378 vector-ranked docs, 12 keyword-ranked docs
+RRF score for 'Context7' (type=mcp_server): 0.032787, text_boost=8.0
+RRF score for 'AI Registry tools' (type=mcp_server): 0.016529, text_boost=5.0
 ```
 
 ### 6. Result Distribution
@@ -455,17 +490,32 @@ For hybrid (vector + keyword) search, use `POST /api/search/semantic` instead.
 
 ### DocumentDB (Production)
 - Native HNSW vector index with `$search` aggregation pipeline
+- **Per-entity-type vector search**: Runs separate `$search vectorSearch` pipelines for each entity type (mcp_server, a2a_agent, skill, virtual_server) to ensure fair candidate representation. In large registries (1000+ documents), a single global search would be dominated by whichever entity type has the most documents, making agents and skills invisible.
+- Each per-type pipeline retrieves `k_per_type = max(max_results * 2, 30)` candidates, then all candidates are merged and deduplicated before RRF scoring
 - Keyword query runs separately and merges results (no `$unionWith` support)
 - Text boost calculated in aggregation pipeline using `$regexMatch`
+
+```
+Query: "flight booking"
+  Pipeline 1: $search vectorSearch (k=30) + $match entity_type=mcp_server  -> top 30 servers
+  Pipeline 2: $search vectorSearch (k=30) + $match entity_type=a2a_agent   -> top 30 agents
+  Pipeline 3: $search vectorSearch (k=30) + $match entity_type=skill       -> top 30 skills
+  Pipeline 4: $search vectorSearch (k=30) + $match entity_type=virtual_server -> top 30 virtual servers
+  Keyword:    collection.find({$or: [name/path/desc/tags/tools regex match]})
+  
+  All candidates merged -> RRF scoring -> _distribute_results -> normalize -> response
+```
 
 ### MongoDB CE (Development/Local)
 - No native vector search support (`$vectorSearch` not available)
 - Falls back to application-level search (in Python backend, not the calling agent):
-  1. Fetch all documents with embeddings from collection
-  2. Calculate cosine similarity in Python code
-  3. Apply keyword matching and text boost in application
-  4. Sort and limit results
+  1. Fetch all documents from collection
+  2. Build vector-ranked list: compute cosine similarity for docs with embeddings
+  3. Build keyword-ranked list: compute text_boost for all docs (including those without embeddings)
+  4. Apply RRF to merge both ranked lists
+  5. Normalize scores and filter below floor
 - Same API contract as DocumentDB implementation
+- Documents without embeddings are still discoverable via keyword ranking
 
 ## Lexical Fallback Mode
 
@@ -637,17 +687,28 @@ When an asset's lifecycle status changes (e.g., from `active` to `deprecated`), 
 ## Performance Considerations
 
 1. **Result Distribution**: Global ranking with competitive soft caps limits results to `max_results` (default 10, max 50). The distribution algorithm is O(n) where n is the candidate set size (at most 150 documents).
-2. **Score-Before-Filter**: All candidates scored and sorted before applying the distribution filter
+2. **RRF is O(n)**: Merging two ranked lists by ID lookup is linear, negligible overhead.
 3. **Index Reuse**: HNSW index parameters (m=16, efConstruction=128) optimized for recall
 4. **efSearch Tuning**: Set to 100 for near-exact recall in typical deployments
 5. **Embedding Caching**: Lazy-loaded model with singleton pattern
 6. **Keyword Fallback**: Separate query ensures explicit matches are not missed
 7. **Error Caching**: Failed model loads are cached to avoid repeated download/API attempts
+8. **Score Normalization**: O(n) min-max pass after ranking is finalized; no impact on search latency
 
-## Example: Why Hybrid Matters
+## Example: Why RRF Matters
 
 Query: "context7"
 
 - **Vector-only**: Might return documentation servers with similar semantic content
-- **Keyword-only**: Finds exact match but misses related servers
-- **Hybrid**: Ranks /context7 at top (keyword boost) while including semantically similar alternatives
+- **Keyword-only**: Finds exact match but misses semantically related servers
+- **RRF**: Ranks /context7 at top (keyword rank #1 contributes 1/61) while including semantically similar alternatives (which rank high in the vector list)
+
+Query: "strava" (server name match, tools don't contain the word)
+
+- **Old behavior**: Server shows at 100%, all 13 tools show at 80% (hardcoded)
+- **RRF behavior**: Server shows at high score (keyword rank #1), only tools with "strava" in name/description appear in tool results. Generic tools like `getStats` are excluded.
+
+Query: "coding assistants" (semantic concept)
+
+- **Old behavior**: Everything saturates to 100% match (cosine + any text_boost > 1.0 after clamp)
+- **RRF behavior**: Top results show 80-100%, lower results show 30-50%, below-20% results excluded. Users can see meaningful ranking differences.

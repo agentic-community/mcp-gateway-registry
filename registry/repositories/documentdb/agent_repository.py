@@ -1,5 +1,6 @@
 """DocumentDB-based repository for A2A agent storage."""
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -8,7 +9,14 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.errors import DuplicateKeyError
 
 from ...schemas.agent_models import AgentCard
+from ...utils.url_normalize import ENTITY_TYPE_AGENT, NORMALIZED_IDENTITY_URL_FIELD
 from ..interfaces import AgentRepositoryBase
+from ._identity_url_sidecar import (
+    backfill_normalized_identity_url,
+    ensure_normalized_identity_url_index,
+    find_by_normalized_identity_url,
+    populate_normalized_identity_url,
+)
 from .client import get_collection_name, get_documentdb_client
 
 logger = logging.getLogger(__name__)
@@ -20,13 +28,38 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
     def __init__(self):
         self._collection: AsyncIOMotorCollection | None = None
         self._collection_name = get_collection_name("mcp_agents")
+        # See server_repository for the rationale; same pattern.
+        self._init_lock: asyncio.Lock | None = None
 
     async def _get_collection(self) -> AsyncIOMotorCollection:
-        """Get DocumentDB collection."""
-        if self._collection is None:
+        """Get DocumentDB collection.
+
+        On first acquisition we also create the sparse index on the
+        ``_identity_url_normalized`` sidecar field and lazily backfill
+        the sidecar onto documents registered before this field
+        existed. The init block runs under an ``asyncio.Lock`` so
+        concurrent callers don't race on the backfill cursor.
+        """
+        if self._collection is not None:
+            return self._collection
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+        async with self._init_lock:
+            if self._collection is not None:
+                return self._collection
             db = await get_documentdb_client()
-            self._collection = db[self._collection_name]
-        return self._collection
+            collection = db[self._collection_name]
+            await ensure_normalized_identity_url_index(
+                collection,
+                self._collection_name,
+            )
+            await backfill_normalized_identity_url(
+                collection,
+                self._collection_name,
+                ENTITY_TYPE_AGENT,
+            )
+            self._collection = collection
+            return self._collection
 
     async def load_all(self) -> None:
         """Load all agents from DocumentDB."""
@@ -120,6 +153,7 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
             doc = {**agent_dict}
             doc["_id"] = path
             doc.pop("path", None)
+            populate_normalized_identity_url(doc, ENTITY_TYPE_AGENT)
 
             await collection.insert_one(doc)
             logger.info(f"Created agent '{agent.name}' at '{path}'")
@@ -168,9 +202,21 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         update_dict = updated_agent.model_dump(mode="json")
         update_dict.pop("path", None)
         update_dict.update(extra_fields)
+        populate_normalized_identity_url(update_dict, ENTITY_TYPE_AGENT)
+        unset_ops: dict[str, str] = {}
+        if (
+            NORMALIZED_IDENTITY_URL_FIELD not in update_dict
+            and "url" in update_dict
+            and not update_dict.get("url")
+        ):
+            unset_ops[NORMALIZED_IDENTITY_URL_FIELD] = ""
+
+        update_spec: dict[str, dict[str, Any]] = {"$set": update_dict}
+        if unset_ops:
+            update_spec["$unset"] = unset_ops
 
         try:
-            result = await collection.update_one({"_id": path}, {"$set": update_dict})
+            result = await collection.update_one({"_id": path}, update_spec)
 
             if result.matched_count == 0:
                 raise ValueError(f"Agent at '{path}' not found in DocumentDB")
@@ -316,13 +362,29 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],
+        *,
+        limit: int | None = None,
     ) -> dict[str, dict]:
         """Find documents matching a MongoDB-style filter."""
         collection = await self._get_collection()
         cursor = collection.find(filter_dict)
+        if limit is not None:
+            cursor = cursor.limit(limit)
         results = {}
         async for doc in cursor:
             doc_id = doc.pop("_id", None)
             if doc_id:
                 results[doc_id] = doc
         return results
+
+    async def find_by_identity_url(
+        self,
+        identity_url: str,
+    ) -> dict[str, Any] | None:
+        """Find an agent whose endpoint ``url`` normalizes to ``identity_url``.
+
+        Indexed ``$eq`` lookup against the ``_identity_url_normalized``
+        sidecar field, populated from ``url`` at write time.
+        """
+        collection = await self._get_collection()
+        return await find_by_normalized_identity_url(collection, identity_url)

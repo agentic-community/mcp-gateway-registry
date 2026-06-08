@@ -51,6 +51,8 @@ spec:
           ports:
             - containerPort: {{ .Values.service.port }}
               name: http
+            - containerPort: 9464
+              name: metrics
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           envFrom:
@@ -125,6 +127,15 @@ spec:
                   name: {{ .Values.auth0.managementApiTokenExistingSecret }}
                   key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
             {{- end }}
+            # OTel-native metric emission (Issue #1122)
+            - name: METRICS_LEGACY_HTTP_POST
+              value: {{ .Values.metrics.legacyHttpPost | default false | quote }}
+            - name: OTEL_METRIC_EXPORT_INTERVAL_MS
+              value: {{ .Values.metrics.otelExportIntervalMs | default "15000" | quote }}
+            - name: OTEL_EXPORTER_PROMETHEUS_HOST
+              value: {{ .Values.metrics.exporterPrometheusHost | default "0.0.0.0" | quote }}
+            - name: OTEL_EXPORTER_PROMETHEUS_PORT
+              value: {{ .Values.metrics.exporterPrometheusPort | default "9464" | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

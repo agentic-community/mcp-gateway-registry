@@ -37,16 +37,28 @@ tests:
               secretKeyRef:
                 name: my-secret
                 key: my-key
-      # Order: chart-managed ENTRA_CLIENT_SECRET comes first (conditional
-      # valueFrom block), then user extraEnv entries.
+      # Order: chart-managed env vars come first, then user extraEnv entries.
+      # NOTE: positions assume entra.clientSecretExistingSecret is set (above)
+      # and that no other conditional secrets (okta/auth0) are configured.
+      # Index map:
+      #   env[0] = ENTRA_CLIENT_SECRET (conditional valueFrom)
+      #   env[1] = METRICS_LEGACY_HTTP_POST  (Issue #1122, unconditional)
+      #   env[2] = OTEL_METRIC_EXPORT_INTERVAL_MS  (Issue #1122)
+      #   env[3] = OTEL_EXPORTER_PROMETHEUS_HOST   (Issue #1122)
+      #   env[4] = OTEL_EXPORTER_PROMETHEUS_PORT   (Issue #1122)
+      #   env[5] = MY_FLAG       (extraEnv[0])
+      #   env[6] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
       - equal:
           path: spec.template.spec.containers[0].env[1].name
+          value: METRICS_LEGACY_HTTP_POST
+      - equal:
+          path: spec.template.spec.containers[0].env[5].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[2].name
+          path: spec.template.spec.containers[0].env[6].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

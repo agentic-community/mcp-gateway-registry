@@ -18,9 +18,10 @@
 set -e
 
 REALM="mcp-gateway"
+# Do not unset KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD here — main() needs to
+# detect whether the caller already exported them so it can skip .env loading
+# and run against a non-.env Keycloak (e.g. ECS).
 KEYCLOAK_URL=""
-KEYCLOAK_ADMIN=""
-KEYCLOAK_ADMIN_PASSWORD=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -52,8 +53,12 @@ setup_dcr_groups_mapper() {
         jq -r '.[] | select(.name=="basic") | .id')
 
     if [ -z "$basic_scope_id" ] || [ "$basic_scope_id" = "null" ]; then
-        echo -e "${RED}Error: Could not find 'basic' client-scope in realm '${REALM}'${NC}"
-        return 1
+        # Older Keycloak versions and custom realm imports do not include a
+        # 'basic' client-scope. The Groups mapper is recommended but not
+        # required for DCR to succeed; skip gracefully so the policy fixes
+        # in steps 3 and 4 still run.
+        echo -e "${YELLOW}WARNING: 'basic' client-scope not found in realm '${REALM}' — skipping groups mapper. Add the mapper manually if you need group claims in DCR'd-client tokens.${NC}"
+        return 0
     fi
 
     local existing=$(curl -s -H "Authorization: Bearer ${token}" \
@@ -104,8 +109,11 @@ setup_dcr_audience_mapper() {
         jq -r '.[] | select(.name=="basic") | .id')
 
     if [ -z "$basic_scope_id" ] || [ "$basic_scope_id" = "null" ]; then
-        echo -e "${RED}Error: Could not find 'basic' client-scope${NC}"
-        return 1
+        # See setup_dcr_groups_mapper() for the rationale: skip when the
+        # realm does not have a 'basic' client-scope so the policy fixes
+        # in steps 3 and 4 can still run.
+        echo -e "${YELLOW}WARNING: 'basic' client-scope not found — skipping audience mapper. Add the mapper manually if DCR'd-client tokens need aud=\"mcp-gateway\".${NC}"
+        return 0
     fi
 
     local existing=$(curl -s -H "Authorization: Bearer ${token}" \
@@ -143,35 +151,33 @@ setup_dcr_audience_mapper() {
     fi
 }
 
-configure_dcr_allowed_scopes() {
+_widen_allowed_scopes_policy() {
+    # Widen one subType's "Allowed Client Scopes" policy to include every
+    # client-scope defined in the realm. Both 'anonymous' and 'authenticated'
+    # subTypes need this because Keycloak picks one based on whether the DCR
+    # request carries an initial-access / registration token. Claude Code,
+    # Claude.ai connectors, and Cursor have been observed to hit either path.
     local token=$1
-
-    echo ""
-    echo "[3/4] Widening anonymous-DCR 'Allowed Client Scopes' policy..."
-
-    local components=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+    local sub_type=$2  # "anonymous" or "authenticated"
+    local components=$3
+    local all_scope_names=$4
 
     local policy_id=$(echo "$components" | \
-        jq -r '.[] | select(.name=="Allowed Client Scopes" and .subType=="anonymous") | .id')
+        jq -r ".[] | select(.name==\"Allowed Client Scopes\" and .subType==\"${sub_type}\") | .id")
     local parent_id=$(echo "$components" | \
-        jq -r '.[] | select(.name=="Allowed Client Scopes" and .subType=="anonymous") | .parentId')
+        jq -r ".[] | select(.name==\"Allowed Client Scopes\" and .subType==\"${sub_type}\") | .parentId")
 
     if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
-        echo -e "${RED}Error: Could not find anonymous 'Allowed Client Scopes' policy${NC}"
-        return 1
+        echo -e "${YELLOW}WARNING: ${sub_type} 'Allowed Client Scopes' policy not found — skipping.${NC}"
+        return 0
     fi
-
-    local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-        jq -c '[.[].name]')
 
     local policy_json=$(jq -n \
         --arg name "Allowed Client Scopes" \
         --arg providerId "allowed-client-templates" \
         --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
         --arg parentId "$parent_id" \
-        --arg subType "anonymous" \
+        --arg subType "$sub_type" \
         --argjson allowedScopes "$all_scope_names" \
         '{
             name: $name,
@@ -192,11 +198,28 @@ configure_dcr_allowed_scopes() {
         -d "$policy_json")
 
     if [ "$response" = "204" ]; then
-        echo -e "${GREEN}OK: Allowed Client Scopes policy includes all realm scopes.${NC}"
+        echo -e "${GREEN}OK: ${sub_type} Allowed Client Scopes policy includes all realm scopes.${NC}"
     else
-        echo -e "${RED}FAILED: HTTP status ${response}${NC}"
+        echo -e "${RED}FAILED (${sub_type}): HTTP status ${response}${NC}"
         return 1
     fi
+}
+
+configure_dcr_allowed_scopes() {
+    local token=$1
+
+    echo ""
+    echo "[3/4] Widening 'Allowed Client Scopes' DCR policy (anonymous + authenticated)..."
+
+    local components=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+    local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
+        jq -c '[.[].name] + ["openid"]')
+
+    _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
+    _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1
 }
 
 configure_dcr_trusted_hosts() {
@@ -250,13 +273,19 @@ main() {
     PROJECT_ROOT="$( cd "$SCRIPT_DIR/../.." && pwd )"
     ENV_FILE="$PROJECT_ROOT/.env"
 
-    if [ -f "$ENV_FILE" ]; then
+    # Prefer already-exported KEYCLOAK_ADMIN_URL + KEYCLOAK_ADMIN_PASSWORD so
+    # this script can run against a non-.env Keycloak (e.g. ECS) without
+    # mutating the developer's local .env. Fall back to .env when those
+    # variables are not exported.
+    if [ -n "$KEYCLOAK_ADMIN_URL" ] && [ -n "$KEYCLOAK_ADMIN_PASSWORD" ]; then
+        echo "Using KEYCLOAK_ADMIN_URL / KEYCLOAK_ADMIN_PASSWORD from environment (skipping .env load)"
+    elif [ -f "$ENV_FILE" ]; then
         echo "Loading environment from $ENV_FILE..."
         set -a
         source "$ENV_FILE"
         set +a
     else
-        echo -e "${RED}Error: .env not found at $ENV_FILE${NC}"
+        echo -e "${RED}Error: export KEYCLOAK_ADMIN_URL and KEYCLOAK_ADMIN_PASSWORD, or provide .env at $ENV_FILE${NC}"
         exit 1
     fi
 
@@ -264,7 +293,7 @@ main() {
     KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
 
     if [ -z "$KEYCLOAK_ADMIN_PASSWORD" ]; then
-        echo -e "${RED}Error: KEYCLOAK_ADMIN_PASSWORD must be set in .env${NC}"
+        echo -e "${RED}Error: KEYCLOAK_ADMIN_PASSWORD must be set (export or .env)${NC}"
         exit 1
     fi
 
@@ -293,15 +322,14 @@ main() {
     echo ""
     echo -e "${GREEN}DCR upgrade complete.${NC}"
     echo ""
-    echo "What was applied:"
-    echo "  - Groups protocol mapper added to 'basic' client-scope"
-    echo "  - Audience mapper added to 'basic' client-scope (aud=mcp-gateway)"
+    echo "What this script attempts:"
+    echo "  - Groups protocol mapper on 'basic' client-scope (skipped if 'basic' missing)"
+    echo "  - Audience mapper on 'basic' client-scope, aud=mcp-gateway (skipped if 'basic' missing)"
     echo "  - Allowed Client Scopes policy widened to all realm scopes"
     echo "  - Trusted Hosts policy: IP check OFF, URI check ON, 'localhost' trusted"
     echo ""
-    echo "Existing DCR'd clients will get the groups+audience claims on their next"
-    echo "/authorize round-trip. New DCR registrations are unaffected by these changes"
-    echo "for clients that already complete registration successfully."
+    echo "Check the output above to see which steps actually ran for this realm."
+    echo "Existing DCR'd clients will pick up the policy changes immediately."
 }
 
 main "$@"

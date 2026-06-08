@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.2
+    tag: 1.24.4
     pullPolicy: IfNotPresent
 
 # Per-service image configuration
@@ -153,5 +153,26 @@ extraEnv: []
 #       name: my-external-config
 #       optional: true
 extraEnvFrom: []
+
+# OTel-native metric emission (Issue #1122)
+# In 1.25.0+ mcpgw emits metrics natively via the OTel SDK.
+# metricsLegacyHttpPost=true ALSO posts to metrics-service (one-release transition).
+# The metrics-service container is removed entirely in 1.26.0.
+metrics:
+  legacyHttpPost: false
+  otelExportIntervalMs: "15000"
+  exporterPrometheusHost: "0.0.0.0"
+  exporterPrometheusPort: "9464"
+
+# Metrics scrape configuration (Issue #1122)
+# Controls the NetworkPolicy that gates the OTel exporter-prometheus port.
+metricsScrape:
+  port: 9464
+  networkPolicy:
+    enabled: true
+    fromNamespaceSelector:
+      kubernetes.io/metadata.name: monitoring
+    fromPodSelector:
+      app.kubernetes.io/name: prometheus
 
 nodeSelector: {}

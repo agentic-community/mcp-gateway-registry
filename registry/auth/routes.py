@@ -8,7 +8,19 @@ import httpx
 from fastapi import APIRouter, Cookie, Depends, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from prometheus_client import Counter
+
+from registry.observability.meters import (
+    logout_id_token_hint_missing_total as logout_id_token_hint_missing,
+)
+from registry.observability.meters import (
+    logout_id_token_hint_present_total as logout_id_token_hint_present,
+)
+from registry.observability.meters import (
+    logout_jwt_validation_failed_total as logout_jwt_validation_failed,
+)
+from registry.observability.meters import (
+    logout_url_length_warning_total as logout_url_length_warning,
+)
 
 from ..audit.context import set_audit_action
 from ..core.config import settings
@@ -55,26 +67,9 @@ def _build_external_url(
     return f"{scheme}://{host}{_ROOT_PATH}{path}"
 
 
-# Prometheus metrics for logout observability
-logout_id_token_hint_present = Counter(
-    "registry_logout_id_token_hint_present_total",
-    "Number of Registry logout requests where id_token was successfully extracted and forwarded",
-)
-
-logout_id_token_hint_missing = Counter(
-    "registry_logout_id_token_hint_missing_total",
-    "Number of Registry logout requests where id_token was missing from session",
-)
-
-logout_jwt_validation_failed = Counter(
-    "registry_logout_jwt_validation_failed_total",
-    "Number of Registry logout requests where id_token failed JWT format validation",
-)
-
-logout_url_length_warning = Counter(
-    "registry_logout_url_length_warning_total",
-    "Number of Registry logout requests where the logout URL exceeded recommended length",
-)
+# Logout observability counters are imported above from
+# registry.observability.meters as part of the OTel migration (issue #1122).
+# Call sites continue to use ``.inc()`` via the _CounterAdapter shim.
 
 router = APIRouter()
 

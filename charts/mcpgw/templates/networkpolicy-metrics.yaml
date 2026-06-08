@@ -1,0 +1,31 @@
+{{- /*
+NetworkPolicy gating ingress to the OTel exporter-prometheus scrape port (Issue #1122).
+See charts/registry/templates/networkpolicy-metrics.yaml for full rationale.
+*/ -}}
+{{- if .Values.metricsScrape.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.app.name }}-metrics-scrape
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.app.name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.metricsScrape.networkPolicy.fromNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.metricsScrape.networkPolicy.fromPodSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metricsScrape.port | default 9464 }}
+{{- end }}

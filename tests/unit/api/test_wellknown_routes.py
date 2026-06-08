@@ -348,16 +348,19 @@ class TestWellKnownMcpServersEndpoint:
                 "path": "healthy-server",
                 "server_name": "Healthy Server",
                 "description": "A healthy server",
+                "is_enabled": True,
             },
             "unhealthy-server": {
                 "path": "unhealthy-server",
                 "server_name": "Unhealthy Server",
                 "description": "An unhealthy server",
+                "is_enabled": True,
             },
             "unknown-server": {
                 "path": "unknown-server",
                 "server_name": "Unknown Server",
                 "description": "A server with unknown status",
+                "is_enabled": True,
             },
         }
 
@@ -438,7 +441,9 @@ def fake_provider(fake_as_metadata):
     provider.authorization_server_issuer.return_value = fake_as_metadata["issuer"]
     # Use the real default protected_resource_metadata implementation by binding it
     provider.protected_resource_metadata.side_effect = (
-        lambda resource, scopes_supported, resource_documentation=None: AuthProvider.protected_resource_metadata(
+        lambda resource,
+        scopes_supported,
+        resource_documentation=None: AuthProvider.protected_resource_metadata(
             provider, resource, scopes_supported, resource_documentation
         )
     )

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-batch-config
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+data:
+  # Agent batch API (issue #956). Non-sensitive tuning knobs for the async
+  # batch endpoint and its in-process worker.
+  BATCH_WORKER_ENABLED: {{ .Values.app.batchWorkerEnabled | toString | quote }}
+  BATCH_MAX_OPERATIONS_PER_JOB: {{ .Values.app.batchMaxOperationsPerJob | toString | quote }}
+  BATCH_MAX_CONCURRENT_JOBS_PER_USER: {{ .Values.app.batchMaxConcurrentJobsPerUser | toString | quote }}
+  BATCH_JOB_RETENTION_DAYS: {{ .Values.app.batchJobRetentionDays | toString | quote }}
+  BATCH_WORKER_POLL_INTERVAL_SECONDS: {{ .Values.app.batchWorkerPollIntervalSeconds | toString | quote }}
+  BATCH_WORKER_LEASE_TTL_SECONDS: {{ .Values.app.batchWorkerLeaseTtlSeconds | toString | quote }}
+  BATCH_WORKER_LEASE_HEARTBEAT_SECONDS: {{ .Values.app.batchWorkerLeaseHeartbeatSeconds | toString | quote }}
+  BATCH_MAX_REQUEST_BYTES: {{ .Values.app.batchMaxRequestBytes | toString | quote }}

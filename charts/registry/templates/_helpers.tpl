@@ -14,10 +14,11 @@ Sections (in order below):
   1. env: block — feature flags and IdP secrets via valueFrom
   2. registry-app-log-config configmap
   3. registry-otel-config configmap
-  4. registry per-chart secret
-  5. keycloak-client-secret (runtime-created by keycloak-configure Job)
-  6. mongo-credentials secret
-  7. shared-secret (stack-level)
+  4. registry-batch-config configmap
+  5. registry per-chart secret
+  6. keycloak-client-secret (runtime-created by keycloak-configure Job)
+  7. mongo-credentials secret
+  8. shared-secret (stack-level)
 
 Over-rejection is preferred to under-rejection: a user attempting to
 inject one of these via extraEnv gets a clear template-render error.

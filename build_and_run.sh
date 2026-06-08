@@ -604,7 +604,7 @@ else
 fi
 
 # Check auth service
-if curl -f http://localhost:18888/health &>/dev/null; then
+if curl -f http://localhost:8888/health &>/dev/null; then
     log "Auth service is healthy"
 else
     log "WARNING: Auth service may still be starting up..."

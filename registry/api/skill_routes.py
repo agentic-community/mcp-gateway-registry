@@ -34,9 +34,16 @@ from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..exceptions import (
     SkillAlreadyExistsError,
+    SkillContentFetchError,
+    SkillContentSSRFError,
+    SkillContentTooLargeError,
     SkillServiceError,
     SkillUrlValidationError,
     SkillValidationError,
+)
+from ..schemas.duplicate_check_models import (
+    DuplicateCheckResult,
+    SkillDuplicateCheckRequest,
 )
 from ..schemas.skill_models import (
     DiscoveryResponse,
@@ -49,21 +56,16 @@ from ..schemas.skill_models import (
     ToolValidationResult,
     VisibilityEnum,
 )
-from ..exceptions import (
-    SkillContentFetchError,
-    SkillContentSSRFError,
-    SkillContentTooLargeError,
-)
+from ..services.duplicate_check_service import get_duplicate_check_service
+from ..services.registration_gate_service import check_registration_gate
 from ..services.skill_service import (
     _build_fetch_headers,
     _check_drift_inline,
     _decrypt_skill_auth,
     _discover_skill_resources,
     _fetch_authenticated_content,
-    _is_safe_url,
     get_skill_service,
 )
-from ..services.registration_gate_service import check_registration_gate
 from ..services.tool_validation_service import get_tool_validation_service
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import flatten_metadata_to_text
@@ -251,8 +253,12 @@ async def list_skills(
 async def parse_skill_md(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     url: str = Query(..., description="URL to SKILL.md file"),
-    auth_scheme: str = Query("none", description="Auth scheme: none, global_credentials, bearer, api_key"),
-    auth_credential: str | None = Query(None, description="Plaintext credential for bearer/api_key"),
+    auth_scheme: str = Query(
+        "none", description="Auth scheme: none, global_credentials, bearer, api_key"
+    ),
+    auth_credential: str | None = Query(
+        None, description="Plaintext credential for bearer/api_key"
+    ),
     auth_header_name: str | None = Query(None, description="Custom header name for api_key scheme"),
 ) -> dict:
     """Parse SKILL.md content and extract metadata.
@@ -419,7 +425,9 @@ async def get_integrity_status(
         "composite_hash": integrity.composite_hash,
         "computed_at": integrity.computed_at.isoformat() if integrity.computed_at else None,
         "drift_detected": integrity.drift_detected,
-        "last_drift_check": integrity.last_drift_check.isoformat() if integrity.last_drift_check else None,
+        "last_drift_check": integrity.last_drift_check.isoformat()
+        if integrity.last_drift_check
+        else None,
         "drifted_files": integrity.drifted_files,
         "file_count": len(integrity.file_hashes),
         "files": [
@@ -482,10 +490,7 @@ async def get_skill_content(
     if not _user_can_access_skill(skill, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    if (
-        skill.content_integrity
-        and skill.content_integrity.drift_detected
-    ):
+    if skill.content_integrity and skill.content_integrity.drift_detected:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -518,7 +523,9 @@ async def get_skill_content(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="No resource manifest available for this skill",
                 )
-            all_resources = manifest.references + manifest.scripts + manifest.agents + manifest.assets
+            all_resources = (
+                manifest.references + manifest.scripts + manifest.agents + manifest.assets
+            )
             matched = [r for r in all_resources if r.path == resource]
             if not matched:
                 raise HTTPException(
@@ -530,7 +537,9 @@ async def get_skill_content(
 
             resource_url = derive_resource_url(str(raw_url), resource)
             response = await _fetch_authenticated_content(
-                resource_url, skill, max_size=MAX_RESOURCE_SIZE,
+                resource_url,
+                skill,
+                max_size=MAX_RESOURCE_SIZE,
             )
 
             drift_task = asyncio.create_task(
@@ -724,7 +733,6 @@ async def rescan_skill(
         )
 
 
-
 @router.post(
     "/{skill_path:path}/refresh-resources",
     response_model=dict,
@@ -775,7 +783,12 @@ async def refresh_skill_resources(
 
     total = 0
     if manifest:
-        total = len(manifest.references) + len(manifest.scripts) + len(manifest.agents) + len(manifest.assets)
+        total = (
+            len(manifest.references)
+            + len(manifest.scripts)
+            + len(manifest.agents)
+            + len(manifest.assets)
+        )
 
     return {
         "path": normalized_path,
@@ -784,7 +797,12 @@ async def refresh_skill_resources(
     }
 
 
-@router.get("/{skill_path:path}", response_model=SkillCard, response_model_exclude=_SKILL_CARD_EXCLUDE, summary="Get a skill by path")
+@router.get(
+    "/{skill_path:path}",
+    response_model=SkillCard,
+    response_model_exclude=_SKILL_CARD_EXCLUDE,
+    summary="Get a skill by path",
+)
 async def get_skill(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     skill_path: str = Path(..., description="Skill path or name"),
@@ -804,6 +822,47 @@ async def get_skill(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     return skill
+
+
+@router.post(
+    "/check-duplicates",
+    response_model=DuplicateCheckResult,
+    summary="Check whether a skill registration would duplicate an existing one",
+)
+async def check_skill_duplicates(
+    payload: SkillDuplicateCheckRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+) -> DuplicateCheckResult:
+    """Advisory duplicate check for skill registrations.
+
+    Always returns 200; the response shape signals matches via
+    ``collision_with`` (exact-URL hit on ``skill_md_url``) and
+    ``advisory_matches`` (similarity hits). The endpoint does not
+    block registration — callers are free to proceed even when matches
+    are returned.
+    """
+    ui_permissions = user_context.get("ui_permissions", {})
+    publish_permissions = ui_permissions.get("publish_skill", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register skills",
+        )
+
+    if not payload.name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="name must not be blank",
+        )
+
+    service = get_duplicate_check_service()
+    return await service.check(
+        name=payload.name,
+        description=payload.description,
+        identity_url=payload.skill_md_url,
+        self_path=payload.self_path,
+        user_context=user_context,
+    )
 
 
 @router.post(
@@ -839,8 +898,7 @@ async def register_skill(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied skill '{request.name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied skill '{request.name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -886,7 +944,12 @@ async def register_skill(
         )
 
 
-@router.put("/{skill_path:path}", response_model=SkillCard, response_model_exclude=_SKILL_CARD_EXCLUDE, summary="Update a skill")
+@router.put(
+    "/{skill_path:path}",
+    response_model=SkillCard,
+    response_model_exclude=_SKILL_CARD_EXCLUDE,
+    summary="Update a skill",
+)
 async def update_skill(
     http_request: Request,
     request: SkillRegistrationRequest,
@@ -927,8 +990,7 @@ async def update_skill(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied skill update '{request.name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied skill update '{request.name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1198,7 +1260,10 @@ async def _perform_skill_security_scan_on_registration(
         fetch_headers: dict[str, str] = {}
         if credential:
             raw_url, fetch_headers = _build_fetch_headers(
-                raw_url, auth_scheme, credential, auth_header_name,
+                raw_url,
+                auth_scheme,
+                credential,
+                auth_header_name,
             )
 
         result = await skill_scanner_service.scan_skill(
@@ -1229,5 +1294,3 @@ async def _perform_skill_security_scan_on_registration(
                     )
             except Exception as tag_err:
                 logger.error(f"Failed to add security-pending tag: {tag_err}")
-
-

@@ -136,6 +136,16 @@ class RegistryCard(BaseModel):
         description="Additional metadata (max 10KB serialized)",
     )
 
+    # Operator-declared cloud provider (set via admin UI banner, issue #1120)
+    cloud_provider_hint: str | None = Field(
+        default=None,
+        description=(
+            "Operator-declared cloud environment from the admin UI banner. "
+            "None = not yet answered. 'on_premises', 'other' = propagate into telemetry. "
+            "'declined' = operator dismissed the banner without answering."
+        ),
+    )
+
     # Internal tracking
     created_at: datetime | None = Field(default=None, description="Created timestamp")
     updated_at: datetime | None = Field(default=None, description="Last updated timestamp")

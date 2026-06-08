@@ -35,6 +35,14 @@ FROM python:3.14-slim
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+# Issue #1122: prefer IPv4 over IPv6 in glibc getaddrinfo. ECS Service Connect
+# populates /etc/hosts with both A (127.255.0.x) and AAAA (2600:f0f0::x)
+# entries; the Fargate task netns has no IPv6 routing, so the default RFC 6724
+# IPv6 preference makes outbound calls (auth-server to mcpgw, DocumentDB)
+# fail with "Network is unreachable". Compose and EKS are unaffected because
+# their /etc/hosts has no IPv6 dual entries to compare against.
+RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+
 # Install only runtime system dependencies.
 # apt-get upgrade pulls in security patches against the base image's
 # already-installed packages (e.g. libc6 / glibc CVE updates) that would
@@ -68,7 +76,7 @@ EXPOSE 8888
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8888/health || exit 1
+    CMD curl -f http://localhost:${AUTH_LISTEN_PORT:-8888}/health || exit 1
 
 # Create non-root user for security (CIS Docker Benchmark 4.1)
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser

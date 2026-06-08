@@ -1,5 +1,5 @@
-import React from 'react';
-import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
+import React, { useState } from 'react';
+import { ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline';
 import DetailsModal from './DetailsModal';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 
@@ -32,6 +32,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
   onCopy,
 }) => {
   const dataToCopy = fullDetails || server;
+  const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
@@ -40,6 +41,8 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
       } else {
         await navigator.clipboard.writeText(JSON.stringify(dataToCopy, null, 2));
       }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy server JSON:', err);
     }
@@ -78,10 +81,23 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
             <h4 className="font-medium text-gray-900 dark:text-white">Server JSON Schema:</h4>
             <button
               onClick={handleCopy}
-              className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors duration-200"
+              className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
+                copied
+                  ? 'bg-green-600'
+                  : 'bg-blue-600 hover:bg-blue-700'
+              }`}
             >
-              <ClipboardDocumentIcon className="h-4 w-4" />
-              Copy JSON
+              {copied ? (
+                <>
+                  <CheckIcon className="h-4 w-4" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                  Copy JSON
+                </>
+              )}
             </button>
           </div>
 

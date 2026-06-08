@@ -194,6 +194,7 @@ class ServerService:
         self,
         include_inactive: bool = False,
         include_credentials: bool = False,
+        exclude_tool_list: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """
         Get all registered servers.
@@ -201,12 +202,15 @@ class ServerService:
         Args:
             include_inactive: If True, include inactive server versions (default False)
             include_credentials: If True, include encrypted credentials in result
+            exclude_tool_list: If True, omit the heavy tool_list field (DB-side
+                projection) for callers that only need metadata. num_tools is
+                unaffected.
 
         Returns:
             Dict of all servers
         """
         # Query repository directly instead of using cache
-        all_servers = await self._repo.list_all()
+        all_servers = await self._repo.list_all(exclude_tool_list=exclude_tool_list)
 
         # Apply read-time migration and credential stripping
         for server_info in all_servers.values():
@@ -226,6 +230,7 @@ class ServerService:
         self,
         skip: int = 0,
         limit: int = 100,
+        exclude_tool_list: bool = False,
     ) -> tuple[dict[str, dict[str, Any]], int]:
         """Get a page of servers with total count.
 
@@ -239,11 +244,15 @@ class ServerService:
         Args:
             skip: Number of servers to skip.
             limit: Maximum number of servers to return.
+            exclude_tool_list: If True, omit the heavy tool_list field for
+                callers that only need metadata. num_tools is unaffected.
 
         Returns:
             Tuple of (servers dict for the requested page, total count of all servers).
         """
-        servers = await self._repo.list_paginated(skip=skip, limit=limit)
+        servers = await self._repo.list_paginated(
+            skip=skip, limit=limit, exclude_tool_list=exclude_tool_list
+        )
         total = await self._repo.count()
 
         # Apply read-time migration and credential stripping
@@ -258,6 +267,18 @@ class ServerService:
         }
 
         return servers, total
+
+    async def count_servers(self) -> int:
+        """Return the total number of server documents.
+
+        Counts all documents (including inactive version docs), so it may be
+        marginally higher than len(get_all_servers()). Intended for cheap
+        totals like log/metric context, not exact active-server counts.
+
+        Returns:
+            Total document count from the repository.
+        """
+        return await self._repo.count()
 
     async def get_filtered_servers(
         self,
@@ -327,7 +348,9 @@ class ServerService:
         return filtered_servers
 
     async def get_all_servers_with_permissions(
-        self, accessible_servers: list[str] | None = None
+        self,
+        accessible_servers: list[str] | None = None,
+        exclude_tool_list: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """
         Get servers with optional filtering based on user permissions.
@@ -335,6 +358,8 @@ class ServerService:
         Args:
             accessible_servers: Optional list of server names the user can access.
                                If None, returns all servers (admin access).
+            exclude_tool_list: If True, omit the heavy tool_list field for
+                callers that only need metadata. num_tools is unaffected.
 
         Returns:
             Dict of servers the user is authorized to see
@@ -342,50 +367,51 @@ class ServerService:
         if accessible_servers is None:
             # Admin access - return all servers
             logger.debug("Admin access - returning all servers")
-            return await self.get_all_servers()
+            return await self.get_all_servers(exclude_tool_list=exclude_tool_list)
         elif "*" in accessible_servers:
             # Wildcard access — return all servers (non-admin with server: '*')
             logger.debug("Wildcard access detected in accessible_servers, returning all servers")
-            return await self.get_all_servers()
+            return await self.get_all_servers(exclude_tool_list=exclude_tool_list)
         else:
-            # Filtered access - return only accessible servers
+            # Filtered access - fetch only the accessible servers via a targeted
+            # query instead of scanning the full collection.
             logger.debug(
                 f"Filtered access - returning servers accessible to user: {accessible_servers}"
             )
-            all_servers = await self.get_all_servers()
 
-            # Filter based on accessible_servers
-            filtered_servers = {}
-            logger.info(f"[FILTER DEBUG] Starting to filter {len(all_servers)} servers")
-            logger.info(f"[FILTER DEBUG] accessible_servers = {accessible_servers}")
-
-            for path, server_info in all_servers.items():
-                server_name = server_info.get("server_name", "")
-                technical_name = path.strip("/")
-
-                logger.info(
-                    f"[FILTER DEBUG] Checking server: path='{path}', technical_name='{technical_name}', server_name='{server_name}'"
+            # Build candidate _id paths covering the slash variants the caller
+            # may supply ("currenttime", "/currenttime", "/currenttime/"). The
+            # $in query only matches existing docs, so extra candidates are
+            # harmless and version docs ({path}:{version}) never match.
+            candidate_paths: list[str] = []
+            for accessible_server in accessible_servers:
+                normalized = accessible_server.strip("/")
+                if not normalized:
+                    continue
+                candidate_paths.extend(
+                    [f"/{normalized}", f"/{normalized}/", normalized, f"{normalized}/"]
                 )
 
-                # Check if user has access to this server using multiple formats
-                # Support: "currenttime", "/currenttime", "/currenttime/"
-                has_access = False
-                for accessible_server in accessible_servers:
-                    # Normalize both sides by stripping slashes for comparison
-                    normalized_accessible = accessible_server.strip("/")
-                    logger.info(
-                        f"[FILTER DEBUG]   Comparing: '{technical_name}' == '{normalized_accessible}' ? {technical_name == normalized_accessible}"
-                    )
-                    if technical_name == normalized_accessible:
-                        has_access = True
-                        break
+            filtered_servers = await self._repo.list_by_ids(candidate_paths)
 
-                logger.info(f"[FILTER DEBUG]   has_access = {has_access}")
-                if has_access:
-                    filtered_servers[path] = server_info
+            # Apply read-time migration and credential stripping
+            for server_info in filtered_servers.values():
+                self._prepare_server_dict(server_info, include_credentials=False)
+                if exclude_tool_list:
+                    server_info.pop("tool_list", None)
 
-            logger.info(f"[FILTER DEBUG] Final filtered_servers: {len(filtered_servers)} servers")
-            logger.info(f"[FILTER DEBUG] Filtered server paths: {list(filtered_servers.keys())}")
+            # Filter out inactive servers (non-default versions) for parity with
+            # get_all_servers; defaults to True for backward compatibility.
+            filtered_servers = {
+                path: server_info
+                for path, server_info in filtered_servers.items()
+                if server_info.get("is_active", True)
+            }
+
+            logger.info(
+                f"Filtered access: fetched {len(filtered_servers)} servers "
+                f"for {len(accessible_servers)} accessible entries"
+            )
             return filtered_servers
 
     async def user_can_access_server_path(self, path: str, accessible_servers: list[str]) -> bool:

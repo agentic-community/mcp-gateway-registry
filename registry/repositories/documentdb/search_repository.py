@@ -10,6 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from ...core.config import embedding_config, settings
 from ...schemas.agent_models import AgentCard
 from ...utils.metadata import flatten_metadata_to_text
+from ...utils.vector import cosine_similarity
 from ..interfaces import SearchRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
@@ -108,6 +109,10 @@ def _tokens_match_text(
 # Maximum possible text_boost sum for lexical scoring normalization
 # path(5.0) + name(3.0) + description(2.0) + tag(1.5) + metadata(1.0) + tool(1.0) = 13.5
 MAX_LEXICAL_BOOST: float = 13.5
+
+# RRF sensitivity constant (industry standard: k=60)
+# Higher k smooths differences between ranks; lower k amplifies top positions.
+RRF_K: int = 60
 
 # Maximum fraction of max_results any single entity type can claim
 # when other entity types have results competing for slots.
@@ -208,8 +213,142 @@ def _distribute_results(
     return selected
 
 
+def _reciprocal_rank_fusion(
+    vector_ranked: list[dict],
+    keyword_ranked: list[dict],
+    k: int = RRF_K,
+) -> list[tuple[dict, float]]:
+    """Combine vector and keyword ranked lists using Reciprocal Rank Fusion.
+
+    RRF produces a single merged ranking from two independently-ranked lists
+    without needing score normalization. The formula per document is:
+
+        rrf_score = sum over lists: 1 / (k + rank)
+
+    where rank starts at 1 for the top result in each list.
+
+    This is the industry standard approach used by Elasticsearch, OpenSearch,
+    MongoDB Atlas, and Azure AI Search (all with k=60).
+
+    Args:
+        vector_ranked: Documents sorted by vector similarity (best first).
+            Documents missing from this list (no embedding) simply receive
+            no vector contribution.
+        keyword_ranked: Documents sorted by text_boost (best first).
+        k: Sensitivity constant. Default 60 (industry standard).
+            Higher k reduces the influence of top positions.
+
+    Returns:
+        List of (doc, rrf_score) tuples sorted by rrf_score descending.
+    """
+    scores: dict[str, float] = {}
+    doc_map: dict[str, dict] = {}
+
+    for rank_zero, doc in enumerate(vector_ranked):
+        doc_id = doc.get("_id") or doc.get("path", f"__vec_{rank_zero}")
+        scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank_zero + 1)
+        doc_map[doc_id] = doc
+
+    for rank_zero, doc in enumerate(keyword_ranked):
+        doc_id = doc.get("_id") or doc.get("path", f"__kw_{rank_zero}")
+        scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank_zero + 1)
+        doc_map[doc_id] = doc
+
+    results = [(doc_map[doc_id], score) for doc_id, score in scores.items()]
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
 
 
+SCORE_DISPLAY_FLOOR: float = 0.10
+
+
+def _normalize_scores(
+    scored_results: list[tuple[dict, float]],
+    max_results: int = 10,
+) -> list[tuple[dict, float]]:
+    """Normalize scores to [0, 1] and drop results below the display floor.
+
+    Maps the highest score to 1.0 and scales others proportionally.
+    Results whose normalized score falls below SCORE_DISPLAY_FLOOR (10%)
+    are excluded, unless that would leave fewer results than max_results.
+
+    For a single result, returns 1.0. For empty input, returns empty.
+
+    Args:
+        scored_results: List of (doc, score) tuples (any score range).
+        max_results: Don't drop results if we'd have fewer than this.
+
+    Returns:
+        Filtered list with scores in [0, 1.0].
+    """
+    if not scored_results:
+        return []
+    if len(scored_results) == 1:
+        return [(scored_results[0][0], 1.0)]
+
+    max_score = scored_results[0][1]
+    min_score = scored_results[-1][1]
+
+    if max_score == min_score:
+        return [(doc, 1.0) for doc, _ in scored_results]
+
+    normalized = []
+    for doc, score in scored_results:
+        norm = (score - min_score) / (max_score - min_score)
+        display_score = max(0.0, round(norm, 4))
+        normalized.append((doc, display_score))
+
+    above_floor = [item for item in normalized if item[1] >= SCORE_DISPLAY_FLOOR]
+
+    if len(above_floor) >= max_results:
+        return above_floor
+
+    return normalized
+
+    return normalized
+
+
+def _score_tool_relevance(
+    tool_name: str,
+    tool_description: str,
+    query_tokens: list[str],
+) -> float:
+    """Score a tool independently based on keyword match strength.
+
+    Returns a score between 0.0 and 1.0 based on how well the tool's
+    name and description match the query tokens.
+
+    Args:
+        tool_name: The tool's name
+        tool_description: The tool's description
+        query_tokens: Tokenized query
+
+    Returns:
+        Score from 0.0 to 1.0
+    """
+    if not query_tokens:
+        return 0.0
+
+    score = 0.0
+    name_lower = tool_name.lower()
+    desc_lower = tool_description.lower()
+
+    matched_tokens = 0
+    for token in query_tokens:
+        if token in name_lower:
+            score += 0.5
+            matched_tokens += 1
+        elif token in desc_lower:
+            score += 0.3
+            matched_tokens += 1
+
+    if not matched_tokens:
+        return 0.0
+
+    token_coverage = matched_tokens / len(query_tokens)
+    score = min(1.0, score) * 0.7 + token_coverage * 0.3
+
+    return round(min(1.0, score), 4)
 
 
 def _build_status_filter(
@@ -287,7 +426,7 @@ def _build_keyword_match_filter(
     Returns:
         MongoDB $match filter dict
     """
-    match_filter = {
+    match_filter: dict[str, Any] = {
         "$or": [
             {"name": {"$regex": token_regex, "$options": "i"}},
             {"path": {"$regex": token_regex, "$options": "i"}},
@@ -513,6 +652,52 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
         return self._embedding_model
 
+    async def _embed_texts(
+        self,
+        texts: list[str],
+        *,
+        context: str,
+        latch_unavailable: bool = True,
+    ) -> list[list[float]] | None:
+        """Encode texts using the lazy-loaded embedding model.
+
+        Single funnel for every embedding call in this repository so the
+        embedding-invariant (query and corpus must use the same model)
+        holds structurally — there is exactly one encoder, used by both
+        index_* and search/dedup paths.
+
+        Args:
+            texts: strings to encode.
+            context: short human-readable label included in the warning
+                log line on failure (e.g. ``"server 'github'"``,
+                ``"hybrid search query"``). Helps operators trace which
+                call path tripped the _embedding_unavailable latch.
+            latch_unavailable: when True (default), an exception from
+                ``model.encode()`` flips ``_embedding_unavailable`` so
+                subsequent calls short-circuit. ``index_*`` callers pass
+                False because they want to keep trying for later docs;
+                ``search`` and ``dedup`` callers want the latch.
+
+        Returns:
+            A list of vectors (one per input) on success, or ``None`` on
+            failure (exception or latch already set).
+        """
+        if latch_unavailable and self._embedding_unavailable:
+            return None
+        try:
+            model = await self._get_embedding_model()
+            vectors = model.encode(texts)
+            return [v.tolist() for v in vectors]
+        except Exception as exc:
+            logger.warning(
+                "Embedding model unavailable for %s: %s",
+                context,
+                exc,
+            )
+            if latch_unavailable:
+                self._embedding_unavailable = True
+            return None
+
     async def initialize(self) -> None:
         """Initialize the search service and create vector index."""
         logger.info(f"Initializing DocumentDB hybrid search on collection: {self._collection_name}")
@@ -617,24 +802,20 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             ):
                 # Content unchanged and embedding exists; just update is_enabled if needed
                 if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one(
-                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
-                    )
+                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
                 return
 
         # Flatten metadata into a searchable text field for keyword matching
         metadata_text = flatten_metadata_to_text(metadata)
 
-        try:
-            model = await self._get_embedding_model()
-            embedding = model.encode([text_for_embedding])[0].tolist()
-        except Exception as e:
-            logger.warning(
-                "Embedding model unavailable, indexing '%s' without embeddings: %s",
-                server_info.get("server_name", path),
-                e,
-            )
-            embedding = []
+        # latch_unavailable=False: indexing failures should not poison
+        # the latch for later docs in the same batch.
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"server {server_info.get('server_name', path)!r}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
 
         doc = {
             "_id": path,
@@ -715,21 +896,15 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 and existing.get("embedding")
             ):
                 if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one(
-                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
-                    )
+                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
                 return
 
-        try:
-            model = await self._get_embedding_model()
-            embedding = model.encode([text_for_embedding])[0].tolist()
-        except Exception as e:
-            logger.warning(
-                "Embedding model unavailable, indexing agent '%s' without embeddings: %s",
-                agent_card.name,
-                e,
-            )
-            embedding = []
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"agent {agent_card.name!r}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
 
         # Flatten agent metadata for keyword search
         agent_metadata = getattr(agent_card, "metadata", None) or {}
@@ -816,22 +991,15 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 and existing.get("embedding")
             ):
                 if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one(
-                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
-                    )
+                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
                 return
 
-        # Generate embedding
-        try:
-            model = await self._get_embedding_model()
-            embedding = model.encode([text_for_embedding])[0].tolist()
-        except Exception as e:
-            logger.warning(
-                "Embedding model unavailable, indexing skill '%s' without embeddings: %s",
-                skill.name,
-                e,
-            )
-            embedding = []
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"skill {skill.name!r}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
 
         # Handle visibility enum
         visibility_value = skill.visibility
@@ -972,17 +1140,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         text_for_embedding = " ".join(filter(None, text_parts))
 
-        # Generate embedding
-        try:
-            model = await self._get_embedding_model()
-            embedding = model.encode([text_for_embedding])[0].tolist()
-        except Exception as e:
-            logger.warning(
-                "Embedding model unavailable, indexing virtual server '%s' without embeddings: %s",
-                virtual_server.server_name,
-                e,
-            )
-            embedding = []
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"virtual server {virtual_server.server_name!r}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
 
         # Flatten virtual server metadata for keyword search
         vs_metadata_parts = []
@@ -1022,25 +1185,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             logger.info(f"Indexed virtual server for search: {path}")
         except Exception as e:
             logger.error(f"Failed to index virtual server in search: {e}", exc_info=True)
-
-    def _calculate_cosine_similarity(self, vec1: list[float], vec2: list[float]) -> float:
-        """Calculate cosine similarity between two vectors.
-
-        Returns a value between 0 and 1, where 1 is identical.
-        """
-        import math
-
-        if not vec1 or not vec2 or len(vec1) != len(vec2):
-            return 0.0
-
-        dot_product = sum(a * b for a, b in zip(vec1, vec2, strict=True))
-        magnitude1 = math.sqrt(sum(a * a for a in vec1))
-        magnitude2 = math.sqrt(sum(b * b for b in vec2))
-
-        if magnitude1 == 0 or magnitude2 == 0:
-            return 0.0
-
-        return dot_product / (magnitude1 * magnitude2)
 
     async def search_by_tags(
         self,
@@ -1092,7 +1236,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         """Return a sorted list of all unique tags across all indexed entities."""
         collection = await self._get_collection()
         try:
-            pipeline = [
+            pipeline: list[dict[str, Any]] = [
                 {"$match": {"tags": {"$exists": True, "$ne": []}}},
                 {"$unwind": "$tags"},
                 {"$group": {"_id": {"$toLower": "$tags"}, "original": {"$first": "$tags"}}},
@@ -1120,6 +1264,164 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 logger.warning(f"Entity '{path}' not found in search index")
         except Exception as e:
             logger.error(f"Failed to remove entity from search index: {e}", exc_info=True)
+
+    async def find_missing_embeddings(self) -> dict[str, Any]:
+        """Find documents in source collections that have no embedding indexed.
+
+        Compares _id values across mcp_servers, mcp_agents, and agent_skills
+        collections against the embeddings collection.
+
+        Returns:
+            Dictionary with missing list, counts, and summary.
+        """
+        db = await get_documentdb_client()
+
+        source_collections = [
+            (get_collection_name("mcp_servers"), "mcp_server"),
+            (get_collection_name("mcp_agents"), "a2a_agent"),
+            (get_collection_name("agent_skills"), "skill"),
+        ]
+
+        embeddings_collection = await self._get_collection()
+        indexed_cursor = embeddings_collection.find({}, {"_id": 1})
+        indexed_docs = await indexed_cursor.to_list(length=None)
+        indexed_ids = {doc["_id"] for doc in indexed_docs}
+
+        missing = []
+        total_source = 0
+
+        for col_name, entity_type in source_collections:
+            collection = db[col_name]
+            cursor = collection.find(
+                {},
+                {"_id": 1, "server_name": 1, "name": 1, "is_enabled": 1},
+            )
+            source_docs = await cursor.to_list(length=None)
+            total_source += len(source_docs)
+
+            for doc in source_docs:
+                doc_id = doc["_id"]
+                if doc_id not in indexed_ids:
+                    name = doc.get("server_name") or doc.get("name") or doc_id
+                    missing.append({
+                        "path": doc_id,
+                        "entity_type": entity_type,
+                        "name": name,
+                        "is_enabled": doc.get("is_enabled", True),
+                    })
+
+        missing.sort(key=lambda x: (x["entity_type"], x["path"]))
+
+        return {
+            "missing": missing,
+            "total_missing": len(missing),
+            "total_indexed": len(indexed_ids),
+            "total_source": total_source,
+        }
+
+    async def reindex_paths(
+        self,
+        paths: list[str],
+    ) -> dict[str, Any]:
+        """Re-index specific documents by reading from source and generating embeddings.
+
+        For each path, finds the source document in the appropriate collection
+        and calls the corresponding index method.
+
+        Args:
+            paths: List of document paths to re-index (max 100).
+
+        Returns:
+            Dictionary with success/failed counts and per-path details.
+        """
+        db = await get_documentdb_client()
+
+        servers_col = db[get_collection_name("mcp_servers")]
+        agents_col = db[get_collection_name("mcp_agents")]
+        skills_col = db[get_collection_name("agent_skills")]
+
+        details = []
+
+        for path in paths:
+            try:
+                server_doc = await servers_col.find_one({"_id": path})
+                if server_doc:
+                    await self.index_server(
+                        path,
+                        server_doc,
+                        is_enabled=server_doc.get("is_enabled", True),
+                    )
+                    details.append({
+                        "path": path,
+                        "entity_type": "mcp_server",
+                        "status": "success",
+                    })
+                    continue
+
+                agent_doc = await agents_col.find_one({"_id": path})
+                if agent_doc:
+                    agent_card = AgentCard(**agent_doc)
+                    await self.index_agent(
+                        path,
+                        agent_card,
+                        is_enabled=agent_doc.get("is_enabled", True),
+                    )
+                    details.append({
+                        "path": path,
+                        "entity_type": "a2a_agent",
+                        "status": "success",
+                    })
+                    continue
+
+                skill_doc = await skills_col.find_one({"_id": path})
+                if skill_doc:
+                    from ...schemas.skill_models import SkillCard
+
+                    skill_card = SkillCard(**skill_doc)
+                    await self.index_skill(
+                        path,
+                        skill_card,
+                        is_enabled=skill_doc.get("is_enabled", True),
+                    )
+                    details.append({
+                        "path": path,
+                        "entity_type": "skill",
+                        "status": "success",
+                    })
+                    continue
+
+                details.append({
+                    "path": path,
+                    "entity_type": "unknown",
+                    "status": "failed",
+                    "error": "Not found in any source collection",
+                })
+
+            except Exception as e:
+                logger.error(f"Failed to reindex '{path}': {e}", exc_info=True)
+                details.append({
+                    "path": path,
+                    "entity_type": "unknown",
+                    "status": "failed",
+                    "error": "Failed to re-index document due to an internal error",
+                })
+
+        success_count = sum(1 for d in details if d["status"] == "success")
+        failed_count = sum(1 for d in details if d["status"] == "failed")
+
+        logger.info(
+            "Reindex completed: %d success, %d failed out of %d paths",
+            success_count,
+            failed_count,
+            len(paths),
+        )
+
+        return {
+            "success": success_count,
+            "failed": failed_count,
+            "total": len(paths),
+            "details": details,
+        }
 
     async def _client_side_search(
         self,
@@ -1178,22 +1480,31 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
 
             all_docs = await cursor.to_list(length=None)
-            logger.info(f"Client-side search: Retrieved {len(all_docs)} documents with embeddings")
+            docs_with_embeddings = sum(
+                1 for d in all_docs if d.get("embedding")
+            )
+            logger.info(
+                "Client-side search: Retrieved %d documents (%d with embeddings)",
+                len(all_docs),
+                docs_with_embeddings,
+            )
 
             # Tokenize query for keyword matching
             query_tokens = _tokenize_query(query)
             logger.debug(f"Client-side search tokens: {query_tokens}")
 
-            # Calculate cosine similarity for each document
-            scored_docs = []
-            for doc in all_docs:
-                embedding = doc.get("embedding", [])
-                if not embedding:
-                    vector_score = 0.0
-                else:
-                    vector_score = self._calculate_cosine_similarity(query_embedding, embedding)
+            # Score each document on BOTH axes independently for RRF
+            vector_scored: list[tuple[dict, float]] = []
+            keyword_scored: list[tuple[dict, float]] = []
 
-                # Add text-based boost using tokenized matching
+            for doc in all_docs:
+                # --- Vector score (only for docs with embeddings) ---
+                embedding = doc.get("embedding", [])
+                if embedding:
+                    vector_score = cosine_similarity(query_embedding, embedding)
+                    vector_scored.append((doc, vector_score))
+
+                # --- Keyword text_boost (all docs participate) ---
                 text_boost = 0.0
                 name = doc.get("name", "")
                 description = doc.get("description", "")
@@ -1201,8 +1512,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 tools = doc.get("tools", [])
                 matching_tools = []
 
-                # Token-based matching for text boost
-                # Check path match first (highest priority - user explicitly named the server)
                 path = doc.get("path", "")
                 server_name_matched = False
                 if path and _tokens_match_text(query_tokens, path):
@@ -1213,87 +1522,92 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     server_name_matched = True
                 if description and _tokens_match_text(query_tokens, description):
                     text_boost += 2.0
-                # Check if any token matches any tag
-                if tags and any(_tokens_match_text(query_tokens, tag) for tag in tags):
+                if tags and any(
+                    _tokens_match_text(query_tokens, tag) for tag in tags
+                ):
                     text_boost += 1.5
 
-                # Check metadata_text match
                 metadata_text = doc.get("metadata_text", "")
-                if metadata_text and _tokens_match_text(query_tokens, metadata_text):
+                if metadata_text and _tokens_match_text(
+                    query_tokens, metadata_text
+                ):
                     text_boost += 1.0
 
-                # Check if any token matches any tool name or description
                 for tool in tools:
                     tool_name = tool.get("name", "")
                     tool_desc = tool.get("description") or ""
-                    tool_matched = _tokens_match_text(
-                        query_tokens, tool_name
-                    ) or _tokens_match_text(query_tokens, tool_desc)
+                    tool_score = _score_tool_relevance(
+                        tool_name, tool_desc, query_tokens
+                    )
 
-                    if tool_matched:
+                    if tool_score > 0:
                         text_boost += 1.0
                         matching_tools.append(
                             {
                                 "tool_name": tool_name,
                                 "description": tool_desc,
-                                "relevance_score": 1.0,
-                                "match_context": tool_desc or f"Tool: {tool_name}",
-                            }
-                        )
-                    elif server_name_matched:
-                        # If server name/path matched, include all tools with base score
-                        matching_tools.append(
-                            {
-                                "tool_name": tool_name,
-                                "description": tool_desc,
-                                "relevance_score": 0.8,
-                                "match_context": tool_desc or f"Tool: {tool_name}",
+                                "relevance_score": tool_score,
+                                "match_context": tool_desc
+                                or f"Tool: {tool_name}",
                             }
                         )
 
-                # Store matching tools for later use
                 doc["_matching_tools"] = matching_tools
+                doc["text_boost"] = text_boost
 
-                # Hybrid score: vector score + normalized text boost
-                # Normalize vector_score to [0, 1] range (cosine can be [-1, 1])
-                normalized_vector_score = (vector_score + 1.0) / 2.0
-                # Text boost multiplier: 0.1 (same as DocumentDB search path)
-                # Path match (5.0) adds +0.50, Name match (3.0) adds +0.30
-                text_boost_contribution = text_boost * 0.1
-                relevance_score = normalized_vector_score + text_boost_contribution
-                relevance_score = max(0.0, min(1.0, relevance_score))
+                if text_boost > 0:
+                    keyword_scored.append((doc, text_boost))
 
+            # Sort each list independently (best first)
+            vector_scored.sort(key=lambda x: x[1], reverse=True)
+            keyword_scored.sort(key=lambda x: x[1], reverse=True)
+
+            if settings.search_fusion_method == "rrf":
                 logger.info(
-                    "Score for '%s' (type=%s): vector=%.4f, "
-                    "normalized_vector=%.4f, text_boost=%.1f, "
-                    "boost_contrib=%.4f, final=%.4f",
-                    doc.get("name"),
-                    doc.get("entity_type"),
-                    vector_score,
-                    normalized_vector_score,
-                    text_boost,
-                    text_boost_contribution,
-                    relevance_score,
+                    "RRF inputs: %d vector-ranked docs, %d keyword-ranked docs",
+                    len(vector_scored),
+                    len(keyword_scored),
                 )
-
-                scored_docs.append(
-                    {
-                        "doc": doc,
-                        "relevance_score": relevance_score,
-                        "vector_score": vector_score,
-                        "text_boost": text_boost,
-                    }
+                vector_ranked_docs = [doc for doc, _ in vector_scored]
+                keyword_ranked_docs = [doc for doc, _ in keyword_scored]
+                scored_tuples = _reciprocal_rank_fusion(
+                    vector_ranked_docs, keyword_ranked_docs
                 )
+                for doc, rrf_score in scored_tuples[:10]:
+                    logger.info(
+                        "RRF score for '%s' (type=%s): %.6f, text_boost=%.1f",
+                        doc.get("name"),
+                        doc.get("entity_type"),
+                        rrf_score,
+                        doc.get("text_boost", 0.0),
+                    )
+            else:
+                scored_tuples = []
+                for doc, vector_score in vector_scored:
+                    text_boost = doc.get("text_boost", 0.0)
+                    normalized_vector_score = (vector_score + 1.0) / 2.0
+                    text_boost_contribution = text_boost * 0.1
+                    relevance_score = max(
+                        0.0, min(1.0, normalized_vector_score + text_boost_contribution)
+                    )
+                    scored_tuples.append((doc, relevance_score))
+                for doc, text_boost in keyword_scored:
+                    doc_id = doc.get("_id") or doc.get("path")
+                    if not any(
+                        (d.get("_id") or d.get("path")) == doc_id
+                        for d, _ in scored_tuples
+                    ):
+                        relevance_score = min(1.0, text_boost * 0.1)
+                        scored_tuples.append((doc, relevance_score))
+                scored_tuples.sort(key=lambda x: x[1], reverse=True)
 
-            # Sort by relevance score (descending)
-            scored_docs.sort(key=lambda x: x["relevance_score"], reverse=True)
-
-            # Convert to (doc, score) tuples and distribute with soft caps
-            scored_tuples = [(item["doc"], item["relevance_score"]) for item in scored_docs]
             selected = _distribute_results(scored_tuples, max_results)
 
+            if settings.search_fusion_method == "rrf":
+                selected = _normalize_scores(selected, max_results)
+
             # Format results to match the API contract
-            grouped_results = {
+            grouped_results: dict[str, list[dict[str, Any]]] = {
                 "servers": [],
                 "tools": [],
                 "agents": [],
@@ -1351,7 +1665,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                 "tool_name": tool_name,
                                 "description": tool.get("description", ""),
                                 "inputSchema": tool_schema_map.get(tool_name, {}),
-                                "relevance_score": tool.get("relevance_score", relevance_score),
+                                "relevance_score": tool.get("relevance_score", 0.0),
                                 "match_context": tool.get("match_context", ""),
                             }
                         )
@@ -1493,7 +1807,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         text_boost_stage = _build_text_boost_stage(token_regex)
 
-        pipeline = [
+        pipeline: list[dict[str, Any]] = [
             {"$match": keyword_match_filter},
         ]
 
@@ -1557,7 +1871,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         selected = _distribute_results(scored_tuples, max_results)
 
         # Group selected results by entity type
-        grouped_results = {
+        grouped_results: dict[str, list[dict[str, Any]]] = {
             "servers": [],
             "tools": [],
             "agents": [],
@@ -1610,7 +1924,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                             "tool_name": tool_name,
                             "description": tool.get("description", ""),
                             "inputSchema": tool_schema_map.get(tool_name, {}),
-                            "relevance_score": tool.get("relevance_score", relevance_score),
+                            "relevance_score": tool.get("relevance_score", 0.0),
                             "match_context": tool.get("match_context", ""),
                         }
                     )
@@ -1705,18 +2019,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            # Try to get embedding; fall back to lexical-only search if unavailable
-            query_embedding = None
-            if not self._embedding_unavailable:
-                try:
-                    model = await self._get_embedding_model()
-                    query_embedding = model.encode([query])[0].tolist()
-                except Exception as embed_error:
-                    logger.warning(
-                        "Embedding model unavailable, falling back to lexical-only search: %s",
-                        embed_error,
-                    )
-                    self._embedding_unavailable = True
+            # Try to get embedding; fall back to lexical-only search if
+            # unavailable. _embed_texts() honors and updates the
+            # _embedding_unavailable latch for us.
+            vectors = await self._embed_texts([query], context="hybrid search query")
+            query_embedding = vectors[0] if vectors else None
 
             if query_embedding is None:
                 return await self._lexical_only_search(
@@ -1728,46 +2035,21 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     include_disabled=include_disabled,
                 )
 
-            # DocumentDB vector search returns results sorted by similarity
-            # We get more results than needed to allow for text-based re-ranking
+            # DocumentDB vector search returns results sorted by similarity.
+            # Run separate vector search per entity type to ensure each type
+            # gets fair representation in the candidate pool (prevents servers
+            # from crowding out agents/skills in large registries).
             ef_search = settings.vector_search_ef_search
-            k_value = max(max_results * 3, 50)  # At least 50 to avoid missing docs
-            pipeline = [
-                {
-                    "$search": {
-                        "vectorSearch": {
-                            "vector": query_embedding,
-                            "path": "embedding",
-                            "similarity": "cosine",
-                            "k": k_value,
-                            "efSearch": ef_search,
-                        }
-                    }
-                }
-            ]
-            logger.info(
-                "Vector search pipeline: k=%d, efSearch=%d",
-                k_value,
-                ef_search,
-            )
+            k_per_type = max(max_results * 2, 30)
 
-            # Apply entity type filter if specified
-            if entity_types:
-                pipeline.append({"$match": {"entity_type": {"$in": entity_types}}})
-
-            # Apply lifecycle status and enabled filter
             status_filter = _build_status_filter(
                 include_draft=include_draft,
                 include_deprecated=include_deprecated,
                 include_disabled=include_disabled,
             )
-            if status_filter:
-                pipeline.append({"$match": status_filter})
 
             # Tokenize query and create regex pattern for matching any token
             query_tokens = _tokenize_query(query)
-            # Create regex that matches any token (e.g., "current|time|timezone")
-            # Escape special regex characters in tokens for safety
             escaped_tokens = [re.escape(token) for token in query_tokens]
             token_regex = "|".join(escaped_tokens) if escaped_tokens else query
             logger.info(
@@ -1777,54 +2059,71 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 token_regex,
             )
 
+            text_boost_stage = _build_text_boost_stage(token_regex)
+
+            search_types = [
+                t for t in (entity_types or [
+                    "mcp_server", "a2a_agent", "skill", "virtual_server"
+                ])
+                if t != "tool"
+            ]
+
+            results = []
+            result_ids: set[str] = set()
+
+            for search_type in search_types:
+                pipeline: list[dict[str, Any]] = [
+                    {
+                        "$search": {
+                            "vectorSearch": {
+                                "vector": query_embedding,
+                                "path": "embedding",
+                                "similarity": "cosine",
+                                "k": k_per_type,
+                                "efSearch": ef_search,
+                            }
+                        }
+                    },
+                    {"$match": {"entity_type": search_type}},
+                ]
+                if status_filter:
+                    pipeline.append({"$match": status_filter})
+                pipeline.append(text_boost_stage)
+                pipeline.append({"$sort": {"text_boost": -1}})
+                pipeline.append({"$limit": k_per_type})
+
+                cursor = collection.aggregate(pipeline)
+                type_results = await cursor.to_list(length=k_per_type)
+
+                for doc in type_results:
+                    doc_id = doc.get("_id")
+                    if doc_id not in result_ids:
+                        results.append(doc)
+                        result_ids.add(doc_id)
+
+            logger.info(
+                "Per-type vector search for '%s': %d total candidates "
+                "(k_per_type=%d, efSearch=%d, types=%s)",
+                query,
+                len(results),
+                k_per_type,
+                ef_search,
+                search_types,
+            )
+
             # NOTE: DocumentDB does not support $unionWith, so we run a separate
             # keyword query and merge results in Python code after the main pipeline.
-            # Reuse shared helper for consistent matching across all fields
             keyword_match_filter = _build_keyword_match_filter(
                 token_regex=token_regex,
                 entity_types=entity_types,
             )
 
-            # Add text-based scoring for re-ranking using shared helper
-            # Scores: path (+5.0), name (+3.0), description (+2.0),
-            # tags (+1.5), tools (+1.0 per match)
-            text_boost_stage = _build_text_boost_stage(token_regex)
-            pipeline.append(text_boost_stage)
-
-            # Sort by text boost (descending), keeping vector search order as secondary
-            pipeline.append({"$sort": {"text_boost": -1}})
-
-            # Fetch more candidates than max_results to allow for global ranking.
-            # The _distribute_results() function will pick the top max_results.
-            candidate_limit = max(max_results * 3, 50)
-            pipeline.append({"$limit": candidate_limit})
-
-            cursor = collection.aggregate(pipeline)
-            results = await cursor.to_list(length=candidate_limit)
-
-            # Log vector search results for diagnosis
-            logger.info(
-                "Vector search for '%s' returned %d documents (k=%d, efSearch=%d)",
-                query,
-                len(results),
-                k_value,
-                ef_search,
+            keyword_cursor = collection.find(keyword_match_filter).limit(
+                max(max_results, 10)
             )
-            for i, doc in enumerate(results):
-                logger.info(
-                    "  Vector result [%d]: name='%s', type=%s, text_boost=%.1f, path='%s'",
-                    i,
-                    doc.get("name"),
-                    doc.get("entity_type"),
-                    doc.get("text_boost", 0.0),
-                    doc.get("path"),
-                )
-
-            # DocumentDB doesn't support $unionWith, so we run a separate keyword
-            # query to find documents that match by name/path/description/tags/tools
-            # but may not appear in vector search results
-            keyword_cursor = collection.find(keyword_match_filter).limit(5)
-            keyword_results = await keyword_cursor.to_list(length=5)
+            keyword_results = await keyword_cursor.to_list(
+                length=max(max_results, 10)
+            )
 
             logger.info(
                 "Keyword search for '%s' found %d candidates",
@@ -1845,7 +2144,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # Merge keyword results with vector results, avoiding duplicates
             # Calculate text_boost and matching_tools for keyword results since they
             # didn't go through the aggregation pipeline
-            result_ids = {doc.get("_id") for doc in results}
             keyword_added_count = 0
             for kw_doc in keyword_results:
                 if kw_doc.get("_id") not in result_ids:
@@ -1873,22 +2171,20 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     tools = kw_doc.get("tools", [])
                     matching_tools = []
                     for tool in tools:
-                        tool_name = (tool.get("name") or "").lower()
-                        tool_desc = (tool.get("description") or "").lower()
-                        # Check if any token matches tool name or description
-                        tool_matches = any(
-                            token.lower() in tool_name or token.lower() in tool_desc
-                            for token in query_tokens
+                        t_name = tool.get("name") or ""
+                        t_desc = tool.get("description") or ""
+                        tool_score = _score_tool_relevance(
+                            t_name, t_desc, query_tokens
                         )
-                        if tool_matches:
-                            kw_text_boost += 1.0  # Tool match
+                        if tool_score > 0:
+                            kw_text_boost += 1.0
                             matching_tools.append(
                                 {
-                                    "tool_name": tool.get("name", ""),
-                                    "description": tool.get("description", ""),
-                                    "relevance_score": 1.0,
-                                    "match_context": tool.get("description")
-                                    or f"Tool: {tool.get('name', '')}",
+                                    "tool_name": t_name,
+                                    "description": t_desc,
+                                    "relevance_score": tool_score,
+                                    "match_context": t_desc
+                                    or f"Tool: {t_name}",
                                 }
                             )
 
@@ -1911,47 +2207,47 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 keyword_added_count,
             )
 
-            # Calculate hybrid scores for ALL results before grouping
-            # This ensures we log every document's score for diagnosis
-            scored_results = []
-            for doc in results:
-                entity_type = doc.get("entity_type")
-                doc_embedding = doc.get("embedding", [])
-                vector_score = self._calculate_cosine_similarity(query_embedding, doc_embedding)
-                text_boost = doc.get("text_boost", 0.0)
+            # Combine vector and keyword signals using configured fusion method
+            vector_ranked_docs = list(results)
+            keyword_ranked_docs = sorted(
+                [doc for doc in results if doc.get("text_boost", 0.0) > 0],
+                key=lambda d: d.get("text_boost", 0.0),
+                reverse=True,
+            )
 
-                # Normalize vector_score from [-1, 1] to [0, 1]
-                normalized_vector_score = (vector_score + 1.0) / 2.0
-
-                # Text boost multiplier: 0.1 gives significant weight to keyword matches
-                # Name match (3.0) adds +0.30, Description (2.0) adds +0.20
-                text_boost_contribution = text_boost * 0.1
-                relevance_score = normalized_vector_score + text_boost_contribution
-                relevance_score = max(0.0, min(1.0, relevance_score))
-
-                logger.info(
-                    "Score for '%s' (type=%s): vector=%.4f, "
-                    "normalized_vector=%.4f, text_boost=%.1f, "
-                    "boost_contrib=%.4f, final=%.4f",
-                    doc.get("name"),
-                    entity_type,
-                    vector_score,
-                    normalized_vector_score,
-                    text_boost,
-                    text_boost_contribution,
-                    relevance_score,
+            if settings.search_fusion_method == "rrf":
+                scored_results = _reciprocal_rank_fusion(
+                    vector_ranked_docs, keyword_ranked_docs
                 )
+                for doc, rrf_score in scored_results[:10]:
+                    logger.info(
+                        "RRF score for '%s' (type=%s): %.6f, text_boost=%.1f",
+                        doc.get("name"),
+                        doc.get("entity_type"),
+                        rrf_score,
+                        doc.get("text_boost", 0.0),
+                    )
+            else:
+                scored_results = []
+                for doc in results:
+                    doc_embedding = doc.get("embedding", [])
+                    vector_score = cosine_similarity(query_embedding, doc_embedding)
+                    text_boost = doc.get("text_boost", 0.0)
+                    normalized_vector_score = (vector_score + 1.0) / 2.0
+                    text_boost_contribution = text_boost * 0.1
+                    relevance_score = max(
+                        0.0, min(1.0, normalized_vector_score + text_boost_contribution)
+                    )
+                    scored_results.append((doc, relevance_score))
+                scored_results.sort(key=lambda x: x[1], reverse=True)
 
-                scored_results.append((doc, relevance_score))
-
-            # Sort by hybrid score descending
-            scored_results.sort(key=lambda x: x[1], reverse=True)
-
-            # Distribute results using global ranking with soft caps
             selected_results = _distribute_results(scored_results, max_results)
 
+            if settings.search_fusion_method == "rrf":
+                selected_results = _normalize_scores(selected_results, max_results)
+
             # Group selected results by entity type for the response
-            grouped_results = {
+            grouped_results: dict[str, list[dict[str, Any]]] = {
                 "servers": [],
                 "tools": [],
                 "agents": [],
@@ -2008,7 +2304,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                 "tool_name": tool_name,
                                 "description": tool.get("description", ""),
                                 "inputSchema": tool_schema_map.get(tool_name, {}),
-                                "relevance_score": tool.get("relevance_score", relevance_score),
+                                "relevance_score": tool.get("relevance_score", 0.0),
                                 "match_context": tool.get("match_context", ""),
                             }
                         )

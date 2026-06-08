@@ -50,7 +50,7 @@ async def send_registration_webhook(
     card_data: dict,
     performed_by: str | None = None,
 ) -> None:
-    """Send a webhook notification for a successful registration or deletion.
+    """Send a webhook notification for a successful registration, update, or deletion.
 
     This is fire-and-forget: failures are logged but never raised.
 
@@ -60,7 +60,10 @@ async def send_registration_webhook(
     considered sensitive when sent to an external endpoint.
 
     Args:
-        event_type: One of "registration" (add) or "deletion" (remove).
+        event_type: One of "registration" (add), "update" (partial/full edit),
+            or "deletion" (remove). The "update" event has the same payload
+            shape as "registration"; consumers filtering by event type must
+            allow it or skip unknown types without failing.
         registration_type: One of "server", "agent", or "skill".
         card_data: The full card JSON as a dictionary.
         performed_by: Username of the operator who performed the action.

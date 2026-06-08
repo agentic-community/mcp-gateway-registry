@@ -18,13 +18,38 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
     def __init__(self):
         self._collection: AsyncIOMotorCollection | None = None
         self._collection_name = get_collection_name("mcp_security_scans")
+        self._indexes_created = False
 
     async def _get_collection(self) -> AsyncIOMotorCollection:
-        """Get DocumentDB collection."""
+        """Get DocumentDB collection, creating indexes on first access."""
         if self._collection is None:
             db = await get_documentdb_client()
             self._collection = db[self._collection_name]
+            await self.ensure_indexes()
         return self._collection
+
+    async def ensure_indexes(self) -> None:
+        """Create required indexes if not present.
+
+        The scan collection grows one document per scan run per path, so
+        ``get_latest`` (filter on path, sort by ``scan_timestamp`` desc)
+        would otherwise scan and sort the whole history. The compound
+        index serves both halves of that query in one seek.
+        """
+        if self._indexes_created or self._collection is None:
+            return
+
+        try:
+            await self._collection.create_index(
+                [
+                    ("server_path", 1),
+                    ("scan_timestamp", -1),
+                ]
+            )
+            self._indexes_created = True
+            logger.info(f"Created indexes for {self._collection_name} collection")
+        except Exception as e:
+            logger.warning(f"Could not create indexes for {self._collection_name}: {e}")
 
     async def load_all(self) -> None:
         """Load all security scan results from DocumentDB."""

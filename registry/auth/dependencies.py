@@ -139,24 +139,29 @@ async def map_cognito_groups_to_scopes(groups: list[str]) -> list[str]:
     """
     from ..repositories.factory import get_scope_repository
 
-    scopes = []
     scope_repo = get_scope_repository()
 
+    # Single read of all scope->groups mappings, then invert in memory.
+    # Avoids one find() per group on this hot auth path.
+    all_mappings = await scope_repo.get_all_group_mappings()
+    group_to_scopes: dict[str, list[str]] = {}
+    for scope_name, mapped_groups in all_mappings.items():
+        for mapped_group in mapped_groups:
+            group_to_scopes.setdefault(mapped_group, []).append(scope_name)
+
+    # Collect scopes in group order, deduping while preserving order.
+    seen: set[str] = set()
+    unique_scopes: list[str] = []
     for group in groups:
-        group_scopes = await scope_repo.get_group_mappings(group)
+        group_scopes = group_to_scopes.get(group, [])
         if group_scopes:
-            scopes.extend(group_scopes)
             logger.debug(f"Mapped group '{group}' to scopes: {group_scopes}")
         else:
             logger.debug(f"No scope mapping found for group: {group}")
-
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_scopes = []
-    for scope in scopes:
-        if scope not in seen:
-            seen.add(scope)
-            unique_scopes.append(scope)
+        for scope in group_scopes:
+            if scope not in seen:
+                seen.add(scope)
+                unique_scopes.append(scope)
 
     logger.info(f"Final mapped scopes: {unique_scopes}")
     return unique_scopes

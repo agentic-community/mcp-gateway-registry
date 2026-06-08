@@ -1,0 +1,72 @@
+suite: batch config configmap
+templates:
+  - templates/configmap-batch.yaml
+tests:
+  - it: renders batch defaults into the configmap
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: registry-batch-config
+      - equal:
+          path: data.BATCH_WORKER_ENABLED
+          value: "true"
+      - equal:
+          path: data.BATCH_MAX_OPERATIONS_PER_JOB
+          value: "1000"
+      - equal:
+          path: data.BATCH_MAX_CONCURRENT_JOBS_PER_USER
+          value: "3"
+      - equal:
+          path: data.BATCH_JOB_RETENTION_DAYS
+          value: "7"
+      - equal:
+          path: data.BATCH_WORKER_POLL_INTERVAL_SECONDS
+          value: "1.0"
+      - equal:
+          path: data.BATCH_WORKER_LEASE_TTL_SECONDS
+          value: "60.0"
+      - equal:
+          path: data.BATCH_WORKER_LEASE_HEARTBEAT_SECONDS
+          value: "15.0"
+      - equal:
+          path: data.BATCH_MAX_REQUEST_BYTES
+          value: "4194304"
+
+  - it: honors overridden batch values
+    set:
+      app:
+        batchWorkerEnabled: false
+        batchMaxOperationsPerJob: "50"
+        batchMaxConcurrentJobsPerUser: "1"
+        batchJobRetentionDays: "14"
+        batchWorkerPollIntervalSeconds: "2.5"
+        batchWorkerLeaseTtlSeconds: "30.0"
+        batchWorkerLeaseHeartbeatSeconds: "10.0"
+        batchMaxRequestBytes: "1048576"
+    asserts:
+      - equal:
+          path: data.BATCH_WORKER_ENABLED
+          value: "false"
+      - equal:
+          path: data.BATCH_MAX_OPERATIONS_PER_JOB
+          value: "50"
+      - equal:
+          path: data.BATCH_MAX_CONCURRENT_JOBS_PER_USER
+          value: "1"
+      - equal:
+          path: data.BATCH_JOB_RETENTION_DAYS
+          value: "14"
+      - equal:
+          path: data.BATCH_WORKER_POLL_INTERVAL_SECONDS
+          value: "2.5"
+      - equal:
+          path: data.BATCH_WORKER_LEASE_TTL_SECONDS
+          value: "30.0"
+      - equal:
+          path: data.BATCH_WORKER_LEASE_HEARTBEAT_SECONDS
+          value: "10.0"
+      - equal:
+          path: data.BATCH_MAX_REQUEST_BYTES
+          value: "1048576"

@@ -8,6 +8,8 @@ Based on: docs/design/a2a-protocol-integration.md
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -16,13 +18,15 @@ import httpx
 from fastapi import (
     APIRouter,
     Depends,
+    Header,
     HTTPException,
     Query,
     Request,
+    Response,
     status,
 )
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from ..audit import set_audit_action
 from ..auth.csrf import verify_csrf_token_flexible
@@ -31,16 +35,34 @@ from ..core.config import settings
 from ..repositories.factory import get_search_repository
 from ..repositories.interfaces import SearchRepositoryBase
 from ..schemas.agent_models import (
+    REGISTRANT_ONLY_FIELDS,
+    AgentBatchItem,
+    AgentBatchRequest,
     AgentCard,
+    AgentCardPatch,
     AgentInfo,
     AgentProvider,
     AgentRegistrationRequest,
 )
+from ..schemas.duplicate_check_models import (
+    AgentDuplicateCheckRequest,
+    DuplicateCheckResult,
+)
+from ..services.agent_batch_service import (
+    ConcurrentJobLimitError,
+    agent_batch_service,
+)
 from ..services.agent_service import agent_service
+from ..services.duplicate_check_service import get_duplicate_check_service
 from ..services.registration_gate_service import check_registration_gate
-from ..utils.metadata import flatten_metadata_to_text
 from ..services.webhook_service import send_registration_webhook
+from ..utils.metadata import flatten_metadata_to_text
 from ..utils.request_utils import get_client_ip
+from ._etag_utils import (
+    parse_if_match,
+    updated_ms,
+    weak_etag_for_timestamp,
+)
 
 
 def get_search_repo() -> SearchRepositoryBase:
@@ -127,9 +149,7 @@ async def _perform_agent_security_scan_on_registration(
                         updated_card["tags"] = current_tags
                         from ..schemas.agent_models import AgentCard as AgentCardModel
 
-                        await agent_service.update_agent(
-                            path, AgentCardModel(**updated_card)
-                        )
+                        await agent_service.update_agent(path, AgentCardModel(**updated_card))
                     logger.info(f"Added 'security-pending' tag to agent {path}")
 
             # Disable agent if configured
@@ -217,6 +237,37 @@ def _normalize_path(
         path = path.rstrip("/")
 
     return path
+
+
+def _weak_etag_for(agent_card: AgentCard) -> str:
+    """Weak ETag derived from updated_at epoch milliseconds.
+
+    Thin wrapper over the shared helper to preserve agent-specific call sites.
+    """
+    return weak_etag_for_timestamp(agent_card.updated_at, agent_card.registered_at)
+
+
+def _parse_if_match(if_match: str | None) -> int | None:
+    """Parse a weak If-Match header. Thin wrapper over the shared helper."""
+    return parse_if_match(if_match)
+
+
+def _agent_updated_ms(agent_card: AgentCard) -> int:
+    """Epoch-ms of the card's updated_at (or registered_at fallback, else 0).
+
+    Thin wrapper over the shared helper to preserve agent-specific call sites.
+    """
+    return updated_ms(agent_card.updated_at, agent_card.registered_at)
+
+
+def _hash_items(items: list[AgentBatchItem]) -> str:
+    """Stable SHA-256 over canonicalized items, for idempotency auditing."""
+    payload = json.dumps(
+        [item.model_dump(mode="json") for item in items],
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _check_agent_permission(
@@ -342,6 +393,47 @@ def _filter_agents_by_access(
             continue
 
     return accessible
+
+
+@router.post(
+    "/agents/check-duplicates",
+    response_model=DuplicateCheckResult,
+    summary="Check whether an agent registration would duplicate an existing one",
+)
+async def check_agent_duplicates(
+    payload: AgentDuplicateCheckRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+) -> DuplicateCheckResult:
+    """Advisory duplicate check for agent registrations.
+
+    Always returns 200; the response shape signals matches via
+    ``collision_with`` (exact-URL hit on the agent endpoint) and
+    ``advisory_matches`` (similarity hits). The endpoint does not
+    block registration — callers are free to proceed even when matches
+    are returned.
+    """
+    ui_permissions = user_context.get("ui_permissions", {})
+    publish_permissions = ui_permissions.get("publish_agent", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register agents",
+        )
+
+    if not payload.name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="name must not be blank",
+        )
+
+    service = get_duplicate_check_service()
+    return await service.check(
+        name=payload.name,
+        description=payload.description,
+        identity_url=payload.url,
+        self_path=payload.self_path,
+        user_context=user_context,
+    )
 
 
 @router.post("/agents/register")
@@ -515,8 +607,7 @@ async def register_agent(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied agent '{request.name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied agent '{request.name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -693,7 +784,9 @@ async def list_agents(
     search_query = query.lower() if query else ""
 
     for agent in accessible_agents:
-        if enabled_only and not await agent_service.is_agent_enabled(agent.path):
+        agent_is_enabled = getattr(agent, "is_enabled", False)
+
+        if enabled_only and not agent_is_enabled:
             continue
 
         if visibility and agent.visibility != visibility:
@@ -728,7 +821,7 @@ async def list_agents(
                 skills=[s.name for s in agent.skills],
                 num_skills=len(agent.skills),
                 num_stars=agent.num_stars,
-                is_enabled=await agent_service.is_agent_enabled(agent.path),
+                is_enabled=agent_is_enabled,
                 provider=provider_name,
                 streaming=streaming,
                 trust_level=agent.trust_level,
@@ -1208,10 +1301,110 @@ async def rescan_agent(
         )
 
 
+@router.post(
+    "/agents/batch",
+    status_code=202,
+    responses={
+        202: {
+            "description": "Batch accepted (or idempotent replay).",
+            "headers": {
+                "X-Idempotent-Replay": {
+                    "description": (
+                        "Present and equal to 'true' when the returned job_id comes "
+                        "from a prior submission with the same idempotency_key. The "
+                        "new request body was not run."
+                    ),
+                    "schema": {"type": "string"},
+                },
+            },
+        },
+        413: {"description": "Request body or item count exceeds configured limits."},
+        429: {"description": "Submitter has too many concurrent batch jobs."},
+    },
+)
+async def submit_agent_batch(
+    http_request: Request,
+    body: AgentBatchRequest,
+    response: Response,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Submit an asynchronous batch of agent register/patch/replace/delete ops.
+
+    Each item is re-authorized and processed independently by the batch worker;
+    one failing item never aborts the job. Poll GET /api/agents/batch/{job_id}
+    for progress and per-item results.
+
+    Returns:
+        202 with {job_id, status_url}.
+
+    Raises:
+        HTTPException: 413 if the body or item count is too large, 429 if the
+            submitter already has the maximum number of active jobs.
+    """
+    # Defence in depth: reject oversize payloads before deep processing. nginx
+    # sits in front in production but local/dev deployments may not cap size.
+    content_length = int(http_request.headers.get("content-length") or 0)
+    if content_length and content_length > settings.batch_max_request_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"request body exceeds {settings.batch_max_request_bytes} bytes",
+        )
+
+    if len(body.items) > settings.batch_max_operations_per_job:
+        raise HTTPException(
+            status_code=413,
+            detail=f"batch exceeds max {settings.batch_max_operations_per_job} items",
+        )
+
+    try:
+        job, replayed = await agent_batch_service.submit(
+            body,
+            submitted_by=user_context["username"],
+            submitted_body_hash=_hash_items(body.items),
+            submitter_is_admin=user_context.get("is_admin", False),
+            submitter_ui_permissions=user_context.get("ui_permissions", {}),
+            request_id=http_request.headers.get("x-request-id"),
+        )
+    except ConcurrentJobLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
+
+    if replayed:
+        response.headers["X-Idempotent-Replay"] = "true"
+
+    return {"job_id": job.job_id, "status_url": f"/api/agents/batch/{job.job_id}"}
+
+
+@router.get("/agents/batch/{job_id}")
+async def get_agent_batch_job(
+    job_id: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Fetch the current state and per-item results of a batch job.
+
+    Caller must be the submitter or an admin.
+
+    Raises:
+        HTTPException: 403 if not the submitter/admin, 404 if unknown job_id.
+    """
+    job = await agent_batch_service.get(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
+    if not user_context.get("is_admin", False) and job.submitted_by != user_context["username"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view batch jobs you submitted",
+        )
+    return job.model_dump(
+        mode="json",
+        exclude={"submitter_ui_permissions", "submitter_is_admin", "submitted_body_hash"},
+    )
+
+
 @router.get("/agents/{path:path}")
 async def get_agent(
     request: Request,
     path: str,
+    response: Response,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
 ):
     """
@@ -1254,6 +1447,7 @@ async def get_agent(
             detail="You do not have access to this agent",
         )
 
+    response.headers["ETag"] = _weak_etag_for(agent_card)
     return agent_card.model_dump()
 
 
@@ -1386,8 +1580,7 @@ async def update_agent(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied agent update '{request.name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied agent update '{request.name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1417,6 +1610,174 @@ async def update_agent(
     )
 
     return updated_agent.model_dump()
+
+
+@router.patch("/agents/{path:path}")
+async def patch_agent(
+    http_request: Request,
+    path: str,
+    patch_body: AgentCardPatch,
+    response: Response,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+):
+    """Apply an RFC 7396 JSON Merge Patch to an agent card.
+
+    Only the fields explicitly supplied are changed; required fields stay
+    required. Registrant-only fields are rejected by the AgentCardPatch
+    validator before this handler runs.
+
+    Concurrency: if `If-Match` is supplied the request is rejected with 412
+    when the stored updated_at no longer matches. If absent, PATCH is
+    last-write-wins (same race window as PUT); clients that care must send
+    If-Match.
+
+    Returns:
+        200 with the full updated card and a fresh ETag header.
+
+    Raises:
+        HTTPException: 400 empty/malformed, 403 unauthorized/federated,
+            404 not found, 412 precondition failed, 422 validation.
+    """
+    set_audit_action(
+        http_request,
+        "update",
+        "agent",
+        resource_id=path,
+        description=f"Patch agent {path}",
+    )
+
+    path = _normalize_path(path)
+
+    existing_agent = await agent_service.get_agent_info(path)
+    if not existing_agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent not found at path '{path}'",
+        )
+
+    # Federated read-only guard (parity with DELETE)
+    sync_metadata = existing_agent.sync_metadata or {}
+    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
+        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+        logger.warning(
+            f"User {user_context['username']} attempted to patch federated agent {path} "
+            f"from {source_peer}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Agent '{path}' is synced from {source_peer} and cannot be patched locally. "
+            f"Patch this agent at its source registry, or remove the peer federation.",
+        )
+
+    # Authorization (parity with PUT)
+    _check_agent_permission("modify_service", existing_agent.name, user_context)
+    if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
+        logger.warning(
+            f"User {user_context['username']} attempted to patch agent {path} "
+            f"owned by {existing_agent.registered_by}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only patch agents you registered",
+        )
+
+    # Optimistic concurrency
+    client_ts = _parse_if_match(if_match)
+    if client_ts is not None:
+        server_ts = _agent_updated_ms(existing_agent)
+        if client_ts != server_ts:
+            logger.warning(
+                "patch_agent if_match_mismatch path=%s user=%s client_ts=%d server_ts=%d",
+                path,
+                user_context["username"],
+                client_ts,
+                server_ts,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current agent version",
+            )
+
+    # Merge supplied fields onto the existing card
+    patch_dict = patch_body.model_dump(exclude_unset=True, by_alias=False)
+    if not patch_dict:
+        raise HTTPException(status_code=400, detail="Empty patch body")
+
+    merged_dict = {**existing_agent.model_dump(), **patch_dict}
+    try:
+        merged_agent = AgentCard(**merged_dict)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=e.errors(),
+        ) from e
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid agent card: {str(e)}",
+        ) from e
+
+    # Defence in depth: re-pin server-managed fields from the existing card.
+    for field in REGISTRANT_ONLY_FIELDS:
+        setattr(merged_agent, field, getattr(existing_agent, field))
+
+    from ..utils.agent_validator import agent_validator
+
+    validation_result = await agent_validator.validate_agent_card(
+        merged_agent,
+        verify_endpoint=False,
+    )
+    if not validation_result.is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Agent card validation failed",
+                "errors": validation_result.errors,
+            },
+        )
+
+    # Registration gate (parity with PUT)
+    gate_result = await check_registration_gate(
+        asset_type="agent",
+        operation="update",
+        source_api=f"/api/agents/{path}",
+        registration_payload=merged_agent.model_dump(mode="json"),
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied agent patch '{merged_agent.name}': "
+            f"{gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
+
+    # Persist (update_agent sets updated_at and re-indexes search internally)
+    await agent_service.update_agent(path, merged_agent.model_dump())
+
+    updated = await agent_service.get_agent_info(path)
+
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="update",
+            registration_type="agent",
+            card_data=updated.model_dump(mode="json"),
+            performed_by=user_context.get("username"),
+        )
+    )
+
+    logger.info(
+        "patch_agent success path=%s user=%s if_match_supplied=%s",
+        path,
+        user_context["username"],
+        if_match is not None,
+    )
+
+    response.headers["ETag"] = _weak_etag_for(updated)
+    return updated.model_dump()
 
 
 @router.delete("/agents/{path:path}")
@@ -1550,7 +1911,7 @@ async def discover_agents_by_skills(
     required_tags = set(t.lower() for t in tags) if tags else set()
 
     for agent in accessible_agents:
-        if not await agent_service.is_agent_enabled(agent.path):
+        if not getattr(agent, "is_enabled", False):
             continue
 
         agent_skills = set(skill.id.lower() for skill in agent.skills) | set(
@@ -1690,7 +2051,7 @@ async def discover_agents_semantic(
         logger.info(f"Semantic search returned {len(accessible_results)} agents for query: {query}")
 
         # Increment semantic search counter (fail-silent)
-        from registry.repositories.stats_repository import increment_search_counter
+        from ..repositories.stats_repository import increment_search_counter
 
         await increment_search_counter()
 

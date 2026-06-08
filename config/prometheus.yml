@@ -7,9 +7,57 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
+  # ---------------------------------------------------------------------------
+  # OTel-native metrics from MCP Gateway services (issue #1122)
+  # ---------------------------------------------------------------------------
+  # Each service exposes its in-process OpenTelemetry meters via the OTel
+  # Prometheus exporter on port 9464 (configurable via OTEL_EXPORTER_PROMETHEUS_PORT).
+  # The MCP Gateway services initialize their meter providers on startup; if
+  # OTEL_EXPORTER_OTLP_ENDPOINT is set, metrics are also pushed via OTLP (used
+  # primarily on ECS via the per-task ADOT sidecar).
+  # ---------------------------------------------------------------------------
+  - job_name: 'mcp-registry'
+    static_configs:
+      - targets: ['registry:9464']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  - job_name: 'mcp-auth-server'
+    static_configs:
+      - targets: ['auth-server:9464']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  - job_name: 'mcp-mcpgw'
+    static_configs:
+      - targets: ['mcpgw-server:9464']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry Collector (Issue #1122)
+  # ---------------------------------------------------------------------------
+  # The collector re-exposes everything it receives over OTLP in Prometheus
+  # format on :8889. Useful as a second view of the same metrics, and shows
+  # the collector's own otelcol_* self-metrics. The collector is only
+  # meaningful when at least one service has OTEL_EXPORTER_OTLP_ENDPOINT
+  # pointing at it; otherwise this scrape job returns only collector
+  # self-metrics.
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8889']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  # ---------------------------------------------------------------------------
+  # Legacy metrics-service scrape (deprecated; removed in 1.26.0)
+  # ---------------------------------------------------------------------------
+  # Only meaningful when METRICS_LEGACY_HTTP_POST=true is set in .env, in which
+  # case registry/auth-server/mcpgw also POST events to metrics-service:8890
+  # and the OTel exporter on metrics-service:9465 surfaces them. Kept here for
+  # the dual-write transition window.
   - job_name: 'mcp-metrics-service'
     static_configs:
       - targets: ['metrics-service:9465']
     scrape_interval: 10s
     metrics_path: /metrics
-    

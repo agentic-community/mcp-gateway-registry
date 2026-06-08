@@ -450,19 +450,20 @@ class SyncOrchestrator:
             print(f"Manifest entries:  {len(self._manifest_entries)}")
 
         print("\nDETAILS:")
-        print("-" * 80)
-        print(f"{'Type':<10} {'Name':<30} {'Path':<25} {'Status':<10}")
-        print("-" * 80)
+        print("-" * 95)
+        print(f"{'Type':<10} {'Name':<30} {'Path':<25} {'Auth':<14} {'Status':<10}")
+        print("-" * 95)
 
         for r in self.results:
             print(
                 f"{r['resource_type']:<10} "
                 f"{r['resource_name'][:30]:<30} "
                 f"{r['path'][:25]:<25} "
+                f"{r.get('auth_type', 'N/A'):<14} "
                 f"{r['status']:<10}"
             )
 
-        print("=" * 80)
+        print("=" * 95)
 
     # ------------------------------------------------------------------
     # Internal -- manifest collection
@@ -522,6 +523,7 @@ class SyncOrchestrator:
                     "resource_arn": gateway_arn,
                     "registration_type": "mcp_server",
                     "path": f"/{_slugify(gateway_name)}",
+                    "auth_type": gateway.get("authorizerType", "NONE"),
                     "status": "skipped",
                     "message": "Invalid URL (must be HTTPS)",
                 }
@@ -530,6 +532,7 @@ class SyncOrchestrator:
 
         registration = self.builder.build_gateway_registration(gateway)
         registration.overwrite = self.overwrite
+        authorizer_type = gateway.get("authorizerType", "NONE")
 
         result: dict[str, Any] = {
             "resource_type": "gateway",
@@ -537,6 +540,7 @@ class SyncOrchestrator:
             "resource_arn": gateway_arn,
             "registration_type": "mcp_server",
             "path": registration.service_path,
+            "auth_type": authorizer_type,
         }
 
         if self.dry_run:
@@ -579,12 +583,15 @@ class SyncOrchestrator:
         registration.overwrite = self.overwrite
         target_name = target.get("name", target["targetId"])
 
+        authorizer_type = gateway.get("authorizerType", "NONE")
+
         result: dict[str, Any] = {
             "resource_type": "target",
             "resource_name": target_name,
             "resource_arn": (f"{gateway.get('gatewayArn', '')}:target:{target['targetId']}"),
             "registration_type": "mcp_server",
             "path": registration.service_path,
+            "auth_type": authorizer_type,
         }
 
         if self.dry_run:
@@ -632,6 +639,7 @@ class SyncOrchestrator:
             "resource_arn": runtime.get("agentRuntimeArn", ""),
             "registration_type": "mcp_server",
             "path": registration.service_path,
+            "auth_type": "IAM",
         }
 
         if self.dry_run:
@@ -664,6 +672,7 @@ class SyncOrchestrator:
             "resource_arn": runtime.get("agentRuntimeArn", ""),
             "registration_type": "agent",
             "path": registration.path,
+            "auth_type": "IAM",
         }
 
         if self.dry_run:

@@ -24,18 +24,19 @@ _EMBEDDINGS_BACKEND_KIND_PATTERN = (
 )
 
 # Allowlist of values for cloud_detection_method. Added in schema v3
-# (issue #986).
-_CLOUD_DETECTION_METHOD_PATTERN = r"^(env|dmi|ecs_meta|k8s_heuristic|imds|unknown)$"
+# (issue #986). Extended in issue #1120 with explicit, operator_declared,
+# operator_declined.
+_CLOUD_DETECTION_METHOD_PATTERN = (
+    r"^(env|dmi|ecs_meta|k8s_heuristic|imds|"
+    r"explicit|operator_declared|operator_declined|unknown)$"
+)
 
 
 def _check_cloud_detection_consistency(cloud: str, method: str | None) -> None:
     """Reject payloads where cloud and cloud_detection_method are inconsistent.
 
     Absent method (None) is always acceptable for backwards compatibility with
-    pre-v3 clients. We enforce only two rules that cannot be wrong:
-
-    - ecs_meta is AWS-only by construction.
-    - cloud=unknown iff method in (unknown, None).
+    pre-v3 clients.
     """
     if method is None:
         return
@@ -47,10 +48,25 @@ def _check_cloud_detection_consistency(cloud: str, method: str | None) -> None:
         raise ValueError(
             f"cloud_detection_method=unknown requires cloud=unknown, got cloud={cloud!r}"
         )
-    if cloud == "unknown" and method not in ("unknown", None):
+    if cloud == "unknown" and method not in ("unknown", "operator_declined", None):
         raise ValueError(
-            f"cloud=unknown requires cloud_detection_method in (unknown, None), "
+            f"cloud=unknown requires cloud_detection_method in (unknown, operator_declined, None), "
             f"got method={method!r}"
+        )
+    if method == "operator_declared" and cloud not in ("on_premises", "other"):
+        raise ValueError(
+            f"cloud_detection_method=operator_declared requires cloud in "
+            f"{{on_premises, other}}, got cloud={cloud!r}"
+        )
+    if method == "operator_declined" and cloud != "unknown":
+        raise ValueError(
+            f"cloud_detection_method=operator_declined requires cloud=unknown, "
+            f"got cloud={cloud!r}"
+        )
+    if cloud in ("on_premises", "other") and method not in ("operator_declared", "explicit"):
+        raise ValueError(
+            f"cloud={cloud!r} requires cloud_detection_method in "
+            f"{{operator_declared, explicit}}, got method={method!r}"
         )
 
 
@@ -74,7 +90,7 @@ class StartupEvent(BaseModel):
     arch: str = Field(..., min_length=1, max_length=20, description="CPU architecture")
     cloud: str = Field(
         default="unknown",
-        pattern="^(aws|gcp|azure|unknown)$",
+        pattern="^(aws|gcp|azure|on_premises|other|unknown)$",
         description="Cloud provider",
     )
     compute: str = Field(
@@ -234,7 +250,7 @@ class HeartbeatEvent(BaseModel):
     )
     cloud: str = Field(
         default="unknown",
-        pattern="^(aws|gcp|azure|unknown)$",
+        pattern="^(aws|gcp|azure|on_premises|other|unknown)$",
         description="Cloud provider",
     )
     compute: str = Field(

@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.2
+    tag: 1.24.4
     pullPolicy: IfNotPresent
 
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
@@ -196,6 +196,18 @@ keycloak-configure:
   keycloak:
     realm: *keycloakRealm
     adminUser: *keycloakAdmin
+  # MCP Dynamic Client Registration (RFC 7591) realm setup. When true, the
+  # post-install/post-upgrade Job applies four changes that together let
+  # Claude Code, Claude.ai connectors, and Cursor self-register as OAuth
+  # clients against this realm:
+  #   - groups + audience mappers on the `basic` client-scope
+  #   - "Allowed Client Scopes" client-registration policy widened to all
+  #     realm scopes (anonymous + authenticated subTypes)
+  #   - "Trusted Hosts" policy relaxed for cloud-egress MCP clients
+  # Disable for closed deployments (no MCP coding-assistant users) or when
+  # using a pre-configured external Keycloak with its own DCR setup.
+  dcr:
+    enabled: true
 
 # Mongodb configuration job
 mongodb-configure:
@@ -266,6 +278,18 @@ registry:
     registrationWebhookAuthToken: ""
     registrationWebhookTimeoutSeconds: "10"
 
+    # Agent batch API (issue #956)
+    # Lease-based claiming makes multi-worker operation safe: any number of
+    # replicas may set batchWorkerEnabled=true.
+    batchWorkerEnabled: true
+    batchMaxOperationsPerJob: "1000"
+    batchMaxConcurrentJobsPerUser: "3"
+    batchJobRetentionDays: "7"
+    batchWorkerPollIntervalSeconds: "1.0"
+    batchWorkerLeaseTtlSeconds: "60.0"
+    batchWorkerLeaseHeartbeatSeconds: "15.0"
+    batchMaxRequestBytes: "4194304"
+
     # Registration gate / admission control (issue #809)
     registrationGateEnabled: false
     registrationGateUrl: ""
@@ -284,11 +308,29 @@ registry:
     # their group mappings directly, without requiring an IdP Admin API token.
     m2mDirectRegistrationEnabled: true
 
+    # Registration deduplication (issue #913)
+    # Advisory checks that surface likely-duplicate entities (servers, agents,
+    # skills) before a user registers a new one. The /api/<entity>/check-duplicates
+    # endpoints are always available for CI / federation / CLI callers regardless
+    # of the registrationHintEnabled flag; that flag only governs whether the
+    # registration form pre-flights the check and renders the hint modal.
+    # The check is advisory and never blocks registration.
+    dedup:
+      registrationHintEnabled: true  # When true, registration UI pre-flights /check-duplicates and shows hint modal.
+      scoreThreshold: "0.7"          # Minimum similarity score (0.0..1.0) for advisory matches.
+      maxSuggestions: "3"            # Cap on advisory suggestions per request.
+
     # OpenTelemetry direct OTLP push export configuration
     otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
     otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
     otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
     otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
+
+    # OTel-native metric emission (Issue #1122)
+    metricsLegacyHttpPost: false
+    otelMetricExportIntervalMs: "15000"
+    otelExporterPrometheusHost: "0.0.0.0"
+    otelExporterPrometheusPort: "9464"
 
     # Telemetry configuration
     # Anonymous usage telemetry (startup ping + daily heartbeat, both on by default)
@@ -297,6 +339,7 @@ registry:
     telemetryHeartbeatIntervalMinutes: "1440"  # Heartbeat interval in minutes (default: 1440 = 24 hours)
     telemetryDebug: false  # Set to true to log payloads instead of sending
     mcpTelemetryImdsProbeDisabled: false  # Set to true to disable IMDS probing in cloud detection (issue #986)
+    mcpCloudProvider: ""  # Override cloud auto-detection: aws|azure|gcp|on_premises|other (issue #1120)
 
     # Application Log Configuration (centralized log rotation and retrieval)
     # NOTE: Centralized logging is ON by default (appLogCentralizedEnabled: "true").
@@ -319,6 +362,13 @@ registry:
     # Tool-level access control (issue #1026)
     mcpToolsListFilterEnabled: true    # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
     toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+
+    # PRM `scopes_supported` override. Default matches Keycloak-DCR setup
+    # (Claude Code, Claude.ai, Cursor) — the three scopes are present in every
+    # Keycloak realm by default, so DCR succeeds. Set to "" to derive from the
+    # registry's own scopes config; see
+    # docs/ai-coding-assistant-registry-integration.md.
+    mcpAdvertisedScopes: "profile email offline_access"
 
     # Demo server configuration
     disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
@@ -410,7 +460,7 @@ auth-server:
 
     # Tool-level access control (issue #1026)
     mcpToolsListFilterEnabled: true    # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
-    mcpProxyMaxBodyBytes: 2097152      # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
+    mcpProxyMaxBodyBytes: "2097152"    # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
     toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
   keycloak:

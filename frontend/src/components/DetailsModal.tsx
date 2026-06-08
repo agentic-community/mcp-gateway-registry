@@ -9,6 +9,13 @@ interface DetailsModalProps {
   error?: string | null;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl';
+  /**
+   * Tailwind z-index class for the backdrop. Default ``z-50`` is fine
+   * for a top-level page modal. Pass ``z-[60]`` (or higher) when the
+   * modal is rendered on top of another open modal — e.g. a duplicate
+   * check that pre-flights from inside an open registration form.
+   */
+  zIndexClass?: string;
 }
 
 const MAX_WIDTH_CLASSES = {
@@ -54,6 +61,7 @@ const DetailsModal: React.FC<DetailsModalProps> = ({
   error = null,
   children,
   maxWidth = '4xl',
+  zIndexClass = 'z-50',
 }) => {
   useEscapeKey(onClose, isOpen);
 
@@ -62,7 +70,7 @@ const DetailsModal: React.FC<DetailsModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+    <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center ${zIndexClass}`}>
       <div
         className={`bg-white dark:bg-gray-800 rounded-xl p-6 ${MAX_WIDTH_CLASSES[maxWidth]} w-full mx-4 max-h-[80vh] overflow-auto`}
       >

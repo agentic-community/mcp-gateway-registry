@@ -20,6 +20,9 @@ import {
   buildLocalRuntimeForm,
 } from '../utils/localRuntime';
 import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
+import DuplicateCheckModal from '../components/DuplicateCheckModal';
+import { useDuplicateCheck } from '../hooks/useDuplicateCheck';
+import type { ExistingEntity } from '../types/duplicateCheck';
 
 
 // Toast notification component
@@ -192,6 +195,26 @@ const RegisterPage: React.FC = () => {
   const [errors, setErrors] = useState<FormErrors>({});
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [mcpRegistryNotice, setMcpRegistryNotice] = useState<string | null>(null);
+
+  // Registration deduplication. The hook owns the modal state, the
+  // sticky-disabled flag, the AbortController, and all of the network
+  // The hook owns AbortController, the hint-flag short-circuit, and
+  // the modal state. The page only owns the action callbacks
+  // (proceed / pick / cancel) that interact with the local form
+  // lifecycle. The modal currently surfaces from either the server
+  // tab or the agent tab; whichever submitted last sets
+  // ``activeRegisteringEntityType`` so the modal title and pluralization
+  // match.
+  const {
+    collisionWith,
+    advisoryMatches,
+    showModal: showDuplicateModal,
+    runCheck: runDuplicateCheck,
+    closeModal: closeDuplicateModal,
+  } = useDuplicateCheck();
+  const [activeRegisteringEntityType, setActiveRegisteringEntityType] =
+    useState<'mcp_server' | 'a2a_agent'>('mcp_server');
 
 
   const generatePath = useCallback((name: string): string => {
@@ -319,6 +342,97 @@ const RegisterPage: React.FC = () => {
         const parsed = JSON.parse(content);
         setJsonContent(JSON.stringify(parsed, null, 2));
 
+        // Detect upstream MCP Registry server.json schema. The $schema field
+        // is optional in the spec, so also fire on structural canonical signals
+        // (reverse-DNS name, remotes[], packages[], or namespaced _meta).
+        const reverseDnsName = typeof parsed.name === 'string'
+          && /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/.test(parsed.name);
+        const hasNamespacedMeta = parsed._meta && typeof parsed._meta === 'object'
+          && Object.keys(parsed._meta).some(k => k.includes('/'));
+        const isMcpRegistrySchema = (typeof parsed.$schema === 'string'
+            && parsed.$schema.includes('modelcontextprotocol/registry'))
+          || Array.isArray(parsed.remotes)
+          || Array.isArray(parsed.packages)
+          || hasNamespacedMeta
+          || reverseDnsName;
+
+        if (isMcpRegistrySchema) {
+          setMcpRegistryNotice(
+            'This file uses the upstream MCP Registry server.json format. ' +
+            'Additional fields (repository, packages, remotes, _meta) will be stored ' +
+            'in the metadata field and preserved in the database.'
+          );
+          // Unpack the registry's own internal _meta block (if any) into
+          // bespoke top-level fields. Convention: any _meta key ending in
+          // '/internal' is treated as our own previously-exported state.
+          // Merge order: later blocks override earlier ones; existing
+          // top-level fields win over _meta (caller intent > round-trip state).
+          if (parsed._meta && typeof parsed._meta === 'object') {
+            const internalBlocks = Object.entries(parsed._meta)
+              .filter(([k]) => /\/internal$/.test(k))
+              .map(([, v]) => v)
+              .filter((v): v is Record<string, any> =>
+                v !== null && typeof v === 'object' && !Array.isArray(v));
+            const merged = internalBlocks.reduce<Record<string, any>>(
+              (acc, b) => ({ ...acc, ...b }), {});
+            for (const key of [
+              'path', 'tags', 'license', 'deployment', 'proxy_pass_url',
+              'supported_transports', 'auth_scheme', 'auth_provider',
+              'visibility', 'allowed_groups', 'status',
+              'provider_organization', 'provider_url',
+            ]) {
+              if (parsed[key] === undefined && merged[key] !== undefined) {
+                parsed[key] = merged[key];
+              }
+            }
+            // Nested metadata under _meta.<vendor>/internal.metadata is
+            // free-form vendor data — surface it to the form's metadata field
+            // unless the upload already supplied one.
+            if (parsed.metadata === undefined && merged.metadata !== undefined) {
+              parsed.metadata = merged.metadata;
+            }
+          }
+          // Transform upstream fields to populate the form correctly
+          if (!parsed.server_name && !parsed.name && parsed.title) {
+            parsed.name = parsed.title;
+          }
+          // Derive path from name if not explicitly set
+          if (!parsed.path && parsed.name) {
+            const slug = parsed.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+            parsed.path = '/' + slug;
+          }
+          if (!parsed.proxy_pass_url && parsed.remotes?.[0]?.url) {
+            parsed.proxy_pass_url = parsed.remotes[0].url;
+          }
+          if (!parsed.deployment) {
+            parsed.deployment = parsed.remotes?.length ? 'remote' : 'local';
+          }
+          if (!parsed.auth_scheme && parsed.remotes?.[0]?.headers) {
+            const authHeader = parsed.remotes[0].headers.find(
+              (h: any) => h.name?.toLowerCase() === 'authorization'
+            );
+            if (authHeader?.value?.toLowerCase().includes('bearer')) {
+              parsed.auth_scheme = 'bearer';
+            }
+          }
+          // Preserve upstream-only fields in metadata
+          const upstreamSpec: any = {};
+          if (parsed.repository) upstreamSpec.repository = parsed.repository;
+          if (parsed.packages) upstreamSpec.packages = parsed.packages;
+          if (parsed.remotes) upstreamSpec.remotes = parsed.remotes;
+          if (parsed._meta) upstreamSpec._meta = parsed._meta;
+          if (parsed.version) upstreamSpec.version = parsed.version;
+          if (parsed.$schema) upstreamSpec.$schema = parsed.$schema;
+          upstreamSpec.original_name = parsed.name || parsed.title;
+
+          const existingMetadata = (typeof parsed.metadata === 'object' && parsed.metadata !== null)
+            ? parsed.metadata
+            : {};
+          parsed.metadata = { ...existingMetadata, mcp_registry_spec: upstreamSpec };
+        } else {
+          setMcpRegistryNotice(null);
+        }
+
         // Auto-populate form fields from JSON
         if (registrationType === 'server') {
           // Helper to convert ISO timestamp to datetime-local format
@@ -429,20 +543,14 @@ const RegisterPage: React.FC = () => {
   }, [registrationType]);
 
 
-  const handleServerSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (loading) return;
-
-    if (!validateServerForm()) return;
-
-    setLoading(true);
-
+  const performServerRegistration = useCallback(async () => {
     // Local deployments accept local_runtime as a JSON-encoded form field
     // (same convention as metadata). See utils/localRuntime.ts.
     const localRuntimeJson = serverForm.deployment === 'local'
       ? buildLocalRuntimeJson(serverForm.local_runtime)
       : null;
 
+    setLoading(true);
     try {
       const formData = new FormData();
       formData.append('name', serverForm.name);
@@ -514,15 +622,10 @@ const RegisterPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [loading, serverForm, validateServerForm, navigate]);
+  }, [serverForm, navigate]);
 
 
-  const handleAgentSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (loading) return;
-
-    if (!validateAgentForm()) return;
-
+  const performAgentRegistration = useCallback(async (): Promise<void> => {
     let parsedSkills = agentForm.skills;
     if (agentForm.skills_json.trim()) {
       try {
@@ -592,7 +695,116 @@ const RegisterPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [loading, agentForm, validateAgentForm, navigate]);
+  }, [agentForm, navigate]);
+
+
+  const handleServerSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+    if (!validateServerForm()) return;
+
+    setLoading(true);
+    setActiveRegisteringEntityType('mcp_server');
+    const outcome = await runDuplicateCheck({
+      entityType: 'mcp_server',
+      payload: {
+        name: serverForm.name.trim(),
+        description: serverForm.description.trim() || null,
+        proxy_pass_url:
+          serverForm.deployment === 'remote' && serverForm.proxy_pass_url
+            ? serverForm.proxy_pass_url.trim()
+            : null,
+        self_path: serverForm.path.trim() || null,
+      },
+    });
+    // performServerRegistration manages `loading` itself, so reset
+    // here before branching.
+    setLoading(false);
+
+    if (outcome.kind === 'show-modal') {
+      // Hook already set collisionWith / advisoryMatches / showModal.
+      return;
+    }
+    if (outcome.kind === 'cancelled') {
+      // The hook's in-flight check was aborted by a fresher submit or
+      // by the component unmounting. Either way the page must not
+      // proceed: a stale registration POST after navigation is the
+      // exact bug this branch prevents.
+      return;
+    }
+    if (outcome.notice) {
+      setToast({ message: outcome.notice, type: 'error' });
+    }
+    await performServerRegistration();
+  }, [loading, serverForm, validateServerForm, performServerRegistration, runDuplicateCheck]);
+
+
+  const handleDuplicateProceed = useCallback(async () => {
+    closeDuplicateModal();
+    if (activeRegisteringEntityType === 'mcp_server') {
+      await performServerRegistration();
+    } else {
+      await performAgentRegistration();
+    }
+  }, [
+    performServerRegistration,
+    performAgentRegistration,
+    closeDuplicateModal,
+    activeRegisteringEntityType,
+  ]);
+
+
+  const handleDuplicatePickExisting = useCallback((entity: ExistingEntity) => {
+    closeDuplicateModal();
+    // The advisory list is cross-entity: a server registration can
+    // surface a similar skill, etc. Pass `tab=` so the dashboard
+    // switches view filters to the entity's own list.
+    const tabByEntityType: Record<string, string> = {
+      mcp_server: 'servers',
+      a2a_agent: 'agents',
+      skill: 'skills',
+    };
+    const params = new URLSearchParams();
+    params.set('highlight', entity.path);
+    const tab = tabByEntityType[entity.entity_type];
+    if (tab) {
+      params.set('tab', tab);
+    }
+    navigate(`/?${params.toString()}`);
+  }, [navigate, closeDuplicateModal]);
+
+
+  const handleAgentSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+    if (!validateAgentForm()) return;
+
+    setLoading(true);
+    setActiveRegisteringEntityType('a2a_agent');
+    const outcome = await runDuplicateCheck({
+      entityType: 'a2a_agent',
+      payload: {
+        name: agentForm.name.trim(),
+        description: agentForm.description.trim() || null,
+        url: agentForm.url.trim() || null,
+        self_path: agentForm.path.trim() || null,
+      },
+    });
+    // performAgentRegistration manages `loading` itself, so reset
+    // here before branching.
+    setLoading(false);
+
+    if (outcome.kind === 'show-modal') {
+      return;
+    }
+    if (outcome.kind === 'cancelled') {
+      return;
+    }
+    if (outcome.notice) {
+      setToast({ message: outcome.notice, type: 'error' });
+    }
+    await performAgentRegistration();
+  }, [loading, agentForm, validateAgentForm, performAgentRegistration, runDuplicateCheck]);
 
 
   const inputClass = "block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500";
@@ -1381,6 +1593,23 @@ const RegisterPage: React.FC = () => {
         </div>
       )}
 
+      {/* MCP Registry Schema Notice */}
+      {mcpRegistryNotice && (
+        <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+          <div className="flex">
+            <InformationCircleIcon className="h-5 w-5 text-amber-500 flex-shrink-0" />
+            <div className="ml-3">
+              <h4 className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                MCP Registry Format Detected
+              </h4>
+              <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                {mcpRegistryNotice}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Info Box */}
       <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
         <div className="flex">
@@ -1460,6 +1689,17 @@ const RegisterPage: React.FC = () => {
           onClose={() => setToast(null)}
         />
       )}
+
+      <DuplicateCheckModal
+        isOpen={showDuplicateModal}
+        onClose={closeDuplicateModal}
+        onProceed={handleDuplicateProceed}
+        onPickExisting={handleDuplicatePickExisting}
+        collisionWith={collisionWith}
+        advisoryMatches={advisoryMatches}
+        isLoading={loading}
+      />
+
 
       {/* Header */}
       <div className="mb-8">

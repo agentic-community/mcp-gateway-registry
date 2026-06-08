@@ -3,8 +3,8 @@ from datetime import UTC
 from enum import Enum
 from pathlib import Path
 
-from pydantic import ConfigDict, Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist
 # at terraform/aws-ecs/variables.tf (issue #955) so both layers reject the same
@@ -53,7 +53,7 @@ class RegistryMode(str, Enum):
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
 
-    model_config = ConfigDict(
+    model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
         extra="ignore",  # Ignore extra environment variables
@@ -157,6 +157,11 @@ class Settings(BaseSettings):
     # Default 40 may miss documents in small collections; 100 gives near-exact recall.
     vector_search_ef_search: int = 100
 
+    # Search fusion method: 'rrf' (Reciprocal Rank Fusion, industry standard)
+    # or 'legacy' (previous additive formula). RRF avoids score saturation and
+    # handles missing embeddings gracefully.
+    search_fusion_method: str = "rrf"
+
     # LiteLLM-specific settings (only used when embeddings_provider='litellm')
     # For Bedrock: Set to None and configure AWS credentials via standard methods
     # (IAM roles, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, or ~/.aws/credentials)
@@ -214,6 +219,25 @@ class Settings(BaseSettings):
     otel_otlp_endpoint: str | None = None  # OTLP HTTP endpoint (e.g. https://otlp.example.com)
     otel_otlp_export_interval_ms: int = 30000  # OTLP export interval in milliseconds
     otel_exporter_otlp_metrics_temporality_preference: str = "cumulative"  # cumulative or delta
+
+    # OTel-native metric emission migration (issue #1122)
+    metrics_legacy_http_post: bool = Field(
+        default=False,
+        description=(
+            "When True, ALSO emit metrics via the legacy HTTP POST path to "
+            "metrics-service:8890 in addition to the native OTel path. "
+            "For one-release Compose migration only; removed in 1.26.0."
+        ),
+    )
+    otel_metric_export_interval_ms: int = Field(
+        default=15000,
+        ge=1000,
+        description=(
+            "OTel SDK metric export push interval in milliseconds. "
+            "Default 15s gives near-real-time dashboards during incident "
+            "response. Raise to 30000+ for high-traffic production."
+        ),
+    )
 
     # Security scanning settings (MCP Servers)
     security_scan_enabled: bool = True
@@ -600,6 +624,30 @@ class Settings(BaseSettings):
             "provider. MCP_TELEMETRY_IMDS_PROBE_DISABLED=1"
         ),
     )
+    mcp_cloud_provider: str | None = Field(
+        default=None,
+        description=(
+            "Operator-supplied cloud provider override. Takes precedence over "
+            "the auto-detection cascade and the admin-UI hint. "
+            "Allowed: aws, azure, gcp, on_premises, other."
+        ),
+    )
+
+    @field_validator("mcp_cloud_provider")
+    @classmethod
+    def _validate_cloud_provider(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
+        v_lower = v.strip().lower()
+        if v_lower not in {"aws", "azure", "gcp", "on_premises", "other"}:
+            display = v[:16] + ("..." if len(v) > 16 else "")
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                f"MCP_CLOUD_PROVIDER={display!r} is not a valid value; ignoring"
+            )
+            return None
+        return v_lower
 
     # Demo server configuration
     disable_ai_registry_tools_server: bool = Field(
@@ -662,6 +710,34 @@ class Settings(BaseSettings):
             return "AI Registry"
         return "AI Gateway & Registry"
 
+    # Registration deduplication. Advisory checks that surface
+    # likely-duplicate entities (servers, agents, skills) before a user
+    # registers a new one. The /check-duplicates endpoints are always
+    # available; this setting only controls whether the registration
+    # form pre-flights the check and renders the modal hint.
+    dedup_registration_hint_enabled: bool = Field(
+        default=True,
+        description=(
+            "When true, the registration form pre-flights "
+            "/api/<entity>/check-duplicates and renders a hint modal "
+            "if matches are found. When false, the form submits "
+            "straight to /register without checking. The endpoint and "
+            "service themselves remain available regardless."
+        ),
+    )
+    dedup_score_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Minimum semantic-search score (0..1) for an advisory match to be returned.",
+    )
+    dedup_max_suggestions: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Cap on the number of duplicate suggestions returned.",
+    )
+
     # Storage Backend Configuration
     storage_backend: str = Field(
         default="file",
@@ -723,14 +799,10 @@ class Settings(BaseSettings):
         if v is None:
             return "text"
         if not isinstance(v, str):
-            raise ValueError(
-                f"APP_LOG_CONSOLE_FORMAT must be a string, got {type(v).__name__}"
-            )
+            raise ValueError(f"APP_LOG_CONSOLE_FORMAT must be a string, got {type(v).__name__}")
         normalized = v.strip().lower()
         if normalized not in ("json", "text"):
-            raise ValueError(
-                f"APP_LOG_CONSOLE_FORMAT must be 'json' or 'text', got {v!r}"
-            )
+            raise ValueError(f"APP_LOG_CONSOLE_FORMAT must be 'json' or 'text', got {v!r}")
         return normalized
 
     @field_validator("storage_backend", mode="before")
@@ -781,6 +853,62 @@ class Settings(BaseSettings):
 
     # DocumentDB Namespace (for multi-tenancy support)
     documentdb_namespace: str = "default"
+
+    # Agent batch API (issue #956)
+    batch_max_operations_per_job: int = Field(
+        default=1000,
+        ge=1,
+        description="Maximum number of items allowed in a single agent batch submission.",
+    )
+    batch_max_concurrent_jobs_per_user: int = Field(
+        default=3,
+        ge=1,
+        description="Maximum number of active (queued or running) batch jobs per submitter.",
+    )
+    batch_job_retention_days: int = Field(
+        default=7,
+        ge=1,
+        description="Retention window for agent batch jobs in MongoDB (TTL index on updated_at).",
+    )
+    batch_worker_poll_interval_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        description="How often the batch worker polls MongoDB for queued jobs.",
+    )
+    batch_worker_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable the in-process agent batch worker loop. Lease-based claiming "
+            "makes multi-worker operation safe: any number of replicas may run "
+            "with this true and cooperatively drain the queue."
+        ),
+    )
+    batch_worker_lease_ttl_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "How long a claimed batch job stays owned before its lease expires "
+            "and another worker may reclaim it. Must exceed the worst-case time "
+            "between lease renewals (slowest single item + heartbeat interval + "
+            "clock-skew slack), or a slow-but-healthy worker risks having its job "
+            "reclaimed and processed concurrently."
+        ),
+    )
+    batch_worker_lease_heartbeat_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        description=(
+            "Interval at which a worker renews the lease on its in-flight job. "
+            "Should be comfortably below batch_worker_lease_ttl_seconds (a common "
+            "shape is TTL = 3-4x the heartbeat) so a renewal is never missed by a "
+            "healthy worker."
+        ),
+    )
+    batch_max_request_bytes: int = Field(
+        default=4 * 1024 * 1024,
+        ge=1024,
+        description="Maximum request body size (bytes) accepted by POST /api/agents/batch.",
+    )
 
     # Container paths - adjust for local development
     container_app_dir: Path = Path("/app")

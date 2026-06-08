@@ -4,8 +4,10 @@ import axios from 'axios';
 interface RegistryConfig {
   deployment_mode: 'with-gateway' | 'registry-only';
   registry_mode: 'full' | 'skills-only' | 'mcp-servers-only' | 'agents-only';
+  auth_provider: string;
   nginx_updates_enabled: boolean;
   coding_assistants: string[];
+  dedup_registration_hint_enabled: boolean;
   features: {
     mcp_servers: boolean;
     agents: boolean;
@@ -19,8 +21,10 @@ interface RegistryConfig {
 const DEFAULT_CONFIG: RegistryConfig = {
   deployment_mode: 'with-gateway',
   registry_mode: 'full',
+  auth_provider: 'cognito',
   nginx_updates_enabled: true,
   coding_assistants: [],
+  dedup_registration_hint_enabled: false,
   features: {
     mcp_servers: true,
     agents: true,

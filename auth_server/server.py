@@ -16,6 +16,7 @@ import secrets
 import sys
 import time
 import urllib.parse
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -98,6 +99,58 @@ MAX_TOKENS_PER_USER_PER_HOUR = int(os.environ.get("MAX_TOKENS_PER_USER_PER_HOUR"
 # exist; fall back to env vars so this module stays importable during
 # the rollout window in which the Settings class may not yet carry the
 # new fields (parallel agent work).
+def _endpoint_is_localhost(url: str) -> bool:
+    """Return True if the URL host is 127.0.0.1, ::1, or localhost."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = urlsplit(url).hostname or ""
+    except ValueError:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _log_otel_state() -> None:
+    """Emit a single startup log line describing OTel SDK + legacy-flag state.
+
+    Issue #1122: lets operators see at a glance whether OTel emission is
+    active, which OTLP endpoint is configured, the export interval, and
+    whether the legacy HTTP POST path is also enabled. Also warns if the
+    OTLP endpoint uses HTTP to a non-localhost host.
+    """
+    from opentelemetry import metrics
+
+    provider = metrics.get_meter_provider()
+    provider_name = type(provider).__name__
+    otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    legacy = os.getenv("METRICS_LEGACY_HTTP_POST", "false").lower() == "true"
+    interval_ms = os.getenv("OTEL_METRIC_EXPORT_INTERVAL_MS", "15000")
+
+    if "NoOp" in provider_name or "Default" in provider_name or "Proxy" in provider_name:
+        logger.warning(
+            "OTel metrics DISABLED (provider=%s). Set OTEL_EXPORTER_OTLP_ENDPOINT "
+            "or OTEL_EXPORTER_PROMETHEUS_HOST to enable. Legacy HTTP POST: %s.",
+            provider_name,
+            legacy,
+        )
+        return
+
+    logger.info(
+        "OTel metrics enabled (provider=%s, endpoint=%s, interval_ms=%s, legacy_http_post=%s)",
+        provider_name,
+        otlp_endpoint,
+        interval_ms,
+        legacy,
+    )
+
+    if otlp_endpoint.startswith("http://") and not _endpoint_is_localhost(otlp_endpoint):
+        logger.warning(
+            "OTEL_EXPORTER_OTLP_ENDPOINT uses http:// to a non-localhost host (%s). "
+            "Telemetry will be UNENCRYPTED in transit. Use https:// in production.",
+            otlp_endpoint,
+        )
+
+
 def _read_mcp_filter_enabled() -> bool:
     try:
         value = getattr(settings, "mcp_tools_list_filter_enabled", None)
@@ -1047,6 +1100,9 @@ def check_rate_limit(username: str) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI application."""
+    # Log OTel SDK + metrics emission state (issue #1122)
+    _log_otel_state()
+
     # Startup: Load scopes configuration
     global SCOPES_CONFIG
     try:
@@ -1084,6 +1140,24 @@ app = FastAPI(
     lifespan=lifespan,
     root_path=ROOT_PATH,
 )
+
+# Issue #1122: programmatic FastAPI auto-instrumentation (HTTP semantic
+# conventions). See registry/main.py for the full rationale. Skipped when
+# the opentelemetry-instrument wrapper has already instrumented the app to
+# avoid the "already instrumented" warning and any double-instrumentation
+# side effects observed on ECS.
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    if getattr(app, "_is_instrumented_by_opentelemetry", False):
+        logger.info("FastAPI already instrumented by opentelemetry-instrument; skipping programmatic instrument_app")
+    else:
+        FastAPIInstrumentor.instrument_app(app)
+        logger.info("Programmatic FastAPI auto-instrumentation enabled (issue #1122)")
+except ImportError:
+    logger.debug("opentelemetry-instrumentation-fastapi not installed; HTTP auto-metrics disabled")
+except Exception as exc:
+    logger.warning("FastAPI auto-instrumentation failed: %s", exc)
 
 
 # Router for service-to-service /internal/* endpoints.
@@ -1880,6 +1954,7 @@ async def validate_request(request: Request):
             f"Client-Id={mask_sensitive_id(client_id) if client_id else 'None'}, "
             f"Region={region}, Original-URL={original_url}"
         )
+
         logger.info(f"Server Name from URL: {server_name_from_url}")
 
         # Only activate static token auth when there is no session cookie
@@ -2066,7 +2141,9 @@ async def validate_request(request: Request):
 
                 if not validation_result:
                     auth_provider = get_auth_provider()
-                    logger.info(f"Using authentication provider: {auth_provider.__class__.__name__}")
+                    logger.info(
+                        f"Using authentication provider: {auth_provider.__class__.__name__}"
+                    )
 
                     # Provider-specific validation
                     if hasattr(auth_provider, "validate_token"):
@@ -3893,11 +3970,17 @@ async def oauth2_logout(
 #                    written after /validate accepted the caller.
 #
 # All headers from the incoming request (except hop-by-hop headers) are
-# forwarded to the upstream. For any JSON-RPC method other than
-# "tools/list", the upstream response body is returned unchanged ("uniform
-# proxy"). For tools/list, the response body is buffered (up to
-# MCP_PROXY_MAX_BODY_BYTES), filtered via filter_tools_list_response, and
-# returned with an updated result.tools array.
+# forwarded to the upstream. The upstream response headers are likewise
+# forwarded back to the client (except framing/encoding headers that
+# Starlette must recompute) so streamable-http session state such as the
+# ``Mcp-Session-Id`` header that the upstream emits during ``initialize``
+# propagates end-to-end. Without that header the MCP client cannot
+# establish a session and follow-up calls fail with "Missing session ID".
+# For any JSON-RPC method other than "tools/list", the upstream response
+# body is returned unchanged ("uniform proxy"). For tools/list, the
+# response body is buffered (up to MCP_PROXY_MAX_BODY_BYTES), filtered
+# via filter_tools_list_response, and returned with an updated
+# result.tools array.
 
 
 _HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
@@ -3912,6 +3995,43 @@ _HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
         "upgrade",
         "host",
         "content-length",
+    }
+)
+
+
+# Allowlist of upstream response headers the proxy is permitted to forward
+# back to the MCP client. The auth-server sits on a trust boundary in front
+# of arbitrary upstream MCP servers, so the default posture is to drop
+# everything and explicitly opt-in the small set of headers MCP clients
+# actually act on. This prevents an upstream from dictating response-header
+# policy that browsers / MCP clients honor (Set-Cookie, Strict-Transport-
+# Security, Content-Security-Policy, Access-Control-Allow-*, Location,
+# Server, etc.) and from overriding framing headers Starlette must set
+# itself (Content-Length, Content-Encoding, Transfer-Encoding, Connection).
+#
+# Entries are stored lowercase; matching is case-insensitive (HTTP header
+# names are case-insensitive per RFC 9110 section 5.1). Adding to this set
+# is a security-relevant change -- every new entry should be reviewed for
+# whether an upstream-supplied value could be abused before it lands.
+#
+# Why each entry is here:
+#   mcp-session-id     streamable-http MCP servers emit this on initialize
+#                      and clients must echo it on follow-up requests to
+#                      identify the session (MCP spec, "Session
+#                      management").
+#   x-mcp-session-id   legacy alias some MCP servers / clients still emit;
+#                      kept for compatibility with the same flow.
+#   www-authenticate   required by the PRM / OAuth resource-metadata flow
+#                      added in PR #1115 so 401 responses point clients at
+#                      the authorization server.
+#   retry-after        lets clients honor upstream 429 / 503 backoff hints
+#                      rather than retry-storm the upstream.
+_FORWARDED_RESPONSE_HEADERS: frozenset[str] = frozenset(
+    {
+        "mcp-session-id",
+        "x-mcp-session-id",
+        "www-authenticate",
+        "retry-after",
     }
 )
 
@@ -3955,6 +4075,31 @@ def _forward_headers(
             continue
         forwarded[key] = value
     return forwarded
+
+
+def _select_forwarded_response_headers(
+    upstream_headers: Mapping[str, str],
+) -> dict[str, str]:
+    """Select upstream MCP response headers safe to forward back to the
+    client, applying the ``_FORWARDED_RESPONSE_HEADERS`` allowlist with
+    case-insensitive matching.
+
+    Anything outside the allowlist is silently dropped. This is the
+    enforcement point for the trust boundary between the auth-server and
+    arbitrary upstream MCP servers -- an upstream cannot dictate
+    ``Set-Cookie``, ``Location``, ``Strict-Transport-Security`` etc. on
+    responses the gateway issues.
+
+    The original header casing from the upstream is preserved on the
+    returned dict so the bytes on the wire match what the MCP server sent
+    (e.g. ``Mcp-Session-Id`` rather than ``mcp-session-id``). HTTP header
+    lookups remain case-insensitive on Starlette's ``Response.headers``.
+    """
+    selected: dict[str, str] = {}
+    for key, value in upstream_headers.items():
+        if key.lower() in _FORWARDED_RESPONSE_HEADERS:
+            selected[key] = value
+    return selected
 
 
 @app.post("/mcp-proxy/{server_name:path}")
@@ -4038,6 +4183,10 @@ async def mcp_proxy(
                 body_bytes = await _read_bounded(upstream_response, max_body_bytes)
                 status_code = upstream_response.status_code
                 content_type = upstream_response.headers.get("content-type", "application/json")
+                # Snapshot upstream headers BEFORE leaving the stream
+                # context. httpx releases response.headers when the
+                # async-with block exits; reading them afterwards returns
+                # an empty mapping and Mcp-Session-Id is silently lost.
                 # Capture MCP session headers before the response stream closes
                 upstream_headers = dict(upstream_response.headers)
     except HTTPException:
@@ -4063,13 +4212,13 @@ async def mcp_proxy(
         and "application/json" in content_type.lower()
     )
 
-    # Forward key MCP response headers from the upstream (especially
-    # Mcp-Session-Id which the client needs for subsequent requests).
-    response_headers: dict[str, str] = {}
-    for hdr in ("mcp-session-id", "x-mcp-session-id"):
-        val = upstream_headers.get(hdr)
-        if val:
-            response_headers[hdr] = val
+    # Apply the response-header allowlist. Anything outside
+    # _FORWARDED_RESPONSE_HEADERS (Set-Cookie, Location, HSTS, CSP,
+    # framing headers, etc.) is dropped here so an upstream MCP server
+    # cannot dictate response-header policy on the gateway. The
+    # allowlist itself is the auditable enforcement point -- adding to
+    # it requires a security review (see comment on the constant).
+    response_headers = _select_forwarded_response_headers(upstream_headers)
 
     if not should_filter:
         # Forward the upstream body and content_type unchanged. Many MCP

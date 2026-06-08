@@ -374,7 +374,6 @@ charts/*/Chart.lock
 # Claude
 .claude/*
 !.claude/skills/
-.claude/skills/search-registry/
 .token?
 
 # Telemetry collector build artifacts and state
@@ -436,3 +435,13 @@ registry_metrics.csv
 # Stress test generated data and results (may move to a separate repo later)
 tests/stress/data/
 tests/stress/results/
+
+# Search evaluation (datasets + generated results)
+tests/fixtures/search_dataset/unified_dataset.json
+tests/fixtures/search_dataset/ground_truth.json
+tests/fixtures/search_dataset/generated_ground_truth.json
+tests/fixtures/search_dataset/benchmark_results.json
+tests/fixtures/search_dataset/benchmark_results.md
+
+# Benchmark search results (generated, not committed)
+results*.json

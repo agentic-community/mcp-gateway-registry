@@ -12,8 +12,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
-from prometheus_client import Counter
 from pymongo import ReadPreference, WriteConcern
+
+from registry.observability.meters import (
+    session_store_resolve_total,
+)
 
 from ..repositories.documentdb.client import get_collection_name, get_documentdb_client
 from .session_crypto import decrypt_id_token
@@ -24,16 +27,13 @@ COLLECTION_BASE_NAME: str = "oauth_sessions"
 
 _collection: AsyncIOMotorCollection | None = None
 
-# Outcome counter for resolve_session calls. Labels:
-#   hit          — record found, valid, returned
-#   miss         — empty session_id or no document found
-#   expired      — document exists but expires_at <= now
-#   store_error  — read raised (network blip, replica lag, etc.)
-session_store_resolve_total = Counter(
-    "registry_session_store_resolve_total",
-    "Outcome of session_store.resolve_session calls",
-    ["result"],
-)
+# Outcome counter for resolve_session calls is imported above from
+# registry.observability.meters as part of the OTel migration (issue #1122).
+# Labels:
+#   hit          - record found, valid, returned
+#   miss         - empty session_id or no document found
+#   expired      - document exists but expires_at <= now
+#   store_error  - read raised (network blip, replica lag, etc.)
 
 
 async def _get_collection() -> AsyncIOMotorCollection:

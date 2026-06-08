@@ -122,6 +122,7 @@ Internal and external URLs for the auth server, plus internal JWT signing.
 | Internal JWT issuer | (constant in code) | — | `auth-server.app.jwtIssuer` | `iss` claim on internal service JWTs. |
 | Internal JWT audience | (constant in code) | — | `auth-server.app.jwtAudience` | `aud` claim on internal service JWTs. |
 | App secret key **(secret)** | `SECRET_KEY` (required) | `secret_key` via `TF_VAR_*` / Secrets Manager (required) | `global.secretKey` (Helm chart auto-generates at install time if unset) | JWT signing + session-cookie signing + at-rest encryption of OAuth `id_token`. **Required** — auth_server and registry refuse to start without it (the previous per-replica random fallback caused `BadSignature` across replicas). Must be identical across all auth_server and registry replicas. Rotating invalidates stored creds and active sessions; rotation requires a process restart, not a SIGHUP reload. **Must be high-entropy (32+ bytes from a CSPRNG)** — read access to the `oauth_sessions_*` collection is equivalent to credential compromise unless this key is strong and never written to a logged location. Generate with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'`. |
+| Advertised OAuth scopes | `MCP_ADVERTISED_SCOPES` | — | `registry.app.mcpAdvertisedScopes` | Space-separated override for the `scopes_supported` array in the PRM (Protected Resource Metadata) document. When set, only these scopes are advertised to MCP discovery clients. Useful when the IdP performs RFC 7591 DCR and rejects scope names it does not recognize. Example: `openid email profile offline_access`. When unset, all scopes from the registry authorization config are advertised (default). |
 
 ---
 
@@ -133,6 +134,7 @@ Affects only `with-gateway` deployments (nginx reverse proxy).
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Extra nginx `server_name` entries | `GATEWAY_ADDITIONAL_SERVER_NAMES` | — | — (ingress annotations handle this) | Space-separated list of additional hostnames / IPs to accept. |
 | Server bind address (IPv6 opt-in) | `BIND_HOST` (and `HOST` for currenttime/mcpgw) | `bind_host` | `mcpgw.app.bindHost` | Default `0.0.0.0` (IPv4) works everywhere. Set to `::` only for IPv6-only deployments — requires `net.ipv6.bindv6only=0` on the host AND an IPv6 loopback in the container. Issue #863 / PR #864. Local-dev `uvicorn` direct invocation and `servers/currenttime` keep the safer `127.0.0.1` default. |
+| Nginx IPv6 listeners (opt-in) | `NGINX_ENABLE_IPV6` | — | via `extraEnv` | Default `false` keeps the in-pod nginx reverse proxy's IPv4-only `listen` directives, which work on every host (binding `[::]` fails where IPv6 is unavailable). Set to `true` on IPv6-only / dual-stack clusters so the entrypoint adds `listen [::]:8080;` (and `[::]:8443 ssl;`), letting the load balancer and kubelet readiness probe reach the pod over IPv6. Nginx counterpart to `BIND_HOST=::`. |
 
 ---
 
@@ -179,6 +181,23 @@ Fail-closed external approval of registrations.
 | OAuth2 client id | `REGISTRATION_GATE_OAUTH2_CLIENT_ID` | `registration_gate_oauth2_client_id` | `registry.app.registrationGateOauth2ClientId` | — |
 | OAuth2 client secret **(secret)** | `REGISTRATION_GATE_OAUTH2_CLIENT_SECRET` | `registration_gate_oauth2_client_secret` | `registry.app.registrationGateOauth2ClientSecret` | — |
 | OAuth2 scope | `REGISTRATION_GATE_OAUTH2_SCOPE` | `registration_gate_oauth2_scope` | `registry.app.registrationGateOauth2Scope` | e.g. `api://app-id/.default`. |
+
+---
+
+## Group 7a — Agent Batch API (Issue #956)
+
+Async batch register/patch/replace/delete for agent cards, drained by an in-process worker. Helm renders these into the `registry-batch-config` ConfigMap (non-secret).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Worker enabled | `BATCH_WORKER_ENABLED` | `batch_worker_enabled` | `registry.app.batchWorkerEnabled` | Enable in-process worker. v1: exactly one replica true. |
+| Max ops per job | `BATCH_MAX_OPERATIONS_PER_JOB` | `batch_max_operations_per_job` | `registry.app.batchMaxOperationsPerJob` | Items per submission. Default 1000. |
+| Max concurrent jobs/user | `BATCH_MAX_CONCURRENT_JOBS_PER_USER` | `batch_max_concurrent_jobs_per_user` | `registry.app.batchMaxConcurrentJobsPerUser` | Active jobs per submitter. Default 3. |
+| Job retention (days) | `BATCH_JOB_RETENTION_DAYS` | `batch_job_retention_days` | `registry.app.batchJobRetentionDays` | TTL on `updated_at`. Default 7. |
+| Worker poll interval | `BATCH_WORKER_POLL_INTERVAL_SECONDS` | `batch_worker_poll_interval_seconds` | `registry.app.batchWorkerPollIntervalSeconds` | Queue poll cadence. Default 1.0. |
+| Max request bytes | `BATCH_MAX_REQUEST_BYTES` | `batch_max_request_bytes` | `registry.app.batchMaxRequestBytes` | Body size cap. Default 4194304 (4 MiB). |
+| Worker lease TTL | `BATCH_WORKER_LEASE_TTL_SECONDS` | `batch_worker_lease_ttl_seconds` | `registry.app.batchWorkerLeaseTtlSeconds` | Seconds before an unrenewed lease expires. Default 60. |
+| Worker lease heartbeat | `BATCH_WORKER_LEASE_HEARTBEAT_SECONDS` | `batch_worker_lease_heartbeat_seconds` | `registry.app.batchWorkerLeaseHeartbeatSeconds` | Lease renewal interval. Should be below TTL. Default 15. |
 
 ---
 
@@ -439,6 +458,25 @@ Used by `registry` and `mcpgw` services.
 
 ---
 
+## Group 20a — Registration Deduplication
+
+Advisory check that surfaces likely-duplicate servers when a user registers a new one. Reuses the embedding model from Group 20 — the query embedder and the persisted-corpus embedder must be the same model for cosine scores to be meaningful. Used by the `registry` service only. Path uniqueness remains the only hard rule; this feature is purely advisory and never blocks registration.
+
+Weights must sum to 1.0 ± 0.001 or the registry process refuses to start (validated in `Settings`).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable feature | `DEDUP_ENABLED` | `dedup_enabled` | `registry.app.dedup.enabled` | Master switch. `false` makes `POST /servers/similar` return `enabled=false` and skip all work. |
+| Score threshold | `DEDUP_SCORE_THRESHOLD` | `dedup_score_threshold` | `registry.app.dedup.scoreThreshold` | Minimum composite score (0.0..1.0) for a candidate to surface. Default `0.7`. |
+| Max suggestions | `DEDUP_MAX_SUGGESTIONS` | `dedup_max_suggestions` | `registry.app.dedup.maxSuggestions` | Cap on suggestions returned. Default `3`. |
+| Candidate pool size | `DEDUP_CANDIDATE_POOL_SIZE` | `dedup_candidate_pool_size` | `registry.app.dedup.candidatePoolSize` | `k` for vector search before scoring. Default `20`. Tripled internally for restricted callers (whose visibility filter would otherwise decimate results). |
+| Semantic weight | `DEDUP_WEIGHT_SEMANTIC` | `dedup_weight_semantic` | `registry.app.dedup.weightSemantic` | Default `0.55`. |
+| URL weight | `DEDUP_WEIGHT_URL` | `dedup_weight_url` | `registry.app.dedup.weightUrl` | Default `0.30`. |
+| Name-exact weight | `DEDUP_WEIGHT_NAME_EXACT` | `dedup_weight_name_exact` | `registry.app.dedup.weightNameExact` | Default `0.15`. |
+| Max query text chars | `DEDUP_MAX_TEXT_CHARS` | `dedup_max_text_chars` | `registry.app.dedup.maxTextChars` | Cap on `(name + description)` fed to the embedder per call. Default `2000`. Cost guard. |
+
+---
+
 ## Group 21 — ANS (Agent Naming Service)
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
@@ -505,6 +543,13 @@ Used by `registry` and `mcpgw` services.
 | OTLP headers **(secret)** | `OTEL_EXPORTER_OTLP_HEADERS` | `otel_exporter_otlp_headers` | `registry.app.otelExporterOtlpHeaders` | API-key-bearing. Use Secrets Manager on ECS. |
 | Export interval (ms) | `OTEL_OTLP_EXPORT_INTERVAL_MS` | `otel_otlp_export_interval_ms` | `registry.app.otelOtlpExportIntervalMs` | Default 30000. |
 | Metrics temporality | `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `otel_exporter_otlp_metrics_temporality_preference` | `registry.app.otelExporterOtlpMetricsTemporalityPreference` | `cumulative` (default) or `delta` (Datadog). |
+| Native OTel emission: legacy POST (Issue #1122) | `METRICS_LEGACY_HTTP_POST` | (set in container env block, no top-level tfvar) | `registry.app.metricsLegacyHttpPost`, `auth-server.metrics.legacyHttpPost`, `mcpgw.metrics.legacyHttpPost` | One-release transition flag. `true` keeps the legacy `metrics-service:8890` HTTP POST active alongside native OTel. Default false. Removed in 1.26.0. |
+| Native OTel emission: export interval (Issue #1122) | `OTEL_METRIC_EXPORT_INTERVAL_MS` | (set in container env block) | `registry.app.otelMetricExportIntervalMs`, `auth-server.metrics.otelExportIntervalMs`, `mcpgw.metrics.otelExportIntervalMs` | OTel SDK metric export push interval, ms. Default 15000. |
+| Native OTel emission: Prometheus exporter host (Issue #1122) | `OTEL_EXPORTER_PROMETHEUS_HOST` | (set in container env block) | `registry.app.otelExporterPrometheusHost`, `auth-server.metrics.exporterPrometheusHost`, `mcpgw.metrics.exporterPrometheusHost` | Bind address for the OTel Prometheus exporter listener. EKS default `0.0.0.0` (NetworkPolicy gates access); Compose default `127.0.0.1`. |
+| Native OTel emission: Prometheus exporter port (Issue #1122) | `OTEL_EXPORTER_PROMETHEUS_PORT` | (set in container env block) | `registry.app.otelExporterPrometheusPort`, `auth-server.metrics.exporterPrometheusPort`, `mcpgw.metrics.exporterPrometheusPort` | Port for the OTel Prometheus exporter. Default 9464. |
+| OTLP push endpoint (standard OTel SDK var, Issue #1122) | `OTEL_EXPORTER_OTLP_ENDPOINT` | Set conditionally in `ecs-services.tf` to `http://localhost:4317` when `var.enable_observability=true` (per-task ADOT sidecar). Else empty. | Operators inject via `extraEnv` per chart, or set on the chart's configmap | Activates the OTLP push exporter when set. SDK default empty (Compose pull-only mode). |
+| OTLP push protocol (standard OTel SDK var, Issue #1122) | `OTEL_EXPORTER_OTLP_PROTOCOL` | (set in container env block) | (set via `extraEnv`) | `grpc` (default) or `http/protobuf`. Must match the receiver. |
+| Service name for trace attribution (standard OTel SDK var, Issue #1122) | `OTEL_SERVICE_NAME` | Hardcoded per service in `ecs-services.tf` (e.g., `mcp-gateway-registry`) | (set via `extraEnv` per pod) | Without this, traces are tagged `unknown_service` in your tracing backend. Set per service. |
 
 ---
 
@@ -529,6 +574,7 @@ Used by `registry` and `mcpgw` services.
 | Collector endpoint | `MCP_TELEMETRY_ENDPOINT` | — | — | Self-hosted override. |
 | Debug mode | `TELEMETRY_DEBUG` | `telemetry_debug` | `registry.app.telemetryDebug` | Log payloads instead of send. |
 | Disable IMDS probe (cloud detection) | `MCP_TELEMETRY_IMDS_PROBE_DISABLED` | `mcp_telemetry_imds_probe_disabled` | `registry.app.mcpTelemetryImdsProbeDisabled` | Issue #986. Env/DMI/ECS/k8s tiers still run. |
+| Cloud provider override | `MCP_CLOUD_PROVIDER` | `mcp_cloud_provider` | `registry.app.mcpCloudProvider` | Issue #1120. Allowed: aws\|azure\|gcp\|on_premises\|other. Suppresses admin-UI banner. |
 
 ---
 

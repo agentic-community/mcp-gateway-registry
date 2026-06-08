@@ -54,15 +54,33 @@ def mock_search_repo():
 
 @pytest.fixture
 def mock_server_service():
-    """Mock server service for testing."""
-    with patch("registry.api.search_routes.server_service") as mock:
+    """Mock server service for testing.
+
+    The visibility helpers (registry.services.visibility) lazy-import
+    server_service from its canonical module, while the search route
+    re-imports it under registry.api.search_routes.server_service.
+    Both bindings need to be patched to point at the same mock so
+    the test sees consistent state regardless of which code path is
+    exercised.
+    """
+    with (
+        patch("registry.api.search_routes.server_service") as mock,
+        patch("registry.services.server_service.server_service", mock),
+    ):
         yield mock
 
 
 @pytest.fixture
 def mock_agent_service():
-    """Mock agent service for testing."""
-    with patch("registry.api.search_routes.agent_service") as mock:
+    """Mock agent service for testing.
+
+    Same rationale as ``mock_server_service``: patch both the
+    search_routes alias and the canonical singleton binding.
+    """
+    with (
+        patch("registry.api.search_routes.agent_service") as mock,
+        patch("registry.services.agent_service.agent_service", mock),
+    ):
         yield mock
 
 
@@ -116,14 +134,16 @@ def mock_server_and_agent_service_db_calls():
             return AgentCardFactory(path=path, name="data-analyst", visibility="public")
         return None
 
-    # Patch both service methods
+    # Patch the singleton method bindings at the canonical sites so
+    # both the search route's direct calls and the visibility helpers'
+    # lazy imports see the mocks.
     with (
         patch(
-            "registry.api.search_routes.server_service.get_server_info",
+            "registry.services.server_service.server_service.get_server_info",
             new=AsyncMock(side_effect=get_server_info),
         ),
         patch(
-            "registry.api.search_routes.agent_service.get_agent_info",
+            "registry.services.agent_service.agent_service.get_agent_info",
             new=AsyncMock(side_effect=get_agent_info),
         ),
     ):

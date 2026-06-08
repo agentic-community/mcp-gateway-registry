@@ -308,92 +308,20 @@ async def _get_tool_schema_for_virtual_server(
         return None
 
 
-async def _user_can_access_server(path: str, server_name: str, user_context: dict) -> bool:
-    """Validate whether the current user can view the specified server."""
-    if user_context.get("is_admin"):
-        return True
-
-    accessible_servers = user_context.get("accessible_servers") or []
-    if "all" in accessible_servers:
-        return True
-
-    if not accessible_servers:
-        return False
-
-    try:
-        if await server_service.user_can_access_server_path(path, accessible_servers):
-            return True
-    except Exception:
-        # Fall through to string comparisons if server lookup failed
-        logger.debug("Unable to validate server path via service for %s", path, exc_info=True)
-
-    technical_name = path.strip("/")
-    return technical_name in accessible_servers or (
-        server_name and server_name in accessible_servers
-    )
-
-
-async def _user_can_access_agent(agent_path: str, user_context: dict) -> bool:
-    """Validate user access for a given agent."""
-    if user_context.get("is_admin"):
-        return True
-
-    accessible_agents = user_context.get("accessible_agents") or []
-    if "all" not in accessible_agents and agent_path not in accessible_agents:
-        return False
-
-    agent_card = await agent_service.get_agent_info(agent_path)
-    if not agent_card:
-        return False
-
-    if agent_card.visibility == "public":
-        return True
-
-    if agent_card.visibility == "private":
-        return agent_card.registered_by == user_context.get("username")
-
-    if agent_card.visibility == "group-restricted":
-        allowed_groups = set(agent_card.allowed_groups)
-        user_groups = set(user_context.get("groups", []))
-        return bool(allowed_groups & user_groups)
-
-    return False
-
-
-async def _user_can_access_skill(
-    skill_path: str,
-    visibility: str,
-    owner: str,
-    allowed_groups: list,
-    user_context: dict,
-) -> bool:
-    """Validate user access for a given skill based on visibility.
-
-    Args:
-        skill_path: The skill path
-        visibility: Skill visibility (public, private, group)
-        owner: Skill owner username
-        allowed_groups: Groups allowed to access the skill
-        user_context: User context with username, groups, is_admin
-
-    Returns:
-        True if user can access the skill, False otherwise
-    """
-    if user_context.get("is_admin"):
-        return True
-
-    if visibility == "public":
-        return True
-
-    if visibility == "private":
-        return owner == user_context.get("username")
-
-    if visibility == "group":
-        user_groups = set(user_context.get("groups", []))
-        skill_groups = set(allowed_groups or [])
-        return bool(user_groups & skill_groups)
-
-    return False
+# The visibility helpers live in ``registry.services.visibility`` so
+# the duplicate-check service can import them without creating a
+# circular dependency on the API layer. We re-export them under their
+# original underscore-prefixed names so existing callers in this module
+# don't have to change.
+from ..services.visibility import (
+    user_can_access_agent as _user_can_access_agent,
+)
+from ..services.visibility import (
+    user_can_access_server as _user_can_access_server,
+)
+from ..services.visibility import (
+    user_can_access_skill as _user_can_access_skill,
+)
 
 
 def _compute_trust_verified(
@@ -875,7 +803,7 @@ async def semantic_search(
     # In FULL mode, return all results (no filtering needed)
 
     # Increment semantic search counter (fail-silent)
-    from registry.repositories.stats_repository import increment_search_counter
+    from ..repositories.stats_repository import increment_search_counter
 
     await increment_search_counter()
 

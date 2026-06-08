@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { ServerStatsProvider } from '../contexts/ServerStatsContext';
 import { useEffect } from 'react';
 
 interface ProtectedRouteProps {
@@ -29,7 +30,7 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     return null;
   }
 
-  return <>{children}</>;
+  return <ServerStatsProvider>{children}</ServerStatsProvider>;
 };
 
-export default ProtectedRoute; 
+export default ProtectedRoute;

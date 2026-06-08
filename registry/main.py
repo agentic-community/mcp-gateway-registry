@@ -7,8 +7,10 @@ This main.py file serves as the application coordinator, importing and registeri
 domain routers while handling core app configuration.
 """
 
+import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 # Import datetime for uptime tracking
@@ -33,6 +35,7 @@ from registry.api.federation_routes import router as federation_router
 from registry.api.internal_routes import router as internal_router
 from registry.api.log_routes import router as log_router
 from registry.api.m2m_management_routes import router as m2m_management_router
+from registry.api.embeddings_admin_routes import router as embeddings_admin_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
 from registry.api.peer_management_routes import router as peer_management_router
@@ -79,7 +82,8 @@ from registry.core.telemetry import (
 from registry.health.routes import router as health_router
 from registry.health.service import health_service
 
-# Import registry mode middleware
+# Import metrics + registry mode middleware
+from registry.metrics.middleware import RegistryMetricsMiddleware
 from registry.middleware.mcp_www_authenticate import WWWAuthenticateMiddleware
 from registry.middleware.mode_filter import RegistryModeMiddleware
 from registry.repositories.factory import get_search_repository
@@ -134,10 +138,73 @@ def _log_startup_configuration() -> None:
 
 
 def _initialize_deployment_metrics() -> None:
-    """Initialize deployment mode Prometheus metrics."""
+    """Initialize deployment mode Prometheus metrics.
+
+    The DEPLOYMENT_MODE_INFO call is preserved for backward compatibility
+    with the legacy Prometheus Gauge API, but is now a no-op shim. The OTel
+    ObservableGauge in registry.observability.meters reads the current
+    deployment mode on every export cycle.
+    """
     DEPLOYMENT_MODE_INFO.labels(
         deployment_mode=settings.deployment_mode.value, registry_mode=settings.registry_mode.value
     ).set(1)
+
+
+def _endpoint_is_localhost(url: str) -> bool:
+    """Return True if the URL host is 127.0.0.1, ::1, or localhost."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = urlsplit(url).hostname or ""
+    except ValueError:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _log_otel_state() -> None:
+    """Emit a single startup log line describing OTel SDK + legacy-flag state.
+
+    Issue #1122: lets operators see at a glance whether OTel emission is
+    active, which OTLP endpoint is configured, the export interval, and
+    whether the legacy HTTP POST path is also enabled. Also warns at startup
+    if the OTLP endpoint uses HTTP to a non-localhost host (telemetry would
+    be unencrypted in transit).
+    """
+    try:
+        from opentelemetry import metrics
+    except ImportError:
+        logger.debug("opentelemetry not installed; skipping OTel state log")
+        return
+
+    provider = metrics.get_meter_provider()
+    provider_name = type(provider).__name__
+    otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    legacy = settings.metrics_legacy_http_post
+    interval_ms = settings.otel_metric_export_interval_ms
+
+    if "NoOp" in provider_name or "Default" in provider_name or "Proxy" in provider_name:
+        logger.warning(
+            "OTel metrics DISABLED (provider=%s). Set OTEL_EXPORTER_OTLP_ENDPOINT "
+            "or OTEL_EXPORTER_PROMETHEUS_HOST to enable. Legacy HTTP POST: %s.",
+            provider_name,
+            legacy,
+        )
+        return
+
+    logger.info(
+        "OTel metrics enabled (provider=%s, endpoint=%s, interval_ms=%s, legacy_http_post=%s)",
+        provider_name,
+        otlp_endpoint,
+        interval_ms,
+        legacy,
+    )
+
+    if otlp_endpoint.startswith("http://") and not _endpoint_is_localhost(otlp_endpoint):
+        logger.warning(
+            "OTEL_EXPORTER_OTLP_ENDPOINT uses http:// to a non-localhost host (%s). "
+            "Telemetry will be UNENCRYPTED in transit. Use https:// in production.",
+            otlp_endpoint,
+        )
 
 
 # Stats and deployment detection functions moved to registry/api/system_routes.py
@@ -363,6 +430,9 @@ async def lifespan(app: FastAPI):
     # Initialize Prometheus metrics
     _initialize_deployment_metrics()
 
+    # Log OTel SDK + metrics emission state (issue #1122)
+    _log_otel_state()
+
     # Validate required configuration settings
     logger.info("🔍 Validating configuration...")
     errors = []
@@ -476,9 +546,7 @@ async def lifespan(app: FastAPI):
                     )
             logger.info(f"✅ {backend_name} index rebuilt with {len(all_skills)} skills")
         else:
-            logger.info(
-                f"✅ {backend_name} search index is persistent, skipping startup re-index"
-            )
+            logger.info(f"✅ {backend_name} search index is persistent, skipping startup re-index")
             # Still need to load agent state (in-memory service cache)
             logger.info("📋 Loading agent cards and state...")
             await agent_service.load_agents_and_state()
@@ -523,6 +591,15 @@ async def lifespan(app: FastAPI):
 
                 if sync_on_startup:
                     logger.info("🔄 Syncing servers from federated registries on startup...")
+                    # Issue #1129: bound the entire startup-sync block so a slow or
+                    # unreachable upstream registry can't block FastAPI lifespan. The
+                    # full background-task refactor is tracked in #1129; this is the
+                    # minimal cap to prevent crash-loops when sync would otherwise
+                    # blow past the entrypoint's nginx-config wait.
+                    sync_deadline_seconds = int(
+                        os.environ.get("FEDERATION_STARTUP_SYNC_TIMEOUT_SECONDS", "60")
+                    )
+                    sync_started_at = time.monotonic()
                     try:
                         from registry.services.federation.anthropic_client import (
                             AnthropicFederationClient,
@@ -534,11 +611,24 @@ async def lifespan(app: FastAPI):
                             and federation_config.anthropic.sync_on_startup
                         ):
                             logger.info("Syncing from Anthropic MCP Registry...")
+                            # Per-request timeout of 5s (down from default 30s) so
+                            # a single slow server can't consume the whole 60s budget.
                             anthropic_client = AnthropicFederationClient(
-                                endpoint=federation_config.anthropic.endpoint
+                                endpoint=federation_config.anthropic.endpoint,
+                                timeout_seconds=5,
                             )
-                            servers = anthropic_client.fetch_all_servers(
-                                federation_config.anthropic.servers
+                            # fetch_all_servers is synchronous (httpx.Client); run it
+                            # in a thread with a remaining-budget timeout so the event
+                            # loop stays free and we can actually cancel.
+                            remaining = max(
+                                1.0, sync_deadline_seconds - (time.monotonic() - sync_started_at)
+                            )
+                            servers = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    anthropic_client.fetch_all_servers,
+                                    federation_config.anthropic.servers,
+                                ),
+                                timeout=remaining,
                             )
 
                             # Register servers
@@ -626,6 +716,13 @@ async def lifespan(app: FastAPI):
                                     exc_info=True,
                                 )
 
+                    except TimeoutError:
+                        logger.warning(
+                            "⚠️ Federation startup sync exceeded %ds budget — abandoning to "
+                            "let the registry come up. Set FEDERATION_STARTUP_SYNC_TIMEOUT_SECONDS "
+                            "to extend, or trigger sync manually after startup. See issue #1129.",
+                            sync_deadline_seconds,
+                        )
                     except Exception as e:
                         logger.error(
                             f"⚠️ Federation sync failed (continuing with startup): {e}",
@@ -655,6 +752,12 @@ async def lifespan(app: FastAPI):
             ans_scheduler = get_ans_sync_scheduler()
             await ans_scheduler.start()
             logger.info("ANS sync scheduler started")
+
+        # Start agent batch worker (issue #956)
+        from registry.services.agent_batch_worker import get_agent_batch_worker
+
+        agent_batch_worker = get_agent_batch_worker()
+        await agent_batch_worker.start()
 
         # Ensure unique index on idp_m2m_clients.client_id for the direct
         # M2M registration API (issue #851). Only when feature is enabled.
@@ -749,6 +852,11 @@ async def lifespan(app: FastAPI):
     # Shutdown tasks
     logger.info("🔄 Shutting down MCP Gateway Registry...")
     try:
+        # Stop agent batch worker (issue #956)
+        from registry.services.agent_batch_worker import get_agent_batch_worker
+
+        await get_agent_batch_worker().stop()
+
         # Stop ANS sync scheduler
         if settings.ans_integration_enabled:
             from registry.services.ans_sync_scheduler import get_ans_sync_scheduler
@@ -843,6 +951,29 @@ app = FastAPI(
     ],
 )
 
+# Issue #1122: programmatic FastAPI auto-instrumentation. Emits HTTP
+# semantic-convention metrics (http.server.duration histogram + counter,
+# http.server.active_requests gauge) and spans for every route, with
+# attributes including http.route (template form, NOT the raw URL),
+# http.method, http.status_code. Works whether or not opentelemetry-
+# instrument is wrapping uvicorn at startup. Skipped when the wrapper has
+# already instrumented the app, to avoid the "already instrumented" warning
+# and any double-instrumentation side effects observed on ECS.
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    if getattr(app, "_is_instrumented_by_opentelemetry", False):
+        logger.info(
+            "FastAPI already instrumented by opentelemetry-instrument; skipping programmatic instrument_app"
+        )
+    else:
+        FastAPIInstrumentor.instrument_app(app)
+        logger.info("Programmatic FastAPI auto-instrumentation enabled (issue #1122)")
+except ImportError:
+    logger.debug("opentelemetry-instrumentation-fastapi not installed; HTTP auto-metrics disabled")
+except Exception as exc:
+    logger.warning("FastAPI auto-instrumentation failed: %s", exc)
+
 # Add WWW-Authenticate middleware for MCP-facing 401s (RFC 9728 §5.1).
 # Must be added BEFORE CORS so the response-mutation step runs LAST in
 # Starlette's LIFO middleware order (i.e. after CORS adds its own headers),
@@ -885,6 +1016,14 @@ app.add_middleware(
 if settings.registry_mode != RegistryMode.FULL:
     logger.info(f"Adding registry mode middleware - mode: {settings.registry_mode.value}")
     app.add_middleware(RegistryModeMiddleware)
+
+# Issue #1122: register the OTel-emitting metrics middleware. Emits
+# registry_operation_total / _duration_ms, tool_discovery_total / _duration_ms,
+# and (when METRICS_LEGACY_HTTP_POST=true) the legacy HTTP POST to
+# metrics-service. The middleware was previously defined but never
+# registered with the app, so these counters never reached any exporter.
+app.add_middleware(RegistryMetricsMiddleware, service_name="registry")
+logger.info("Registered RegistryMetricsMiddleware (issue #1122)")
 
 # Add audit middleware if enabled (must be added before app starts)
 if settings.audit_log_enabled:
@@ -945,6 +1084,7 @@ app.include_router(audit_router, prefix="/api", tags=["Audit Logs"])
 app.include_router(log_router, prefix="/api", tags=["Application Logs"])
 app.include_router(export_router, tags=["Data Export"])
 app.include_router(registry_management_router, prefix="/api")
+app.include_router(embeddings_admin_router, prefix="/api")
 
 # Register IdP M2M management routers (Okta and Auth0)
 app.include_router(okta_m2m_router, prefix="/api", tags=["Okta M2M"])
@@ -1034,12 +1174,15 @@ async def get_current_user(user_context: dict[str, Any] = Depends(nginx_proxied_
 @app.get("/health")
 async def health_check():
     """Simple health check for load balancers and monitoring."""
+    from registry.services.agent_batch_worker import get_agent_batch_worker
+
     return {
         "status": "healthy",
         "service": "mcp-gateway-registry",
         "deployment_mode": settings.deployment_mode.value,
         "registry_mode": settings.registry_mode.value,
         "nginx_updates_enabled": settings.nginx_updates_enabled,
+        "batch_worker": get_agent_batch_worker().health(),
     }
 
 

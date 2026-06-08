@@ -46,8 +46,9 @@ tests:
       # Order: chart-managed env vars start with NODE_NAME (downward API,
       # env[0]); DEPLOYMENT_MODE is env[1]; CODING_ASSISTANTS is env[7];
       # UI_TITLE is env[8]; the tool-level access control pair (issue #1026)
-      # is env[9]/env[10]; KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak
-      # provider) is env[11]; user extraEnv entries are appended at the end.
+      # is env[9]/env[10]; MCP_ADVERTISED_SCOPES is env[11];
+      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[12];
+      # user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
       # (set at the suite level) and awsRegistry.federationEnabled=false.
@@ -75,12 +76,15 @@ tests:
           value: TOOL_FILTER_AUDIT_LOG_LEVEL
       - equal:
           path: spec.template.spec.containers[0].env[11].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: MCP_ADVERTISED_SCOPES
       - equal:
           path: spec.template.spec.containers[0].env[12].name
-          value: MY_FLAG
+          value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[13].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[14].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -107,7 +111,8 @@ tests:
       # NOTE: These indices assume the stack-level secrets (shared-secret,
       # oauth-provider-secret) are NOT set — those would append before the
       # extraEnvFrom entries. When running standalone (no parent stack),
-      # envFrom[0..2] are otel-config, app-log-config, registry-secret.
+      # envFrom[0..3] are otel-config, app-log-config, batch-config,
+      # registry-secret.
       - equal:
           path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
           value: registry-otel-config
@@ -115,7 +120,10 @@ tests:
           path: spec.template.spec.containers[0].envFrom[1].configMapRef.name
           value: registry-app-log-config
       - equal:
-          path: spec.template.spec.containers[0].envFrom[2].secretRef.name
+          path: spec.template.spec.containers[0].envFrom[2].configMapRef.name
+          value: registry-batch-config
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[3].secretRef.name
           value: registry-secret
 
   - it: fails when extraEnv contains an env-block reserved name (DEPLOYMENT_MODE)
@@ -181,6 +189,15 @@ tests:
       - failedTemplate:
           errorPattern: "\"REGISTRATION_GATE_OAUTH2_CLIENT_SECRET\" is a reserved variable"
 
+  - it: fails when extraEnv contains a batch configmap name (BATCH_WORKER_ENABLED)
+    set:
+      extraEnv:
+        - name: BATCH_WORKER_ENABLED
+          value: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"BATCH_WORKER_ENABLED\" is a reserved variable"
+
   - it: fails when extraEnv contains UI_TITLE
     set:
       extraEnv:
@@ -208,6 +225,45 @@ tests:
           content:
             name: UI_TITLE
             value: "Acme AI Portal"
+
+  - it: emits Keycloak-DCR-aligned MCP_ADVERTISED_SCOPES by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCP_ADVERTISED_SCOPES
+            value: "profile email offline_access"
+
+  - it: lets app.mcpAdvertisedScopes be overridden (custom scope list)
+    set:
+      app:
+        mcpAdvertisedScopes: "openid"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCP_ADVERTISED_SCOPES
+            value: "openid"
+
+  - it: lets app.mcpAdvertisedScopes be cleared to empty (registry derives the list)
+    set:
+      app:
+        mcpAdvertisedScopes: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCP_ADVERTISED_SCOPES
+            value: ""
+
+  - it: fails when extraEnv contains MCP_ADVERTISED_SCOPES
+    set:
+      extraEnv:
+        - name: MCP_ADVERTISED_SCOPES
+          value: "openid"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"MCP_ADVERTISED_SCOPES\" is a reserved variable"
 
   - it: fails on duplicate names within extraEnv
     set:

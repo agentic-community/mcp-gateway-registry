@@ -18,6 +18,7 @@ import logging
 import os
 import platform
 import sys
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -46,6 +47,13 @@ _DETECTION_METHOD_ECS_META = "ecs_meta"
 _DETECTION_METHOD_K8S_HEURISTIC = "k8s_heuristic"
 _DETECTION_METHOD_IMDS = "imds"
 _DETECTION_METHOD_UNKNOWN = "unknown"
+_DETECTION_METHOD_EXPLICIT = "explicit"
+_DETECTION_METHOD_OPERATOR_DECLARED = "operator_declared"
+_DETECTION_METHOD_OPERATOR_DECLINED = "operator_declined"
+
+# Hint cache: avoids a DocumentDB read on every banner-state GET within 60s.
+_HINT_CACHE_TTL_SECONDS = 60
+_hint_cache: dict[str, tuple[float, str | None]] = {}
 
 # Worst-case probe budget: three providers x 300ms each = 900ms once per process.
 _IMDS_PROBE_TIMEOUT_SECONDS = 0.3
@@ -273,6 +281,64 @@ def _detect_cloud_provider() -> str:
     """Return just the cloud label. Kept for code that only needs the label."""
     cloud, _ = _detect_cloud_provider_with_method()
     return cloud
+
+
+async def _get_operator_cloud_hint() -> str | None:
+    """Fetch the registry-card operator hint with a 60s TTL cache.
+
+    Returns one of 'on_premises', 'other', 'declined', or None.
+    Never raises — on any repository error returns None so the cascade proceeds.
+    """
+    now = time.monotonic()
+    cached = _hint_cache.get("registry")
+    if cached is not None and now - cached[0] < _HINT_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    hint: str | None = None
+    try:
+        from registry.repositories.factory import get_registry_card_repository
+
+        repo = get_registry_card_repository()
+        card = await repo.get()
+        hint = card.cloud_provider_hint if card else None
+    except Exception as e:
+        logger.debug(f"[telemetry] Failed to load operator cloud hint: {type(e).__name__}")
+
+    _hint_cache["registry"] = (now, hint)
+    return hint
+
+
+def _invalidate_hint_cache() -> None:
+    """Clear the hint cache. Called by the POST endpoint so the next telemetry
+    event picks up the newly set hint without waiting up to 60s."""
+    _hint_cache.clear()
+
+
+async def _resolve_cloud() -> tuple[str, str]:
+    """Resolve the final (cloud, method) applying overrides in priority order.
+
+    Priority:
+        1. MCP_CLOUD_PROVIDER env var       -> method="explicit"
+        2. Registry card operator hint
+             on_premises / other            -> method="operator_declared"
+             declined                       -> ("unknown", "operator_declined")
+        3. Auto-detection cascade           -> existing 5-step
+        4. Fallback                         -> ("unknown", "unknown")
+    """
+    explicit = settings.mcp_cloud_provider
+    if explicit:
+        _log_detection_result(explicit, _DETECTION_METHOD_EXPLICIT)
+        return explicit, _DETECTION_METHOD_EXPLICIT
+
+    hint = await _get_operator_cloud_hint()
+    if hint in ("on_premises", "other"):
+        _log_detection_result(hint, _DETECTION_METHOD_OPERATOR_DECLARED)
+        return hint, _DETECTION_METHOD_OPERATOR_DECLARED
+    if hint == "declined":
+        _log_detection_result("unknown", _DETECTION_METHOD_OPERATOR_DECLINED)
+        return "unknown", _DETECTION_METHOD_OPERATOR_DECLINED
+
+    return _detect_cloud_provider_with_method()
 
 
 def _detect_compute_platform() -> str:
@@ -581,7 +647,7 @@ async def _build_startup_payload() -> dict:
         settings.embeddings_provider,
         settings.embeddings_model_name,
     )
-    cloud, detection_method = _detect_cloud_provider_with_method()
+    cloud, detection_method = await _resolve_cloud()
 
     return {
         "event": "startup",
@@ -670,7 +736,7 @@ async def _build_heartbeat_payload() -> dict:
         settings.embeddings_provider,
         settings.embeddings_model_name,
     )
-    cloud, detection_method = _detect_cloud_provider_with_method()
+    cloud, detection_method = await _resolve_cloud()
 
     return {
         "event": "heartbeat",

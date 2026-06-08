@@ -69,7 +69,7 @@ async def get_wellknown_mcp_servers(
     for server_path, server_info in all_servers.items():
         # For now, include all enabled servers
         # TODO: Add discoverability flag to server configs if needed
-        if await server_service.is_service_enabled(server_path):
+        if server_info.get("is_enabled", False):
             formatted_server = _format_server_discovery(server_info, request)
             discoverable_servers.append(formatted_server)
 

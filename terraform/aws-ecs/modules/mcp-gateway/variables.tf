@@ -37,51 +37,57 @@ variable "task_execution_role_arn" {
   default     = ""
 }
 
-# Container Image URIs (pre-built images from Docker Hub)
+# Container Image URIs (pre-built images from public ECR)
 variable "registry_image_uri" {
-  description = "Container image URI for registry service (defaults to pre-built image from mcpgateway Docker Hub)"
+  description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "mcpgateway/registry:latest"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.4"
 }
 
 variable "auth_server_image_uri" {
-  description = "Container image URI for auth server service (defaults to pre-built image from mcpgateway Docker Hub)"
+  description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "mcpgateway/auth-server:latest"
-}
-
-variable "currenttime_image_uri" {
-  description = "Container image URI for currenttime MCP server"
-  type        = string
-  default     = ""
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.4"
 }
 
 variable "mcpgw_image_uri" {
-  description = "Container image URI for mcpgw MCP server"
+  description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
+  type        = string
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.4"
+}
+
+variable "enable_demo_servers" {
+  description = "Deploy demo MCP servers and A2A agents (currenttime, realserverfaketools, flight-booking-agent, travel-assistant-agent). Requires setting the corresponding image URIs."
+  type        = bool
+  default     = false
+}
+
+variable "currenttime_image_uri" {
+  description = "Container image URI for currenttime MCP server (only used when enable_demo_servers is true)"
   type        = string
   default     = ""
 }
 
 variable "realserverfaketools_image_uri" {
-  description = "Container image URI for realserverfaketools MCP server"
+  description = "Container image URI for realserverfaketools MCP server (only used when enable_demo_servers is true)"
   type        = string
   default     = ""
 }
 
 variable "flight_booking_agent_image_uri" {
-  description = "Container image URI for flight booking A2A agent"
+  description = "Container image URI for flight booking A2A agent (only used when enable_demo_servers is true)"
   type        = string
   default     = ""
 }
 
 variable "travel_assistant_agent_image_uri" {
-  description = "Container image URI for travel assistant A2A agent"
+  description = "Container image URI for travel assistant A2A agent (only used when enable_demo_servers is true)"
   type        = string
   default     = ""
 }
 
 variable "dockerhub_org" {
-  description = "Docker Hub organization for pre-built images"
+  description = "DEPRECATED: Docker Hub organization. No longer used; images default to public ECR."
   type        = string
   default     = "mcpgateway"
 }
@@ -125,12 +131,12 @@ variable "auth_replicas" {
 }
 
 variable "currenttime_replicas" {
-  description = "Number of replicas for CurrentTime MCP server"
+  description = "Number of replicas for CurrentTime MCP server (only used when enable_demo_servers is true)"
   type        = number
   default     = 1
   validation {
-    condition     = var.currenttime_replicas > 0
-    error_message = "CurrentTime replicas must be greater than 0."
+    condition     = var.currenttime_replicas >= 0
+    error_message = "CurrentTime replicas must be 0 or greater."
   }
 }
 
@@ -145,32 +151,32 @@ variable "mcpgw_replicas" {
 }
 
 variable "realserverfaketools_replicas" {
-  description = "Number of replicas for RealServerFakeTools MCP server"
+  description = "Number of replicas for RealServerFakeTools MCP server (only used when enable_demo_servers is true)"
   type        = number
   default     = 1
   validation {
-    condition     = var.realserverfaketools_replicas > 0
-    error_message = "RealServerFakeTools replicas must be greater than 0."
+    condition     = var.realserverfaketools_replicas >= 0
+    error_message = "RealServerFakeTools replicas must be 0 or greater."
   }
 }
 
 variable "flight_booking_agent_replicas" {
-  description = "Number of replicas for Flight Booking A2A agent"
+  description = "Number of replicas for Flight Booking A2A agent (only used when enable_demo_servers is true)"
   type        = number
   default     = 1
   validation {
-    condition     = var.flight_booking_agent_replicas > 0
-    error_message = "Flight Booking agent replicas must be greater than 0."
+    condition     = var.flight_booking_agent_replicas >= 0
+    error_message = "Flight Booking agent replicas must be 0 or greater."
   }
 }
 
 variable "travel_assistant_agent_replicas" {
-  description = "Number of replicas for Travel Assistant A2A agent"
+  description = "Number of replicas for Travel Assistant A2A agent (only used when enable_demo_servers is true)"
   type        = number
   default     = 1
   validation {
-    condition     = var.travel_assistant_agent_replicas > 0
-    error_message = "Travel Assistant agent replicas must be greater than 0."
+    condition     = var.travel_assistant_agent_replicas >= 0
+    error_message = "Travel Assistant agent replicas must be 0 or greater."
   }
 }
 
@@ -332,6 +338,37 @@ variable "embeddings_api_key" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+
+# Registration Deduplication. Advisory only; reuses the embeddings
+# model above. The /api/<entity>/check-duplicates endpoints are always
+# available; the hint flag only governs whether the registration UI
+# pre-flights the check. The check never blocks registration.
+variable "dedup_registration_hint_enabled" {
+  description = "When true, registration UI pre-flights /check-duplicates and shows a hint modal. Endpoints remain available regardless."
+  type        = bool
+  default     = true
+}
+
+variable "dedup_score_threshold" {
+  description = "Minimum similarity score (0.0..1.0) for an advisory match. Default 0.7."
+  type        = number
+  default     = 0.7
+  validation {
+    condition     = var.dedup_score_threshold >= 0.0 && var.dedup_score_threshold <= 1.0
+    error_message = "dedup_score_threshold must be between 0.0 and 1.0."
+  }
+}
+
+variable "dedup_max_suggestions" {
+  description = "Cap on duplicate suggestions returned per request. Default 3."
+  type        = number
+  default     = 3
+  validation {
+    condition     = var.dedup_max_suggestions >= 1 && var.dedup_max_suggestions <= 10
+    error_message = "dedup_max_suggestions must be between 1 and 10."
+  }
 }
 
 
@@ -722,6 +759,55 @@ variable "registration_webhook_timeout_seconds" {
   default     = 10
 }
 
+# Agent batch API (issue #956)
+variable "batch_worker_enabled" {
+  description = "Enable the in-process agent batch worker loop. v1 single-worker constraint."
+  type        = bool
+  default     = true
+}
+
+variable "batch_max_operations_per_job" {
+  description = "Maximum number of items allowed in a single agent batch submission."
+  type        = number
+  default     = 1000
+}
+
+variable "batch_max_concurrent_jobs_per_user" {
+  description = "Maximum number of active batch jobs per submitter."
+  type        = number
+  default     = 3
+}
+
+variable "batch_job_retention_days" {
+  description = "Retention window for agent batch jobs in MongoDB (TTL on updated_at)."
+  type        = number
+  default     = 7
+}
+
+variable "batch_worker_poll_interval_seconds" {
+  description = "How often the batch worker polls MongoDB for queued jobs."
+  type        = number
+  default     = 1.0
+}
+
+variable "batch_max_request_bytes" {
+  description = "Maximum request body size (bytes) accepted by POST /api/agents/batch."
+  type        = number
+  default     = 4194304
+}
+
+variable "batch_worker_lease_ttl_seconds" {
+  description = "How long a claimed batch job stays owned before its lease expires and another worker may reclaim it."
+  type        = number
+  default     = 60
+}
+
+variable "batch_worker_lease_heartbeat_seconds" {
+  description = "Interval at which a worker renews the lease on its in-flight job. Should be below batch_worker_lease_ttl_seconds."
+  type        = number
+  default     = 15
+}
+
 # Registration gate / admission control (issue #809)
 variable "registration_gate_enabled" {
   description = "Enable registration gate (admission control). Default: false."
@@ -1003,6 +1089,21 @@ variable "tool_filter_audit_log_level" {
   default     = "INFO"
 }
 
+variable "mcp_advertised_scopes" {
+  description = <<-EOT
+    Space-separated override for the `scopes_supported` array in the gateway's
+    /.well-known/oauth-protected-resource document. Required when the IdP's
+    RFC 7591 DCR rejects scopes that don't exist as client-scope objects in
+    the realm. Default ("profile email offline_access") is the safe set of
+    OIDC scopes that all major IdPs ship with by default. Set to "" to fall
+    back to scope names from the registry's scopes config (which advertises
+    DocumentDB group names — Keycloak / Auth0 / Okta will reject those
+    during DCR unless they are also defined as client-scopes in the realm).
+  EOT
+  type        = string
+  default     = "profile email offline_access"
+}
+
 # =============================================================================
 # DEPLOYMENT MODE CONFIGURATION
 # =============================================================================
@@ -1130,6 +1231,12 @@ variable "telemetry_debug" {
 
 variable "mcp_telemetry_imds_probe_disabled" {
   description = "Disable IMDS probing in cloud detection (issue #986). Set to '1' to opt out. Env-var, DMI, ECS-metadata, and k8s heuristics still run."
+  type        = string
+  default     = ""
+}
+
+variable "mcp_cloud_provider" {
+  description = "Override the cloud auto-detection cascade (issue #1120). Allowed: aws, azure, gcp, on_premises, other. Leave empty to let the cascade run."
   type        = string
   default     = ""
 }

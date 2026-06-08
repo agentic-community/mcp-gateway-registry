@@ -150,6 +150,13 @@ class Action(BaseModel):
             "'forbidden' (IdP 403), 'not_found' (IdP 404)."
         ),
     )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Optional structured dimensions recorded alongside the action "
+            "(e.g., {'had_if_match': True}). Used for later analysis."
+        ),
+    )
 
 
 class Authorization(BaseModel):

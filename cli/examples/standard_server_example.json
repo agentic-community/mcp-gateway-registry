@@ -1,0 +1,132 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/docs/reference/server-json/draft/server.schema.json",
+  "name": "io.example/calculator-mcp",
+  "title": "Calculator MCP Server",
+  "description": "MCP server providing arithmetic operations: add, subtract, divide, echo, and slugify",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/example-org/calculator-mcp-server",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "calculator-mcp-server",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "uvx",
+      "environmentVariables": [
+        {
+          "name": "GATEWAY_ID",
+          "description": "Gateway ID from cloud console",
+          "isRequired": true,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "AWS_REGION",
+          "description": "AWS region for the gateway",
+          "default": "us-east-1",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://gateway-dev.example.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "value": "Bearer {access_token}",
+          "isSecret": true
+        },
+        {
+          "name": "x-gateway-id",
+          "value": "{gateway_id}"
+        },
+        {
+          "name": "Accept",
+          "value": "application/json, text/event-stream"
+        }
+      ],
+      "variables": {
+        "gateway_id": {
+          "description": "Gateway ID for dev environment",
+          "isRequired": true,
+          "isSecret": false
+        },
+        "access_token": {
+          "description": "JWT access token for dev environment",
+          "isRequired": true,
+          "isSecret": true
+        }
+      }
+    }
+  ],
+
+  "deployment": "remote",
+  "proxy_pass_url": "https://gateway-dev.example.com/mcp",
+  "transport": "streamable-http",
+  "supported_transports": ["streamable-http"],
+  "auth_scheme": "bearer",
+  "visibility": "group-restricted",
+  "allowed_groups": ["engineering", "platform-team"],
+  "status": "active",
+  "tags": ["calculator", "mcp", "lambda", "python"],
+  "num_tools": 3,
+  "tool_list": [
+    {
+      "name": "echo",
+      "description": "Returns the provided message",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string", "description": "Message to echo back" }
+        },
+        "required": ["message"]
+      }
+    },
+    {
+      "name": "calculate",
+      "description": "Evaluates a math expression (add, subtract, multiply, divide)",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "expression": { "type": "string", "description": "Math expression (e.g. '2 + 3 * 4')" }
+        },
+        "required": ["expression"]
+      }
+    },
+    {
+      "name": "slugify",
+      "description": "Converts a string to a URL-friendly slug",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "Text to convert to slug" }
+        },
+        "required": ["text"]
+      }
+    }
+  ],
+  "metadata": {
+    "runtime": "aws-lambda",
+    "language": "python",
+    "pythonVersion": "3.12",
+    "environment": "dev",
+    "region": "us-east-1"
+  },
+
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "tool": "manual",
+      "version": "1.0.0"
+    }
+  }
+}

@@ -67,6 +67,15 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     DEBIAN_FRONTEND=noninteractive
 
+# Issue #1122: prefer IPv4 over IPv6 in glibc getaddrinfo. ECS Service Connect
+# populates /etc/hosts with both A (127.255.0.x) and AAAA (2600:f0f0::x)
+# entries; the Fargate task netns has no IPv6 routing, so the default RFC 6724
+# IPv6 preference makes nginx upstream resolution and other glibc-using
+# outbound calls fail with "Network is unreachable". Bumping the IPv4-mapped
+# precedence flips the selection to IPv4. Compose and EKS are unaffected
+# because their /etc/hosts has no IPv6 dual entries to compare against.
+RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+
 # Build argument for version
 ARG BUILD_VERSION="1.0.0"
 
@@ -130,6 +139,13 @@ COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/build /app/fr
 # Only chown directories that are created here (not covered by COPY --chown).
 # /app/logs is still created for audit logs (see settings.audit_log_path).
 # Application logs now go to /var/log/containers/ai-registry per issue #987.
+#
+# The `sed` rewrites the nginx pid path at image-build time to a directory the
+# non-root appuser can write to. Doing this here (instead of in the entrypoint)
+# avoids a race: uvicorn starts in the background and registers servers before
+# the entrypoint reaches its `sed`, and any nginx -t fired by the registration
+# path would otherwise fail with "/run/nginx.pid: Permission denied" and skip
+# the reload — which silently drops new servers' location blocks.
 RUN mkdir -p /app/logs && \
     mkdir -p /app/certs && \
     mkdir -p /app/security_scans /app/skill_security_scans /app/agent_security_scans && \
@@ -139,6 +155,7 @@ RUN mkdir -p /app/logs && \
     mkdir -p /var/log/nginx && \
     mkdir -p /var/log/containers/ai-registry && \
     mkdir -p /run/nginx && \
+    sed -i 's|pid /run/nginx.pid;|pid /run/nginx/nginx.pid;|' /etc/nginx/nginx.conf && \
     chown -R appuser:appuser /app/logs /app/certs /app/security_scans /app/skill_security_scans /app/agent_security_scans /etc/nginx /var/log/nginx /var/log/containers/ai-registry /var/lib/nginx /run/nginx
 
 # Expose ports for nginx (HTTP/HTTPS on high ports for non-root) and registry

@@ -114,14 +114,19 @@ fi
 # the net.ipv6.bindv6only=0 host-side requirement.
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
 
-echo "Starting Auth Server (host=$BIND_HOST)..."
+# Internal listen port. Defaults to 8888 (Docker Compose, Helm). On ECS with
+# Service Connect, set AUTH_LISTEN_PORT=18888 to avoid conflict with Envoy's
+# outbound interceptor which binds 127.0.0.1:8888.
+AUTH_LISTEN_PORT="${AUTH_LISTEN_PORT:-8888}"
+
+echo "Starting Auth Server (host=$BIND_HOST, port=$AUTH_LISTEN_PORT)..."
 cd /app
 source .venv/bin/activate
 if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT}" ] && command -v opentelemetry-instrument >/dev/null 2>&1; then
     echo "Using OTEL_EXPORTER_OTLP_ENDPOINT at ${OTEL_EXPORTER_OTLP_ENDPOINT}"
-    UVICORN_CMD="opentelemetry-instrument uvicorn server:app --host $BIND_HOST --port 8888 --proxy-headers --forwarded-allow-ips=*"
+    UVICORN_CMD="opentelemetry-instrument uvicorn server:app --host $BIND_HOST --port $AUTH_LISTEN_PORT --proxy-headers --forwarded-allow-ips=*"
 else
     echo "OTEL_EXPORTER_OTLP_ENDPOINT not found, not using OTEL"
-    UVICORN_CMD="uvicorn server:app --host $BIND_HOST --port 8888 --proxy-headers --forwarded-allow-ips=*"
+    UVICORN_CMD="uvicorn server:app --host $BIND_HOST --port $AUTH_LISTEN_PORT --proxy-headers --forwarded-allow-ips=*"
 fi
 exec $UVICORN_CMD

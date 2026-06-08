@@ -8,6 +8,14 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     UV_NO_CACHE=1
 
+# Issue #1122: prefer IPv4 over IPv6 in glibc getaddrinfo. ECS Service Connect
+# populates /etc/hosts with both A (127.255.0.x) and AAAA (2600:f0f0::x)
+# entries; the Fargate task netns has no IPv6 routing, so the default RFC 6724
+# IPv6 preference makes outbound calls (mcpgw to registry, etc.) fail with
+# "Network is unreachable". Compose and EKS are unaffected because their
+# /etc/hosts has no IPv6 dual entries to compare against.
+RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+
 # Install system dependencies.
 # apt-get upgrade pulls in security patches against the base image's
 # already-installed packages (e.g. libc6 / glibc CVE updates) that would

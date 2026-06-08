@@ -253,6 +253,7 @@ from registry_client import (
     RatingInfoResponse,
     RatingResponse,
     RegistryClient,
+    ServerUpdateResponse,
     Skill,
     SkillRegistrationRequest,
     ToolMapping,
@@ -457,6 +458,149 @@ def _load_json_config(config_path: str) -> dict[str, Any]:
     return config
 
 
+def _is_mcp_registry_schema(data: dict[str, Any]) -> bool:
+    """Check if a JSON config uses the upstream MCP Registry server.json schema."""
+    schema_value = data.get("$schema", "")
+    if not isinstance(schema_value, str):
+        return False
+    return "modelcontextprotocol/registry" in schema_value
+
+
+def _transform_mcp_registry_to_internal(data: dict[str, Any]) -> dict[str, Any]:
+    """Transform an upstream MCP Registry server.json into internal registration format.
+
+    Derives path, server_name, proxy_pass_url, deployment, and other fields from
+    the upstream schema. Preserves all upstream-only fields in metadata["mcp_registry_spec"].
+    """
+    import re as _re
+
+    def slugify(name: str) -> str:
+        slug = name.lower()
+        slug = _re.sub(r"[^a-z0-9\-]", "-", slug)
+        slug = _re.sub(r"-+", "-", slug)
+        return slug.strip("-")
+
+    name = data.get("name", "")
+    title = data.get("title")
+    remotes = data.get("remotes", [])
+    packages = data.get("packages", [])
+
+    path = data.get("path") or f"/{slugify(name)}"
+    if not path.startswith("/"):
+        path = f"/{path}"
+
+    server_name = title if title else name
+
+    proxy_pass_url = data.get("proxy_pass_url")
+    if not proxy_pass_url and remotes:
+        proxy_pass_url = remotes[0].get("url")
+
+    deployment = data.get("deployment")
+    if not deployment:
+        if remotes:
+            deployment = "remote"
+        elif packages:
+            pkg_transport = (packages[0].get("transport") or {}).get("type", "")
+            deployment = "local" if pkg_transport == "stdio" else "remote"
+        else:
+            deployment = "remote"
+
+    supported_transports = data.get("supported_transports")
+    if not supported_transports and remotes:
+        supported_transports = [r.get("type") for r in remotes]
+
+    transport = data.get("transport")
+    if not transport and remotes:
+        transport = remotes[0].get("type")
+
+    auth_scheme = data.get("auth_scheme")
+    if not auth_scheme and remotes:
+        for header in remotes[0].get("headers", []):
+            if header.get("name", "").lower() == "authorization":
+                if "bearer" in header.get("value", "").lower():
+                    auth_scheme = "bearer"
+                    break
+    if not auth_scheme:
+        auth_scheme = "none"
+
+    tags = list(data.get("tags") or [])
+    if "mcp-registry-spec" not in tags:
+        tags.append("mcp-registry-spec")
+
+    tool_list = data.get("tool_list") or []
+
+    spec_data: dict[str, Any] = {}
+    if data.get("repository"):
+        spec_data["repository"] = data["repository"]
+    if packages:
+        spec_data["packages"] = packages
+    if remotes:
+        spec_data["remotes"] = remotes
+    if data.get("_meta"):
+        spec_data["_meta"] = data["_meta"]
+    if data.get("version"):
+        spec_data["version"] = data["version"]
+    if data.get("$schema"):
+        spec_data["$schema"] = data["$schema"]
+    spec_data["original_name"] = name
+
+    metadata = dict(data.get("metadata") or {})
+    metadata["mcp_registry_spec"] = spec_data
+
+    result: dict[str, Any] = {
+        "path": path,
+        "server_name": server_name,
+        "name": server_name,
+        "description": data.get("description", ""),
+        "proxy_pass_url": proxy_pass_url,
+        "deployment": deployment,
+        "transport": transport,
+        "supported_transports": supported_transports,
+        "auth_scheme": auth_scheme,
+        "tags": tags,
+        "num_tools": data.get("num_tools") or len(tool_list),
+        "tool_list": tool_list,
+        "tool_list_json": json.dumps(tool_list) if tool_list else None,
+        "metadata": metadata,
+        "status": data.get("status") or "active",
+        "version": data.get("version"),
+    }
+
+    if data.get("visibility"):
+        result["visibility"] = data["visibility"]
+    if data.get("allowed_groups"):
+        result["allowed_groups"] = data["allowed_groups"]
+
+    if deployment == "local" and packages:
+        pkg = packages[0]
+        runtime_type = (pkg.get("runtimeHint") or "command").lower()
+        if runtime_type not in {"npx", "uvx", "docker", "command"}:
+            runtime_type = "command"
+        env: dict[str, str] = {}
+        required_env: list[str] = []
+        for env_var in pkg.get("environmentVariables", []):
+            if env_var.get("isRequired"):
+                required_env.append(env_var["name"])
+            if env_var.get("default"):
+                env[env_var["name"]] = env_var["default"]
+        local_runtime: dict[str, Any] = {
+            "type": runtime_type,
+            "package": pkg.get("identifier", ""),
+            "version": pkg.get("version"),
+        }
+        if env:
+            local_runtime["env"] = env
+        if required_env:
+            local_runtime["required_env"] = required_env
+        result["local_runtime"] = local_runtime
+        result["proxy_pass_url"] = None
+
+    logger.info(
+        f"Transformed MCP Registry server.json: name={name} -> path={path}, deployment={deployment}"
+    )
+    return result
+
+
 def _create_client(args: argparse.Namespace) -> RegistryClient:
     """
     Create and return a configured RegistryClient instance.
@@ -571,6 +715,11 @@ def cmd_register(args: argparse.Namespace) -> int:
     try:
         config = _load_json_config(args.config)
 
+        # Detect upstream MCP Registry server.json schema and transform
+        if _is_mcp_registry_schema(config):
+            logger.info("Detected upstream MCP Registry server.json format, transforming...")
+            config = _transform_mcp_registry_to_internal(config)
+
         # Convert config to InternalServiceRegistration
         # Handle both old and new config formats
         registration = InternalServiceRegistration(
@@ -584,6 +733,7 @@ def cmd_register(args: argparse.Namespace) -> int:
             status=config.get("status"),
             auth_provider=config.get("auth_provider"),
             auth_scheme=config.get("auth_scheme", config.get("auth_type")),
+            transport=config.get("transport"),
             supported_transports=config.get("supported_transports"),
             headers=config.get("headers"),
             tool_list_json=config.get("tool_list_json"),
@@ -598,6 +748,8 @@ def cmd_register(args: argparse.Namespace) -> int:
             source_updated_at=config.get("source_updated_at"),
             external_tags=config.get("external_tags"),
             custom_headers=config.get("custom_headers"),
+            visibility=config.get("visibility"),
+            allowed_groups=config.get("allowed_groups"),
         )
 
         client = _create_client(args)
@@ -1126,20 +1278,149 @@ def cmd_server_get(args: argparse.Namespace) -> int:
             "is_enabled": server.is_enabled,
             "health_status": server.health_status,
             "transport": server.transport,
+            "supported_transports": getattr(server, "supported_transports", None),
             "version": server.version,
             "versions": server.versions,
             "license": server.license,
-            # Local-server fields. ServerDetailResponse uses extra='allow', so
-            # these surface via the extra-attrs lookup even though they aren't
-            # declared as model fields.
             "deployment": getattr(server, "deployment", None) or "remote",
             "local_runtime": getattr(server, "local_runtime", None),
+            "metadata": getattr(server, "metadata", None),
+            "visibility": getattr(server, "visibility", None),
+            "allowed_groups": getattr(server, "allowed_groups", None),
+            "auth_scheme": getattr(server, "auth_scheme", None),
+            "mcp_endpoint": getattr(server, "mcp_endpoint", None),
+            "sse_endpoint": getattr(server, "sse_endpoint", None),
+            "status": getattr(server, "status", None),
+            "registered_by": getattr(server, "registered_by", None),
         }
         print(json.dumps(output, indent=2, default=str))
         return 0
 
     except Exception as e:
         logger.error(f"Get server failed: {e}")
+        return 1
+
+
+def _build_update_server_body(args: argparse.Namespace) -> dict[str, Any]:
+    """Build the PUT body from --body or from individual field flags.
+
+    If ``--body`` is supplied, it is parsed as JSON and used verbatim.
+    Otherwise, only the supplied field flags are added to the body so
+    the user does not have to repeat unchanged fields.
+
+    Args:
+        args: Parsed CLI arguments for the update-server command.
+
+    Returns:
+        Dict to send as the JSON body of PUT /api/servers/{path}.
+
+    Raises:
+        ValueError: If ``--body`` is not valid JSON or not a JSON object.
+    """
+    if args.body:
+        parsed = json.loads(args.body)
+        if not isinstance(parsed, dict):
+            raise ValueError("--body must be a JSON object")
+        return parsed
+
+    body: dict[str, Any] = {}
+    if args.server_name is not None:
+        body["server_name"] = args.server_name
+    if args.description is not None:
+        body["description"] = args.description
+    if args.proxy_pass_url is not None:
+        body["proxy_pass_url"] = args.proxy_pass_url
+    if args.tags is not None:
+        body["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
+    if args.license is not None:
+        body["license"] = args.license
+    if args.num_tools is not None:
+        body["num_tools"] = args.num_tools
+    if args.metadata is not None:
+        body["metadata"] = json.loads(args.metadata)
+    if args.visibility is not None:
+        body["visibility"] = args.visibility
+    if args.allowed_groups is not None:
+        body["allowed_groups"] = [g.strip() for g in args.allowed_groups.split(",") if g.strip()]
+    return body
+
+
+def cmd_update_server(args: argparse.Namespace) -> int:
+    """
+    Replace a server's mutable metadata via PUT /api/servers/{path}.
+
+    Either provide a full JSON body via --body, or supply individual
+    field flags (--server-name, --description, ...). When --body is
+    supplied, all field flags are ignored.
+
+    Args:
+        args: Command arguments with path, body or field flags, and
+            optional if-match.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        body = _build_update_server_body(args)
+        if not body:
+            logger.error("No update fields provided. Pass --body or at least one field flag.")
+            return 1
+
+        client = _create_client(args)
+        result: ServerUpdateResponse = client.update_server(
+            path=args.path,
+            body=body,
+            if_match=args.if_match,
+        )
+
+        print(json.dumps(result.model_dump(), indent=2, default=str))
+        return 0
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Update server failed: {e}")
+        logger.debug("Full error details:", exc_info=True)
+        return 1
+
+
+def cmd_patch_server(args: argparse.Namespace) -> int:
+    """
+    Partially update a server via PATCH /api/servers/{path}.
+
+    The patch body must be a JSON object (RFC 7396 JSON Merge Patch).
+    Only fields present in the patch are changed.
+
+    Args:
+        args: Command arguments with path, patch JSON string, and
+            optional if-match.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        patch = json.loads(args.patch)
+        if not isinstance(patch, dict):
+            logger.error("--patch must be a JSON object")
+            return 1
+
+        client = _create_client(args)
+        result: ServerUpdateResponse = client.patch_server(
+            path=args.path,
+            patch=patch,
+            if_match=args.if_match,
+        )
+
+        print(json.dumps(result.model_dump(), indent=2, default=str))
+        return 0
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in --patch: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Patch server failed: {e}")
+        logger.debug("Full error details:", exc_info=True)
         return 1
 
 
@@ -1990,6 +2271,134 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Agent update failed: {e}")
+        logger.debug("Full error details:", exc_info=True)
+        return 1
+
+
+def cmd_agent_patch(args: argparse.Namespace) -> int:
+    """
+    Partially update an agent using RFC 7396 JSON Merge Patch.
+
+    The patch body is read from a JSON file and sent as-is; only the supplied
+    fields change. An optional weak ETag enables optimistic concurrency.
+
+    Args:
+        args: Command arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        config_path = Path(args.config)
+        if not config_path.exists():
+            logger.error(f"Patch file not found: {config_path}")
+            return 1
+
+        with open(config_path) as f:
+            patch = json.load(f)
+
+        if not isinstance(patch, dict):
+            logger.error("Patch file must contain a JSON object")
+            return 1
+
+        client = _create_client(args)
+        response = client.patch_agent(args.path, patch, if_match=args.if_match)
+
+        logger.info(f"Agent patched successfully: {response.name}")
+        return 0
+
+    except Exception as e:
+        logger.error(f"Agent patch failed: {e}")
+        logger.debug("Full error details:", exc_info=True)
+        return 1
+
+
+def cmd_agent_batch_submit(args: argparse.Namespace) -> int:
+    """
+    Submit an asynchronous batch of agent operations from a JSON file.
+
+    The file must contain either a JSON array of items or an object with an
+    "items" array (and optional "idempotency_key").
+
+    Args:
+        args: Command arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        batch_path = Path(args.file)
+        if not batch_path.exists():
+            logger.error(f"Batch file not found: {batch_path}")
+            return 1
+
+        with open(batch_path) as f:
+            payload = json.load(f)
+
+        if isinstance(payload, list):
+            items = payload
+            idempotency_key = args.idempotency_key
+        elif isinstance(payload, dict):
+            items = payload.get("items", [])
+            idempotency_key = args.idempotency_key or payload.get("idempotency_key")
+        else:
+            logger.error("Batch file must be a JSON array or object with 'items'")
+            return 1
+
+        if not items:
+            logger.error("Batch file contains no items")
+            return 1
+
+        client = _create_client(args)
+        response = client.submit_agent_batch(items, idempotency_key=idempotency_key)
+
+        if getattr(args, "json", False):
+            print(json.dumps(response.model_dump(), indent=2, default=str))
+        else:
+            logger.info(
+                f"Batch submitted: job_id={response.job_id} (replay={response.idempotent_replay})"
+            )
+            logger.info(f"Poll status with: agent-batch-status --job-id {response.job_id}")
+        return 0
+
+    except Exception as e:
+        logger.error(f"Agent batch submit failed: {e}")
+        logger.debug("Full error details:", exc_info=True)
+        return 1
+
+
+def cmd_agent_batch_status(args: argparse.Namespace) -> int:
+    """
+    Fetch the current state and per-item results of a batch job.
+
+    Args:
+        args: Command arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        job = client.get_agent_batch(args.job_id)
+
+        if getattr(args, "json", False):
+            print(json.dumps(job.model_dump(), indent=2, default=str))
+            return 0
+
+        logger.info(
+            f"Job {job.job_id}: state={job.state} "
+            f"total={job.total} succeeded={job.succeeded} failed={job.failed}"
+        )
+        for item in job.results:
+            status_label = "OK" if item.status < 400 else "ERR"
+            msg = f"  [{status_label}] #{item.index} {item.op} {item.path or ''} -> {item.status}"
+            if item.error:
+                msg += f" ({item.error.get('code')}: {item.error.get('message')})"
+            logger.info(msg)
+        return 0
+
+    except Exception as e:
+        logger.error(f"Agent batch status failed: {e}")
         logger.debug("Full error details:", exc_info=True)
         return 1
 
@@ -4641,6 +5050,122 @@ def cmd_logs(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_embeddings_missing(args: argparse.Namespace) -> int:
+    """Find documents missing from the search embeddings index.
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+
+        response = client._make_request(
+            method="GET",
+            endpoint="/api/admin/embeddings/missing",
+        )
+
+        data = response.json()
+        total_missing = data.get("total_missing", 0)
+        total_indexed = data.get("total_indexed", 0)
+        total_source = data.get("total_source", 0)
+
+        if getattr(args, "json", False):
+            print(json.dumps(data, indent=2))
+            return 0
+
+        print("\nEmbeddings Index Status:")
+        print(f"  Source documents:  {total_source}")
+        print(f"  Indexed:           {total_indexed}")
+        print(f"  Missing:           {total_missing}")
+
+        if total_missing == 0:
+            print("\n  All documents are indexed.")
+            return 0
+
+        print(f"\nMissing documents ({total_missing}):\n")
+        print(f"  {'Path':<50} {'Type':<15} {'Name'}")
+        print(f"  {'-' * 50} {'-' * 15} {'-' * 30}")
+        for entry in data.get("missing", []):
+            print(f"  {entry['path']:<50} {entry['entity_type']:<15} {entry['name']}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Embeddings missing check failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_embeddings_reindex(args: argparse.Namespace) -> int:
+    """Re-index specific paths or all missing documents.
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+
+        paths = getattr(args, "paths", None)
+
+        if getattr(args, "all_missing", False):
+            response = client._make_request(
+                method="GET",
+                endpoint="/api/admin/embeddings/missing",
+            )
+            missing_data = response.json()
+            paths = [entry["path"] for entry in missing_data.get("missing", [])]
+            if not paths:
+                print("No missing embeddings found. Nothing to reindex.")
+                return 0
+            print(f"Found {len(paths)} missing documents. Reindexing...")
+
+        if not paths:
+            print("Error: provide --paths or --all-missing", file=sys.stderr)
+            return 1
+
+        batch_size = 100
+        total_success = 0
+        total_failed = 0
+
+        for i in range(0, len(paths), batch_size):
+            batch = paths[i : i + batch_size]
+            response = client._make_request(
+                method="POST",
+                endpoint="/api/admin/embeddings/reindex",
+                data={"paths": batch},
+            )
+            result = response.json()
+            total_success += result.get("success", 0)
+            total_failed += result.get("failed", 0)
+
+            if getattr(args, "json", False):
+                print(json.dumps(result, indent=2))
+            else:
+                print(
+                    f"  Batch {i // batch_size + 1}: "
+                    f"{result.get('success', 0)} success, "
+                    f"{result.get('failed', 0)} failed"
+                )
+
+                for detail in result.get("details", []):
+                    if detail.get("status") == "failed":
+                        print(f"    FAILED: {detail['path']} - {detail.get('error', 'unknown')}")
+
+        print(f"\nReindex complete: {total_success} success, {total_failed} failed")
+        return 0 if total_failed == 0 else 1
+
+    except Exception as e:
+        logger.error(f"Embeddings reindex failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     """
     Main entry point for the CLI.
@@ -4805,6 +5330,73 @@ Examples:
     server_get_parser = subparsers.add_parser("server-get", help="Get details of a specific server")
     server_get_parser.add_argument("--path", required=True, help="Server path (e.g., /my-server)")
 
+    # Server full-replacement update (PUT /api/servers/{path})
+    update_server_parser = subparsers.add_parser(
+        "update-server",
+        help="Replace a server's mutable metadata (PUT /api/servers/{path})",
+    )
+    update_server_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /my-server)"
+    )
+    update_server_parser.add_argument(
+        "--body",
+        default=None,
+        help=(
+            "Full JSON body for ServerUpdateRequest. When supplied, "
+            "individual field flags are ignored."
+        ),
+    )
+    update_server_parser.add_argument("--server-name", default=None, help="New server display name")
+    update_server_parser.add_argument("--description", default=None, help="New server description")
+    update_server_parser.add_argument(
+        "--proxy-pass-url", default=None, help="Backend URL for remote-deployment servers"
+    )
+    update_server_parser.add_argument("--tags", default=None, help="Comma-separated list of tags")
+    update_server_parser.add_argument("--license", default=None, help="License identifier")
+    update_server_parser.add_argument(
+        "--num-tools", type=int, default=None, help="Number of tools exposed by the server"
+    )
+    update_server_parser.add_argument(
+        "--metadata",
+        default=None,
+        help="JSON object string for the metadata field",
+    )
+    update_server_parser.add_argument(
+        "--visibility",
+        default=None,
+        choices=["public", "private", "group-restricted"],
+        help="Visibility level",
+    )
+    update_server_parser.add_argument(
+        "--allowed-groups",
+        default=None,
+        help="Comma-separated groups for group-restricted visibility",
+    )
+    update_server_parser.add_argument(
+        "--if-match",
+        dest="if_match",
+        default=None,
+        help="Weak ETag for optimistic concurrency (e.g. 'W/\"<epoch_ms>\"')",
+    )
+
+    # Server partial update (PATCH /api/servers/{path}) - RFC 7396 JSON Merge Patch
+    patch_server_parser = subparsers.add_parser(
+        "patch-server",
+        help="Partially update a server (PATCH /api/servers/{path}, RFC 7396 JSON Merge Patch)",
+    )
+    patch_server_parser.add_argument("--path", required=True, help="Server path (e.g., /my-server)")
+    patch_server_parser.add_argument(
+        "--patch",
+        required=True,
+        help="JSON object string with fields to change (RFC 7396 JSON Merge Patch)",
+    )
+    patch_server_parser.add_argument(
+        "--if-match",
+        dest="if_match",
+        default=None,
+        help="Weak ETag for optimistic concurrency (e.g. 'W/\"<epoch_ms>\"')",
+    )
+
     # Server rate command
     server_rate_parser = subparsers.add_parser("server-rate", help="Rate a server (1-5 stars)")
     server_rate_parser.add_argument(
@@ -4878,9 +5470,7 @@ Examples:
     server_connect_config_parser.add_argument(
         "--path", required=True, help="Server path (e.g., /my-server)"
     )
-    server_connect_config_parser.add_argument(
-        "--json", action="store_true", help="Output raw JSON"
-    )
+    server_connect_config_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Server search command
     server_search_parser = subparsers.add_parser(
@@ -4971,6 +5561,49 @@ Examples:
     agent_update_parser.add_argument("--path", required=True, help="Agent path")
     agent_update_parser.add_argument(
         "--config", required=True, help="Path to updated agent configuration JSON file"
+    )
+
+    # Agent patch command (RFC 7396 JSON Merge Patch)
+    agent_patch_parser = subparsers.add_parser(
+        "agent-patch", help="Partially update an agent (JSON Merge Patch)"
+    )
+    agent_patch_parser.add_argument("--path", required=True, help="Agent path")
+    agent_patch_parser.add_argument(
+        "--config", required=True, help="Path to JSON file containing fields to patch"
+    )
+    agent_patch_parser.add_argument(
+        "--if-match",
+        dest="if_match",
+        default=None,
+        help="Weak ETag from a prior GET/PATCH for optimistic concurrency",
+    )
+
+    # Agent batch submit command
+    agent_batch_submit_parser = subparsers.add_parser(
+        "agent-batch-submit", help="Submit an async batch of agent operations"
+    )
+    agent_batch_submit_parser.add_argument(
+        "--file", required=True, help="Path to JSON file with batch items"
+    )
+    agent_batch_submit_parser.add_argument(
+        "--idempotency-key",
+        dest="idempotency_key",
+        default=None,
+        help="Optional idempotency key to dedupe re-submissions",
+    )
+    agent_batch_submit_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON response"
+    )
+
+    # Agent batch status command
+    agent_batch_status_parser = subparsers.add_parser(
+        "agent-batch-status", help="Get the status and results of a batch job"
+    )
+    agent_batch_status_parser.add_argument(
+        "--job-id", dest="job_id", required=True, help="Batch job identifier"
+    )
+    agent_batch_status_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON response"
     )
 
     # Agent delete command
@@ -5682,6 +6315,31 @@ Examples:
     # Application Log Commands (issue #886)
     # ==========================================
 
+    # Embeddings admin commands
+    embeddings_missing_parser = subparsers.add_parser(
+        "embeddings-missing",
+        help="Find documents missing from the search embeddings index (admin only)",
+    )
+    embeddings_missing_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    embeddings_reindex_parser = subparsers.add_parser(
+        "embeddings-reindex",
+        help="Re-index documents to generate search embeddings (admin only)",
+    )
+    embeddings_reindex_parser.add_argument(
+        "--paths",
+        nargs="+",
+        help="Specific paths to reindex (e.g. /cloudflare-docs /my-agent)",
+    )
+    embeddings_reindex_parser.add_argument(
+        "--all-missing",
+        action="store_true",
+        help="Reindex all documents missing from the embeddings index",
+    )
+    embeddings_reindex_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON per batch"
+    )
+
     logs_parser = subparsers.add_parser("logs", help="Query application logs (admin only)")
     logs_parser.add_argument("--service", help="Filter by service name")
     logs_parser.add_argument(
@@ -5728,6 +6386,8 @@ Examples:
         "list-groups": cmd_list_groups,
         "describe-group": cmd_describe_group,
         "server-get": cmd_server_get,
+        "update-server": cmd_update_server,
+        "patch-server": cmd_patch_server,
         "server-rate": cmd_server_rate,
         "server-rating": cmd_server_rating,
         "security-scan": cmd_security_scan,
@@ -5742,6 +6402,9 @@ Examples:
         "agent-list": cmd_agent_list,
         "agent-get": cmd_agent_get,
         "agent-update": cmd_agent_update,
+        "agent-patch": cmd_agent_patch,
+        "agent-batch-submit": cmd_agent_batch_submit,
+        "agent-batch-status": cmd_agent_batch_status,
         "agent-delete": cmd_agent_delete,
         "agent-toggle": cmd_agent_toggle,
         "agent-discover": cmd_agent_discover,
@@ -5821,6 +6484,9 @@ Examples:
         "telemetry-heartbeat": cmd_telemetry_heartbeat,
         "telemetry-startup": cmd_telemetry_startup,
         "logs": cmd_logs,
+        # Embeddings admin commands
+        "embeddings-missing": cmd_embeddings_missing,
+        "embeddings-reindex": cmd_embeddings_reindex,
     }
 
     handler = command_handlers.get(args.command)

@@ -10,7 +10,8 @@ Based on: docs/design/a2a-protocol-integration.md
 import logging
 import re
 from datetime import datetime
-from typing import Any
+from enum import Enum
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import (
@@ -1068,7 +1069,176 @@ class AgentRegistrationRequest(BaseModel):
     ) -> "AgentRegistrationRequest":
         """Validate group-restricted visibility has allowed groups."""
         if self.visibility == "group-restricted" and not self.allowed_groups:
-            raise ValueError(
-                "group-restricted visibility requires at least one allowed_group"
-            )
+            raise ValueError("group-restricted visibility requires at least one allowed_group")
         return self
+
+
+# Fields a registrant must not be able to change via PATCH or batch patch.
+# These are either server-managed (timestamps, health, ratings) or identity
+# anchors (id, path, registered_by). Supplying any of them is rejected.
+REGISTRANT_ONLY_FIELDS: frozenset[str] = frozenset(
+    {
+        "id",
+        "path",
+        "registered_by",
+        "registered_at",
+        "updated_at",
+        "num_stars",
+        "rating_details",
+        "health_status",
+        "last_health_check",
+        "sync_metadata",
+        "ans_metadata",
+    }
+)
+
+
+class AgentCardPatch(BaseModel):
+    """RFC 7396 JSON Merge Patch body for an agent card.
+
+    Every field is optional. A field present here overrides the stored value;
+    a field that is absent is preserved. Registrant-only fields (timestamps,
+    health, ratings, identity anchors) are rejected with a validation error if
+    supplied, so they can never be mutated through PATCH.
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+    url: str | None = Field(default=None, min_length=1)
+    version: str | None = Field(default=None, min_length=1)
+    protocol_version: str | None = Field(default=None, alias="protocolVersion")
+    provider: dict[str, str] | None = None
+    skills: list[dict[str, Any]] | None = None
+    security_schemes: dict[str, dict[str, Any]] | None = Field(
+        default=None, alias="securitySchemes"
+    )
+    capabilities: dict[str, Any] | None = None
+    security: list[dict[str, list[str]]] | None = None
+    tags: list[str] | str | None = None
+    visibility: str | None = None
+    allowed_groups: list[str] | None = Field(default=None, alias="allowedGroups")
+    trust_level: str | None = Field(default=None, alias="trustLevel")
+    license: str | None = None
+    status: str | None = None
+    external_tags: list[str] | str | None = None
+
+    @model_validator(mode="after")
+    def _reject_registrant_only(self) -> "AgentCardPatch":
+        """Reject any registrant-only field that was explicitly supplied."""
+        supplied = set(self.model_dump(exclude_unset=True, by_alias=False).keys())
+        bad = REGISTRANT_ONLY_FIELDS & supplied
+        if bad:
+            raise ValueError(f"Field(s) {sorted(bad)} are read-only and cannot be patched")
+        return self
+
+
+class BatchItemOp(str, Enum):
+    """Supported operations for a single item inside a batch job."""
+
+    register = "register"
+    patch = "patch"
+    replace = "replace"
+    delete = "delete"
+
+
+class _RegisterItem(BaseModel):
+    """Batch item that registers a new agent card."""
+
+    op: Literal[BatchItemOp.register] = BatchItemOp.register
+    card: AgentRegistrationRequest
+
+
+class _PatchItem(BaseModel):
+    """Batch item that applies a JSON Merge Patch to an existing agent."""
+
+    op: Literal[BatchItemOp.patch] = BatchItemOp.patch
+    path: str
+    card: AgentCardPatch
+
+
+class _ReplaceItem(BaseModel):
+    """Batch item that fully replaces an existing agent card (PUT semantics)."""
+
+    op: Literal[BatchItemOp.replace] = BatchItemOp.replace
+    path: str
+    card: AgentRegistrationRequest
+
+
+class _DeleteItem(BaseModel):
+    """Batch item that deletes an existing agent."""
+
+    op: Literal[BatchItemOp.delete] = BatchItemOp.delete
+    path: str
+
+
+# Discriminated union keyed on `op`. Each variant's body is type-checked at
+# submit time, so malformed items fail with a precise 422 before the job is
+# ever enqueued, and OpenAPI renders each variant concretely.
+AgentBatchItem = Annotated[
+    _RegisterItem | _PatchItem | _ReplaceItem | _DeleteItem,
+    Field(discriminator="op"),
+]
+
+
+class AgentBatchRequest(BaseModel):
+    """Request body for POST /api/agents/batch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str | None = Field(default=None, max_length=200)
+    items: list[AgentBatchItem] = Field(..., min_length=1)
+
+
+class AgentBatchItemResult(BaseModel):
+    """Per-item outcome recorded as a batch job runs."""
+
+    index: int
+    op: BatchItemOp
+    path: str | None = None
+    status: int  # HTTP-style status code per item
+    error: dict[str, Any] | None = None  # {"code", "message"} when status >= 400
+
+
+class AgentBatchJobState(str, Enum):
+    """Lifecycle state of a batch job."""
+
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    partial = "partial"
+    failed = "failed"
+
+
+class AgentBatchJob(BaseModel):
+    """Persisted batch job document (collection: mcp_agent_batch_jobs)."""
+
+    job_id: str  # uuid4 hex
+    state: AgentBatchJobState
+    submitted_by: str
+    submitted_at: datetime
+    updated_at: datetime  # refreshed on every item checkpoint; anchors TTL
+    request_id: str | None = None  # X-Request-Id captured at submit time
+    idempotency_key: str | None = None
+    submitted_body_hash: str  # SHA-256 of canonicalized items; detects divergent replays
+    # Submitter authorization snapshot, captured at submit time. The worker
+    # runs outside the original HTTP request and cannot rebuild scopes from a
+    # username, so we persist exactly what per-item authz needs.
+    submitter_is_admin: bool = False
+    submitter_ui_permissions: dict[str, list[str]] = Field(default_factory=dict)
+    total: int
+    succeeded: int = 0
+    failed: int = 0
+    next_index: int = 0  # resume pointer after a reclaim
+    # Lease fields. claimed_by identifies the owning worker (diagnostic);
+    # lease_expires_at is the instant the claim goes stale. A worker renews the
+    # lease via heartbeat while running; once it lapses any worker may reclaim
+    # the job, resuming from next_index.
+    claimed_by: str | None = None
+    lease_expires_at: datetime | None = None
+    items: list[AgentBatchItem]  # original submission (immutable)
+    results: list[AgentBatchItemResult] = Field(default_factory=list)

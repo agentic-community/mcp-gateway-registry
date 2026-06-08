@@ -187,6 +187,16 @@ def mock_scopes_config(sample_scopes_config: dict[str, Any], monkeypatch):
         group_mappings = sample_scopes_config.get("group_mappings", {})
         return group_mappings.get(group, [])
 
+    # get_all_group_mappings returns the inverse shape stored in the DB:
+    # {scope_name: [groups]} (not {group: [scopes]} like the YAML config).
+    async def mock_get_all_group_mappings():
+        group_mappings = sample_scopes_config.get("group_mappings", {})
+        inverted: dict[str, list[str]] = {}
+        for group, scope_names in group_mappings.items():
+            for scope_name in scope_names:
+                inverted.setdefault(scope_name, []).append(group)
+        return inverted
+
     # Configure get_ui_scopes based on sample config
     async def mock_get_ui_scopes(scope: str):
         ui_scopes = sample_scopes_config.get("UI-Scopes", {})
@@ -203,6 +213,7 @@ def mock_scopes_config(sample_scopes_config: dict[str, Any], monkeypatch):
         return []
 
     mock_repo.get_group_mappings.side_effect = mock_get_group_mappings
+    mock_repo.get_all_group_mappings.side_effect = mock_get_all_group_mappings
     mock_repo.get_ui_scopes.side_effect = mock_get_ui_scopes
     mock_repo.get_server_scopes.side_effect = mock_get_server_scopes
 
@@ -1274,24 +1285,28 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_scopes_deduplication(self, mock_scopes_config: dict[str, Any]):
-        """Test that duplicate scopes are removed."""
-        # Arrange - create mock repository that returns duplicate scopes
+        """Test that scopes shared across a user's groups are deduplicated."""
+        # Arrange - scope1 is reachable via two of the user's groups, so it
+        # must appear only once in the result. The repo stores the inverse
+        # {scope_name: [groups]} shape.
         mock_repo = AsyncMock()
 
-        async def mock_get_group_mappings_with_duplicates(group: str):
-            if group == "test-group":
-                return ["scope1", "scope2", "scope1"]
-            return []
+        async def mock_get_all_group_mappings_with_overlap():
+            return {
+                "scope1": ["group-a", "group-b"],
+                "scope2": ["group-a"],
+            }
 
-        mock_repo.get_group_mappings.side_effect = mock_get_group_mappings_with_duplicates
+        mock_repo.get_all_group_mappings.side_effect = mock_get_all_group_mappings_with_overlap
 
         with patch("registry.repositories.factory.get_scope_repository", return_value=mock_repo):
             # Act
-            scopes = await map_cognito_groups_to_scopes(["test-group"])
+            scopes = await map_cognito_groups_to_scopes(["group-a", "group-b"])
 
             # Assert
             assert len(scopes) == len(set(scopes))  # No duplicates
             assert scopes.count("scope1") == 1
+            assert "scope2" in scopes
 
     @pytest.mark.asyncio
     async def test_enhanced_auth_oauth2_no_groups(

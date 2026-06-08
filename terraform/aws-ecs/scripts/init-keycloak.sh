@@ -1202,6 +1202,22 @@ main() {
 
         refresh_token
         setup_m2m_scopes "$TOKEN"
+
+        # MCP Dynamic Client Registration (DCR) support. Adds the groups + audience
+        # mappers to the 'basic' client-scope (so DCR'd-client tokens carry a groups
+        # claim and aud=mcp-gateway), widens the Allowed Client Scopes policy, and
+        # relaxes the Trusted Hosts policy so MCP clients (Claude Code, claude.ai
+        # connectors, Cursor) can self-register. Delegates to the canonical,
+        # idempotent script (single source of truth) rather than duplicating it.
+        refresh_token
+        DCR_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../keycloak/setup" 2>/dev/null && pwd)/upgrade-realm-for-dcr.sh"
+        if [ -f "$DCR_SCRIPT" ]; then
+            echo "Applying MCP Dynamic Client Registration (DCR) realm configuration..."
+            KEYCLOAK_ADMIN_URL="$KEYCLOAK_URL" KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
+                bash "$DCR_SCRIPT" || echo -e "${YELLOW}WARNING: DCR setup did not complete; MCP clients may not be able to self-register. Re-run manually: $DCR_SCRIPT${NC}"
+        else
+            echo -e "${YELLOW}WARNING: DCR script not found at $DCR_SCRIPT; skipping DCR setup. MCP client auto-registration will not work until configured.${NC}"
+        fi
     else
         exit 1
     fi

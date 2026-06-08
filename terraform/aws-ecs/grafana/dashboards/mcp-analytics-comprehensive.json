@@ -21,19 +21,19 @@
       "targets": [
         {
           "legendFormat": "Initialize Rate",
-          "expr": "sum(increase(mcp_tool_executions_total{method=\"initialize\", success=\"true\"}[1m]))"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"initialize\", success=\"true\"}[1m]))"
         },
         {
           "legendFormat": "Tools List Rate",
-          "expr": "sum(increase(mcp_tool_executions_total{method=\"tools/list\", success=\"true\"}[1m]))"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"tools/list\", success=\"true\"}[1m]))"
         },
         {
           "legendFormat": "Tool Call Rate",
-          "expr": "sum(increase(mcp_tool_executions_total{method=\"tools/call\", success=\"true\"}[1m]))"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"tools/call\", success=\"true\"}[1m]))"
         },
         {
           "legendFormat": "Auth Success Rate",
-          "expr": "sum(increase(mcp_auth_requests_total{success=\"true\"}[1m]))"
+          "expr": "sum(increase(mcpgw_registry_auth_request_total{success=\"true\"}[1m]))"
         }
       ],
       "gridPos": {
@@ -64,11 +64,11 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(mcp_auth_requests_total{success=\"true\"}[5m]))",
+          "expr": "sum(rate(mcpgw_registry_auth_request_total{success=\"true\"}[5m]))",
           "legendFormat": "Successful Auth"
         },
         {
-          "expr": "sum(rate(mcp_auth_requests_total{success=\"false\"}[5m]))",
+          "expr": "sum(rate(mcpgw_registry_auth_request_total{success=\"false\"}[5m]))",
           "legendFormat": "Failed Auth"
         }
       ],
@@ -100,7 +100,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(mcp_auth_requests_total{success=\"true\"}) / sum(mcp_auth_requests_total) * 100",
+          "expr": "sum(mcpgw_registry_auth_request_total{success=\"true\"}) / sum(mcpgw_registry_auth_request_total) * 100",
           "legendFormat": "Success Rate %"
         }
       ],
@@ -142,7 +142,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "count(count by (server_name)(mcp_tool_executions_total))",
+          "expr": "count(count by (server_name)(mcpgw_registry_tool_execution_total))",
           "legendFormat": "Active Servers"
         }
       ],
@@ -187,7 +187,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(increase(mcp_tool_executions_total[1h]))",
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total[1h]))",
           "legendFormat": "Tools/Hour"
         }
       ],
@@ -232,7 +232,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "topk(1, sum(mcp_tool_executions_total{method=\"tools/call\"}) by (tool_name))",
+          "expr": "topk(1, sum(mcpgw_registry_tool_execution_total{method=\"tools/call\"}) by (tool_name))",
           "legendFormat": "{{tool_name}}"
         }
       ],
@@ -268,11 +268,11 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, server_name)(rate(mcp_tool_execution_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, server_name)(rate(tool_execution_duration_milliseconds_bucket[5m])))",
           "legendFormat": "{{server_name}} P95"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le, method)(rate(mcp_tool_execution_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, method)(rate(tool_execution_duration_milliseconds_bucket[5m])))",
           "legendFormat": "{{method}} P95"
         }
       ],
@@ -304,7 +304,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(mcp_tool_executions_total[5m])) by (method)",
+          "expr": "sum(rate(mcpgw_registry_tool_execution_total[5m])) by (method)",
           "legendFormat": "{{method}}"
         }
       ],
@@ -337,11 +337,11 @@
       "targets": [
         {
           "legendFormat": "Auth Error Rate",
-          "expr": "sum(increase(mcp_auth_requests_total{success=\"false\"}[5m])) / sum(increase(mcp_auth_requests_total[5m])) * 100"
+          "expr": "sum(increase(mcpgw_registry_auth_request_total{success=\"false\"}[5m])) / sum(increase(mcpgw_registry_auth_request_total[5m])) * 100"
         },
         {
           "legendFormat": "Tool Execution Error Rate",
-          "expr": "sum(increase(mcp_tool_executions_total{success=\"false\"}[5m])) / sum(increase(mcp_tool_executions_total[5m])) * 100"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{success=\"false\"}[5m])) / sum(increase(mcpgw_registry_tool_execution_total[5m])) * 100"
         }
       ],
       "gridPos": {
@@ -388,11 +388,11 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "avg(rate(mcp_auth_request_duration_seconds_sum[5m])) / avg(rate(mcp_auth_request_duration_seconds_count[5m]))",
+          "expr": "avg(rate(mcpgw_registry_auth_request_duration_milliseconds_sum[5m])) / avg(rate(mcpgw_registry_auth_request_duration_milliseconds_count[5m]))",
           "legendFormat": "Auth Avg Response Time"
         },
         {
-          "expr": "avg(rate(mcp_tool_execution_duration_seconds_sum[5m])) / avg(rate(mcp_tool_execution_duration_seconds_count[5m]))",
+          "expr": "avg(rate(tool_execution_duration_milliseconds_sum[5m])) / avg(rate(tool_execution_duration_milliseconds_count[5m]))",
           "legendFormat": "Tool Exec Avg Response Time"
         }
       ],
@@ -424,19 +424,19 @@
       "type": "table",
       "targets": [
         {
-          "expr": "sum(mcp_tool_executions_total) by (server_name)",
+          "expr": "sum(mcpgw_registry_tool_execution_total) by (server_name)",
           "legendFormat": "{{server_name}}_total_calls",
           "format": "table",
           "instant": true
         },
         {
-          "expr": "sum(increase(mcp_tool_executions_total[1h])) by (server_name)",
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total[1h])) by (server_name)",
           "legendFormat": "{{server_name}}_calls_per_hour",
           "format": "table",
           "instant": true
         },
         {
-          "expr": "count(count by (server_name, tool_name)(mcp_tool_executions_total)) by (server_name)",
+          "expr": "count(count by (server_name, tool_name)(mcpgw_registry_tool_execution_total)) by (server_name)",
           "legendFormat": "{{server_name}}_unique_tools",
           "format": "table",
           "instant": true
@@ -475,13 +475,13 @@
       "type": "table",
       "targets": [
         {
-          "expr": "sum(mcp_tool_executions_total{method=\"tools/call\"}) by (tool_name)",
+          "expr": "sum(mcpgw_registry_tool_execution_total{method=\"tools/call\"}) by (tool_name)",
           "legendFormat": "{{tool_name}}",
           "format": "table",
           "instant": true
         },
         {
-          "expr": "sum(increase(mcp_tool_executions_total{method=\"tools/call\"}[1h])) by (tool_name)",
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"tools/call\"}[1h])) by (tool_name)",
           "legendFormat": "{{tool_name}}_rate",
           "format": "table",
           "instant": true
@@ -527,7 +527,7 @@
       "type": "bargauge",
       "targets": [
         {
-          "expr": "topk(10, sum(mcp_tool_executions_total{method!=\"tools/call\"}) by (method))",
+          "expr": "topk(10, sum(mcpgw_registry_tool_execution_total{method!=\"tools/call\"}) by (method))",
           "legendFormat": "{{method}}"
         }
       ],
@@ -559,7 +559,7 @@
       "type": "barchart",
       "targets": [
         {
-          "expr": "topk(10, sum(mcp_tool_executions_total{method=\"tools/call\"}) by (tool_name))",
+          "expr": "topk(10, sum(mcpgw_registry_tool_execution_total{method=\"tools/call\"}) by (tool_name))",
           "legendFormat": "{{tool_name}}",
           "instant": true,
           "format": "table"
@@ -597,7 +597,7 @@
       "type": "bargauge",
       "targets": [
         {
-          "expr": "topk(10, sum(mcp_tool_executions_total) by (client_name))",
+          "expr": "topk(10, sum(mcpgw_registry_tool_execution_total) by (client_name))",
           "legendFormat": "{{client_name}}"
         }
       ],
@@ -629,19 +629,19 @@
       "type": "table",
       "targets": [
         {
-          "expr": "sum(mcp_tool_executions_total{method=\"initialize\"}) by (client_name)",
+          "expr": "sum(mcpgw_registry_tool_execution_total{method=\"initialize\"}) by (client_name)",
           "legendFormat": "{{client_name}}_init",
           "format": "table",
           "instant": true
         },
         {
-          "expr": "sum(mcp_tool_executions_total{method=\"tools/list\"}) by (client_name)",
+          "expr": "sum(mcpgw_registry_tool_execution_total{method=\"tools/list\"}) by (client_name)",
           "legendFormat": "{{client_name}}_list",
           "format": "table",
           "instant": true
         },
         {
-          "expr": "sum(mcp_tool_executions_total{method=\"tools/call\"}) by (client_name)",
+          "expr": "sum(mcpgw_registry_tool_execution_total{method=\"tools/call\"}) by (client_name)",
           "legendFormat": "{{client_name}}_call",
           "format": "table",
           "instant": true
@@ -680,7 +680,7 @@
       "type": "bargauge",
       "targets": [
         {
-          "expr": "sum(mcp_auth_requests_total) by (method)",
+          "expr": "sum(mcpgw_registry_auth_request_total) by (method)",
           "legendFormat": "{{method}}"
         }
       ],
@@ -713,7 +713,7 @@
       "targets": [
         {
           "legendFormat": "Success Rate",
-          "expr": "sum(increase(mcp_tool_executions_total{success=\"true\"}[5m])) / sum(increase(mcp_tool_executions_total[5m])) * 100"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{success=\"true\"}[5m])) / sum(increase(mcpgw_registry_tool_execution_total[5m])) * 100"
         }
       ],
       "gridPos": {
@@ -763,7 +763,7 @@
       "type": "bargauge",
       "targets": [
         {
-          "expr": "topk(15, sum(rate(mcp_tool_executions_total[5m])) by (client_name))",
+          "expr": "topk(15, sum(rate(mcpgw_registry_tool_execution_total[5m])) by (client_name))",
           "legendFormat": "{{client_name}}"
         }
       ],
@@ -795,7 +795,7 @@
       {
         "name": "server",
         "type": "query",
-        "query": "label_values(mcp_auth_requests_total, server)",
+        "query": "label_values(mcpgw_registry_auth_request_total, server)",
         "refresh": 1,
         "includeAll": true,
         "allValue": ".*"
@@ -803,7 +803,7 @@
       {
         "name": "client",
         "type": "query",
-        "query": "label_values(mcp_tool_executions_total, client_name)",
+        "query": "label_values(mcpgw_registry_tool_execution_total, client_name)",
         "refresh": 1,
         "includeAll": true,
         "allValue": ".*"
@@ -811,7 +811,7 @@
       {
         "name": "method",
         "type": "query",
-        "query": "label_values(mcp_tool_executions_total, method)",
+        "query": "label_values(mcpgw_registry_tool_execution_total, method)",
         "refresh": 1,
         "includeAll": true,
         "allValue": ".*"

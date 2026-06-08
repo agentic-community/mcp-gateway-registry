@@ -18,31 +18,33 @@ locals {
       value = var.aws_region
     },
     {
-      name  = "KC_PROXY"
-      value = "edge"
+      # Issue #1122: KC_PROXY=edge was deprecated in Keycloak 24+; KC25 ignores
+      # it. Replaced with KC_PROXY_HEADERS=xforwarded so Keycloak trusts the
+      # X-Forwarded-Proto/Host headers from CloudFront → ALB and recognizes
+      # the connection as HTTPS. Without this, KC25 returns "HTTPS required"
+      # for all OIDC endpoints.
+      name  = "KC_PROXY_HEADERS"
+      value = "xforwarded"
     },
     {
-      name  = "KC_PROXY_ADDRESS_FORWARDING"
-      value = "true"
-    },
-    {
-      # KC_HOSTNAME_URL tells Keycloak the full external URL including protocol
-      # This is required for CloudFront mode where Keycloak needs to know it's behind HTTPS
-      name  = "KC_HOSTNAME_URL"
+      # Issue #1122: Keycloak 25 introduced "Hostname v2" config. The KC23
+      # variables KC_HOSTNAME_URL, KC_HOSTNAME_ADMIN_URL, KC_HOSTNAME_STRICT,
+      # and KC_HOSTNAME_STRICT_HTTPS are all deprecated and IGNORED on KC25.
+      # Replaced with a single KC_HOSTNAME pointing at the full public URL.
+      # When KC_HOSTNAME is a full https:// URL, KC25 derives the canonical
+      # scheme from it and trusts X-Forwarded-Proto via KC_PROXY_HEADERS.
+      # See https://www.keycloak.org/server/hostname for hostname v2 docs.
+      name  = "KC_HOSTNAME"
       value = local.keycloak_hostname_url
     },
     {
-      # KC_HOSTNAME_ADMIN_URL for admin console access
-      name  = "KC_HOSTNAME_ADMIN_URL"
-      value = local.keycloak_hostname_url
-    },
-    {
-      name  = "KC_HOSTNAME_STRICT"
-      value = "false"
-    },
-    {
-      # HTTPS strict mode - Keycloak will require HTTPS for all requests
-      name  = "KC_HOSTNAME_STRICT_HTTPS"
+      # Issue #1122: KC25 listens HTTPS-only (8443) by default; KC23 listened
+      # HTTP (8080). The ALB target group health checks port 8080, so we must
+      # explicitly enable the HTTP listener on KC25. CloudFront → ALB is
+      # already TLS-terminated by ALB/CloudFront, so HTTP between ALB and
+      # Keycloak is fine within the VPC. KC_PROXY_HEADERS=xforwarded above
+      # makes Keycloak still recognize the client connection as HTTPS.
+      name  = "KC_HTTP_ENABLED"
       value = "true"
     },
     {
@@ -56,6 +58,19 @@ locals {
     {
       name  = "KEYCLOAK_LOGLEVEL"
       value = var.keycloak_log_level
+    },
+    {
+      # Public-image support: the official quay.io/keycloak image is NOT pre-built
+      # with our options (the custom image baked these via `kc.sh build`). Running a
+      # non-optimized `start` (see command below) makes Keycloak build from these at
+      # startup. KC_DB must be the Aurora vendor (mysql); KC_FEATURES matches the
+      # custom Dockerfile's token-exchange feature.
+      name  = "KC_DB"
+      value = "mysql"
+    },
+    {
+      name  = "KC_FEATURES"
+      value = "token-exchange"
     }
   ]
 
@@ -271,9 +286,15 @@ resource "aws_ecs_task_definition" "keycloak" {
   container_definitions = jsonencode([
     {
       name               = "keycloak"
-      image              = "${aws_ecr_repository.keycloak.repository_url}:latest"
+      image              = var.keycloak_image_uri
       versionConsistency = "disabled"
       essential          = true
+
+      # Non-optimized start so a stock public Keycloak image works without a
+      # pre-baked `kc.sh build`. Keycloak builds from the KC_* env at startup
+      # (~20-30s slower first boot). The official image's entrypoint is kc.sh,
+      # so this becomes `kc.sh start`.
+      command = ["start"]
 
       portMappings = [
         {
@@ -306,11 +327,11 @@ resource "aws_ecs_task_definition" "keycloak" {
       readonlyRootFilesystem = false
 
       healthCheck = {
-        command     = ["CMD-SHELL", "exit 0"]
+        command     = ["CMD-SHELL", "curl -f http://localhost:9000/health/ready || exit 1"]
         interval    = 30
         timeout     = 5
         retries     = 3
-        startPeriod = 60
+        startPeriod = 90
       }
     }
   ])

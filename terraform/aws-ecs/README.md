@@ -112,6 +112,15 @@ For detailed configuration and troubleshooting, see [Deployment Modes Guide](../
 >
 > While these instructions should work on macOS or other development environments, you will need to have AWS credentials configured via `aws configure` or an AWS profile.
 
+> **Prefer a coding assistant?** These same steps are codified as a skill you can run conversationally through your favorite coding assistant (e.g. Claude Code) — it walks you through prerequisites, configuration, the apply, and post-deployment. See the [`terraform-setup` skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/terraform-setup/SKILL.md). Following this README by hand works exactly the same.
+
+> **Pre-built images vs. building your own — you do NOT need to build anything to use this out of the box.** By default the stack pulls **pre-built public images** with no build step:
+> - registry / auth-server / mcpgw → `public.ecr.aws/p3v1o3c6/...`
+> - Keycloak → `quay.io/keycloak/keycloak` (public)
+> - Grafana → the stock public Grafana image (provisioned at runtime)
+>
+> You only need `make build-push` (and Docker) if you want to run your **own** modified images. If you just want to use the solution as-is, skip building entirely and the defaults below pick up the public images. See [Using Custom Images](#using-custom-images) for the build path.
+
 ### Step 1: Prerequisites
 
 #### Step 1.1: Domain Configuration
@@ -233,19 +242,7 @@ aws configure
 aws sts get-caller-identity
 ```
 
-### Step 2: Build and Push Container Images (~30 min)
-
-```bash
-# Set your target AWS region
-export AWS_REGION=us-east-1
-
-# cd to the directory where you cloned this repo
-
-# Build and push all images
-make build-push
-```
-
-### Step 3: Configure terraform.tfvars
+### Step 2: Configure terraform.tfvars
 
 ```bash
 cd terraform/aws-ecs
@@ -258,13 +255,15 @@ cp terraform.tfvars.example terraform.tfvars
 
 | Parameter | Description |
 |-----------|-------------|
-| `aws_region` | AWS region (must match where you pushed ECR images) |
-| `ingress_cidr_blocks` | IP addresses allowed to access the ALB |
+| `aws_region` | AWS region for deployment. Must support Amazon DocumentDB when `storage_backend = "documentdb"` (the default) |
+| `ingress_cidr_blocks` | IP addresses allowed to access the registry/ALB (your IP `/32`). Always include the machine you deploy from |
 | `keycloak_admin_password` | Keycloak admin password (min 12 chars) |
 | `keycloak_database_password` | Database password (min 12 chars) |
+| `registry_name` | Human-readable registry name. **Required** — the registry rejects an empty value and crash-loops |
+| `registry_organization_name` | Organization that operates this registry. **Required** — same as above |
+| `documentdb_admin_username` / `documentdb_admin_password` | DocumentDB admin credentials. **Required when `storage_backend = "documentdb"` (the default).** Password min 8 chars |
 | `session_cookie_secure` | Set to `true` for HTTPS (all modes except development) |
 | `grafana_admin_password` | Grafana admin password (required when `enable_observability = true`) |
-| 7 ECR image URIs | Container image URIs with your account ID and region |
 
 **Mode-Specific Parameters:**
 
@@ -291,18 +290,6 @@ aws sts get-caller-identity --query Account --output text
 echo $AWS_REGION
 ```
 
-**Auto-configure ECR image URIs with sed:**
-
-```bash
-# Set your values
-export AWS_REGION=us-east-1
-export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-
-# Update all 7 ECR image URIs in terraform.tfvars
-sed -i "s/YOUR_ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" terraform.tfvars
-sed -i "s/YOUR_AWS_REGION/${AWS_REGION}/g" terraform.tfvars
-```
-
 **Configure ingress_cidr_blocks:**
 
 ```bash
@@ -318,45 +305,47 @@ If you are running this from an EC2 instance, you may also want to run `curl -s 
 **Example terraform.tfvars for Mode 1 (CloudFront Only - Easiest):**
 
 ```hcl
-# AWS Region (must match where you pushed ECR images)
+# AWS Region (must support Amazon DocumentDB - the default storage backend)
 aws_region = "us-east-1"
 
 # Deployment Mode: CloudFront Only (no custom domain required)
 enable_cloudfront  = true
 enable_route53_dns = false
 
-# IP addresses allowed to access the ALB
+# IP addresses allowed to access the registry (include the machine you deploy from)
 ingress_cidr_blocks = [
   "203.0.113.10/32",   # Your EC2 instance IP
   "198.51.100.25/32",  # Your laptop IP
 ]
 
-# Keycloak credentials (CHANGE THESE)
+# Keycloak credentials (CHANGE THESE, min 12 chars)
 keycloak_admin_password    = "YourSecurePassword123!"
 keycloak_database_password = "YourDBPassword456!"
+
+# Registry identity (REQUIRED - the registry rejects empty values and crash-loops)
+registry_name              = "MCP Gateway Registry"
+registry_organization_name = "ACME Inc."
+
+# Storage backend (default is "documentdb"). The DocumentDB admin credentials are
+# REQUIRED when storage_backend = "documentdb". Password min 8 chars.
+storage_backend           = "documentdb"
+documentdb_admin_username = "docdbadmin"
+documentdb_admin_password = "YourDocDBPassword789!"
 
 # Session cookie configuration
 session_cookie_secure = true   # Always true for HTTPS
 session_cookie_domain = ""     # Empty for CloudFront mode
 
-# ECR image URIs (after running sed commands above)
-registry_image_uri               = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-registry:latest"
-auth_server_image_uri            = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-auth-server:latest"
-currenttime_image_uri            = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-currenttime:latest"
-mcpgw_image_uri                  = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-mcpgw:latest"
-realserverfaketools_image_uri    = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-realserverfaketools:latest"
-flight_booking_agent_image_uri   = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-flight-booking-agent:latest"
-travel_assistant_agent_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-travel-assistant-agent:latest"
+# Container images: NOTHING to set here for a standard deployment. Core services
+# default to pre-built PUBLIC ECR images (public.ecr.aws/p3v1o3c6/...), Keycloak to
+# quay.io/keycloak/keycloak, and Grafana to the stock public image. Only set the
+# *_image_uri variables if you built your own images (see "Using Custom Images").
 
-# Observability (optional - creates AMP workspace, metrics-service, Grafana)
-# enable_observability       = true
-# metrics_service_image_uri  = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-metrics-service:latest"
-# grafana_image_uri          = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-grafana:latest"
-
-# Grafana admin password (REQUIRED when enable_observability = true)
-# IMPORTANT: Do NOT use "admin" or any weak default. Generate a strong random password.
-# Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
-# grafana_admin_password     = "YOUR-STRONG-RANDOM-PASSWORD"
+# Observability (optional): Amazon Managed Prometheus + ADOT sidecars + Grafana.
+# Uses the stock public Grafana image, provisioned at runtime - no build required.
+# enable_observability   = true
+# grafana_admin_password = "YOUR-STRONG-RANDOM-PASSWORD"  # required when observability is on
+#   Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
 ```
 
 **Example terraform.tfvars for Mode 2 or 3 (Custom Domain):**
@@ -377,15 +366,25 @@ session_cookie_domain = ".your.domain"
 # ... plus all common parameters from Mode 1 example above
 ```
 
-### Step 4: Deploy Infrastructure (~20 min)
+### Step 3: Deploy Infrastructure (~20 min)
 
-**First-time deployments require a two-stage process due to SSL certificate dependencies.**
+**CloudFront Only mode (Mode 1) — a single apply is sufficient.** The ACM
+certificate resources only exist when `enable_route53_dns = true`, so there is
+nothing to pre-create:
 
 ```bash
-# Initialize Terraform
+terraform init -upgrade
+terraform apply
+```
+
+**Custom Domain modes (Mode 2 / Mode 3) only:** first-time deploys are two-stage
+because of ACM/DNS validation dependencies — create the certificates first, then
+the rest:
+
+```bash
 terraform init -upgrade
 
-# Stage 1: Create SSL certificates first
+# Stage 1: Create SSL certificates first (custom-domain modes only)
 terraform apply \
   -target=aws_acm_certificate.keycloak \
   -target=aws_acm_certificate.registry \
@@ -396,13 +395,54 @@ terraform apply \
 terraform apply
 ```
 
-### Step 5: Post-Deployment Setup
+### Step 4: Post-Deployment Setup
 
 See [Post-Deployment](#post-deployment) section for:
 - Initializing Keycloak
 - Running scopes initialization
 - Restarting ECS tasks
 - Accessing the Web UI
+
+---
+
+## Using Custom Images
+
+**You do not need to build anything to use the solution out of the box.** By default:
+- registry, auth-server, mcpgw → pre-built images from `public.ecr.aws/p3v1o3c6/`
+- Keycloak → the public `quay.io/keycloak/keycloak` image (run non-optimized; no custom build)
+- Grafana (when `enable_observability = true`) → the stock public Grafana image, provisioned at runtime by a sidecar
+
+The build path below is **only** for when you want to run your **own** modified images (e.g. local code changes). To deploy your own custom-built images instead:
+
+1. Build and push images to your private ECR:
+   ```bash
+   export AWS_REGION=us-east-1
+   make build-push
+   ```
+
+2. Override image URIs in `terraform.tfvars`:
+   ```hcl
+   registry_image_uri    = "YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-registry:latest"
+   auth_server_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-auth-server:latest"
+   mcpgw_image_uri       = "YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-mcpgw:latest"
+   ```
+
+3. Run `terraform apply`.
+
+### Deploying Demo Servers
+
+The demo MCP servers (currenttime, realserverfaketools) and A2A agents (flight-booking, travel-assistant)
+are disabled by default. To deploy them:
+
+```hcl
+enable_demo_servers              = true
+currenttime_image_uri            = "YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-currenttime:latest"
+realserverfaketools_image_uri    = "YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-realserverfaketools:latest"
+flight_booking_agent_image_uri   = "YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-flight-booking-agent:latest"
+travel_assistant_agent_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-travel-assistant-agent:latest"
+```
+
+These images are not available on public ECR and must be built from source with `make build-push`.
 
 ---
 
@@ -502,8 +542,8 @@ if [[ ! -f "$OUTPUTS_FILE" ]]; then
     exit 1
 fi
 
-# Extract URLs
-REGISTRY_URL=$(jq -r '.registry_url.value' "$OUTPUTS_FILE")
+# Extract URLs (registry_url is null in CloudFront Only mode - fall back to the CloudFront URL)
+REGISTRY_URL=$(jq -r '.registry_url.value // .cloudfront_mcp_gateway_url.value // .mcp_gateway_url.value // empty' "$OUTPUTS_FILE")
 KEYCLOAK_URL=$(jq -r '.keycloak_url.value' "$OUTPUTS_FILE")
 KEYCLOAK_ADMIN_URL=$(jq -r '.keycloak_admin_console.value' "$OUTPUTS_FILE")
 
@@ -545,29 +585,29 @@ Now let's register some example MCP servers using the CLI tool:
 ```bash
 cd ../../mcp-gateway-registry
 
-# Load URLs from terraform outputs (both REGISTRY_URL and KEYCLOAK_URL are required)
+# Load URLs from terraform outputs (both REGISTRY_URL and KEYCLOAK_URL are required).
+# In CloudFront Only mode registry_url is null, so fall back to the CloudFront URL.
 OUTPUTS_FILE="terraform/aws-ecs/scripts/terraform-outputs.json"
-export REGISTRY_URL=$(jq -r '.registry_url.value' "$OUTPUTS_FILE")
-export KEYCLOAK_URL=$(jq -r '.keycloak_url.value' "$OUTPUTS_FILE")
+export REGISTRY_URL=$(jq -r '.registry_url.value // .cloudfront_mcp_gateway_url.value // .mcp_gateway_url.value // empty' "$OUTPUTS_FILE")
+export KEYCLOAK_URL=$(jq -r '.keycloak_url.value // empty' "$OUTPUTS_FILE")
 
 echo "Registry URL: $REGISTRY_URL"
 echo "Keycloak URL: $KEYCLOAK_URL"
 
-# Register Cloudflare Docs server
+# NOTE: The "AI Registry tools" server (registry-management tools, served by mcpgw)
+# is AUTO-REGISTERED at registry startup and appears automatically - no action
+# needed. (Opt out with DISABLE_AI_REGISTRY_TOOLS_SERVER=true.)
+
+# Register a simple example MCP server - Cloudflare Documentation:
 uv run python api/registry_management.py register \
   --config cli/examples/cloudflare-docs-server-config.json
 
-# Register Context7 server
+# ...or the AWS Knowledge Base example:
 uv run python api/registry_management.py register \
-  --config cli/examples/context7-server-config.json
+  --config cli/examples/aws-kb-server.json
 
-# Register MCPGW server (registry management tools)
-uv run python api/registry_management.py register \
-  --config cli/examples/mcpgw.json
-
-# Register CurrentTime server
-uv run python api/registry_management.py register \
-  --config cli/examples/currenttime.json
+# More examples are available in cli/examples/ (e.g. context7-server-config.json,
+# currenttime.json) - register any of them the same way.
 ```
 
 **Register Example A2A Agents:**
@@ -585,8 +625,8 @@ uv run python api/registry_management.py agent-register \
 **Verify Registration:**
 
 Refresh the browser and you should now see:
-- 4 MCP servers (Cloudflare Docs, Context7, MCPGW, CurrentTime)
-- 2 A2A agents (Flight Booking Agent, Travel Assistant Agent)
+- The auto-registered **AI Registry tools** server (always present), plus whichever example servers you registered above (e.g. Cloudflare Docs and/or AWS Knowledge Base)
+- The 2 A2A agents if you registered them (Flight Booking Agent, Travel Assistant Agent)
 
 You can also verify via CLI:
 
@@ -646,9 +686,19 @@ The MCP Gateway Registry uses **DocumentDB** (MongoDB-compatible) for production
 - Distributed storage with automatic replication
 - ACID transactions and strong consistency
 
+**Selecting the storage backend (`storage_backend`):**
+
+The storage backend is controlled by the `storage_backend` variable in `terraform.tfvars` (default: `documentdb`). DocumentDB resources are only provisioned when this is set to `documentdb`:
+
+| `storage_backend` | Behavior |
+|-------------------|----------|
+| `documentdb` (default) | Provisions an Amazon DocumentDB cluster in this Terraform state. **DocumentDB is not available in every region** — verify your `aws_region` supports it before deploying. |
+| `file` | JSON files only. No DocumentDB provisioned. Single-task, not horizontally scalable; intended for local/dev use. |
+| `mongodb-ce` / `mongodb` / `mongodb-atlas` | Connect to an externally-provisioned MongoDB you already own. No DocumentDB provisioned. Requires `mongodb_connection_string` or `mongodb_connection_string_secret_arn`. |
+
 **DocumentDB Setup:**
 
-The DocumentDB cluster is automatically provisioned by Terraform. To initialize the database with indexes and scopes:
+When `storage_backend = "documentdb"` (the default), the DocumentDB cluster is automatically provisioned by Terraform. To initialize the database with indexes and scopes:
 
 ```bash
 # 1. Run the DocumentDB initialization script
@@ -1001,6 +1051,9 @@ For running Terraform and the deployment scripts, your IAM user or role needs th
         "secretsmanager:*",
         "bedrock-agentcore:*",
         "iam:PassRole",
+        "s3:*",
+        "lambda:*",
+        "elasticfilesystem:*",
         "ec2:*",
         "ecs:*",
         "rds:*",
@@ -1025,6 +1078,10 @@ For running Terraform and the deployment scripts, your IAM user or role needs th
 ```
 
 **Note:** For production, consider restricting these permissions to specific resource ARNs.
+
+**Note:** The `s3:*` permission is required — the stack creates S3 buckets for ALB access logs and CloudFront logs. Without it, `terraform apply` fails with `s3:CreateBucket ... AccessDenied`.
+
+**Note:** This stack creates an RDS DB Proxy, which depends on the `AWSServiceRoleForRDS` service-linked role. On a brand-new account the first apply may fail with *"RDS is not authorized to assume service-linked role ... AWSServiceRoleForRDS"* before AWS finishes auto-creating it; simply re-run `terraform apply`. If it persists, create it explicitly with `aws iam create-service-linked-role --aws-service-name rds.amazonaws.com`.
 
 **Note:** The `cloudfront:*` permission is required for CloudFront deployment modes (Mode 1: CloudFront Only, Mode 3: CloudFront + Custom Domain). If you are only using Mode 2 (Custom Domain Only), you can omit this permission.
 

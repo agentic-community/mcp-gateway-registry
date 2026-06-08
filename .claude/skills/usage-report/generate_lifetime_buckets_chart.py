@@ -180,32 +180,52 @@ def _generate_chart(
     fig.suptitle(CHART_TITLE, fontsize=14, fontweight="bold", y=0.97)
 
     parsed = [datetime.strptime(r["date"], "%Y-%m-%d") for r in rows]
-    palette = sns.color_palette("Blues_d", len(THRESHOLDS))[::-1]
+
+    # Qualitatively distinct colours for each survival threshold.
+    # Tufte: use colour to encode meaning (different cohorts), not intensity.
+    # These are muted, print-safe, and visually distinct from each other
+    # and from the red one-day-wonders line on the secondary axis.
+    THRESHOLD_COLORS = {
+        3: "#1b7837",    # forest green (most common survival, dominant line)
+        7: "#2166ac",    # steel blue
+        14: "#762a83",   # muted purple
+        30: "#e08214",   # warm amber (rarest cohort, should pop)
+    }
 
     # Survival-curve series: percentage of customer fleet whose age_days >= threshold
+    # Direct-label at the line tip instead of a separate legend box (Tufte:
+    # integrate words and graphics, eliminate the legend decode step).
     for idx, threshold in enumerate(THRESHOLDS):
         key = f"pct_ge_{threshold}d"
         values = [r[key] for r in rows]
+        color = THRESHOLD_COLORS.get(threshold, "#333333")
         ax.plot(
             parsed,
             values,
             marker="o",
             markersize=5,
             linewidth=2,
-            color=palette[idx],
-            label=f">= {threshold} days",
+            color=color,
+        )
+        # Place label at the rightmost data point
+        ax.text(
+            parsed[-1],
+            values[-1],
+            f"  >= {threshold}d ({values[-1]:.1f}%)",
+            va="center",
+            ha="left",
+            fontsize=9,
+            fontweight="600",
+            color=color,
         )
 
     ax.set_ylabel("% of customer instances", fontsize=11)
     ax.set_xlabel("Snapshot date", fontsize=11)
-    ax.legend(
-        title="Lifetime threshold",
-        loc="upper left",
-    )
     ax.set_ylim(0, max(35, max((r["pct_ge_3d"] for r in rows), default=35) + 5))
 
     # One-day-wonder line on a secondary axis (typically much higher than the
     # survival curves, so a shared axis would compress the signal).
+    ODW_COLOR = "#c0392b"  # muted red, distinct from the four survival colours
     ax_odw = ax.twinx()
     odw_vals = [r["one_day_wonder_pct"] for r in rows]
     ax_odw.plot(
@@ -215,21 +235,37 @@ def _generate_chart(
         markersize=4,
         linewidth=2,
         linestyle="--",
-        color=sns.color_palette("Reds_d")[2],
-        label="one-day wonders",
+        color=ODW_COLOR,
     )
-    ax_odw.set_ylabel("% one-day wonders", fontsize=11, color=sns.color_palette("Reds_d")[2])
-    ax_odw.tick_params(axis="y", labelcolor=sns.color_palette("Reds_d")[2])
+    ax_odw.set_ylabel("% one-day wonders", fontsize=11, color=ODW_COLOR)
+    ax_odw.tick_params(axis="y", labelcolor=ODW_COLOR)
     ax_odw.set_ylim(0, 100)
 
-    # Combined legend across both axes
-    h1, l1 = ax.get_legend_handles_labels()
-    h2, l2 = ax_odw.get_legend_handles_labels()
-    ax.legend(h1 + h2, l1 + l2, loc="upper left", fontsize=9)
+    # Direct-label the one-day-wonders line at its tip too.
+    # Nudge upward slightly so it doesn't collide with the >= 7d label
+    # on the primary axis (they often sit at similar visual heights).
+    ax_odw.text(
+        parsed[-1],
+        odw_vals[-1] + 3,
+        f"  1-day wonders ({odw_vals[-1]:.0f}%)",
+        va="center",
+        ha="left",
+        fontsize=9,
+        fontweight="600",
+        color=ODW_COLOR,
+    )
+
+    # No legend box needed: all lines are directly labeled at their tips.
+    # This follows Tufte's principle of integrating text with data rather
+    # than forcing the reader to decode a separate legend key.
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(parsed) // 14)))
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+    # Add right padding so direct labels at the line tips are not clipped
+    from datetime import timedelta
+    ax.set_xlim(parsed[0], parsed[-1] + timedelta(days=max(4, len(parsed) // 6)))
 
     for _ax in fig.axes:
         tufte_axes(_ax)

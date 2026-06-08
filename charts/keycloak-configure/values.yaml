@@ -3,3 +3,28 @@ keycloak:
   adminUser: user
   realm: mcp-gateway
   existingSecret: ""  # If set, use this existing secret instead of creating one
+
+# Dynamic Client Registration (RFC 7591) realm setup.
+#
+# When true, the Job applies the four MCP-DCR enabling changes:
+#   - Groups protocol mapper on the `basic` client-scope (so DCR'd clients'
+#     tokens carry the user's groups)
+#   - Audience mapper on `basic` (so tokens carry aud="mcp-gateway" for
+#     RFC 8707 audience binding at the gateway)
+#   - "Allowed Client Scopes" client-registration policy widened to all
+#     realm scopes (anonymous + authenticated subTypes)
+#   - "Trusted Hosts" policy relaxed (IP check off, URI check on, with
+#     localhost/claude.ai trusted) for cloud-egress MCP clients
+#
+# Disable when:
+#   - Using a pre-configured external Keycloak that already has DCR set up
+#   - Operating a closed deployment that doesn't need MCP clients to
+#     dynamically self-register (no Claude Code / Claude.ai / Cursor users)
+#   - The realm has DCR locked down by org policy and you don't want the
+#     Job to touch it
+#
+# Default true matches the chart's primary use case (bundled Keycloak +
+# Claude Code DCR) and aligns with the registry's default
+# MCP_ADVERTISED_SCOPES value.
+dcr:
+  enabled: true

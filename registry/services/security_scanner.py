@@ -94,9 +94,11 @@ def _parse_scanner_json_output(stdout: str) -> list:
     if json_start == -1:
         raise ValueError("No JSON array found in scanner output")
 
-    # Extract and parse JSON
+    # Extract and parse JSON. mcp-scanner may emit extra output after the JSON
+    # array (a trailing summary / log line), so parse only the first JSON value
+    # and ignore trailing data. Plain json.loads() raises "Extra data" here.
     json_str = clean_stdout[json_start:]
-    tool_results = json.loads(json_str)
+    tool_results, _ = json.JSONDecoder().raw_decode(json_str)
     return tool_results
 
 

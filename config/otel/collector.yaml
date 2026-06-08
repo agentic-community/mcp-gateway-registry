@@ -1,0 +1,43 @@
+# OpenTelemetry Collector configuration for local Compose verification (Issue #1122).
+#
+# Receives OTLP metrics + traces from registry / auth-server / mcpgw on
+# :4317 (gRPC) and :4318 (HTTP), and:
+#   1. Re-exposes metrics in Prometheus exposition format on :8889 so the
+#      in-stack Prometheus can scrape the collector as a separate target.
+#   2. Logs everything received to stdout via the debug exporter (verbose),
+#      which is what omrishiv's email thread was reading from.
+#
+# This is a verification / debugging collector. Production deployments use
+# the per-task ADOT sidecar pattern (Phase E of #1122) on ECS, or the
+# operator's existing in-cluster collector on EKS.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  # Re-export metrics in Prometheus exposition format. Prometheus container
+  # in docker-compose.yml has a scrape job pointing at otel-collector:8889.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      exporters: [debug]

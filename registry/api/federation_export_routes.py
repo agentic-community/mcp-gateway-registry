@@ -50,8 +50,8 @@ async def _get_current_sync_generation() -> int:
     try:
         all_servers = await server_service.get_all_servers()
         enabled_server_count = 0
-        for path in all_servers:
-            if await server_service.is_service_enabled(path):
+        for server_data in all_servers.values():
+            if server_data.get("is_enabled", False):
                 enabled_server_count += 1
 
         agent_states = await agent_service.get_all_agent_states()
@@ -447,7 +447,7 @@ async def export_servers(
     # Each server is a dict with 'path' key
     enabled_servers = []
     for path, server_data in all_servers_dict.items():
-        if await server_service.is_service_enabled(path):
+        if server_data.get("is_enabled", False):
             enabled_servers.append(server_data)
 
     # Extract peer groups from JWT for visibility filtering
@@ -664,7 +664,7 @@ async def export_security_scans(
 
     for path, server_data in all_servers_dict.items():
         # Check if server is enabled
-        if not await server_service.is_service_enabled(path):
+        if not server_data.get("is_enabled", False):
             continue
 
         # Check visibility

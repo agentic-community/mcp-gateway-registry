@@ -1,0 +1,710 @@
+---
+name: usage-report-v0
+description: ARCHIVED - LLM-driven usage report generation (pre-deterministic refactor). Kept as a reference for comparing prose, structure, and content philosophy against the current /usage-report skill. NOT MEANT TO BE INVOKED.
+license: Apache-2.0
+metadata:
+  author: mcp-gateway-registry
+  version: "1.3-archived"
+---
+
+> **ARCHIVED, DOC-ONLY REFERENCE.** Do not invoke this skill for production reports. Use `/usage-report` instead.
+>
+> **Comparison-mode usage:** This skill can be run AFTER `/usage-report` has already populated `.scratchpad/usage-reports/<DATE>/` with the bastion export, analyzer JSON/CSV files, and PNG charts. In comparison mode you skip Steps 1-6 (the bastion export and analyzer runs) and jump straight to Step 7 (LLM writes the report by reading the existing files). The output is a v0-style LLM-written report alongside the new deterministic + commentary report, useful for side-by-side prose voice / structure comparison.
+>
+> This SKILL.md captures the report-generation approach that was on `main` at commit `f1c0c14a` (2026-06-07), before the deterministic-render refactor. At that point the LLM did the report writing: it ran the analyzer scripts, then wrote the entire markdown by reading their outputs and synthesizing prose. The hallucination bug class we hit (Azure 28 vs 47, etc.) was the motivation to move to the template + augment-with-commentary architecture used in the current `/usage-report` skill.
+>
+> Kept here for:
+> - Side-by-side comparison runs against `/usage-report` output for the same date.
+> - Comparing prose voice and section structure between the old LLM-written reports and the new deterministic+commentary reports.
+> - Recovering specific narrative patterns (e.g., "the longevity tier is now an aws/ecs/entra phenomenon") that were good and worth porting forward.
+> - Auditing what the old skill's instructions told the LLM to do, to make sure no semantic content was lost in the migration.
+>
+> The .py scripts referenced below (`analyze_telemetry.py`, `analyze_liveness.py`, the chart generators, etc.) live in `.claude/skills/usage-report/`. This v0 folder contains only this SKILL.md.
+>
+> **Comparison-mode workflow (recommended):**
+> 1. Run `/usage-report` first for date `<DATE>`. This produces the deterministic report and populates `.scratchpad/usage-reports/<DATE>/` with all data files and charts.
+> 2. Then invoke this archived skill in comparison mode: skip Steps 1-6 (data is already exported), and start at Step 7 to have the LLM write a v0-style report from the existing files.
+> 3. Save the v0 output as `ai-registry-usage-report-<DATE>-v0.md` in the same dated folder, next to the deterministic `ai-registry-usage-report-<DATE>.md`.
+
+# Usage Report Skill (archived)
+
+Export telemetry data from the MCP Gateway Registry's DocumentDB telemetry collector and generate a usage report showing deployment patterns, version adoption, and feature usage in the wild.
+
+## Visualization Guidelines
+
+All charts in this skill follow Edward Tufte's principles documented in [tufte-viz-guidelines.md](tufte-viz-guidelines.md): high data-ink ratio, no chartjunk, layered information, honest scales. The shared style module [tufte_style.py](tufte_style.py) provides `apply_tufte_style()` (rcParams) and `tufte_axes(ax)` (per-axes cleanup). When adding new chart generators, import from `tufte_style` and call `apply_tufte_style()` once before plotting and `tufte_axes(ax)` for each axes after plotting. Reference the Tufte checklist in `tufte-viz-guidelines.md` before merging any new chart.
+
+## Prerequisites
+
+1. **SSH key** at `~/.ssh/id_ed25519` with access to the bastion host
+2. **Terraform state** available in `terraform/telemetry-collector/` (to read bastion IP)
+3. **Bastion host enabled** (`bastion_enabled = true` in `terraform/telemetry-collector/terraform.tfvars`)
+4. **AWS credentials** configured on the bastion host (for Secrets Manager access)
+5. **GitHub CLI (`gh`)** authenticated with read access to the upstream repo (`agentic-community/mcp-gateway-registry`) for collecting stars, forks, and contributor counts
+
+## Input
+
+The skill accepts optional parameters:
+
+```
+/usage-report [OUTPUT_DIR]
+```
+
+- **OUTPUT_DIR** - Base directory for reports (default: `.scratchpad/usage-reports/`)
+
+If OUTPUT_DIR is not provided, save to `.scratchpad/usage-reports/`.
+
+All artifacts for a given run are placed in a **dated subfolder**: `OUTPUT_DIR/YYYY-MM-DD/`. This keeps each report self-contained and avoids a flat directory of hundreds of files. Previous metrics and CSV files are discovered by scanning both the base directory and all dated subdirectories.
+
+## Workflow
+
+### Step 1: Get Bastion IP
+
+```bash
+cd terraform/telemetry-collector && terraform output -raw bastion_public_ip
+```
+
+If the output is "Bastion not enabled", tell the user to set `bastion_enabled = true` in `terraform/telemetry-collector/terraform.tfvars` and run `terraform apply`.
+
+### Step 2: Copy Export Script to Bastion
+
+```bash
+scp -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 \
+  terraform/telemetry-collector/bastion-scripts/telemetry_db.py \
+  ec2-user@$BASTION_IP:~/telemetry_db.py
+```
+
+### Step 3: Run Export on Bastion
+
+```bash
+ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 \
+  ec2-user@$BASTION_IP \
+  'python3 telemetry_db.py export --output /tmp/registry_metrics.csv 2>&1'
+```
+
+Capture the full output -- it contains the summary statistics printed by `telemetry_db.py`.
+
+### Step 4: Create Dated Subfolder and Download the CSV
+
+Create a dated subfolder for this run's artifacts, then download the CSV into it:
+
+```bash
+DATE_DIR=OUTPUT_DIR/YYYY-MM-DD
+mkdir -p $DATE_DIR
+
+scp -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 \
+  ec2-user@$BASTION_IP:/tmp/registry_metrics.csv \
+  $DATE_DIR/registry_metrics.csv
+```
+
+### Step 5: Install Python Dependencies and Generate Charts
+
+First, ensure matplotlib and seaborn are available on the system Python:
+
+```bash
+/usr/bin/python3 -c "import matplotlib, seaborn" 2>/dev/null || pip install --break-system-packages matplotlib seaborn
+```
+
+Then generate the **instance-based** deployment distribution chart (counts unique registry instances, not events). Run it twice -- once for the cumulative install base, once filtered to the previous complete day -- so the report can show "everyone who ever installed" alongside "who is running it right now":
+
+```bash
+# Cumulative -- all customers ever
+/usr/bin/python3 .claude/skills/usage-report/generate_instance_distribution_chart.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output $DATE_DIR/instance-distribution-YYYY-MM-DD.png
+
+# Active-yesterday -- only customers that reported on the last complete day.
+# Pass YYYY-MM-DD - 1 (the previous day relative to report date) so today's
+# partial-day undercount doesn't bias the picture.
+/usr/bin/python3 .claude/skills/usage-report/generate_instance_distribution_chart.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output $DATE_DIR/instance-distribution-active-PREVIOUS-YYYY-MM-DD.png \
+  --active-on-date PREVIOUS-YYYY-MM-DD
+```
+
+Each invocation produces a faceted PNG with 6 subplots: Cloud Provider, Compute Platform, Storage Backend, Auth Provider, Architecture, and Deployment Mode. Each subplot shows unique instance counts and percentages. The `--active-on-date` form filters the row set to instances that had at least one event on the given date (heartbeat or startup), then runs the same six-panel breakdown on that subset; the chart title is annotated to make the filter explicit.
+
+In the report, embed both PNGs in the "Deployment Distribution (by Unique Instances)" section and add a short narrative pointing out where the two views diverge -- typically the active-yesterday view shifts toward Kubernetes (vs Docker), enterprise IdP (vs the long-tail), and AWS dominance.
+
+### Step 5b: Generate Timeseries Chart
+
+Generate a timeseries chart showing unique registry installs per cloud provider over time. This reads ALL CSV files in the base output directory and dated subdirectories to build a complete historical view:
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_timeseries_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/registry-installs-timeseries-YYYY-MM-DD.png \
+  --exclude-incomplete-day YYYY-MM-DD
+```
+
+This produces a PNG with three subplots:
+- **Cumulative Unique Registry Installs** -- running total of unique registry_ids per cloud provider
+- **Daily Active Registry Installs** -- unique registry_ids seen each day per cloud provider (returning instances are re-counted)
+- **Daily NEW Registry Installs (first-seen)** -- unique registry_ids whose earliest-ever event lands on each day, per cloud provider. Each instance is counted exactly once across the entire history. Use this to track raw acquisition velocity per cloud, isolated from churn and re-engagement
+
+> **`--exclude-incomplete-day`** drops events on the given date (today's date, the in-progress day) before charting so the trailing data point doesn't show a misleading dip. Always pass today's `YYYY-MM-DD`. Snapshot tables and headline tallies still see the full data; only the chart series are trimmed.
+
+### Step 5b2: Generate Compute Platform Timeseries Chart
+
+Generate a second timeseries chart, parallel to the cloud-provider one, showing unique registry installs per **compute platform** (docker, kubernetes, ecs, ec2, etc.) over time. Same data-sourcing behavior (scans all CSV files across dated subdirectories). Pass `--snapshots-table` to also emit a markdown per-snapshot table ready to embed in the report:
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_compute_timeseries_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/compute-installs-timeseries-YYYY-MM-DD.png \
+  --snapshots-table $DATE_DIR/compute-platform-snapshots-YYYY-MM-DD.md \
+  --exclude-incomplete-day YYYY-MM-DD
+```
+
+This produces:
+- A PNG with two subplots:
+  - **Cumulative Unique Registry Installs per Compute Platform** -- running total of unique registry_ids per platform
+  - **Daily Active Registry Installs per Compute Platform** -- unique registry_ids seen each day per platform
+- A markdown file with the **Per-Platform Growth (Unique Installs)** table, one row per dated CSV snapshot, sorted **descending by date** (newest first, bolded). The column order is `docker | kubernetes | ecs | ec2 | unknown` when present, plus any other platforms alphabetically. Unique-instance counts per snapshot are computed directly from each dated CSV using the `compute` column (not `compute_platform` -- that's the schema key but not the CSV column name).
+
+Embed the chart in the report's "Compute Platform Growth" section and drop the contents of the snapshots-table markdown file in under the "Per-Platform Growth (Unique Installs)" subheading. Add a short narrative on which platforms are growing fastest in absolute and percentage terms; the newest (bolded) row is the current total for the report.
+
+### Step 5c: Generate Instance Lifetime Chart
+
+Generate a density plot showing the distribution of instance lifetimes (age in days). This reads the metrics JSON produced by the analysis step, so it must run after Step 6. However, the SKILL.md lists it here for logical grouping with other charts:
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_lifetime_chart.py \
+  --metrics $DATE_DIR/metrics-YYYY-MM-DD.json \
+  --output $DATE_DIR/instance-lifetime-YYYY-MM-DD.png
+```
+
+This produces a PNG with three panels:
+- **Age Distribution** -- histogram with KDE density overlay showing instance ages in days, with stats annotation (mean, max, multi-day vs single-day counts)
+- **Age Spread** -- boxplot with Q1/median/Q3/max annotated and individual points overlaid, useful for spotting outliers and the long-tail of long-lived deployments
+- **Age Buckets** -- horizontal bar chart grouping instances into age ranges (0 days, 1-2 days, 3-5 days, etc.) with counts and percentages
+
+**Note**: Run this after Step 6 (telemetry analysis) since it reads the metrics JSON.
+
+### Step 5c-ts: Generate Lifetime-Bucket Retention Chart
+
+Plot per-snapshot **lifetime retention percentages** (one-day wonders vs >=3 / >=7 / >=14 / >=30 day cohorts) over time. Reads every `metrics-*.json` file under the base output directory and recomputes the buckets retroactively, so it works on snapshots that predate the `lifetime_bucket_pct` field. Produces a PNG plus a per-snapshot CSV sidecar that future reports can diff against.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_lifetime_buckets_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/lifetime-buckets-YYYY-MM-DD.png \
+  --csv-out $DATE_DIR/lifetime-buckets-YYYY-MM-DD.csv
+```
+
+Embed the chart in the report directly below the Registry Instance Lifetime section, alongside a narrative that quotes the latest CSV row (the report-date snapshot) and contrasts it with the earliest snapshot to show whether the customer-retention curve is improving over time.
+
+**Note**: Run this after Step 6 since it depends on `instance_lifetime` + `internal_instance_ids` keys in `metrics-*.json`.
+
+### Step 5c2: Generate Customer-Active-Instances Chart
+
+Generate a chart of customer engagement over time, with three overlaid series:
+
+- **Daily Active Instances (DAI)** -- unique `registry_id`s that sent at least one event (startup OR heartbeat) on that day.
+- **7-day moving average (MA7)** -- trailing 7-day average of DAI.
+- **7-day consistency streak (S7)** -- unique `registry_id`s that sent at least one event on EACH of the 7 days in the window `[D-6..D]`.
+
+Customer-only: internal instances loaded from `known-internal-instances.md` are excluded so the numbers align with the Liveness section (which is also customer-only). A CSV sidecar of the per-day values is written alongside the PNG so the report narrative can quote exact numbers and future reports can diff against it.
+
+The CSV also includes two **DAI percentage** columns derived from the same per-day registry-id sets:
+- `cumulative_installs`, `dai_pct_of_total` -- DAI / cumulative_installs through that day; the engagement rate of the full install funnel ever recorded
+- `likely_alive_7d`, `dai_pct_of_likely_alive` -- DAI / unique-active-in-trailing-7d; the engagement rate of the currently-active fleet (analog of a DAU/WAU ratio)
+
+Both percentages should be quoted side-by-side in the report's "DAI as a percentage of total installs" subsection so the reader sees the funnel-engagement number (low, because of one-day wonders) and the active-fleet engagement number (the healthier B2B-style read) together.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_active_instances_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/active-instances-YYYY-MM-DD.png \
+  --internal-instances .claude/skills/usage-report/known-internal-instances.md \
+  --csv-out $DATE_DIR/active-instances-YYYY-MM-DD.csv \
+  --exclude-incomplete-day YYYY-MM-DD
+```
+
+Same data-sourcing behavior as the other historical charts (scans all CSVs across dated subdirectories). Embed in the Liveness section under an "Engagement over Time" subheading.
+
+### Step 5c3: Generate LTV Infra-Spend Chart and Summary
+
+Compute daily and cumulative AWS customer infra spend (EC2 compute + Bedrock Titan embeddings). The script emits **two cost numbers framed as a range** so the report can be conservative about not over-estimating spend:
+
+- **All-days (upper bound):** charges every distinct (AWS customer instance, day) pair, including 1-day trial installs. Matches "every real AWS billing day this solution caused".
+- **Proven-persistence (lower bound):** charges an instance on day D only if it had events on D AND on any prior day. This excludes every instance's first-ever active day, so instances that phone home once and never again contribute $0. Gap-tolerant: if an instance is silent on day D-1 and comes back on D, it's still charged on D (because it had prior events on earlier days).
+
+Customer-only (internal UUIDs excluded), AWS-only (GCP/Azure/unknown excluded because we can't attribute their AWS-side usage). On the current fleet ~59% of AWS customer instances are "one-day wonders" — they show up once and never return — so the proven-persistence number is typically ~30% lower than all-days.
+
+**Cost model (per-compute-platform, grounded in deployment artefacts):**
+
+| Platform | Daily rate | Grounding |
+|---|---:|---|
+| `docker` | $3.99 | 1 × t3.xlarge on-demand ($0.1664/hr), customer VM |
+| `ecs` | $19.03 | From `terraform/aws-ecs/terraform.tfstate`: 10 Fargate tasks ($7.67) + DocumentDB db.t3.medium ($1.87) + RDS Aurora Serverless v2 avg 1 ACU ($2.88) + 2 ALBs ($1.35) + 3 NAT Gateways ($3.24) + 2 CloudFront ($0.50) + S3 logs ($0.05) + CloudWatch ($1.00) + EFS/SM/DT ($0.50) |
+| `kubernetes` | $11.17 | From `charts/` Helm defaults + aws-load-balancer-controller: EKS control plane ($2.40) + 2 × t3.large nodes ($3.99) + 4 ALB ingresses ($2.70) + 1 NAT Gateway ($1.08) + EBS ($0.50) + CloudWatch Container Insights ($0.30) + data transfer ($0.20) |
+| `ec2` / `unknown` / other | $3.99 | Docker-compose fallback (single VM) |
+
+Platform for a given instance is resolved via its **most-recent non-empty `compute` field**. If an instance migrates across platforms mid-window, it's billed at the latest platform's rate for the whole window.
+
+**Bedrock Titan embeddings:** only for instances whose latest `embeddings_backend_kind == "bedrock"`. Cost = `delta(search_queries_total)` on that day × 100 tokens/query × $0.00002 / 1K tokens. The delta is computed from the instance's own `search_queries_total` timeseries (monotonic counter), so we never double-count queries that were already charged on a previous day.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_ltv_spend.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/ltv-spend-YYYY-MM-DD.png \
+  --internal-instances .claude/skills/usage-report/known-internal-instances.md \
+  --csv-out $DATE_DIR/ltv-spend-YYYY-MM-DD.csv \
+  --summary-json $DATE_DIR/ltv-spend-YYYY-MM-DD.json \
+  --exclude-incomplete-day YYYY-MM-DD
+```
+
+> When `--exclude-incomplete-day` is passed, the JSON summary's `yesterday` block refers to the **last complete day** (typically YYYY-MM-DD - 1), not today. Headline tables in the report should label this clearly (e.g. "Yesterday (2026-05-16, last complete day)").
+
+Outputs:
+- PNG chart with three panels: daily EC2 compute USD (all-days + proven overlay), daily Bedrock USD, cumulative LTV USD (both lines with shaded range between them).
+- CSV sidecar per day: `date, aws_instances, aws_instances_persistent, <platform>_instances[_persistent], bedrock_queries[_persistent], compute_usd[_persistent], bedrock_usd[_persistent], total_usd[_persistent], cum_total_usd[_persistent]`.
+- JSON summary with headline numbers under `yesterday.all_days` vs `yesterday.proven`, `last_7_days.{all_days_total_usd, proven_total_usd}`, `ltv.{all_days, proven}`, and per-platform LTV breakdown for both models.
+
+Embed the chart in the report's **Customer Infra Spend (AWS)** section. Include a single summary table that shows both numbers as a range (e.g. "yesterday: $292.67 – $346.01"), one short paragraph explaining the two counting rules, and the per-platform LTV breakdown (both models side by side). Flag clearly that the cost model is hypothetical (we don't actually bill these customers; these are "what it would cost them at list price").
+
+**ARR projection (mandatory):** below the cumulative LTV table, add a short subsection titled **"Annualized Run Rate (ARR) Projection"** that takes the 7-day daily-average spend and projects it forward 365 days. Compute as `last_7_days.<model>_total_usd / 7 * 365`, divided by 1,000,000, formatted to 2 decimal places in millions. Render BOTH models (proven and all-days) as a small two-row table:
+
+```
+| Model | 7-day daily avg | x 365 = ARR |
+|-------|----------------:|------------:|
+| Proven | $X | $Y.YYM |
+| All-days | $X | $Y.YYM |
+```
+
+Frame the ARR as "what the active customer fleet would cost AWS customers per year at list price if today's run rate held constant." Include the same hypothetical disclaimer (we do not bill these customers). The ARR is a useful complement to install-count growth: it tracks the real economic footprint of the customer fleet, not just the headcount of registry instances.
+
+### Step 5d: Generate Install Forecast Chart
+
+Project when the registry will reach 1,000 installs using two models: a 14-day OLS linear regression and a 7-day recent-pace extrapolation. Produces a PNG chart (cumulative installs with forecast line and confidence bands) and a JSON summary with ETAs.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_install_forecast.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/install-forecast-YYYY-MM-DD.png \
+  --summary-json $DATE_DIR/install-forecast-YYYY-MM-DD.json
+```
+
+Outputs:
+- PNG chart showing cumulative installs, linear fit, and projected crossing of the 1,000-install target
+- JSON summary with `today.installs`, `linear.eta` (with 95% CI bounds), `recent_pace.eta`, and model parameters
+
+Embed the chart in the report's **Install Forecast** section. Include a table showing both model ETAs and daily rates. This section should come after Version Adoption and before Customer Infra Spend.
+
+### Step 5e: Generate Adoption Funnel Chart
+
+Visualize the conversion funnel from total installs through retention stages to confirmed-alive. Reads the metrics JSON (for lifetime buckets) and optionally the liveness JSON (for confirmed-alive count).
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_adoption_funnel_chart.py \
+  --metrics $DATE_DIR/metrics-YYYY-MM-DD.json \
+  --liveness $DATE_DIR/liveness-YYYY-MM-DD.json \
+  --output $DATE_DIR/adoption-funnel-YYYY-MM-DD.png
+```
+
+**Note**: Run after Step 6 and Step 6c since it reads both `metrics-*.json` and `liveness-*.json`.
+
+Embed the chart in the report's **Adoption Funnel** section (placed after Most Engaged Operators, before Recommendations). Include a table showing each funnel stage, count, and percentage of the previous stage.
+
+### Step 5f: Generate Cloud-Detection-by-Version Chart
+
+Plot how the `cloud_detection_method` outcome distributes per registry version. Each row is a version (top 12 by instance count plus a rolled-up "other"); each row is a stacked horizontal bar split by detection-method outcome (env, dmi, ecs_meta, k8s_heuristic, imds, unknown, "(field absent)" for pre-1.23.0).
+
+This chart lets the report validate that fixes to cloud detection (issue #1093, PR #1106 in 1.24.2) actually moved the needle: the "unknown" red slice should shrink on the row for the version where the fix shipped, relative to older versions on the same chart.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_detection_by_version_chart.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output $DATE_DIR/detection-by-version-YYYY-MM-DD.png \
+  --csv-out $DATE_DIR/detection-by-version-YYYY-MM-DD.csv \
+  --snapshot-date YYYY-MM-DD
+```
+
+Outputs:
+- PNG chart with versions on the y-axis (sorted by instance count, largest at top), detection methods stacked on the x-axis with green-for-success / red-for-unknown / grey-for-field-absent colour coding.
+- CSV sidecar with one row per version, columns for each detection method count, plus a total. Useful for diffing across reports.
+
+Embed the chart in a section titled "Cloud Detection Outcomes by Version" placed after Adoption Funnel and before Recommendations. Add a short narrative quoting the row for the latest release (`1.24.2` and later) and contrasting it with `1.23.0` and `1.24.1` to show whether the fix is working in the wild on instances that adopted it.
+
+### Step 5g: Fetch GitHub Repository Stats
+
+Collect community-growth signals for the upstream repo (`agentic-community/mcp-gateway-registry`) using the authenticated `gh` CLI. These numbers complement telemetry by showing project interest outside of deployed instances.
+
+```bash
+# Star, fork, watcher, open-issue counts (single API call)
+gh api repos/agentic-community/mcp-gateway-registry \
+  --jq '{stars: .stargazers_count, forks: .forks_count, watchers: .subscribers_count, open_issues: .open_issues_count}' \
+  > $DATE_DIR/github_stats.json
+
+# Unique contributors (paginate through all pages, count unique logins)
+gh api --paginate repos/agentic-community/mcp-gateway-registry/contributors \
+  --jq '.[].login' | sort -u | wc -l > $DATE_DIR/github_contributors_count.txt
+```
+
+Record these numbers in the report and compare them against the previous report's `github_stats.json` (if present in the previous dated subfolder). Compute deltas for stars, forks, and contributors the same way telemetry metrics are compared.
+
+**Note**: If `gh` is not authenticated or the API call fails, skip the GitHub section in the report and log a short note instead of failing the entire run.
+
+### Step 6: Run Telemetry Analysis
+
+Run the analysis script to compute all distributions, instance timelines, and metrics. This produces two files:
+- `tables-YYYY-MM-DD.md` -- pre-formatted markdown tables ready to embed in the report (with executive summary comparison at the top)
+- `metrics-YYYY-MM-DD.json` -- raw computed metrics as JSON (includes `per_cloud_unique_installs`)
+
+The script automatically finds the most recent previous `metrics-*.json` file. Since output files are written to the dated subfolder (`$DATE_DIR`) but previous metrics live in *sibling* dated subfolders, you **must** pass `--search-dir OUTPUT_DIR` so the script searches the parent directory containing all dated subfolders:
+
+```bash
+INTERNAL_INSTANCES_FILE=".claude/skills/usage-report/known-internal-instances.md"
+INTERNAL_FLAG=""
+if [ -f "$INTERNAL_INSTANCES_FILE" ]; then
+  INTERNAL_FLAG="--internal-instances $INTERNAL_INSTANCES_FILE"
+fi
+
+/usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output-dir $DATE_DIR \
+  --search-dir OUTPUT_DIR \
+  --date YYYY-MM-DD \
+  $INTERNAL_FLAG
+```
+
+- `--output-dir $DATE_DIR` -- where to write `tables-*.md` and `metrics-*.json`
+- `--search-dir OUTPUT_DIR` -- where to search for previous `metrics-*.json` files (scans this directory and all subdirectories). **If omitted, defaults to the parent of `--output-dir`.**
+- `--internal-instances` -- path to `known-internal-instances.md` listing known internal registry instance IDs. When provided, internal instances are labeled "(internal)" in the Instance Lifetime and Identified Instances tables, a Most Active Instances table is generated with an Internal column, and stickiness metrics (3+ day non-internal count, longest-running non-internal instance) are computed and included in the JSON output.
+
+Or with an explicit previous metrics file (skips auto-detection):
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/analyze_telemetry.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output-dir $DATE_DIR \
+  --date YYYY-MM-DD \
+  --previous-metrics OUTPUT_DIR/PREVIOUS-DATE/metrics-PREVIOUS-DATE.json \
+  $INTERNAL_FLAG
+```
+
+### Step 6b: Identify Internal vs Customer Instances
+
+The `--internal-instances` flag passed in Step 6 handles internal instance identification automatically. The analysis script reads `.claude/skills/usage-report/known-internal-instances.md` (if it exists, since it is gitignored and may not be present on all machines) and:
+
+1. Labels internal instances with "(internal)" in the Instance Lifetime and Identified Instances tables
+2. Generates a "Most Active Instances" table ranked by activity score (max servers + agents + skills + search), with an Internal column and a Version column
+3. Computes stickiness metrics (3+ day non-internal count, longest-running non-internal) and writes them to the JSON output under the `stickiness` key
+4. Writes the list of internal instance IDs to the JSON output under `internal_instance_ids`
+
+If the file does not exist, the script treats all instances as external (no internal labeling, stickiness counts all instances).
+
+When writing the report:
+
+1. **Clearly label known internal instances** in the Instance Lifetime table and Registry Instances table (e.g., add "(internal)" suffix or a dedicated column)
+2. **Separate metrics**: Report total fleet numbers AND customer-only numbers (excluding internal instances). For example: "97 total instances (3 known internal + possibly more, ~94 potential customer instances)"
+3. **Flag unusual activity from internal instances**: If internal instances show disproportionate activity (e.g., many registered servers/agents/skills, heavy search usage, frequent restarts/heartbeats), explicitly note this is internal testing activity and NOT indicative of customer usage patterns
+4. **Note that additional internal instances may exist** beyond the known list -- short-lived CI/CD runs, developer local setups, etc. may not be in the known list
+
+The known internal instances are typically the longest-running, highest-activity instances since they are always-on development environments.
+
+### Step 6c: Run Liveness Analysis
+
+Classify customer (non-internal) instances into liveness tiers based on recent heartbeat activity. Registry heartbeats are emitted once per 24 hours by default (`MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=1440`, see [registry/core/telemetry.py](../../../registry/core/telemetry.py) and [registry/core/config.py](../../../registry/core/config.py)), which makes heartbeat counts a direct proxy for "is this deployment still running".
+
+The script produces two files:
+- `liveness-YYYY-MM-DD.md` -- a pre-formatted markdown section (tier summary table, confirmed-alive instance list, cloud/compute/auth breakdowns) ready to embed in the report
+- `liveness-YYYY-MM-DD.json` -- raw counts and instance ID lists, used for delta tracking in future reports
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/analyze_liveness.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --metrics-json $DATE_DIR/metrics-YYYY-MM-DD.json \
+  --output-dir $DATE_DIR \
+  --search-dir OUTPUT_DIR \
+  --date YYYY-MM-DD \
+  $INTERNAL_FLAG
+```
+
+**Tiers defined:**
+- **Confirmed Alive** (leading, revenue-countable): ≥ 5 heartbeats in the last 7 days -- a registry that has phoned home almost every day for a week
+- **Stronger Alive** (trailing): ≥ 10 heartbeats in the last 14 days -- durable two-week signal
+- **Likely Alive**: any event (startup or heartbeat) in the last 7 days
+- **Silent-but-recent**: event in last 7 days but < 5 heartbeats (new installs or heartbeat-disabled)
+- **Dormant**: no event in the last 14 days (probably deprovisioned)
+
+If a previous `liveness-*.json` file is found in `--search-dir`, the "vs Previous" column in the tier summary table is populated with deltas. On first run, it shows "baseline".
+
+**Note:** Run this after Step 6 since it reads `metrics-YYYY-MM-DD.json` for per-instance cloud/compute/auth metadata.
+
+### Step 7: Generate the Usage Report
+
+Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the report. Add narrative sections (Executive Summary, Architecture Patterns, Recommendations) around the data tables. The tables file contains:
+
+- Key Metrics table
+- Registry Instance Lifetime table (age in days, sorted descending, internal instances labeled)
+- Identified and Unidentified instance tables (internal instances labeled)
+- Cloud, Compute, Architecture, Storage, Auth distribution tables
+- Version Adoption table (with Events, % Events, unique Instances, and % Instances columns)
+- Version Upgrade Trajectories table (one row per non-internal instance that reported >1 distinct version, with Registry ID, Version Changes, and Trajectory in first-seen order; sorted descending by Version Changes; also persisted to `metrics-*.json` under `upgrade_trajectories`)
+- Feature Adoption table
+- Search Usage table
+- Sticky Instance Breakdown table (one row per cloud/compute/storage/auth profile, with count, percentage, and change vs previous)
+- Most Active Instances table (top 10 non-internal instances by activity score, with Version and Embeddings columns)
+- Largest Catalogs table (top 10 non-internal instances by registered objects, sort key `max_servers + max_agents + max_skills`, with Version and per-object columns; surfaces comprehensive-catalog deployments that may rank low on the search-driven activity score)
+- Most Engaged Operators table (top 10 non-internal instances by upgrade-chain length, sort key `version_changes` with `age_days` tiebreaker; shows the operators tracking the project closely enough to upgrade across multiple releases)
+- Per-instance daily timelines (with servers, agents, skills, search queries)
+
+Also read the generated `liveness-YYYY-MM-DD.md` (from Step 6c) and include its tier summary, confirmed-alive instance list, and cloud/compute/auth breakdowns as a dedicated **Liveness** section in the report (placed after "Registry Instance Lifetime" and before "Version Adoption"). The Executive Summary should mention the Confirmed-Alive and Stronger-Alive counts as the revenue-countable leading and trailing indicators.
+
+#### Report Structure
+
+The main body focuses on insights and charts. Detailed event-count distribution tables are moved to an appendix. **IMPORTANT:** Every section below is MANDATORY. Do not skip any section. Each `![...]` image reference is a REQUIRED chart that must be embedded. In particular, the "Most Active Instances", "Largest Catalogs", and "Most Engaged Operators" tables MUST appear in the main report body (not just in the tables appendix file). These are high-value sections for stakeholders.
+
+```markdown
+# AI Registry -- Usage Report
+
+*Report Date: YYYY-MM-DD*
+*Data Source: Telemetry Collector (DocumentDB)*
+*Collection Period: [earliest ts] to [latest ts]*
+
+---
+
+## Executive Summary
+Lead with new installs since last report, total unique installs, dominant cloud/compute/IdP, growth trends. Also include the current GitHub star count (with delta vs previous report) as a top-line community signal.
+
+Include an **instance stickiness** line: "N instances have been running for 3+ days (up/down from M in the previous report). The longest-running non-internal instance is `REGISTRY_ID` at D days (previously P days)."
+
+Include a **one-day-wonder** line from `stickiness.one_day_wonder_pct`. Compare against the previous report to show the trend.
+
+Stickiness values from `metrics-YYYY-MM-DD.json`:
+- `stickiness.sticky_3plus_days`, `stickiness.one_day_wonders`, `stickiness.one_day_wonder_pct`
+- `stickiness.lifetime_bucket_counts` / `lifetime_bucket_pct`: cumulative thresholds at 3, 7, 14, 30 days
+- `stickiness.longest_non_internal_id`, `stickiness.longest_non_internal_days`
+
+![Registry Installs Timeseries](registry-installs-timeseries-YYYY-MM-DD.png)
+
+### Comparison with Previous Report
+- Deltas for total events, unique instances, heartbeat events, null registry_id count
+- Per-cloud-provider unique registry installs comparison table
+- GitHub stars delta (and forks/contributors if notable)
+- Customer instances running 3+ days: current vs previous count
+- Longest-running non-internal instance: current age vs previous age
+- Confirmed-Alive and Stronger-Alive counts (from `liveness-*.json`): current vs previous
+
+## Deployment Distribution (by Unique Instances)
+![Instance Distribution -- All Customers Ever](instance-distribution-YYYY-MM-DD.png)
+![Instance Distribution -- Active on PREVIOUS-YYYY-MM-DD](instance-distribution-active-PREVIOUS-YYYY-MM-DD.png)
+
+Narrative pointing out where the two views diverge (active-yesterday shifts toward Kubernetes, enterprise IdP, AWS dominance).
+
+## Key Metrics
+| Metric | Value |
+|--------|-------|
+| Total Events | N |
+| Unique Registry Instances | N |
+| Known Internal Instances | N (+ possibly more) |
+| Potential Customer Instances | N - internal |
+| ... | ... |
+
+## Internal Instances (Development/Testing)
+List known internal instances. Note disproportionate activity. Clearly state this is not customer usage.
+
+## Registry Instance Lifetime
+Commentary on average/max lifetime, multi-day vs single-day.
+![Instance Lifetime](instance-lifetime-YYYY-MM-DD.png)
+
+### Customer Lifetime Retention Over Time
+![Lifetime Bucket Retention](lifetime-buckets-YYYY-MM-DD.png)
+
+## Liveness (Currently Active Instances)
+Include `liveness-YYYY-MM-DD.md` verbatim (tier summary, confirmed-alive list, breakdowns).
+
+### Engagement Over Time
+![Active Instances](active-instances-YYYY-MM-DD.png)
+
+DAI, MA7, 7-day streak, DAI/total %, DAI/likely-alive % from `active-instances-YYYY-MM-DD.csv`.
+
+## Compute Platform Growth
+![Compute Installs Timeseries](compute-installs-timeseries-YYYY-MM-DD.png)
+
+### Per-Platform Growth (Unique Installs)
+Include the table from `compute-platform-snapshots-YYYY-MM-DD.md` (latest 10 rows, newest first).
+
+## Version Adoption
+Table from `tables-YYYY-MM-DD.md`. Columns: Version, Events, % Events, Instances, % Instances. Top 10-15 versions.
+
+## Version Upgrade Trajectories
+Table from `tables-YYYY-MM-DD.md`. Narrative on longest chains and upgrade fraction.
+
+## Feature Adoption
+Federation, gateway mode, heartbeat rates, embeddings backend breakdown from `tables-YYYY-MM-DD.md`.
+
+## Search Usage
+From `tables-YYYY-MM-DD.md`: instances with search, total queries, average, max.
+
+## Sticky Instance Breakdown (3+ Days)
+Table from `tables-YYYY-MM-DD.md`. Grouped by cloud/compute profile with change vs previous.
+
+## Most Active Instances (by Feature Usage)
+**DO NOT SKIP THIS SECTION.** Copy the full "Most Active Instances" table from `tables-YYYY-MM-DD.md` into the report. This is the top 10 non-internal instances ranked by total feature usage (servers + agents + skills + search queries). Add 2-3 sentences of narrative on usage patterns (e.g., search-heavy vs catalog-heavy deployments).
+
+## Largest Catalogs (by Registered Servers + Agents + Skills)
+**DO NOT SKIP THIS SECTION.** Copy the full "Largest Catalogs" table from `tables-YYYY-MM-DD.md` into the report. This is the top 10 non-internal instances ranked by registered objects (servers + agents + skills). Add a sentence noting any instances that appear here but not in Most Active (large catalog, low search usage).
+
+## Most Engaged Operators (by Upgrade-Chain Length)
+**DO NOT SKIP THIS SECTION.** Copy the full "Most Engaged Operators" table from `tables-YYYY-MM-DD.md` into the report. This is the top 10 non-internal instances ranked by number of distinct versions reported. Add a sentence on upgrade frequency trends.
+
+## Install Forecast
+![Install Forecast](install-forecast-YYYY-MM-DD.png)
+
+Table with both model ETAs (linear and recent-pace) and daily rates from `install-forecast-YYYY-MM-DD.json`.
+
+## Customer Infra Spend (AWS)
+![LTV Spend](ltv-spend-YYYY-MM-DD.png)
+
+Summary table from `ltv-spend-YYYY-MM-DD.json`. Show yesterday, last-7-days, 7-day daily average, and cumulative LTV as ranges. Per-platform LTV breakdown.
+
+### Annualized Run Rate (ARR) Projection
+Compute `7-day daily average * 365 / 1,000,000` for both proven and all-days models. Two-row table showing both ARRs in millions of dollars (formatted to 2 decimal places). Frame as: "what the active customer fleet would cost AWS customers per year at list price if today's run rate held constant." Include hypothetical disclaimer.
+
+## Adoption Funnel
+![Adoption Funnel](adoption-funnel-YYYY-MM-DD.png)
+
+Table showing each funnel stage (total installs, multi-day, sticky 3+, weekly 7+, biweekly 14+, monthly 30+, confirmed alive) with count and % of previous stage.
+
+## Cloud Detection Outcomes by Version
+![Cloud Detection by Version](detection-by-version-YYYY-MM-DD.png)
+
+Stacked-bar view of `cloud_detection_method` outcomes split by registry version. Quote the row for the latest release and contrast it with `1.23.0` and `1.24.1` to validate whether issue #1093 / PR #1106 is actually moving the unknown-cloud rate down on instances that adopted the fix.
+
+## GitHub Repository
+Table with stars, forks, contributors, open issues. Deltas vs previous report.
+
+## Architecture Patterns Observed
+3-5 distinct deployment patterns from the data.
+
+## Recommendations
+5-7 actionable insights based on the data.
+
+## Appendix: Raw Distribution Tables
+Event-count-based distribution tables for cloud, compute, architecture, storage, and auth from `tables-YYYY-MM-DD.md`.
+```
+
+#### Mandatory Charts Checklist
+
+The report MUST embed all 11 charts. If any chart file is missing, generate it before writing the report.
+
+1. `registry-installs-timeseries-YYYY-MM-DD.png` (cloud provider: cumulative + daily-active + daily-new)
+2. `instance-distribution-YYYY-MM-DD.png` (6-panel faceted, all customers)
+3. `instance-distribution-active-PREVIOUS-YYYY-MM-DD.png` (6-panel faceted, active yesterday)
+4. `instance-lifetime-YYYY-MM-DD.png` (age histogram + boxplot + buckets)
+5. `lifetime-buckets-YYYY-MM-DD.png` (retention % over time)
+6. `active-instances-YYYY-MM-DD.png` (DAI + MA7 + streak)
+7. `compute-installs-timeseries-YYYY-MM-DD.png` (compute platform cumulative + daily)
+8. `install-forecast-YYYY-MM-DD.png` (OLS + recent-pace to 1,000)
+9. `ltv-spend-YYYY-MM-DD.png` (daily compute + bedrock + cumulative)
+10. `adoption-funnel-YYYY-MM-DD.png` (funnel from total to confirmed-alive)
+11. `detection-by-version-YYYY-MM-DD.png` (cloud_detection_method outcomes per version)
+
+Save the report to `$DATE_DIR/ai-registry-usage-report-YYYY-MM-DD.md`.
+
+### Step 8: Generate Self-Contained HTML
+
+Convert the markdown report to a single self-contained HTML file using pandoc. The chart PNG is base64-embedded so the HTML works standalone. Run from the DATE_DIR so relative image paths resolve:
+
+```bash
+cd $DATE_DIR && pandoc ai-registry-usage-report-YYYY-MM-DD.md \
+  -o ai-registry-usage-report-YYYY-MM-DD.html \
+  --embed-resources --standalone \
+  --css=.claude/skills/usage-report/report-style.css \
+  --metadata title="AI Registry - Usage Report YYYY-MM-DD"
+```
+
+The `report-style.css` file in the skill directory provides a clean, professional layout. Pandoc must be installed:
+```bash
+which pandoc >/dev/null || sudo apt-get install -y pandoc
+```
+
+### Step 9: Present Results
+
+After generating the report:
+1. Display the Executive Summary (with comparison deltas, including GitHub stars delta) and Key Metrics directly in the conversation
+2. Tell the user the full report path, HTML path, CSV path, and chart paths
+3. Highlight the most interesting findings and notable changes from the previous report (telemetry + GitHub)
+
+## Error Handling
+
+- **SSH connection fails**: Check that the bastion IP is correct and security group allows your IP. The allowed CIDRs are in `terraform/telemetry-collector/terraform.tfvars` under `bastion_allowed_cidrs`.
+- **Export returns 0 documents**: The telemetry collector may not have received any events yet. Check that `telemetry_enabled` is true in registry settings and the collector endpoint is reachable.
+- **Terraform output fails**: Make sure you're in the right directory and have run `terraform init`.
+
+## Example Usage
+
+```
+User: /usage-report
+```
+
+Output:
+```
+Executive Summary: 31479 events from 562 unique registry instances over 55 days...
+Compared to previous report (2026-05-20): +2299 events (+8%), +26 new instances (+5%)
+
+Full report: .scratchpad/usage-reports/2026-05-22/ai-registry-usage-report-2026-05-22.md
+HTML report: .scratchpad/usage-reports/2026-05-22/ai-registry-usage-report-2026-05-22.html
+Charts (10):
+  - registry-installs-timeseries-2026-05-22.png
+  - compute-installs-timeseries-2026-05-22.png
+  - instance-distribution-2026-05-22.png
+  - instance-distribution-active-2026-05-21.png
+  - instance-lifetime-2026-05-22.png
+  - lifetime-buckets-2026-05-22.png
+  - active-instances-2026-05-22.png
+  - install-forecast-2026-05-22.png
+  - ltv-spend-2026-05-22.png
+  - adoption-funnel-2026-05-22.png
+CSV data: .scratchpad/usage-reports/2026-05-22/registry_metrics.csv
+```
+
+```
+User: /usage-report /tmp/reports
+```
+
+Output saved to `/tmp/reports/2026-05-22/`.
+
+## Output Directory Structure
+
+```
+.scratchpad/usage-reports/
+  2026-05-22/
+    # Report files
+    ai-registry-usage-report-2026-05-22.md
+    ai-registry-usage-report-2026-05-22.html
+
+    # Charts (10 mandatory PNGs)
+    registry-installs-timeseries-2026-05-22.png
+    compute-installs-timeseries-2026-05-22.png
+    instance-distribution-2026-05-22.png
+    instance-distribution-active-2026-05-21.png
+    instance-lifetime-2026-05-22.png
+    lifetime-buckets-2026-05-22.png
+    active-instances-2026-05-22.png
+    install-forecast-2026-05-22.png
+    ltv-spend-2026-05-22.png
+    adoption-funnel-2026-05-22.png
+
+    # Analysis outputs
+    tables-2026-05-22.md
+    metrics-2026-05-22.json
+    liveness-2026-05-22.md
+    liveness-2026-05-22.json
+    compute-platform-snapshots-2026-05-22.md
+
+    # CSV sidecars
+    registry_metrics.csv
+    active-instances-2026-05-22.csv
+    ltv-spend-2026-05-22.csv
+    lifetime-buckets-2026-05-22.csv
+
+    # JSON summaries
+    ltv-spend-2026-05-22.json
+    install-forecast-2026-05-22.json
+    github_stats.json
+    github_contributors_count.txt
+```

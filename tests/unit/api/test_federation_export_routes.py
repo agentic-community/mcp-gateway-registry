@@ -98,6 +98,7 @@ def sample_server_public() -> dict[str, Any]:
         "description": "Public server available to all",
         "visibility": "public",
         "allowed_groups": [],
+        "is_enabled": True,
         "sync_metadata": {
             "sync_generation": 10,
             "last_synced_at": "2024-01-15T10:30:00Z",
@@ -114,6 +115,7 @@ def sample_server_group_restricted() -> dict[str, Any]:
         "description": "Finance team only",
         "visibility": "group-restricted",
         "allowed_groups": ["finance"],
+        "is_enabled": True,
         "sync_metadata": {
             "sync_generation": 15,
             "last_synced_at": "2024-01-15T10:30:00Z",
@@ -130,6 +132,7 @@ def sample_server_internal() -> dict[str, Any]:
         "description": "Internal only, never exported",
         "visibility": "internal",
         "allowed_groups": [],
+        "is_enabled": True,
         "sync_metadata": {
             "sync_generation": 20,
             "last_synced_at": "2024-01-15T10:30:00Z",
@@ -612,6 +615,7 @@ class TestPagination:
                 "name": f"Server {i}",
                 "visibility": "public",
                 "allowed_groups": [],
+                "is_enabled": True,
             }
 
         with (
@@ -1147,19 +1151,15 @@ class TestDisabledItemsFiltering:
 
         app.dependency_overrides[nginx_proxied_auth] = mock_federation_auth
 
-        servers_dict = {sample_server_public["path"]: sample_server_public}
+        # Enabled state is carried on the server dict (is_enabled), mirroring
+        # what get_all_servers returns from the repository.
+        disabled_server = {**sample_server_public, "is_enabled": False}
+        servers_dict = {disabled_server["path"]: disabled_server}
 
-        with (
-            patch.object(
-                server_service,
-                "get_all_servers",
-                return_value=servers_dict,
-            ),
-            patch.object(
-                server_service,
-                "is_service_enabled",
-                return_value=False,  # Server is disabled
-            ),
+        with patch.object(
+            server_service,
+            "get_all_servers",
+            return_value=servers_dict,
         ):
             client = TestClient(app)
             response = client.get("/api/federation/servers")
@@ -1360,11 +1360,13 @@ class TestChainPrevention:
                 "path": "/local-server",
                 "name": "Local Server",
                 "visibility": "public",
+                "is_enabled": True,
             },
             "/peer-a/synced-server": {
                 "path": "/peer-a/synced-server",
                 "name": "Synced from Peer A",
                 "visibility": "public",
+                "is_enabled": True,
                 "sync_metadata": {
                     "is_federated": True,
                     "source_peer_id": "peer-a",
@@ -1372,17 +1374,10 @@ class TestChainPrevention:
             },
         }
 
-        with (
-            patch.object(
-                server_service,
-                "get_all_servers",
-                return_value=servers_dict,
-            ),
-            patch.object(
-                server_service,
-                "is_service_enabled",
-                return_value=True,
-            ),
+        with patch.object(
+            server_service,
+            "get_all_servers",
+            return_value=servers_dict,
         ):
             client = TestClient(app)
             response = client.get("/api/federation/servers")

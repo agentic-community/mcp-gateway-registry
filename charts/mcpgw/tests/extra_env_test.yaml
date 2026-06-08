@@ -42,12 +42,21 @@ tests:
               secretKeyRef:
                 name: my-secret
                 key: my-key
-      # Order: chart-managed env vars come first (NODE_NAME, HOST), user
-      # extraEnv entries last. Indices shift whenever a conditional chart-managed
-      # env var is inserted; update these assertions AND the NOTE above
-      # whenever the set of chart-managed entries changes.
+      # Order: chart-managed env vars come first, then user extraEnv entries.
+      # Indices shift whenever a chart-managed env var is inserted; update
+      # these assertions AND the NOTE block whenever the set changes.
       # NOTE: assumes no github* fields set (default values), so only
-      # NODE_NAME and HOST render before extraEnv.
+      # NODE_NAME, HOST and the unconditional Issue #1122 OTel block render
+      # before extraEnv.
+      # Index map:
+      #   env[0] = NODE_NAME
+      #   env[1] = HOST
+      #   env[2] = METRICS_LEGACY_HTTP_POST  (Issue #1122)
+      #   env[3] = OTEL_METRIC_EXPORT_INTERVAL_MS  (Issue #1122)
+      #   env[4] = OTEL_EXPORTER_PROMETHEUS_HOST   (Issue #1122)
+      #   env[5] = OTEL_EXPORTER_PROMETHEUS_PORT   (Issue #1122)
+      #   env[6] = MY_FLAG       (extraEnv[0])
+      #   env[7] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: NODE_NAME
@@ -56,9 +65,12 @@ tests:
           value: HOST
       - equal:
           path: spec.template.spec.containers[0].env[2].name
+          value: METRICS_LEGACY_HTTP_POST
+      - equal:
+          path: spec.template.spec.containers[0].env[6].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[3].name
+          path: spec.template.spec.containers[0].env[7].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

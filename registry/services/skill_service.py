@@ -60,6 +60,10 @@ logger = logging.getLogger(__name__)
 # Constants
 URL_VALIDATION_TIMEOUT: int = 10
 
+# Upper bound on GitLab tree-API pages fetched during resource discovery, so a
+# server that keeps echoing the x-next-page header cannot loop indefinitely.
+MAX_GITLAB_TREE_PAGES: int = 100
+
 # Built-in trusted domains that skip IP validation (SSRF protection allowlist).
 # Enterprise GitHub hosts are merged in at runtime from settings.github_extra_hosts
 # via _trusted_domains() so GHES instances on private IPs are reachable for
@@ -188,6 +192,17 @@ def _is_safe_url(
         return False
 
 
+def _append_page_param(
+    url: str,
+    page: str,
+) -> str:
+    """Append or replace the page query parameter on a URL."""
+    if re.search(r"(?<![a-z_])page=\d+", url):
+        return re.sub(r"(?<![a-z_])page=\d+", f"page={page}", url)
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}page={page}"
+
+
 def _build_fetch_headers(
     url: str,
     auth_scheme: str = "none",
@@ -196,9 +211,10 @@ def _build_fetch_headers(
 ) -> tuple[str, dict[str, str]]:
     """Build fetch URL and auth headers for a SKILL.md request.
 
-    Returns (fetch_url, headers) tuple.  The URL is returned unchanged;
-    platform-specific modules may override to translate web URLs to
-    authenticated API endpoints.
+    For GitLab URLs with credentials, translates /-/raw/ web URLs to
+    API v4 endpoints that accept PRIVATE-TOKEN headers.
+
+    Returns (fetch_url, headers) tuple.
     """
     headers: dict[str, str] = {}
     fetch_url = url
@@ -212,6 +228,20 @@ def _build_fetch_headers(
     elif auth_scheme == "api_key":
         header_name = auth_header_name or "PRIVATE-TOKEN"
         headers[header_name] = auth_credential
+
+    if headers:
+        try:
+            from ..utils.gitlab_url_utils import (
+                parse_gitlab_url,
+                translate_gitlab_to_api_url,
+            )
+
+            if parse_gitlab_url(url):
+                api_url = translate_gitlab_to_api_url(url)
+                if api_url:
+                    fetch_url = api_url
+        except ImportError:
+            pass
 
     return fetch_url, headers
 
@@ -290,6 +320,18 @@ def _resolve_tree_api(
         - ``skill_dir``: directory portion of the path leading up to
           ``SKILL.md`` (``""`` when SKILL.md is at the repo root).
     """
+    # Try GitLab translation first (Meraki: defensive import so removing
+    # gitlab_url_utils leaves upstream features fully functional for GitHub).
+    try:
+        from ..utils.gitlab_url_utils import translate_gitlab_tree_api_url
+
+        gitlab_result = translate_gitlab_tree_api_url(skill_md_url)
+        if gitlab_result is not None:
+            return gitlab_result
+    except ImportError:
+        pass
+
+    # Fall through to upstream GitHub / GHES handling.
     parsed = urlparse(skill_md_url)
     hostname = parsed.hostname or ""
     if not hostname:
@@ -312,13 +354,15 @@ def _resolve_tree_api(
 
 # Files that live in the skill folder but should never be classified as
 # resources (the SKILL.md itself, plus standard repo metadata).
-_SKILL_DIR_EXCLUDED_FILENAMES: frozenset[str] = frozenset({
-    "SKILL.MD",
-    "README.MD",
-    "LICENSE",
-    "LICENSE.TXT",
-    "LICENSE.MD",
-})
+_SKILL_DIR_EXCLUDED_FILENAMES: frozenset[str] = frozenset(
+    {
+        "SKILL.MD",
+        "README.MD",
+        "LICENSE",
+        "LICENSE.TXT",
+        "LICENSE.MD",
+    }
+)
 
 
 def _classify_resource(
@@ -399,7 +443,9 @@ async def _discover_skill_resources(
 
     tree_info = _resolve_tree_api(skill_md_url)
     if not tree_info:
-        logger.debug("Cannot derive tree API URL from %s — skipping resource discovery", skill_md_url)
+        logger.debug(
+            "Cannot derive tree API URL from %s — skipping resource discovery", skill_md_url
+        )
         return None
 
     tree_url, _encoded_project, _ref, skill_dir = tree_info
@@ -414,9 +460,35 @@ async def _discover_skill_resources(
             merged_headers = {**github_headers, **headers}
             resp = await client.get(tree_url, headers=merged_headers)
             if resp.status_code >= 400:
-                logger.warning("Resource discovery failed: HTTP %s for %s", resp.status_code, tree_url)
+                logger.warning(
+                    "Resource discovery failed: HTTP %s for %s", resp.status_code, tree_url
+                )
                 return None
             payload = resp.json()
+
+            # GitLab tree API returns a bare JSON array and paginates via
+            # the x-next-page response header. Fetch remaining pages.
+            if isinstance(payload, list):
+                next_page = resp.headers.get("x-next-page", "")
+                pages_fetched = 0
+                while next_page and pages_fetched < MAX_GITLAB_TREE_PAGES:
+                    page_url = _append_page_param(tree_url, next_page)
+                    resp = await client.get(page_url, headers=merged_headers)
+                    if resp.status_code >= 400:
+                        break
+                    page_payload = resp.json()
+                    if not isinstance(page_payload, list):
+                        break
+                    payload.extend(page_payload)
+                    pages_fetched += 1
+                    next_page = resp.headers.get("x-next-page", "")
+                if next_page:
+                    logger.warning(
+                        "GitLab tree pagination hit %s-page cap for %s; "
+                        "results may be incomplete",
+                        MAX_GITLAB_TREE_PAGES,
+                        tree_url,
+                    )
     except Exception as e:
         logger.warning("Resource discovery error for %s: %s", tree_url, e)
         return None
@@ -459,7 +531,7 @@ async def _discover_skill_resources(
         # WITHIN the skill folder. Don't reject parts of the path that
         # appear in skill_dir itself (e.g. ".claude/skills/usage-report"
         # is a perfectly valid skill location).
-        relative_path = path[len(skill_dir_prefix):] if path.startswith(skill_dir_prefix) else path
+        relative_path = path[len(skill_dir_prefix) :] if path.startswith(skill_dir_prefix) else path
         if any(part.startswith(".") or part.startswith("__") for part in relative_path.split("/")):
             continue
 
@@ -480,14 +552,22 @@ async def _discover_skill_resources(
         if bucket is not None:
             bucket.append(resource)
 
-    total = len(manifest.references) + len(manifest.scripts) + len(manifest.agents) + len(manifest.assets)
+    total = (
+        len(manifest.references)
+        + len(manifest.scripts)
+        + len(manifest.agents)
+        + len(manifest.assets)
+    )
     if total == 0:
         return None
 
     logger.info(
         "Discovered %d resources: %d references, %d scripts, %d agents, %d assets",
-        total, len(manifest.references), len(manifest.scripts),
-        len(manifest.agents), len(manifest.assets),
+        total,
+        len(manifest.references),
+        len(manifest.scripts),
+        len(manifest.agents),
+        len(manifest.assets),
     )
     return manifest
 
@@ -526,7 +606,9 @@ async def _validate_skill_md_url(
             github_headers = await _github_auth.get_auth_headers(str(url))
             merged_headers = {**fetch_headers, **github_headers}
             response = await client.get(
-                fetch_url, headers=merged_headers, follow_redirects=True,
+                fetch_url,
+                headers=merged_headers,
+                follow_redirects=True,
                 timeout=URL_VALIDATION_TIMEOUT,
             )
 
@@ -604,7 +686,10 @@ async def _parse_skill_md_content(
     try:
         async with httpx.AsyncClient() as client:
             fetch_url, fetch_headers = _build_fetch_headers(
-                raw_url_str, auth_scheme, auth_credential, auth_header_name,
+                raw_url_str,
+                auth_scheme,
+                auth_credential,
+                auth_header_name,
             )
             if auth_scheme == "none":
                 headers = fetch_headers
@@ -793,17 +878,17 @@ async def _check_skill_health(
 
         credential = decrypt_credential(auth_credential_encrypted)
 
-    fetch_url, fetch_headers = _build_fetch_headers(
-        url, auth_scheme, credential, auth_header_name
-    )
+    fetch_url, fetch_headers = _build_fetch_headers(url, auth_scheme, credential, auth_header_name)
 
     try:
         async with httpx.AsyncClient() as client:
             github_headers = await _github_auth.get_auth_headers(str(url))
             merged_headers = {**github_headers, **fetch_headers}
             response = await client.head(
-                fetch_url, headers=merged_headers,
-                follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT,
+                fetch_url,
+                headers=merged_headers,
+                follow_redirects=True,
+                timeout=URL_VALIDATION_TIMEOUT,
             )
 
             # SSRF protection: validate final URL after redirects
@@ -861,12 +946,17 @@ async def _compute_content_integrity(
         rel_path: str,
     ) -> FileHash | None:
         fetch_url, fetch_headers = _build_fetch_headers(
-            url, auth_scheme, auth_credential, auth_header_name,
+            url,
+            auth_scheme,
+            auth_credential,
+            auth_header_name,
         )
         try:
             resp = await client.get(
-                fetch_url, headers=fetch_headers,
-                follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT,
+                fetch_url,
+                headers=fetch_headers,
+                follow_redirects=True,
+                timeout=URL_VALIDATION_TIMEOUT,
             )
             if resp.status_code >= 400:
                 logger.warning("Integrity fetch failed for %s: HTTP %s", rel_path, resp.status_code)
@@ -954,7 +1044,10 @@ async def _fetch_authenticated_content(
 
     auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
     fetch_url, fetch_headers = _build_fetch_headers(
-        url, auth_scheme, credential, auth_header_name,
+        url,
+        auth_scheme,
+        credential,
+        auth_header_name,
     )
 
     if auth_scheme == "none":
@@ -980,7 +1073,8 @@ async def _fetch_authenticated_content(
 
             if response.status_code >= 400:
                 raise SkillContentFetchError(
-                    url, f"HTTP {response.status_code}",
+                    url,
+                    f"HTTP {response.status_code}",
                 )
 
             if max_size and len(response.content) > max_size:
@@ -1053,7 +1147,8 @@ async def _check_drift_inline(
             await service.toggle_skill(skill_path, enabled=False)
             logger.warning(
                 "Drift detected for %s in skill %s, skill disabled",
-                file_path, skill_path,
+                file_path,
+                skill_path,
             )
         else:
             await service.toggle_skill(skill_path, enabled=True)
@@ -1105,10 +1200,9 @@ def _build_skill_card(
     # Encrypt credential if provided
     auth_credential_encrypted = None
     credential_updated_at = None
-    if (
-        getattr(request, "auth_credential", None)
-        and getattr(request, "auth_scheme", "none") not in ("none", "global_credentials")
-    ):
+    if getattr(request, "auth_credential", None) and getattr(
+        request, "auth_scheme", "none"
+    ) not in ("none", "global_credentials"):
         from ..utils.credential_encryption import encrypt_credential
 
         auth_credential_encrypted = encrypt_credential(request.auth_credential)

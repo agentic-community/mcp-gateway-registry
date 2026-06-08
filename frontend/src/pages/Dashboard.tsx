@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, XMarkIcon, ArrowPathIcon, CheckCircleIcon, ExclamationCircleIcon, ChevronDownIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { useServerStats } from '../hooks/useServerStats';
 import { useSkills, Skill } from '../hooks/useSkills';
@@ -28,6 +28,9 @@ import {
 import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 import type { LocalRuntime } from '../types/server';
 import Pagination from '../components/Pagination';
+import DuplicateCheckModal from '../components/DuplicateCheckModal';
+import { useDuplicateCheck } from '../hooks/useDuplicateCheck';
+import type { ExistingEntity } from '../types/duplicateCheck';
 
 
 interface SyncMetadata {
@@ -177,6 +180,41 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const { config: registryConfig } = useRegistryConfig();
   const [searchTerm, setSearchTerm] = useState('');
   const [committedQuery, setCommittedQuery] = useState('');
+
+  // When navigated here from the dedup-suggestion modal
+  // (Register page) with `?highlight=<path>`, pre-fill the search box so
+  // the user lands directly on the existing entry they were considering.
+  // The optional `tab=<servers|agents|skills>` param switches the
+  // dashboard view filter so the user lands on the correct list — the
+  // dedup advisory list is cross-entity, so a skill registration can
+  // surface a similar MCP server, and the tab needs to match.
+  // Query params are consumed once and stripped to avoid re-applying on
+  // back/forward navigation.
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Depend on the param string (not the searchParams object identity)
+  // so this re-runs when navigate() updates the URL while we're
+  // already mounted — which is the path the dedup modal takes when
+  // the user picks "View" on a Dashboard-hosted duplicate check
+  // (skill flow). Without this, the highlight/tab params would be
+  // applied only on mount, and same-page navigations would silently
+  // do nothing.
+  const paramString = searchParams.toString();
+  useEffect(() => {
+    const highlight = searchParams.get('highlight');
+    const tab = searchParams.get('tab');
+    if (!highlight && !tab) return;
+    if (highlight) {
+      setSearchTerm(highlight);
+    }
+    if (tab === 'servers' || tab === 'agents' || tab === 'skills') {
+      setViewFilter(tab);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('highlight');
+    next.delete('tab');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramString]);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [registerForm, setRegisterForm] = useState({
     name: '',
@@ -347,6 +385,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const [skillFormLoading, setSkillFormLoading] = useState(false);
   const [showDeleteSkillConfirm, setShowDeleteSkillConfirm] = useState<string | null>(null);
   const [skillAutoFill, setSkillAutoFill] = useState(true);  // Auto-fill from SKILL.md
+
+  // Duplicate-check pre-flight for new skill registrations. Edits are
+  // not eligible (the path / skill_md_url is already taken by the
+  // caller's own record).
+  const {
+    collisionWith: skillCollisionWith,
+    advisoryMatches: skillAdvisoryMatches,
+    showModal: showSkillDuplicateModal,
+    runCheck: runSkillDuplicateCheck,
+    closeModal: closeSkillDuplicateModal,
+  } = useDuplicateCheck();
   const [skillParseLoading, setSkillParseLoading] = useState(false);
 
   const handleAgentUpdate = useCallback((path: string, updates: Partial<Agent>) => {
@@ -1569,17 +1618,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     }
   }, [skillForm.skill_md_url, skillForm.auth_scheme, skillForm.auth_credential, skillForm.auth_header_name, skillParseLoading, showToast]);
 
-  const handleSaveSkill = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (skillFormLoading) return;
-
-    // Validate name format (lowercase, numbers, hyphens only)
-    const nameRegex = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-    if (!nameRegex.test(skillForm.name)) {
-      showToast('Name must be lowercase letters, numbers, and hyphens only (e.g., "my-skill-name")', 'error');
-      return;
-    }
-
+  const performSkillSave = useCallback(async (): Promise<void> => {
     try {
       setSkillFormLoading(true);
 
@@ -1645,7 +1684,90 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     } finally {
       setSkillFormLoading(false);
     }
-  }, [skillForm, skillFormLoading, editingSkill, refreshSkills, showToast, handleCloseSkillModal]);
+  }, [skillForm, editingSkill, refreshSkills, showToast, notifyDataChanged, handleCloseSkillModal]);
+
+
+  const handleSaveSkill = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (skillFormLoading) return;
+
+    // Validate name format (lowercase, numbers, hyphens only)
+    const nameRegex = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+    if (!nameRegex.test(skillForm.name)) {
+      showToast('Name must be lowercase letters, numbers, and hyphens only (e.g., "my-skill-name")', 'error');
+      return;
+    }
+
+    if (editingSkill) {
+      await performSkillSave();
+      return;
+    }
+
+    setSkillFormLoading(true);
+    const outcome = await runSkillDuplicateCheck({
+      entityType: 'skill',
+      payload: {
+        name: skillForm.name.trim(),
+        description: skillForm.description.trim() || null,
+        skill_md_url: skillForm.skill_md_url.trim() || null,
+        self_path: null,  // new skill — no own path yet
+      },
+    });
+    setSkillFormLoading(false);
+
+    if (outcome.kind === 'show-modal') {
+      return;
+    }
+    if (outcome.kind === 'cancelled') {
+      return;
+    }
+    if (outcome.notice) {
+      showToast(outcome.notice, 'error');
+    }
+    await performSkillSave();
+  }, [
+    skillForm,
+    skillFormLoading,
+    editingSkill,
+    showToast,
+    performSkillSave,
+    runSkillDuplicateCheck,
+  ]);
+
+  const handleSkillDuplicateProceed = useCallback(async () => {
+    closeSkillDuplicateModal();
+    await performSkillSave();
+  }, [closeSkillDuplicateModal, performSkillSave]);
+
+
+  const handleSkillDuplicatePickExisting = useCallback(
+    (entity: ExistingEntity) => {
+      closeSkillDuplicateModal();
+      // Also close the skill registration modal — the user has chosen
+      // to view an existing entry, so leaving the form open underneath
+      // would strand them on a stale registration draft when the
+      // dashboard tab switches.
+      setShowSkillModal(false);
+      // The dedup advisory list is cross-entity: a skill registration
+      // can surface a similar server or agent. Switch the dashboard
+      // tab to the entity's own type so the highlighted path lands on
+      // the correct list.
+      const tabByEntityType: Record<string, string> = {
+        mcp_server: 'servers',
+        a2a_agent: 'agents',
+        skill: 'skills',
+      };
+      const tab = tabByEntityType[entity.entity_type];
+      const params = new URLSearchParams();
+      params.set('highlight', entity.path);
+      if (tab) {
+        params.set('tab', tab);
+      }
+      navigate(`/?${params.toString()}`);
+    },
+    [navigate, closeSkillDuplicateModal],
+  );
+
 
   const handleEditSkill = useCallback((skill: Skill) => {
     handleOpenSkillModal(skill);
@@ -3563,6 +3685,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           </div>
         </div>
       )}
+
+      <DuplicateCheckModal
+        isOpen={showSkillDuplicateModal}
+        onClose={closeSkillDuplicateModal}
+        onProceed={handleSkillDuplicateProceed}
+        onPickExisting={handleSkillDuplicatePickExisting}
+        collisionWith={skillCollisionWith}
+        advisoryMatches={skillAdvisoryMatches}
+        isLoading={skillFormLoading}
+      />
 
       {/* Register/Edit Skill Modal */}
       {showSkillModal && (

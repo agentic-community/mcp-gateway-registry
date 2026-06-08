@@ -1,0 +1,162 @@
+"""Shared visibility helpers used by the search route and the
+duplicate-check service.
+
+These helpers were previously defined as private functions inside
+``registry/api/search_routes.py``. Moving them here lets services
+import them without crossing back into the API layer (which would
+create a circular import — search_routes imports services).
+
+Each helper returns True iff the caller is allowed to *view* the
+entity, given the visibility metadata of that entity and the
+caller's auth context (``is_admin``, ``accessible_*`` scope lists,
+``username``, ``groups``).
+"""
+
+import logging
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+async def user_can_access_server(
+    path: str,
+    server_name: str,
+    user_context: dict,
+) -> bool:
+    """Visibility check for an MCP server.
+
+    Mirrors the legacy ``_user_can_access_server`` from
+    ``search_routes.py``. Calls into ``server_service`` for the
+    accessible-servers comparison; falls back to string checks if
+    that lookup raises.
+    """
+    # Local import to avoid pulling server_service at module load
+    # (server_service imports the repository factory which imports
+    # config which imports settings which... etc.).
+    from .server_service import server_service
+
+    if user_context.get("is_admin"):
+        return True
+
+    accessible_servers = user_context.get("accessible_servers") or []
+    if "all" in accessible_servers:
+        return True
+    if not accessible_servers:
+        return False
+
+    try:
+        if await server_service.user_can_access_server_path(path, accessible_servers):
+            return True
+    except Exception:
+        logger.debug("Unable to validate server path via service for %s", path, exc_info=True)
+
+    technical_name = path.strip("/")
+    return technical_name in accessible_servers or (
+        bool(server_name) and server_name in accessible_servers
+    )
+
+
+async def user_can_access_agent(
+    agent_path: str,
+    user_context: dict,
+) -> bool:
+    """Visibility check for an A2A agent (path-based).
+
+    Fetches the agent card from ``agent_service`` to read visibility
+    metadata. For callers that already have the agent dict in hand
+    (e.g. dedup advisory results), prefer
+    :func:`user_can_access_agent_from_doc` to avoid the per-call
+    fetch.
+    """
+    from .agent_service import agent_service
+
+    if user_context.get("is_admin"):
+        return True
+
+    accessible_agents = user_context.get("accessible_agents") or []
+    if "all" not in accessible_agents and agent_path not in accessible_agents:
+        return False
+
+    agent_card = await agent_service.get_agent_info(agent_path)
+    if not agent_card:
+        return False
+
+    if agent_card.visibility == "public":
+        return True
+    if agent_card.visibility == "private":
+        return agent_card.registered_by == user_context.get("username")
+    if agent_card.visibility == "group-restricted":
+        allowed_groups = set(agent_card.allowed_groups)
+        user_groups = set(user_context.get("groups", []))
+        return bool(allowed_groups & user_groups)
+    return False
+
+
+def user_can_access_agent_from_doc(
+    document: dict,
+    user_context: dict,
+) -> bool:
+    """Visibility check for an agent using fields already in hand.
+
+    Same logic as :func:`user_can_access_agent` but reads visibility
+    / registered_by / allowed_groups from the supplied document
+    instead of re-fetching the agent card. Handles both shapes:
+
+    - Repo dump: fields live at the top level.
+    - Search hit: fields live nested under ``agent_card``.
+
+    Used by ``DuplicateCheckService`` to avoid an N+1 fetch when
+    iterating over advisory candidates.
+    """
+    if user_context.get("is_admin"):
+        return True
+
+    path = str(document.get("path") or "")
+    accessible_agents = user_context.get("accessible_agents") or []
+    if "all" not in accessible_agents and path not in accessible_agents:
+        return False
+
+    agent_card = document.get("agent_card")
+    if isinstance(agent_card, dict):
+        visibility = str(agent_card.get("visibility") or "")
+        registered_by = str(agent_card.get("registered_by") or "")
+        allowed_groups = list(agent_card.get("allowed_groups") or [])
+    else:
+        visibility = str(document.get("visibility") or "")
+        registered_by = str(document.get("registered_by") or "")
+        allowed_groups = list(document.get("allowed_groups") or [])
+
+    if visibility == "public":
+        return True
+    if visibility == "private":
+        return registered_by == user_context.get("username")
+    if visibility == "group-restricted":
+        user_groups = set(user_context.get("groups", []))
+        return bool(set(allowed_groups) & user_groups)
+    return False
+
+
+async def user_can_access_skill(
+    skill_path: str,
+    visibility: str,
+    owner: str,
+    allowed_groups: list[Any],
+    user_context: dict,
+) -> bool:
+    """Visibility check for a skill.
+
+    Takes visibility / owner / allowed_groups as arguments rather
+    than looking them up — every caller already has these fields
+    from the search hit or repo dump.
+    """
+    if user_context.get("is_admin"):
+        return True
+    if visibility == "public":
+        return True
+    if visibility == "private":
+        return owner == user_context.get("username")
+    if visibility == "group":
+        user_groups = set(user_context.get("groups", []))
+        skill_groups = set(allowed_groups or [])
+        return bool(user_groups & skill_groups)
+    return False

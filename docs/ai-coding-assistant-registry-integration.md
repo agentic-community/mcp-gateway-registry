@@ -6,8 +6,10 @@
 > just clicks "Allow" in a browser. No `.env` files, no copy-pasted tokens, no
 > shared service accounts.
 >
-> **Status**: tested end-to-end with [Claude Code](https://docs.claude.com/en/docs/claude-code/overview)
-> (CLI on macOS, Linux, Windows), [Claude.ai Custom Connectors](https://support.anthropic.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp),
+> **Status**: tested end-to-end with [Codex CLI](https://github.com/openai/codex),
+> [Claude Code](https://docs.claude.com/en/docs/claude-code/overview)
+> (CLI on macOS, Linux, Windows),
+> [Claude.ai Custom Connectors](https://support.anthropic.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp),
 > and [Kiro CLI](https://kiro.dev/) (Windows). Microsoft Entra ID support via
 > the Client ID Metadata Document (CIMD, `draft-parecki-oauth-client-id-metadata-document`)
 > is the next milestone; see [Roadmap](#roadmap) below.
@@ -52,7 +54,50 @@ paste it in, log in, and you're done.
 
 ## Tested integrations
 
+### Codex CLI
+
+[Codex CLI](https://github.com/openai/codex) is OpenAI's terminal-based AI
+coding agent. It supports MCP via Streamable HTTP transport and performs the
+same DCR + OAuth flow as Claude Code: the assistant registers itself with
+Keycloak, opens your browser for login and consent, and the connection is live.
+
+**Demo walkthrough** (3 minutes): https://app.vidcast.io/share/25ed9141-b890-423c-b063-96da5cd9d533
+
+To add the `airegistry-tools` MCP server:
+
+```bash
+codex mcp add ai-registry --transport streamable-http --url https://mcpgateway.acme.corp/airegistry-tools/mcp
+```
+
+Replace `mcpgateway.acme.corp` with your own gateway hostname.
+
+Once connected, Codex gains access to the registry's `search_registry` tool.
+The AI assistant can then discover and connect to any enterprise-approved MCP
+server in the catalog on behalf of the user, without the user needing to know
+individual server URLs.
+
+What happened under the hood:
+
+1. Codex fetched `/.well-known/oauth-protected-resource` from the gateway,
+   which named Keycloak as the authorization server.
+2. Codex fetched `/.well-known/oauth-authorization-server` from Keycloak,
+   which named the DCR endpoint.
+3. Codex POSTed an RFC 7591 registration to Keycloak, getting back a freshly
+   minted client ID and secret.
+4. Codex initiated an authorization-code+PKCE flow, bouncing you to the
+   browser.
+5. After consent, Codex exchanged the code for an access token.
+6. Codex attached `Authorization: Bearer <token>` on every subsequent MCP
+   call.
+
+**Enterprise value**: developers on Codex get access to the full catalog of
+organization-approved MCP servers through a single registry connection,
+with per-user authorization and audit trails. No shared tokens, no manual
+URL distribution.
+
 ### Claude Code (CLI)
+
+**Demo walkthrough**: https://app.vidcast.io/share/09a267f4-3a5c-43a4-91fb-f128ed0e7983
 
 To add the `airegistry-tools` MCP server (which gives Claude Code access to
 the registry's discovery and search tools):

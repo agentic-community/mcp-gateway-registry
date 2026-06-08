@@ -28,6 +28,8 @@ spec:
                   key: admin-password
                   name: {{ .Release.Name}}-keycloak
               name: KEYCLOAK_ADMIN_PASSWORD
+            - name: ENABLE_DCR_CONFIG
+              value: {{ .Values.dcr.enabled | default false | toString | quote }}
           volumeMounts:
             - mountPath: /app/script.sh
               name: script

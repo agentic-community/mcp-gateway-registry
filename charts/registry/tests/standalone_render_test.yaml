@@ -1,0 +1,40 @@
+suite: standalone render contract (no umbrella)
+# This suite intentionally does NOT pin `templates:` at the suite level
+# so every template in the chart renders. That way a nil-deref in any
+# template (e.g. secret.yaml referencing .Values.global.* keys not
+# declared in registry values.yaml) fails the test, not just the ones
+# we explicitly assert on.
+#
+# The chart's primary deploy path is via mcp-gateway-registry-stack,
+# but standalone helm template should still produce valid manifests
+# for chart authors and users debugging values resolution.
+release:
+  name: test
+  namespace: default
+tests:
+  - it: fails without a secret key (real validation, not nil-deref)
+    asserts:
+      - failedTemplate:
+          errorPattern: "secretKey.*required for standalone deployment"
+
+  - it: renders cleanly when app.secretKey is supplied
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+    # If any template nil-derefs on a missing global.* key, helm fails
+    # before reaching the asserts and the test fails. Multiple
+    # per-template asserts below give the regression locality, not just
+    # "render failed somewhere."
+    asserts:
+      - notFailedTemplate:
+          template: templates/secret.yaml
+      - notFailedTemplate:
+          template: templates/deployment.yaml
+      - notFailedTemplate:
+          template: templates/configmap-app-log.yaml
+      - notFailedTemplate:
+          template: templates/configmap-otel.yaml
+      - notFailedTemplate:
+          template: templates/service.yaml
+      - notFailedTemplate:
+          template: templates/networkpolicy-metrics.yaml

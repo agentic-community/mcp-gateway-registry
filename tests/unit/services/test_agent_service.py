@@ -124,10 +124,15 @@ class InMemoryAgentRepository(AgentRepositoryBase):
         return True
 
     async def find_with_filter(
-        self, filter_dict: dict[str, Any]
+        self,
+        filter_dict: dict[str, Any],
+        *,
+        limit: int | None = None,
     ) -> dict[str, dict]:
         results: dict[str, dict] = {}
         for path, agent in self._agents.items():
+            if limit is not None and len(results) >= limit:
+                break
             data = agent.model_dump()
             if all(data.get(k) == v for k, v in filter_dict.items()):
                 results[path] = data
@@ -400,9 +405,7 @@ class TestUpdateAgent:
         fake_repo: InMemoryAgentRepository,
     ):
         original_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
-        await fake_repo.create(
-            AgentCardFactory(path="/test-agent", updated_at=original_time)
-        )
+        await fake_repo.create(AgentCardFactory(path="/test-agent", updated_at=original_time))
 
         result = await agent_service.update_agent("/test-agent", {"description": "New"})
 
@@ -481,9 +484,7 @@ class TestDeleteAgent:
         assert await fake_repo.get("/test-agent") is None
 
     @pytest.mark.asyncio
-    async def test_remove_agent_returns_false_for_not_found(
-        self, agent_service: AgentService
-    ):
+    async def test_remove_agent_returns_false_for_not_found(self, agent_service: AgentService):
         result = await agent_service.remove_agent("/nonexistent")
 
         assert result is False

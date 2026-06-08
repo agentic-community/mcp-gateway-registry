@@ -16,6 +16,13 @@ locals {
   amp_remote_write_endpoint = var.enable_observability ? "${aws_prometheus_workspace.mcp[0].prometheus_endpoint}api/v1/remote_write" : ""
   amp_query_endpoint        = var.enable_observability ? aws_prometheus_workspace.mcp[0].prometheus_endpoint : ""
 
+  # ADOT sidecar resource reservations (Issue #1122). Subtracted from each
+  # main container's cpu/memory when observability is enabled so the sum
+  # of all containers stays within the task-level limit (ECS rejects the
+  # task definition otherwise).
+  adot_sidecar_cpu    = 128
+  adot_sidecar_memory = 256
+
   # ADOT collector configuration (embedded YAML)
   # ADOT runs as a sidecar in the metrics-service task, scrapes localhost:9465
   adot_config = var.enable_observability ? yamlencode({
@@ -66,6 +73,52 @@ locals {
       }
     }
   }) : ""
+
+  # ADOT collector configuration for OTLP-receive + AMP-remote-write
+  # (Issue #1122). One sidecar per main service task (registry, auth-server,
+  # mcpgw): each main container OTLP-pushes to localhost:4317; the sidecar
+  # remote-writes to AMP. This replaces the legacy metrics-service pull
+  # pattern with a per-task push pattern that surfaces in-process counters
+  # to AMP for the first time.
+  adot_otlp_to_amp_config = var.enable_observability ? yamlencode({
+    receivers = {
+      otlp = {
+        protocols = {
+          grpc = {
+            endpoint = "0.0.0.0:4317"
+          }
+          http = {
+            endpoint = "0.0.0.0:4318"
+          }
+        }
+      }
+    }
+    exporters = {
+      prometheusremotewrite = {
+        endpoint = local.amp_remote_write_endpoint
+        auth = {
+          authenticator = "sigv4auth"
+        }
+      }
+    }
+    extensions = {
+      sigv4auth = {
+        region = data.aws_region.current.id
+      }
+      health_check = {
+        endpoint = "0.0.0.0:13133"
+      }
+    }
+    service = {
+      extensions = ["sigv4auth", "health_check"]
+      pipelines = {
+        metrics = {
+          receivers = ["otlp"]
+          exporters = ["prometheusremotewrite"]
+        }
+      }
+    }
+  }) : ""
 }
 
 
@@ -75,7 +128,11 @@ locals {
 
 #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "ecs_service_metrics" {
-  count   = var.enable_observability ? 1 : 0
+  # metrics-service is optional: the core services (registry/auth/mcpgw) emit OTel
+  # straight to their own ADOT sidecars, so the standalone metrics-service is only
+  # created when an image is explicitly provided. Avoids requiring a build for a
+  # standard observability deploy.
+  count   = var.enable_observability && var.metrics_service_image_uri != "" ? 1 : 0
   source  = "terraform-aws-modules/ecs/aws//modules/service"
   version = "~> 6.0"
 
@@ -549,6 +606,56 @@ module "ecs_service_grafana" {
         timeout     = 5
         retries     = 3
         startPeriod = 30
+      }
+    }
+
+    # Post-install sidecar (replaces the custom Grafana image's baked-in
+    # provisioning): waits for Grafana, creates the AMP datasource (SigV4),
+    # and imports the bundled dashboard via the Grafana HTTP API. Non-essential
+    # and runs on every task start, so it self-heals across task replacements.
+    grafana-config = {
+      essential              = false
+      image                  = "public.ecr.aws/docker/library/alpine:3.21"
+      readonlyRootFilesystem = false
+
+      dependsOn = [{
+        containerName = "grafana"
+        condition     = "START"
+      }]
+
+      command = ["/bin/sh", "-c", <<-EOT
+        apk add --no-cache curl >/dev/null 2>&1 || true
+        echo "Waiting for Grafana to be ready..."
+        i=0; while [ $i -lt 60 ]; do curl -sf http://localhost:3000/api/health >/dev/null 2>&1 && break; i=$((i+1)); sleep 5; done
+        GURL="http://admin:$${GF_SECURITY_ADMIN_PASSWORD}@localhost:3000"
+        echo "Creating Amazon Managed Prometheus datasource..."
+        printf '{"name":"Amazon Managed Prometheus","type":"prometheus","access":"proxy","url":"%s","isDefault":true,"jsonData":{"sigV4Auth":true,"sigV4Region":"%s","httpMethod":"GET"}}' "$${AMP_ENDPOINT}" "$${AWS_REGION}" > /tmp/ds.json
+        curl -s -X DELETE "$${GURL}/api/datasources/name/Amazon%20Managed%20Prometheus" >/dev/null 2>&1 || true
+        curl -s -X POST "$${GURL}/api/datasources" -H "Content-Type: application/json" --data @/tmp/ds.json >/dev/null 2>&1 || true
+        echo "Importing MCP analytics dashboard..."
+        printf '{"dashboard":%s,"overwrite":true,"folderId":0}' "$${DASHBOARD_JSON}" > /tmp/dash.json
+        curl -s -X POST "$${GURL}/api/dashboards/db" -H "Content-Type: application/json" --data @/tmp/dash.json >/dev/null 2>&1 || true
+        echo "Grafana post-install complete."
+      EOT
+      ]
+
+      environment = [
+        { name = "AWS_REGION", value = data.aws_region.current.id },
+        { name = "AMP_ENDPOINT", value = local.amp_query_endpoint },
+        { name = "GF_SECURITY_ADMIN_PASSWORD", value = var.grafana_admin_password },
+        { name = "DASHBOARD_JSON", value = file("${path.module}/../../grafana/dashboards/mcp-analytics-comprehensive.json") },
+      ]
+
+      # Log into the grafana container's log group (do NOT create a second group
+      # with the same name — that races the grafana container and fails apply).
+      enable_cloudwatch_logging = false
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${local.name_prefix}-grafana"
+          "awslogs-region"        = data.aws_region.current.id
+          "awslogs-stream-prefix" = "config"
+        }
       }
     }
   }

@@ -8,6 +8,7 @@ Implements all recommendations:
 - Duplicate key handling
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import (
@@ -22,7 +23,16 @@ from ...exceptions import (
     SkillServiceError,
 )
 from ...schemas.skill_models import SkillCard
+from ...utils.url_normalize import (
+    ENTITY_TYPE_SKILL,
+    NORMALIZED_IDENTITY_URL_FIELD,
+    derive_normalized_identity_url,
+)
 from ..interfaces import SkillRepositoryBase
+from ._identity_url_sidecar import (
+    backfill_normalized_identity_url,
+    find_by_normalized_identity_url,
+)
 from .client import get_collection_name, get_documentdb_client
 
 # Configure logging
@@ -36,9 +46,19 @@ logger = logging.getLogger(__name__)
 def _skill_to_document(
     skill: SkillCard,
 ) -> dict[str, Any]:
-    """Convert SkillCard to MongoDB document."""
+    """Convert SkillCard to MongoDB document.
+
+    Populates the ``_identity_url_normalized`` sidecar field from
+    ``skill_md_url`` so :meth:`find_by_identity_url` can do an indexed
+    ``$eq`` lookup. The sidecar is omitted entirely when the URL is
+    missing or unparseable so the sparse index doesn't keep a stale
+    value.
+    """
     doc = skill.model_dump(mode="json")
     doc["_id"] = skill.path
+    normalized = derive_normalized_identity_url(doc, ENTITY_TYPE_SKILL)
+    if normalized is not None:
+        doc[NORMALIZED_IDENTITY_URL_FIELD] = normalized
     return doc
 
 
@@ -82,13 +102,42 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         self._collection: AsyncIOMotorCollection | None = None
         self._collection_name = get_collection_name("agent_skills")
         self._indexes_created = False
+        # See server_repository for the rationale; same pattern.
+        self._init_lock: asyncio.Lock | None = None
 
     async def _get_collection(self) -> AsyncIOMotorCollection:
-        """Get DocumentDB collection."""
-        if self._collection is None:
+        """Get DocumentDB collection.
+
+        On first acquisition we also create the collection's indexes
+        (name, tags, visibility, registry_name, owner, normalized
+        identity URL sidecar, and the compound index used for common
+        queries) and lazily backfill the identity-URL sidecar onto
+        documents registered before that field existed. The init
+        block runs under an ``asyncio.Lock`` so concurrent callers
+        don't race on the backfill cursor.
+        """
+        if self._collection is not None:
+            return self._collection
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+        async with self._init_lock:
+            if self._collection is not None:
+                return self._collection
             db = await get_documentdb_client()
-            self._collection = db[self._collection_name]
-        return self._collection
+            collection = db[self._collection_name]
+            # ensure_indexes reads self._collection internally — it
+            # was originally written to acquire its own collection.
+            # Set _collection before calling ensure_indexes so the
+            # nested _get_collection call short-circuits, then run
+            # the backfill, then return.
+            self._collection = collection
+            await self.ensure_indexes()
+            await backfill_normalized_identity_url(
+                collection,
+                self._collection_name,
+                ENTITY_TYPE_SKILL,
+            )
+            return self._collection
 
     async def ensure_indexes(self) -> None:
         """Create required indexes if not present."""
@@ -112,6 +161,11 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
 
             # Owner for private visibility
             await collection.create_index("owner")
+
+            # Normalized identity URL sidecar for find_by_identity_url
+            # (registration dedup). Sparse — only present on documents
+            # whose user-facing skill_md_url is non-null and parseable.
+            await collection.create_index(NORMALIZED_IDENTITY_URL_FIELD, sparse=True)
 
             # Compound index for common query patterns
             await collection.create_index(
@@ -249,9 +303,29 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         collection = await self._get_collection()
         updates["updated_at"] = datetime.utcnow().isoformat()
 
+        # Keep the normalized sidecar in sync when this update touches
+        # skill_md_url. If skill_md_url isn't in the patch we leave the
+        # existing sidecar alone; if it's explicitly cleared we drop
+        # the sidecar so the sparse index doesn't keep a stale value.
+        unset_ops: dict[str, str] = {}
+        if "skill_md_url" in updates:
+            new_url = updates.get("skill_md_url")
+            if new_url:
+                normalized = derive_normalized_identity_url(updates, ENTITY_TYPE_SKILL)
+                if normalized is None:
+                    unset_ops[NORMALIZED_IDENTITY_URL_FIELD] = ""
+                else:
+                    updates[NORMALIZED_IDENTITY_URL_FIELD] = normalized
+            else:
+                unset_ops[NORMALIZED_IDENTITY_URL_FIELD] = ""
+
+        update_spec: dict[str, dict[str, Any]] = {"$set": updates}
+        if unset_ops:
+            update_spec["$unset"] = unset_ops
+
         try:
             result = await collection.find_one_and_update(
-                {"_id": path}, {"$set": updates}, return_document=True
+                {"_id": path}, update_spec, return_document=True
             )
 
             if result:
@@ -360,3 +434,15 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         except Exception as e:
             logger.error(f"Error counting skills in DocumentDB: {e}", exc_info=True)
             return 0
+
+    async def find_by_identity_url(
+        self,
+        identity_url: str,
+    ) -> dict[str, Any] | None:
+        """Find a skill whose ``skill_md_url`` normalizes to ``identity_url``.
+
+        Indexed ``$eq`` lookup against the ``_identity_url_normalized``
+        sidecar field, populated from ``skill_md_url`` at write time.
+        """
+        collection = await self._get_collection()
+        return await find_by_normalized_identity_url(collection, identity_url)

@@ -9,6 +9,7 @@ import {
   ArrowRightOnRectangleIcon,
   Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
+import CloudProviderBanner from './CloudProviderBanner';
 import Sidebar from './Sidebar';
 import UptimeDisplay from './UptimeDisplay';
 import { useServerStats } from '../hooks/useServerStats';
@@ -213,6 +214,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         <main className={`flex-1 flex flex-col transition-all duration-300 ${
           sidebarOpen ? 'md:ml-64 lg:ml-72 xl:ml-80' : ''
         }`}>
+          {user?.is_admin && <CloudProviderBanner />}
           <div className="flex-1 flex flex-col px-4 sm:px-6 lg:px-8 py-4 md:py-8 overflow-y-auto">
             {React.cloneElement(children as React.ReactElement, { activeFilter, setActiveFilter, selectedTags })}
           </div>

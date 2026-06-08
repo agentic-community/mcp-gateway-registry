@@ -1,535 +1,303 @@
 # MCP Gateway Metrics Architecture
 
-A comprehensive observability system for monitoring authentication, tool discovery, and execution across the MCP Gateway ecosystem.
+Technical reference for the MCP Gateway observability system. For the operator-facing
+configuration guide and PromQL cookbook, see [OBSERVABILITY.md](OBSERVABILITY.md).
+
+> For the legacy pre-1.25.0 architecture (HTTP POSTs to metrics-service, SQLite,
+> API keys, port 9465), see [OBSERVABILITY-LEGACY.md](OBSERVABILITY-LEGACY.md).
+> That path is removed in 1.26.0.
 
 ## Overview
 
-The metrics system collects, processes, and visualizes telemetry data from all MCP Gateway components. It provides real-time insights into system performance, user behavior, and service health.
+Each application service (registry, auth-server, mcpgw) emits metrics in-process
+via the OpenTelemetry SDK.
 
-### Key Capabilities
+### Key Properties
 
-- **Real-time Monitoring**: Sub-second metric collection and export
-- **Flexible Integration**: Native support for Prometheus, Grafana, and OpenTelemetry Collector
-- **Historical Analysis**: SQLite storage with configurable retention policies
-- **Secure & Scalable**: API key authentication with rate limiting
-- **Multiple Export Paths**: Direct Prometheus scraping or OTLP export to any observability platform
+- **Zero-network emission**: `Counter.add(1, attrs)` is a sub-microsecond memory write
+- **Standard OTel SDK**: Prometheus exporter on `:9464`, optional OTLP push export
+- **Bounded cardinality**: Attributes pruned to a safe set (no unbounded user/query labels)
+- **Three deployment surfaces**: Docker Compose (Prometheus scrape), ECS (ADOT sidecar to AMP), EKS (in-cluster Prometheus with NetworkPolicy)
 
-## High-Level Architecture
+## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Your MCP Services                           │
-│                                                                 │
-│  ┌───────────────┐  ┌───────────────┐  ┌──────────────────┐  │
-│  │ Auth Server   │  │ Registry      │  │  MCP Servers     │  │
-│  │ (middleware)  │  │ (middleware)  │  │  (client lib)    │  │
-│  └───────┬───────┘  └───────┬───────┘  └────────┬─────────┘  │
-│          │                   │                    │             │
-│          └───────────────────┴────────────────────┘             │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                    HTTP POST /metrics
-                    X-API-Key: <service-key>
-                               │
-         ┌─────────────────────▼────────────────────┐
-         │   Metrics Collection Service             │
-         │   (FastAPI + SQLite + OpenTelemetry)    │
-         │                                          │
-         │   • API Key Authentication               │
-         │   • Rate Limiting (1000 req/min)        │
-         │   • Request Validation                  │
-         │   • Buffered Processing (5s flush)      │
-         └────────────┬───────────────┬─────────────┘
-                      │               │
-         ┌────────────▼──┐      ┌────▼─────────────────────────┐
-         │  SQLite DB    │      │  OpenTelemetry Exporters     │
-         │               │      │                              │
-         │  • Raw metrics│      │  ┌────────────────────────┐ │
-         │  • Specialized│      │  │  Prometheus Exporter   │ │
-         │    tables     │      │  │  Port: 9465           │ │
-         │  • Historical │      │  │  /metrics              │ │
-         │    analysis   │      │  └──────────┬─────────────┘ │
-         │  • 90 day     │      │             │               │
-         │    retention  │      │  ┌──────────▼─────────────┐ │
-         └───────────────┘      │  │  OTLP Exporter         │ │
-                                │  │  (Optional)            │ │
-                                │  │  http://collector:4318 │ │
-                                │  └──────────┬─────────────┘ │
-                                └─────────────┼───────────────┘
-                                              │
-                     ┌────────────────────────┴────────────────────────┐
-                     │                                                 │
-         ┌───────────▼──────────┐                        ┌────────────▼─────────────┐
-         │  Grafana             │                        │  OTEL Collector          │
-         │  Port: 3000          │                        │  (Optional)              │
-         │                      │                        │                          │
-         │  • Prometheus queries│                        │  Forwards to:            │
-         │  • Pre-built         │                        │  • Datadog               │
-         │    dashboards        │                        │  • New Relic             │
-         │  • Real-time alerts  │                        │  • Honeycomb             │
-         └──────────────────────┘                        │  • Jaeger                │
-                                                         │  • Any OTLP-compatible   │
-                                                         └──────────────────────────┘
+### End-to-End Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Reg as Registry<br/>(:7860 + :9464 OTel)
+    participant Auth as Auth Server<br/>(:8888 + :9464 OTel)
+    participant Mcpgw as Mcpgw<br/>(:8003 + :9464 OTel)
+    participant ADOT as ADOT sidecar<br/>(per-task on ECS only)
+    participant AMP as Amazon Managed<br/>Prometheus
+    participant Prom as Prometheus<br/>(Compose/EKS)
+    participant Op as Operator
+
+    Note over Reg,Mcpgw: Each service handles requests and updates OTel counters/histograms
+    Reg->>Reg: counter.add(1, attrs)
+    Auth->>Auth: counter.add(1, attrs)
+    Mcpgw->>Mcpgw: counter.add(1, attrs)
+
+    Note over Reg,Mcpgw: OTel SDK background flush every 15s
+    rect rgb(230, 240, 255)
+        Note over Reg,ADOT: ECS path (per-service ADOT sidecar)
+        Reg->>ADOT: OTLP gRPC push (localhost:4317)
+        ADOT->>AMP: prometheus_remote_write (SigV4)
+    end
+    rect rgb(230, 255, 240)
+        Note over Reg,Prom: Compose / EKS path (Prometheus scrapes each service)
+        Prom->>Reg: GET :9464/metrics
+        Prom->>Auth: GET :9464/metrics
+        Prom->>Mcpgw: GET :9464/metrics
+    end
+
+    Op->>AMP: PromQL via Grafana
+    AMP-->>Op: time series
+    Op->>Prom: PromQL via Grafana
+    Prom-->>Op: time series
 ```
 
-## How It Works
+### Component View
 
-### 1. Services Emit Metrics
-
-Your services automatically collect metrics using middleware or client libraries:
-
-**Example: Auth Server tracks authentication events**
 ```
-When: User authenticates to access a tool
-Collected: Success/failure, duration, method (JWT/OAuth), user hash, server name
-Sent to: http://metrics-service:8890/metrics
-```
-
-**Example: Registry tracks tool discovery**
-```
-When: Semantic search for tools
-Collected: Query text, results count, embedding time, search time
-Sent to: http://metrics-service:8890/metrics
-```
-
-### 2. Metrics Service Processes Data
-
-The centralized service receives, validates, and stores metrics:
-
-- **Authentication**: SHA256-hashed API keys per service
-- **Rate Limiting**: Token bucket algorithm (1000 req/min default)
-- **Validation**: Schema validation with detailed error reporting
-- **Buffering**: In-memory buffer with 5-second flush interval
-- **Storage**: Dual-path to SQLite and OpenTelemetry
-
-### 3. Data Export Options
-
-**Option A: Direct Prometheus Scraping (Default)**
-```
-Prometheus scrapes → metrics-service:9465/metrics
-Grafana queries → Prometheus
++--------------------------------------------------------------------+
+|           Registry / Auth-Server / Mcpgw (each process)            |
+|                                                                    |
+|  OpenTelemetry SDK (in-process)                                    |
+|   - MeterProvider with PrometheusMetricReader                      |
+|   - Optional PeriodicExportingMetricReader (OTLP push)             |
+|   - FastAPI auto-instrumentation (HTTP semantic conventions)        |
+|                                                                    |
+|  Instruments declared in:                                          |
+|   - registry/observability/meters.py                               |
+|   - auth_server/observability/meters.py                            |
+|   - servers/mcpgw/observability_bootstrap.py                       |
++------------------------------+-------------------------------------+
+                               |
+              +----------------+----------------+
+              |                                 |
+    GET :9464/metrics                 OTLP push (when configured)
+    (always-on Prometheus exporter)   to OTEL_EXPORTER_OTLP_ENDPOINT
+              |                                 |
+              v                                 v
+    Prometheus (Compose/EKS)          ADOT sidecar (ECS) -> AMP
+              |                       or OTel Collector -> vendor
+              v
+    Grafana (or any PromQL-compatible UI)
 ```
 
-**Option B: OpenTelemetry Collector Pipeline**
-```
-Metrics Service → OTLP export → OTEL Collector → Your observability platform
-                                                  (Datadog, New Relic, etc.)
-```
+## Metric Inventory
 
-**Option C: Hybrid Approach**
-```
-Metrics Service → Both Prometheus + OTLP simultaneously
-                  (Real-time Grafana + Long-term storage in vendor platform)
-```
+### Path-2: Business Event Counters and Histograms
 
-## Metric Types
+These are the primary operational metrics emitted by the middleware layer.
 
-### Authentication Metrics
-Tracks all authentication requests across services:
+| Instrument | Type | Service | Attributes |
+|-----------|------|---------|------------|
+| `auth_request_total` | Counter | auth-server, registry | `success`, `method`, `server` |
+| `auth_request_duration_seconds` | Histogram | auth-server, registry | `success`, `method`, `server` |
+| `tool_execution_total` | Counter | auth-server, registry | `method`, `tool_name`, `success` |
+| `tool_execution_duration_seconds` | Histogram | auth-server, registry | `method`, `tool_name`, `success` |
+| `tool_discovery_total` | Counter | auth-server, registry | `success`, `resource_type` |
+| `tool_discovery_duration_seconds` | Histogram | auth-server, registry | `success`, `resource_type` |
+| `registry_operation_total` | Counter | registry | `operation`, `resource_type`, `success` |
+| `registry_operation_duration_seconds` | Histogram | registry | `operation`, `resource_type`, `success` |
+| `health_check_total` | Counter | auth-server, registry | `success` |
+| `health_check_duration_seconds` | Histogram | auth-server, registry | `success` |
+| `mcpgw_tool_invocations_total` | Counter | mcpgw | `tool`, `success` |
+| `mcpgw_tool_duration_seconds` | Histogram | mcpgw | `tool`, `success` |
 
-- **Dimensions**: success, method (jwt/oauth/noauth), server, user_hash
-- **Measurements**: request count, duration
-- **Use Cases**: Success rates, auth performance, user activity patterns
+### Path-3: In-Process Operational Counters
 
-### Tool Execution Metrics
-Tracks MCP protocol method calls:
+Previously invisible (declared with `prometheus_client.Counter` and never exported).
+Now exposed via OTel instruments with compatibility adapters.
 
-- **Dimensions**: method (initialize/tools/list/tools/call), tool_name, client_name, success
-- **Measurements**: request count, duration, input/output sizes
-- **Use Cases**: Tool popularity, client usage, performance analysis
+| Instrument | Type | Service |
+|-----------|------|---------|
+| `nginx_config_writes_total` | Counter | registry |
+| `nginx_reload_total` | Counter | registry |
+| `nginx_updates_skipped_total` | Counter | registry |
+| `peer_sync_total` | Counter | registry |
+| `peer_sync_failures_total` | Counter | registry |
+| `m2m_orphan_cleanups_total` | Counter | registry |
+| `mcp_registry_cloud_detection_total` | Counter | registry |
+| `logout_session_cleared_total` | Counter | registry |
+| `logout_sso_redirect_total` | Counter | registry |
+| `logout_basic_redirect_total` | Counter | registry |
+| `logout_session_not_found_total` | Counter | registry |
 
-### Discovery Metrics
-Tracks semantic search operations:
+### HTTP Auto-Instrumentation (via opentelemetry-instrumentation-fastapi)
 
-- **Dimensions**: query text, results count, top_k/top_n parameters
-- **Measurements**: embedding time, FAISS search time, total duration
-- **Use Cases**: Search performance optimization, query pattern analysis
+| Instrument | Type | Services |
+|-----------|------|----------|
+| `http_server_duration_milliseconds` | Histogram | all |
+| `http_server_request_size_bytes` | Histogram | all |
+| `http_server_response_size_bytes` | Histogram | all |
+| `http_server_active_requests` | UpDownCounter | all |
 
-### Protocol Latency Metrics
-Measures time between protocol steps:
+### Observable Gauge
 
-- **Flow Steps**:
-  - initialize → tools/list (discovery latency)
-  - tools/list → tools/call (selection latency)
-  - initialize → tools/call (full flow latency)
-- **Use Cases**: User experience optimization, bottleneck identification
+| Instrument | Type | Service | Notes |
+|-----------|------|---------|-------|
+| `deployment_mode` | Gauge | registry | Value is always 1; `mode` attribute carries the deployment mode string |
 
-## Database Schema
+## Emission Paths
 
-### Specialized Tables
+### Prometheus Scrape (always on)
 
-**metrics** - Universal metrics table with JSON dimensions/metadata
-
-**auth_metrics** - Fast queries for authentication analysis
-- Indexed on: timestamp, success, user_hash
-
-**tool_metrics** - Tool usage patterns and performance
-- Indexed on: timestamp, tool_name, client_name, method
-
-**discovery_metrics** - Search performance and patterns
-- Indexed on: timestamp, results_count
-
-**api_keys** - Service authentication
-- SHA256 hashed keys with per-service rate limits
-
-All tables include automatic retention cleanup (90 days default).
-
-## OpenTelemetry Integration
-
-### Instruments
-
-The service creates standard OTEL instruments:
-
-**Counters** (cumulative totals):
-- `mcp_auth_requests_total` - Authentication events
-- `mcp_tool_executions_total` - Tool calls
-- `mcp_tool_discovery_total` - Discovery requests
-- `mcp_health_checks_total` - Health check operations
-
-**Histograms** (duration distributions):
-- `mcp_auth_request_duration_seconds` - Auth latency
-- `mcp_tool_execution_duration_seconds` - Tool latency
-- `mcp_tool_discovery_duration_seconds` - Discovery query latency
-- `mcp_protocol_latency_seconds` - Protocol flow timing
-- `mcp_health_check_duration_seconds` - Health check latency
-
-### Export Configuration
-
-**Environment Variables:**
-```bash
-# Prometheus export (enabled by default)
-OTEL_PROMETHEUS_ENABLED=true
-OTEL_PROMETHEUS_PORT=9465
-
-# OTLP export (optional, for external platforms)
-OTEL_OTLP_ENDPOINT=http://otel-collector:4318
-```
-
-### Using OTEL Collector
-
-To send metrics to Datadog, New Relic, or other platforms:
-
-1. **Deploy OTEL Collector** with appropriate exporters:
-```yaml
-receivers:
-  otlp:
-    protocols:
-      http:
-        endpoint: 0.0.0.0:4318
-
-exporters:
-  datadog:
-    api:
-      key: ${DD_API_KEY}
-  
-  otlp/newrelic:
-    endpoint: otlp.nr-data.net:4317
-    headers:
-      api-key: ${NEW_RELIC_LICENSE_KEY}
-
-service:
-  pipelines:
-    metrics:
-      receivers: [otlp]
-      exporters: [datadog, otlp/newrelic]
-```
-
-2. **Configure metrics service** to export to collector:
-```bash
-OTEL_OTLP_ENDPOINT=http://otel-collector:4318
-```
-
-3. **Metrics flow automatically** from service → collector → your platform
-
-### Direct OTLP Push Export (Simplified Setup)
-
-For simpler deployments, the metrics service can push OTLP metrics directly to any observability platform that supports OTLP HTTP ingestion **without requiring an intermediate OTEL Collector**. This is the easiest way to integrate with commercial observability platforms.
-
-**Supported Platforms:**
-- Datadog (US1, US3, US5, EU1, AP1, GOV)
-- New Relic
-- Honeycomb
-- Grafana Cloud
-- Any OTLP-compatible endpoint
+Each service starts an HTTP server on `OTEL_EXPORTER_PROMETHEUS_PORT` (default `9464`)
+via `opentelemetry-exporter-prometheus`. Prometheus (or any compatible scraper) pulls
+metrics in text exposition format.
 
 **Configuration:**
 
-Set these environment variables to enable direct OTLP push:
-
 ```bash
-# Required: OTLP endpoint URL
-OTEL_OTLP_ENDPOINT=https://otlp.datadoghq.com
-
-# Required: Authentication headers (API keys, tokens)
-OTEL_EXPORTER_OTLP_HEADERS=dd-api-key=YOUR_DATADOG_API_KEY
-
-# Optional: Export interval (default: 30000ms = 30 seconds)
-OTEL_OTLP_EXPORT_INTERVAL_MS=30000
-
-# Optional: Metric temporality (Datadog requires 'delta', most others use 'cumulative')
-OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
+OTEL_EXPORTER_PROMETHEUS_HOST=0.0.0.0   # Bind address (0.0.0.0 for K8s/ECS)
+OTEL_EXPORTER_PROMETHEUS_PORT=9464      # Port for /metrics endpoint
 ```
 
-**Platform-Specific Examples:**
+### OTLP Push (optional, for ECS or vendor platforms)
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the OTel SDK adds a
+`PeriodicExportingMetricReader` that pushes OTLP metrics at a configurable interval.
+
+**Configuration:**
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317          # ADOT sidecar (ECS)
+OTEL_EXPORTER_OTLP_HEADERS=dd-api-key=YOUR_KEY             # For direct vendor push
+OTEL_METRIC_EXPORT_INTERVAL_MS=15000                       # Push interval (default 15s)
+OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta    # Datadog requires delta
+```
+
+**Platform-specific endpoints:**
 
 | Platform | Endpoint | Headers | Temporality |
 |----------|----------|---------|-------------|
+| ADOT sidecar (ECS) | `http://localhost:4317` | (none, SigV4 on sidecar) | `cumulative` |
 | Datadog US1 | `https://otlp.datadoghq.com` | `dd-api-key=YOUR_KEY` | `delta` |
 | Datadog EU1 | `https://otlp.datadoghq.eu` | `dd-api-key=YOUR_KEY` | `delta` |
 | New Relic | `https://otlp.nr-data.net` | `api-key=YOUR_LICENSE_KEY` | `cumulative` |
 | Honeycomb | `https://api.honeycomb.io` | `x-honeycomb-team=YOUR_API_KEY` | `cumulative` |
 | Grafana Cloud | `https://otlp-gateway-{region}.grafana.net/otlp` | `Authorization=Basic {base64}` | `cumulative` |
 
-**Docker Compose Setup:**
+### Legacy HTTP POST (transition only, removed in 1.26.0)
 
-Add to your `.env` file:
+When `METRICS_LEGACY_HTTP_POST=true`, the middleware ALSO posts JSON events to
+`metrics-service:8890` via the old path. Both emissions run simultaneously.
+The `metrics_emission_path_total{path}` counter tracks which paths are active.
 
-```bash
-# Datadog example
-OTEL_OTLP_ENDPOINT=https://otlp.datadoghq.com
-OTEL_EXPORTER_OTLP_HEADERS=dd-api-key=YOUR_DATADOG_API_KEY
-OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
-OTEL_OTLP_EXPORT_INTERVAL_MS=30000
+## ECS Topology (ADOT Sidecar)
+
+On ECS, each service task includes an ADOT sidecar container:
+
+```
++---------------------------------------------------+
+| ECS Task (e.g. registry)                          |
+|                                                   |
+|  +-----------------+    +----------------------+  |
+|  | registry        |    | aws-otel-collector   |  |
+|  | (main app)      |    | (ADOT sidecar)       |  |
+|  |                 |    |                      |  |
+|  | OTLP push ----->|--->| otlp receiver :4317  |  |
+|  |                 |    | prometheusremotewrite |  |
+|  | Prom :9464      |    |   -> AMP (SigV4)     |  |
+|  +-----------------+    +----------------------+  |
+|                                                   |
+|  CPU: 896 + 128 = 1024 (task limit)              |
+|  Mem: 1792 + 256 = 2048 (task limit)             |
++---------------------------------------------------+
 ```
 
-Then start the metrics service:
+The ADOT collector config uses:
+- **Receiver**: OTLP gRPC on `0.0.0.0:4317` and HTTP on `0.0.0.0:4318`
+- **Exporter**: `prometheusremotewrite` with `sigv4auth` to the AMP workspace
+- **Pipeline**: `metrics: otlp -> prometheusremotewrite`
 
-```bash
-docker-compose up -d metrics-service
+IAM policy `adot_amp_write` grants `aps:RemoteWrite` scoped to the specific AMP workspace ARN.
+
+## EKS Topology (Prometheus Scrape + NetworkPolicy)
+
+On EKS, each service pod exposes `:9464` for Prometheus scraping. A `NetworkPolicy`
+restricts ingress on that port to pods matching the Prometheus selector.
+
+```yaml
+# Rendered from charts/registry/templates/networkpolicy-metrics.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: registry
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 9464
+          protocol: TCP
 ```
 
-The metrics service will automatically start pushing metrics to your configured endpoint every 30 seconds (or your configured interval).
+## Compatibility Layer
 
-**Terraform/ECS Deployment:**
+`registry/observability/_compat.py` provides adapter classes that wrap OTel instruments
+with the legacy `prometheus_client` API (`.labels(...).inc()`, `.observe()`). This allows
+gradual migration of call sites without a big-bang rewrite.
 
-For AWS ECS deployments, add these variables to your `terraform.tfvars`:
-
-```hcl
-# Datadog example
-otel_otlp_endpoint = "https://otlp.datadoghq.com"
-otel_exporter_otlp_headers = "dd-api-key=YOUR_DATADOG_API_KEY"  # Stored in AWS Secrets Manager
-otel_exporter_otlp_metrics_temporality_preference = "delta"
-otel_otlp_export_interval_ms = "30000"
-```
-
-For security, `OTEL_EXPORTER_OTLP_HEADERS` is stored in AWS Secrets Manager and not exposed in the ECS task definition plaintext.
-
-**Verification:**
-
-1. Check metrics service logs for OTLP export confirmation:
-```
-INFO: OTLP metrics exporter enabled for https://otlp.datadoghq.com (interval: 30000ms)
-```
-
-2. Within 2 minutes, you should see all 9 MCP Gateway metrics appearing in your observability platform:
-   - 4 counters: `mcp_auth_requests_total`, `mcp_tool_executions_total`, `mcp_tool_discovery_total`, `mcp_health_checks_total`
-   - 5 histograms: `mcp_auth_request_duration_seconds`, `mcp_tool_execution_duration_seconds`, `mcp_tool_discovery_duration_seconds`, `mcp_protocol_latency_seconds`, `mcp_health_check_duration_seconds`
-
-3. All metric dimensions (service, method, tool_name, success, etc.) will appear as tags/labels in your platform
-
-**Benefits of Direct Push:**
-
-- ✅ **No OTEL Collector required** - Simpler architecture, fewer moving parts
-- ✅ **Lower latency** - Metrics go directly from service to platform
-- ✅ **Easier debugging** - Fewer components in the pipeline
-- ✅ **Lower operational overhead** - No collector to manage, scale, or monitor
-- ✅ **Secure by default** - API keys stored in Secrets Manager on ECS
-- ✅ **Works alongside Prometheus** - Both exporters run simultaneously if needed
-
-**When to Use Direct Push vs OTEL Collector:**
-
-| Use Direct Push When | Use OTEL Collector When |
-|-----------------------|--------------------------|
-| Single observability platform | Multiple downstream platforms |
-| Standard OTLP endpoint | Custom metric transformations needed |
-| Simplicity is priority | Advanced filtering/sampling required |
-| Platform-native OTLP support | Legacy/proprietary protocols |
-
-**Note:** Direct OTLP push and Prometheus export can run simultaneously. This allows you to use Grafana for real-time monitoring while also sending metrics to a commercial platform for long-term storage and advanced analytics.
+| Adapter | Wraps | Legacy API preserved |
+|---------|-------|---------------------|
+| `_CounterAdapter` | `Counter` | `.labels(**kwargs).inc(amount)` |
+| `_HistogramAdapter` | `Histogram` | `.labels(**kwargs).observe(value)` |
+| `_UpDownCounterAdapter` | `UpDownCounter` | `.labels(**kwargs).inc()`, `.dec()` |
 
 ## Grafana Dashboards
 
 Pre-built dashboard: **MCP Analytics Comprehensive**
+(`config/grafana/dashboards/mcp-analytics-comprehensive.json`)
 
 ### Key Panels
 
-**Real-time Protocol Activity**
-- Shows rate of initialize, tools/list, tools/call operations
-- Visualizes the MCP protocol flow in real-time
+| Panel | Metric | Description |
+|-------|--------|-------------|
+| Real-time Protocol Activity | `rate(tool_execution_total[5m])` | MCP method call rates |
+| Authentication Flow | `rate(auth_request_total[5m])` | Success/failure by method |
+| Auth Success Rate | `sum(rate(...{success="true"})) / sum(rate(...))` | Single stat with thresholds |
+| Tool Execution Latency | `histogram_quantile(0.95, ...)` | P50/P95/P99 percentiles |
+| Top Tools by Usage | `topk(10, sum by(tool_name)(rate(...)))` | Most called tools |
 
-**Authentication Flow Analysis**
-- Success vs failure rates over time
-- Auth method distribution (JWT, OAuth, NoAuth)
-
-**Authentication Success Rate**
-- Single stat with color thresholds (red < 85%, orange 85-95%, green > 95%)
-
-**Tool Execution Latency**
-- P50, P95, P99 percentiles for performance analysis
-
-**Top Tools by Usage**
-- Most frequently called tools across all servers
-
-**Protocol Flow Latency**
-- Time between protocol steps (initialize → list → call)
-- Helps identify user experience bottlenecks
-
-**Dashboard Features:**
-- Auto-refresh: 30 seconds
-- Time range: Last 1 hour (configurable)
-- Variables: Filter by service, server, method
-
-## Getting Started
-
-### Quick Setup
-
-1. **Start the metrics service:**
-```bash
-docker-compose up -d metrics-service metrics-db grafana
-```
-
-2. **Generate API keys for your services:**
-```bash
-docker-compose exec metrics-service python create_api_key.py
-```
-
-3. **Configure your services with API keys:**
-```bash
-export METRICS_SERVICE_URL=http://metrics-service:8890
-export METRICS_API_KEY=<generated-key>
-```
-
-4. **Access Grafana:**
-```
-http://localhost:3000
-Default credentials: admin/admin
-```
-
-### Integrating Your Service
-
-**Option 1: Use provided middleware (FastAPI/Python)**
-```python
-from auth_server.metrics_middleware import add_auth_metrics_middleware
-
-app = FastAPI()
-add_auth_metrics_middleware(app, service_name="my-service")
-```
-
-**Option 2: Send metrics directly via HTTP:**
-```python
-import httpx
-
-await httpx.post(
-    "http://metrics-service:8890/metrics",
-    json={
-        "service": "my-service",
-        "version": "1.0.0",
-        "metrics": [{
-            "type": "auth_request",
-            "value": 1.0,
-            "duration_ms": 45.2,
-            "dimensions": {"success": True, "method": "jwt"}
-        }]
-    },
-    headers={"X-API-Key": api_key}
-)
-```
-
-## Configuration
-
-### Metrics Service
-
-```bash
-SQLITE_DB_PATH=/var/lib/sqlite/metrics.db
-METRICS_SERVICE_PORT=8890
-METRICS_RATE_LIMIT=1000                # Requests per minute per API key
-METRICS_RETENTION_DAYS=90              # Auto-cleanup after 90 days
-```
-
-### OpenTelemetry
-
-```bash
-OTEL_SERVICE_NAME=mcp-metrics-service
-OTEL_PROMETHEUS_ENABLED=true
-OTEL_PROMETHEUS_PORT=9465
-OTEL_OTLP_ENDPOINT=                    # Optional: http://otel-collector:4318
-```
-
-### Per-Service API Keys
-
-```bash
-METRICS_API_KEY_AUTH=<secret-key-1>
-METRICS_API_KEY_REGISTRY=<secret-key-2>
-METRICS_API_KEY_MYSERVICE=<secret-key-3>
-```
-
-The service automatically discovers `METRICS_API_KEY_*` environment variables and creates corresponding API keys.
-
-## Use Cases
-
-### Performance Monitoring
-- Track P95/P99 latency for authentication and tool execution
-- Identify slow tools or services
-- Monitor protocol flow timing to optimize user experience
-
-### Usage Analytics
-- Most popular tools across your MCP ecosystem
-- Client application distribution (Claude Desktop, custom clients)
-- User activity patterns (hashed for privacy)
-
-### Operational Alerts
-- Authentication failure spikes
-- Service availability issues
-- Rate limit exhaustion
-- Database growth anomalies
-
-### Capacity Planning
-- Request rate trends over time
-- Resource utilization patterns
-- Growth projection from historical data
-
-## Best Practices
-
-### Security
-- Never log API keys in plaintext
-- Use separate API keys per service for isolation
-- Rotate keys periodically
-- Monitor for unusual rate limit patterns
-
-### Performance
-- Services emit metrics asynchronously (fire-and-forget)
-- Metrics collection adds < 5ms overhead per request
-- Buffer size and flush interval tunable for high-volume deployments
-
-### Data Retention
-- Default 90 days for raw metrics
-- Configure longer retention for aggregated metrics
-- Use OTLP export for long-term storage in external platforms
-
-### Observability
-- Start with Prometheus + Grafana for simplicity
-- Add OTEL Collector when integrating with existing observability stack
-- Use hybrid approach for best of both worlds
+Dashboard auto-refreshes every 30 seconds with a default 1-hour time range.
 
 ## Troubleshooting
 
-**Metrics not appearing in Grafana?**
-- Check Prometheus is scraping metrics-service:9465
-- Verify API key in service configuration
-- Check metrics service logs for validation errors
+**No metrics on `:9464/metrics`?**
+- Verify `opentelemetry-exporter-prometheus` is installed in the container
+- Check that `OTEL_EXPORTER_PROMETHEUS_PORT` is not conflicting with another process
+- Look for `PrometheusMetricReader` initialization in service startup logs
 
-**Rate limit errors?**
-- Increase `METRICS_RATE_LIMIT` environment variable
-- Check rate limit status: `GET /rate-limit` endpoint
+**Metrics appear in Prometheus but not in Grafana dashboards?**
+- Verify the Prometheus data source is configured in Grafana
+- Check that metric names in dashboard JSON match the OTel instrument names
+- On ECS: dashboards query OTel-native names; if auth-server is on legacy path,
+  its metrics use `mcp_*` prefix instead
 
-**High database growth?**
-- Verify retention policies are active: `GET /admin/retention/policies`
-- Manually trigger cleanup: `POST /admin/retention/cleanup`
-- Adjust retention days for high-volume tables
+**OTLP push failing?**
+- Check for `StatusCode.UNIMPLEMENTED` errors (means the receiver does not support
+  that signal type, e.g. traces sent to a metrics-only pipeline)
+- Verify `OTEL_EXPORTER_OTLP_ENDPOINT` is reachable from the container
+- For ECS ADOT sidecar: check the task role has `aps:RemoteWrite` permission
 
-## Additional Resources
+**Port `:9464` already in use?**
+- Each service defaults to port 9464. In Docker Compose this is fine (separate
+  containers). If running multiple services on the same host, set
+  `OTEL_EXPORTER_PROMETHEUS_PORT` to different values per service.
 
-- **API Reference**: `metrics-service/docs/api-reference.md`
-- **Data Retention**: `metrics-service/docs/data-retention.md`
-- **Database Schema**: `metrics-service/docs/database-schema.md`
-- **Deployment Guide**: `metrics-service/docs/deployment.md`
+## Related Documentation
+
+- [OBSERVABILITY.md](OBSERVABILITY.md): Operator guide (configuration, PromQL cookbook, verification)
+- [OBSERVABILITY-LEGACY.md](OBSERVABILITY-LEGACY.md): Pre-1.25.0 architecture (deprecated)
+- [unified-parameter-reference.md](unified-parameter-reference.md): Cross-surface env var mapping

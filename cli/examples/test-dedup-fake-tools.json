@@ -1,0 +1,89 @@
+{
+  "server_name": "Real Server with Fake Testing Tools",
+  "description": "A set of fake tools for testing with interesting names and various parameter types",
+  "path": "/test-fake-tools-dedup/",
+  "proxy_pass_url": "http://my-fake-tools-server:9090/mcp",
+  "supported_transports": ["streamable-http"],
+  "auth_scheme": "none",
+  "tags": ["demo", "testing", "fake-tools"],
+  "num_tools": 3,
+  "license": "MIT",
+  "tool_list": [
+    {
+      "name": "quantum_analyzer",
+      "parsed_description": {
+        "main": "Analyzes quantum patterns with configurable energy and stabilization parameters.",
+        "args": "energy: Energy level (1-10), stabilize: Whether to stabilize output",
+        "returns": "str: JSON with analysis results",
+        "raises": ""
+      },
+      "schema": {
+        "properties": {
+          "energy": {
+            "default": 5,
+            "description": "Energy level (1-10)",
+            "type": "integer"
+          },
+          "stabilize": {
+            "default": true,
+            "description": "Whether to stabilize output",
+            "type": "boolean"
+          }
+        },
+        "title": "quantum_analyzerArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "neural_synthesizer",
+      "parsed_description": {
+        "main": "Synthesizes neural patterns into structures for testing purposes.",
+        "args": "patterns: List of patterns to process, threshold: Coherence threshold",
+        "returns": "dict: Synthesis results",
+        "raises": ""
+      },
+      "schema": {
+        "properties": {
+          "patterns": {
+            "description": "List of patterns to process",
+            "items": {"type": "string"},
+            "type": "array"
+          },
+          "threshold": {
+            "default": 0.7,
+            "description": "Coherence threshold",
+            "type": "number"
+          }
+        },
+        "required": ["patterns"],
+        "title": "neural_synthesizerArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "data_generator",
+      "parsed_description": {
+        "main": "Generates synthetic test data based on a schema definition.",
+        "args": "schema: Data schema, count: Number of records",
+        "returns": "dict: Generated records",
+        "raises": ""
+      },
+      "schema": {
+        "properties": {
+          "schema": {
+            "description": "Data schema definition",
+            "type": "object"
+          },
+          "count": {
+            "default": 10,
+            "description": "Number of records to generate",
+            "type": "integer"
+          }
+        },
+        "required": ["schema"],
+        "title": "data_generatorArguments",
+        "type": "object"
+      }
+    }
+  ]
+}

@@ -24,6 +24,28 @@ import httpx
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+# Dual-path import: in-container the auth_server package is flattened into
+# /app (so siblings are imported without the ``auth_server.`` prefix); under
+# pytest the package is rooted at the repo so the prefix is required.
+try:
+    from observability.meters import (
+        auth_request_duration_ms,
+        auth_request_total,
+        protocol_latency_ms,
+        record_emission_path,
+        tool_execution_duration_ms,
+        tool_execution_total,
+    )
+except ImportError:
+    from auth_server.observability.meters import (
+        auth_request_duration_ms,
+        auth_request_total,
+        protocol_latency_ms,
+        record_emission_path,
+        tool_execution_duration_ms,
+        tool_execution_total,
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +67,15 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         self.metrics_url = os.getenv("METRICS_SERVICE_URL", "http://localhost:8890")
         self.api_key = os.getenv("METRICS_API_KEY", "")
         self.client = httpx.AsyncClient(timeout=5.0)
+
+        # OTel-native emission gate (issue #1122). When the legacy flag is
+        # off (the default in 1.25.0+), HTTP POSTs to metrics-service are
+        # skipped entirely and metrics flow only via the in-process OTel
+        # meters declared in auth_server/observability/meters.py. The flag
+        # is removed in 1.26.0 along with the metrics-service container.
+        self.legacy_http_post_enabled = (
+            os.getenv("METRICS_LEGACY_HTTP_POST", "false").lower() == "true"
+        )
 
         # Track request contexts for detailed metrics
         self.request_contexts: dict[str, dict[str, Any]] = {}
@@ -289,9 +320,26 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         error_code: str = None,
         request_id: str = None,
     ):
+        """Emit authentication metric via OTel and (optionally) legacy HTTP POST.
+
+        Cardinality-controlled OTel attributes: ``success``, ``method``, ``server``.
+        The legacy ``user_hash`` and ``request_id`` dimensions are intentionally
+        not OTel attributes; per-user identification stays available in
+        auto-instrumentation span attributes for per-request debugging.
         """
-        Emit authentication metric asynchronously.
-        """
+        # 1) OTel emission (always-on, in-process, non-blocking)
+        otel_attrs = {
+            "success": str(success),
+            "method": method,
+            "server": server_name,
+        }
+        auth_request_total.add(1, otel_attrs)
+        auth_request_duration_ms.record(duration_ms, otel_attrs)
+        record_emission_path("otel")
+
+        # 2) Legacy HTTP POST (one-release dual-write window, issue #1122)
+        if not self.legacy_http_post_enabled:
+            return
         try:
             if not self.api_key:
                 return
@@ -322,8 +370,11 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
             await self.client.post(
                 f"{self.metrics_url}/metrics", json=payload, headers={"X-API-Key": self.api_key}
             )
+            record_emission_path("legacy")
+        except httpx.RequestError as e:
+            logger.debug(f"Legacy metrics-service POST failed (non-fatal): {e}")
         except Exception as e:
-            logger.debug(f"Failed to emit auth metric: {e}")
+            logger.debug(f"Failed to emit legacy auth metric: {e}")
 
     async def _emit_tool_execution_metric(
         self,
@@ -336,28 +387,40 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         request_id: str = None,
         auth_method: str = "unknown",
     ):
-        """
-        Emit tool execution metric for the specialized tool_metrics table.
-        """
+        """Emit tool execution metric via OTel and (optionally) legacy HTTP POST."""
+        # Extract tool/method details (used by both paths)
+        method_name = tool_info.get("method", "unknown")
+        actual_tool_name = tool_info.get("tool_name")
+        client_info = tool_info.get("client_info", {})
+
+        # If no client_info in current request, try to get it from session
+        if not client_info or client_info.get("name") == "unknown":
+            session_key = f"{server_name}:{user_hash}" if user_hash else f"{server_name}:anonymous"
+            stored_client_info = self.session_client_info.get(session_key, {})
+            if stored_client_info:
+                client_info = stored_client_info
+
+        # 1) OTel emission. Cardinality-controlled: drops user_hash, request_id,
+        # server_path (redundant with server_name), and the metadata block.
+        otel_attrs = {
+            "tool_name": str(actual_tool_name or method_name),
+            "server_name": str(server_name),
+            "success": str(success),
+            "method": str(method_name),
+            "client_name": str(client_info.get("name", "unknown")),
+            "client_version": str(client_info.get("version", "unknown")),
+        }
+        tool_execution_total.add(1, otel_attrs)
+        tool_execution_duration_ms.record(duration_ms, otel_attrs)
+        record_emission_path("otel")
+
+        # 2) Legacy HTTP POST (one-release dual-write window, issue #1122)
+        if not self.legacy_http_post_enabled:
+            return
         try:
             if not self.api_key:
                 return
 
-            # Extract tool/method details
-            method_name = tool_info.get("method", "unknown")
-            actual_tool_name = tool_info.get("tool_name")
-            client_info = tool_info.get("client_info", {})
-
-            # If no client_info in current request, try to get it from session
-            if not client_info or client_info.get("name") == "unknown":
-                session_key = (
-                    f"{server_name}:{user_hash}" if user_hash else f"{server_name}:anonymous"
-                )
-                stored_client_info = self.session_client_info.get(session_key, {})
-                if stored_client_info:
-                    client_info = stored_client_info
-
-            # Create tool execution metric payload
             metric_data = {
                 "type": "tool_execution",
                 "timestamp": datetime.utcnow().isoformat(),
@@ -382,7 +445,7 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
                     "actual_tool_name": actual_tool_name,
                     "method_type": method_name,
                     "input_size_bytes": len(json.dumps(tool_info.get("params", {})).encode()),
-                    "output_size_bytes": 0,  # Will be updated if response available
+                    "output_size_bytes": 0,
                 },
             }
 
@@ -391,8 +454,11 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
             await self.client.post(
                 f"{self.metrics_url}/metrics", json=payload, headers={"X-API-Key": self.api_key}
             )
+            record_emission_path("legacy")
+        except httpx.RequestError as e:
+            logger.debug(f"Legacy metrics-service POST failed (non-fatal): {e}")
         except Exception as e:
-            logger.debug(f"Failed to emit tool execution metric: {e}")
+            logger.debug(f"Failed to emit legacy tool execution metric: {e}")
 
     async def _emit_protocol_latency_metric(
         self,
@@ -402,14 +468,32 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         user_hash: str,
         request_id: str,
     ):
-        """
-        Emit protocol flow latency metrics based on session timing data.
+        """Emit protocol flow latency metric via OTel and (optionally) legacy HTTP POST.
+
+        OTel attributes drop ``user_hash`` and ``session_key`` (high cardinality,
+        ephemeral). The legacy POST preserves the full dimension set for the
+        one-release dual-write window.
         """
         try:
+            session_data = self.session_timings.get(session_key, {})
+
+            # 1) OTel emission for each completed flow step
+            for flow_step, latency_seconds in self._compute_completed_latencies(session_data):
+                protocol_latency_ms.record(
+                    latency_seconds * 1000.0,
+                    {
+                        "flow_step": flow_step,
+                        "server_name": str(server_name),
+                    },
+                )
+                record_emission_path("otel")
+
+            # 2) Legacy HTTP POST (one-release dual-write window, issue #1122)
+            if not self.legacy_http_post_enabled:
+                return
             if not self.api_key:
                 return
 
-            session_data = self.session_timings.get(session_key, {})
             current_time = time.time()
 
             # Calculate latencies between protocol steps
@@ -502,11 +586,43 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
                 await self.client.post(
                     f"{self.metrics_url}/metrics", json=payload, headers={"X-API-Key": self.api_key}
                 )
+                record_emission_path("legacy")
 
             # Cleanup is now handled by _cleanup_sessions_if_needed method
 
+        except httpx.RequestError as e:
+            logger.debug(f"Legacy metrics-service POST failed (non-fatal): {e}")
         except Exception as e:
             logger.debug(f"Failed to emit protocol latency metric: {e}")
+
+    def _compute_completed_latencies(
+        self,
+        session_data: dict[str, float],
+    ) -> list[tuple[str, float]]:
+        """Return (flow_step, latency_seconds) tuples for completed protocol flows.
+
+        Identical bounds to the legacy logic: each step is only emitted if both
+        endpoints exist in ``session_data`` and the computed latency falls in
+        a reasonable range.
+        """
+        out: list[tuple[str, float]] = []
+
+        if "initialize" in session_data and "tools/list" in session_data:
+            init_to_list = session_data["tools/list"] - session_data["initialize"]
+            if 0 < init_to_list < 300:
+                out.append(("initialize_to_tools_list", init_to_list))
+
+        if "tools/list" in session_data and "tools/call" in session_data:
+            list_to_call = session_data["tools/call"] - session_data["tools/list"]
+            if 0 < list_to_call < 300:
+                out.append(("tools_list_to_tools_call", list_to_call))
+
+        if "initialize" in session_data and "tools/call" in session_data:
+            total_flow = session_data["tools/call"] - session_data["initialize"]
+            if 0 < total_flow < 600:
+                out.append(("full_protocol_flow", total_flow))
+
+        return out
 
 
 def add_auth_metrics_middleware(app, service_name: str = "auth-server"):

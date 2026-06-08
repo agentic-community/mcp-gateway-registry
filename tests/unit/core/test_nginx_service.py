@@ -59,6 +59,7 @@ def nginx_service():
             mock_settings.deployment_mode = MagicMock()
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
+            mock_settings.auth_server_url = "http://auth-server:8888"
 
             service = NginxConfigService()
             yield service

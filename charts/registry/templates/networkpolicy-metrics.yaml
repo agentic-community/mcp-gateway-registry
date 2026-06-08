@@ -1,0 +1,42 @@
+{{- /*
+NetworkPolicy gating ingress to the OTel exporter-prometheus scrape port (Issue #1122).
+
+When ``metricsScrape.networkPolicy.enabled`` is true (the default), this resource
+restricts ingress to ``metricsScrape.port`` (default 9464) so that only pods
+matching the configured selectors can scrape the registry's in-process meters.
+
+The default selectors target Prometheus pods in the ``monitoring`` namespace.
+Override ``metricsScrape.networkPolicy.fromNamespaceSelector`` and
+``metricsScrape.networkPolicy.fromPodSelector`` if your in-cluster Prometheus
+runs elsewhere (e.g., ``kube-prometheus-stack`` uses different labels).
+
+To disable gating entirely (NOT recommended on multi-tenant clusters), set
+``metricsScrape.networkPolicy.enabled: false``.
+*/ -}}
+{{- if .Values.metricsScrape.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.app.name }}-metrics-scrape
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.app.name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.metricsScrape.networkPolicy.fromNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.metricsScrape.networkPolicy.fromPodSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metricsScrape.port | default 9464 }}
+{{- end }}

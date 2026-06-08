@@ -50,6 +50,8 @@ spec:
               name: https
             - containerPort: 7860
               name: registry
+            - containerPort: 9464
+              name: metrics
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           envFrom:
@@ -57,6 +59,8 @@ spec:
                 name: registry-otel-config
             - configMapRef:
                 name: registry-app-log-config
+            - configMapRef:
+                name: registry-batch-config
             - secretRef:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if eq (.Values.global.authProvider.type | default "keycloak") "keycloak" }}
@@ -102,6 +106,9 @@ spec:
               value: {{ .Values.app.mcpToolsListFilterEnabled | toString | quote }}
             - name: TOOL_FILTER_AUDIT_LOG_LEVEL
               value: {{ .Values.app.toolFilterAuditLogLevel | default "INFO" | quote }}
+            # DCR scope-allowlist alignment
+            - name: MCP_ADVERTISED_SCOPES
+              value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}
             {{- if .Values.awsRegistry.federationEnabled }}
             - name: AWS_REGISTRY_FEDERATION_ENABLED
               value: "true"

@@ -1,11 +1,16 @@
-"""
-FastAPI middleware for registry metrics collection.
+"""FastAPI middleware for registry metrics collection.
 
 Tracks registry operations, request headers, and API usage patterns.
+
+Issue #1122 migration: metrics now flow primarily through native OpenTelemetry
+``Counter.add()`` / ``Histogram.record()`` calls in-process. The legacy HTTP
+POST path to metrics-service is preserved for one release behind the
+``METRICS_LEGACY_HTTP_POST=true`` env var. Both paths are removed in 1.26.0.
 """
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -13,25 +18,57 @@ from typing import Any
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from registry.observability.meters import (
+    record_emission_path,
+    registry_operation_duration_ms,
+    registry_operation_total,
+    tool_discovery_duration_ms,
+    tool_discovery_total,
+)
+
 from .client import create_metrics_client
 from .utils import extract_headers_for_analysis, hash_user_id
 
 logger = logging.getLogger(__name__)
 
 
-class RegistryMetricsMiddleware(BaseHTTPMiddleware):
+def _bucket_results_count(count: int) -> str:
+    """Map a search results count to a low-cardinality bucket label.
+
+    Avoids creating one time series per unique count value (which can be
+    arbitrary). Buckets keep the cardinality bounded.
     """
-    Middleware to collect registry operation and request metrics.
+    if count < 0:
+        return "unknown"
+    if count == 0:
+        return "zero"
+    if count <= 10:
+        return "low"
+    if count <= 50:
+        return "med"
+    return "high"
+
+
+class RegistryMetricsMiddleware(BaseHTTPMiddleware):
+    """Middleware to collect registry operation and request metrics.
 
     Tracks:
     - Registry operations (server CRUD, search, health)
-    - Request headers for nginx config analysis
+    - Request headers for nginx config analysis (legacy path only)
     - API usage patterns
     """
 
     def __init__(self, app, service_name: str = "registry"):
         super().__init__(app)
         self.metrics_client = create_metrics_client(service_name=service_name)
+
+        # OTel-native emission gate (issue #1122). When the legacy flag is
+        # off (the default in 1.25.0+), metrics flow only via the in-process
+        # OTel meters in registry/observability/meters.py. The flag is
+        # removed in 1.26.0 along with the metrics-service container.
+        self.legacy_http_post_enabled = (
+            os.getenv("METRICS_LEGACY_HTTP_POST", "false").lower() == "true"
+        )
 
     def extract_operation_info(self, request: Request) -> dict[str, Any]:
         """Extract operation type and resource information from the request."""
@@ -165,41 +202,64 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
             # Calculate duration
             duration_ms = (time.perf_counter() - start_time) * 1000
 
-            # Emit registry operation metric asynchronously
-            asyncio.create_task(
-                self._emit_registry_metric(
-                    operation=operation_info["operation"],
-                    resource_type=operation_info["resource_type"],
-                    success=success,
-                    duration_ms=duration_ms,
-                    resource_id=operation_info["resource_id"],
-                    user_id=user_hash,
-                    error_code=error_code,
-                )
-            )
+            # Native OTel emission (always-on, in-process, non-blocking).
+            # Cardinality-controlled attributes: drop resource_id, user_id,
+            # error_code (logged separately) from the OTel attribute set.
+            otel_attrs = {
+                "operation": str(operation_info["operation"]),
+                "resource_type": str(operation_info["resource_type"]),
+                "success": str(success),
+            }
+            registry_operation_total.add(1, otel_attrs)
+            registry_operation_duration_ms.record(duration_ms, otel_attrs)
+            record_emission_path("otel")
 
-            # Emit headers analysis metric for nginx config insights
-            if success and operation_info["resource_type"] != "health":
+            # Legacy HTTP POST path (gated, one-release dual-write)
+            if self.legacy_http_post_enabled:
                 asyncio.create_task(
-                    self._emit_headers_metric(
-                        path=operation_info["path"],
-                        method=request.method,
-                        headers_info=headers_info,
-                        status_code=response.status_code if response else 500,
+                    self._emit_registry_metric_legacy(
+                        operation=operation_info["operation"],
+                        resource_type=operation_info["resource_type"],
+                        success=success,
+                        duration_ms=duration_ms,
+                        resource_id=operation_info["resource_id"],
+                        user_id=user_hash,
+                        error_code=error_code,
                     )
                 )
 
-            # If this is a search operation, emit discovery metric too
+                # Headers metric was a debug-only custom metric. Preserved
+                # only in the legacy path; not migrated to OTel because it
+                # is not used in any dashboard.
+                if success and operation_info["resource_type"] != "health":
+                    asyncio.create_task(
+                        self._emit_headers_metric_legacy(
+                            path=operation_info["path"],
+                            method=request.method,
+                            headers_info=headers_info,
+                            status_code=response.status_code if response else 500,
+                        )
+                    )
+
+            # Emit search-specific OTel metric and (optionally) legacy
             if operation_info["resource_type"] == "search" and success:
-                asyncio.create_task(
-                    self._emit_discovery_metric_from_request(
-                        request=request, duration_ms=duration_ms
+                discovery_attrs = {
+                    "results_count_bucket": "unknown",  # not available without response body
+                }
+                tool_discovery_total.add(1, discovery_attrs)
+                tool_discovery_duration_ms.record(duration_ms, discovery_attrs)
+                record_emission_path("otel")
+
+                if self.legacy_http_post_enabled:
+                    asyncio.create_task(
+                        self._emit_discovery_metric_from_request_legacy(
+                            request=request, duration_ms=duration_ms
+                        )
                     )
-                )
 
         return response
 
-    async def _emit_registry_metric(
+    async def _emit_registry_metric_legacy(
         self,
         operation: str,
         resource_type: str,
@@ -209,7 +269,7 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
         user_id: str = "",
         error_code: str = None,
     ):
-        """Emit registry operation metric asynchronously."""
+        """Legacy HTTP POST path; only invoked when METRICS_LEGACY_HTTP_POST is true."""
         try:
             await self.metrics_client.emit_registry_metric(
                 operation=operation,
@@ -220,13 +280,18 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
                 user_id=user_id,
                 error_code=error_code,
             )
+            record_emission_path("legacy")
         except Exception as e:
-            logger.debug(f"Failed to emit registry metric: {e}")
+            logger.debug(f"Legacy registry metric emit failed: {e}")
 
-    async def _emit_headers_metric(
-        self, path: str, method: str, headers_info: dict[str, Any], status_code: int
+    async def _emit_headers_metric_legacy(
+        self,
+        path: str,
+        method: str,
+        headers_info: dict[str, Any],
+        status_code: int,
     ):
-        """Emit custom metric with request header information for nginx config analysis."""
+        """Legacy custom-metric path used only for nginx-config debug analysis."""
         try:
             await self.metrics_client.emit_custom_metric(
                 metric_name="request_headers_analysis",
@@ -240,34 +305,32 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
                     "content_type": headers_info.get("content_type", "unknown")[:50],
                     "has_origin": headers_info.get("origin", "unknown") != "unknown",
                 },
-                metadata={
-                    "headers_sample": str(headers_info)[:500]  # Truncated sample
-                },
+                metadata={"headers_sample": str(headers_info)[:500]},
             )
+            record_emission_path("legacy")
         except Exception as e:
-            logger.debug(f"Failed to emit headers metric: {e}")
+            logger.debug(f"Legacy headers metric emit failed: {e}")
 
-    async def _emit_discovery_metric_from_request(self, request: Request, duration_ms: float):
-        """Emit discovery metric for search operations."""
+    async def _emit_discovery_metric_from_request_legacy(
+        self,
+        request: Request,
+        duration_ms: float,
+    ):
+        """Legacy HTTP POST path for search/discovery events."""
         try:
-            # Extract query from request parameters
             query_params = request.query_params
             query = query_params.get("q", query_params.get("query", "unknown"))
-
-            # For now, we can't easily get the results count from the response
-            # without parsing the response body, so we'll set a placeholder
-            results_count = -1  # Indicates count not available
-
+            results_count = -1  # not available from middleware
             await self.metrics_client.emit_discovery_metric(
                 query=query, results_count=results_count, duration_ms=duration_ms
             )
+            record_emission_path("legacy")
         except Exception as e:
-            logger.debug(f"Failed to emit discovery metric: {e}")
+            logger.debug(f"Legacy discovery metric emit failed: {e}")
 
 
 def add_registry_metrics_middleware(app, service_name: str = "registry"):
-    """
-    Convenience function to add registry metrics middleware to a FastAPI app.
+    """Convenience function to add registry metrics middleware to a FastAPI app.
 
     Args:
         app: FastAPI application instance
@@ -275,3 +338,7 @@ def add_registry_metrics_middleware(app, service_name: str = "registry"):
     """
     app.add_middleware(RegistryMetricsMiddleware, service_name=service_name)
     logger.info(f"Registry metrics middleware added for service: {service_name}")
+    logger.info(
+        "Metrics emission: native OTel (always-on); "
+        f"legacy HTTP POST: {os.getenv('METRICS_LEGACY_HTTP_POST', 'false').lower() == 'true'}"
+    )

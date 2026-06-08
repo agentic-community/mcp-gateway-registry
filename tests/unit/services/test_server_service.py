@@ -555,6 +555,27 @@ class TestGetAllServers:
         assert sample_server_dict_2["path"] in result
 
 
+@pytest.mark.unit
+@pytest.mark.servers
+class TestCountServers:
+    """Test the count_servers helper used for the dashboard total."""
+
+    @pytest.mark.asyncio
+    async def test_count_servers_delegates_to_repository(
+        self,
+        server_service: ServerService,
+        mock_server_repository,
+    ):
+        """count_servers delegates to repository.count() without a full fetch."""
+        mock_server_repository.count.return_value = 7
+
+        result = await server_service.count_servers()
+
+        mock_server_repository.count.assert_awaited_once()
+        mock_server_repository.list_all.assert_not_called()
+        assert result == 7
+
+
 # =============================================================================
 # TEST: Filtering Servers
 # =============================================================================
@@ -792,14 +813,16 @@ class TestGetAllServersWithPermissions:
         self,
         server_service: ServerService,
         sample_server_dict: dict[str, Any],
-        sample_server_dict_2: dict[str, Any],
         mock_server_repository,
     ):
-        """Test filtered access returns only accessible servers."""
-        # Arrange
-        mock_server_repository.list_all.return_value = {
+        """Filtered access fetches only accessible servers via a targeted query.
+
+        The restricted path must NOT scan the full collection (list_all);
+        it issues a targeted list_by_ids query covering the slash variants.
+        """
+        # Arrange - targeted query returns only the accessible server
+        mock_server_repository.list_by_ids.return_value = {
             sample_server_dict["path"]: sample_server_dict,
-            sample_server_dict_2["path"]: sample_server_dict_2,
         }
 
         # Act
@@ -810,6 +833,13 @@ class TestGetAllServersWithPermissions:
         # Assert
         assert len(result) == 1
         assert "/test-server" in result
+        # Targeted fetch was used, full scan was not
+        mock_server_repository.list_by_ids.assert_awaited_once()
+        mock_server_repository.list_all.assert_not_called()
+        # Candidate paths cover the slash variants for "test-server"
+        called_paths = mock_server_repository.list_by_ids.call_args.args[0]
+        assert "/test-server" in called_paths
+        assert "test-server" in called_paths
 
 
 # =============================================================================

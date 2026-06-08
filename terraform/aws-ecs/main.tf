@@ -69,18 +69,21 @@ module "mcp_gateway" {
   enable_cloudfront           = var.enable_cloudfront
   cloudfront_prefix_list_name = local.cloudfront_prefix_list_name
 
-  # Container images
-  registry_image_uri               = var.registry_image_uri
-  auth_server_image_uri            = var.auth_server_image_uri
+  # Container images (core services default to public ECR)
+  registry_image_uri    = var.registry_image_uri
+  auth_server_image_uri = var.auth_server_image_uri
+  mcpgw_image_uri       = var.mcpgw_image_uri
+
+  # Demo servers (disabled by default)
+  enable_demo_servers              = var.enable_demo_servers
   currenttime_image_uri            = var.currenttime_image_uri
-  mcpgw_image_uri                  = var.mcpgw_image_uri
   realserverfaketools_image_uri    = var.realserverfaketools_image_uri
   flight_booking_agent_image_uri   = var.flight_booking_agent_image_uri
   travel_assistant_agent_image_uri = var.travel_assistant_agent_image_uri
 
   # Service replicas
-  currenttime_replicas            = var.currenttime_replicas
   mcpgw_replicas                  = var.mcpgw_replicas
+  currenttime_replicas            = var.currenttime_replicas
   realserverfaketools_replicas    = var.realserverfaketools_replicas
   flight_booking_agent_replicas   = var.flight_booking_agent_replicas
   travel_assistant_agent_replicas = var.travel_assistant_agent_replicas
@@ -102,6 +105,11 @@ module "mcp_gateway" {
   embeddings_model_dimensions = var.embeddings_model_dimensions
   embeddings_aws_region       = var.embeddings_aws_region
   embeddings_api_key          = var.embeddings_api_key
+
+  # Registration deduplication
+  dedup_registration_hint_enabled = var.dedup_registration_hint_enabled
+  dedup_score_threshold           = var.dedup_score_threshold
+  dedup_max_suggestions           = var.dedup_max_suggestions
 
   # Keycloak admin credentials (for Management API)
   keycloak_admin_password = var.keycloak_admin_password
@@ -177,6 +185,16 @@ module "mcp_gateway" {
   registration_webhook_auth_header     = var.registration_webhook_auth_header
   registration_webhook_auth_token      = var.registration_webhook_auth_token
   registration_webhook_timeout_seconds = var.registration_webhook_timeout_seconds
+
+  # Agent batch API (issue #956)
+  batch_worker_enabled                 = var.batch_worker_enabled
+  batch_max_operations_per_job         = var.batch_max_operations_per_job
+  batch_max_concurrent_jobs_per_user   = var.batch_max_concurrent_jobs_per_user
+  batch_job_retention_days             = var.batch_job_retention_days
+  batch_worker_poll_interval_seconds   = var.batch_worker_poll_interval_seconds
+  batch_max_request_bytes              = var.batch_max_request_bytes
+  batch_worker_lease_ttl_seconds       = var.batch_worker_lease_ttl_seconds
+  batch_worker_lease_heartbeat_seconds = var.batch_worker_lease_heartbeat_seconds
 
   # Registration gate / admission control (issue #809)
   registration_gate_enabled              = var.registration_gate_enabled
@@ -267,6 +285,7 @@ module "mcp_gateway" {
   mcp_telemetry_heartbeat_interval_minutes = var.mcp_telemetry_heartbeat_interval_minutes
   telemetry_debug                          = var.telemetry_debug
   mcp_telemetry_imds_probe_disabled        = var.mcp_telemetry_imds_probe_disabled
+  mcp_cloud_provider                       = var.mcp_cloud_provider
 
   # Demo server configuration
   disable_ai_registry_tools_server = var.disable_ai_registry_tools_server

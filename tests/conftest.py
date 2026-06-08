@@ -167,9 +167,7 @@ _setup_auto_mocking()
 # Settings() is constructed at module-import time and refuses to start
 # without one. pytest_configure() runs AFTER conftest import, so setting it
 # there is too late.
-os.environ.setdefault(
-    "SECRET_KEY", "test-secret-key-for-testing-only-do-not-use-in-production"
-)
+os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only-do-not-use-in-production")
 
 
 # Now we can safely import registry modules
@@ -342,6 +340,7 @@ def mock_server_repository():
     mock.create.return_value = True
     mock.update.return_value = True
     mock.get_state.return_value = False
+    mock.get_all_states.return_value = {}
     mock.set_state.return_value = True
     return mock
 

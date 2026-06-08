@@ -138,43 +138,103 @@ class FileServerRepository(ServerRepositoryBase):
             logger.error(f"Failed to save server: {e}", exc_info=True)
             return False
 
+    def _with_state(
+        self,
+        info: dict[str, Any],
+        exclude_tool_list: bool = False,
+    ) -> dict[str, Any]:
+        """Return a shallow copy of a server dict with ``is_enabled`` injected.
+
+        The file backend tracks enabled/disabled state in a separate
+        ``self._state`` map, whereas DocumentDB stores ``is_enabled`` inside the
+        document itself. Callers that iterate ``list_all``/``list_by_ids`` read
+        ``is_enabled`` straight off the dict, so we mirror the DocumentDB
+        contract here. The value is computed fresh on every read rather than
+        cached into ``self._servers`` so it never goes stale when ``set_state``
+        updates only ``self._state``.
+        """
+        enriched = {k: v for k, v in info.items() if not (exclude_tool_list and k == "tool_list")}
+        enriched["is_enabled"] = self._state.get(info.get("path"), False)
+        return enriched
+
     async def get(
         self,
         path: str,
     ) -> dict[str, Any] | None:
         """Get server by path."""
         server_info = self._servers.get(path)
-        if server_info:
-            return server_info
+        if server_info is None:
+            alternate_path = path.rstrip("/") if path.endswith("/") else path + "/"
+            server_info = self._servers.get(alternate_path)
 
-        if path.endswith("/"):
-            alternate_path = path.rstrip("/")
-        else:
-            alternate_path = path + "/"
+        if server_info is None:
+            return None
 
-        return self._servers.get(alternate_path)
+        return self._with_state(server_info)
 
-    async def list_all(self) -> dict[str, dict[str, Any]]:
-        """List all servers."""
-        return self._servers.copy()
+    async def list_all(
+        self,
+        exclude_tool_list: bool = False,
+    ) -> dict[str, dict[str, Any]]:
+        """List all servers.
+
+        Args:
+            exclude_tool_list: If True, return shallow copies without the
+                ``tool_list`` field to mirror the DocumentDB projection. The
+                stored documents are not mutated.
+        """
+        return {
+            path: self._with_state(info, exclude_tool_list) for path, info in self._servers.items()
+        }
 
     async def list_paginated(
         self,
         skip: int = 0,
         limit: int = 100,
+        exclude_tool_list: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """List servers with in-memory pagination (file backend).
 
         Args:
             skip: Number of servers to skip.
             limit: Maximum number of servers to return.
+            exclude_tool_list: If True, return shallow copies without the
+                ``tool_list`` field. The stored documents are not mutated.
 
         Returns:
             Dictionary mapping server path to server info for the requested page.
         """
         items = list(self._servers.items())
         page_items = items[skip : skip + limit]
-        return dict(page_items)
+        return {
+            path: self._with_state(info, exclude_tool_list)
+            for path, info in page_items
+        }
+
+    async def list_by_ids(
+        self,
+        paths: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """List servers whose path is in the given set (file backend).
+
+        Mirrors ``get``'s trailing-slash tolerance so callers can pass paths
+        in either form.
+
+        Args:
+            paths: Exact server paths to fetch.
+
+        Returns:
+            Dictionary mapping stored server path to server info for found paths.
+        """
+        result: dict[str, dict[str, Any]] = {}
+        for path in paths:
+            info = self._servers.get(path)
+            if info is None:
+                alternate_path = path.rstrip("/") if path.endswith("/") else path + "/"
+                info = self._servers.get(alternate_path)
+            if info is not None:
+                result[info["path"]] = self._with_state(info)
+        return result
 
     async def list_by_source(
         self,
@@ -332,6 +392,10 @@ class FileServerRepository(ServerRepositoryBase):
 
         return result
 
+    async def get_all_states(self) -> dict[str, bool]:
+        """Get enabled/disabled state for all servers in a single read."""
+        return dict(self._state)
+
     async def set_state(
         self,
         path: str,
@@ -391,11 +455,21 @@ class FileServerRepository(ServerRepositoryBase):
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],
+        *,
+        limit: int | None = None,
     ) -> dict[str, dict]:
-        """Find documents matching a filter (file-based, basic support)."""
+        """Find documents matching a filter (file-based, basic support).
+
+        Note: only `$exists` is supported here today. Conditions other
+        than `$exists` (e.g. `$regex`, `$in`) are silently treated as
+        a match, which means filters that the DocumentDB backend would
+        reject will return ALL documents from the file backend.
+        """
         all_data = await self.list_all()
-        results = {}
+        results: dict[str, dict] = {}
         for path, data in all_data.items():
+            if limit is not None and len(results) >= limit:
+                break
             match = True
             for field_name, condition in filter_dict.items():
                 if isinstance(condition, dict) and "$exists" in condition:

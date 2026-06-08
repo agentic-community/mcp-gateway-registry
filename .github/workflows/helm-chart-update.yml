@@ -1,4 +1,4 @@
-name: Update Helm Charts on Release
+name: Update Image Tags on Release
 
 on:
   workflow_run:
@@ -10,8 +10,8 @@ permissions:
   pull-requests: write
 
 jobs:
-  update-helm-charts:
-    name: Update Helm Chart Image Tags
+  update-image-tags:
+    name: Update Image Tags in Helm Charts and Terraform
     runs-on: ubuntu-latest
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
@@ -36,7 +36,6 @@ jobs:
           echo "Extracted version: $VERSION from tag: $TAG"
 
       - name: Update image tags in Helm charts
-        id: update
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -52,8 +51,34 @@ jobs:
             echo "Updated $VALUES_FILE"
           done
 
+      - name: Update public ECR image defaults in Terraform variables.tf
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Bump the `default = "public.ecr.aws/p3v1o3c6/<service>:<version>"`
+          # lines in the Terraform variable declarations. These defaults are
+          # what `terraform apply` uses when the operator does not set the
+          # corresponding variable in their `terraform.tfvars`, so they
+          # decide what image a fresh ECS deployment pulls. They MUST track
+          # the latest released version.
+          #
+          # `terraform.tfvars.example` is intentionally NOT touched here.
+          # That file is documentation only (Terraform never reads it). Its
+          # commented-out lines stay as `:latest` placeholders that operators
+          # uncomment and edit in their own `terraform.tfvars` if they want
+          # to override the default with a custom-built image.
+          for VARS_FILE in \
+            terraform/aws-ecs/variables.tf \
+            terraform/aws-ecs/modules/mcp-gateway/variables.tf; do
+            sed -i -E "s|(public\\.ecr\\.aws/p3v1o3c6/[a-zA-Z0-9._-]+:)[0-9]+\\.[0-9]+\\.[0-9]+[A-Za-z0-9._-]*|\\1${VERSION}|g" "$VARS_FILE"
+            echo "Updated $VARS_FILE"
+          done
+
+      - name: Check for changes
+        id: update
+        run: |
           if git diff --quiet; then
-            echo "Charts already at version $VERSION, skipping PR creation"
+            echo "All files already at target version, skipping PR creation"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -136,18 +161,20 @@ jobs:
         if: steps.update.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
         with:
-          branch: helm-update-${{ steps.version.outputs.version }}
-          commit-message: "chore: update Helm chart image tags to ${{ steps.version.outputs.version }}"
-          title: "chore: update Helm chart image tags to ${{ steps.version.outputs.version }}"
+          branch: release-update-${{ steps.version.outputs.version }}
+          commit-message: "chore: update image tags to ${{ steps.version.outputs.version }}"
+          title: "chore: update image tags to ${{ steps.version.outputs.version }}"
           body: |
-            Automated update of Helm chart image tags to `${{ steps.version.outputs.version }}` following release `${{ steps.version.outputs.tag }}`.
+            Automated update of image tags to `${{ steps.version.outputs.version }}` following release `${{ steps.version.outputs.tag }}`.
 
             Updated files:
             - `charts/mcp-gateway-registry-stack/values.yaml`
             - `charts/auth-server/values.yaml`
             - `charts/registry/values.yaml`
             - `charts/mcpgw/values.yaml`
-          labels: helm
+            - `terraform/aws-ecs/variables.tf`
+            - `terraform/aws-ecs/modules/mcp-gateway/variables.tf`
+          labels: release
 
       - name: Comment on PR with missing env vars
         if: steps.update.outputs.changed == 'true' && steps.envcheck.outputs.comment != ''

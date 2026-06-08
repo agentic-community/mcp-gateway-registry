@@ -247,7 +247,7 @@ data:
 
         echo "Creating custom MCP scopes..."
 
-        local scopes=("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute")
+        local scopes=("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute" "mcp-registry-admin" "registry-admins")
 
         for scope in "${scopes[@]}"; do
             local scope_json='{
@@ -408,58 +408,78 @@ data:
     }
 
     # Function to create test users
+    # Upsert a realm user: create if missing, otherwise PUT a fresh password.
+    # Without the password reset, helm upgrades silently drift the realm
+    # password from whatever value the registry-login-credentials secret holds.
+    upsert_user() {
+        local token=$1
+        local username=$2
+        local password=$3
+        local first_name=$4
+        local last_name=$5
+
+        local user_json=$(jq -n \
+            --arg u "$username" \
+            --arg e "${username}@example.com" \
+            --arg p "$password" \
+            --arg fn "$first_name" \
+            --arg ln "$last_name" \
+            '{
+                username: $u,
+                email: $e,
+                enabled: true,
+                emailVerified: true,
+                firstName: $fn,
+                lastName: $ln,
+                credentials: [{type: "password", value: $p, temporary: false}]
+            }')
+
+        local status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$user_json")
+
+        if [ "$status" = "201" ]; then
+            echo "  - Created user: $username"
+        elif [ "$status" = "409" ]; then
+            # User already exists — look up id and reset password so the realm
+            # stays in sync with the registry-login-credentials secret.
+            local user_id=$(curl -s -H "Authorization: Bearer ${token}" \
+                "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$username&exact=true" | \
+                jq -r '.[0].id // empty')
+            if [ -z "$user_id" ]; then
+                echo -e "${RED}  - 409 on POST but could not look up id for $username${NC}"
+                return 1
+            fi
+            local reset_status=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${user_id}/reset-password" \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                -d "{\"type\":\"password\",\"value\":\"$password\",\"temporary\":false}")
+            if [ "$reset_status" = "204" ]; then
+                echo "  - Updated password for existing user: $username"
+            else
+                echo -e "${RED}  - Failed to reset password for $username (HTTP $reset_status)${NC}"
+                return 1
+            fi
+        else
+            echo -e "${RED}  - Failed to create/update user $username (HTTP $status)${NC}"
+            return 1
+        fi
+    }
+
     create_users() {
         local token=$1
 
-        echo "Creating test users..."
+        echo "Creating realm users..."
 
         # Define usernames for consistency
         local admin_username="admin"
         local test_username="testuser"
 
-        # Create admin user
-        local admin_user_json='{
-            "username": "'$admin_username'",
-            "email": "'$admin_username'@example.com",
-            "enabled": true,
-            "emailVerified": true,
-            "firstName": "Admin",
-            "lastName": "User",
-            "credentials": [
-                {
-                    "type": "password",
-                    "value": "'${INITIAL_ADMIN_PASSWORD}'",
-                    "temporary": false
-                }
-            ]
-        }'
-
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            -d "$admin_user_json" > /dev/null
-
-        # Create test user
-        local test_user_json='{
-            "username": "'$test_username'",
-            "email": "'$test_username'@example.com",
-            "enabled": true,
-            "emailVerified": true,
-            "firstName": "Test",
-            "lastName": "User",
-            "credentials": [
-                {
-                    "type": "password",
-                    "value": "'${INITIAL_USER_PASSWORD}'",
-                    "temporary": false
-                }
-            ]
-        }'
-
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            -d "$test_user_json" > /dev/null
+        upsert_user "$token" "$admin_username" "${INITIAL_ADMIN_PASSWORD}" "Admin" "User"
+        upsert_user "$token" "$test_username" "${INITIAL_USER_PASSWORD}" "Test" "User"
 
         echo "Assigning users to groups..."
 
@@ -668,6 +688,243 @@ data:
         fi
     }
 
+    # =========================================================================
+    # Dynamic Client Registration (RFC 7591) support
+    # =========================================================================
+    # Three configuration changes are needed so that MCP clients (Claude Code,
+    # Claude.ai connectors, Cursor, etc.) can register themselves dynamically
+    # and receive tokens that carry the user's groups for per-user authorization
+    # at the gateway:
+    #
+    # 1. setup_dcr_groups_mapper / setup_dcr_audience_mapper - attach mappers
+    #    to the `basic` client-scope. `basic` is auto-attached to every client
+    #    (including DCR'd ones), so this is the only reliable place to put a
+    #    mapper that runs for clients we don't pre-create.
+    # 2. configure_dcr_allowed_scopes - widen the anonymous + authenticated DCR
+    #    "Allowed Client Scopes" policies to accept all realm client-scopes.
+    # 3. configure_dcr_trusted_hosts - relax the anonymous DCR "Trusted Hosts"
+    #    policy so MCP clients running on diverse cloud egress IPs can register.
+
+    setup_dcr_groups_mapper() {
+        local token=$1
+
+        echo "Attaching Groups protocol mapper to the 'basic' client-scope..."
+
+        local basic_scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
+            jq -r '.[] | select(.name=="basic") | .id')
+
+        if [ -z "$basic_scope_id" ] || [ "$basic_scope_id" = "null" ]; then
+            echo -e "${YELLOW}WARNING: 'basic' client-scope not found — skipping DCR groups mapper.${NC}"
+            return 0
+        fi
+
+        local existing=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}" | \
+            jq -r '.protocolMappers[]? | select(.name=="groups") | .id')
+
+        if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            echo -e "${YELLOW}Groups mapper already attached to 'basic' scope. Skipping.${NC}"
+            return 0
+        fi
+
+        local groups_mapper_json='{
+            "name": "groups",
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-group-membership-mapper",
+            "consentRequired": false,
+            "config": {
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "groups",
+                "userinfo.token.claim": "true"
+            }
+        }'
+
+        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}/protocol-mappers/models" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$groups_mapper_json")
+
+        if [ "$response" = "201" ]; then
+            echo -e "${GREEN}Groups mapper attached to 'basic' scope. DCR'd clients will receive groups in tokens.${NC}"
+        elif [ "$response" = "409" ]; then
+            echo -e "${YELLOW}Groups mapper already exists on 'basic' scope. Continuing...${NC}"
+        else
+            echo -e "${RED}Failed to attach Groups mapper to 'basic'. HTTP status: ${response}${NC}"
+            return 1
+        fi
+    }
+
+    setup_dcr_audience_mapper() {
+        local token=$1
+
+        echo "Attaching Audience protocol mapper to the 'basic' client-scope..."
+
+        local basic_scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
+            jq -r '.[] | select(.name=="basic") | .id')
+
+        if [ -z "$basic_scope_id" ] || [ "$basic_scope_id" = "null" ]; then
+            echo -e "${YELLOW}WARNING: 'basic' client-scope not found — skipping DCR audience mapper.${NC}"
+            return 0
+        fi
+
+        local existing=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}" | \
+            jq -r '.protocolMappers[]? | select(.name=="mcp-gateway-audience") | .id')
+
+        if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            echo -e "${YELLOW}Audience mapper already attached. Skipping.${NC}"
+            return 0
+        fi
+
+        local audience_mapper_json='{
+            "name": "mcp-gateway-audience",
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-audience-mapper",
+            "consentRequired": false,
+            "config": {
+                "included.custom.audience": "mcp-gateway",
+                "id.token.claim": "false",
+                "access.token.claim": "true"
+            }
+        }'
+
+        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}/protocol-mappers/models" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$audience_mapper_json")
+
+        if [ "$response" = "201" ]; then
+            echo -e "${GREEN}Audience mapper attached. DCR'd-client tokens will carry aud=\"mcp-gateway\".${NC}"
+        elif [ "$response" = "409" ]; then
+            echo -e "${YELLOW}Audience mapper already exists. Continuing...${NC}"
+        else
+            echo -e "${RED}Failed to attach Audience mapper. HTTP status: ${response}${NC}"
+            return 1
+        fi
+    }
+
+    # Widen one subType's "Allowed Client Scopes" policy to include every
+    # client-scope defined in the realm. Both 'anonymous' and 'authenticated'
+    # subTypes need this because Keycloak picks one based on whether the DCR
+    # request carries an initial-access / registration token.
+    _widen_allowed_scopes_policy() {
+        local token=$1
+        local sub_type=$2
+        local components=$3
+        local all_scope_names=$4
+
+        local policy_id=$(echo "$components" | \
+            jq -r ".[] | select(.name==\"Allowed Client Scopes\" and .subType==\"${sub_type}\") | .id")
+        local parent_id=$(echo "$components" | \
+            jq -r ".[] | select(.name==\"Allowed Client Scopes\" and .subType==\"${sub_type}\") | .parentId")
+
+        if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+            echo -e "${YELLOW}WARNING: ${sub_type} 'Allowed Client Scopes' policy not found — skipping.${NC}"
+            return 0
+        fi
+
+        local policy_json=$(jq -n \
+            --arg name "Allowed Client Scopes" \
+            --arg providerId "allowed-client-templates" \
+            --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
+            --arg parentId "$parent_id" \
+            --arg subType "$sub_type" \
+            --argjson allowedScopes "$all_scope_names" \
+            '{
+                name: $name,
+                providerId: $providerId,
+                providerType: $providerType,
+                parentId: $parentId,
+                subType: $subType,
+                config: {
+                    "allow-default-scopes": ["true"],
+                    "allowed-client-scopes": $allowedScopes
+                }
+            }')
+
+        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$policy_json")
+
+        if [ "$response" = "204" ]; then
+            echo -e "${GREEN}${sub_type} Allowed Client Scopes policy includes all realm scopes.${NC}"
+        else
+            echo -e "${RED}FAILED (${sub_type}): HTTP status ${response}${NC}"
+            return 1
+        fi
+    }
+
+    configure_dcr_allowed_scopes() {
+        local token=$1
+
+        echo "Widening 'Allowed Client Scopes' DCR policy (anonymous + authenticated)..."
+
+        local components=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+        local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
+            jq -c '[.[].name]')
+
+        _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
+        _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1
+    }
+
+    configure_dcr_trusted_hosts() {
+        local token=$1
+
+        echo "Relaxing anonymous-DCR 'Trusted Hosts' policy..."
+
+        local components=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+        local policy_id=$(echo "$components" | \
+            jq -r '.[] | select(.name=="Trusted Hosts" and .subType=="anonymous") | .id')
+        local parent_id=$(echo "$components" | \
+            jq -r '.[] | select(.name=="Trusted Hosts" and .subType=="anonymous") | .parentId')
+
+        if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+            echo -e "${RED}Error: Could not find anonymous 'Trusted Hosts' policy${NC}"
+            return 1
+        fi
+
+        # IP-must-match check off (MCP clients run from diverse cloud IPs).
+        # URI-must-match stays on with `localhost` trusted for OAuth callbacks.
+        local policy_json='{
+            "name": "Trusted Hosts",
+            "providerId": "trusted-hosts",
+            "providerType": "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy",
+            "parentId": "'"$parent_id"'",
+            "subType": "anonymous",
+            "config": {
+                "host-sending-registration-request-must-match": ["false"],
+                "client-uris-must-match": ["true"],
+                "trusted-hosts": ["localhost", "127.0.0.1", "claude.ai"]
+            }
+        }'
+
+        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$policy_json")
+
+        if [ "$response" = "204" ]; then
+            echo -e "${GREEN}Trusted Hosts policy relaxed (IP check off, URI check on, localhost allowed).${NC}"
+        else
+            echo -e "${RED}Failed to update Trusted Hosts policy. HTTP status: ${response}${NC}"
+            return 1
+        fi
+    }
+
     # Function to generate random password
     generate_password() {
         # Generate a 16-character random password with alphanumeric characters
@@ -695,15 +952,41 @@ data:
             echo "Project root: $PROJECT_ROOT"
         fi
 
-        # Generate random passwords if not provided
+        # Resolve registry user passwords. Order of precedence:
+        #   1. Caller-exported INITIAL_ADMIN_PASSWORD / INITIAL_USER_PASSWORD
+        #      (e.g. operator-supplied via --set-string).
+        #   2. Existing registry-login-credentials secret (helm upgrade case —
+        #      preserve passwords across re-runs so users don't get rotated
+        #      out from under their already-stored credentials).
+        #   3. Freshly generated (first install case).
+        # Without (2), every helm upgrade rotates the secret and (because the
+        # realm user POST returns 409) the realm keeps the OLD password while
+        # the secret advertises the new one. Operators lose the ability to log
+        # in until they reset by hand.
         if [ -z "$INITIAL_ADMIN_PASSWORD" ]; then
-            INITIAL_ADMIN_PASSWORD=$(generate_password)
-            echo -e "${YELLOW}Generated random admin password${NC}"
+            existing_admin=$(kubectl get secret registry-login-credentials \
+                -o jsonpath='{.data.REGISTRY_ADMIN_PASSWORD}' 2>/dev/null \
+                | base64 -d 2>/dev/null || true)
+            if [ -n "$existing_admin" ]; then
+                INITIAL_ADMIN_PASSWORD="$existing_admin"
+                echo "Reusing admin password from existing registry-login-credentials secret"
+            else
+                INITIAL_ADMIN_PASSWORD=$(generate_password)
+                echo -e "${YELLOW}Generated new admin password (first install)${NC}"
+            fi
         fi
 
         if [ -z "$INITIAL_USER_PASSWORD" ]; then
-            INITIAL_USER_PASSWORD=$(generate_password)
-            echo -e "${YELLOW}Generated random user password${NC}"
+            existing_user=$(kubectl get secret registry-login-credentials \
+                -o jsonpath='{.data.REGISTRY_USER_PASSWORD}' 2>/dev/null \
+                | base64 -d 2>/dev/null || true)
+            if [ -n "$existing_user" ]; then
+                INITIAL_USER_PASSWORD="$existing_user"
+                echo "Reusing testuser password from existing registry-login-credentials secret"
+            else
+                INITIAL_USER_PASSWORD=$(generate_password)
+                echo -e "${YELLOW}Generated new testuser password (first install)${NC}"
+            fi
         fi
 
         # Store passwords in variables for later use
@@ -747,17 +1030,40 @@ data:
             setup_client_secrets "$TOKEN"
             setup_groups_mapper "$TOKEN"
             setup_m2m_scopes "$TOKEN"
+
+            # MCP DCR support: groups + audience mappers on `basic` scope
+            # (reliably attached to every DCR'd client), Allowed Client Scopes
+            # widened, Trusted Hosts relaxed for cloud-egress MCP clients.
+            # Order matters: scopes (create_scopes) must run before
+            # configure_dcr_allowed_scopes, since the policy is widened to the
+            # union of all realm scopes that exist at policy-update time.
+            #
+            # Gated by ENABLE_DCR_CONFIG (chart value: dcr.enabled). Disable
+            # for deployments using a pre-configured external Keycloak or
+            # closed deployments that don't need RFC 7591 DCR.
+            if [ "${ENABLE_DCR_CONFIG:-false}" = "true" ]; then
+                echo ""
+                echo -e "${YELLOW}=== Configuring Keycloak realm for MCP Dynamic Client Registration ===${NC}"
+                setup_dcr_groups_mapper "$TOKEN"
+                setup_dcr_audience_mapper "$TOKEN"
+                configure_dcr_allowed_scopes "$TOKEN"
+                configure_dcr_trusted_hosts "$TOKEN"
+            else
+                echo ""
+                echo -e "${YELLOW}DCR realm setup skipped (ENABLE_DCR_CONFIG=${ENABLE_DCR_CONFIG:-false}).${NC}"
+                echo "Set keycloak-configure.dcr.enabled=true in chart values to enable."
+            fi
         else
             exit 1
         fi
 
-        # Save generated passwords to a Kubernetes secret. Uses
-        # `apply` rather than plain `create` so the Job can be re-run
-        # by the post-install/post-upgrade Helm hook without failing
-        # with AlreadyExists. Note: INITIAL_ADMIN_PASSWORD /
-        # INITIAL_USER_PASSWORD are re-generated on every Job run and
-        # the realm user passwords are PUT-updated earlier in this
-        # script, so the secret stays in sync with the realm.
+        # Save passwords to a Kubernetes secret. Uses `apply` so the Job can
+        # be re-run by the post-install/post-upgrade Helm hook without failing
+        # with AlreadyExists.
+        #
+        # Drift-free across re-runs because: (1) main() reuses passwords from
+        # this same secret when it already exists, and (2) upsert_user() PUTs
+        # /reset-password on 409 so the realm side picks up the same value.
         kubectl create secret generic registry-login-credentials \
           --from-literal=REGISTRY_ADMIN_NAME=admin \
           --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD \
@@ -783,4 +1089,3 @@ data:
 
     # Run main function
     main
-

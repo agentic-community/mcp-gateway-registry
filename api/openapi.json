@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "v1.0.20"
+    "version": "1.24.3"
   },
   "paths": {
     "/api/version": {
@@ -12,7 +12,7 @@
           "System"
         ],
         "summary": "Get Version",
-        "description": "Get application version.\n\nReturns:\n    Dictionary with version string",
+        "description": "Get application version and unauthenticated UI metadata.\n\nIncludes ``ui_title`` so pre-auth pages (Login, Logout) can\nrender the operator-configured title without exposing the full /api/config\npayload to unauthenticated callers.\n\nReturns:\n    Dictionary with version string and ui_title.",
         "operationId": "get_version_api_version_get",
         "responses": {
           "200": {
@@ -20,6 +20,45 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/system/telemetry-detection": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get Telemetry Detection Info",
+        "description": "Return the telemetry cloud-detection result for the current process.\n\nReads from the cached result in the telemetry module; no additional probes\nare triggered. Lets operators verify how their instance was classified\nwithout tailing logs.\n\nReturns:\n    Dictionary with:\n    - cloud: aws/gcp/azure/unknown\n    - cloud_detection_method: env/dmi/ecs_meta/k8s_heuristic/imds/unknown",
+        "operationId": "get_telemetry_detection_info_api_system_telemetry_detection_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Telemetry Detection Info Api System Telemetry Detection Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -45,6 +84,16 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -456,7 +505,7 @@
           "Server Management"
         ],
         "summary": "Get Servers Json",
-        "description": "Get servers data as JSON for React frontend and external API (supports both session cookies and Bearer tokens).",
+        "description": "Get servers data as JSON for React frontend and external API.\n\nUses lexical (substring) search, not hybrid/semantic. For vector-based\nsearch, use POST /api/search/semantic instead.",
         "operationId": "get_servers_json_api_servers_get",
         "parameters": [
           {
@@ -472,8 +521,10 @@
                   "type": "null"
                 }
               ],
+              "description": "Lexical substring search across server name, description, tags, and metadata",
               "title": "Query"
-            }
+            },
+            "description": "Lexical substring search across server name, description, tags, and metadata"
           },
           {
             "name": "limit",
@@ -481,13 +532,13 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 500,
+              "maximum": 2000,
               "minimum": 1,
-              "description": "Number of servers to return (max 500)",
+              "description": "Number of servers to return (max 2000)",
               "default": 20,
               "title": "Limit"
             },
-            "description": "Number of servers to return (max 500)"
+            "description": "Number of servers to return (max 2000)"
           },
           {
             "name": "offset",
@@ -601,13 +652,60 @@
         ]
       }
     },
+    "/api/servers/check-duplicates": {
+      "post": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Check whether a server registration would duplicate an existing one",
+        "description": "Advisory duplicate check for server registrations.\n\nAlways returns 200; the response shape signals matches via\n``collision_with`` (exact-URL hit) and ``advisory_matches``\n(similarity hits). The endpoint does not block registration \u2014\ncallers are free to proceed even when matches are returned.",
+        "operationId": "check_server_duplicates_api_servers_check_duplicates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerDuplicateCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateCheckResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/register": {
       "post": {
         "tags": [
           "Server Management"
         ],
         "summary": "Register Service",
-        "description": "Register a new service (requires register_service UI permission).",
+        "description": "Register a new service (requires register_service UI permission).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores\n  the launch recipe for stdio MCP servers; it does NOT execute the server.\n\nThe local_runtime field is a JSON-encoded string (same convention as metadata):\n    {\"type\": \"npx\", \"package\": \"@acme/mcp\", \"version\": \"1.0.0\",\n     \"args\": [...], \"env\": {...}, \"required_env\": [...]}",
         "operationId": "register_service_api_register_post",
         "parameters": [
           {
@@ -682,6 +780,68 @@
           },
           "required": true
         },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clear-security-pending-local/{service_path}": {
+      "post": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Clear Security Pending Local",
+        "description": "Admin action: mark a local server as security-reviewed.\n\nRemoves the `security-pending-local` tag from a local server. Local\nservers can't be auto-scanned (no HTTP endpoint), so the tag is added at\nregistration and persists until an admin manually clears it. This\nendpoint provides a discoverable way to do that \u2014 the alternative is\nediting the tags string via the edit form.",
+        "operationId": "clear_security_pending_local_api_clear_security_pending_local__service_path__post",
+        "parameters": [
+          {
+            "name": "service_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Path"
+            }
+          },
+          {
+            "name": "mcp_gateway_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Gateway Session"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -892,7 +1052,7 @@
           "Server Management"
         ],
         "summary": "Edit Server Submit",
-        "description": "Handle server edit form submission (requires modify_service UI permission).",
+        "description": "Handle server edit form submission (requires modify_service UI permission).\n\nLocal servers (deployment='local') are edited the same way: pass\n`deployment=local` and `local_runtime` as a JSON-encoded string. Local edits\nrequire admin privileges, mirroring the registration gate. If `deployment`\nis omitted, the existing server's deployment is preserved.",
         "operationId": "edit_server_submit_api_edit__service_path__post",
         "parameters": [
           {
@@ -1520,7 +1680,7 @@
           "Server Management"
         ],
         "summary": "Register Service Api",
-        "description": "Register a service via JWT Bearer Token authentication (External API).\n\nThis endpoint provides the same functionality as POST /api/internal/register\nbut uses modern JWT Bearer token authentication via nginx headers, making it\nsuitable for external service-to-service communication.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Request body (form data):**\n- `name` (required): Service name\n- `description` (required): Service description\n- `path` (required): Service path (e.g., /myservice)\n- `proxy_pass_url` (required): Proxy URL (e.g., http://localhost:8000)\n- `tags` (optional): Comma-separated tags\n- `num_tools` (optional): Number of tools\n- `license` (optional): License name\n- `overwrite` (optional): Overwrite if exists (boolean, default true)\n- `auth_provider` (optional): Auth provider name\n- `auth_scheme` (optional): Auth scheme (none, bearer, api_key)\n- `auth_credential` (optional): Plaintext credential (encrypted before storage)\n- `auth_header_name` (optional): Custom header name for API key auth\n- `supported_transports` (optional): JSON array of transports\n- `headers` (optional): JSON object of headers\n- `tool_list_json` (optional): JSON array of tool definitions\n- `mcp_endpoint` (optional): Full URL for custom MCP endpoint (overrides /mcp suffix)\n- `sse_endpoint` (optional): Full URL for custom SSE endpoint (overrides /sse suffix)\n- `version` (optional): Server version (e.g., v1.0.0, v2.0.0)\n- `status` (optional): Lifecycle status (active, deprecated, draft, beta)\n- `provider_organization` (optional): Provider organization name\n- `provider_url` (optional): Provider URL\n- `source_created_at` (optional): Original creation timestamp (ISO format)\n- `source_updated_at` (optional): Last update timestamp (ISO format)\n- `external_tags` (optional): Comma-separated tags from external system\n\n**Response:**\n- `201 Created`: Service registered successfully\n- `400 Bad Request`: Invalid input data\n- `401 Unauthorized`: Missing or invalid JWT token\n- `409 Conflict`: Service already exists with same version (different version auto-creates new version)\n- `500 Internal Server Error`: Server error\n\n**Example:**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Service\" \\\n  -F \"description=My MCP Service\" \\\n  -F \"path=/myservice\" \\\n  -F \"proxy_pass_url=http://localhost:8000\"\n```",
+        "description": "Register a service via JWT Bearer Token authentication (External API).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores the\n  launch recipe for stdio MCP servers; it does NOT execute the server.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token. Local registration requires admin.\n\n**Request body (form data):**\n- `name` (required): Service name\n- `description` (required): Service description\n- `path` (required): Service path (e.g., /myservice)\n- `deployment` (optional): 'remote' (default) or 'local'\n- `proxy_pass_url` (required for remote): Proxy URL (e.g., http://localhost:8000)\n- `local_runtime` (required for local): JSON-encoded launch recipe\n- `tags` (optional): Comma-separated tags\n- `num_tools` (optional): Number of tools\n- `license` (optional): License name\n- `overwrite` (optional): Overwrite if exists (boolean, default true)\n- `auth_scheme` (optional): Auth scheme (none, bearer, api_key). Forced to 'none' for local.\n- `auth_credential` (optional): Plaintext credential (encrypted before storage)\n- `mcp_endpoint` (optional): Full URL for custom MCP endpoint (remote only)\n- `sse_endpoint` (optional): Full URL for custom SSE endpoint (remote only)\n- `metadata` (optional): JSON string of custom metadata\n- `version` (optional): Server version (e.g., v1.0.0)\n- `status` (optional): Lifecycle status (active, deprecated, draft, beta)\n\n**Example (remote):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Service\" \\\n  -F \"description=My MCP Service\" \\\n  -F \"path=/myservice\" \\\n  -F \"proxy_pass_url=http://localhost:8000\"\n```\n\n**Example (local):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Local MCP\" \\\n  -F \"description=Stdio MCP server\" \\\n  -F \"path=/my-local-mcp\" \\\n  -F \"deployment=local\" \\\n  -F 'local_runtime={\"type\":\"npx\",\"package\":\"@acme/mcp\",\"version\":\"1.0.0\",\"args\":[],\"env\":{},\"required_env\":[\"API_KEY\"]}'\n```",
         "operationId": "register_service_api_api_servers_register_post",
         "requestBody": {
           "content": {
@@ -1836,7 +1996,7 @@
           "Server Management"
         ],
         "summary": "Create Group Api",
-        "description": "Create a new scope group via JWT authentication (External API).\n\nThis endpoint provides the same functionality as POST /api/internal/create-group\nbut uses modern JWT Bearer token authentication.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Request body (form data):**\n- `group_name` (required): Name of the new group\n- `description` (optional): Group description\n- `create_in_idp` (optional): Whether to create in IdP (default: true)\n\n**Response:**\nReturns confirmation of group creation.\n\n**Example:**\n```bash\ncurl -X POST https://registry.example.com/api/servers/groups/create \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"group_name=new-team\" \\\n  -F \"description=Team for new project\" \\\n  -F \"create_in_idp=true\"\n```",
+        "description": "Create a new scope group via JWT authentication (External API).\n\nThis endpoint provides the same functionality as POST /api/internal/create-group\nbut uses modern JWT Bearer token authentication.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Request body (form data):**\n- `group_name` (required): Name of the new group\n- `description` (optional): Group description\n- `create_in_idp` (optional): Whether to create in IdP (default: false)\n\n**Response:**\nReturns confirmation of group creation.\n\n**Example:**\n```bash\ncurl -X POST https://registry.example.com/api/servers/groups/create \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"group_name=new-team\" \\\n  -F \"description=Team for new project\" \\\n  -F \"create_in_idp=true\"\n```",
         "operationId": "create_group_api_api_servers_groups_create_post",
         "requestBody": {
           "content": {
@@ -2455,6 +2615,52 @@
         ]
       }
     },
+    "/api/servers/{service_path}/connect-config": {
+      "get": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Get Server Connect Config",
+        "description": "Return decrypted connect-time config for a server.\n\nIncludes the list of custom HTTP headers with their plaintext values,\nready to be rendered into the Connect-button JSON.",
+        "operationId": "get_server_connect_config_api_servers__service_path__connect_config_get",
+        "parameters": [
+          {
+            "name": "service_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/servers/{path}": {
       "get": {
         "tags": [
@@ -2934,6 +3140,53 @@
         ]
       }
     },
+    "/api/agents/check-duplicates": {
+      "post": {
+        "tags": [
+          "Agent Management"
+        ],
+        "summary": "Check whether an agent registration would duplicate an existing one",
+        "description": "Advisory duplicate check for agent registrations.\n\nAlways returns 200; the response shape signals matches via\n``collision_with`` (exact-URL hit on the agent endpoint) and\n``advisory_matches`` (similarity hits). The endpoint does not\nblock registration \u2014 callers are free to proceed even when matches\nare returned.",
+        "operationId": "check_agent_duplicates_api_agents_check_duplicates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentDuplicateCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateCheckResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/agents/register": {
       "post": {
         "tags": [
@@ -2985,7 +3238,7 @@
           "Agent Management"
         ],
         "summary": "List Agents",
-        "description": "List all agents filtered by user permissions with pagination.\n\nArgs:\n    query: Optional search query\n    enabled_only: Only return enabled agents\n    visibility: Filter by visibility level\n    limit: Number of agents to return (1-100, default 20)\n    offset: Number of agents to skip (default 0)\n    user_context: Authenticated user context\n\nReturns:\n    Paginated list of agent info objects with metadata",
+        "description": "List all agents filtered by user permissions with pagination.\n\nUses lexical (substring) search, not hybrid/semantic. For vector-based\nsearch, use POST /api/search/semantic instead.\n\nArgs:\n    query: Lexical substring filter across name, description, tags, skill names, and metadata\n    enabled_only: Only return enabled agents\n    visibility: Filter by visibility level\n    limit: Number of agents to return (1-500, default 20)\n    offset: Number of agents to skip (default 0)\n    user_context: Authenticated user context\n\nReturns:\n    Paginated list of agent info objects with metadata",
         "operationId": "list_agents_api_agents_get",
         "parameters": [
           {
@@ -3001,10 +3254,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Search query string",
+              "description": "Lexical substring search across agent name, description, tags, skill names, and metadata",
               "title": "Query"
             },
-            "description": "Search query string"
+            "description": "Lexical substring search across agent name, description, tags, skill names, and metadata"
           },
           {
             "name": "enabled_only",
@@ -3037,18 +3290,36 @@
             "description": "Filter by visibility"
           },
           {
+            "name": "allowed_groups",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by allowed_groups (comma-separated). Returns only group-restricted agents whose allowed_groups intersect with the given values.",
+              "title": "Allowed Groups"
+            },
+            "description": "Filter by allowed_groups (comma-separated). Returns only group-restricted agents whose allowed_groups intersect with the given values."
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 500,
+              "maximum": 2000,
               "minimum": 1,
-              "description": "Number of agents to return (max 500)",
+              "description": "Number of agents to return (max 2000)",
               "default": 20,
               "title": "Limit"
             },
-            "description": "Number of agents to return (max 500)"
+            "description": "Number of agents to return (max 2000)"
           },
           {
             "name": "offset",
@@ -3914,7 +4185,7 @@
           "Management API"
         ],
         "summary": "Management List Groups",
-        "description": "List IAM groups from the configured identity provider (admin only).",
+        "description": "List IAM groups from the configured identity provider and local-only\nscope documents (admin only).\n\nLocal-only groups (created with `create_in_idp=False`, see issue #946) live\nonly in the MongoDB `scopes` collection and are invisible to the IdP.\nThis handler merges the IdP list with any MongoDB scope documents that\ndon't appear in the IdP response so every UI picker sees them.",
         "operationId": "management_list_groups_api_management_iam_groups_get",
         "responses": {
           "200": {
@@ -3949,7 +4220,7 @@
           "Management API"
         ],
         "summary": "Management Create Group",
-        "description": "Create a new group in the identity provider and/or MongoDB (admin only).\n\nWhen create_in_idp is True (default), creates in both the configured\nidentity provider and MongoDB scopes collection.\nWhen create_in_idp is False, creates only in MongoDB scopes collection.",
+        "description": "Create a new group in the identity provider and/or MongoDB (admin only).\n\nWhen create_in_idp is True, creates in both the configured\nidentity provider and MongoDB scopes collection.\nWhen create_in_idp is False, creates only in MongoDB scopes collection\nand persists `is_idp_managed=False` so subsequent PATCH/DELETE do not\ncall the IdP (see issue #946).",
         "operationId": "management_create_group_api_management_iam_groups_post",
         "requestBody": {
           "content": {
@@ -3996,7 +4267,7 @@
           "Management API"
         ],
         "summary": "Management Delete Group",
-        "description": "Delete a group from the identity provider and/or MongoDB (admin only).\n\nAttempts to delete from IdP first. If the group does not exist in the IdP\n(e.g., it was created with create_in_idp=False), the IdP error is logged\nand the MongoDB deletion proceeds.",
+        "description": "Delete a group (admin only).\n\nBehavior (see issue #946):\n- is_idp_managed=False: IdP call is skipped entirely.\n- is_idp_managed=True and IdP 403/404: non-fatal fall-through; MongoDB\n  deletion proceeds; audit entry includes idp_skip_reason.\n- Any other IdP error: propagates as before (502).",
         "operationId": "management_delete_group_api_management_iam_groups__group_name__delete",
         "parameters": [
           {
@@ -4088,7 +4359,7 @@
           "Management API"
         ],
         "summary": "Management Update Group",
-        "description": "Update a group's properties and scope configuration (admin only).\n\nThis updates the group in both:\n1. The configured identity provider (Keycloak or Entra ID)\n2. MongoDB scopes collection for authorization",
+        "description": "Update a group's properties and scope configuration (admin only).\n\nBehavior (see issue #946):\n- is_idp_managed=False: IdP call is skipped entirely. MongoDB update\n  proceeds. The flag is preserved across edits.\n- is_idp_managed=True and IdP 403/404: non-fatal fall-through; MongoDB\n  update proceeds; audit entry includes idp_skip_reason.",
         "operationId": "management_update_group_api_management_iam_groups__group_name__patch",
         "parameters": [
           {
@@ -5008,7 +5279,7 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 500,
+              "maximum": 2000,
               "minimum": 1,
               "default": 100,
               "title": "Page Size"
@@ -5090,13 +5361,13 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 500,
+              "maximum": 2000,
               "minimum": 1,
-              "description": "Number of skills to return (max 500)",
+              "description": "Number of skills to return (max 2000)",
               "default": 20,
               "title": "Limit"
             },
-            "description": "Number of skills to return (max 500)"
+            "description": "Number of skills to return (max 2000)"
           },
           {
             "name": "offset",
@@ -5196,7 +5467,7 @@
           "skills"
         ],
         "summary": "Parse SKILL.md content from URL",
-        "description": "Parse SKILL.md content and extract metadata.\n\nReturns name, description, version, and tags from the SKILL.md file.\nUseful for auto-populating the skill registration form.",
+        "description": "Parse SKILL.md content and extract metadata.\n\nReturns name, description, version, and tags from the SKILL.md file.\nUseful for auto-populating the skill registration form.\nAccepts optional auth parameters for parsing private repo SKILL.md files.",
         "operationId": "parse_skill_md_api_skills_parse_skill_md_post",
         "parameters": [
           {
@@ -5209,6 +5480,54 @@
               "title": "Url"
             },
             "description": "URL to SKILL.md file"
+          },
+          {
+            "name": "auth_scheme",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Auth scheme: none, global_credentials, bearer, api_key",
+              "default": "none",
+              "title": "Auth Scheme"
+            },
+            "description": "Auth scheme: none, global_credentials, bearer, api_key"
+          },
+          {
+            "name": "auth_credential",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plaintext credential for bearer/api_key",
+              "title": "Auth Credential"
+            },
+            "description": "Plaintext credential for bearer/api_key"
+          },
+          {
+            "name": "auth_header_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Custom header name for api_key scheme",
+              "title": "Auth Header Name"
+            },
+            "description": "Custom header name for api_key scheme"
           }
         ],
         "responses": {
@@ -5249,7 +5568,7 @@
           "skills"
         ],
         "summary": "Search skills",
-        "description": "Search for skills by name, description, or tags.\n\nReturns skills matching the query with basic relevance scoring.\nDeprecated and draft skills are excluded by default.",
+        "description": "Search for skills by name, description, tags, and metadata.\n\nUses lexical (substring) search with basic relevance scoring, not\nhybrid/semantic. For vector-based search, use POST /api/search/semantic instead.\nDeprecated and draft skills are excluded by default.",
         "operationId": "search_skills_api_skills_search_get",
         "parameters": [
           {
@@ -5258,10 +5577,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "Search query",
+              "description": "Lexical substring search across skill name, description, tags, and metadata",
               "title": "Q"
             },
-            "description": "Search query"
+            "description": "Lexical substring search across skill name, description, tags, and metadata"
           },
           {
             "name": "tags",
@@ -5315,6 +5634,59 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Search Skills Api Skills Search Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/skills/{skill_path}/integrity": {
+      "get": {
+        "tags": [
+          "skills",
+          "skills"
+        ],
+        "summary": "Get content integrity status",
+        "description": "Return the stored content integrity record for a skill.\n\nThis is a read-only view of the baseline hashes and drift state\nthat were computed at registration and updated on every content fetch.\nNo external requests are made.",
+        "operationId": "get_integrity_status_api_skills__skill_path__integrity_get",
+        "parameters": [
+          {
+            "name": "skill_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Skill path or name",
+              "title": "Skill Path"
+            },
+            "description": "Skill path or name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Integrity Status Api Skills  Skill Path  Integrity Get"
                 }
               }
             }
@@ -5397,7 +5769,7 @@
           "skills"
         ],
         "summary": "Get SKILL.md content",
-        "description": "Fetch SKILL.md content from the raw URL.\n\nThis endpoint proxies the SKILL.md content to avoid CORS issues\nwhen the frontend tries to fetch from GitHub directly.",
+        "description": "Fetch skill content.\n\nWithout ``resource``: returns SKILL.md markdown and the resource manifest.\nWith ``resource``: returns the content of the specified companion file\n(validated against the stored manifest to prevent path traversal).",
         "operationId": "get_skill_content_api_skills__skill_path__content_get",
         "parameters": [
           {
@@ -5410,6 +5782,24 @@
               "title": "Skill Path"
             },
             "description": "Skill path or name"
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional relative path to a companion resource file. When omitted, returns SKILL.md content.",
+              "title": "Resource"
+            },
+            "description": "Optional relative path to a companion resource file. When omitted, returns SKILL.md content."
           }
         ],
         "responses": {
@@ -5653,6 +6043,59 @@
         ]
       }
     },
+    "/api/skills/{skill_path}/refresh-resources": {
+      "post": {
+        "tags": [
+          "skills",
+          "skills"
+        ],
+        "summary": "Refresh skill resource manifest",
+        "description": "Re-discover companion resource files and update the stored manifest.\n\nUseful when new files have been added to the skill's repository directory\nwithout re-registering the skill.",
+        "operationId": "refresh_skill_resources_api_skills__skill_path__refresh_resources_post",
+        "parameters": [
+          {
+            "name": "skill_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Skill path or name",
+              "title": "Skill Path"
+            },
+            "description": "Skill path or name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Refresh Skill Resources Api Skills  Skill Path  Refresh Resources Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/skills/{skill_path}": {
       "get": {
         "tags": [
@@ -5786,6 +6229,54 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/skills/check-duplicates": {
+      "post": {
+        "tags": [
+          "skills",
+          "skills"
+        ],
+        "summary": "Check whether a skill registration would duplicate an existing one",
+        "description": "Advisory duplicate check for skill registrations.\n\nAlways returns 200; the response shape signals matches via\n``collision_with`` (exact-URL hit on ``skill_md_url``) and\n``advisory_matches`` (similarity hits). The endpoint does not\nblock registration \u2014 callers are free to proceed even when matches\nare returned.",
+        "operationId": "check_skill_duplicates_api_skills_check_duplicates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillDuplicateCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateCheckResult"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -8753,6 +9244,505 @@
         ]
       }
     },
+    "/api/admin/logs": {
+      "get": {
+        "tags": [
+          "Application Logs",
+          "Application Logs"
+        ],
+        "summary": "Query application logs",
+        "description": "Query centralized application logs with filtering, pagination, and time range support.",
+        "operationId": "query_logs_api_admin_logs_get",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by service name",
+              "title": "Service"
+            },
+            "description": "Filter by service name"
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum log level: DEBUG, INFO, WARNING, ERROR, CRITICAL",
+              "title": "Level"
+            },
+            "description": "Minimum log level: DEBUG, INFO, WARNING, ERROR, CRITICAL"
+          },
+          {
+            "name": "hostname",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by pod/hostname",
+              "title": "Hostname"
+            },
+            "description": "Filter by pod/hostname"
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Start of time range (ISO 8601)",
+              "title": "Start"
+            },
+            "description": "Start of time range (ISO 8601)"
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "End of time range (ISO 8601)",
+              "title": "End"
+            },
+            "description": "End of time range (ISO 8601)"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Substring search in message (max 200 chars)",
+              "title": "Search"
+            },
+            "description": "Substring search in message (max 200 chars)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "minimum": 1,
+              "description": "Max entries to return",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "Max entries to return"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of entries to skip",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Number of entries to skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogQueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/logs/export": {
+      "get": {
+        "tags": [
+          "Application Logs",
+          "Application Logs"
+        ],
+        "summary": "Export application logs as JSONL",
+        "description": "Stream application logs as newline-delimited JSON for download.",
+        "operationId": "export_logs_api_admin_logs_export_get",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by service name",
+              "title": "Service"
+            },
+            "description": "Filter by service name"
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum log level",
+              "title": "Level"
+            },
+            "description": "Minimum log level"
+          },
+          {
+            "name": "hostname",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by pod/hostname",
+              "title": "Hostname"
+            },
+            "description": "Filter by pod/hostname"
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Start of time range (ISO 8601)",
+              "title": "Start"
+            },
+            "description": "Start of time range (ISO 8601)"
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "End of time range (ISO 8601)",
+              "title": "End"
+            },
+            "description": "End of time range (ISO 8601)"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Substring search in message (max 200 chars)",
+              "title": "Search"
+            },
+            "description": "Substring search in message (max 200 chars)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50000,
+              "minimum": 1,
+              "description": "Max entries to export",
+              "default": 10000,
+              "title": "Limit"
+            },
+            "description": "Max entries to export"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/logs/metadata": {
+      "get": {
+        "tags": [
+          "Application Logs",
+          "Application Logs"
+        ],
+        "summary": "Get log filter metadata",
+        "description": "Returns available service names, hostnames, and log levels for building filter UIs.",
+        "operationId": "get_log_metadata_api_admin_logs_metadata_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogMetadataResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/export/audit-event": {
+      "post": {
+        "tags": [
+          "Data Export",
+          "Data Export"
+        ],
+        "summary": "Record Export Audit Event",
+        "description": "Record an audit event for a data export action.\n\nThis endpoint emits a dedicated audit event so that export activity\nis easily searchable in the audit log (operation='export', resource_type='data').",
+        "operationId": "record_export_audit_event_api_export_audit_event_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportAuditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Record Export Audit Event Api Export Audit Event Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/export/scopes": {
+      "get": {
+        "tags": [
+          "Data Export",
+          "Data Export"
+        ],
+        "summary": "Export Scopes",
+        "description": "Export all scope documents from the mcp_scopes collection.\n\nReturns the raw scope documents with full server_access rules,\ngroup_mappings, ui_permissions, and agent_access details.",
+        "operationId": "export_scopes_api_export_scopes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Export Scopes Api Export Scopes Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/registry-management/telemetry/info": {
+      "get": {
+        "tags": [
+          "Registry Management"
+        ],
+        "summary": "Get Telemetry Info",
+        "description": "Return the current deployment info (same shape as the heartbeat payload).\n\nDoes NOT send the heartbeat to the collector. Use this to inspect what\nthe registry would report: version, cloud, compute platform, storage\nbackend, auth provider, architecture, embeddings config, and aggregate\ncounts. Useful for benchmarking tools that need to record the hardware\nand software configuration alongside performance results.",
+        "operationId": "get_telemetry_info_api_registry_management_telemetry_info_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/registry-management/telemetry/heartbeat": {
       "post": {
         "tags": [
@@ -9812,6 +10802,85 @@
         ]
       }
     },
+    "/api/registry/v0.1/banner-state": {
+      "get": {
+        "tags": [
+          "Registry Card",
+          "Anthropic Registry API"
+        ],
+        "summary": "Get Banner State",
+        "description": "Return whether the cloud-provider confirmation banner should render.\n\nAdmin only. Called once per page load by the React frontend.",
+        "operationId": "get_banner_state_api_registry_v0_1_banner_state_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BannerStateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/registry/v0.1/cloud-provider-hint": {
+      "post": {
+        "tags": [
+          "Registry Card",
+          "Anthropic Registry API"
+        ],
+        "summary": "Set Cloud Provider Hint",
+        "description": "Persist the operator's cloud-provider banner answer.\n\nAdmin only. Returns 204 on success. Returns 409 if hint already set.",
+        "operationId": "set_cloud_provider_hint_api_registry_v0_1_cloud_provider_hint_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudProviderHintRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/.well-known/mcp-servers": {
       "get": {
         "tags": [
@@ -9876,6 +10945,46 @@
                 "schema": {
                   "$ref": "#/components/schemas/RegistryCard"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "Get Oauth Protected Resource",
+        "description": "Return the gateway's RFC 9728 Protected Resource Metadata document.\n\nThis is the entry point for spec-compliant MCP clients (Claude Code,\nClaude.ai connectors, Cursor, etc.) to discover which authorization\nserver protects this gateway and which scopes it recognizes.\n\nPer the MCP 2025-06-18 authorization spec, MCP servers MUST publish\nthis document. The `resource` field is the canonical gateway URL, which\nis also the `resource_metadata` URL embedded in WWW-Authenticate 401\nheaders (byte-for-byte match required by RFC 9728 \u00a75.1).\n\nPublic endpoint - no authentication required.",
+        "operationId": "get_oauth_protected_resource__well_known_oauth_protected_resource_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "Get Oauth Authorization Server",
+        "description": "Return the configured IdP's RFC 8414 Authorization Server Metadata.\n\nThis is a thin passthrough/normalization of the upstream IdP's metadata\ndocument, with provider-specific quirks flattened (e.g. Cognito's split\nendpoints rehomed onto the cognito-domain host).\n\nPublic endpoint - no authentication required.",
+        "operationId": "get_oauth_authorization_server__well_known_oauth_authorization_server_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -9972,6 +11081,61 @@
   },
   "components": {
     "schemas": {
+      "AgentDuplicateCheckRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Optional description used as part of the similarity search query. The combined name + description text is truncated to ~500 characters before being passed to the embedding backend; longer values are accepted but only the leading portion contributes to the similarity match."
+          },
+          "self_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Self Path",
+            "description": "When re-registering an existing entity, set this to the caller's own path so it is excluded from collision and advisory results."
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "The agent endpoint URL (from the AgentCard). The exact-match check uses the canonical form to detect URL collisions."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AgentDuplicateCheckRequest",
+        "description": "Request body for ``POST /api/agents/check-duplicates``."
+      },
       "AgentRegistrationRequest": {
         "properties": {
           "name": {
@@ -10102,6 +11266,15 @@
             "title": "Visibility",
             "description": "Visibility: public, private, or group-restricted (default: public). 'internal' accepted as alias for 'private'.",
             "default": "public"
+          },
+          "allowedGroups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Allowedgroups",
+            "description": "Groups with access when visibility is group-restricted (list or comma-separated string)"
           },
           "trustLevel": {
             "type": "string",
@@ -10679,6 +11852,39 @@
         "title": "AwsRegistryFederationConfig",
         "description": "AWS Agent Registry federation configuration."
       },
+      "BannerStateResponse": {
+        "properties": {
+          "should_show": {
+            "type": "boolean",
+            "title": "Should Show",
+            "description": "True iff the banner should render."
+          },
+          "last_cloud": {
+            "type": "string",
+            "title": "Last Cloud",
+            "description": "Most recently resolved cloud value."
+          },
+          "last_detection_method": {
+            "type": "string",
+            "title": "Last Detection Method",
+            "description": "Most recently resolved detection method."
+          },
+          "hint_set": {
+            "type": "boolean",
+            "title": "Hint Set",
+            "description": "True iff cloud_provider_hint is non-null."
+          }
+        },
+        "type": "object",
+        "required": [
+          "should_show",
+          "last_cloud",
+          "last_detection_method",
+          "hint_set"
+        ],
+        "title": "BannerStateResponse",
+        "description": "Response for GET /api/registry/banner-state."
+      },
       "Body_add_server_to_groups_api_api_servers_groups_add_post": {
         "properties": {
           "server_name": {
@@ -10711,7 +11917,7 @@
           "create_in_idp": {
             "type": "boolean",
             "title": "Create In Idp",
-            "default": true
+            "default": false
           }
         },
         "type": "object",
@@ -10780,7 +11986,14 @@
             "title": "Name"
           },
           "proxy_pass_url": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Proxy Pass Url"
           },
           "description": {
@@ -10813,6 +12026,17 @@
               }
             ],
             "title": "Mcp Endpoint"
+          },
+          "sse_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sse Endpoint"
           },
           "metadata": {
             "anyOf": [
@@ -10878,12 +12102,44 @@
               }
             ],
             "title": "Auth Header Name"
+          },
+          "deployment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment"
+          },
+          "local_runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Runtime"
+          },
+          "custom_headers": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Headers"
           }
         },
         "type": "object",
         "required": [
-          "name",
-          "proxy_pass_url"
+          "name"
         ],
         "title": "Body_edit_server_submit_api_edit__service_path__post"
       },
@@ -10919,7 +12175,7 @@
           "create_in_idp": {
             "type": "boolean",
             "title": "Create In Idp",
-            "default": true
+            "default": false
           }
         },
         "type": "object",
@@ -11026,6 +12282,17 @@
               }
             ],
             "title": "Auth Header Name"
+          },
+          "custom_headers": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Headers"
           },
           "supported_transports": {
             "anyOf": [
@@ -11156,7 +12423,14 @@
             "title": "Path"
           },
           "proxy_pass_url": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Proxy Pass Url"
           },
           "tags": {
@@ -11216,6 +12490,28 @@
               }
             ],
             "title": "Auth Header Name"
+          },
+          "custom_headers": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Headers"
+          },
+          "transport": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transport"
           },
           "supported_transports": {
             "anyOf": [
@@ -11359,14 +12655,45 @@
               }
             ],
             "title": "External Tags"
+          },
+          "deployment": {
+            "type": "string",
+            "title": "Deployment",
+            "default": "remote"
+          },
+          "local_runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Runtime"
+          },
+          "visibility": {
+            "type": "string",
+            "title": "Visibility",
+            "default": "public"
+          },
+          "allowed_groups": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Groups"
           }
         },
         "type": "object",
         "required": [
           "name",
           "description",
-          "path",
-          "proxy_pass_url"
+          "path"
         ],
         "title": "Body_register_service_api_api_servers_register_post"
       },
@@ -11385,7 +12712,14 @@
             "title": "Path"
           },
           "proxy_pass_url": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Proxy Pass Url"
           },
           "tags": {
@@ -11479,6 +12813,17 @@
             ],
             "title": "Auth Header Name"
           },
+          "custom_headers": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Headers"
+          },
           "status": {
             "anyOf": [
               {
@@ -11533,14 +12878,29 @@
               }
             ],
             "title": "Source Updated At"
+          },
+          "deployment": {
+            "type": "string",
+            "title": "Deployment",
+            "default": "remote"
+          },
+          "local_runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Runtime"
           }
         },
         "type": "object",
         "required": [
           "name",
           "description",
-          "path",
-          "proxy_pass_url"
+          "path"
         ],
         "title": "Body_register_service_api_register_post"
       },
@@ -11623,6 +12983,29 @@
         ],
         "title": "Body_update_peer_token_api_peers__peer_id__token_patch"
       },
+      "CloudProviderHintRequest": {
+        "properties": {
+          "hint": {
+            "type": "string",
+            "enum": [
+              "aws",
+              "azure",
+              "gcp",
+              "on_premises",
+              "other",
+              "declined"
+            ],
+            "title": "Hint",
+            "description": "Operator's banner answer. Includes cloud providers for cases where auto-detection failed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "hint"
+        ],
+        "title": "CloudProviderHintRequest",
+        "description": "Request body for POST /api/registry/cloud-provider-hint."
+      },
       "CompatibilityRequirement": {
         "properties": {
           "type": {
@@ -11677,6 +13060,60 @@
         ],
         "title": "CompatibilityRequirement",
         "description": "Machine-readable compatibility constraint."
+      },
+      "ContentIntegrity": {
+        "properties": {
+          "composite_hash": {
+            "type": "string",
+            "title": "Composite Hash",
+            "description": "SHA-256 of the sorted, concatenated per-file hashes"
+          },
+          "file_hashes": {
+            "items": {
+              "$ref": "#/components/schemas/FileHash"
+            },
+            "type": "array",
+            "title": "File Hashes"
+          },
+          "computed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Computed At"
+          },
+          "drift_detected": {
+            "type": "boolean",
+            "title": "Drift Detected",
+            "description": "True when a drift check found content differs from this baseline",
+            "default": false
+          },
+          "last_drift_check": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Drift Check",
+            "description": "When drift was last checked"
+          },
+          "drifted_files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Drifted Files",
+            "description": "Paths of files that changed since baseline"
+          }
+        },
+        "type": "object",
+        "required": [
+          "composite_hash"
+        ],
+        "title": "ContentIntegrity",
+        "description": "Content integrity record computed at registration or refresh.\n\nStores per-file SHA-256 hashes and a composite hash derived from all\nindividual hashes, enabling drift detection without re-fetching content."
       },
       "CreateClientSessionRequest": {
         "properties": {
@@ -11822,6 +13259,50 @@
         "title": "DiscoveryResponse",
         "description": "Response for coding assistant discovery endpoint."
       },
+      "DuplicateCheckResult": {
+        "properties": {
+          "collision_with": {
+            "items": {
+              "$ref": "#/components/schemas/ExistingEntity"
+            },
+            "type": "array",
+            "title": "Collision With",
+            "description": "Existing entities (across all entity types) whose identity URL matches the proposed registration. Each repository is queried with its own normalization rule; a hit in any repo populates this list with that repo's entity_type. Empty when no URL collision is found. Owner/path are redacted to blanks for callers who cannot view the colliding entity per the registry's visibility rules \u2014 the fact of a collision is still exposed, but no ownership details leak."
+          },
+          "advisory_matches": {
+            "items": {
+              "$ref": "#/components/schemas/ExistingEntity"
+            },
+            "type": "array",
+            "title": "Advisory Matches",
+            "description": "Best-effort list of semantically similar existing entities (across all entity types), filtered by visibility and capped by ``dedup_max_suggestions``. Distinct from ``collision_with``: these are similarity-based candidates, not exact-URL hits. Both lists can be populated simultaneously. The cap is global across entity types, not per-type \u2014 a registering server may see only similar skills if those skills score higher. The frontend should group results by entity_type when rendering."
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold",
+            "description": "Minimum semantic-search score required for a similarity-based advisory match (echoes settings)."
+          },
+          "similarity_search_available": {
+            "type": "boolean",
+            "title": "Similarity Search Available",
+            "description": "True when the semantic search backend was reachable. False indicates the similarity check was skipped due to embedder unavailability; the exact-match check still ran. Frontends can use this to surface a degraded-state hint."
+          },
+          "has_collision": {
+            "type": "boolean",
+            "title": "Has Collision",
+            "description": "Convenience flag: True iff ``collision_with`` is non-empty.\n\nPure derived state; the frontend can render the URL-match\nmodal section based on this single field instead of\ninspecting list length.",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "threshold",
+          "similarity_search_available",
+          "has_collision"
+        ],
+        "title": "DuplicateCheckResult",
+        "description": "Response shape for ``/check-duplicates`` endpoints and the\nreturn type of ``DuplicateCheckService.check()``.\n\nBoth the URL match and the similarity matches are advisory. The\nHTTP route layer always returns 200 with this envelope \u2014 there is\nno 4xx path. Frontend behavior is gated by\n``DEDUP_REGISTRATION_HINT_ENABLED``, not by anything in this\nresponse.\n\nBoth checks span all three entity types:\n- ``collision_with``: each repository is queried with its own\n  normalization rule and the union is returned. A server\n  registration that collides with an existing agent at the same\n  URL surfaces here, tagged with ``entity_type=\"a2a_agent\"``.\n- ``advisory_matches``: similarity hits from any of\n  {server, agent, skill} can appear together. Each entry carries\n  its own ``entity_type``."
+      },
       "ErrorResponse": {
         "properties": {
           "error": {
@@ -11836,6 +13317,107 @@
         ],
         "title": "ErrorResponse",
         "description": "Standard error response."
+      },
+      "ExistingEntity": {
+        "properties": {
+          "entity_type": {
+            "type": "string",
+            "enum": [
+              "mcp_server",
+              "a2a_agent",
+              "skill"
+            ],
+            "title": "Entity Type"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered At"
+          },
+          "relevance_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relevance Score",
+            "description": "Score from the semantic search backend; populated only for entries surfaced by the similarity check. Exact-URL collisions leave this as None."
+          },
+          "match_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match Reason",
+            "description": "Human-readable explanation of why this entity was surfaced (e.g. 'exact URL match', 'similar name and description')."
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity_type",
+          "path",
+          "name"
+        ],
+        "title": "ExistingEntity",
+        "description": "Lightweight projection of an existing registry entity.\n\nUsed for both the ``collision_with`` field (the entity that blocks\nregistration on an exact-URL match) and the ``advisory_matches``\nlist (similar entities surfaced by the similarity check)."
+      },
+      "ExportAuditRequest": {
+        "properties": {
+          "export_type": {
+            "type": "string",
+            "pattern": "^(single|all)$",
+            "title": "Export Type",
+            "description": "Type of export: 'single' for one collection, 'all' for bulk ZIP"
+          },
+          "collections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Collections",
+            "description": "List of collection IDs that were exported"
+          }
+        },
+        "type": "object",
+        "required": [
+          "export_type",
+          "collections"
+        ],
+        "title": "ExportAuditRequest",
+        "description": "Request body for recording a data export audit event."
       },
       "ExportFormat": {
         "type": "string",
@@ -11995,6 +13577,33 @@
           "total_count": 42
         }
       },
+      "FileHash": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Relative path (e.g. 'SKILL.md' or 'references/arch.md')"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256",
+            "description": "Full SHA-256 hex digest of the file content"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "description": "File size at hash time",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "title": "FileHash",
+        "description": "SHA-256 hash for a single file in the skill directory."
+      },
       "GetBackendSessionResponse": {
         "properties": {
           "backend_session_id": {
@@ -12147,6 +13756,18 @@
               }
             ],
             "title": "Agent Access"
+          },
+          "is_idp_managed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Idp Managed",
+            "description": "Whether the group is managed in the upstream identity provider. None for legacy records that predate the flag; True means PATCH/DELETE call the IdP, False means local-only. See issue #946."
           }
         },
         "type": "object",
@@ -12203,6 +13824,18 @@
               }
             ],
             "title": "Attributes"
+          },
+          "is_idp_managed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Idp Managed",
+            "description": "Whether the group is managed in the upstream identity provider. None for legacy records that predate the flag; True means PATCH/DELETE call the IdP, False means local-only. See issue #946."
           }
         },
         "type": "object",
@@ -12563,6 +14196,131 @@
         ],
         "title": "LinkANSRequest",
         "description": "Request to link an ANS Agent ID."
+      },
+      "LogEntry": {
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Timestamp"
+          },
+          "hostname": {
+            "type": "string",
+            "title": "Hostname"
+          },
+          "service": {
+            "type": "string",
+            "title": "Service"
+          },
+          "level": {
+            "type": "string",
+            "title": "Level"
+          },
+          "level_no": {
+            "type": "integer",
+            "title": "Level No",
+            "default": 0
+          },
+          "logger": {
+            "type": "string",
+            "title": "Logger",
+            "default": ""
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename",
+            "default": ""
+          },
+          "lineno": {
+            "type": "integer",
+            "title": "Lineno",
+            "default": 0
+          },
+          "process": {
+            "type": "integer",
+            "title": "Process",
+            "default": 0
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "timestamp",
+          "hostname",
+          "service",
+          "level"
+        ],
+        "title": "LogEntry",
+        "description": "Single application log entry."
+      },
+      "LogMetadataResponse": {
+        "properties": {
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Services"
+          },
+          "hostnames": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hostnames"
+          },
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Levels"
+          }
+        },
+        "type": "object",
+        "title": "LogMetadataResponse",
+        "description": "Available filter values for log queries."
+      },
+      "LogQueryResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/LogEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "has_next": {
+            "type": "boolean",
+            "title": "Has Next"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entries",
+          "total_count",
+          "limit",
+          "offset",
+          "has_next"
+        ],
+        "title": "LogQueryResponse",
+        "description": "Paginated response for log queries."
       },
       "M2MAccountRequest": {
         "properties": {
@@ -13002,6 +14760,12 @@
             "type": "array",
             "title": "Tag Filters",
             "description": "Tags to filter by when sync_mode is 'tag_filter'"
+          },
+          "sync_local_servers": {
+            "type": "boolean",
+            "title": "Sync Local Servers",
+            "description": "Whether to accept deployment='local' servers from this peer. Local servers are executable launch recipes that run on developer machines \u2014 only enable for trusted peers. Default False is the safe choice; existing peers continue to behave identically.",
+            "default": false
           },
           "sync_interval_minutes": {
             "type": "integer",
@@ -13472,6 +15236,18 @@
             "title": "Metadata",
             "description": "Additional metadata (max 10KB serialized)"
           },
+          "cloud_provider_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cloud Provider Hint",
+            "description": "Operator-declared cloud environment from the admin UI banner. None = not yet answered. 'on_premises', 'other' = propagate into telemetry. 'declined' = operator dismissed the banner without answering."
+          },
           "created_at": {
             "anyOf": [
               {
@@ -13828,6 +15604,61 @@
         "title": "ServerDetail",
         "description": "Detailed MCP server information."
       },
+      "ServerDuplicateCheckRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Optional description used as part of the similarity search query. The combined name + description text is truncated to ~500 characters before being passed to the embedding backend; longer values are accepted but only the leading portion contributes to the similarity match."
+          },
+          "self_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Self Path",
+            "description": "When re-registering an existing entity, set this to the caller's own path so it is excluded from collision and advisory results."
+          },
+          "proxy_pass_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proxy Pass Url",
+            "description": "The server's identity URL. The exact-match check uses the canonical (scheme-collapsed) form to detect URL collisions. Optional: when omitted, the exact-match check is skipped and only similarity-based advisory matches are returned."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ServerDuplicateCheckRequest",
+        "description": "Request body for ``POST /api/servers/check-duplicates``."
+      },
       "ServerList": {
         "properties": {
           "servers": {
@@ -14017,6 +15848,29 @@
             "title": "Trust Verified",
             "description": "Trust verification status: none, verified, expired, revoked, not_found, pending",
             "default": "none"
+          },
+          "deployment": {
+            "type": "string",
+            "enum": [
+              "remote",
+              "local"
+            ],
+            "title": "Deployment",
+            "description": "Deployment model: 'remote' (HTTP) or 'local' (stdio launch recipe).",
+            "default": "remote"
+          },
+          "local_runtime": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Runtime",
+            "description": "Stdio launch recipe for local servers (type, package, args, env, required_env, version, image_digest). Null for remote."
           }
         },
         "type": "object",
@@ -14211,6 +16065,66 @@
             "title": "Owner",
             "description": "Owner email/username for private visibility"
           },
+          "auth_scheme": {
+            "type": "string",
+            "enum": [
+              "none",
+              "global_credentials",
+              "bearer",
+              "api_key"
+            ],
+            "title": "Auth Scheme",
+            "description": "Auth scheme for fetching SKILL.md: none, global_credentials, bearer, api_key",
+            "default": "none"
+          },
+          "auth_credential_encrypted": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Credential Encrypted",
+            "description": "Encrypted credential for SKILL.md fetching"
+          },
+          "auth_header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Header Name",
+            "description": "Custom header name for credential (default: Authorization for bearer, PRIVATE-TOKEN for api_key)"
+          },
+          "credential_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Updated At",
+            "description": "When the credential was last updated"
+          },
+          "resource_manifest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillResourceManifest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Manifest of companion resource files discovered in the skill directory"
+          },
           "is_enabled": {
             "type": "boolean",
             "title": "Is Enabled",
@@ -14289,6 +16203,17 @@
             "title": "Content Updated At",
             "description": "When SKILL.md content was last updated"
           },
+          "content_integrity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContentIntegrity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-file hashes and composite hash for drift detection"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -14349,6 +16274,61 @@
         ],
         "title": "SkillCard",
         "description": "Full skill profile following Agent Skills specification."
+      },
+      "SkillDuplicateCheckRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Optional description used as part of the similarity search query. The combined name + description text is truncated to ~500 characters before being passed to the embedding backend; longer values are accepted but only the leading portion contributes to the similarity match."
+          },
+          "self_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Self Path",
+            "description": "When re-registering an existing entity, set this to the caller's own path so it is excluded from collision and advisory results."
+          },
+          "skill_md_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Md Url",
+            "description": "The skill's identity URL \u2014 the link to the SKILL.md file in the source repository. The exact-match check uses the canonical GitHub form to detect URL collisions."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SkillDuplicateCheckRequest",
+        "description": "Request body for ``POST /api/skills/check-duplicates``."
       },
       "SkillMetadata": {
         "properties": {
@@ -14512,6 +16492,42 @@
             "title": "Status",
             "description": "Lifecycle status (default: draft). Allowed: active, deprecated, draft, beta",
             "default": "draft"
+          },
+          "auth_scheme": {
+            "type": "string",
+            "enum": [
+              "none",
+              "global_credentials",
+              "bearer",
+              "api_key"
+            ],
+            "title": "Auth Scheme",
+            "description": "Auth scheme for fetching SKILL.md from private repos: none, global_credentials, bearer, api_key",
+            "default": "none"
+          },
+          "auth_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Credential",
+            "description": "Credential (token/key) for fetching SKILL.md; encrypted before storage, never persisted in plaintext"
+          },
+          "auth_header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Header Name",
+            "description": "Custom header name (default: Authorization for bearer, PRIVATE-TOKEN for api_key)"
           }
         },
         "type": "object",
@@ -14522,6 +16538,95 @@
         ],
         "title": "SkillRegistrationRequest",
         "description": "Request model for skill registration."
+      },
+      "SkillResource": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Relative path from skill root"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "script",
+              "reference",
+              "asset",
+              "agent"
+            ],
+            "title": "Type"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "default": 0
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language",
+            "description": "Programming language for scripts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "type"
+        ],
+        "title": "SkillResource",
+        "description": "Reference to a skill resource file."
+      },
+      "SkillResourceManifest": {
+        "properties": {
+          "scripts": {
+            "items": {
+              "$ref": "#/components/schemas/SkillResource"
+            },
+            "type": "array",
+            "title": "Scripts"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/SkillResource"
+            },
+            "type": "array",
+            "title": "References"
+          },
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/SkillResource"
+            },
+            "type": "array",
+            "title": "Assets"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/SkillResource"
+            },
+            "type": "array",
+            "title": "Agents"
+          }
+        },
+        "type": "object",
+        "title": "SkillResourceManifest",
+        "description": "Manifest of available resources for a skill."
       },
       "SkillSearchResult": {
         "properties": {

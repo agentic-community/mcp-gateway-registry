@@ -214,11 +214,19 @@ class FileAgentRepository(AgentRepositoryBase):
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],
+        *,
+        limit: int | None = None,
     ) -> dict[str, dict]:
-        """Find documents matching a filter (file-based, basic support)."""
+        """Find documents matching a filter (file-based, basic support).
+
+        Same caveat as the file-backed server repo: only `$exists` is
+        supported; other conditions silently match-everything.
+        """
         all_agents = await self.get_all()
         results = {}
         for agent_path, agent in all_agents.items():
+            if limit is not None and len(results) >= limit:
+                break
             data = agent.model_dump(mode="json")
             match = True
             for field_name, condition in filter_dict.items():

@@ -12,10 +12,12 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from prometheus_client import Counter
 
 from registry.audit.context import set_audit_action
 from registry.auth.dependencies import nginx_proxied_auth
+from registry.observability.meters import (
+    m2m_management_requests_total,
+)
 from registry.repositories.documentdb.client import get_documentdb_client
 from registry.schemas.idp_m2m_client import (
     IdPM2MClient,
@@ -39,11 +41,8 @@ _LIST_DEFAULT_LIMIT: int = 500
 _LIST_MAX_LIMIT: int = 1000
 
 
-m2m_management_requests_total = Counter(
-    "m2m_management_requests_total",
-    "Count of direct M2M client registration API calls",
-    ["operation", "outcome"],
-)
+# m2m_management_requests_total is imported above from
+# registry.observability.meters as part of the OTel migration (issue #1122).
 
 
 def _require_admin(

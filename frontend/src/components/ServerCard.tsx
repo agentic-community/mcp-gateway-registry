@@ -181,6 +181,8 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   const [showVersionSelector, setShowVersionSelector] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [fullServerDetails, setFullServerDetails] = useState<any>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<number>>(new Set());
   const [showClearSecurityPendingConfirm, setShowClearSecurityPendingConfirm] = useState(false);
   const [clearingSecurityPending, setClearingSecurityPending] = useState(false);
@@ -579,6 +581,31 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             >
               <LinkIcon className="h-3.5 w-3.5" />
               Connect
+            </button>
+
+            {/* Full JSON Details Button */}
+            <button
+              onClick={async () => {
+                setShowDetails(true);
+                setDetailsLoading(true);
+                try {
+                  const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
+                  const response = await axios.get(
+                    `/api/server_details${server.path}`,
+                    headers ? { headers } : undefined
+                  );
+                  setFullServerDetails(response.data);
+                } catch (err) {
+                  console.error('Failed to fetch full server details:', err);
+                } finally {
+                  setDetailsLoading(false);
+                }
+              }}
+              className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+              title="View full server JSON from database"
+              aria-label={`View full details for ${server.name}`}
+            >
+              <InformationCircleIcon className="h-4 w-4" />
             </button>
 
             {/* Security Scan Button */}
@@ -981,8 +1008,9 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
       <ServerDetailsModal
         server={server}
         isOpen={showDetails}
-        onClose={() => setShowDetails(false)}
-        fullDetails={server}
+        onClose={() => { setShowDetails(false); setFullServerDetails(null); }}
+        loading={detailsLoading}
+        fullDetails={fullServerDetails}
       />
 
     </>
