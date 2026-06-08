@@ -585,44 +585,44 @@ class NginxConfigService:
                 logger.info(
                     f"AUTH_PROVIDER is '{auth_provider}', removed PingFederate location blocks from nginx config"
                 )
+
+            # Parse Keycloak configuration from KEYCLOAK_URL environment variable.
+            # This always runs so the Keycloak template placeholders are filled even
+            # when another provider is active (the location blocks are stripped above).
+            keycloak_url = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
+            try:
+                parsed_keycloak = urlparse(keycloak_url)
+                keycloak_scheme = parsed_keycloak.scheme or "http"
+                keycloak_host = parsed_keycloak.hostname or "keycloak"
+                # Use default port based on scheme if not specified
+                if parsed_keycloak.port:
+                    keycloak_port = str(parsed_keycloak.port)
+                else:
+                    keycloak_port = "443" if keycloak_scheme == "https" else "8080"
+
+                # Validate that we can actually resolve the hostname
+                if not keycloak_host or keycloak_host == "keycloak":
+                    # If we end up with just 'keycloak', use the full URL's netloc instead
+                    keycloak_host = (
+                        parsed_keycloak.netloc.split(":")[0]
+                        if parsed_keycloak.netloc
+                        else "keycloak"
+                    )
+                    logger.warning(
+                        f"Keycloak hostname is 'keycloak', using netloc instead: {keycloak_host}"
+                    )
+
+                logger.info(
+                    f"Using Keycloak configuration from KEYCLOAK_URL '{keycloak_url}': "
+                    f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to parse KEYCLOAK_URL '{keycloak_url}': {e}. Using defaults."
+                )
                 keycloak_scheme = "http"
                 keycloak_host = "keycloak"
                 keycloak_port = "8080"
-            else:
-                keycloak_url = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
-                try:
-                    parsed_keycloak = urlparse(keycloak_url)
-                    keycloak_scheme = parsed_keycloak.scheme or "http"
-                    keycloak_host = parsed_keycloak.hostname or "keycloak"
-                    # Use default port based on scheme if not specified
-                    if parsed_keycloak.port:
-                        keycloak_port = str(parsed_keycloak.port)
-                    else:
-                        keycloak_port = "443" if keycloak_scheme == "https" else "8080"
-
-                    # Validate that we can actually resolve the hostname
-                    if not keycloak_host or keycloak_host == "keycloak":
-                        # If we end up with just 'keycloak', use the full URL's netloc instead
-                        keycloak_host = (
-                            parsed_keycloak.netloc.split(":")[0]
-                            if parsed_keycloak.netloc
-                            else "keycloak"
-                        )
-                        logger.warning(
-                            f"Keycloak hostname is 'keycloak', using netloc instead: {keycloak_host}"
-                        )
-
-                    logger.info(
-                        f"Using Keycloak configuration from KEYCLOAK_URL '{keycloak_url}': "
-                        f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to parse KEYCLOAK_URL '{keycloak_url}': {e}. Using defaults."
-                    )
-                    keycloak_scheme = "http"
-                    keycloak_host = "keycloak"
-                    keycloak_port = "8080"
 
             # Generate version map for multi-version servers
             # In registry-only mode, skip version map generation (use empty string)
@@ -644,14 +644,21 @@ class NginxConfigService:
             config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
             config_content = config_content.replace("{{KEYCLOAK_PORT}}", keycloak_port)
 
-            import os
+            # Parse PingFederate configuration, falling back to defaults on any error
+            # so a malformed PINGFEDERATE_BASE_URL never breaks config generation.
             pingfederate_url = os.environ.get("PINGFEDERATE_BASE_URL", "http://pingfederate:9032")
-            from urllib.parse import urlparse
-
-            pf_parsed = urlparse(pingfederate_url)
-            pf_scheme = pf_parsed.scheme or "http"
-            pf_host = pf_parsed.hostname or "pingfederate"
-            pf_port = str(pf_parsed.port or ("443" if pf_scheme == "https" else "9032"))
+            try:
+                pf_parsed = urlparse(pingfederate_url)
+                pf_scheme = pf_parsed.scheme or "http"
+                pf_host = pf_parsed.hostname or "pingfederate"
+                pf_port = str(pf_parsed.port or ("443" if pf_scheme == "https" else "9032"))
+            except Exception as e:
+                logger.warning(
+                    f"Failed to parse PINGFEDERATE_BASE_URL '{pingfederate_url}': {e}. Using defaults."
+                )
+                pf_scheme = "http"
+                pf_host = "pingfederate"
+                pf_port = "9032"
             config_content = config_content.replace("{{PINGFEDERATE_SCHEME}}", pf_scheme)
             config_content = config_content.replace("{{PINGFEDERATE_HOST}}", pf_host)
             config_content = config_content.replace("{{PINGFEDERATE_PORT}}", pf_port)
