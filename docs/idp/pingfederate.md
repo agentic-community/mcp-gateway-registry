@@ -31,7 +31,7 @@ The same set of variables is set across all three deployment modes; only the fil
 | Admin API password (**secret**) | `PF_ADMIN_PASS` | `pf_admin_pass` | `pingfederateAdmin.password` (or `pingfederateAdmin.passwordExistingSecret`) |
 | User-to-group fallback allowlist | `IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=pingfederate` | `idp_user_group_fallback_enabled_providers = "pingfederate"` | `idpUserGroupFallbackEnabledProviders: "pingfederate"` (registry + auth-server) |
 
-Note on the provider switch: Docker (`AUTH_PROVIDER`) and Helm (`authProvider.type`) take a provider-name string. The Terraform module has no `auth_provider` variable; you select the provider by setting its boolean `*_enabled` flag, and the module derives the `AUTH_PROVIDER` value for the containers (precedence: pingfederate > auth0 > okta > entra > keycloak). So for Terraform, `pingfederate_enabled = true` is the only switch needed.
+Note on the provider switch: Docker (`AUTH_PROVIDER`) and Helm (`authProvider.type`) take a provider-name string. The Terraform module has no `auth_provider` variable; you enable exactly one provider by setting its boolean `*_enabled` flag to true (leave the others false), and the module derives the `AUTH_PROVIDER` value for the containers. If you enable none, Keycloak is the default. So for Terraform, `pingfederate_enabled = true` is the only switch needed.
 
 The "secret" rows must be sourced from a secrets store in production (AWS Secrets Manager for Terraform, a Kubernetes Secret for Helm via `*ExistingSecret`). Don't paste secrets into `terraform.tfvars` or `values.yaml` checked into git.
 
