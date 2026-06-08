@@ -1,5 +1,5 @@
 """
-Unit tests for auth_server/models/custom_authorizer.py
+Unit tests for auth_server/authorizer_models/custom_authorizer.py
         and auth_server/services/custom_authorizer.py
 
 Tests cover:
@@ -36,36 +36,36 @@ class TestAuthorizerMode:
     """AuthorizerMode enum parsing and string comparison."""
 
     def test_parse_native(self):
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         assert AuthorizerMode("native") == AuthorizerMode.NATIVE
 
     def test_parse_custom(self):
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         assert AuthorizerMode("custom") == AuthorizerMode.CUSTOM
 
     def test_parse_both(self):
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         assert AuthorizerMode("both") == AuthorizerMode.BOTH
 
     def test_invalid_raises_value_error(self):
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         with pytest.raises(ValueError):
             AuthorizerMode("invalid")
 
     def test_str_comparison_native(self):
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         assert AuthorizerMode.NATIVE == "native"
 
     def test_str_comparison_custom(self):
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         assert AuthorizerMode.CUSTOM == "custom"
 
     def test_str_comparison_both(self):
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         assert AuthorizerMode.BOTH == "both"
 
     def test_values_are_lowercase_strings(self):
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         assert AuthorizerMode.NATIVE.value == "native"
         assert AuthorizerMode.CUSTOM.value == "custom"
         assert AuthorizerMode.BOTH.value == "both"
@@ -80,7 +80,7 @@ class TestCustomAuthRequest:
     """CustomAuthRequest construction and defaults."""
 
     def test_required_fields_only(self):
-        from models.custom_authorizer import CustomAuthRequest
+        from authorizer_models.custom_authorizer import CustomAuthRequest
         req = CustomAuthRequest(
             method="GET",
             path="/api/servers",
@@ -95,7 +95,7 @@ class TestCustomAuthRequest:
         assert req.body is None
 
     def test_all_fields(self):
-        from models.custom_authorizer import CustomAuthRequest
+        from authorizer_models.custom_authorizer import CustomAuthRequest
         req = CustomAuthRequest(
             method="POST",
             path="/api/servers/register",
@@ -110,7 +110,7 @@ class TestCustomAuthRequest:
         assert req.body == '{"name": "my-server"}'
 
     def test_missing_required_field_raises(self):
-        from models.custom_authorizer import CustomAuthRequest
+        from authorizer_models.custom_authorizer import CustomAuthRequest
         with pytest.raises(Exception):
             CustomAuthRequest(method="GET", path="/x")  # missing original_url and client_ip
 
@@ -119,7 +119,7 @@ class TestNativeAuthResult:
     """NativeAuthResult construction and defaults."""
 
     def test_only_valid_required(self):
-        from models.custom_authorizer import NativeAuthResult
+        from authorizer_models.custom_authorizer import NativeAuthResult
         result = NativeAuthResult(valid=True)
         assert result.valid is True
         assert result.username is None
@@ -129,7 +129,7 @@ class TestNativeAuthResult:
         assert result.client_id is None
 
     def test_all_fields_populated(self):
-        from models.custom_authorizer import NativeAuthResult
+        from authorizer_models.custom_authorizer import NativeAuthResult
         result = NativeAuthResult(
             valid=True,
             username="alice@example.com",
@@ -145,7 +145,7 @@ class TestNativeAuthResult:
         assert result.client_id == "mcp-gateway-web"
 
     def test_invalid_native_result(self):
-        from models.custom_authorizer import NativeAuthResult
+        from authorizer_models.custom_authorizer import NativeAuthResult
         result = NativeAuthResult(valid=False, username="unknown")
         assert result.valid is False
 
@@ -154,19 +154,19 @@ class TestCustomAuthContext:
     """CustomAuthContext auto-timestamp and defaults."""
 
     def test_auto_timestamp_generated(self):
-        from models.custom_authorizer import CustomAuthContext
+        from authorizer_models.custom_authorizer import CustomAuthContext
         ctx = CustomAuthContext(request_id="req-1")
         assert ctx.timestamp  # non-empty
         assert ctx.gateway_version == "1.0.0"
         assert ctx.request_id == "req-1"
 
     def test_explicit_timestamp_accepted(self):
-        from models.custom_authorizer import CustomAuthContext
+        from authorizer_models.custom_authorizer import CustomAuthContext
         ctx = CustomAuthContext(timestamp="2026-01-01T00:00:00Z", request_id="req-2")
         assert ctx.timestamp == "2026-01-01T00:00:00Z"
 
     def test_custom_gateway_version(self):
-        from models.custom_authorizer import CustomAuthContext
+        from authorizer_models.custom_authorizer import CustomAuthContext
         ctx = CustomAuthContext(request_id="req-3", gateway_version="2.5.1")
         assert ctx.gateway_version == "2.5.1"
 
@@ -175,17 +175,17 @@ class TestCustomAuthorizerPayload:
     """CustomAuthorizerPayload with and without native auth."""
 
     def _make_request(self):
-        from models.custom_authorizer import CustomAuthRequest
+        from authorizer_models.custom_authorizer import CustomAuthRequest
         return CustomAuthRequest(
             method="GET", path="/test", original_url="http://h/test", client_ip="1.2.3.4"
         )
 
     def _make_context(self):
-        from models.custom_authorizer import CustomAuthContext
+        from authorizer_models.custom_authorizer import CustomAuthContext
         return CustomAuthContext(request_id="req-x")
 
     def test_without_native_auth(self):
-        from models.custom_authorizer import CustomAuthorizerPayload
+        from authorizer_models.custom_authorizer import CustomAuthorizerPayload
         payload = CustomAuthorizerPayload(
             request=self._make_request(),
             native_auth_result=None,
@@ -194,7 +194,7 @@ class TestCustomAuthorizerPayload:
         assert payload.native_auth_result is None
 
     def test_with_native_auth(self):
-        from models.custom_authorizer import CustomAuthorizerPayload, NativeAuthResult
+        from authorizer_models.custom_authorizer import CustomAuthorizerPayload, NativeAuthResult
         payload = CustomAuthorizerPayload(
             request=self._make_request(),
             native_auth_result=NativeAuthResult(valid=True, username="alice"),
@@ -203,7 +203,7 @@ class TestCustomAuthorizerPayload:
         assert payload.native_auth_result.username == "alice"
 
     def test_serialises_to_json(self):
-        from models.custom_authorizer import CustomAuthorizerPayload
+        from authorizer_models.custom_authorizer import CustomAuthorizerPayload
         payload = CustomAuthorizerPayload(
             request=self._make_request(),
             context=self._make_context(),
@@ -217,14 +217,14 @@ class TestCustomAuthorizerResponse:
     """CustomAuthorizerResponse construction."""
 
     def test_authorized_response(self):
-        from models.custom_authorizer import CustomAuthorizerResponse
+        from authorizer_models.custom_authorizer import CustomAuthorizerResponse
         resp = CustomAuthorizerResponse(authorized=True, metadata={"policy": "allow-all"})
         assert resp.authorized is True
         assert resp.error is None
         assert resp.metadata == {"policy": "allow-all"}
 
     def test_denied_response_with_error(self):
-        from models.custom_authorizer import CustomAuthErrorDetail, CustomAuthorizerResponse
+        from authorizer_models.custom_authorizer import CustomAuthErrorDetail, CustomAuthorizerResponse
         err = CustomAuthErrorDetail(
             code="POLICY_VIOLATION",
             message="User not permitted",
@@ -236,7 +236,7 @@ class TestCustomAuthorizerResponse:
         assert resp.error.details == {"username": "bob"}
 
     def test_minimal_denied_response(self):
-        from models.custom_authorizer import CustomAuthErrorDetail, CustomAuthorizerResponse
+        from authorizer_models.custom_authorizer import CustomAuthErrorDetail, CustomAuthorizerResponse
         resp = CustomAuthorizerResponse(
             authorized=False,
             error=CustomAuthErrorDetail(code="DENIED", message="No access"),
@@ -338,7 +338,7 @@ class TestMaskSensitiveHeaders:
 
 def _make_payload():
     """Helper — builds a minimal CustomAuthorizerPayload."""
-    from models.custom_authorizer import CustomAuthContext, CustomAuthRequest, CustomAuthorizerPayload
+    from authorizer_models.custom_authorizer import CustomAuthContext, CustomAuthRequest, CustomAuthorizerPayload
     return CustomAuthorizerPayload(
         request=CustomAuthRequest(
             method="GET", path="/test", original_url="http://h/test", client_ip="1.2.3.4"
@@ -498,37 +498,37 @@ class TestGetAuthorizerMode:
 
     def test_default_is_native_when_env_not_set(self, monkeypatch):
         from services.custom_authorizer import get_authorizer_mode
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         monkeypatch.delenv("AUTHORIZER_MODE", raising=False)
         assert get_authorizer_mode() == AuthorizerMode.NATIVE
 
     def test_parses_custom(self, monkeypatch):
         from services.custom_authorizer import get_authorizer_mode
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         monkeypatch.setenv("AUTHORIZER_MODE", "custom")
         assert get_authorizer_mode() == AuthorizerMode.CUSTOM
 
     def test_parses_both(self, monkeypatch):
         from services.custom_authorizer import get_authorizer_mode
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         monkeypatch.setenv("AUTHORIZER_MODE", "both")
         assert get_authorizer_mode() == AuthorizerMode.BOTH
 
     def test_case_insensitive(self, monkeypatch):
         from services.custom_authorizer import get_authorizer_mode
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         monkeypatch.setenv("AUTHORIZER_MODE", "BOTH")
         assert get_authorizer_mode() == AuthorizerMode.BOTH
 
     def test_invalid_falls_back_to_native(self, monkeypatch):
         from services.custom_authorizer import get_authorizer_mode
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         monkeypatch.setenv("AUTHORIZER_MODE", "garbage")
         assert get_authorizer_mode() == AuthorizerMode.NATIVE
 
     def test_result_is_cached(self, monkeypatch):
         from services.custom_authorizer import get_authorizer_mode
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         monkeypatch.setenv("AUTHORIZER_MODE", "custom")
         first = get_authorizer_mode()
         monkeypatch.setenv("AUTHORIZER_MODE", "both")  # change env after first call
@@ -638,7 +638,7 @@ class TestBuildCustomAuthPayload:
 
     def test_payload_with_native_auth(self):
         from services.custom_authorizer import build_custom_auth_payload
-        from models.custom_authorizer import NativeAuthResult
+        from authorizer_models.custom_authorizer import NativeAuthResult
         req, ip = _make_mock_request()
         native = NativeAuthResult(
             valid=True, username="alice", scopes=["read:servers"], groups=["admins"],
@@ -798,7 +798,7 @@ class TestResetGlobals:
 
     def test_reset_clears_mode_singleton(self, monkeypatch):
         from services.custom_authorizer import _reset_globals, get_authorizer_mode
-        from models.custom_authorizer import AuthorizerMode
+        from authorizer_models.custom_authorizer import AuthorizerMode
         monkeypatch.setenv("AUTHORIZER_MODE", "custom")
         get_authorizer_mode()  # populate cache
 

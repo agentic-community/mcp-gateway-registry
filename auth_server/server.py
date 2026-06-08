@@ -41,7 +41,7 @@ from metrics_middleware import add_auth_metrics_middleware
 # Import provider factory
 from providers.factory import get_auth_provider
 # Import custom authorizer models and services for external authorization integration
-from models.custom_authorizer import AuthorizerMode, NativeAuthResult
+from authorizer_models.custom_authorizer import AuthorizerMode, NativeAuthResult
 from services.custom_authorizer import (
     get_authorizer_mode,
     get_custom_authorizer_client,

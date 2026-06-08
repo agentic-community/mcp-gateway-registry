@@ -37,7 +37,7 @@ POLICIES_FILE: str = os.environ.get("POLICIES_FILE", "policies.cedar")
 API_KEY: str = os.environ.get("API_KEY", "").strip()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Webhook contract models (mirror of auth_server/models/custom_authorizer.py)
+# Webhook contract models (mirror of auth_server/authorizer_models/custom_authorizer.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 

@@ -28,7 +28,7 @@ from typing import Optional, TYPE_CHECKING
 
 import httpx
 
-from models.custom_authorizer import (
+from authorizer_models.custom_authorizer import (
     AuthorizerMode,
     CustomAuthContext,
     CustomAuthErrorDetail,
