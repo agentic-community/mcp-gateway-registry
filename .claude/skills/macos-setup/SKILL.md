@@ -140,6 +140,9 @@ git --version 2>/dev/null && echo "GIT_OK" || echo "GIT_FAIL"
 
 echo "=== jq ==="
 jq --version 2>/dev/null && echo "JQ_OK" || echo "JQ_FAIL"
+
+echo "=== gettext ==="
+gettext --version 2>/dev/null && echo "GETTEXT_OK" || echo "GETTEXT_FAIL"
 ```
 
 For any failed check, display the install instructions:
@@ -152,8 +155,9 @@ For any failed check, display the install instructions:
 | NODE_FAIL | `brew install node@20` or download from https://nodejs.org/ |
 | GIT_FAIL | `xcode-select --install` |
 | JQ_FAIL | `brew install jq` |
+| GETTEXT_FAIL | `brew install gettext` |
 
-**Do not proceed if Docker or git fail.** Python, uv, Node.js, and jq must also be present before continuing. Ask the user to install missing tools and retry.
+**Do not proceed if Docker or git fail.** Python, uv, Node.js, jq, and gettext must also be present before continuing. Ask the user to install missing tools and retry.
 
 Log: `{ 1, "Prerequisites Check", DONE/FAILED, list of what passed/failed }`
 
@@ -658,7 +662,7 @@ Registration CLI: [`api/registry_management.py`](https://github.com/agentic-comm
 cd "${INSTALL_DIR}"
 
 # Verify token file exists for test-agent
-TOKEN_FILE=".oauth-tokens/agent-test-agent-m2m.env"
+TOKEN_FILE=".oauth-tokens/agent-test-agent-m2m-token.json"
 if [ ! -f "$TOKEN_FILE" ]; then
     echo "ERROR: Token file not found: $TOKEN_FILE"
     ls .oauth-tokens/
@@ -684,7 +688,7 @@ Verify the server was registered:
 cd "${INSTALL_DIR}"
 
 uv run python api/registry_management.py \
-    --token-file ".oauth-tokens/agent-test-agent-m2m.env" \
+    --token-file ".oauth-tokens/agent-test-agent-m2m-token.json" \
     --registry-url http://localhost \
     list 2>/dev/null | grep -i cloudflare && echo "Cloudflare server confirmed in registry" || echo "WARNING: Cloudflare server not found in list"
 ```
@@ -733,7 +737,7 @@ done
 echo ""
 echo "=== Registered Servers ==="
 uv run python api/registry_management.py \
-    --token-file ".oauth-tokens/agent-test-agent-m2m.env" \
+    --token-file ".oauth-tokens/agent-test-agent-m2m-token.json" \
     --registry-url http://localhost \
     list 2>/dev/null || echo "Could not retrieve server list"
 ```
