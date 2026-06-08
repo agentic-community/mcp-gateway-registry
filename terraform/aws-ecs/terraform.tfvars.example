@@ -636,13 +636,34 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 #
 # IMPORTANT: Only ONE authentication provider should be enabled at a time!
 #
-# Three authentication provider options:
-#   1. Keycloak (default) - Leave both okta_enabled and entra_enabled as false/unset
-#   2. Microsoft Entra ID - Set entra_enabled = true
-#   3. Okta - Set okta_enabled = true
+# There is NO `auth_provider` variable in this Terraform module. Unlike the
+# Docker (.env: AUTH_PROVIDER) and Helm (values.yaml: authProvider.type)
+# surfaces, you select the provider here by setting its boolean `*_enabled`
+# flag to true. The module derives the AUTH_PROVIDER value passed to the
+# containers from these flags.
+#
+# Five authentication provider options:
+#   1. Keycloak (default) - leave all *_enabled flags false/unset and set a
+#      keycloak domain (use_regional_domains = true, or keycloak_domain)
+#   2. Microsoft Entra ID  - set entra_enabled = true
+#   3. Okta                - set okta_enabled = true
+#   4. Auth0               - set auth0_enabled = true
+#   5. PingFederate        - set pingfederate_enabled = true
 #
 # If multiple providers are enabled simultaneously, priority order is:
-#   okta_enabled > entra_enabled > keycloak (default)
+#   pingfederate > auth0 > okta > entra > keycloak (default)
+#
+# --- Provider selector (exactly one active) -------------------------------
+# Keycloak is the active provider below: every *_enabled flag is false, and a
+# Keycloak domain is configured in the DOMAIN section above. To switch
+# providers, set the matching flag to true (and leave the rest false), then
+# fill in that provider's configuration block further down.
+#
+# entra_enabled        = false
+# okta_enabled         = false
+# auth0_enabled        = false
+# pingfederate_enabled = false
+# --------------------------------------------------------------------------
 #
 # ============================================================================
 

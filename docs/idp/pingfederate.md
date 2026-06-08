@@ -16,7 +16,7 @@ The same set of variables is set across all three deployment modes; only the fil
 
 | What it is | `.env` (Docker Compose) | Terraform variable | Helm value |
 |---|---|---|---|
-| Active provider switch | `AUTH_PROVIDER=pingfederate` | `auth_provider = "pingfederate"` | `global.authProvider.type: pingfederate` |
+| Active provider switch | `AUTH_PROVIDER=pingfederate` | `pingfederate_enabled = true` (no `auth_provider` variable; see note) | `global.authProvider.type: pingfederate` |
 | Show login button | `PINGFEDERATE_ENABLED=true` | `pingfederate_enabled = true` | `pingfederate.enabled: true` |
 | Server-to-server URL (auth-server reaches PF) | `PINGFEDERATE_BASE_URL` | `pingfederate_base_url` | `pingfederate.baseUrl` |
 | Browser-facing URL (used in redirects) | `PINGFEDERATE_EXTERNAL_URL` | `pingfederate_external_url` | `pingfederate.externalUrl` |
@@ -30,6 +30,8 @@ The same set of variables is set across all three deployment modes; only the fil
 | Admin API username | `PF_ADMIN_USER` | `pf_admin_user` | `pingfederateAdmin.user` |
 | Admin API password (**secret**) | `PF_ADMIN_PASS` | `pf_admin_pass` | `pingfederateAdmin.password` (or `pingfederateAdmin.passwordExistingSecret`) |
 | User-to-group fallback allowlist | `IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=pingfederate` | `idp_user_group_fallback_enabled_providers = "pingfederate"` | `idpUserGroupFallbackEnabledProviders: "pingfederate"` (registry + auth-server) |
+
+Note on the provider switch: Docker (`AUTH_PROVIDER`) and Helm (`authProvider.type`) take a provider-name string. The Terraform module has no `auth_provider` variable; you select the provider by setting its boolean `*_enabled` flag, and the module derives the `AUTH_PROVIDER` value for the containers (precedence: pingfederate > auth0 > okta > entra > keycloak). So for Terraform, `pingfederate_enabled = true` is the only switch needed.
 
 The "secret" rows must be sourced from a secrets store in production (AWS Secrets Manager for Terraform, a Kubernetes Secret for Helm via `*ExistingSecret`). Don't paste secrets into `terraform.tfvars` or `values.yaml` checked into git.
 
@@ -102,9 +104,13 @@ Follow [Admin Console Configuration](#admin-console-configuration) below. Note t
 
 Use a separate non-committed `*.auto.tfvars` file (e.g. `secrets.auto.tfvars`) for the secret values, OR populate the AWS Secrets Manager secret values out-of-band via `aws secretsmanager update-secret` after `terraform apply` — the resources have `lifecycle { ignore_changes = [secret_string] }` so future plans won't drift.
 
+Note: the Terraform module has no `auth_provider` variable (that name is the
+Docker `.env` / Helm `values.yaml` switch). On this surface the provider is
+selected by the boolean flag below; setting `pingfederate_enabled = true` is
+what makes the module emit `AUTH_PROVIDER=pingfederate` to the containers.
+
 ```hcl
 # terraform.tfvars
-auth_provider                  = "pingfederate"
 pingfederate_enabled           = true
 
 # Endpoints — both should point at your PingFederate
