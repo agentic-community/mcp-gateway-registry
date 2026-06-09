@@ -35,6 +35,7 @@ from servers.mcpgw.server import (
     _build_discovery_receipt,
     _validate_top_n,
     intelligent_tool_finder,
+    search_registry,
 )
 
 
@@ -63,6 +64,31 @@ def _make_server_with_tools(n_tools, server_name="test-server", path="/test"):
     }
 
 
+async def _call_with_mocked_registry(tool_func, mock_response, capture=None, **kwargs):
+    """Call a registry search tool with mocked HTTP client and token."""
+    captured_kwargs = {}
+
+    async def mock_post(url, **post_kwargs):
+        captured_kwargs.update(post_kwargs)
+        return mock_response
+
+    mock_client = AsyncMock()
+    mock_client.post = mock_post
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
+        patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
+    ):
+        result = await tool_func(**kwargs)
+
+    if capture is not None:
+        capture.update(captured_kwargs)
+
+    return result
+
+
 async def _call_finder(mock_response, query="test", top_n=None, capture=None):
     """Helper to call intelligent_tool_finder with mocked HTTP client and token.
 
@@ -75,30 +101,26 @@ async def _call_finder(mock_response, query="test", top_n=None, capture=None):
     Returns:
         The result dict from intelligent_tool_finder.
     """
-    captured_kwargs = {}
+    kwargs = {"query": query}
+    if top_n is not None:
+        kwargs["top_n"] = top_n
+    return await _call_with_mocked_registry(
+        intelligent_tool_finder,
+        mock_response,
+        capture=capture,
+        **kwargs,
+    )
 
-    async def mock_post(url, **kwargs):
-        captured_kwargs.update(kwargs)
-        return mock_response
 
-    mock_client = AsyncMock()
-    mock_client.post = mock_post
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with (
-        patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
-        patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
-    ):
-        if top_n is not None:
-            result = await intelligent_tool_finder(query=query, top_n=top_n)
-        else:
-            result = await intelligent_tool_finder(query=query)
-
-    if capture is not None:
-        capture.update(captured_kwargs)
-
-    return result
+async def _call_search_registry(mock_response, query="test", max_results=10, capture=None):
+    """Helper to call search_registry with mocked HTTP client and token."""
+    return await _call_with_mocked_registry(
+        search_registry,
+        mock_response,
+        capture=capture,
+        query=query,
+        max_results=max_results,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +276,59 @@ async def test_discovery_receipt_records_exposed_and_withheld_tools():
         "reason": "outside_intent_or_budget",
     }
     assert receipt["stop_reason"] == "results_returned"
+
+
+# ---------------------------------------------------------------------------
+# test_search_registry_receipt_counts_withheld_matching_tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_registry_receipt_counts_withheld_matching_tools():
+    """search_registry receipt counts all matching tools, not just servers."""
+    server = _make_server_with_tools(4, server_name="server-a", path="/a")
+    mock_resp = _make_mock_response(servers=[server])
+
+    result = await _call_search_registry(mock_resp, query="weather lookup", max_results=2)
+
+    receipt = result["discovery_receipt"]
+    assert result["total_results"] == 1
+    assert receipt["exposed_tools"] == [
+        {"service_path": "/a", "tool_name": "tool_0", "similarity_score": 1.0},
+        {"service_path": "/a", "tool_name": "tool_1", "similarity_score": 0.95},
+    ]
+    assert receipt["withheld"] == {
+        "candidate_tool_count": 2,
+        "reason": "outside_intent_or_budget",
+    }
+
+
+# ---------------------------------------------------------------------------
+# test_search_registry_receipt_counts_top_level_tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_registry_receipt_counts_top_level_tools():
+    """search_registry receipt also handles top-level tool search results."""
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [],
+        "tools": [
+            {"server_path": "/a", "tool_name": "tool_0", "relevance_score": 1.0},
+            {"server_path": "/a", "tool_name": "tool_1", "relevance_score": 0.95},
+            {"server_path": "/b", "tool_name": "tool_2", "relevance_score": 0.9},
+        ],
+        "agents": [],
+        "skills": [],
+    }
+
+    result = await _call_search_registry(mock_resp, query="weather lookup", max_results=2)
+
+    receipt = result["discovery_receipt"]
+    assert result["total_results"] == 3
+    assert len(receipt["exposed_tools"]) == 2
+    assert receipt["withheld"]["candidate_tool_count"] == 1
 
 
 # ---------------------------------------------------------------------------

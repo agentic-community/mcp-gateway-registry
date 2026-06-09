@@ -626,9 +626,9 @@ async def search_registry(
         agents = data.get("agents", []) if isinstance(data, dict) else []
         skills = data.get("skills", []) if isinstance(data, dict) else []
 
-        exposed_tools = []
+        candidate_tools = []
         for tool in tools:
-            exposed_tools.append(
+            candidate_tools.append(
                 {
                     "service_path": tool.get("server_path") or tool.get("path") or "",
                     "tool_name": tool.get("tool_name") or tool.get("name") or "",
@@ -638,21 +638,21 @@ async def search_registry(
         for server in servers:
             server_path = server.get("path", "")
             for tool in server.get("matching_tools", []):
-                exposed_tools.append(
+                candidate_tools.append(
                     {
                         "service_path": server_path,
                         "tool_name": tool.get("tool_name", ""),
                         "similarity_score": tool.get("relevance_score"),
                     }
                 )
-        exposed_tools = exposed_tools[:max_results]
+        exposed_tools = candidate_tools[:max_results]
 
         total_results = len(servers) + len(tools) + len(agents) + len(skills)
         discovery_receipt = _build_discovery_receipt(
             query=query,
             limit=max_results,
             exposed_tools=exposed_tools,
-            total_candidates=max(total_results, len(exposed_tools)),
+            total_candidates=len(candidate_tools),
             status="success",
             stop_reason="results_returned" if total_results else "no_match",
         )
