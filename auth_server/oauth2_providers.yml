@@ -102,10 +102,9 @@ providers:
     scopes: ["openid", "email", "profile"]
     response_type: "code"
     grant_type: "authorization_code"
-    # Claims mapping for user info
-    # Auth0 uses 'nickname' for display name and requires a custom
-    # Rule/Action to add groups to tokens as a namespaced claim
-    username_claim: "nickname"
+    # AUTH0_USERNAME_CLAIM selects which ID-token claim becomes the username
+    # used for session storage and DB group lookups.  Defaults to "nickname".
+    username_claim: "${AUTH0_USERNAME_CLAIM:-nickname}"
     groups_claim: "${AUTH0_GROUPS_CLAIM}"
     email_claim: "email"
     name_claim: "name"

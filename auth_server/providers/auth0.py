@@ -45,6 +45,7 @@ class Auth0Provider(AuthProvider):
         m2m_client_id: str | None = None,
         m2m_client_secret: str | None = None,
         groups_claim: str = "https://mcp-gateway/groups",
+        username_claim: str = "nickname",
     ):
         """Initialize Auth0 provider.
 
@@ -59,6 +60,9 @@ class Auth0Provider(AuthProvider):
                 Auth0 requires a namespaced claim via a Rule/Action
                 (e.g., 'https://mcp-gateway/groups'). Defaults to
                 'https://mcp-gateway/groups'.
+            username_claim: ID-token claim used as the canonical username for
+                session storage and DB group lookups.  Defaults to
+                ``"nickname"``.  Set ``AUTH0_USERNAME_CLAIM`` to override.
         """
         self.domain = domain.rstrip("/")
         self.client_id = client_id
@@ -67,6 +71,7 @@ class Auth0Provider(AuthProvider):
         self.m2m_client_id = m2m_client_id or client_id
         self.m2m_client_secret = m2m_client_secret or client_secret
         self.groups_claim = groups_claim
+        self.username_claim = username_claim
 
         # JWKS cache
         self._jwks_cache: dict[str, Any] | None = None
@@ -156,7 +161,7 @@ class Auth0Provider(AuthProvider):
 
             logger.debug(
                 f"Token validation successful for user: "
-                f"{claims.get('nickname', claims.get('sub', 'unknown'))}"
+                f"{claims.get(self.username_claim, claims.get('sub', 'unknown'))}"
             )
 
             # Extract groups from custom namespaced claim
@@ -167,7 +172,11 @@ class Auth0Provider(AuthProvider):
 
             return {
                 "valid": True,
-                "username": claims.get("nickname", claims.get("sub")),
+                "username": (
+                    claims.get(self.username_claim)
+                    or claims.get("sub")
+                    or ""
+                ).lower(),
                 "email": claims.get("email"),
                 "groups": groups,
                 "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
@@ -519,13 +528,16 @@ class Auth0Provider(AuthProvider):
         Auth0 Action or Rule. If no groups are found, falls back to the
         'permissions' claim from Auth0 RBAC.
 
+        The username is taken from the claim named by ``self.username_claim``,
+        then lowercased for consistent DB lookups.
+
         Args:
             token_data: Token response from Auth0 containing 'id_token'
                 and 'access_token' keys
 
         Returns:
             Dictionary containing:
-                - username: User's nickname, email, or sub claim
+                - username: Lowercased value of ``username_claim`` (or ``sub``)
                 - email: User's email address
                 - name: User's display name
                 - groups: List of group memberships
@@ -561,10 +573,14 @@ class Auth0Provider(AuthProvider):
                 # Fallback: check permissions claim (Auth0 RBAC)
                 groups = id_token_claims.get("permissions", [])
 
+            username = (
+                id_token_claims.get(self.username_claim)
+                or id_token_claims.get("sub")
+                or ""
+            ).lower()
+
             return {
-                "username": id_token_claims.get("nickname")
-                or id_token_claims.get("email")
-                or id_token_claims.get("sub"),
+                "username": username,
                 "email": id_token_claims.get("email"),
                 "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
                 "groups": groups,

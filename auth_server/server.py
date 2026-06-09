@@ -20,7 +20,6 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from string import Template
 from typing import Any
 from urllib.parse import urlparse
 
@@ -3055,37 +3054,49 @@ def auto_derive_cognito_domain(user_pool_id: str) -> str:
 
 
 def substitute_env_vars(config):
-    """Recursively substitute environment variables in configuration"""
+    """Recursively substitute environment variables in configuration.
+
+    Supports two syntaxes:
+    - ``${VAR}``        — replaced with the value of ``VAR``; warns and keeps
+                          the original string if ``VAR`` is not set.
+    - ``${VAR:-default}`` — replaced with ``VAR`` when set, otherwise
+                             ``default``.  The special value ``auto`` for
+                             ``COGNITO_DOMAIN`` triggers automatic derivation
+                             from ``COGNITO_USER_POOL_ID``.
+    """
     if isinstance(config, dict):
         return {k: substitute_env_vars(v) for k, v in config.items()}
     elif isinstance(config, list):
         return [substitute_env_vars(item) for item in config]
     elif isinstance(config, str) and "${" in config:
-        try:
-            # Handle special case for auto-derived Cognito domain
-            if "COGNITO_DOMAIN:-auto" in config:
-                # Check if COGNITO_DOMAIN is set, if not auto-derive from user pool ID
-                cognito_domain = os.environ.get("COGNITO_DOMAIN")
-                if not cognito_domain:
-                    user_pool_id = os.environ.get("COGNITO_USER_POOL_ID", "")
-                    cognito_domain = auto_derive_cognito_domain(user_pool_id)
+        def _replace(match: re.Match) -> str:
+            expr = match.group(1)
+            if ":-" in expr:
+                var_name, default = expr.split(":-", 1)
+                # Special case: COGNITO_DOMAIN:-auto derives from pool ID
+                if var_name == "COGNITO_DOMAIN" and default == "auto":
+                    value = os.environ.get(var_name)
+                    if not value:
+                        user_pool_id = os.environ.get("COGNITO_USER_POOL_ID", "")
+                        value = auto_derive_cognito_domain(user_pool_id)
+                    return value
+                return os.environ.get(var_name, default)
+            else:
+                value = os.environ.get(expr)
+                if value is None:
+                    logger.warning(f"Environment variable '{expr}' not set in template '{config}'")
+                    return match.group(0)  # keep original ${VAR}
+                return value
 
-                # Replace the template with the derived domain
-                config = config.replace("${COGNITO_DOMAIN:-auto}", cognito_domain)
+        result = re.sub(r"\$\{([^}]+)\}", _replace, config)
 
-            template = Template(config)
-            result = template.substitute(os.environ)
+        # Convert string booleans to actual booleans
+        if result.lower() == "true":
+            return True
+        elif result.lower() == "false":
+            return False
 
-            # Convert string booleans to actual booleans
-            if result.lower() == "true":
-                return True
-            elif result.lower() == "false":
-                return False
-
-            return result
-        except KeyError as e:
-            logger.warning(f"Environment variable not found for template {config}: {e}")
-            return config
+        return result
     else:
         return config
 

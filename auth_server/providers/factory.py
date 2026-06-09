@@ -206,6 +206,7 @@ def _create_auth0_provider() -> Auth0Provider:
     m2m_client_id = os.environ.get("AUTH0_M2M_CLIENT_ID")
     m2m_client_secret = os.environ.get("AUTH0_M2M_CLIENT_SECRET")
     groups_claim = os.environ.get("AUTH0_GROUPS_CLAIM", "https://mcp-gateway/groups")
+    username_claim = os.environ.get("AUTH0_USERNAME_CLAIM", "nickname")
 
     # Validate required configuration
     missing_vars = []
@@ -232,6 +233,7 @@ def _create_auth0_provider() -> Auth0Provider:
         m2m_client_id=m2m_client_id,
         m2m_client_secret=m2m_client_secret,
         groups_claim=groups_claim,
+        username_claim=username_claim,
     )
 
 
