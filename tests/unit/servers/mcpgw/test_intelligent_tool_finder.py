@@ -31,7 +31,11 @@ _mcpgw_path = str(Path(__file__).resolve().parents[4] / "servers" / "mcpgw")
 if _mcpgw_path not in sys.path:
     sys.path.insert(0, _mcpgw_path)
 
-from servers.mcpgw.server import _validate_top_n, intelligent_tool_finder
+from servers.mcpgw.server import (
+    _build_discovery_receipt,
+    _validate_top_n,
+    intelligent_tool_finder,
+)
 
 
 def _make_mock_response(servers=None, status_code=200):
@@ -222,3 +226,54 @@ async def test_total_results_matches_truncated_list():
 
     assert result["total_results"] == len(result["results"])
     assert result["total_results"] == 5
+
+
+# ---------------------------------------------------------------------------
+# test_discovery_receipt_records_exposed_and_withheld_tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discovery_receipt_records_exposed_and_withheld_tools():
+    """Receipt shows visible results and candidate tools kept out by top_n."""
+    server = _make_server_with_tools(4, server_name="server-a", path="/a")
+    mock_resp = _make_mock_response(servers=[server])
+
+    result = await _call_finder(mock_resp, query="weather lookup", top_n=2)
+
+    receipt = result["discovery_receipt"]
+    assert receipt["event"] == "tool.discovery_receipt"
+    assert receipt["query"] == "weather lookup"
+    assert receipt["limits"] == {"max_results": 2}
+    assert receipt["exposed_tools"] == [
+        {"service_path": "/a", "tool_name": "tool_0", "similarity_score": 1.0},
+        {"service_path": "/a", "tool_name": "tool_1", "similarity_score": 0.95},
+    ]
+    assert receipt["withheld"] == {
+        "candidate_tool_count": 2,
+        "reason": "outside_intent_or_budget",
+    }
+    assert receipt["stop_reason"] == "results_returned"
+
+
+# ---------------------------------------------------------------------------
+# test_discovery_receipt_helper_does_not_leak_payloads
+# ---------------------------------------------------------------------------
+
+
+def test_discovery_receipt_helper_does_not_leak_payloads():
+    """Helper keeps receipts to query, counts, limits, scores, and status fields."""
+    receipt = _build_discovery_receipt(
+        query="find private customer records",
+        limit=1,
+        exposed_tools=[
+            {"service_path": "/crm", "tool_name": "search_customers", "similarity_score": 0.9}
+        ],
+        total_candidates=3,
+        status="success",
+        stop_reason="results_returned",
+    )
+
+    assert "raw_args" not in receipt
+    assert "raw_result" not in receipt
+    assert receipt["withheld"]["candidate_tool_count"] == 2

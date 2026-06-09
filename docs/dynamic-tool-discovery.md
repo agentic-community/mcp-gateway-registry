@@ -39,7 +39,7 @@ The dynamic tool discovery process follows these steps:
 
 ## Discovery Receipts and Context Budgets
 
-Dynamic discovery reduces up-front context bloat, but operators still need to know which tool surface an agent actually saw. For production or multi-tenant use, emit a small discovery receipt alongside normal audit logs so each run can be reviewed without replaying raw prompts or tool payloads.
+Dynamic discovery reduces up-front context bloat, but operators still need to know which tool surface an agent actually saw. The `search_registry` and deprecated `intelligent_tool_finder` tools return a compact `discovery_receipt` with their successful responses; operators can persist that receipt alongside normal audit logs so each run can be reviewed without replaying raw prompts or tool payloads.
 
 A useful receipt answers four questions:
 

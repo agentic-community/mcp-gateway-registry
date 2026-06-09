@@ -205,6 +205,35 @@ def _validate_query(query: str) -> str:
     return query.strip()
 
 
+def _build_discovery_receipt(
+    *,
+    query: str,
+    limit: int,
+    exposed_tools: list[dict[str, Any]],
+    total_candidates: int,
+    status: str,
+    stop_reason: str,
+) -> dict[str, Any]:
+    """Build a compact, privacy-safe receipt for dynamic discovery results.
+
+    The receipt deliberately records shapes/counts and ranking metadata rather
+    than raw tool arguments, tool outputs, or user data. It is returned with the
+    search response so callers can persist it in their own audit pipeline.
+    """
+    return {
+        "event": "tool.discovery_receipt",
+        "query": query,
+        "limits": {"max_results": limit},
+        "exposed_tools": exposed_tools,
+        "withheld": {
+            "candidate_tool_count": max(total_candidates - len(exposed_tools), 0),
+            "reason": "outside_intent_or_budget",
+        },
+        "status": status,
+        "stop_reason": stop_reason,
+    }
+
+
 def _extract_bearer_token(ctx: Context | None) -> str:
     """Extract bearer token from FastMCP context (legacy / no-OAuth mode).
 
@@ -597,13 +626,45 @@ async def search_registry(
         agents = data.get("agents", []) if isinstance(data, dict) else []
         skills = data.get("skills", []) if isinstance(data, dict) else []
 
+        exposed_tools = []
+        for tool in tools:
+            exposed_tools.append(
+                {
+                    "service_path": tool.get("server_path") or tool.get("path") or "",
+                    "tool_name": tool.get("tool_name") or tool.get("name") or "",
+                    "similarity_score": tool.get("relevance_score") or tool.get("score"),
+                }
+            )
+        for server in servers:
+            server_path = server.get("path", "")
+            for tool in server.get("matching_tools", []):
+                exposed_tools.append(
+                    {
+                        "service_path": server_path,
+                        "tool_name": tool.get("tool_name", ""),
+                        "similarity_score": tool.get("relevance_score"),
+                    }
+                )
+        exposed_tools = exposed_tools[:max_results]
+
+        total_results = len(servers) + len(tools) + len(agents) + len(skills)
+        discovery_receipt = _build_discovery_receipt(
+            query=query,
+            limit=max_results,
+            exposed_tools=exposed_tools,
+            total_candidates=max(total_results, len(exposed_tools)),
+            status="success",
+            stop_reason="results_returned" if total_results else "no_match",
+        )
+
         return {
             "servers": servers,
             "tools": tools,
             "agents": agents,
             "skills": skills,
             "query": query,
-            "total_results": len(servers) + len(tools) + len(agents) + len(skills),
+            "total_results": total_results,
+            "discovery_receipt": discovery_receipt,
             "status": "success",
         }
 
@@ -677,6 +738,7 @@ async def intelligent_tool_finder(
 
         # Flatten matching_tools from all servers into ToolSearchResult objects
         result_list = []
+        exposed_tools = []
         for server in servers:
             server_path = server.get("path", "")
             server_name = server.get("server_name", "")
@@ -690,14 +752,33 @@ async def intelligent_tool_finder(
                         path=server_path,
                     ).model_dump()
                 )
+                exposed_tools.append(
+                    {
+                        "service_path": server_path,
+                        "tool_name": tool.get("tool_name", ""),
+                        "similarity_score": tool.get("relevance_score"),
+                    }
+                )
+
+        total_candidates = len(result_list)
 
         # Enforce client-side limit (safety net in case registry returns more)
         result_list = result_list[:top_n]
+        exposed_tools = exposed_tools[:top_n]
+        discovery_receipt = _build_discovery_receipt(
+            query=query,
+            limit=top_n,
+            exposed_tools=exposed_tools,
+            total_candidates=total_candidates,
+            status="success",
+            stop_reason="results_returned" if result_list else "no_match",
+        )
 
         return {
             "results": result_list,
             "query": query,
             "total_results": len(result_list),
+            "discovery_receipt": discovery_receipt,
             "status": "success",
         }
 
