@@ -112,13 +112,58 @@ terraform apply
 
 One Secrets Manager entry is created (`cognito_client_secret`) and the registry/auth-server tasks read it via `valueFrom` at boot. The plain (non-secret) values are wired as regular environment variables.
 
-### Step 4: Configure the App Client redirect URI
+### Step 4: Register the callback and sign-out URLs on the App Client (post-deployment)
 
-In the Cognito App Client, add the registry's callback URL as an allowed callback URL:
+Two separate URL lists on the App Client must be configured, and Cognito rejects any value not present in the matching list:
 
-- `https://<your-registry-domain>/oauth2/callback/cognito`
+- **Allowed callback URLs** — the auth-server sends `redirect_uri = <registry-external-url>/oauth2/callback/cognito` during login.
+- **Allowed sign-out URLs** — the auth-server sends `logout_uri = <registry-external-url>/login` during logout. This is easy to miss; if only the callback is registered, login works but logout fails with a Cognito error page (`Required String parameter 'redirect_uri' is not present` or a sign-out URL mismatch).
 
-This must match the auth-server's external URL, which Terraform sets from your `domain_name`.
+The registry does NOT configure Cognito for you (it is bring-your-own), so this is a manual step.
+
+When you use a custom domain (`enable_route53_dns = true`), you know the registry URL up front and can register both URLs before deploying. When you use CloudFront-only mode (`enable_cloudfront = true`, no custom domain), the registry domain is the CloudFront distribution domain, which is not known until after `terraform apply` — so this step must happen AFTER the first apply.
+
+1. Get the registry's external URL from the Terraform output:
+
+   ```bash
+   terraform output cloudfront_mcp_gateway_url
+   # e.g. https://d2xl2zfuhgc4l0.cloudfront.net
+   ```
+
+   For a custom-domain deployment it is `https://<your-registry-domain>` instead.
+
+2. On the App Client, set:
+   - **Allowed callback URLs:** `<that URL>/oauth2/callback/cognito`
+   - **Allowed sign-out URLs:** `<that URL>/login`
+
+   **From the AWS console:**
+   - Open the Cognito console, select your User Pool.
+   - Go to **App integration** -> **App clients** -> select your app client.
+   - Under **Hosted UI** (or **Login pages**), click **Edit**.
+   - Add the callback URL to **Allowed callback URLs** and the `/login` URL to **Allowed sign-out URLs** (keep any existing entries, e.g. the localhost ones for local testing), then **Save changes**.
+
+   **From the CLI** (note: `update-user-pool-client` replaces the full lists, so include every URL you want to keep):
+
+   ```bash
+   aws cognito-idp update-user-pool-client \
+     --user-pool-id "<your-user-pool-id>" \
+     --client-id "<your-app-client-id>" \
+     --region "<your-region>" \
+     --callback-urls \
+       "https://<your-registry-domain>/oauth2/callback/cognito" \
+       "http://localhost:8888/oauth2/callback/cognito" \
+     --logout-urls \
+       "https://<your-registry-domain>/login" \
+       "http://localhost:8888/login" \
+     --allowed-o-auth-flows code \
+     --allowed-o-auth-scopes openid email profile aws.cognito.signin.user.admin \
+     --allowed-o-auth-flows-user-pool-client \
+     --supported-identity-providers COGNITO
+   ```
+
+   Updating these URLs is a Cognito-side change only; it takes effect immediately and does NOT require redeploying the stack.
+
+> **CloudFront domain changes on recreate.** The callback and sign-out URLs you register here are fixed strings stored on the App Client; nothing in Terraform manages them. If a later `terraform apply` recreates the CloudFront distribution, its domain changes, the auth-server starts sending the new domain in `redirect_uri` / `logout_uri`, and login or logout fails until you re-register the new URLs (repeat this step). For a stable configuration that never drifts, use a custom domain (`enable_route53_dns = true`) instead of CloudFront-only mode.
 
 ## Mode 3: Helm / Kubernetes (BYO Cognito)
 
@@ -161,9 +206,9 @@ helm install mcp-gateway-registry charts/mcp-gateway-registry-stack \
   -f values.yaml
 ```
 
-### Step 5: Configure the App Client redirect URI
+### Step 5: Register the registry callback URL on the App Client
 
-Add `https://<your-registry-domain>/oauth2/callback/cognito` as an allowed callback URL on the Cognito App Client.
+Add `https://<your-registry-domain>/oauth2/callback/cognito` to the App Client's allowed callback URLs (console or `aws cognito-idp update-user-pool-client`, exactly as in [Mode 2, Step 4](#step-4-register-the-registry-callback-url-on-the-app-client-post-deployment)). On Helm the registry domain is your ingress host, so it is known up front; register it before or right after install. It must match what the auth-server sends (`<registry-external-url>/oauth2/callback/cognito`).
 
 ## Console Configuration
 
@@ -189,9 +234,51 @@ These are the one-time steps you must perform in the AWS Cognito console. They a
 
 You do NOT configure OAuth scopes or a resource server in Cognito for this. The only thing Cognito contributes is group membership; the actual permissions are defined in the registry. See [How groups map to access](#how-groups-map-to-access) below for the full model.
 
-1. In the User Pool, create the **groups** your users will belong to. Use the same names the registry expects, e.g. `mcp-registry-admin` (built-in admin) and a non-admin group such as `public-mcp-users`.
+1. In the User Pool, create the **groups** your users will belong to. Use the same names the registry expects, e.g. `registry-admins` (admin) and a non-admin group such as `public-mcp-users`.
 2. Assign users to those groups. Cognito places group memberships in the `cognito:groups` claim of the ID token.
 3. Make sure a matching group mapping exists in the registry (next section). The group name in Cognito is the contract: it must match a group mapping in the registry exactly.
+
+**From the AWS console:** User Pool -> **Groups** -> **Create group** for each name; then User Pool -> **Users** -> select a user -> **Add to group**.
+
+**From the CLI** (replace `<pool-id>` and `<region>`):
+
+```bash
+POOL=<pool-id>
+REGION=<region>
+
+# Create the groups
+aws cognito-idp create-group --group-name registry-admins \
+  --user-pool-id "$POOL" --region "$REGION" \
+  --description "Registry admins"
+aws cognito-idp create-group --group-name public-mcp-users \
+  --user-pool-id "$POOL" --region "$REGION" \
+  --description "General read-only users"
+
+# Create an admin user and a test user (email as username; no invite email)
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --region "$REGION" \
+  --username admin@example.com \
+  --user-attributes Name=email,Value=admin@example.com Name=email_verified,Value=true \
+  --message-action SUPPRESS
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --region "$REGION" \
+  --username testuser@example.com \
+  --user-attributes Name=email,Value=testuser@example.com Name=email_verified,Value=true \
+  --message-action SUPPRESS
+
+# Set permanent passwords so the users can log in immediately
+# (requires the cognito-idp:AdminSetUserPassword permission)
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --region "$REGION" \
+  --username admin@example.com --password '<admin-password>' --permanent
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --region "$REGION" \
+  --username testuser@example.com --password '<test-password>' --permanent
+
+# Assign each user to its group
+aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" --region "$REGION" \
+  --username admin@example.com --group-name registry-admins
+aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" --region "$REGION" \
+  --username testuser@example.com --group-name public-mcp-users
+```
+
+> A freshly created user without `admin-set-user-password --permanent` stays in `FORCE_CHANGE_PASSWORD` status and cannot sign in through the hosted UI sign-in form. If your principal lacks `cognito-idp:AdminSetUserPassword`, set the password from the console instead (Users -> select user -> **Actions -> Set password**, mark as Permanent), or have the user complete the forgot-password flow.
 
 ### 4. (Optional) Custom hosted UI domain
 
@@ -214,13 +301,34 @@ This is the same groups-to-scopes path used by every other IdP (Keycloak, Entra,
 
 So to set up, for example, an admin group and a general-user group:
 
-1. In Cognito, create groups `mcp-registry-admin` and `public-mcp-users`, and assign users.
-2. In the registry's IAM > Groups / Scopes UI (backed by DocumentDB), make sure a group mapping exists for each of those exact names with the scopes you want. `mcp-registry-admin` is the built-in admin scope; `public-mcp-users` (or any name you choose) is whatever read-only/limited scope set you define.
+1. In Cognito, create groups `registry-admins` and `public-mcp-users`, and assign users (see the CLI/console commands in [Create groups](#3-create-groups-not-scopes) above).
+2. In the registry's IAM > Groups / Scopes UI (backed by DocumentDB), make sure a group mapping exists for each of those exact names with the scopes you want. `registry-admins` maps to the admin scope; `public-mcp-users` (or any name you choose) is whatever read-only/limited scope set you define.
 3. Nothing else is configured in Cognito: no resource server, no custom OAuth scopes, no scope-to-group rules.
 
 If a Cognito group name has no matching mapping in DocumentDB, that group simply contributes no scopes (the user may end up with no access). The group names must match exactly.
 
 For agents that authenticate with their own identity (M2M / client credentials), see the agent-identity section in [docs/cognito.md](../cognito.md).
+
+## Seeding the group-to-scope mappings in DocumentDB
+
+The registry reads group-to-scope mappings from DocumentDB at validation time; it does NOT auto-seed them from `scopes.yml` on startup. So a fresh DocumentDB has no mappings, with one exception: the deployment's database-init step seeds a single bootstrap admin group named **`registry-admins`** (mapped to full admin: all servers, all tools, all agent actions). This is what lets the first admin log in and then manage everything else from the UI.
+
+How the bootstrap admin group gets seeded per surface:
+
+- **Terraform / ECS:** run the DocumentDB init task once after the stack is up. It runs `init-documentdb-indexes.py` inside an ECS task (which has VPC access to the cluster) and loads the default `registry-admins` admin scope:
+
+  ```bash
+  ./terraform/aws-ecs/scripts/run-documentdb-init.sh
+  ```
+
+- **Helm:** the `mongodb-configure` Job seeds `registry-admins` automatically on install.
+- **Docker Compose:** the database-init step seeds `registry-admins` as part of `build_and_run.sh`.
+
+This is why the admin group in the examples above is named `registry-admins`: it matches the seeded DocumentDB mapping. Point your Cognito admin group at that exact name and the first admin gets full access with no extra DocumentDB work.
+
+Every OTHER group (for example `public-mcp-users`) is NOT seeded. After the admin logs in, create those mappings through the registry's **IAM > Groups / Scopes** UI, using the same names as the Cognito groups. There is no separate init script to write — the bootstrap task plus the UI cover it. The model is: seed `registry-admins` via the init step, then create all other groups in the UI.
+
+> **Cognito IAM management in the UI is read-only.** The registry's IAM > Groups / Users pages can *list* Cognito groups and users, but cannot create or delete Cognito groups/users from the UI yet (the registry task role is granted only `cognito-idp:ListGroups`, `ListUsers`, and `AdminListGroupsForUser`). Create the Cognito groups and assign users via the AWS console or `aws cognito-idp ...` (see [Create groups](#3-create-groups-not-scopes)). The registry IAM UI is still where you define each group's **scopes/permissions** in DocumentDB — that part works normally. In short: define the group's membership in Cognito, define the group's scopes in the registry UI.
 
 ## Troubleshooting
 
@@ -230,11 +338,30 @@ For agents that authenticate with their own identity (M2M / client credentials),
 
 **Fix:** The callback URL registered on the App Client must exactly match `<protocol>://<auth-server-host>/oauth2/callback/cognito`. Confirm the protocol (http vs https), the host, and the path. On Terraform/ECS and Helm the host is your registry domain; on local Docker Compose it is `http://localhost:8888`.
 
+A common cause on Terraform/ECS CloudFront-only deployments: a `terraform apply` recreated the CloudFront distribution, so the registry domain changed but the App Client's callback URL still points at the old domain. Re-run `terraform output cloudfront_mcp_gateway_url` and re-register the new callback URL on the App Client (see [Mode 2, Step 4](#step-4-register-the-callback-and-sign-out-urls-on-the-app-client-post-deployment)).
+
+### Logout fails with a Cognito error page
+
+**Symptom:** Login works, but clicking logout lands on a Cognito error page (e.g. `Required String parameter 'redirect_uri' is not present`), with a URL like `.../error?...&logout_uri=https%3A%2F%2F<domain>%2Flogin`.
+
+**Fix:** The App Client's **Allowed sign-out URLs** must include `<registry-external-url>/login` — this is a separate list from the callback URLs, and is easy to miss. The auth-server sends `logout_uri = <registry-external-url>/login` on logout; Cognito rejects it if it is not registered. Add it (see [Mode 2, Step 4](#step-4-register-the-callback-and-sign-out-urls-on-the-app-client-post-deployment)). The `logout_uri` echoed in the error page URL is the value Cognito rejected, not a separate problem.
+
 ### Empty groups after login
 
 **Symptom:** The user logs in but has no permissions.
 
 **Fix:** Confirm the user is assigned to at least one Cognito group, and that a group mapping with that exact name exists in the registry's DocumentDB (IAM > Groups / Scopes UI). Cognito only emits `cognito:groups` for groups the user actually belongs to, and a group with no DocumentDB mapping contributes no scopes.
+
+If even your admin user has no permissions, the bootstrap admin mapping was likely never seeded into DocumentDB. Run the database-init step for your surface (see [Seeding the group-to-scope mappings in DocumentDB](#seeding-the-group-to-scope-mappings-in-documentdb)) — on Terraform/ECS that is `./terraform/aws-ecs/scripts/run-documentdb-init.sh` — and make sure your Cognito admin group is named `registry-admins` to match the seeded mapping.
+
+### "Unable to list IAM groups" on the IAM pages
+
+**Symptom:** Login works, but the **Settings -> IAM -> Groups** (or Users) page shows `Unable to list IAM groups` (HTTP 502).
+
+**Fix:** This is a server-side failure listing groups from Cognito. Check two things:
+
+1. **Registry version** must include the Cognito IAM manager. Older builds had no Cognito case in the IAM manager factory and silently fell back to the Keycloak manager, which fails against a Cognito deployment. Confirm the registry image is recent enough to support `AUTH_PROVIDER=cognito` for IAM listing.
+2. **Task role permissions.** The registry task role must allow `cognito-idp:ListGroups`, `cognito-idp:ListUsers`, and `cognito-idp:AdminListGroupsForUser` on the User Pool. On Terraform/ECS this is wired automatically when `cognito_enabled = true`; if you deployed before that wiring existed, re-apply so the `cognito_iam_read` policy is attached. Check the registry logs for an `AccessDenied` from `cognito-idp` to confirm.
 
 ### Wrong region / token validation failure
 
