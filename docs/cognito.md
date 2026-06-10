@@ -2,6 +2,8 @@
 
 This comprehensive guide covers setting up Amazon Cognito for both user identity and agent identity authentication modes with the MCP Gateway Registry system.
 
+> **Looking for deployment wiring?** For how to point each deployment surface (Docker Compose, Terraform/ECS, Helm) at a Cognito User Pool, see [Amazon Cognito (Deployment Surfaces)](idp/cognito.md). This guide focuses on the Cognito console setup and the two agent authentication modes.
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -18,7 +20,7 @@ The MCP Gateway Registry supports two distinct authentication modes:
 - **Agent Uses User Identity Mode**: Agents act on behalf of users using OAuth 2.0 PKCE flow with session cookies
 - **Agent Uses Its Own Identity Mode**: Agents have their own identity using Machine-to-Machine (M2M) authentication with JWT tokens
 
-Both modes integrate with Amazon Cognito as the Identity Provider (IdP) and use the same scope-based authorization system defined in [`auth_server/scopes.yml`](../auth_server/scopes.yml).
+Both modes integrate with Amazon Cognito as the Identity Provider (IdP) and use the same scope-based authorization system. Group-to-scope mappings and permissions are stored in DocumentDB and managed through the registry's IAM > Groups / Scopes UI; the auth server resolves a user's or agent's groups to scopes at validation time by querying DocumentDB.
 
 ## Amazon Cognito Setup
 
@@ -130,7 +132,7 @@ This setup is for agents that have their own identity and authenticate using cli
      - `read`: "Read access to all MCP servers"
      - `execute`: "Execute access to all MCP servers"
    - This group gives your agent access to all MCP servers and tools accessible via the MCP Gateway
-   - See [`auth_server/scopes.yml`](../auth_server/scopes.yml) file for more details on scope configuration
+   - The matching `mcp-servers-unrestricted` scope and its read/execute permissions are defined in the registry (DocumentDB), managed via the IAM > Groups / Scopes UI
 
 #### Step 3: Assign Scopes to Agent App Client
 
@@ -157,7 +159,7 @@ This mode enables agents to act on behalf of users, using their Cognito identity
 Ensure your Cognito User Pool is configured with:
 - **PKCE-enabled app client** (public client without secret)
 - **Hosted UI enabled** with appropriate callback URLs
-- **User groups** mapped to MCP scopes via [`scopes.yml`](../auth_server/scopes.yml)
+- **User groups** mapped to MCP scopes in the registry (DocumentDB), managed via the IAM > Groups / Scopes UI
 
 #### 2. OAuth 2.0 PKCE Flow Setup
 
@@ -339,8 +341,8 @@ python -c 'import secrets; print(secrets.token_hex(32))'
 
 **Problem**: Access denied errors despite valid authentication
 
-**Solution**: Verify scope mappings in [`scopes.yml`](../auth_server/scopes.yml):
-- Check group mappings match Cognito groups
+**Solution**: Verify the group-to-scope mappings in the registry (DocumentDB), via the IAM > Groups / Scopes UI:
+- Check group mappings match the Cognito group names exactly
 - Ensure server/tool permissions are correctly defined
 - Verify M2M client has required custom scopes
 
@@ -429,7 +431,7 @@ python cli_user_auth.py
 
 **Solution**:
 1. Check user's group membership in Cognito
-2. Verify group mappings in [`scopes.yml`](../auth_server/scopes.yml)
+2. Verify the group mappings in the registry (DocumentDB), via the IAM > Groups / Scopes UI
 3. For M2M, check client's assigned scopes in Cognito
 
 #### Error: `JWT token validation failed`
@@ -484,7 +486,7 @@ python agent.py --message "test" --mcp-registry-url http://localhost/mcpgw/sse
 
 ```bash
 # View auth server logs for validation details
-docker-compose logs -f auth-server
+docker compose logs -f auth-server
 
 # Look for:
 # - Token validation attempts
@@ -494,29 +496,20 @@ docker-compose logs -f auth-server
 
 #### Verify Scope Mappings
 
+Group-to-scope mappings live in DocumentDB, not in a local file. Inspect or edit them through the registry's **IAM > Groups / Scopes** UI, which shows each group, the scopes it maps to, and the resulting permissions.
+
+To confirm what scopes a login actually resolved to, check the auth server logs after a login or token validation; `map_groups_to_scopes()` logs the final mapped scopes:
+
 ```bash
-# Test scope mapping logic
-cd auth_server/
-python -c "
-import yaml
-from server import map_cognito_groups_to_scopes
-
-# Load scopes config
-with open('scopes.yml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# Test group mapping
-groups = ['mcp-registry-user']
-scopes = map_cognito_groups_to_scopes(groups)
-print(f'Groups {groups} mapped to scopes: {scopes}')
-"
+docker compose logs -f auth-server | grep -i "mapped scopes"
 ```
 
 ## Related Documentation
 
 - [Main Authentication Guide](auth.md) - Overview of the authentication architecture
-- [Scopes Configuration](../auth_server/scopes.yml) - Detailed scope and permission definitions
-- [Environment Template](../.env.template) - Complete environment configuration template
+- [Amazon Cognito (Deployment Surfaces)](idp/cognito.md) - Wiring Cognito into Docker Compose, Terraform/ECS, and Helm
+- [Access Control & Scopes](scopes.md) - How group-to-scope mappings and permissions work (stored in DocumentDB)
+- [Environment Template](../.env.example) - Complete environment configuration template
 - [Agent Implementation](../agents/agent.py) - Reference agent implementation
 - [CLI Authentication Tool](../agents/cli_user_auth.py) - User authentication utility
 
@@ -535,13 +528,13 @@ This guide provides comprehensive coverage of Amazon Cognito setup for both auth
 
 After completing the Cognito setup and obtaining your client ID and secret, you need to configure the agent environment files to use these credentials.
 
-### Step 1: Copy Template to Environment File
+### Step 1: Create the Environment File
 
-Navigate to the `agents/` directory and copy the template file:
+The CLI authentication tool (`cli_user_auth.py`) loads its configuration from `agents/.env.user`. Create that file in the `agents/` directory:
 
 ```bash
 cd agents/
-cp .env.template .env.user
+touch .env.user
 ```
 
 ### Step 2: Configure Client Credentials
