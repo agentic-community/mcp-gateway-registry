@@ -598,6 +598,41 @@ variable "idp_user_group_fallback_enabled_providers" {
 }
 
 # =============================================================================
+# AMAZON COGNITO CONFIGURATION
+# =============================================================================
+
+variable "cognito_enabled" {
+  description = "Enable Amazon Cognito as the authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "cognito_user_pool_id" {
+  description = "Cognito User Pool ID (e.g. us-east-1_XXXXXXXXX)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_client_id" {
+  description = "Cognito App Client ID for web login"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_client_secret" {
+  description = "Cognito App Client secret for web login"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "cognito_domain" {
+  description = "Optional Cognito hosted UI domain prefix or custom domain. Leave empty to derive it from the User Pool ID."
+  type        = string
+  default     = ""
+}
+
+# =============================================================================
 # OKTA CONFIGURATION
 # =============================================================================
 
