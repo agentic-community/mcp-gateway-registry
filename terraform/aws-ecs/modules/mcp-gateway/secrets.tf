@@ -203,6 +203,30 @@ resource "aws_secretsmanager_secret_version" "entra_client_secret" {
 }
 
 
+# Amazon Cognito App Client secret (for OAuth authentication)
+#checkov:skip=CKV2_AWS_57:IdP client secret managed in the Cognito App Client, not rotatable via Secrets Manager
+resource "aws_secretsmanager_secret" "cognito_client_secret" {
+  count = var.cognito_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-cognito-client-secret-"
+  description             = "Amazon Cognito App Client secret for OAuth authentication"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "cognito_client_secret" {
+  count = var.cognito_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.cognito_client_secret[0].id
+  secret_string = var.cognito_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+
 # Okta client secret (for OAuth authentication)
 #checkov:skip=CKV2_AWS_57:IdP client secret managed in Okta admin console, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "okta_client_secret" {

@@ -22,6 +22,7 @@ resource "aws_iam_policy" "ecs_secrets_access" {
           ],
           var.documentdb_credentials_secret_arn != "" ? [var.documentdb_credentials_secret_arn] : [],
           var.entra_enabled ? [aws_secretsmanager_secret.entra_client_secret[0].arn] : [],
+          var.cognito_enabled ? [aws_secretsmanager_secret.cognito_client_secret[0].arn] : [],
           var.okta_enabled ? [
             aws_secretsmanager_secret.okta_client_secret[0].arn,
             aws_secretsmanager_secret.okta_m2m_client_secret[0].arn,
