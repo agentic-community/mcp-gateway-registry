@@ -712,6 +712,10 @@ module "ecs_service_registry" {
     var.aws_registry_federation_enabled ? {
       BedrockAgentCoreAccess = aws_iam_policy.bedrock_agentcore_access[0].arn
     } : {},
+    # Cognito read-only access for the registry IAM management UI (list groups/users)
+    var.cognito_enabled ? {
+      CognitoIamRead = aws_iam_policy.cognito_iam_read[0].arn
+    } : {},
     # Issue #1122: per-task ADOT sidecar needs AMP remote-write permission
     var.enable_observability ? {
       AMPRemoteWrite = aws_iam_policy.adot_amp_write[0].arn

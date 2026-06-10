@@ -2,7 +2,8 @@
 IAM Manager factory for multi-provider support.
 
 This module provides a unified interface for IAM operations across
-different identity providers (Keycloak, Entra ID, Okta, Auth0).
+different identity providers (Keycloak, Entra ID, Okta, Auth0, PingFederate,
+and Amazon Cognito).
 """
 
 import logging
@@ -748,6 +749,94 @@ class PingFederateIAMManager:
         }
 
 
+# Message shared by every write method that Cognito IAM management does not yet
+# support from the UI. Group/user administration for Cognito is currently done
+# out-of-band (AWS console or `aws cognito-idp ...`); see docs/idp/cognito.md.
+_COGNITO_WRITE_UNSUPPORTED: str = (
+    "Cognito IAM write operations are not supported from the registry UI yet. "
+    "Manage Cognito groups and users via the AWS console or the AWS CLI "
+    "(aws cognito-idp ...). See docs/idp/cognito.md."
+)
+
+
+class CognitoIAMManager:
+    """Amazon Cognito IAM manager (read-only).
+
+    Listing groups and users is implemented against the Cognito User Pool.
+    Write operations are not yet supported and raise NotImplementedError with a
+    clear message pointing operators to the AWS console / CLI.
+    """
+
+    async def list_users(
+        self, search: str | None = None, max_results: int = 500, include_groups: bool = True
+    ) -> list[dict[str, Any]]:
+        """List users from the Cognito User Pool."""
+        from .cognito_manager import list_cognito_users
+
+        return await list_cognito_users(
+            max_results=max_results, include_groups=include_groups
+        )
+
+    async def list_groups(self) -> list[dict[str, Any]]:
+        """List groups from the Cognito User Pool, filtered by IDP_GROUP_FILTER_PREFIX if set."""
+        from .cognito_manager import list_cognito_groups
+
+        groups = await list_cognito_groups()
+        return _filter_groups_by_prefix(groups, IDP_GROUP_FILTER_PREFIXES)
+
+    async def group_exists(self, group_name: str) -> bool:
+        """Check if a group exists in the Cognito User Pool."""
+        from .cognito_manager import list_cognito_groups
+
+        try:
+            groups = await list_cognito_groups()
+            return any(g.get("name", "").lower() == group_name.lower() for g in groups)
+        except Exception:
+            return False
+
+    async def create_human_user(
+        self,
+        username: str,
+        email: str,
+        first_name: str,
+        last_name: str,
+        groups: list[str],
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        """Not supported yet for Cognito."""
+        raise NotImplementedError(_COGNITO_WRITE_UNSUPPORTED)
+
+    async def delete_user(self, username: str) -> bool:
+        """Not supported yet for Cognito."""
+        raise NotImplementedError(_COGNITO_WRITE_UNSUPPORTED)
+
+    async def create_group(self, group_name: str, description: str = "") -> dict[str, Any]:
+        """Not supported yet for Cognito."""
+        raise NotImplementedError(_COGNITO_WRITE_UNSUPPORTED)
+
+    async def delete_group(self, group_name: str) -> bool:
+        """Not supported yet for Cognito."""
+        raise NotImplementedError(_COGNITO_WRITE_UNSUPPORTED)
+
+    async def create_service_account(
+        self, client_id: str, groups: list[str], description: str | None = None
+    ) -> dict[str, Any]:
+        """Not supported yet for Cognito."""
+        raise NotImplementedError(_COGNITO_WRITE_UNSUPPORTED)
+
+    async def update_user_groups(self, username: str, groups: list[str]) -> dict[str, Any]:
+        """Not supported yet for Cognito."""
+        raise NotImplementedError(_COGNITO_WRITE_UNSUPPORTED)
+
+    async def update_group(
+        self,
+        group_name: str,
+        description: str = "",
+    ) -> dict[str, Any]:
+        """Not supported yet for Cognito."""
+        raise NotImplementedError(_COGNITO_WRITE_UNSUPPORTED)
+
+
 def get_iam_manager() -> IAMManager:
     """
     Factory function to get the appropriate IAM manager based on AUTH_PROVIDER.
@@ -776,6 +865,10 @@ def get_iam_manager() -> IAMManager:
     elif provider == "pingfederate":
         logger.debug("Using PingFederate IAM manager")
         return PingFederateIAMManager()
+
+    elif provider == "cognito":
+        logger.debug("Using Cognito IAM manager")
+        return CognitoIAMManager()
 
     else:
         logger.warning(f"Unknown AUTH_PROVIDER '{provider}', defaulting to Keycloak")
