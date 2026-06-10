@@ -13,56 +13,48 @@ Cost model (auditable, documented below):
                    24h * $0.1664/hr = $3.99.
                    Customer VM; no managed-AWS services implied.
 
-     ecs        -> $19.03/day : grounded in terraform/aws-ecs/terraform.tfstate.
-                   Itemized:
-                     10 Fargate tasks (5 @ 1vCPU/2GB + 5 @ 0.5vCPU/1GB)
-                       = $7.67/day
-                       (vCPU $0.04048/hr + GB $0.004445/hr, 24h, us-east-1)
-                     DocumentDB db.t3.medium  ($0.078/hr, 1 instance)
-                       = $1.87/day
-                     RDS Aurora Serverless v2 (Keycloak, avg 1 ACU @ $0.12/hr)
-                       = $2.88/day
-                     2 Application Load Balancers ($0.0225/hr + LCUs)
-                       = $1.35/day
-                     3 NAT Gateways ($0.045/hr each, excludes data processing)
-                       = $3.24/day
-                     2 CloudFront distributions (PriceClass_100, low traffic)
-                       = $0.50/day
-                     S3 (ALB + CloudFront logs)
-                       = $0.05/day
-                     CloudWatch log groups + metric alarms (14 + 12)
-                       = $1.00/day
-                     EFS + Secrets Manager + data transfer overhead
-                       = $0.50/day
-                   See terraform/aws-ecs/modules/mcp-gateway/*.tf for
-                   resource definitions, cpu/memory defaults, and the
-                   ALB / NAT / CloudFront wiring.
+     ecs        -> $26.04/day : grounded in a measured AWS Cost Explorer
+                   day (May-30) for the terraform/aws-ecs deployment.
+                   Excludes shared-account overhead (CloudTrail, Others) and
+                   the standalone EC2-Instances row (a separate box, not ECS).
+                   Itemized (per-day, from the bill):
+                     Elastic Container Service (Fargate vCPU + memory)
+                       = $7.66/day
+                     EC2-Other (NAT-per-AZ + EBS + inter-AZ data transfer)
+                       = $7.39/day
+                     RDS (Keycloak)
+                       = $4.47/day
+                     DocumentDB (with MongoDB compatibility)
+                       = $2.03/day
+                     VPC (endpoints, etc.)
+                       = $1.80/day
+                     CloudWatch (logs + metric alarms)
+                       = $1.61/day
+                     Elastic Load Balancing (ALBs)
+                       = $1.08/day
+                   Total = $26.04/day.
+                   ECS tasks run on FARGATE (no EC2-backed cluster); the NAT
+                   cost lands under EC2-Other because Fargate tasks in private
+                   subnets egress through it. See terraform/aws-ecs/*.tf.
 
-     kubernetes -> $11.17/day : grounded in charts/registry/values.yaml
-                   and the stack chart's 4 ALB-backed ingresses.
+     kubernetes -> $18.58/day : grounded in the measured EKS reference
+                   deployment (3-node managed node group + single ALB).
                    Itemized:
                      EKS control plane ($0.10/hr)
                        = $2.40/day
-                     2 x t3.large worker nodes ($0.0832/hr each)
-                       = $3.99/day
-                     4 Application Load Balancers (keycloak, registry,
-                       mcpgw, stack-level) @ $0.0225/hr each + LCUs
-                       = $2.70/day
-                     1 NAT Gateway for private subnets ($0.045/hr)
-                       = $1.08/day
-                     EBS volumes (node storage + mongodb PV)
-                       = $0.50/day
-                     CloudWatch Container Insights
-                       = $0.30/day
-                     Data transfer overhead
-                       = $0.20/day
-                   Pod resource requests from chart defaults:
-                     registry      1 vCPU / 1 GiB
-                     auth-server   1 vCPU / 1 GiB
-                     mcpgw       0.5 vCPU / 1 GiB
-                     keycloak    ~1 vCPU / 1 GiB (in-cluster)
-                     mongodb    ~0.5 vCPU / 2 GiB (in-cluster)
-                   Total ~4 vCPU / 6 GiB fits comfortably on 2 x t3.large.
+                     3 x m6i.xlarge worker nodes
+                       = $13.82/day
+                     EBS gp3 (~41 Gi)
+                       = $0.11/day
+                     1 Application Load Balancer
+                       = $0.92/day
+                     1 NAT Gateway + 5 GB egress
+                       = $1.31/day
+                     ACM public cert
+                       = $0.00/day
+                     Route 53 hosted zone
+                       = $0.02/day
+                   Total = $18.58/day.
 
      ec2        -> $3.99/day : single VM, same as docker fallback.
 
@@ -144,14 +136,17 @@ EC2_DAILY_RATE: float = 24 * EC2_HOURLY_RATE
 
 # Per-compute-platform daily infra rate in USD.
 # See the module docstring for the tfstate + Helm chart grounding.
+# docker / ec2 / unknown / vm all map to a single customer VM running
+# docker-compose, priced off EC2_DAILY_RATE (t3.xlarge) so the hourly-rate
+# constant above stays the single source of truth (no hardcoded duplicate).
 COMPUTE_PLATFORM_DAILY_RATE_USD: dict[str, float] = {
-    "docker": 3.99,
-    "ecs": 19.03,
-    "kubernetes": 11.17,
-    "ec2": 3.99,
-    "unknown": 3.99,
-    "vm": 3.99,
-    "": 3.99,
+    "docker": EC2_DAILY_RATE,
+    "ecs": 26.04,
+    "kubernetes": 18.58,
+    "ec2": EC2_DAILY_RATE,
+    "unknown": EC2_DAILY_RATE,
+    "vm": EC2_DAILY_RATE,
+    "": EC2_DAILY_RATE,
 }
 
 BEDROCK_MODEL: str = "amazon.titan-embed-text-v2"
@@ -171,7 +166,7 @@ FIGURE_WIDTH: int = 14
 FIGURE_HEIGHT: int = 9
 CHART_TITLE: str = (
     "AI Registry -- Customer AWS infra spend "
-    "(per-platform: docker $3.99 / ecs $19.03 / k8s $11.17 per day + Bedrock Titan)"
+    "(per-platform: docker $3.99 / ecs $26.04 / k8s $18.58 per day + Bedrock Titan)"
 )
 
 
@@ -384,6 +379,18 @@ def _compute_daily_spend(
             if cur is None or d < cur:
                 instance_first_day[rid] = d
 
+    # Per-instance distinct-reporting-day count (needed for the "persisted" model:
+    # an instance is only charged at all if it reported on >= 2 distinct days, i.e.
+    # it came back on a separate day rather than installing and vanishing the same
+    # day. Once it qualifies, EVERY day it reported is charged -- including its
+    # first day. This is the "real running deployment" definition: excludes
+    # install-and-delete instances, double-counts nothing.
+    instance_distinct_days: dict[str, int] = defaultdict(int)
+    for ids in by_day_instances.values():
+        for rid in ids:
+            instance_distinct_days[rid] += 1
+    persisted_ids = {rid for rid, n in instance_distinct_days.items() if n >= 2}
+
     # Bedrock instances (latest-backend = bedrock)
     latest_backend = _compute_per_instance_latest_backend(rows, internal_ids)
     bedrock_instance_ids = {rid for rid, ebk in latest_backend.items() if ebk == "bedrock"}
@@ -410,6 +417,7 @@ def _compute_daily_spend(
     out: list[dict[str, float | int | str]] = []
     cum = 0.0
     cum_persistent = 0.0
+    cum_persisted = 0.0
     for d in _date_range(all_days[0], all_days[-1]):
         active = by_day_instances.get(d, set())
         n_inst = len(active)
@@ -418,6 +426,13 @@ def _compute_daily_spend(
         # on any prior day. The instance's first-ever active day is excluded.
         active_persistent = {rid for rid in active if instance_first_day.get(rid) != d}
         n_inst_persistent = len(active_persistent)
+
+        # "Persisted" subset: instance reported on >= 2 distinct days total, AND
+        # was active on D. Unlike "proven", the instance's first day IS charged
+        # once it qualifies. This is the "real running deployment, count every
+        # day it phoned home" definition (excludes install-and-delete instances).
+        active_persisted = active & persisted_ids
+        n_inst_persisted = len(active_persisted)
 
         # Per-platform breakdown for this day (permissive / all-days model)
         platform_counts: dict[str, int] = defaultdict(int)
@@ -428,7 +443,7 @@ def _compute_daily_spend(
             platform_counts[p] += 1
             platform_usd[p] += rate
 
-        # Per-platform breakdown for the persistent subset
+        # Per-platform breakdown for the proven subset
         platform_counts_p: dict[str, int] = defaultdict(int)
         platform_usd_p: dict[str, float] = defaultdict(float)
         for rid in active_persistent:
@@ -437,30 +452,47 @@ def _compute_daily_spend(
             platform_counts_p[p] += 1
             platform_usd_p[p] += rate
 
+        # Per-platform breakdown for the persisted subset
+        platform_counts_d: dict[str, int] = defaultdict(int)
+        platform_usd_d: dict[str, float] = defaultdict(float)
+        for rid in active_persisted:
+            p = latest_platform.get(rid) or "unknown"
+            rate = _daily_rate_for_platform(p)
+            platform_counts_d[p] += 1
+            platform_usd_d[p] += rate
+
         compute_usd = sum(platform_usd.values())
         compute_usd_persistent = sum(platform_usd_p.values())
+        compute_usd_persisted = sum(platform_usd_d.values())
 
         queries = 0
         queries_persistent = 0
+        queries_persisted = 0
         for rid in bedrock_instance_ids:
             if rid in active:
                 delta = by_instance_daily_delta.get(rid, {}).get(d, 0)
                 queries += delta
                 if rid in active_persistent:
                     queries_persistent += delta
+                if rid in active_persisted:
+                    queries_persisted += delta
         bedrock_usd = queries * BEDROCK_COST_PER_QUERY
         bedrock_usd_persistent = queries_persistent * BEDROCK_COST_PER_QUERY
+        bedrock_usd_persisted = queries_persisted * BEDROCK_COST_PER_QUERY
 
         total_usd = compute_usd + bedrock_usd
         total_usd_persistent = compute_usd_persistent + bedrock_usd_persistent
+        total_usd_persisted = compute_usd_persisted + bedrock_usd_persisted
         cum += total_usd
         cum_persistent += total_usd_persistent
+        cum_persisted += total_usd_persisted
 
         out.append(
             {
                 "date": d,
                 "aws_instances": n_inst,
                 "aws_instances_persistent": n_inst_persistent,
+                "aws_instances_persisted": n_inst_persisted,
                 "docker_instances": platform_counts.get("docker", 0),
                 "ecs_instances": platform_counts.get("ecs", 0),
                 "kubernetes_instances": platform_counts.get("kubernetes", 0),
@@ -475,16 +507,28 @@ def _compute_daily_spend(
                     v for k, v in platform_counts_p.items()
                     if k not in ("docker", "ecs", "kubernetes")
                 ),
+                "docker_instances_persisted": platform_counts_d.get("docker", 0),
+                "ecs_instances_persisted": platform_counts_d.get("ecs", 0),
+                "kubernetes_instances_persisted": platform_counts_d.get("kubernetes", 0),
+                "other_platform_instances_persisted": sum(
+                    v for k, v in platform_counts_d.items()
+                    if k not in ("docker", "ecs", "kubernetes")
+                ),
                 "bedrock_queries": queries,
                 "bedrock_queries_persistent": queries_persistent,
+                "bedrock_queries_persisted": queries_persisted,
                 "compute_usd": round(compute_usd, 4),
                 "compute_usd_persistent": round(compute_usd_persistent, 4),
+                "compute_usd_persisted": round(compute_usd_persisted, 4),
                 "bedrock_usd": round(bedrock_usd, 6),
                 "bedrock_usd_persistent": round(bedrock_usd_persistent, 6),
+                "bedrock_usd_persisted": round(bedrock_usd_persisted, 6),
                 "total_usd": round(total_usd, 4),
                 "total_usd_persistent": round(total_usd_persistent, 4),
+                "total_usd_persisted": round(total_usd_persisted, 4),
                 "cum_total_usd": round(cum, 4),
                 "cum_total_usd_persistent": round(cum_persistent, 4),
+                "cum_total_usd_persisted": round(cum_persisted, 4),
             }
         )
     return out, dict(platform_instance_counts)
@@ -532,13 +576,17 @@ def _write_summary_json(
     yesterday = daily[-1]
     ltv = yesterday["cum_total_usd"]
     ltv_persistent = yesterday["cum_total_usd_persistent"]
+    ltv_persisted = yesterday["cum_total_usd_persisted"]
     seven = daily[-7:]
     ltv_7d = round(sum(r["total_usd"] for r in seven), 2)
     ltv_7d_persistent = round(sum(r["total_usd_persistent"] for r in seven), 2)
+    ltv_7d_persisted = round(sum(r["total_usd_persisted"] for r in seven), 2)
     ltv_compute = round(sum(r["compute_usd"] for r in daily), 2)
     ltv_bedrock = round(sum(r["bedrock_usd"] for r in daily), 2)
     ltv_compute_persistent = round(sum(r["compute_usd_persistent"] for r in daily), 2)
     ltv_bedrock_persistent = round(sum(r["bedrock_usd_persistent"] for r in daily), 2)
+    ltv_compute_persisted = round(sum(r["compute_usd_persisted"] for r in daily), 2)
+    ltv_bedrock_persisted = round(sum(r["bedrock_usd_persisted"] for r in daily), 2)
 
     # Platform-level instance-day totals and compute-USD totals (LTV) -- permissive
     platform_instance_days: dict[str, int] = defaultdict(int)
@@ -564,24 +612,37 @@ def _write_summary_json(
         platform_instance_days_p["other"] += other_n
         platform_compute_usd_p["other"] += other_n * _daily_rate_for_platform("unknown")
 
+    # Same breakdown for the persisted model (>= 2 distinct days, all reported days charged)
+    platform_instance_days_d: dict[str, int] = defaultdict(int)
+    platform_compute_usd_d: dict[str, float] = defaultdict(float)
+    for row in daily:
+        for p in ("docker", "ecs", "kubernetes"):
+            n = int(row.get(f"{p}_instances_persisted", 0))
+            platform_instance_days_d[p] += n
+            platform_compute_usd_d[p] += n * _daily_rate_for_platform(p)
+        other_n = int(row.get("other_platform_instances_persisted", 0))
+        platform_instance_days_d["other"] += other_n
+        platform_compute_usd_d["other"] += other_n * _daily_rate_for_platform("unknown")
+
     summary = {
         "cost_model": {
             "per_platform_daily_rate_usd": dict(COMPUTE_PLATFORM_DAILY_RATE_USD),
             "docker_breakdown": "1 x t3.xlarge on-demand ($0.1664/hr)",
             "ecs_breakdown": (
-                "Grounded in terraform/aws-ecs/terraform.tfstate: "
-                "10 Fargate tasks ($7.67) + DocumentDB db.t3.medium ($1.87) "
-                "+ RDS Aurora Serverless v2 avg 1 ACU ($2.88) + 2 ALBs ($1.35) "
-                "+ 3 NAT Gateways ($3.24) + 2 CloudFront distributions ($0.50) "
-                "+ S3 logs ($0.05) + CloudWatch ($1.00) + EFS/SM/DT ($0.50) "
-                "= $19.03/day"
+                "Grounded in a measured Cost Explorer day (May-30) for the "
+                "terraform/aws-ecs deployment, excl shared-account overhead "
+                "(CloudTrail, Others) and the standalone EC2-Instances box: "
+                "Fargate/ECS ($7.66) + EC2-Other NAT/EBS/data ($7.39) "
+                "+ RDS Keycloak ($4.47) + DocumentDB ($2.03) + VPC ($1.80) "
+                "+ CloudWatch ($1.61) + ELB/ALBs ($1.08) "
+                "= $26.04/day"
             ),
             "kubernetes_breakdown": (
-                "Grounded in charts/ Helm defaults + aws-load-balancer-controller: "
-                "EKS control plane ($2.40) + 2 x t3.large nodes ($3.99) "
-                "+ 4 ALB ingresses ($2.70) + 1 NAT Gateway ($1.08) "
-                "+ EBS ($0.50) + CloudWatch Container Insights ($0.30) "
-                "+ Data transfer ($0.20) = $11.17/day"
+                "Grounded in the measured EKS reference deployment: "
+                "EKS control plane ($2.40) + 3 x m6i.xlarge nodes ($13.82) "
+                "+ EBS gp3 ~41Gi ($0.11) + 1 ALB ($0.92) "
+                "+ 1 NAT Gateway + 5 GB egress ($1.31) + ACM public cert ($0.00) "
+                "+ Route 53 hosted zone ($0.02) = $18.58/day"
             ),
             "bedrock_model": BEDROCK_MODEL,
             "bedrock_price_per_1k_tokens_usd": BEDROCK_PRICE_PER_1K_TOKENS,
@@ -602,6 +663,15 @@ def _write_summary_json(
                 "'proven'. ~59% of the current fleet never sends a second "
                 "day of events (one-day wonders) -- they contribute $0 under "
                 "this model."
+            ),
+            "persisted": (
+                "Charge an instance on EVERY day it reported, but only if it "
+                "reported on >= 2 distinct days total (i.e. it came back on a "
+                "separate day rather than installing and vanishing the same "
+                "day). Unlike 'proven', the instance's first day IS charged "
+                "once it qualifies. This is the 'real running deployment' "
+                "definition: excludes install-and-delete instances, "
+                "double-counts nothing. Headline numbers labeled 'persisted'."
             ),
         },
         "yesterday": {
@@ -628,6 +698,17 @@ def _write_summary_json(
                 "bedrock_usd": yesterday["bedrock_usd_persistent"],
                 "total_usd": yesterday["total_usd_persistent"],
             },
+            "persisted": {
+                "aws_instances": yesterday["aws_instances_persisted"],
+                "docker_instances": yesterday.get("docker_instances_persisted", 0),
+                "ecs_instances": yesterday.get("ecs_instances_persisted", 0),
+                "kubernetes_instances": yesterday.get("kubernetes_instances_persisted", 0),
+                "other_platform_instances": yesterday.get("other_platform_instances_persisted", 0),
+                "bedrock_queries": yesterday["bedrock_queries_persisted"],
+                "compute_usd": yesterday["compute_usd_persisted"],
+                "bedrock_usd": yesterday["bedrock_usd_persisted"],
+                "total_usd": yesterday["total_usd_persisted"],
+            },
         },
         "per_platform_unique_instance_totals": platform_instance_counts,
         "per_platform_ltv_breakdown_all_days": {
@@ -644,9 +725,17 @@ def _write_summary_json(
             }
             for p in ("docker", "ecs", "kubernetes", "other")
         },
+        "per_platform_ltv_breakdown_persisted": {
+            p: {
+                "instance_days": platform_instance_days_d[p],
+                "compute_usd": round(platform_compute_usd_d[p], 2),
+            }
+            for p in ("docker", "ecs", "kubernetes", "other")
+        },
         "last_7_days": {
             "all_days_total_usd": ltv_7d,
             "proven_total_usd": ltv_7d_persistent,
+            "persisted_total_usd": ltv_7d_persisted,
         },
         "ltv": {
             "all_days": {
@@ -660,6 +749,12 @@ def _write_summary_json(
                 "bedrock_usd": ltv_bedrock_persistent,
                 "total_usd": ltv_persistent,
                 "total_instance_days": sum(r["aws_instances_persistent"] for r in daily),
+            },
+            "persisted": {
+                "compute_usd": ltv_compute_persisted,
+                "bedrock_usd": ltv_bedrock_persisted,
+                "total_usd": ltv_persisted,
+                "total_instance_days": sum(r["aws_instances_persisted"] for r in daily),
             },
             "first_day": daily[0]["date"],
             "last_day": yesterday["date"],
@@ -688,15 +783,17 @@ def _generate_chart(
     dates = [datetime.strptime(r["date"], "%Y-%m-%d") for r in daily]
     compute = [r["compute_usd"] for r in daily]
     compute_p = [r["compute_usd_persistent"] for r in daily]
+    compute_d = [r["compute_usd_persisted"] for r in daily]
     bedrock = [r["bedrock_usd"] for r in daily]
     cum = [r["cum_total_usd"] for r in daily]
     cum_p = [r["cum_total_usd_persistent"] for r in daily]
-    colors = sns.color_palette("Set2", 4)
+    cum_d = [r["cum_total_usd_persisted"] for r in daily]
+    colors = sns.color_palette("Set2", 5)
 
-    # Daily compute: show permissive as the bar height and overlay the proven
-    # subset so the "first-day wedge" is visible at a glance.
-    ax_compute.bar(dates, compute, color=colors[0], alpha=0.5, label="all-days (incl. first-day installs)")
-    ax_compute.bar(dates, compute_p, color=colors[0], alpha=0.95, label="proven (seen on any prior day)")
+    # Daily compute: show all-days as the faint bar height, overlay the persisted
+    # subset (the headline rule: >= 2 distinct reporting days) as the solid bar.
+    ax_compute.bar(dates, compute, color=colors[0], alpha=0.4, label="all-days (incl. install-and-vanish)")
+    ax_compute.bar(dates, compute_d, color=colors[0], alpha=0.95, label="persisted (>= 2 distinct reporting days)")
     ax_compute.set_title(
         "Daily EC2 compute cost -- per-platform rate * active AWS customer instances",
         fontsize=10,
@@ -718,11 +815,15 @@ def _generate_chart(
         label="all-days (upper bound)",
     )
     ax_cum.plot(
-        dates, cum_p, linewidth=2.5, color=colors[3], marker="s", markersize=3,
-        label="proven (lower bound)",
+        dates, cum_d, linewidth=2.5, color=colors[4], marker="D", markersize=3,
+        label="persisted (headline: >= 2 distinct days)",
     )
-    ax_cum.fill_between(dates, cum_p, cum, color=colors[2], alpha=0.15)
-    ax_cum.set_title("Cumulative LTV spend (compute + Bedrock) -- range between two counting rules", fontsize=10)
+    ax_cum.plot(
+        dates, cum_p, linewidth=1.8, color=colors[3], marker="s", markersize=3,
+        linestyle="--", label="proven (first day free, lower bound)",
+    )
+    ax_cum.fill_between(dates, cum_p, cum, color=colors[2], alpha=0.12)
+    ax_cum.set_title("Cumulative LTV spend (compute + Bedrock) -- range across counting rules", fontsize=10)
     ax_cum.set_ylabel("USD total")
     ax_cum.legend(loc="upper left", fontsize=8)
     ax_cum.yaxis.set_major_locator(plt.MaxNLocator(nbins=6))

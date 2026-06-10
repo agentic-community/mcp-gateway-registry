@@ -228,8 +228,8 @@ Customer-only (internal UUIDs excluded), AWS-only (GCP/Azure/unknown excluded be
 | Platform | Daily rate | Grounding |
 |---|---:|---|
 | `docker` | $3.99 | 1 × t3.xlarge on-demand ($0.1664/hr), customer VM |
-| `ecs` | $19.03 | From `terraform/aws-ecs/terraform.tfstate`: 10 Fargate tasks ($7.67) + DocumentDB db.t3.medium ($1.87) + RDS Aurora Serverless v2 avg 1 ACU ($2.88) + 2 ALBs ($1.35) + 3 NAT Gateways ($3.24) + 2 CloudFront ($0.50) + S3 logs ($0.05) + CloudWatch ($1.00) + EFS/SM/DT ($0.50) |
-| `kubernetes` | $11.17 | From `charts/` Helm defaults + aws-load-balancer-controller: EKS control plane ($2.40) + 2 × t3.large nodes ($3.99) + 4 ALB ingresses ($2.70) + 1 NAT Gateway ($1.08) + EBS ($0.50) + CloudWatch Container Insights ($0.30) + data transfer ($0.20) |
+| `ecs` | $26.04 | From a measured Cost Explorer day (May-30) for the `terraform/aws-ecs` deployment, excl shared-account overhead (CloudTrail, Others) and the standalone EC2-Instances box: Fargate/ECS ($7.66) + EC2-Other NAT/EBS/data ($7.39) + RDS Keycloak ($4.47) + DocumentDB ($2.03) + VPC ($1.80) + CloudWatch ($1.61) + ELB/ALBs ($1.08) |
+| `kubernetes` | $18.58 | From the measured EKS reference deployment: EKS control plane ($2.40) + 3 × m6i.xlarge nodes ($13.82) + EBS gp3 ~41Gi ($0.11) + 1 ALB ($0.92) + 1 NAT Gateway + 5 GB egress ($1.31) + ACM public cert ($0.00) + Route 53 hosted zone ($0.02) |
 | `ec2` / `unknown` / other | $3.99 | Docker-compose fallback (single VM) |
 
 Platform for a given instance is resolved via its **most-recent non-empty `compute` field**. If an instance migrates across platforms mid-window, it's billed at the latest platform's rate for the whole window.
@@ -248,23 +248,64 @@ Platform for a given instance is resolved via its **most-recent non-empty `compu
 
 > When `--exclude-incomplete-day` is passed, the JSON summary's `yesterday` block refers to the **last complete day** (typically YYYY-MM-DD - 1), not today. Headline tables in the report should label this clearly (e.g. "Yesterday (2026-05-16, last complete day)").
 
+**Three counting rules** are emitted side by side so the report can show a range and pick a headline:
+- **all-days** (upper bound): charge every distinct (AWS customer instance, day) pair, including 1-day trial installs.
+- **persisted** (HEADLINE): charge every day an instance reported, but only if it reported on **>= 2 distinct days** total (i.e. it came back on a separate day rather than installing and vanishing the same day). Unlike `proven`, the instance's first day IS charged once it qualifies. This is the "real running deployment, count every day it phoned home" definition the maintainer settled on: it excludes install-and-delete instances and double-counts nothing.
+- **proven** (lower bound): charge an instance on day D only if it had events on D AND any prior day. Excludes every instance's first-ever active day.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_ltv_spend.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/ltv-spend-YYYY-MM-DD.png \
+  --internal-instances .claude/skills/usage-report/known-internal-instances.md \
+  --csv-out $DATE_DIR/ltv-spend-YYYY-MM-DD.csv \
+  --summary-json $DATE_DIR/ltv-spend-YYYY-MM-DD.json \
+  --exclude-incomplete-day YYYY-MM-DD
+```
+
 Outputs:
-- PNG chart with three panels: daily EC2 compute USD (all-days + proven overlay), daily Bedrock USD, cumulative LTV USD (both lines with shaded range between them).
-- CSV sidecar per day: `date, aws_instances, aws_instances_persistent, <platform>_instances[_persistent], bedrock_queries[_persistent], compute_usd[_persistent], bedrock_usd[_persistent], total_usd[_persistent], cum_total_usd[_persistent]`.
-- JSON summary with headline numbers under `yesterday.all_days` vs `yesterday.proven`, `last_7_days.{all_days_total_usd, proven_total_usd}`, `ltv.{all_days, proven}`, and per-platform LTV breakdown for both models.
+- PNG chart with three panels: daily EC2 compute USD (all-days bar + persisted overlay), daily Bedrock USD, cumulative LTV USD (all-days / persisted / proven lines with shaded range).
+- CSV sidecar per day with `_persistent` (proven) and `_persisted` (>= 2 distinct days) variants of every column alongside the all-days columns.
+- JSON summary with headline numbers under `yesterday.{all_days, persisted, proven}`, `last_7_days.{all_days_total_usd, persisted_total_usd, proven_total_usd}`, `ltv.{all_days, persisted, proven}`, and per-platform LTV breakdown for all three models.
 
-Embed the chart in the report's **Customer Infra Spend (AWS)** section. Include a single summary table that shows both numbers as a range (e.g. "yesterday: $292.67 – $346.01"), one short paragraph explaining the two counting rules, and the per-platform LTV breakdown (both models side by side). Flag clearly that the cost model is hypothetical (we don't actually bill these customers; these are "what it would cost them at list price").
+Embed the chart in the report's **Customer Infra Spend (AWS)** section. Lead with the **persisted** number as the headline, and show all three as a range in the summary table. Include one short paragraph explaining the three counting rules and the per-platform LTV breakdown. Flag clearly that the cost model is hypothetical (we don't actually bill these customers; these are "what it would cost them at list price").
 
-**ARR projection (mandatory):** below the cumulative LTV table, add a short subsection titled **"Annualized Run Rate (ARR) Projection"** that takes the 7-day daily-average spend and projects it forward 365 days. Compute as `last_7_days.<model>_total_usd / 7 * 365`, divided by 1,000,000, formatted to 2 decimal places in millions. Render BOTH models (proven and all-days) as a small two-row table:
+**Formula clarification (mandatory):** below the spend table, include the "How the three numbers relate" block (the template renders this from `ltv.{all_days,persisted,proven}.total_instance_days`). The key points the reader needs:
+- All three rules multiply the **same** per-platform daily rates by a count of **instance-days** (one (instance, day) pair = one charge). They differ ONLY in which instance-days qualify, so `all-days >= persisted >= proven` always holds.
+- `all-days - persisted` = the count of single-calendar-day (install-and-vanish) instance-days that persisted drops.
+- `persisted - proven` = exactly the number of persisted instances (proven frees each instance's first-ever day; persisted keeps it). This identity is a useful self-check: if it doesn't equal the persisted-instance count, something is wrong.
+- At the trailing edge of the window the persisted and proven **daily** figures converge (an instance active on the last complete day cannot still be on its first-ever day, so proven charges it too) -- this is why yesterday's persisted and proven numbers are typically identical while the cumulative ones diverge.
+
+**ARR projection (mandatory):** below the cumulative LTV table, add a short subsection titled **"Annualized Run Rate (ARR) Projection"** that takes the 7-day daily-average spend and projects it forward 365 days. Compute as `last_7_days.<model>_total_usd / 7 * 365`, divided by 1,000,000, formatted to 2 decimal places in millions. Render all three models, with **persisted** as the headline row:
 
 ```
 | Model | 7-day daily avg | x 365 = ARR |
 |-------|----------------:|------------:|
-| Proven | $X | $Y.YYM |
+| Persisted (headline) | $X | $Y.YYM |
 | All-days | $X | $Y.YYM |
+| Proven | $X | $Y.YYM |
 ```
 
 Frame the ARR as "what the active customer fleet would cost AWS customers per year at list price if today's run rate held constant." Include the same hypothetical disclaimer (we do not bill these customers). The ARR is a useful complement to install-count growth: it tracks the real economic footprint of the customer fleet, not just the headcount of registry instances.
+
+### Step 5c3b: Generate Daily Reporters Chart
+
+Plot the daily count of AWS customer instances reporting home, with two persistence-filtered overlays that exclude install-and-vanish-within-a-day instances. This is the visual companion to the **persisted** LTV counting rule: the green ">= 2 distinct days" line is exactly the daily instance count that drives the headline infra-spend number.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_daily_reporters_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/daily-reporters-YYYY-MM-DD.png \
+  --internal-instances .claude/skills/usage-report/known-internal-instances.md \
+  --csv-out $DATE_DIR/daily-reporters-YYYY-MM-DD.csv \
+  --exclude-incomplete-day YYYY-MM-DD
+```
+
+This produces:
+- A PNG with three overlaid daily series (AWS-only, customer-only): all reporters, persisted (>= 2 events ever), persisted (>= 2 distinct days).
+- A CSV sidecar per day: `date, all_reporters, persisted_2events, persisted_2days`.
+
+Same data-sourcing behavior as the other historical charts (scans all CSVs across dated subdirectories). Embed in the report's **Customer Infra Spend (AWS)** section, directly above or beside the LTV chart, so the reader sees how the headline daily instance count (~the green line) is derived. Add a short narrative noting how little the install-and-vanish filter moves the line (the daily fleet is overwhelmingly persistent), and that the gap between "all reporters" and ">= 2 distinct days" is the single-calendar-day cohort.
 
 ### Step 5d: Generate Install Forecast Chart
 
@@ -461,7 +502,7 @@ The renderer is composed of three pieces, all under `.claude/skills/usage-report
 
 #### Mandatory Charts Checklist
 
-The report MUST embed all 11 charts (the template's `![...]` references). If any chart file is missing the renderer will substitute the path verbatim and pandoc will render a broken-image placeholder, so generate all charts (Steps 5 through 5f) before invoking `render_report.py`.
+The report MUST embed all 12 charts (the template's `![...]` references). If any chart file is missing the renderer will substitute the path verbatim and pandoc will render a broken-image placeholder, so generate all charts (Steps 5 through 5f) before invoking `render_report.py`.
 
 1. `registry-installs-timeseries-YYYY-MM-DD.png` (cloud provider: cumulative + daily-active + daily-new)
 2. `instance-distribution-YYYY-MM-DD.png` (6-panel faceted, all customers)
@@ -471,9 +512,10 @@ The report MUST embed all 11 charts (the template's `![...]` references). If any
 6. `active-instances-YYYY-MM-DD.png` (DAI + MA7 + streak)
 7. `compute-installs-timeseries-YYYY-MM-DD.png` (compute platform cumulative + daily)
 8. `install-forecast-YYYY-MM-DD.png` (OLS + recent-pace to 1,000)
-9. `ltv-spend-YYYY-MM-DD.png` (daily compute + bedrock + cumulative)
-10. `adoption-funnel-YYYY-MM-DD.png` (funnel from total to confirmed-alive)
-11. `detection-by-version-YYYY-MM-DD.png` (cloud_detection_method outcomes per version)
+9. `daily-reporters-YYYY-MM-DD.png` (daily AWS reporters: all + persisted >=2 events + persisted >=2 days)
+10. `ltv-spend-YYYY-MM-DD.png` (daily compute + bedrock + cumulative)
+11. `adoption-funnel-YYYY-MM-DD.png` (funnel from total to confirmed-alive)
+12. `detection-by-version-YYYY-MM-DD.png` (cloud_detection_method outcomes per version)
 
 #### Editing the report
 
@@ -523,7 +565,7 @@ The pipeline is split so the LLM has a narrowly-scoped, hard-to-screw-up job:
 
 #### Required commentary anchors (in template)
 
-The current template has 19 commentary anchors covering: executive_summary, cloud_installs, deployment_distribution, lifetime_retention, liveness, engagement, compute_platform, version_adoption, upgrade_trajectories, feature_adoption, sticky_breakdown, most_active, install_forecast, ltv_arr, adoption_funnel, cloud_detection, github, architecture, recommendations.
+The current template has 20 commentary anchors covering: executive_summary, cloud_installs, deployment_distribution, lifetime_retention, liveness, engagement, compute_platform, version_adoption, upgrade_trajectories, feature_adoption, sticky_breakdown, most_active, install_forecast, daily_reporters, ltv_arr, adoption_funnel, cloud_detection, github, architecture, recommendations.
 
 Adding/removing anchors: edit `report_template.md` to insert or delete `<!-- COMMENTARY:name -->` markers; the augmenter's extract phase will pick up the new set automatically.
 
