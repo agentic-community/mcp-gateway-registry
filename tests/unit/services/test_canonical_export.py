@@ -5,15 +5,20 @@ exercise the round-trip path (when metadata.mcp_registry_spec is present),
 the synthesis fallback path (legacy/bespoke documents), the description
 truncation rule, and the reverse-DNS namespace derivation.
 """
+import copy
 
 import pytest
 
+
+
 from registry.services import canonical_export
+
 from registry.services.canonical_export import (
     DEFAULT_SCHEMA_URL,
     MAX_CANONICAL_DESCRIPTION,
     _reverse_dns_base,
     to_canonical,
+    redact_backend_urls,
 )
 
 
@@ -523,3 +528,26 @@ class TestRoundtripByteEquality:
         # Synthesis path must not run; preserved array passes through unchanged.
         assert out["packages"] == preserved_packages
         assert "remotes" not in out
+
+def test_redaction_does_not_mutate_source_server():
+    """Redaction works on a copy: source untouched, output stripped."""
+    stored = {
+        "path": "/test",
+        "description": "test server",
+        "metadata": {
+            "mcp_registry_spec": {
+                "remotes": [
+                    {"type": "streamable-http", "url": "http://backend:8000/mcp"}
+                ]
+            }
+        },
+    }
+    before = copy.deepcopy(stored)
+
+    canonical, _ = to_canonical(stored)
+    redacted = redact_backend_urls(canonical)   # capture the returned copy
+
+    # source the caller passed in is untouched (no cache corruption)...
+    assert stored == before, "redaction leaked back into the stored server"
+    # ...and the returned doc actually has the backend url stripped
+    assert "url" not in redacted["remotes"][0], "backend url was not redacted"

@@ -6,6 +6,7 @@ Private helpers (prefixed _) first, public functions after.
 
 import logging
 import re
+import copy
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
@@ -227,3 +228,37 @@ def to_canonical(stored: dict) -> tuple[dict, bool]:
     out["_meta"] = {**preserved_meta, _meta_namespace(): internal}
 
     return out, truncated
+
+
+def _strip_remote_urls(remotes: Any) -> None:
+    """Strip the backend `url` from each entry in a `remotes` list, in-place."""
+    if not isinstance(remotes, list):
+        return
+    for remote in remotes:
+        if isinstance(remote, dict):
+            remote.pop("url", None)
+
+
+def _redact_node(node: Any) -> None:
+    """Recursively strip backend URLs from a canonical-doc subtree, in-place."""
+    if isinstance(node, dict):
+        # proxy_pass_url is the registry's internal backend URL. It lives in our
+        # own _meta namespace, but a preserved upstream namespace could echo it
+        # too, so drop it wherever it appears.
+        node.pop("proxy_pass_url", None)
+        # `url` is a backend URL only inside a `remotes` entry. Scope the removal
+        # so non-backend URLs (repository.url, provider_url, ...) are preserved.
+        if "remotes" in node:
+            _strip_remote_urls(node["remotes"])
+        for value in node.values():
+            _redact_node(value)
+    elif isinstance(node, list):
+        for item in node:
+            _redact_node(item)
+
+
+def redact_backend_urls(canonical: dict) -> dict:
+    """Return a redacted COPY of a canonical doc. Does NOT mutate the input."""
+    redacted = copy.deepcopy(canonical)
+    _redact_node(redacted)
+    return redacted

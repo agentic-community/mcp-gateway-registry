@@ -39,6 +39,7 @@ from ..schemas.server_update_models import (
     ServerCardPatch,
     ServerUpdateRequest,
 )
+from ..services.canonical_export import redact_backend_urls, to_canonical
 from ..services.registration_gate_service import check_registration_gate
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
@@ -2491,6 +2492,63 @@ async def get_server_details(
         server_info["default_version"] = current_version
 
     return server_info
+
+
+@router.get("/servers/{path:path}/server.json")
+async def get_server_canonical(
+    request: Request,
+    path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Return a server projected into the canonical MCP Registry server.json shape.
+
+    Read-only export. Storage stays bespoke; this endpoint projects the stored
+    document into a doc conforming to the upstream server.schema.json (see
+    issue #1187). Auth mirrors the bespoke server read: same access check, and
+    in with-gateway mode the backend URLs are redacted for non-admin callers.
+    """
+    service_path = _normalize_server_path(path)
+
+    set_audit_action(
+        request,
+        "read",
+        "server",
+        resource_id=service_path,
+        description=f"Read canonical server.json for {service_path}",
+    )
+
+    server_info = await server_service.get_server_info(service_path)
+    if not server_info:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+
+    is_admin = user_context.get("is_admin", False)
+
+    # Non-admin callers may only export servers they can access.
+    if not is_admin:
+        if not await server_service.user_can_access_server_path(
+            service_path, user_context.get("accessible_servers", [])
+        ):
+            logger.warning(
+                f"User {user_context.get('username')} attempted canonical export of "
+                f"{service_path} without access"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
+
+    canonical, truncated = to_canonical(server_info)
+
+    # In with-gateway mode non-admin clients reach servers through the gateway,
+    # so the raw backend URL must not leak. Walk every _meta namespace plus the
+    # top-level remotes block to strip proxy_pass_url and remotes[].url. Mirrors
+    # the proxy_pass_url stripping in GET /api/servers/{path}: strip unless
+    # registry-only, where users need the URL to connect directly.
+    if not is_admin and settings.deployment_mode != DeploymentMode.REGISTRY_ONLY:
+        canonical = redact_backend_urls(canonical)
+
+    headers = {"X-Description-Truncated": "true"} if truncated else None
+    return JSONResponse(content=canonical, headers=headers)
 
 
 @router.get("/tools/{service_path:path}")
