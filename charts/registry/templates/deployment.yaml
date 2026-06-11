@@ -89,6 +89,11 @@ spec:
               value: {{ .Values.app.deploymentMode | default "with-gateway" | quote }}
             - name: REGISTRY_MODE
               value: {{ .Values.app.registryMode | default "full" | quote }}
+            # Internal/workshop deployment classification (telemetry labels; issue #1216)
+            - name: INTERNAL_ONLY_DEPLOYMENT
+              value: {{ .Values.app.internalOnlyDeployment | default false | quote }}
+            - name: INTERNAL_DEPLOYMENT_TYPE
+              value: {{ .Values.app.internalDeploymentType | default "none" | quote }}
             - name: SHOW_SERVERS_TAB
               value: {{ .Values.app.showServersTab | default true | quote }}
             - name: SHOW_VIRTUAL_SERVERS_TAB

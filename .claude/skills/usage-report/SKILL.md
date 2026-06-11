@@ -425,6 +425,16 @@ The `--internal-instances` flag passed in Step 6 handles internal instance ident
 3. Computes stickiness metrics (3+ day non-internal count, longest-running non-internal) and writes them to the JSON output under the `stickiness` key
 4. Writes the list of internal instance IDs to the JSON output under `internal_instance_ids`
 
+### Step 6d: Internal Installs Section (telemetry-driven, issue #1216/#1217)
+
+In addition to the manual `known-internal-instances.md` allowlist, the analysis emits a dedicated **Internal Installs** markdown section driven by the `internal_only_deployment` / `internal_deployment_type` telemetry fields (added in registry release 1.24.5). The section includes:
+
+1. A total count of internal installs in the window, broken down by type (`dev` / `workshop` / `other`).
+2. An "Internal Installs Over Time" monthly timeseries table across all internal types.
+3. A capture-start note stating that classification is captured from release **1.24.5 onwards** (pre-1.24.5 installs are undercounted and rely on the manual allowlist).
+
+The computed data is written to the JSON output under the `internal_installs` key (`total`, `by_type`, `timeseries`, `since_release`). These fields come from the CSV export, so the bastion export script (`telemetry_db.py`) must include the `internal_only_deployment` and `internal_deployment_type` columns (it does as of #1216).
+
 If the file does not exist, the script treats all instances as external (no internal labeling, stickiness counts all instances).
 
 When writing the report:

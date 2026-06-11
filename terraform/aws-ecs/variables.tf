@@ -1323,6 +1323,31 @@ variable "registry_mode" {
   }
 }
 
+variable "internal_only_deployment" {
+  description = <<-EOT
+    Marks this as one of our own internal/workshop deployments (not a community
+    install). Telemetry label only (issue #1216); does not change access control.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "internal_deployment_type" {
+  description = <<-EOT
+    Classification of an internal deployment: none, dev, workshop, or other.
+    Telemetry label only (issue #1216). Forced to "none" when
+    internal_only_deployment is false; defaults to "dev" when
+    internal_only_deployment is true and left unset.
+  EOT
+  type        = string
+  default     = "none"
+
+  validation {
+    condition     = contains(["none", "dev", "workshop", "other"], var.internal_deployment_type)
+    error_message = "internal_deployment_type must be one of: 'none', 'dev', 'workshop', 'other'"
+  }
+}
+
 variable "show_servers_tab" {
   description = "Show the MCP Servers tab in the UI. AND-ed with registry_mode."
   type        = bool

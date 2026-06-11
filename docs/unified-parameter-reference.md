@@ -102,6 +102,8 @@ Controls registry-vs-gateway integration and which tabs render in the UI. See [`
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Deployment mode | `DEPLOYMENT_MODE` | `deployment_mode` | `registry.app.deploymentMode` | `with-gateway` (nginx integration) or `registry-only`. |
 | Registry mode | `REGISTRY_MODE` | `registry_mode` | `registry.app.registryMode` | `full`, `mcp-servers-only`, `agents-only`, `skills-only`. |
+| Internal-only deployment | `INTERNAL_ONLY_DEPLOYMENT` | `internal_only_deployment` | `registry.app.internalOnlyDeployment` | Telemetry label marking an internal/workshop deployment (default `false`). Does not change access control. |
+| Internal deployment type | `INTERNAL_DEPLOYMENT_TYPE` | `internal_deployment_type` | `registry.app.internalDeploymentType` | `none`/`dev`/`workshop`/`other` (default `none`); forced to `none` when internal-only is false, defaults to `dev` when internal-only is true and unset. |
 | Show Servers tab | `SHOW_SERVERS_TAB` | `show_servers_tab` | `registry.app.showServersTab` | UI tab toggle (AND-ed with `REGISTRY_MODE`). |
 | Show Virtual Servers tab | `SHOW_VIRTUAL_SERVERS_TAB` | `show_virtual_servers_tab` | `registry.app.showVirtualServersTab` | — |
 | Show Skills tab | `SHOW_SKILLS_TAB` | `show_skills_tab` | `registry.app.showSkillsTab` | — |

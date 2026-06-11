@@ -289,6 +289,10 @@ module "mcp_gateway" {
   deployment_mode = var.deployment_mode
   registry_mode   = var.registry_mode
 
+  # Internal/workshop deployment classification (telemetry labels; issue #1216)
+  internal_only_deployment = var.internal_only_deployment
+  internal_deployment_type = var.internal_deployment_type
+
   # Tab visibility overrides
   show_servers_tab         = var.show_servers_tab
   show_virtual_servers_tab = var.show_virtual_servers_tab

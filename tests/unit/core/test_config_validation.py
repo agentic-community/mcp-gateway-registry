@@ -162,3 +162,59 @@ class TestStorageBackendEmptyValues:
         settings = Settings()
 
         assert settings.storage_backend == "file"
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestInternalDeploymentType:
+    """Cover the _validate_internal_deployment_type @field_validator (issue #1216)."""
+
+    @pytest.mark.parametrize("value", ["none", "dev", "workshop", "other"])
+    def test_every_valid_value_accepted(
+        self,
+        monkeypatch,
+        tmp_path,
+        value: str,
+    ) -> None:
+        """Settings() accepts each allowed value (case/space-normalized)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INTERNAL_DEPLOYMENT_TYPE", f"  {value.upper()} ")
+
+        settings = Settings()
+
+        assert settings.internal_deployment_type.value == value
+
+    def test_invalid_value_rejected(
+        self,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        """Unknown values raise ValidationError listing the accepted values."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INTERNAL_DEPLOYMENT_TYPE", "production")
+
+        with pytest.raises(ValidationError, match="Accepted values"):
+            Settings()
+
+    def test_empty_and_unset_default_to_none(
+        self,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        """Empty string and unset both coerce to 'none'."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INTERNAL_DEPLOYMENT_TYPE", "")
+        assert Settings().internal_deployment_type.value == "none"
+
+        monkeypatch.delenv("INTERNAL_DEPLOYMENT_TYPE", raising=False)
+        assert Settings().internal_deployment_type.value == "none"
+
+    def test_internal_only_deployment_defaults_false(
+        self,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        """internal_only_deployment defaults to False when unset."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("INTERNAL_ONLY_DEPLOYMENT", raising=False)
+        assert Settings().internal_only_deployment is False

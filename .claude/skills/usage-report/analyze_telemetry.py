@@ -911,6 +911,126 @@ def _compute_instance_lifetime(
     return result
 
 
+# Internal-install classification began shipping with this release (issue #1216).
+# Deployments running an earlier version emit no classification fields, so any
+# internal/workshop installs before this release are only visible via the manual
+# known-internal-instances allowlist, not the telemetry signal.
+INTERNAL_CLASSIFICATION_SINCE_RELEASE = "1.24.5"
+
+# The internal deployment types we expect (matches InternalDeploymentType in
+# registry/core/config.py). "none" means not an internal deployment.
+INTERNAL_DEPLOYMENT_TYPES = ("dev", "workshop", "other")
+
+
+def _compute_internal_installs(
+    instances: list[dict],
+    rows: list[dict[str, str]],
+) -> dict:
+    """Compute internal-install metrics from the telemetry classification fields.
+
+    An instance counts as internal when its telemetry reports
+    internal_only_deployment=true (issue #1216). Returns:
+      total: number of distinct internal installs in the window
+      by_type: count of internal installs per internal_deployment_type
+      timeseries: month -> {type -> count of installs first seen that month},
+        capturing all internal types over time
+      since_release: the release classification capture began (for the note)
+    """
+    internal = [inst for inst in instances if inst.get("internal_only_deployment")]
+
+    by_type: dict[str, int] = {t: 0 for t in INTERNAL_DEPLOYMENT_TYPES}
+    for inst in internal:
+        dtype = (inst.get("internal_deployment_type") or "").strip().lower()
+        if dtype not in by_type:
+            # Defensive: an unexpected/blank type still counts toward the total
+            # under an "other" bucket so we never silently drop an internal install.
+            by_type.setdefault("other", 0)
+            dtype = "other"
+        by_type[dtype] += 1
+
+    # Monthly timeseries keyed by first-seen month (YYYY-MM). Each month maps to
+    # a per-type count so the chart can stack workshop/dev/other over time.
+    timeseries: dict[str, dict[str, int]] = {}
+    for inst in internal:
+        first_seen = inst.get("first_seen", "")
+        if len(first_seen) < 7:
+            continue
+        month = first_seen[:7]
+        dtype = (inst.get("internal_deployment_type") or "other").strip().lower()
+        if dtype not in INTERNAL_DEPLOYMENT_TYPES:
+            dtype = "other"
+        bucket = timeseries.setdefault(month, {t: 0 for t in INTERNAL_DEPLOYMENT_TYPES})
+        bucket[dtype] += 1
+
+    return {
+        "total": len(internal),
+        "by_type": by_type,
+        "timeseries": dict(sorted(timeseries.items())),
+        "since_release": INTERNAL_CLASSIFICATION_SINCE_RELEASE,
+    }
+
+
+def _build_internal_installs_md(
+    internal_installs: dict,
+) -> str:
+    """Build the 'Internal Installs' report section (issue #1216/#1217).
+
+    Renders the total count, a per-type breakdown, a monthly timeseries table
+    across all internal types, and the capture-start note for the release.
+    """
+    total = internal_installs.get("total", 0)
+    by_type = internal_installs.get("by_type", {})
+    timeseries = internal_installs.get("timeseries", {})
+    since = internal_installs.get("since_release", INTERNAL_CLASSIFICATION_SINCE_RELEASE)
+
+    lines: list[str] = []
+    lines.append("## Internal Installs")
+    lines.append("")
+    lines.append(
+        f"> **Note:** Internal/workshop install classification is captured from "
+        f"telemetry starting with release **{since}** onwards. Deployments running "
+        f"earlier versions report no classification, so internal installs before "
+        f"**{since}** are undercounted here (they appear only if listed in the manual "
+        f"known-internal-instances allowlist)."
+    )
+    lines.append("")
+
+    # Summary sentence + per-type breakdown
+    type_summary = ", ".join(
+        f"{by_type.get(t, 0)} {t}" for t in INTERNAL_DEPLOYMENT_TYPES
+    )
+    lines.append(
+        f"We had **{total}** internal install(s) in this window ({type_summary})."
+    )
+    lines.append("")
+    lines.append("| Internal Deployment Type | Installs |")
+    lines.append("|--------------------------|----------|")
+    for t in INTERNAL_DEPLOYMENT_TYPES:
+        lines.append(f"| {t} | {by_type.get(t, 0)} |")
+    lines.append(f"| **Total** | **{total}** |")
+    lines.append("")
+
+    # Monthly timeseries across all internal types
+    lines.append("### Internal Installs Over Time")
+    lines.append("")
+    if not timeseries:
+        lines.append(
+            f"_No internal installs recorded yet. Data begins with release {since}._"
+        )
+    else:
+        header_types = " | ".join(t.capitalize() for t in INTERNAL_DEPLOYMENT_TYPES)
+        divider = " | ".join("---" for _ in INTERNAL_DEPLOYMENT_TYPES)
+        lines.append(f"| Month | {header_types} | Total |")
+        lines.append(f"|-------|{divider}|-------|")
+        for month, counts in timeseries.items():
+            row_counts = " | ".join(str(counts.get(t, 0)) for t in INTERNAL_DEPLOYMENT_TYPES)
+            month_total = sum(counts.get(t, 0) for t in INTERNAL_DEPLOYMENT_TYPES)
+            lines.append(f"| {month} | {row_counts} | {month_total} |")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def _build_exec_summary_md(
     current_metrics: dict,
     previous_metrics: dict | None,
@@ -1183,6 +1303,13 @@ def _compute_instance_table(
         # Use _latest_nonempty to walk back to the most recent startup event.
         auth = _latest_nonempty(events, "auth")
 
+        # Internal/workshop deployment classification (schema v5+, issue #1216).
+        # Pre-v5 events omit these fields, so they stay empty and the instance
+        # is treated as external (unless matched by the manual allowlist).
+        internal_only_raw = _latest_nonempty(events, "internal_only_deployment")
+        internal_only_flag = internal_only_raw.strip().lower() == "true"
+        internal_deployment_type = _latest_nonempty(events, "internal_deployment_type")
+
         result.append(
             {
                 "registry_id": rid[:12] + "...",
@@ -1205,6 +1332,8 @@ def _compute_instance_table(
                 "search_backend": search_backend,
                 "embeddings_provider": embeddings_provider,
                 "embeddings_backend_kind": embeddings_backend_kind,
+                "internal_only_deployment": internal_only_flag,
+                "internal_deployment_type": internal_deployment_type,
                 "first_seen": first_ts,
                 "latest_seen": latest_ts,
             }
@@ -2046,12 +2175,19 @@ def main() -> None:
         upgrade_trajectories=upgrade_trajectories,
     )
 
+    # Internal installs section (issue #1216/#1217): count + per-type breakdown +
+    # monthly timeseries, with the capture-start-at-release note. Appended after
+    # the main tables so it has its own clearly labeled section.
+    internal_installs = _compute_internal_installs(instances, rows)
+    md_content = md_content + "\n\n" + _build_internal_installs_md(internal_installs)
+
     # Build JSON with all computed data
     metrics_json = {
         "report_date": date_str,
         "key_metrics": metrics,
         "per_cloud_unique_installs": cloud_installs,
         "instance_lifetime": instance_lifetime,
+        "internal_installs": internal_installs,
         "stickiness": stickiness,
         "sticky_profiles": sticky_profile_counts,
         "sticky_cloud_compute": sticky_cc_counts,

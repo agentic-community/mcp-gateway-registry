@@ -855,6 +855,16 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Default: "full" (uncomment to change)
 # registry_mode = "full"
 
+# Internal/workshop deployment classification (telemetry labels only; issue #1216).
+# Tags a deployment as one of our own internal/workshop installs so it can be
+# distinguished from community installs in telemetry. Does NOT change access control.
+#   - internal_only_deployment (default false): true for our own internal/workshop installs.
+#   - internal_deployment_type (default "none"): "none" | "dev" | "workshop" | "other".
+#       Forced to "none" when internal_only_deployment = false; defaults to "dev" when
+#       internal_only_deployment = true and left unset.
+# internal_only_deployment = false
+# internal_deployment_type = "none"
+
 # Tab visibility overrides (AND-ed with registry_mode)
 # Controls which tabs are shown in the UI without affecting backend APIs.
 # All default to true (backward compatible). Set to false to hide a tab.

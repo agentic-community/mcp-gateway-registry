@@ -1197,6 +1197,15 @@ module "ecs_service_registry" {
           name  = "REGISTRY_MODE"
           value = var.registry_mode
         },
+        # Internal/workshop deployment classification (telemetry labels; issue #1216)
+        {
+          name  = "INTERNAL_ONLY_DEPLOYMENT"
+          value = tostring(var.internal_only_deployment)
+        },
+        {
+          name  = "INTERNAL_DEPLOYMENT_TYPE"
+          value = var.internal_deployment_type
+        },
         {
           name  = "SHOW_SERVERS_TAB"
           value = tostring(var.show_servers_tab)

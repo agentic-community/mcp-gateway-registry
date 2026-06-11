@@ -274,6 +274,45 @@ class TestSchemas:
         with pytest.raises(ValidationError):
             HeartbeatEvent(**payload)
 
+    # ---- Schema v5 internal/workshop deployment classification (issue #1216) ----
+
+    def test_startup_accepts_v5_internal_classification(self):
+        """Schema v5 startup carries internal_only_deployment + internal_deployment_type."""
+        payload = self._v2_startup_payload()
+        payload["schema_version"] = "5"
+        payload["internal_only_deployment"] = True
+        payload["internal_deployment_type"] = "workshop"
+        event = StartupEvent(**payload)
+        assert event.internal_only_deployment is True
+        assert event.internal_deployment_type == "workshop"
+
+    def test_heartbeat_accepts_v5_internal_classification(self):
+        """Schema v5 heartbeat carries the same classification fields."""
+        payload = self._v2_heartbeat_payload()
+        payload["schema_version"] = "5"
+        payload["internal_only_deployment"] = True
+        payload["internal_deployment_type"] = "dev"
+        event = HeartbeatEvent(**payload)
+        assert event.internal_only_deployment is True
+        assert event.internal_deployment_type == "dev"
+
+    def test_v5_classification_fields_are_optional(self):
+        """Pre-v5 clients omit these fields; both schemas must still accept them."""
+        startup = StartupEvent(**self._v2_startup_payload())
+        heartbeat = HeartbeatEvent(**self._v2_heartbeat_payload())
+        assert startup.internal_only_deployment is None
+        assert startup.internal_deployment_type is None
+        assert heartbeat.internal_only_deployment is None
+        assert heartbeat.internal_deployment_type is None
+
+    def test_rejects_invalid_internal_deployment_type(self):
+        """internal_deployment_type is pattern-validated when present."""
+        payload = self._v2_startup_payload()
+        payload["schema_version"] = "5"
+        payload["internal_deployment_type"] = "production"  # not in the allowed set
+        with pytest.raises(ValidationError):
+            StartupEvent(**payload)
+
 
 class TestIPHashing:
     """Test IP hashing for privacy-preserving rate limiting."""

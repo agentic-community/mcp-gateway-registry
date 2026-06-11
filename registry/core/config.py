@@ -51,6 +51,15 @@ class RegistryMode(str, Enum):
     AGENTS_ONLY = "agents-only"
 
 
+class InternalDeploymentType(str, Enum):
+    """Classification of an internal/workshop deployment (telemetry label only)."""
+
+    NONE = "none"
+    DEV = "dev"
+    WORKSHOP = "workshop"
+    OTHER = "other"
+
+
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
 
@@ -640,6 +649,28 @@ class Settings(BaseSettings):
         default=RegistryMode.FULL, description="Registry operating mode"
     )
 
+    # Internal/workshop deployment classification (telemetry labels only; see issue
+    # #1216). These are self-reported labels for tracing our own internal and workshop
+    # deployments in telemetry. They do NOT change access control or network behavior.
+    # The cross-field default/correction logic (force to "none" when not internal,
+    # default to "dev" when internal and unset) runs at startup in main.py, mirroring
+    # the deployment_mode/registry_mode correction pattern.
+    internal_only_deployment: bool = Field(
+        default=False,
+        description=(
+            "Marks this as one of our own internal/workshop deployments (not a "
+            "community install). Telemetry label only; does not change access control."
+        ),
+    )
+    internal_deployment_type: InternalDeploymentType = Field(
+        default=InternalDeploymentType.NONE,
+        description=(
+            "Classification of an internal deployment: none, dev, workshop, or other. "
+            "Forced to 'none' when internal_only_deployment is false; defaults to 'dev' "
+            "when internal_only_deployment is true and left unset."
+        ),
+    )
+
     # Coding assistant selection for the Server Configuration modal.
     # Empty (default) means all supported assistants are shown.
     # Comma-separated list from the CODING_ASSISTANTS env var, e.g.
@@ -903,6 +934,37 @@ class Settings(BaseSettings):
         if normalized not in ALLOWED_STORAGE_BACKENDS:
             accepted = ", ".join(sorted(ALLOWED_STORAGE_BACKENDS))
             raise ValueError(f"Invalid STORAGE_BACKEND={v!r}. Accepted values: {accepted}.")
+        return normalized
+
+    @field_validator("internal_deployment_type", mode="before")
+    @classmethod
+    def _validate_internal_deployment_type(
+        cls,
+        v: str | None,
+    ) -> str:
+        """Reject unknown INTERNAL_DEPLOYMENT_TYPE values at startup.
+
+        Empty string and None coerce to "none". Any other value is normalized
+        (stripped, lowercased) and compared against the InternalDeploymentType
+        members. Unknown values raise ValueError listing the accepted values.
+
+        Safe to echo v in the error: this is a non-secret config name.
+        """
+        if v is None or v == "":
+            return InternalDeploymentType.NONE.value
+        if isinstance(v, InternalDeploymentType):
+            return v.value
+        if not isinstance(v, str):
+            raise ValueError(
+                f"INTERNAL_DEPLOYMENT_TYPE must be a string, got {type(v).__name__}"
+            )
+        normalized = v.strip().lower()
+        valid = {t.value for t in InternalDeploymentType}
+        if normalized not in valid:
+            accepted = ", ".join(sorted(valid))
+            raise ValueError(
+                f"Invalid INTERNAL_DEPLOYMENT_TYPE={v!r}. Accepted values: {accepted}."
+            )
         return normalized
 
     # DocumentDB Configuration (only used when storage_backend="documentdb" or "mongodb-ce")

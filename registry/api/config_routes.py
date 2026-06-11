@@ -39,6 +39,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("deployment_mode", "Deployment Mode", False),
             ("registry_mode", "Registry Mode", False),
+            ("internal_only_deployment", "Internal-Only Deployment", False),
+            ("internal_deployment_type", "Internal Deployment Type", False),
             ("nginx_updates_enabled", "Nginx Updates Enabled", False),
             ("bind_host", "Bind Host", False),
             ("show_servers_tab", "Show MCP Servers Tab", False),

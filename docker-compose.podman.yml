@@ -13,6 +13,9 @@ services:
       # Deployment Mode Configuration
       - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-with-gateway}
       - REGISTRY_MODE=${REGISTRY_MODE:-full}
+      # Internal/workshop deployment classification (telemetry labels; issue #1216)
+      - INTERNAL_ONLY_DEPLOYMENT=${INTERNAL_ONLY_DEPLOYMENT:-false}
+      - INTERNAL_DEPLOYMENT_TYPE=${INTERNAL_DEPLOYMENT_TYPE:-none}
       # Tab visibility overrides (AND-ed with REGISTRY_MODE)
       - SHOW_SERVERS_TAB=${SHOW_SERVERS_TAB:-true}
       - SHOW_VIRTUAL_SERVERS_TAB=${SHOW_VIRTUAL_SERVERS_TAB:-true}

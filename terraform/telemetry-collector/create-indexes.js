@@ -16,6 +16,10 @@ db.startup_events.createIndex({ "instance_id": 1 });
 db.startup_events.createIndex({ "v": 1, "received_at": -1 });
 db.heartbeat_events.createIndex({ "instance_id": 1 });
 
+// Internal/workshop deployment classification (issue #1216)
+db.startup_events.createIndex({ "internal_deployment_type": 1 });
+db.heartbeat_events.createIndex({ "internal_deployment_type": 1 });
+
 // Verify indexes
 print("\n=== Startup Events Indexes ===");
 printjson(db.startup_events.getIndexes());

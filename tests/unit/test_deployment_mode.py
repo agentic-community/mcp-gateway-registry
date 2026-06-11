@@ -274,3 +274,62 @@ class TestNginxServiceDeploymentMode:
         assert result is True
         mock_counter.labels.assert_called_with(operation="reload")
         mock_counter.labels().inc.assert_called_once()
+
+
+# =============================================================================
+# TEST CLASS: Internal Deployment Classification (issue #1216)
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestInternalDeploymentClassification:
+    """Test the startup correction logic for internal/workshop deployments.
+
+    _resolve_internal_deployment_classification mutates the module-level
+    settings via object.__setattr__, mirroring the deployment-mode correction.
+    """
+
+    def _run_with(self, internal_only, initial_type):
+        """Apply the correction to a patched settings and return the result type."""
+        from unittest.mock import patch
+
+        from registry.core.config import InternalDeploymentType, Settings
+
+        settings = Settings()
+        object.__setattr__(settings, "internal_only_deployment", internal_only)
+        object.__setattr__(settings, "internal_deployment_type", initial_type)
+
+        with patch("registry.main.settings", settings):
+            from registry.main import _resolve_internal_deployment_classification
+
+            _resolve_internal_deployment_classification()
+
+        return settings.internal_deployment_type, InternalDeploymentType
+
+    def test_not_internal_keeps_none(self):
+        """internal_only=False with NONE type stays NONE (the common default case)."""
+        from registry.core.config import InternalDeploymentType
+
+        result, Enum = self._run_with(False, InternalDeploymentType.NONE)
+        assert result == Enum.NONE
+
+    def test_not_internal_with_workshop_corrected_to_none(self):
+        """A non-none type with internal_only=False is corrected to NONE."""
+        from registry.core.config import InternalDeploymentType
+
+        result, Enum = self._run_with(False, InternalDeploymentType.WORKSHOP)
+        assert result == Enum.NONE
+
+    def test_internal_unset_defaults_to_dev(self):
+        """internal_only=True with NONE type defaults to DEV."""
+        from registry.core.config import InternalDeploymentType
+
+        result, Enum = self._run_with(True, InternalDeploymentType.NONE)
+        assert result == Enum.DEV
+
+    def test_internal_workshop_preserved(self):
+        """internal_only=True with an explicit type keeps that type."""
+        from registry.core.config import InternalDeploymentType
+
+        result, Enum = self._run_with(True, InternalDeploymentType.WORKSHOP)
+        assert result == Enum.WORKSHOP

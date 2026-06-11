@@ -18,6 +18,34 @@ tests:
           content:
             name: DEPLOYMENT_MODE
             value: "with-gateway"
+      # Internal/workshop deployment classification defaults (issue #1216)
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INTERNAL_ONLY_DEPLOYMENT
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INTERNAL_DEPLOYMENT_TYPE
+            value: "none"
+
+  - it: renders internal-deployment classification overrides (issue #1216)
+    set:
+      app:
+        internalOnlyDeployment: true
+        internalDeploymentType: workshop
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INTERNAL_ONLY_DEPLOYMENT
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INTERNAL_DEPLOYMENT_TYPE
+            value: "workshop"
 
   - it: appends extraEnv entries after chart-managed env vars
     set:
@@ -44,15 +72,17 @@ tests:
                 name: my-secret
                 key: my-key
       # Order: chart-managed env vars start with NODE_NAME (downward API,
-      # env[0]); DEPLOYMENT_MODE is env[1]; CODING_ASSISTANTS is env[7];
-      # UI_TITLE is env[8]; the tool-level access control pair (issue #1026)
-      # is env[9]/env[10]; MCP_ADVERTISED_SCOPES is env[11]; the custom-entity-
-      # types quartet (CUSTOM_ENTITY_TYPES_ENABLED, CUSTOM_TYPE_CACHE_TTL_SECONDS,
-      # MAX_CUSTOM_RECORDS_PER_TYPE, MAX_CUSTOM_TYPES) is
-      # env[12]/env[13]/env[14]/env[15];
-      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[16];
+      # env[0]); DEPLOYMENT_MODE is env[1]; REGISTRY_MODE is env[2]; the
+      # internal-deployment classification pair (issue #1216)
+      # INTERNAL_ONLY_DEPLOYMENT/INTERNAL_DEPLOYMENT_TYPE is env[3]/env[4];
+      # CODING_ASSISTANTS is env[9]; UI_TITLE is env[10]; the tool-level access
+      # control pair (issue #1026) is env[11]/env[12]; MCP_ADVERTISED_SCOPES is
+      # env[13]; the custom-entity-types quartet (CUSTOM_ENTITY_TYPES_ENABLED,
+      # CUSTOM_TYPE_CACHE_TTL_SECONDS, MAX_CUSTOM_RECORDS_PER_TYPE,
+      # MAX_CUSTOM_TYPES) is env[14]/env[15]/env[16]/env[17];
+      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[18];
       # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
-      # env[17]/env[18]; user extraEnv entries are appended at the end.
+      # env[19]/env[20]; user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
       # (set at the suite level), awsRegistry.federationEnabled=false, and
@@ -69,46 +99,52 @@ tests:
           path: spec.template.spec.containers[0].env[1].name
           value: DEPLOYMENT_MODE
       - equal:
-          path: spec.template.spec.containers[0].env[7].name
-          value: CODING_ASSISTANTS
+          path: spec.template.spec.containers[0].env[3].name
+          value: INTERNAL_ONLY_DEPLOYMENT
       - equal:
-          path: spec.template.spec.containers[0].env[8].name
-          value: UI_TITLE
+          path: spec.template.spec.containers[0].env[4].name
+          value: INTERNAL_DEPLOYMENT_TYPE
       - equal:
           path: spec.template.spec.containers[0].env[9].name
-          value: MCP_TOOLS_LIST_FILTER_ENABLED
+          value: CODING_ASSISTANTS
       - equal:
           path: spec.template.spec.containers[0].env[10].name
-          value: TOOL_FILTER_AUDIT_LOG_LEVEL
+          value: UI_TITLE
       - equal:
           path: spec.template.spec.containers[0].env[11].name
-          value: MCP_ADVERTISED_SCOPES
+          value: MCP_TOOLS_LIST_FILTER_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[12].name
-          value: CUSTOM_ENTITY_TYPES_ENABLED
+          value: TOOL_FILTER_AUDIT_LOG_LEVEL
       - equal:
           path: spec.template.spec.containers[0].env[13].name
-          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
+          value: MCP_ADVERTISED_SCOPES
       - equal:
           path: spec.template.spec.containers[0].env[14].name
-          value: MAX_CUSTOM_RECORDS_PER_TYPE
+          value: CUSTOM_ENTITY_TYPES_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[15].name
-          value: MAX_CUSTOM_TYPES
+          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[16].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: MAX_CUSTOM_RECORDS_PER_TYPE
       - equal:
           path: spec.template.spec.containers[0].env[17].name
-          value: PF_ADMIN_URL
+          value: MAX_CUSTOM_TYPES
       - equal:
           path: spec.template.spec.containers[0].env[18].name
-          value: PF_ADMIN_USER
+          value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[19].name
-          value: MY_FLAG
+          value: PF_ADMIN_URL
       - equal:
           path: spec.template.spec.containers[0].env[20].name
+          value: PF_ADMIN_USER
+      - equal:
+          path: spec.template.spec.containers[0].env[21].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[22].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

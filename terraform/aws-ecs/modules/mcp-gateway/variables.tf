@@ -1268,6 +1268,18 @@ variable "registry_mode" {
   default     = "full"
 }
 
+variable "internal_only_deployment" {
+  description = "Marks an internal/workshop deployment (telemetry label; issue #1216). Does not change access control."
+  type        = bool
+  default     = false
+}
+
+variable "internal_deployment_type" {
+  description = "Internal deployment classification: 'none', 'dev', 'workshop', or 'other' (telemetry label; issue #1216)."
+  type        = string
+  default     = "none"
+}
+
 variable "show_servers_tab" {
   description = "Show the MCP Servers tab in the UI. AND-ed with registry_mode."
   type        = bool

@@ -236,6 +236,14 @@ registry:
     # Registry mode: full, skills-only, mcp-servers-only, agents-only
     registryMode: full
 
+    # Internal/workshop deployment classification (telemetry labels only; issue #1216).
+    # Tags a deployment as one of our own internal/workshop installs so it can be
+    # distinguished from community installs in telemetry. Does NOT change access control.
+    # internalDeploymentType is forced to "none" when internalOnlyDeployment is false, and
+    # defaults to "dev" when internalOnlyDeployment is true and left unset.
+    internalOnlyDeployment: false
+    internalDeploymentType: "none"
+
     # Tab visibility overrides (AND-ed with registryMode)
     showServersTab: true
     showVirtualServersTab: true

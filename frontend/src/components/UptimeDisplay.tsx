@@ -165,6 +165,14 @@ const UptimeDisplay: React.FC = () => {
                   {stats.deployment_mode}
                 </span>
               </div>
+              {stats.internal_only_deployment && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Internal:</span>
+                  <span className="text-gray-900 dark:text-gray-100 truncate text-right">
+                    {stats.internal_deployment_type}
+                  </span>
+                </div>
+              )}
               {detection && (
                 <div className="flex justify-between gap-2">
                   <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Cloud:</span>

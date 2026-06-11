@@ -31,6 +31,10 @@ _CLOUD_DETECTION_METHOD_PATTERN = (
     r"explicit|operator_declared|operator_declined|unknown)$"
 )
 
+# Allowlist of values for internal_deployment_type. Added in schema v5
+# (issue #1216). Keep in sync with InternalDeploymentType in registry/core/config.py.
+_INTERNAL_DEPLOYMENT_TYPE_PATTERN = r"^(none|dev|workshop|other)$"
+
 
 def _check_cloud_detection_consistency(cloud: str, method: str | None) -> None:
     """Reject payloads where cloud and cloud_detection_method are inconsistent.
@@ -138,6 +142,17 @@ class StartupEvent(BaseModel):
             "How the cloud value was detected. Added in schema v3 (issue #986). "
             "None for pre-v3 clients."
         ),
+    )
+    # Internal/workshop deployment classification (added in schema v5, issue #1216).
+    # Optional so pre-v5 clients (which omit these) still validate.
+    internal_only_deployment: bool | None = Field(
+        default=None,
+        description="Internal/workshop deployment flag. Added in schema v5.",
+    )
+    internal_deployment_type: str | None = Field(
+        default=None,
+        pattern=_INTERNAL_DEPLOYMENT_TYPE_PATTERN,
+        description="Internal deployment classification. Added in schema v5.",
     )
     ts: str = Field(..., description="ISO 8601 timestamp")
 
@@ -292,6 +307,17 @@ class HeartbeatEvent(BaseModel):
     )
     search_queries_24h: int = Field(default=0, ge=0, description="Search queries in last 24 hours")
     search_queries_1h: int = Field(default=0, ge=0, description="Search queries in last hour")
+    # Internal/workshop deployment classification (added in schema v5, issue #1216).
+    # Optional so pre-v5 clients (which omit these) still validate.
+    internal_only_deployment: bool | None = Field(
+        default=None,
+        description="Internal/workshop deployment flag. Added in schema v5.",
+    )
+    internal_deployment_type: str | None = Field(
+        default=None,
+        pattern=_INTERNAL_DEPLOYMENT_TYPE_PATTERN,
+        description="Internal deployment classification. Added in schema v5.",
+    )
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")

@@ -637,6 +637,18 @@ async def _acquire_telemetry_lock(event_type: str, interval_seconds: int) -> boo
         return True
 
 
+def _classification_fields() -> dict:
+    """Return the internal-deployment classification keys for telemetry payloads.
+
+    Single source of truth so the startup and heartbeat builders cannot drift
+    (issue #1216). Both builders merge this dict into their payload.
+    """
+    return {
+        "internal_only_deployment": settings.internal_only_deployment,
+        "internal_deployment_type": settings.internal_deployment_type.value,
+    }
+
+
 async def _build_startup_payload() -> dict:
     """Build the anonymous startup event payload."""
     from registry.repositories.stats_repository import get_search_counts
@@ -651,7 +663,7 @@ async def _build_startup_payload() -> dict:
 
     return {
         "event": "startup",
-        "schema_version": "4",
+        "schema_version": "5",
         "registry_id": registry_id,
         "v": __version__,
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
@@ -670,6 +682,8 @@ async def _build_startup_payload() -> dict:
         "search_queries_total": counts["total"],
         "search_queries_24h": counts["last_24h"],
         "search_queries_1h": counts["last_1h"],
+        # Internal/workshop deployment classification (schema v5+, issue #1216)
+        **_classification_fields(),
         "ts": datetime.now(UTC).isoformat(),
     }
 
@@ -740,7 +754,7 @@ async def _build_heartbeat_payload() -> dict:
 
     return {
         "event": "heartbeat",
-        "schema_version": "4",
+        "schema_version": "5",
         "registry_id": registry_id,
         "v": __version__,
         # Deployment-shape fields (schema v4+). Carrying them on every
@@ -770,6 +784,8 @@ async def _build_heartbeat_payload() -> dict:
         "search_queries_total": counts["total"],
         "search_queries_24h": counts["last_24h"],
         "search_queries_1h": counts["last_1h"],
+        # Internal/workshop deployment classification (schema v5+, issue #1216)
+        **_classification_fields(),
         "ts": datetime.now(UTC).isoformat(),
     }
 

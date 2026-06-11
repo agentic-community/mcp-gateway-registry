@@ -68,6 +68,7 @@ from registry.auth.routes import router as auth_router
 # Import core configuration
 from registry.core.config import (
     MONGODB_BACKENDS,
+    InternalDeploymentType,
     RegistryMode,
     _print_config_warning_banner,
     _validate_mode_combination,
@@ -109,12 +110,49 @@ logger = logging.getLogger(__name__)
 logger.info(f"Logging configured. Writing to file: {log_file_path}")
 
 
+def _resolve_internal_deployment_classification() -> None:
+    """Apply the internal-deployment default/correction rules at startup.
+
+    Rules (see issue #1216):
+      - internal_only_deployment is False -> internal_deployment_type forced to NONE
+        (warn if a non-none type was supplied, since it would be misleading).
+      - internal_only_deployment is True and type is NONE -> default to DEV.
+
+    Uses object.__setattr__ because Settings is frozen at runtime, mirroring the
+    deployment-mode correction below.
+    """
+    is_internal = settings.internal_only_deployment
+    current_type = settings.internal_deployment_type
+
+    if not is_internal:
+        if current_type != InternalDeploymentType.NONE:
+            logger.warning(
+                "INTERNAL_DEPLOYMENT_TYPE=%s ignored because INTERNAL_ONLY_DEPLOYMENT "
+                "is false; forcing to 'none'.",
+                current_type.value,
+            )
+            object.__setattr__(
+                settings, "internal_deployment_type", InternalDeploymentType.NONE
+            )
+        return
+
+    if current_type == InternalDeploymentType.NONE:
+        logger.info(
+            "INTERNAL_ONLY_DEPLOYMENT is true with no type set; defaulting to 'dev'."
+        )
+        object.__setattr__(
+            settings, "internal_deployment_type", InternalDeploymentType.DEV
+        )
+
+
 def _log_startup_configuration() -> None:
     """Log startup configuration with clear formatting."""
     logger.info("=" * 60)
     logger.info("Registry starting with:")
     logger.info(f"  - DEPLOYMENT_MODE: {settings.deployment_mode.value}")
     logger.info(f"  - REGISTRY_MODE: {settings.registry_mode.value}")
+    logger.info(f"  - INTERNAL_ONLY_DEPLOYMENT: {settings.internal_only_deployment}")
+    logger.info(f"  - INTERNAL_DEPLOYMENT_TYPE: {settings.internal_deployment_type.value}")
     logger.info(f"  - Nginx updates: {'ENABLED' if settings.nginx_updates_enabled else 'DISABLED'}")
 
     # Log what's disabled based on registry mode
@@ -423,6 +461,9 @@ async def lifespan(app: FastAPI):
         # Update settings (use object.__setattr__ for frozen pydantic settings)
         object.__setattr__(settings, "deployment_mode", corrected_deployment)
         object.__setattr__(settings, "registry_mode", corrected_registry)
+
+    # Apply internal-deployment classification default/correction (issue #1216)
+    _resolve_internal_deployment_classification()
 
     # Log startup configuration
     _log_startup_configuration()

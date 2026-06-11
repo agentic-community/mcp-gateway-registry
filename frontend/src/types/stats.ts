@@ -44,6 +44,8 @@ export interface SystemStats {
   version: string;
   deployment_type: string;      // "Kubernetes" | "ECS" | "EC2" | "Local"
   deployment_mode: string;      // "with-gateway" | "registry-only"
+  internal_only_deployment: boolean;  // issue #1216: internal/workshop deployment flag
+  internal_deployment_type: string;   // "none" | "dev" | "workshop" | "other"
   registry_stats: RegistryStatsData;
   database_status: DatabaseStatus;
   auth_status: AuthStatus;

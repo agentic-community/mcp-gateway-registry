@@ -191,6 +191,8 @@ class TestPayloadBuilding:
             mock_settings.storage_backend = "file"
             mock_settings.auth_provider = "cognito"
             mock_settings.federation_static_token_auth_enabled = False
+            mock_settings.internal_only_deployment = False
+            mock_settings.internal_deployment_type.value = "none"
 
             payload = await _build_startup_payload()
 
@@ -209,6 +211,9 @@ class TestPayloadBuilding:
             assert "search_queries_total" in payload
             assert payload["search_queries_total"] == 42
             assert "ts" in payload
+            # Internal/workshop deployment classification (issue #1216)
+            assert payload["internal_only_deployment"] is False
+            assert payload["internal_deployment_type"] == "none"
 
     @pytest.mark.asyncio
     async def test_no_pii_in_startup_payload(self):
@@ -234,6 +239,8 @@ class TestPayloadBuilding:
             mock_settings.embeddings_provider = "sentence-transformers"
             mock_settings.embeddings_model_name = "all-MiniLM-L6-v2"
             mock_settings.mcp_cloud_provider = None
+            mock_settings.internal_only_deployment = False
+            mock_settings.internal_deployment_type.value = "none"
 
             payload = await _build_startup_payload()
             payload_str = json.dumps(payload)
@@ -888,7 +895,7 @@ class TestEmbeddingsTelemetryFields:
 
             assert payload["embeddings_provider"] == "litellm"
             assert payload["embeddings_backend_kind"] == "bedrock"
-            assert payload["schema_version"] == "4"
+            assert payload["schema_version"] == "5"
 
     @pytest.mark.asyncio
     async def test_startup_payload_omits_raw_model_name_and_dimensions(self):
@@ -915,6 +922,8 @@ class TestEmbeddingsTelemetryFields:
             mock_settings.embeddings_model_name = "bedrock/amazon.titan-embed-text-v2:0"
             mock_settings.embeddings_model_dimensions = 1024
             mock_settings.mcp_cloud_provider = None
+            mock_settings.internal_only_deployment = False
+            mock_settings.internal_deployment_type.value = "none"
 
             payload = await _build_startup_payload()
 
@@ -966,6 +975,8 @@ class TestEmbeddingsTelemetryFields:
             mock_settings.auth_provider = "keycloak"
             mock_settings.federation_static_token_auth_enabled = False
             mock_settings.mcp_cloud_provider = None
+            mock_settings.internal_only_deployment = False
+            mock_settings.internal_deployment_type = MagicMock(value="none")
 
             # Mock repository methods
             for repo_mock in (mock_server_repo, mock_agent_repo, mock_skill_repo):
@@ -980,7 +991,7 @@ class TestEmbeddingsTelemetryFields:
 
             assert payload["embeddings_provider"] == "sentence-transformers"
             assert payload["embeddings_backend_kind"] == "sentence-transformers"
-            assert payload["schema_version"] == "4"
+            assert payload["schema_version"] == "5"
             # New v4 deployment-shape fields surface on heartbeat too.
             assert payload["auth"] == "keycloak"
             assert payload["mode"] == "with-gateway"

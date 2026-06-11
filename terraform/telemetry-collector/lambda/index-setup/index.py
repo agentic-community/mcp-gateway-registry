@@ -74,10 +74,14 @@ def lambda_handler(event, context):
                 ({"keys": [("received_at", 1)], "kwargs": {"expireAfterSeconds": 31536000}}, "TTL"),
                 ({"keys": [("instance_id", 1)], "kwargs": {}}, "query"),
                 ({"keys": [("v", 1), ("received_at", -1)], "kwargs": {}}, "query"),
+                # Internal/workshop deployment classification (issue #1216)
+                ({"keys": [("internal_deployment_type", 1)], "kwargs": {}}, "query"),
             ],
             "heartbeat_events": [
                 ({"keys": [("received_at", 1)], "kwargs": {"expireAfterSeconds": 31536000}}, "TTL"),
                 ({"keys": [("instance_id", 1)], "kwargs": {}}, "query"),
+                # Internal/workshop deployment classification (issue #1216)
+                ({"keys": [("internal_deployment_type", 1)], "kwargs": {}}, "query"),
             ],
         }
 

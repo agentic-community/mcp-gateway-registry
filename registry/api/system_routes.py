@@ -297,6 +297,8 @@ async def _get_cached_stats() -> dict:
         "version": __version__,
         "deployment_type": _detect_deployment_type(),
         "deployment_mode": settings.deployment_mode.value,
+        "internal_only_deployment": settings.internal_only_deployment,
+        "internal_deployment_type": settings.internal_deployment_type.value,
         "registry_stats": registry_stats,
         "database_status": database_status,
         "auth_status": auth_status,
