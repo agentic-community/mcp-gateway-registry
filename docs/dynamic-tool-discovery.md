@@ -39,36 +39,38 @@ The dynamic tool discovery process follows these steps:
 
 ## Discovery Receipts and Context Budgets
 
-Dynamic discovery reduces up-front context bloat, but operators still need to know which tool surface an agent actually saw. The `search_registry` and deprecated `intelligent_tool_finder` tools return a compact `discovery_receipt` with their successful responses; operators can persist that receipt alongside normal audit logs so each run can be reviewed without replaying raw prompts or tool payloads.
+Dynamic discovery reduces up-front context bloat, but eval harnesses and agent-development workflows still need to know which result surface an agent actually saw. The `search_registry` and deprecated `intelligent_tool_finder` tools can return a compact `discovery_receipt` when callers set `include_discovery_receipt=true`; the default response remains unchanged to avoid adding model-facing tokens in production calls.
+
+The receipt is a caller-visible eval/debugging signal, not an operator audit transport. If you need audit evidence for production traffic, emit it server-side through structured logs or OTel events/spans instead of relying on the model or caller to persist it.
 
 A useful receipt answers four questions:
 
 1. **What was requested?** The natural-language discovery query and correlation identifiers.
-2. **What was exposed?** The services/tools returned to the agent, with scores and the configured `top_k_services` / `top_n_tools` limits.
-3. **What stayed out?** The count or categories of candidate tools that were intentionally withheld because they were outside the current intent, policy scope, or result budget.
+2. **What was exposed?** The tools, agents, or skills returned to the agent, with scores and the configured result limits.
+3. **What stayed out?** The count or categories of candidate results that were intentionally withheld because they were outside the current intent, policy scope, or result budget.
 4. **What happened next?** Whether a discovered tool was invoked, skipped, denied, or fell back to another path.
 
 Example shape:
 
 ```json
 {
-  "event": "tool.discovery_receipt",
+  "event": "registry.discovery_receipt",
   "request_id": "req_123",
   "session_id": "sess_456",
   "query": "weather forecast for tomorrow",
   "limits": {
-    "top_k_services": 3,
-    "top_n_tools": 1
+    "max_results": 1
   },
-  "exposed_tools": [
+  "exposed_results": [
     {
+      "asset_type": "tool",
       "service_path": "/weather",
-      "tool_name": "get_forecast",
+      "name": "get_forecast",
       "similarity_score": 0.91
     }
   ],
   "withheld": {
-    "candidate_tool_count": 42,
+    "candidate_result_count": 42,
     "reason": "outside_intent_or_budget"
   },
   "invocation": {
@@ -90,7 +92,7 @@ Keep discovery receipts compact and privacy-safe:
 - Store shapes, counts, categories, scores, and correlation IDs; avoid raw user prompts beyond the discovery query unless your retention policy allows them.
 - Redact tool arguments and results by default. The receipt should show the class of data used, not copy sensitive payloads into observability storage.
 - Keep metrics lower-cardinality than receipts. Good metric labels include service family, status, and stop reason; avoid labels such as raw query text, user IDs, arguments, or result values.
-- Treat withheld tools as a first-class signal. If many tools are repeatedly withheld for the same task, split services, improve descriptions, or adjust discovery limits.
+- Treat withheld results as a first-class signal. If many useful tools, agents, or skills are repeatedly withheld for the same task, split services, improve descriptions, or adjust discovery limits.
 
 ## Architecture
 

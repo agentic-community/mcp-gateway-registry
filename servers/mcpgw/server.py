@@ -209,7 +209,7 @@ def _build_discovery_receipt(
     *,
     query: str,
     limit: int,
-    exposed_tools: list[dict[str, Any]],
+    exposed_results: list[dict[str, Any]],
     total_candidates: int,
     status: str,
     stop_reason: str,
@@ -217,16 +217,16 @@ def _build_discovery_receipt(
     """Build a compact, privacy-safe receipt for dynamic discovery results.
 
     The receipt deliberately records shapes/counts and ranking metadata rather
-    than raw tool arguments, tool outputs, or user data. It is returned with the
-    search response so callers can persist it in their own audit pipeline.
+    than raw tool arguments, tool outputs, or user data. It is an opt-in
+    eval/agent-development signal; server-side audit should use logs or OTel.
     """
     return {
-        "event": "tool.discovery_receipt",
+        "event": "registry.discovery_receipt",
         "query": query,
         "limits": {"max_results": limit},
-        "exposed_tools": exposed_tools,
+        "exposed_results": exposed_results,
         "withheld": {
-            "candidate_tool_count": max(total_candidates - len(exposed_tools), 0),
+            "candidate_result_count": max(total_candidates - len(exposed_results), 0),
             "reason": "outside_intent_or_budget",
         },
         "status": status,
@@ -562,6 +562,7 @@ async def get_skill_content(
 async def search_registry(
     query: str,
     max_results: int = 10,
+    include_discovery_receipt: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -591,6 +592,7 @@ async def search_registry(
     Args:
         query: What capability or tool you are looking for (natural language)
         max_results: Number of results to return (default: 10, max: 50)
+        include_discovery_receipt: Include compact eval metadata about exposed and withheld results
 
     Returns:
         Dictionary with servers, tools, agents, skills arrays and metadata
@@ -626,47 +628,67 @@ async def search_registry(
         agents = data.get("agents", []) if isinstance(data, dict) else []
         skills = data.get("skills", []) if isinstance(data, dict) else []
 
-        candidate_tools = []
+        candidate_results = []
         for tool in tools:
-            candidate_tools.append(
+            candidate_results.append(
                 {
+                    "asset_type": "tool",
                     "service_path": tool.get("server_path") or tool.get("path") or "",
-                    "tool_name": tool.get("tool_name") or tool.get("name") or "",
+                    "name": tool.get("tool_name") or tool.get("name") or "",
                     "similarity_score": tool.get("relevance_score") or tool.get("score"),
                 }
             )
         for server in servers:
             server_path = server.get("path", "")
             for tool in server.get("matching_tools", []):
-                candidate_tools.append(
+                candidate_results.append(
                     {
+                        "asset_type": "tool",
                         "service_path": server_path,
-                        "tool_name": tool.get("tool_name", ""),
+                        "name": tool.get("tool_name", ""),
                         "similarity_score": tool.get("relevance_score"),
                     }
                 )
-        exposed_tools = candidate_tools[:max_results]
+        for agent in agents:
+            candidate_results.append(
+                {
+                    "asset_type": "agent",
+                    "service_path": agent.get("path") or agent.get("url") or "",
+                    "name": agent.get("agent_name") or agent.get("name") or "",
+                    "similarity_score": agent.get("relevance_score") or agent.get("score"),
+                }
+            )
+        for skill in skills:
+            candidate_results.append(
+                {
+                    "asset_type": "skill",
+                    "service_path": skill.get("path") or skill.get("url") or "",
+                    "name": skill.get("skill_name") or skill.get("name") or "",
+                    "similarity_score": skill.get("relevance_score") or skill.get("score"),
+                }
+            )
+        exposed_results = candidate_results[:max_results]
 
         total_results = len(servers) + len(tools) + len(agents) + len(skills)
-        discovery_receipt = _build_discovery_receipt(
-            query=query,
-            limit=max_results,
-            exposed_tools=exposed_tools,
-            total_candidates=len(candidate_tools),
-            status="success",
-            stop_reason="results_returned" if total_results else "no_match",
-        )
-
-        return {
+        result = {
             "servers": servers,
             "tools": tools,
             "agents": agents,
             "skills": skills,
             "query": query,
             "total_results": total_results,
-            "discovery_receipt": discovery_receipt,
             "status": "success",
         }
+        if include_discovery_receipt:
+            result["discovery_receipt"] = _build_discovery_receipt(
+                query=query,
+                limit=max_results,
+                exposed_results=exposed_results,
+                total_candidates=len(candidate_results),
+                status="success",
+                stop_reason="results_returned" if total_results else "no_match",
+            )
+        return result
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
@@ -699,6 +721,7 @@ async def search_registry(
 async def intelligent_tool_finder(
     query: str,
     top_n: int = 5,
+    include_discovery_receipt: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -709,6 +732,7 @@ async def intelligent_tool_finder(
     Args:
         query: Natural language description of what you want to do
         top_n: Number of results to return (default: 5, max: 50)
+        include_discovery_receipt: Include compact eval metadata about exposed and withheld results
 
     Returns:
         Dictionary containing results, query, total_results, and status
@@ -765,22 +789,30 @@ async def intelligent_tool_finder(
         # Enforce client-side limit (safety net in case registry returns more)
         result_list = result_list[:top_n]
         exposed_tools = exposed_tools[:top_n]
-        discovery_receipt = _build_discovery_receipt(
-            query=query,
-            limit=top_n,
-            exposed_tools=exposed_tools,
-            total_candidates=total_candidates,
-            status="success",
-            stop_reason="results_returned" if result_list else "no_match",
-        )
-
-        return {
+        result = {
             "results": result_list,
             "query": query,
             "total_results": len(result_list),
-            "discovery_receipt": discovery_receipt,
             "status": "success",
         }
+        if include_discovery_receipt:
+            result["discovery_receipt"] = _build_discovery_receipt(
+                query=query,
+                limit=top_n,
+                exposed_results=[
+                    {
+                        "asset_type": "tool",
+                        "service_path": tool["service_path"],
+                        "name": tool["tool_name"],
+                        "similarity_score": tool["similarity_score"],
+                    }
+                    for tool in exposed_tools
+                ],
+                total_candidates=total_candidates,
+                status="success",
+                stop_reason="results_returned" if result_list else "no_match",
+            )
+        return result
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
