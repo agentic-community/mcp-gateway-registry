@@ -314,9 +314,9 @@ cleanup() {
     echo -e "${BLUE}[Step 14] Deleting human user: ${HUMAN_USERNAME}${NC}"
     ${MGMT_CMD} user-delete --username "${HUMAN_USERNAME}" --force || echo -e "${RED}Failed to delete human user${NC}"
 
-    # Delete group
+    # Delete group (--idp removes it from Keycloak too, matching create-group --idp above)
     echo -e "${BLUE}[Step 15] Deleting group: ${GROUP_NAME}${NC}"
-    ${MGMT_CMD} group-delete --name "${GROUP_NAME}" --force || echo -e "${RED}Failed to delete group${NC}"
+    ${MGMT_CMD} delete-group --name "${GROUP_NAME}" --idp --force || echo -e "${RED}Failed to delete group${NC}"
 
     # Delete temporary JSON files
     echo -e "${BLUE}[Step 16] Cleaning up temporary JSON files${NC}"
@@ -344,16 +344,21 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 # Step 1: Create IAM group
+# Use --idp so the group is created in Keycloak (not just the registry DB).
+# The human-user and M2M-account steps below add users to this group, and
+# Keycloak rejects membership in a group it does not know about.
 echo -e "${BLUE}[Step 1] Creating IAM group: ${GROUP_NAME}${NC}"
 if [ "$VERBOSE" = true ]; then
-    ${MGMT_CMD} group-create \
+    ${MGMT_CMD} create-group \
         --name "${GROUP_NAME}" \
-        --description "Test group for end-to-end testing"
+        --description "Test group for end-to-end testing" \
+        --idp
     CREATE_STATUS=$?
 else
-    ${MGMT_CMD} group-create \
+    ${MGMT_CMD} create-group \
         --name "${GROUP_NAME}" \
-        --description "Test group for end-to-end testing" > /dev/null 2>&1
+        --description "Test group for end-to-end testing" \
+        --idp > /dev/null 2>&1
     CREATE_STATUS=$?
 fi
 
@@ -614,55 +619,46 @@ fi
 echo ""
 
 # Step 8: List servers
-echo -e "${BLUE}[Step 8] Listing all servers (should include ${SERVER_NAME})${NC}"
+# Use server-get to fetch the test server directly by path. The plain `list`
+# command is paginated (default 20, max 100) and the registry can hold
+# hundreds of servers, so a freshly registered server may not be on page one.
+echo -e "${BLUE}[Step 8] Verifying test server is retrievable: ${SERVER_PATH}${NC}"
 if [ "$VERBOSE" = true ]; then
-    SERVER_LIST_OUTPUT=$(${MGMT_CMD} list 2>&1)
+    SERVER_GET_OUTPUT=$(${MGMT_CMD} server-get --path "${SERVER_PATH}" 2>&1)
     CREATE_STATUS=$?
-    echo "$SERVER_LIST_OUTPUT"
+    echo "$SERVER_GET_OUTPUT"
 else
-    SERVER_LIST_OUTPUT=$(${MGMT_CMD} list 2>&1)
+    SERVER_GET_OUTPUT=$(${MGMT_CMD} server-get --path "${SERVER_PATH}" 2>&1)
     CREATE_STATUS=$?
 fi
 
-if [ $CREATE_STATUS -eq 0 ]; then
-    # Verify our registered server is in the list (check for the path)
-    if echo "$SERVER_LIST_OUTPUT" | grep -q "${SERVER_PATH}"; then
-        echo -e "${GREEN}Server list retrieved successfully - verified test server present${NC}"
-        record_result "List Servers" "PASS"
-    else
-        echo -e "${RED}Server list retrieved but test server not found${NC}"
-        echo -e "${RED}Expected server path: ${SERVER_PATH}${NC}"
-        record_result "List Servers" "FAIL"
-    fi
+if [ $CREATE_STATUS -eq 0 ] && echo "$SERVER_GET_OUTPUT" | grep -q "${SERVER_PATH}"; then
+    echo -e "${GREEN}Server retrieved successfully - verified test server present${NC}"
+    record_result "List Servers" "PASS"
 else
-    echo -e "${RED}Server list failed${NC}"
+    echo -e "${RED}Server retrieval failed for path: ${SERVER_PATH}${NC}"
     record_result "List Servers" "FAIL"
 fi
 echo ""
 
 # Step 9: List agents
-echo -e "${BLUE}[Step 9] Listing all agents (should include ${AGENT_NAME})${NC}"
+# Use agent-get to fetch the test agent directly by path, for the same
+# pagination reason as the server step above.
+echo -e "${BLUE}[Step 9] Verifying test agent is retrievable: ${AGENT_PATH}${NC}"
 if [ "$VERBOSE" = true ]; then
-    AGENT_LIST_OUTPUT=$(${MGMT_CMD} agent-list 2>&1)
+    AGENT_GET_OUTPUT=$(${MGMT_CMD} agent-get --path "${AGENT_PATH}" 2>&1)
     CREATE_STATUS=$?
-    echo "$AGENT_LIST_OUTPUT"
+    echo "$AGENT_GET_OUTPUT"
 else
-    AGENT_LIST_OUTPUT=$(${MGMT_CMD} agent-list 2>&1)
+    AGENT_GET_OUTPUT=$(${MGMT_CMD} agent-get --path "${AGENT_PATH}" 2>&1)
     CREATE_STATUS=$?
 fi
 
-if [ $CREATE_STATUS -eq 0 ]; then
-    # Verify our registered agent is in the list (check for the path)
-    if echo "$AGENT_LIST_OUTPUT" | grep -q "${AGENT_PATH}"; then
-        echo -e "${GREEN}Agent list retrieved successfully - verified test agent present${NC}"
-        record_result "List Agents" "PASS"
-    else
-        echo -e "${RED}Agent list retrieved but test agent not found${NC}"
-        echo -e "${RED}Expected agent path: ${AGENT_PATH}${NC}"
-        record_result "List Agents" "FAIL"
-    fi
+if [ $CREATE_STATUS -eq 0 ] && echo "$AGENT_GET_OUTPUT" | grep -q "${AGENT_PATH}"; then
+    echo -e "${GREEN}Agent retrieved successfully - verified test agent present${NC}"
+    record_result "List Agents" "PASS"
 else
-    echo -e "${RED}Agent list failed${NC}"
+    echo -e "${RED}Agent retrieval failed for path: ${AGENT_PATH}${NC}"
     record_result "List Agents" "FAIL"
 fi
 echo ""

@@ -1,5 +1,5 @@
 # Pin to specific version for reproducibility (Security best practice)
-FROM public.ecr.aws/docker/library/busybox:1.36
+FROM public.ecr.aws/docker/library/busybox:1.38
 
 # Copy scopes.yml into the container
 COPY auth_server/scopes.yml /scopes.yml

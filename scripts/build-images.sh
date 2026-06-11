@@ -137,16 +137,23 @@ declare -A IMAGES
 declare -A BUILD_ARGS
 declare -a IMAGE_NAMES
 
-# Single pass to parse config and collect image information
-while IFS='|' read -r name repo_name dockerfile context build_args; do
-    if [ -n "$name" ]; then
-        IMAGES["$name"]="$repo_name|$dockerfile|$context"
-        BUILD_ARGS["$name"]="$build_args"
-        IMAGE_NAMES+=("$name")
-    fi
-done <<< "$(python3 << PYEOF
-import yaml
+# Single pass to parse config and collect image information.
+# Capture the parser output and exit status separately so a failed parse
+# (e.g. missing PyYAML in the active python3) fails loudly instead of
+# silently producing an empty image list.
+PARSED_IMAGES="$(python3 << PYEOF
 import sys
+
+try:
+    import yaml
+except ModuleNotFoundError:
+    print(
+        f"ERROR: PyYAML is not installed for this python3 ({sys.executable}). "
+        "Install it with 'python3 -m pip install pyyaml', or deactivate any "
+        "non-project virtualenv/conda env before running this script.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 try:
     with open('$CONFIG_FILE') as f:
@@ -173,6 +180,25 @@ except Exception as e:
     sys.exit(1)
 PYEOF
 )"
+PARSE_STATUS=$?
+
+if [ "$PARSE_STATUS" -ne 0 ]; then
+    log_error "Failed to parse $CONFIG_FILE (python3 exited $PARSE_STATUS)"
+    exit 1
+fi
+
+while IFS='|' read -r name repo_name dockerfile context build_args; do
+    if [ -n "$name" ]; then
+        IMAGES["$name"]="$repo_name|$dockerfile|$context"
+        BUILD_ARGS["$name"]="$build_args"
+        IMAGE_NAMES+=("$name")
+    fi
+done <<< "$PARSED_IMAGES"
+
+if [ "${#IMAGE_NAMES[@]}" -eq 0 ]; then
+    log_error "No buildable images found in $CONFIG_FILE"
+    exit 1
+fi
 
 # Function to setup A2A agent build dependencies
 setup_a2a_agent() {

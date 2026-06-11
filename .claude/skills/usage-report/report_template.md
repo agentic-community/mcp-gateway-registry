@@ -195,16 +195,42 @@ The Confirmed-Alive instances skew toward AWS, with ECS, Kubernetes, and Docker 
 
 ## Customer Infra Spend (AWS)
 
+### Daily AWS Customer Instances Reporting Home
+
+![Daily Reporters](daily-reporters-{date}.png)
+
+The headline infra-spend number counts an instance only if it persisted, i.e. reported on **>= 2 distinct days** (it came back on a separate day rather than installing and vanishing the same day). The green line below is that count; the grey line includes single-event install-and-vanish instances. The two lines sit close together, which is the point: the daily reporting fleet is overwhelmingly real, persistent deployments, not install-and-delete churn.
+
+<!-- COMMENTARY:daily_reporters -->
+
 ![LTV Spend](ltv-spend-{date}.png)
 
-Hypothetical AWS infrastructure cost (list price), customer-only:
+Hypothetical AWS infrastructure cost (list price), customer-only. **Persisted** is the headline rule (>= 2 distinct reporting days, every reported day charged); All-Days is the upper bound (includes install-and-vanish); Proven is the lower bound (first day free):
 
-| Window | Proven | All-Days |
-|--------|------:|---------:|
-| Yesterday ({yesterday_label}) | {ltv_yesterday_proven} | {ltv_yesterday_all_days} |
-| Last 7 days | {ltv_last_7_days_proven} | {ltv_last_7_days_all_days} |
-| 7-day daily average | {ltv_7day_daily_avg_proven} | {ltv_7day_daily_avg_all_days} |
-| Cumulative LTV | {ltv_cumulative_proven} | {ltv_cumulative_all_days} |
+| Window | Persisted (headline) | All-Days | Proven |
+|--------|------:|---------:|-------:|
+| Yesterday ({yesterday_label}) | {ltv_yesterday_persisted} | {ltv_yesterday_all_days} | {ltv_yesterday_proven} |
+| Last 7 days | {ltv_last_7_days_persisted} | {ltv_last_7_days_all_days} | {ltv_last_7_days_proven} |
+| 7-day daily average | {ltv_7day_daily_avg_persisted} | {ltv_7day_daily_avg_all_days} | {ltv_7day_daily_avg_proven} |
+| Cumulative LTV | {ltv_cumulative_persisted} | {ltv_cumulative_all_days} | {ltv_cumulative_proven} |
+
+#### How the three numbers relate
+
+All three rules multiply the **same** per-platform daily rates (docker $3.99, ecs $26.04, kubernetes $18.58) by a count of **instance-days** (one (instance, day) pair = one charge). They differ only in which instance-days qualify, so by construction **all-days >= persisted >= proven**:
+
+- **All-days** charges every day any AWS customer instance reported.
+- **Persisted** charges all of an instance's reported days, but only if it reported on >= 2 distinct days (drops install-and-vanish-within-a-day instances).
+- **Proven** is persisted minus each instance's first-ever day (the first day is always free).
+
+Cumulative instance-day decomposition for this window:
+
+| | Instance-days | vs Persisted |
+|---|---:|---|
+| All-days | {ltv_instance_days_all_days} | +{ltv_gap_install_vanish_days} single-calendar-day (install-and-vanish) days |
+| **Persisted (headline)** | **{ltv_instance_days_persisted}** | baseline |
+| Proven | {ltv_instance_days_proven} | -{ltv_gap_first_free_days} first-days freed (one per persisted instance) |
+
+So `persisted - proven` equals the number of persisted instances exactly (each loses one first day), and `all-days - persisted` is the install-and-vanish cohort. At the trailing edge of the window persisted and proven daily figures converge, because an instance active on the last complete day cannot still be on its first-ever day, so proven charges it too.
 
 ### Annualized Run Rate (ARR) Projection
 
@@ -212,8 +238,9 @@ Projecting the last-7-day daily average forward 365 days:
 
 | Model | 7-day daily avg | x 365 = ARR |
 |-------|----------------:|------------:|
-| Proven | {ltv_7day_daily_avg_proven} | **{arr_proven_str}** |
+| Persisted (headline) | {ltv_7day_daily_avg_persisted} | **{arr_persisted_str}** |
 | All-days | {ltv_7day_daily_avg_all_days} | **{arr_all_days_str}** |
+| Proven | {ltv_7day_daily_avg_proven} | **{arr_proven_str}** |
 
 The ARR is hypothetical (we do not bill these customers). It represents the AWS-side infra cost the deployed customer base is generating annually at current run rate, complementing install-count growth as a measure of the fleet's economic footprint.
 

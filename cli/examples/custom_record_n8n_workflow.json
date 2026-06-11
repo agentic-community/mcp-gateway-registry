@@ -1,0 +1,13 @@
+{
+  "name": "Nightly DB Backup",
+  "description": "Scheduled Postgres dump to S3 with Slack notification on failure.",
+  "visibility": "public",
+  "tags": ["backup", "database", "ops"],
+  "attributes": {
+    "trigger_type": "schedule",
+    "node_count": 5,
+    "summary": "Runs pg_dump every night and uploads the archive to an S3 bucket; posts to Slack only when the dump or upload fails.",
+    "production_ready": true,
+    "categories": ["backup", "database"]
+  }
+}

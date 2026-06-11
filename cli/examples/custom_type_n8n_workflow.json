@@ -1,0 +1,39 @@
+{
+  "name": "n8n_workflow",
+  "display_name": "n8n Workflows",
+  "description": "Reusable n8n automation workflows shared across the team: triggers, node graphs, and the integrations they touch.",
+  "fields": [
+    {
+      "name": "trigger_type",
+      "label": "Trigger",
+      "datatype": "enum",
+      "enum_values": ["webhook", "schedule", "manual", "event"],
+      "required": true,
+      "show_in_list": true
+    },
+    {
+      "name": "node_count",
+      "label": "Node Count",
+      "datatype": "number",
+      "show_in_list": true
+    },
+    {
+      "name": "summary",
+      "label": "Summary",
+      "datatype": "text",
+      "semantic": true
+    },
+    {
+      "name": "production_ready",
+      "label": "Production Ready",
+      "datatype": "bool",
+      "show_in_list": true
+    },
+    {
+      "name": "categories",
+      "label": "Categories",
+      "datatype": "array<string>",
+      "semantic": true
+    }
+  ]
+}

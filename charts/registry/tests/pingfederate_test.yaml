@@ -1,0 +1,64 @@
+suite: pingfederate provider
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: emits no PINGFEDERATE_* env entries when disabled
+    set:
+      global:
+        authProvider:
+          type: keycloak
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PINGFEDERATE_BASE_URL
+
+  - it: emits plain env entries when enabled
+    set:
+      global:
+        authProvider:
+          type: pingfederate
+      pingfederate:
+        enabled: true
+        baseUrl: https://pf:9031
+        externalUrl: https://pf:9031
+        clientId: mcp-gateway
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PINGFEDERATE_BASE_URL
+            value: https://pf:9031
+
+  - it: emits secretKeyRef when clientSecretExistingSecret is set
+    set:
+      global:
+        authProvider:
+          type: pingfederate
+      pingfederate:
+        enabled: true
+        clientSecretExistingSecret: pf-secrets
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PINGFEDERATE_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: pf-secrets
+                key: PINGFEDERATE_CLIENT_SECRET
+
+  - it: rejects PINGFEDERATE_BASE_URL via extraEnv (reserved name)
+    set:
+      global:
+        authProvider:
+          type: keycloak
+      extraEnv:
+        - name: PINGFEDERATE_BASE_URL
+          value: bypass-attempt
+    asserts:
+      - failedTemplate:
+          errorPattern: "PINGFEDERATE_BASE_URL.*reserved"

@@ -19,19 +19,31 @@ import SkillCard from './SkillCard';
 import type { Skill } from '../types/skill';
 import VirtualServerCard from './VirtualServerCard';
 import type { VirtualServerInfo } from '../types/virtualServer';
+import CustomEntityCard from './CustomEntityCard';
+import type {
+  CustomEntityRecord,
+  CustomTypeDescriptor,
+} from '../types/customEntity';
 
 
-type ItemType = 'server' | 'agent' | 'skill' | 'virtual';
+type ItemType = 'server' | 'agent' | 'skill' | 'virtual' | 'custom';
 
 
 interface DiscoverListRowProps {
   type: ItemType;
-  item: Server | Skill | VirtualServerInfo;
+  item: Server | Skill | VirtualServerInfo | CustomEntityRecord;
   onToggle: (path: string, enabled: boolean) => void;
   onEdit?: (item: any) => void;
   onDelete?: (path: string) => any;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
   authToken?: string | null;
+  // Custom-entity rows render a CustomEntityCard when expanded, which is
+  // descriptor-driven and uses record-based (not path-based) handlers.
+  customDescriptor?: CustomTypeDescriptor;
+  customCanModify?: boolean;
+  onCustomView?: (record: CustomEntityRecord) => void;
+  onCustomEdit?: (record: CustomEntityRecord) => void;
+  onCustomDelete?: (record: CustomEntityRecord) => void;
 }
 
 
@@ -74,6 +86,13 @@ function _getTypeBadge(type: ItemType) {
       label: 'Agent',
     };
   }
+  if (type === 'custom') {
+    return {
+      bg: 'bg-teal-500/15 text-teal-300',
+      icon: Square3Stack3DIcon,
+      label: 'Custom',
+    };
+  }
   return {
     bg: 'bg-amber-500/15 text-amber-300',
     icon: SparklesIcon,
@@ -107,7 +126,7 @@ function _getServerRegistrySource(server: Server): string | null {
  */
 function _extractDisplayFields(
   type: ItemType,
-  item: Server | Skill | VirtualServerInfo
+  item: Server | Skill | VirtualServerInfo | CustomEntityRecord
 ) {
   if (type === 'virtual') {
     const vs = item as VirtualServerInfo;
@@ -136,6 +155,18 @@ function _extractDisplayFields(
       registrySource: source,
     };
   }
+  if (type === 'custom') {
+    const record = item as CustomEntityRecord;
+    return {
+      name: record.name,
+      description: record.description || '',
+      tags: record.tags || [],
+      rating: _getAverageRating(record.rating_details),
+      ratingCount: record.rating_details?.length || 0,
+      toolCount: 0,
+      registrySource: null as string | null,
+    };
+  }
   // server or agent
   const server = item as Server;
   return {
@@ -158,6 +189,11 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
   onDelete,
   onShowToast,
   authToken,
+  customDescriptor,
+  customCanModify = false,
+  onCustomView,
+  onCustomEdit,
+  onCustomDelete,
 }) => {
   const [expanded, setExpanded] = useState(false);
 
@@ -297,6 +333,25 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
               onShowToast={onShowToast as any}
               authToken={authToken}
             />
+          )}
+          {type === 'custom' && customDescriptor && (
+            <CustomEntityCard
+              descriptor={customDescriptor}
+              record={item as CustomEntityRecord}
+              canModify={customCanModify}
+              onView={onCustomView ?? (() => {})}
+              onEdit={onCustomEdit ?? (() => {})}
+              onDelete={onCustomDelete ?? (() => {})}
+              authToken={authToken}
+              onShowToast={onShowToast}
+            />
+          )}
+          {type === 'custom' && !customDescriptor && (
+            // Descriptor failed to load (deleted type, network error): show an
+            // inline notice instead of rendering an empty expanded box.
+            <div className="px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-900/50 text-sm text-gray-500 dark:text-gray-400">
+              Schema unavailable for this entry (type descriptor could not be loaded).
+            </div>
           )}
         </div>
       )}

@@ -127,6 +127,40 @@ spec:
                   name: {{ .Values.auth0.managementApiTokenExistingSecret }}
                   key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
             {{- end }}
+            {{- if .Values.pingfederate.clientSecretExistingSecret }}
+            - name: PINGFEDERATE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pingfederate.clientSecretExistingSecret }}
+                  key: {{ .Values.pingfederate.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.pingfederate.m2mClientSecretExistingSecret }}
+            - name: PINGFEDERATE_M2M_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pingfederate.m2mClientSecretExistingSecret }}
+                  key: {{ .Values.pingfederate.m2mClientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if eq $authProviderType "pingfederate" }}
+            - name: PINGFEDERATE_ENABLED
+              value: "true"
+            - name: PINGFEDERATE_BASE_URL
+              value: {{ .Values.pingfederate.baseUrl | quote }}
+            - name: PINGFEDERATE_EXTERNAL_URL
+              value: {{ .Values.pingfederate.externalUrl | quote }}
+            - name: PINGFEDERATE_CLIENT_ID
+              value: {{ .Values.pingfederate.clientId | quote }}
+            {{- if .Values.pingfederate.m2mClientId }}
+            - name: PINGFEDERATE_M2M_CLIENT_ID
+              value: {{ .Values.pingfederate.m2mClientId | quote }}
+            {{- end }}
+            {{- if .Values.pingfederate.applicationIdUri }}
+            - name: PINGFEDERATE_APPLICATION_ID_URI
+              value: {{ .Values.pingfederate.applicationIdUri | quote }}
+            {{- end }}
+            - name: PINGFEDERATE_GROUPS_CLAIM
+              value: {{ .Values.pingfederate.groupsClaim | default "groups" | quote }}
+            {{- end }}
             # OTel-native metric emission (Issue #1122)
             - name: METRICS_LEGACY_HTTP_POST
               value: {{ .Values.metrics.legacyHttpPost | default false | quote }}

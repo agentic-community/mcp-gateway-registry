@@ -16,8 +16,10 @@ import {
   SemanticToolHit,
   SemanticAgentHit,
   SemanticSkillHit,
-  SemanticVirtualServerHit
+  SemanticVirtualServerHit,
+  SemanticCustomHit
 } from '../hooks/useSemanticSearch';
+import { humanize } from '../utils/humanize';
 import ServerConfigModal from './ServerConfigModal';
 import AgentDetailsModal from './AgentDetailsModal';
 import type { Server } from './ServerCard';
@@ -34,6 +36,7 @@ interface SemanticSearchResultsProps {
   agents: SemanticAgentHit[];
   skills: SemanticSkillHit[];
   virtualServers?: SemanticVirtualServerHit[];
+  custom?: SemanticCustomHit[];
 }
 
 interface ToolSchemaModalProps {
@@ -780,9 +783,10 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
   tools,
   agents,
   skills,
-  virtualServers = []
+  virtualServers = [],
+  custom = []
 }) => {
-  const hasResults = servers.length > 0 || tools.length > 0 || agents.length > 0 || skills.length > 0 || virtualServers.length > 0;
+  const hasResults = servers.length > 0 || tools.length > 0 || agents.length > 0 || skills.length > 0 || virtualServers.length > 0 || custom.length > 0;
   const [configServer, setConfigServer] = useState<SemanticServerHit | null>(null);
   const [detailsServer, setDetailsServer] = useState<SemanticServerHit | null>(null);
   const [detailsSkill, setDetailsSkill] = useState<SemanticSkillHit | null>(null);
@@ -1290,6 +1294,68 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                 virtualServer={vs}
                 onViewDetails={() => setDetailsVirtualServer(vs)}
               />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {custom.length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              Matching Custom Entities <span className="text-sm font-normal text-gray-500">({custom.length})</span>
+            </h4>
+          </div>
+          <div
+            className="grid"
+            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}
+          >
+            {custom.map((record) => (
+              <div
+                key={record.path}
+                className="rounded-2xl border-2 border-teal-200 dark:border-teal-700 bg-gradient-to-br from-teal-50 to-emerald-50 dark:from-teal-900/20 dark:to-emerald-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-base font-semibold text-gray-900 dark:text-white">
+                        {record.name}
+                      </p>
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600 uppercase">
+                        {humanize(record.entity_type)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {record.visibility || 'public'}
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 px-3 py-1 text-xs font-semibold">
+                    {formatPercent(record.relevance_score)} match
+                  </span>
+                </div>
+
+                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
+                  {record.description || record.match_context || 'No description available.'}
+                </p>
+
+                {record.tags && record.tags.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {record.tags.slice(0, 6).map((tag) => (
+                      <span
+                        key={tag}
+                        className="px-2.5 py-1 text-[11px] rounded-full bg-teal-50 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                  {record.owner && <span>by {record.owner}</span>}
+                  <span className="ml-auto">{record.is_enabled === false ? 'Disabled' : 'Enabled'}</span>
+                </div>
+              </div>
             ))}
           </div>
         </section>

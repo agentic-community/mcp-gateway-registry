@@ -12,6 +12,7 @@ This document provides a comprehensive overview of the MCP Gateway & Registry so
 - **Dynamic Tool Catalog**: Real-time discovery of available tools across registered servers
 - **MCP Server Version Routing**: Run multiple versions of the same server behind a single gateway endpoint with instant rollback, version pinning, and deprecation lifecycle
 - **Custom Metadata**: Add rich custom metadata to servers and agents for organization, compliance, and integration tracking, fully searchable via semantic search
+- **Custom Entity Types**: Admins define schema-driven catalog types at runtime (e.g. LLM prompts, model cards, workflows) with typed fields; users create records via API or a dynamically-rendered UI tab, with lexical + semantic search, ratings, visibility controls, and pagination
 - **Server & Agent Rating System**: 5-star rating widget with aggregate scoring, one rating per user, and rotating buffer
 - **Health Monitoring**: Built-in health checks and status monitoring for all registered services
 - **Scalable Architecture**: Docker-based deployment with horizontal scaling support

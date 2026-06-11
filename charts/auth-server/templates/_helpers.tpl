@@ -11,7 +11,10 @@ To update: edit charts/auth-server/reserved-env-names.txt and run
 `helm dep update` on any parent chart that depends on this subchart.
 
 Sections (in order below):
-  1. env: block — IdP secrets via valueFrom (conditional)
+  1. env: block — IdP secrets via valueFrom (conditional). Includes
+     PingFederate plain env vars (BASE_URL, EXTERNAL_URL, CLIENT_ID,
+     M2M_CLIENT_ID, APPLICATION_ID_URI, GROUPS_CLAIM, ENABLED) and
+     valueFrom-sourced secrets (CLIENT_SECRET, M2M_CLIENT_SECRET).
   2. auth-server-app-log-config configmap
   3. auth-server per-chart secret
   4. keycloak-client-secret (runtime-created by keycloak-configure Job)

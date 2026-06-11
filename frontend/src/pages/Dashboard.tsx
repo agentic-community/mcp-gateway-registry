@@ -19,6 +19,18 @@ import {
 } from '../types/virtualServer';
 import VirtualServerForm from '../components/VirtualServerForm';
 import DiscoverTab from '../components/DiscoverTab';
+import type { CustomEntitySection } from '../components/DiscoverTab';
+import CustomEntityTab from '../components/CustomEntityTab';
+import CustomEntityForm from '../components/CustomEntityForm';
+import CustomEntityDetail from '../components/CustomEntityDetail';
+import ConfirmModal from '../components/ConfirmModal';
+import { uuidFromPath } from '../hooks/useCustomEntities';
+import type {
+  CustomEntityRecord,
+  CustomEntityCreate,
+  CustomEntityUpdate,
+  CustomTypeDescriptor,
+} from '../types/customEntity';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
 import {
@@ -160,7 +172,7 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFilter, selectedTags = [] }) => {
   const navigate = useNavigate();
-  const { servers, agents: agentsFromStats, loading, error, refreshData, setServers, setAgents } = useServerStats();
+  const { servers, agents: agentsFromStats, customRecordsByType: customEntityRecordsByType, loading, error, refreshData, setServers, setAgents } = useServerStats();
   const { skills, setSkills, loading: skillsLoading, error: skillsError, refreshData: refreshSkills } = useSkills();
   const {
     virtualServers,
@@ -262,8 +274,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [agentApiToken, setAgentApiToken] = useState<string | null>(null);
 
-  // View filter state
-  const [viewFilter, setViewFilter] = useState<'discover' | 'servers' | 'agents' | 'skills' | 'virtual' | 'external'>('discover');
+  // View filter state. Custom entity types use a dynamic `custom:{name}` value.
+  type ViewFilter =
+    | 'discover'
+    | 'servers'
+    | 'agents'
+    | 'skills'
+    | 'virtual'
+    | 'external'
+    | `custom:${string}`;
+  const [viewFilter, setViewFilter] = useState<ViewFilter>('discover');
 
   // Pagination state (per entity type)
   const PAGE_SIZE = 50;
@@ -291,6 +311,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     }
     if (viewFilter === 'servers' && registryConfig?.features.mcp_servers === false) {
       setViewFilter('discover');
+    }
+    // A custom-type tab whose type is no longer in config (admin deleted it).
+    if (viewFilter.startsWith('custom:')) {
+      const typeName = viewFilter.slice('custom:'.length);
+      const exists = (registryConfig?.custom_types ?? []).some((t) => t.name === typeName);
+      if (registryConfig && !exists) {
+        setViewFilter('discover');
+      }
     }
   }, [viewFilter, registryConfig]);
 
@@ -648,6 +676,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const semanticAgents = semanticResults?.agents ?? [];
   const semanticSkills = semanticResults?.skills ?? [];
   const semanticVirtualServers = semanticResults?.virtual_servers ?? [];
+  const semanticCustom = semanticResults?.custom ?? [];
   const semanticDisplayQuery = semanticResults?.query || committedQuery || searchTerm;
   const semanticSectionVisible = semanticEnabled;
   const shouldShowFallbackGrid =
@@ -658,7 +687,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         semanticTools.length === 0 &&
         semanticAgents.length === 0 &&
         semanticSkills.length === 0 &&
-        semanticVirtualServers.length === 0));
+        semanticVirtualServers.length === 0 &&
+        semanticCustom.length === 0));
 
   // Helper: check if entity has all selected tags (case-insensitive)
   const matchesSelectedTags = useCallback((entityTags: string[] | undefined) => {
@@ -667,6 +697,62 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     const lowerTags = entityTags.map(t => t.toLowerCase());
     return selectedTags.every(st => lowerTags.includes(st.toLowerCase()));
   }, [selectedTags]);
+
+  // Per-type custom entity counts for the sidebar summary, respecting the
+  // sidebar tag filter the same way the built-in categories do.
+  const customCounts = useMemo(
+    () =>
+      customEntityRecordsByType.map((ct) => ({
+        name: ct.name,
+        displayName: ct.displayName,
+        count: ct.records.filter((r) => matchesSelectedTags(r.tags)).length,
+      })),
+    [customEntityRecordsByType, matchesSelectedTags],
+  );
+
+  // Custom-entity modal state for the Discover view. Spans multiple types, so
+  // each carries its own descriptor (the per-tab hook only knows one type).
+  const [customViewing, setCustomViewing] = useState<{
+    descriptor: CustomTypeDescriptor;
+    record: CustomEntityRecord;
+  } | null>(null);
+  const [customEditing, setCustomEditing] = useState<{
+    typeName: string;
+    descriptor: CustomTypeDescriptor;
+    record: CustomEntityRecord | null;
+  } | null>(null);
+  const [customDeleting, setCustomDeleting] = useState<{
+    typeName: string;
+    record: CustomEntityRecord;
+  } | null>(null);
+  const [customDeleteLoading, setCustomDeleteLoading] = useState(false);
+
+  // Build the Discover custom sections: tag-filtered records + descriptor +
+  // per-record view/edit/delete handlers. Only types with a loaded descriptor
+  // can render cards, so descriptor-less types are dropped here.
+  const customSections = useMemo<CustomEntitySection[]>(
+    () =>
+      customEntityRecordsByType
+        .filter((ct) => ct.descriptor)
+        .map((ct) => {
+          const descriptor = ct.descriptor as CustomTypeDescriptor;
+          return {
+            name: ct.name,
+            displayName: ct.displayName,
+            descriptor,
+            records: ct.records.filter((r) => matchesSelectedTags(r.tags)),
+            canModify: (record: CustomEntityRecord) =>
+              !!user?.is_admin || record.owner === user?.username,
+            onView: (record: CustomEntityRecord) =>
+              setCustomViewing({ descriptor, record }),
+            onEdit: (record: CustomEntityRecord) =>
+              setCustomEditing({ typeName: ct.name, descriptor, record }),
+            onDelete: (record: CustomEntityRecord) =>
+              setCustomDeleting({ typeName: ct.name, record }),
+          };
+        }),
+    [customEntityRecordsByType, matchesSelectedTags, user],
+  );
 
   // Parse #tag tokens from the search term for local filtering
   const parsedSearch = useMemo(() => {
@@ -1053,6 +1139,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     [semanticSectionVisible]
   );
 
+  // Derived: the active custom type (name + display label), or null for built-in tabs.
+  const currentCustomType = useMemo(() => {
+    if (!viewFilter.startsWith('custom:')) return null;
+    const typeName = viewFilter.slice('custom:'.length);
+    return (registryConfig?.custom_types ?? []).find((t) => t.name === typeName) ?? null;
+  }, [viewFilter, registryConfig]);
+
   // Notify Layout to refresh the sidebar tag list after data changes
   const notifyDataChanged = useCallback(() => {
     window.dispatchEvent(new Event('registry-data-changed'));
@@ -1222,6 +1315,40 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const hideToast = useCallback(() => {
     setToast(null);
   }, []);
+
+  const handleCustomSave = useCallback(
+    async (body: CustomEntityCreate | CustomEntityUpdate) => {
+      if (!customEditing) return;
+      const { typeName, record } = customEditing;
+      if (record) {
+        await axios.put(`/api/custom/${typeName}/${uuidFromPath(record.path)}`, body);
+        showToast(`Updated ${body.name ?? record.name}`, 'success');
+      } else {
+        await axios.post(`/api/custom/${typeName}`, body);
+        showToast(`Created ${body.name}`, 'success');
+      }
+      setCustomEditing(null);
+      await refreshData();
+    },
+    [customEditing, refreshData, showToast],
+  );
+
+  const handleCustomDelete = useCallback(async () => {
+    if (!customDeleting) return;
+    setCustomDeleteLoading(true);
+    try {
+      await axios.delete(
+        `/api/custom/${customDeleting.typeName}/${uuidFromPath(customDeleting.record.path)}`,
+      );
+      showToast(`Deleted ${customDeleting.record.name}`, 'success');
+      setCustomDeleting(null);
+      await refreshData();
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Failed to delete', 'error');
+    } finally {
+      setCustomDeleteLoading(false);
+    }
+  }, [customDeleting, refreshData, showToast]);
 
   const handleSaveEdit = async () => {
     if (editLoading || !editingServer) return;
@@ -2862,6 +2989,25 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 Agent Skills
               </button>
             )}
+            {/* Custom entity type tabs render before External Registries, which
+                is always the last tab. */}
+            {registryConfig?.features.custom_types &&
+              (registryConfig?.custom_types ?? []).map((ct) => {
+                const filter = `custom:${ct.name}` as const;
+                return (
+                  <button
+                    key={ct.name}
+                    onClick={() => handleChangeViewFilter(filter)}
+                    className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
+                      viewFilter === filter
+                        ? 'border-purple-500 text-purple-600 dark:text-purple-400'
+                        : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    {ct.display_name}
+                  </button>
+                );
+              })}
             {registryConfig?.features.federation !== false && (
               <button
                 onClick={() => handleChangeViewFilter('external')}
@@ -2876,7 +3022,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             )}
           </div>
 
-          {viewFilter !== 'discover' && (
+          {viewFilter !== 'discover' && !currentCustomType && (
           <>
           {/* Search Bar and Refresh Button */}
           <div className="flex gap-4 items-center">
@@ -2950,6 +3096,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                     {registryConfig?.features.skills !== false && (
                       <>{filteredSkills.length} skills</>
                     )}
+                    {customCounts.map((ct) => (
+                      <React.Fragment key={ct.name}>
+                        , {ct.count} {ct.displayName}
+                      </React.Fragment>
+                    ))}
                   </>
                 )}
               </p>
@@ -2964,14 +3115,25 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
         {/* Scrollable Content Area */}
         <div className="flex-1 overflow-y-auto min-h-0 space-y-10">
-          {viewFilter === 'discover' ? (
+          {currentCustomType ? (
+            <CustomEntityTab
+              key={currentCustomType.name}
+              typeName={currentCustomType.name}
+              displayName={currentCustomType.display_name}
+              user={user}
+              selectedTags={selectedTags}
+              authToken={agentApiToken}
+              onShowToast={showToast}
+            />
+          ) : viewFilter === 'discover' ? (
             <DiscoverTab
               servers={filteredServers}
               agents={filteredAgents}
-              skills={skills}
-              virtualServers={virtualServers}
-              externalServers={externalServers}
-              externalAgents={externalAgents}
+              skills={filteredSkills}
+              virtualServers={filteredVirtualServers}
+              externalServers={filteredExternalServers}
+              externalAgents={filteredExternalAgents}
+              customSections={customSections}
               loading={loading || skillsLoading || virtualServersLoading}
               onServerToggle={handleToggleServer}
               onServerEdit={handleEditServer}
@@ -3001,6 +3163,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                     agents={semanticAgents}
                     skills={semanticSkills}
                     virtualServers={semanticVirtualServers}
+                    custom={semanticCustom}
                   />
 
                   {shouldShowFallbackGrid && (
@@ -4168,6 +4331,36 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           </div>
         </div>
       )}
+
+      {/* Custom entity modals for the Discover view (view / edit / delete) */}
+      {customViewing && (
+        <CustomEntityDetail
+          descriptor={customViewing.descriptor}
+          record={customViewing.record}
+          onClose={() => setCustomViewing(null)}
+        />
+      )}
+
+      {customEditing && (
+        <CustomEntityForm
+          descriptor={customEditing.descriptor}
+          record={customEditing.record}
+          onSave={handleCustomSave}
+          onCancel={() => setCustomEditing(null)}
+        />
+      )}
+
+      <ConfirmModal
+        isOpen={!!customDeleting}
+        onClose={() => setCustomDeleting(null)}
+        onConfirm={handleCustomDelete}
+        title="Delete record"
+        message={`Are you sure you want to delete "${customDeleting?.record.name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        loadingLabel="Deleting..."
+        isDestructive
+        isLoading={customDeleteLoading}
+      />
 
     </>
   );

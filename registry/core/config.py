@@ -2,9 +2,10 @@ import logging
 from datetime import UTC
 from enum import Enum
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist
 # at terraform/aws-ecs/variables.tf (issue #955) so both layers reject the same
@@ -161,6 +162,40 @@ class Settings(BaseSettings):
     # or 'legacy' (previous additive formula). RRF avoids score saturation and
     # handles missing embeddings gracefully.
     search_fusion_method: str = "rrf"
+
+    # Custom entity types (admin-defined schema-driven catalog types)
+    custom_entity_types_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable admin-defined custom catalog entity types. This is a "
+            "feature-invisible kill-switch, not a pause-new-usage flag: when "
+            "false the CRUD routers are unregistered (404), the tabs/config "
+            "list is empty, and custom types are excluded from both the search "
+            "scope and result processing. Existing records remain in the DB but "
+            "are unreachable until the flag is re-enabled."
+        ),
+    )
+    custom_type_cache_ttl_seconds: float = Field(
+        default=60.0,
+        description="TTL for the in-process custom-type descriptor cache (seconds)",
+    )
+    max_custom_records_per_type: int = Field(
+        default=1000,
+        description=(
+            "Soft cap on records per custom type (0 = unlimited). Best-effort: "
+            "the count-then-create check may overshoot slightly under concurrent "
+            "creates; it is not a hard transactional guarantee. Guards against "
+            "runaway imports hitting the embedding-collection scaling ceiling."
+        ),
+    )
+    max_custom_types: int = Field(
+        default=50,
+        description=(
+            "Cap on the number of custom entity TYPES an admin can define "
+            "(0 = unlimited). Guards against unbounded type creation, each of "
+            "which carries its own embedding collection. Enforced at type create."
+        ),
+    )
 
     # LiteLLM-specific settings (only used when embeddings_provider='litellm')
     # For Bedrock: Set to None and configure AWS credentials via standard methods
@@ -450,6 +485,44 @@ class Settings(BaseSettings):
             "without an IdP Admin API token."
         ),
     )
+
+    # User-to-group fallback for IdPs that don't carry groups in JWTs (issue #1127).
+    # Auth server consults the idp_user_groups collection only when the JWT's
+    # groups claim is empty AND the token's provider name appears in this list.
+    # Annotated with NoDecode so pydantic-settings does NOT try to JSON-parse
+    # the env var; the field_validator below handles the CSV split itself.
+    idp_user_group_fallback_enabled_providers: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["pingfederate"],
+        description=(
+            "Comma-separated list of IdP providers for which the auth server should "
+            "consult the idp_user_groups collection when the JWT's groups claim is "
+            "empty. Read from IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS. "
+            "Default: 'pingfederate'."
+        ),
+    )
+
+    @field_validator("idp_user_group_fallback_enabled_providers", mode="before")
+    @classmethod
+    def _parse_idp_user_group_fallback_enabled_providers(
+        cls,
+        v: object,
+    ) -> list[str]:
+        """Accept either a CSV string (from env var) or a list (from defaults).
+
+        Empty/whitespace entries are dropped, and values are lowercased to
+        match the case of provider names emitted by the auth layer
+        (e.g. 'pingfederate', 'okta').
+        """
+        if v is None or v == "":
+            return []
+        if isinstance(v, list):
+            return [str(item).strip().lower() for item in v if str(item).strip()]
+        if isinstance(v, str):
+            return [item.strip().lower() for item in v.split(",") if item.strip()]
+        raise ValueError(
+            "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS must be a CSV string or list, "
+            f"got {type(v).__name__}"
+        )
 
     # ANS Integration
     ans_integration_enabled: bool = Field(

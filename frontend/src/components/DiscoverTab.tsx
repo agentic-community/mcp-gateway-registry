@@ -7,6 +7,10 @@ import type { Server } from './ServerCard';
 import type { Agent } from './AgentCard';
 import type { Skill } from '../types/skill';
 import type { VirtualServerInfo } from '../types/virtualServer';
+import type {
+  CustomEntityRecord,
+  CustomTypeDescriptor,
+} from '../types/customEntity';
 
 
 // Path for the built-in AI Registry Tools server
@@ -16,6 +20,22 @@ const AI_REGISTRY_TOOLS_PATH = '/airegistry-tools/';
 const MAX_FEATURED = 4;
 
 
+/**
+ * One custom entity type's data for the Discover view. Records are already
+ * tag-filtered by the parent; DiscoverTab applies the keyword filter and the
+ * featured cap the same way it does for built-in categories.
+ */
+export interface CustomEntitySection {
+  name: string;
+  displayName: string;
+  descriptor: CustomTypeDescriptor | null;
+  records: CustomEntityRecord[];
+  canModify: (record: CustomEntityRecord) => boolean;
+  onView: (record: CustomEntityRecord) => void;
+  onEdit: (record: CustomEntityRecord) => void;
+  onDelete: (record: CustomEntityRecord) => void;
+}
+
 interface DiscoverTabProps {
   servers: Server[];
   agents: Agent[];
@@ -23,6 +43,7 @@ interface DiscoverTabProps {
   virtualServers: VirtualServerInfo[];
   externalServers: Server[];
   externalAgents: Agent[];
+  customSections?: CustomEntitySection[];
   loading: boolean;
   onServerToggle: (path: string, enabled: boolean) => void;
   onServerEdit?: (server: Server) => void;
@@ -38,6 +59,12 @@ interface DiscoverTabProps {
   onVirtualServerDelete?: (path: string) => void;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
   authToken?: string | null;
+}
+
+/** A custom section reduced to what the featured list renders. */
+interface FeaturedCustomSection extends CustomEntitySection {
+  featured: CustomEntityRecord[];
+  matched: number;
 }
 
 
@@ -132,7 +159,8 @@ function _countFragment(
 function _buildSummaryText(
   totals: { servers: number; virtual: number; agents: number; skills: number; external: number },
   matched: { servers: number; virtual: number; agents: number; skills: number; external: number },
-  isSearching: boolean
+  isSearching: boolean,
+  customSections: FeaturedCustomSection[] = []
 ): string {
   const parts: string[] = [];
 
@@ -154,12 +182,64 @@ function _buildSummaryText(
     }
   }
 
+  // Custom types contribute their matched (when searching) or total record
+  // count. Use the type's display name verbatim (already human-readable)
+  // rather than pluralizing.
+  for (const ct of customSections) {
+    const count = isSearching ? ct.matched : ct.records.length;
+    if (count > 0) {
+      parts.push(`${count} ${ct.displayName}`);
+    }
+  }
+
   if (parts.length === 0) {
     return isSearching ? 'No matches' : 'No items registered';
   }
 
   const prefix = isSearching ? 'Showing ' : '';
   return prefix + parts.join(', ');
+}
+
+
+/**
+ * Sort custom records by average rating (desc) then name, matching the
+ * built-in categories.
+ */
+function _sortCustomByRating(records: CustomEntityRecord[]): CustomEntityRecord[] {
+  return [...records].sort((a, b) => {
+    const ratingDiff = _getAverageRating(b.rating_details) - _getAverageRating(a.rating_details);
+    if (ratingDiff !== 0) return ratingDiff;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+
+/**
+ * Apply the keyword filter + featured cap to each custom section, dropping
+ * sections that end up empty.
+ */
+function _getFeaturedCustomSections(
+  sections: CustomEntitySection[],
+  keywordFilter: string
+): FeaturedCustomSection[] {
+  const hasFilter = keywordFilter.length > 0;
+  return sections
+    .map((section) => {
+      const filtered = hasFilter
+        ? section.records.filter((r) =>
+            _matchesKeyword(
+              { name: r.name, description: r.description || '', path: r.path, tags: r.tags },
+              keywordFilter
+            )
+          )
+        : section.records;
+      return {
+        ...section,
+        featured: _sortCustomByRating(filtered).slice(0, MAX_FEATURED),
+        matched: filtered.length,
+      };
+    })
+    .filter((section) => section.matched > 0);
 }
 
 
@@ -276,6 +356,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
   virtualServers,
   externalServers,
   externalAgents,
+  customSections = [],
   loading,
   onServerToggle,
   onServerEdit,
@@ -326,9 +407,20 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
     [servers, agents, skills, virtualServers, externalServers, externalAgents, searchTerm, isSemanticActive]
   );
 
+  // Custom sections share the keyword filter + featured cap with built-ins.
+  // Suppressed during semantic search (that path covers built-in entities only).
+  const featuredCustomSections = useMemo(
+    () =>
+      isSemanticActive
+        ? []
+        : _getFeaturedCustomSections(customSections, searchTerm),
+    [customSections, searchTerm, isSemanticActive]
+  );
+
   const totalFeatured = featuredServers.length + featuredAgents.length +
     featuredSkills.length + featuredVirtual.length +
-    featuredExtServers.length + featuredExtAgents.length;
+    featuredExtServers.length + featuredExtAgents.length +
+    featuredCustomSections.reduce((sum, s) => sum + s.featured.length, 0);
 
   const handleSemanticSearch = useCallback(() => {
     if (searchTerm.trim().length >= 2) {
@@ -393,7 +485,8 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
             {_buildSummaryText(
               { servers: totalServers, virtual: totalVirtual, agents: totalAgents, skills: totalSkills, external: totalExternal },
               { servers: matchedServers, virtual: matchedVirtual, agents: matchedAgents, skills: matchedSkills, external: matchedExternal },
-              searchTerm.length > 0
+              searchTerm.length > 0,
+              featuredCustomSections
             )}
             {searchTerm && (
               <span className="text-gray-600 dark:text-gray-600">
@@ -417,6 +510,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
             agents={searchResults?.agents || []}
             skills={searchResults?.skills || []}
             virtualServers={searchResults?.virtual_servers || []}
+            custom={searchResults?.custom || []}
           />
         </div>
       ) : (
@@ -590,6 +684,35 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   ))}
                 </div>
               )}
+
+              {/* Custom entity type sections — one per type with >=1 record */}
+              {featuredCustomSections.map(section => (
+                <div key={section.name}>
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                    {section.displayName}
+                    {section.matched > section.featured.length && (
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                        (showing {section.featured.length} of {section.matched})
+                      </span>
+                    )}
+                  </h2>
+                  {section.featured.map(record => (
+                    <DiscoverListRow
+                      key={record.path}
+                      type="custom"
+                      item={record}
+                      onToggle={() => {}}
+                      onShowToast={onShowToast}
+                      authToken={authToken}
+                      customDescriptor={section.descriptor ?? undefined}
+                      customCanModify={section.canModify(record)}
+                      onCustomView={section.onView}
+                      onCustomEdit={section.onEdit}
+                      onCustomDelete={section.onDelete}
+                    />
+                  ))}
+                </div>
+              ))}
 
               {/* Bottom padding so fade gradient doesn't cover last row */}
               <div className="h-8" />

@@ -22,6 +22,7 @@ resource "aws_iam_policy" "ecs_secrets_access" {
           ],
           var.documentdb_credentials_secret_arn != "" ? [var.documentdb_credentials_secret_arn] : [],
           var.entra_enabled ? [aws_secretsmanager_secret.entra_client_secret[0].arn] : [],
+          var.cognito_enabled ? [aws_secretsmanager_secret.cognito_client_secret[0].arn] : [],
           var.okta_enabled ? [
             aws_secretsmanager_secret.okta_client_secret[0].arn,
             aws_secretsmanager_secret.okta_m2m_client_secret[0].arn,
@@ -30,6 +31,11 @@ resource "aws_iam_policy" "ecs_secrets_access" {
           var.auth0_enabled ? [
             aws_secretsmanager_secret.auth0_client_secret[0].arn,
             aws_secretsmanager_secret.auth0_m2m_client_secret[0].arn
+          ] : [],
+          var.pingfederate_enabled ? [
+            aws_secretsmanager_secret.pingfederate_client_secret[0].arn,
+            aws_secretsmanager_secret.pingfederate_m2m_client_secret[0].arn,
+            aws_secretsmanager_secret.pf_admin_pass[0].arn,
           ] : [],
           var.enable_observability ? [aws_secretsmanager_secret.metrics_api_key[0].arn] : [],
           var.enable_observability && var.otel_otlp_endpoint != "" ? [aws_secretsmanager_secret.otlp_exporter_headers[0].arn] : []
@@ -112,6 +118,33 @@ resource "aws_iam_policy" "bedrock_agentcore_access" {
             "iam:ResourceTag/Purpose" = "agentcore-federation"
           }
         }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+
+# Cognito read-only access for the registry IAM management UI.
+# The registry's CognitoIAMManager lists groups and users from the User Pool to
+# populate the IAM > Groups / Users pages. Read-only: no create/delete actions.
+resource "aws_iam_policy" "cognito_iam_read" {
+  count       = var.cognito_enabled ? 1 : 0
+  name_prefix = "${local.name_prefix}-cognito-iam-read-"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CognitoIdpReadOnly"
+        Effect = "Allow"
+        Action = [
+          "cognito-idp:ListGroups",
+          "cognito-idp:ListUsers",
+          "cognito-idp:AdminListGroupsForUser"
+        ]
+        Resource = "arn:aws:cognito-idp:*:*:userpool/${var.cognito_user_pool_id}"
       }
     ]
   })

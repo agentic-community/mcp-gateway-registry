@@ -3,9 +3,6 @@ import axios from 'axios';
 
 type EntityType = 'mcp_server' | 'tool' | 'a2a_agent' | 'skill' | 'virtual_server';
 
-const DEFAULT_ENTITY_TYPES: EntityType[] = ['mcp_server', 'tool', 'a2a_agent', 'skill', 'virtual_server'];
-const DEFAULT_ENTITY_TYPES_KEY = DEFAULT_ENTITY_TYPES.join('|');
-
 export interface MatchingToolHit {
   tool_name: string;
   description?: string;
@@ -120,6 +117,19 @@ export interface SemanticVirtualServerHit {
   endpoint_url?: string;
 }
 
+export interface SemanticCustomHit {
+  entity_type: string;
+  path: string;
+  name: string;
+  description?: string;
+  tags: string[];
+  visibility?: string;
+  owner?: string;
+  is_enabled?: boolean;
+  relevance_score: number;
+  match_context?: string;
+}
+
 export interface SemanticSearchResponse {
   query: string;
   servers: SemanticServerHit[];
@@ -127,18 +137,22 @@ export interface SemanticSearchResponse {
   agents: SemanticAgentHit[];
   skills: SemanticSkillHit[];
   virtual_servers: SemanticVirtualServerHit[];
+  custom: SemanticCustomHit[];
   total_servers: number;
   total_tools: number;
   total_agents: number;
   total_skills: number;
   total_virtual_servers: number;
+  total_custom: number;
 }
 
 interface UseSemanticSearchOptions {
   enabled?: boolean;
   minLength?: number;
   maxResults?: number;
-  entityTypes?: EntityType[];
+  // Built-in types are the EntityType union; custom types are dynamic names
+  // (e.g. 'prompt_template'), so a bare string is also accepted.
+  entityTypes?: (EntityType | string)[];
   tags?: string[];
 }
 
@@ -161,9 +175,11 @@ export const useSemanticSearch = (
   const enabled = options.enabled ?? true;
   const minLength = options.minLength ?? 2;
   const maxResults = options.maxResults ?? 10;
-  const entityTypes = options.entityTypes ?? DEFAULT_ENTITY_TYPES;
-  const entityTypesKey =
-    options.entityTypes?.join('|') ?? DEFAULT_ENTITY_TYPES_KEY;
+  // When the caller does not pin entity types, omit the filter entirely so the
+  // backend searches all types — including custom entities, whose dynamic type
+  // names cannot be expressed by the static EntityType union.
+  const entityTypes = options.entityTypes;
+  const entityTypesKey = options.entityTypes?.join('|') ?? '';
   const tags = options.tags;
   const tagsKey = tags?.join('|') ?? '';
 
@@ -196,9 +212,11 @@ export const useSemanticSearch = (
       try {
         const body: Record<string, unknown> = {
           query: debouncedQuery || '*',
-          entity_types: entityTypes,
           max_results: maxResults,
         };
+        if (entityTypes && entityTypes.length > 0) {
+          body.entity_types = entityTypes;
+        }
         if (tags && tags.length > 0) {
           body.tags = tags;
         }

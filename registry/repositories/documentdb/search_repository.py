@@ -136,6 +136,31 @@ def _tool_extraction_limit(
     return max(3, math.ceil(max_results * SOFT_CAP_RATIO))
 
 
+def _format_custom_result(
+    doc: dict[str, Any],
+    relevance_score: float,
+) -> dict[str, Any]:
+    """Format a custom-entity search hit into a generic result envelope.
+
+    Custom types have no fixed schema, so the result carries the entity_type
+    discriminator and the common envelope fields; the schema-driven UI renders
+    attributes from the type descriptor.
+    """
+    return {
+        "entity_type": doc.get("entity_type"),
+        "path": doc.get("path"),
+        "name": doc.get("name"),
+        "description": doc.get("description"),
+        "tags": doc.get("tags", []),
+        "visibility": doc.get("visibility", "private"),
+        "owner": doc.get("owner"),
+        "allowed_groups": doc.get("allowed_groups", []),
+        "is_enabled": doc.get("is_enabled", False),
+        "relevance_score": relevance_score,
+        "match_context": doc.get("description"),
+    }
+
+
 def _distribute_results(
     scored_results: list[tuple[dict, float]],
     max_results: int,
@@ -1061,6 +1086,115 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         except Exception as e:
             logger.error(f"Failed to index skill in search: {e}", exc_info=True)
 
+    async def index_custom_entity(
+        self,
+        record: Any,
+        descriptor: Any,
+    ) -> None:
+        """Index a custom entity record for semantic search.
+
+        Mirrors index_skill, but assembles the embedding text from descriptor
+        fields flagged ``semantic`` and routes the remaining fields into
+        ``metadata_text`` for keyword-search boosting.
+
+        Args:
+            record: CustomEntityRecord to index.
+            descriptor: CustomTypeDescriptor describing the record's type.
+        """
+        import hashlib
+
+        collection = await self._get_collection()
+
+        # Semantic fields -> embedding text (vector search).
+        text_parts = [record.name]
+        if record.description:
+            text_parts.append(record.description)
+        for f in descriptor.fields:
+            if f.semantic and f.name in record.attributes:
+                val = record.attributes[f.name]
+                text_parts.append(", ".join(val) if isinstance(val, list) else str(val))
+        if record.tags:
+            text_parts.append("Tags: " + ", ".join(record.tags))
+        text_for_embedding = " ".join(p for p in text_parts if p)
+        content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
+
+        # Non-semantic fields -> metadata_text (keyword-search boost).
+        metadata_parts: list[str] = []
+        for f in descriptor.fields:
+            if not f.semantic and f.name in record.attributes:
+                val = record.attributes[f.name]
+                if isinstance(val, list):
+                    metadata_parts.append(f"{f.name}: {', '.join(str(x) for x in val)}")
+                elif isinstance(val, bool):
+                    pass  # booleans don't help keyword search
+                elif val is not None:
+                    metadata_parts.append(f"{f.name}: {val}")
+        metadata_text = " | ".join(metadata_parts) if metadata_parts else ""
+
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"custom {record.entity_type}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
+
+        search_doc = {
+            "_id": record.path,
+            "entity_type": record.entity_type,
+            "path": record.path,
+            "name": record.name,
+            "description": record.description or "",
+            "tags": record.tags or [],
+            "metadata_text": metadata_text,
+            "is_enabled": record.is_enabled,
+            "visibility": record.visibility,
+            "allowed_groups": record.allowed_groups or [],
+            "owner": record.owner,
+            "text_for_embedding": text_for_embedding,
+            "content_hash": content_hash,
+            "embedding": embedding,
+            "embedding_metadata": embedding_config.get_embedding_metadata(),
+            "indexed_at": record.updated_at or record.created_at,
+        }
+
+        try:
+            await collection.replace_one({"_id": record.path}, search_doc, upsert=True)
+            logger.info(f"Indexed custom entity for search: {record.path}")
+        except Exception as e:
+            logger.error(f"Failed to index custom entity in search: {e}", exc_info=True)
+
+    async def delete_custom_entity_index(
+        self,
+        path: str,
+    ) -> None:
+        """Remove a single custom record's embedding (called on record DELETE)."""
+        collection = await self._get_collection()
+        try:
+            result = await collection.delete_one({"_id": path})
+            if result.deleted_count > 0:
+                logger.info(f"Removed custom entity '{path}' from search index")
+        except Exception as e:
+            logger.error(f"Failed to remove custom entity from search index: {e}", exc_info=True)
+
+    async def delete_custom_entity_index_by_type(
+        self,
+        entity_type: str,
+    ) -> int:
+        """Bulk-remove all embeddings for a type (first step of delete-type cascade)."""
+        collection = await self._get_collection()
+        try:
+            result = await collection.delete_many({"entity_type": entity_type})
+            logger.info(
+                f"Removed {result.deleted_count} custom entity embeddings of type {entity_type}"
+            )
+            return result.deleted_count
+        except Exception as e:
+            logger.error(
+                f"Failed to bulk-remove custom entity embeddings for type {entity_type}: {e}",
+                exc_info=True,
+            )
+            return 0
+
     async def index_virtual_server(
         self,
         path: str,
@@ -1303,12 +1437,14 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 doc_id = doc["_id"]
                 if doc_id not in indexed_ids:
                     name = doc.get("server_name") or doc.get("name") or doc_id
-                    missing.append({
-                        "path": doc_id,
-                        "entity_type": entity_type,
-                        "name": name,
-                        "is_enabled": doc.get("is_enabled", True),
-                    })
+                    missing.append(
+                        {
+                            "path": doc_id,
+                            "entity_type": entity_type,
+                            "name": name,
+                            "is_enabled": doc.get("is_enabled", True),
+                        }
+                    )
 
         missing.sort(key=lambda x: (x["entity_type"], x["path"]))
 
@@ -1351,11 +1487,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         server_doc,
                         is_enabled=server_doc.get("is_enabled", True),
                     )
-                    details.append({
-                        "path": path,
-                        "entity_type": "mcp_server",
-                        "status": "success",
-                    })
+                    details.append(
+                        {
+                            "path": path,
+                            "entity_type": "mcp_server",
+                            "status": "success",
+                        }
+                    )
                     continue
 
                 agent_doc = await agents_col.find_one({"_id": path})
@@ -1366,11 +1504,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         agent_card,
                         is_enabled=agent_doc.get("is_enabled", True),
                     )
-                    details.append({
-                        "path": path,
-                        "entity_type": "a2a_agent",
-                        "status": "success",
-                    })
+                    details.append(
+                        {
+                            "path": path,
+                            "entity_type": "a2a_agent",
+                            "status": "success",
+                        }
+                    )
                     continue
 
                 skill_doc = await skills_col.find_one({"_id": path})
@@ -1383,28 +1523,34 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         skill_card,
                         is_enabled=skill_doc.get("is_enabled", True),
                     )
-                    details.append({
-                        "path": path,
-                        "entity_type": "skill",
-                        "status": "success",
-                    })
+                    details.append(
+                        {
+                            "path": path,
+                            "entity_type": "skill",
+                            "status": "success",
+                        }
+                    )
                     continue
 
-                details.append({
-                    "path": path,
-                    "entity_type": "unknown",
-                    "status": "failed",
-                    "error": "Not found in any source collection",
-                })
+                details.append(
+                    {
+                        "path": path,
+                        "entity_type": "unknown",
+                        "status": "failed",
+                        "error": "Not found in any source collection",
+                    }
+                )
 
             except Exception as e:
                 logger.error(f"Failed to reindex '{path}': {e}", exc_info=True)
-                details.append({
-                    "path": path,
-                    "entity_type": "unknown",
-                    "status": "failed",
-                    "error": "Failed to re-index document due to an internal error",
-                })
+                details.append(
+                    {
+                        "path": path,
+                        "entity_type": "unknown",
+                        "status": "failed",
+                        "error": "Failed to re-index document due to an internal error",
+                    }
+                )
 
         success_count = sum(1 for d in details if d["status"] == "success")
         failed_count = sum(1 for d in details if d["status"] == "failed")
@@ -1480,9 +1626,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
 
             all_docs = await cursor.to_list(length=None)
-            docs_with_embeddings = sum(
-                1 for d in all_docs if d.get("embedding")
-            )
+            docs_with_embeddings = sum(1 for d in all_docs if d.get("embedding"))
             logger.info(
                 "Client-side search: Retrieved %d documents (%d with embeddings)",
                 len(all_docs),
@@ -1522,23 +1666,17 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     server_name_matched = True
                 if description and _tokens_match_text(query_tokens, description):
                     text_boost += 2.0
-                if tags and any(
-                    _tokens_match_text(query_tokens, tag) for tag in tags
-                ):
+                if tags and any(_tokens_match_text(query_tokens, tag) for tag in tags):
                     text_boost += 1.5
 
                 metadata_text = doc.get("metadata_text", "")
-                if metadata_text and _tokens_match_text(
-                    query_tokens, metadata_text
-                ):
+                if metadata_text and _tokens_match_text(query_tokens, metadata_text):
                     text_boost += 1.0
 
                 for tool in tools:
                     tool_name = tool.get("name", "")
                     tool_desc = tool.get("description") or ""
-                    tool_score = _score_tool_relevance(
-                        tool_name, tool_desc, query_tokens
-                    )
+                    tool_score = _score_tool_relevance(tool_name, tool_desc, query_tokens)
 
                     if tool_score > 0:
                         text_boost += 1.0
@@ -1547,8 +1685,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                 "tool_name": tool_name,
                                 "description": tool_desc,
                                 "relevance_score": tool_score,
-                                "match_context": tool_desc
-                                or f"Tool: {tool_name}",
+                                "match_context": tool_desc or f"Tool: {tool_name}",
                             }
                         )
 
@@ -1570,9 +1707,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 )
                 vector_ranked_docs = [doc for doc, _ in vector_scored]
                 keyword_ranked_docs = [doc for doc, _ in keyword_scored]
-                scored_tuples = _reciprocal_rank_fusion(
-                    vector_ranked_docs, keyword_ranked_docs
-                )
+                scored_tuples = _reciprocal_rank_fusion(vector_ranked_docs, keyword_ranked_docs)
                 for doc, rrf_score in scored_tuples[:10]:
                     logger.info(
                         "RRF score for '%s' (type=%s): %.6f, text_boost=%.1f",
@@ -1593,10 +1728,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     scored_tuples.append((doc, relevance_score))
                 for doc, text_boost in keyword_scored:
                     doc_id = doc.get("_id") or doc.get("path")
-                    if not any(
-                        (d.get("_id") or d.get("path")) == doc_id
-                        for d, _ in scored_tuples
-                    ):
+                    if not any((d.get("_id") or d.get("path")) == doc_id for d, _ in scored_tuples):
                         relevance_score = min(1.0, text_boost * 0.1)
                         scored_tuples.append((doc, relevance_score))
                 scored_tuples.sort(key=lambda x: x[1], reverse=True)
@@ -1613,6 +1745,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 "agents": [],
                 "skills": [],
                 "virtual_servers": [],
+                "custom": [],
             }
 
             tool_count = 0
@@ -1740,15 +1873,19 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     }
                     grouped_results["virtual_servers"].append(result_entry)
 
+                else:
+                    grouped_results["custom"].append(_format_custom_result(doc, relevance_score))
+
             logger.info(
                 "Client-side search returned "
                 "%d servers, %d tools, %d agents, %d skills, "
-                "%d virtual_servers from %d total documents (max_results=%d)",
+                "%d virtual_servers, %d custom from %d total documents (max_results=%d)",
                 len(grouped_results["servers"]),
                 len(grouped_results["tools"]),
                 len(grouped_results["agents"]),
                 len(grouped_results["skills"]),
                 len(grouped_results["virtual_servers"]),
+                len(grouped_results["custom"]),
                 len(all_docs),
                 max_results,
             )
@@ -1763,6 +1900,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 "agents": [],
                 "skills": [],
                 "virtual_servers": [],
+                "custom": [],
             }
 
     async def _lexical_only_search(
@@ -1795,7 +1933,14 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         if not query_tokens:
             logger.info("Lexical search: no valid tokens from query '%s'", query)
-            return {"servers": [], "tools": [], "agents": [], "skills": []}
+            return {
+                "servers": [],
+                "tools": [],
+                "agents": [],
+                "skills": [],
+                "virtual_servers": [],
+                "custom": [],
+            }
 
         escaped_tokens = [re.escape(token) for token in query_tokens]
         token_regex = "|".join(escaped_tokens)
@@ -1877,6 +2022,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "agents": [],
             "skills": [],
             "virtual_servers": [],
+            "custom": [],
         }
         tool_count = 0
         tool_limit = _tool_extraction_limit(max_results)
@@ -1999,7 +2145,30 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 }
                 grouped_results["virtual_servers"].append(result_entry)
 
+            else:
+                grouped_results["custom"].append(_format_custom_result(doc, relevance_score))
+
         return grouped_results
+
+    async def _default_search_scope(self) -> list[str]:
+        """Default entity types for unscoped search.
+
+        Built at query time so newly defined custom types appear in the
+        "search everything" results. Custom type names come from the shared
+        in-memory descriptor cache (never a per-query Mongo read); a stale
+        cache only delays a brand-new type by the cache TTL.
+        """
+        scope = ["mcp_server", "a2a_agent", "skill", "virtual_server"]
+        if not settings.custom_entity_types_enabled:
+            return scope
+        try:
+            from ..factory import get_custom_type_repository
+
+            descriptors = await get_custom_type_repository().cache.list_descriptors()
+            scope.extend(d.name for d in descriptors)
+        except Exception as e:
+            logger.warning(f"Could not append custom types to search scope: {e}")
+        return scope
 
     async def search(
         self,
@@ -2061,12 +2230,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
             text_boost_stage = _build_text_boost_stage(token_regex)
 
-            search_types = [
-                t for t in (entity_types or [
-                    "mcp_server", "a2a_agent", "skill", "virtual_server"
-                ])
-                if t != "tool"
-            ]
+            default_scope = await self._default_search_scope()
+            search_types = [t for t in (entity_types or default_scope) if t != "tool"]
 
             results = []
             result_ids: set[str] = set()
@@ -2118,12 +2283,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 entity_types=entity_types,
             )
 
-            keyword_cursor = collection.find(keyword_match_filter).limit(
-                max(max_results, 10)
-            )
-            keyword_results = await keyword_cursor.to_list(
-                length=max(max_results, 10)
-            )
+            keyword_cursor = collection.find(keyword_match_filter).limit(max(max_results, 10))
+            keyword_results = await keyword_cursor.to_list(length=max(max_results, 10))
 
             logger.info(
                 "Keyword search for '%s' found %d candidates",
@@ -2173,9 +2334,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     for tool in tools:
                         t_name = tool.get("name") or ""
                         t_desc = tool.get("description") or ""
-                        tool_score = _score_tool_relevance(
-                            t_name, t_desc, query_tokens
-                        )
+                        tool_score = _score_tool_relevance(t_name, t_desc, query_tokens)
                         if tool_score > 0:
                             kw_text_boost += 1.0
                             matching_tools.append(
@@ -2183,8 +2342,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                     "tool_name": t_name,
                                     "description": t_desc,
                                     "relevance_score": tool_score,
-                                    "match_context": t_desc
-                                    or f"Tool: {t_name}",
+                                    "match_context": t_desc or f"Tool: {t_name}",
                                 }
                             )
 
@@ -2216,9 +2374,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
 
             if settings.search_fusion_method == "rrf":
-                scored_results = _reciprocal_rank_fusion(
-                    vector_ranked_docs, keyword_ranked_docs
-                )
+                scored_results = _reciprocal_rank_fusion(vector_ranked_docs, keyword_ranked_docs)
                 for doc, rrf_score in scored_results[:10]:
                     logger.info(
                         "RRF score for '%s' (type=%s): %.6f, text_boost=%.1f",
@@ -2253,6 +2409,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 "agents": [],
                 "skills": [],
                 "virtual_servers": [],
+                "custom": [],
             }
             tool_count = 0
             tool_limit = _tool_extraction_limit(max_results)
@@ -2380,6 +2537,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     }
                     grouped_results["virtual_servers"].append(result_entry)
 
+                else:
+                    # Custom entity types (admin-defined). Generic envelope —
+                    # the schema-driven UI renders attributes from the descriptor.
+                    grouped_results["custom"].append(_format_custom_result(doc, relevance_score))
+
             # Sort each group by relevance_score (descending) to ensure highest matches
             # appear first. This is needed because the DB sorts by text_boost only,
             # but relevance_score combines both vector similarity and text boost.
@@ -2390,17 +2552,19 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             grouped_results["virtual_servers"].sort(
                 key=lambda x: x.get("relevance_score", 0), reverse=True
             )
+            grouped_results["custom"].sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
 
             logger.info(
                 "Hybrid search for '%s' returned "
                 "%d servers, %d tools, %d agents, %d skills, "
-                "%d virtual_servers (max_results=%d)",
+                "%d virtual_servers, %d custom (max_results=%d)",
                 query,
                 len(grouped_results["servers"]),
                 len(grouped_results["tools"]),
                 len(grouped_results["agents"]),
                 len(grouped_results["skills"]),
                 len(grouped_results["virtual_servers"]),
+                len(grouped_results["custom"]),
                 max_results,
             )
 
@@ -2442,4 +2606,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 )
 
             logger.error(f"Failed to perform hybrid search: {e}", exc_info=True)
-            return {"servers": [], "tools": [], "agents": [], "skills": []}
+            return {
+                "servers": [],
+                "tools": [],
+                "agents": [],
+                "skills": [],
+                "virtual_servers": [],
+                "custom": [],
+            }

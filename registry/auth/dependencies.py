@@ -608,8 +608,14 @@ async def nginx_proxied_auth(
         f"[NGINX_AUTH_DEBUG] Authorization header: {request.headers.get('authorization', 'NOT PRESENT')[:50] if request.headers.get('authorization') else 'NOT PRESENT'}"
     )
 
-    # Log ALL headers for complete diagnostic
-    all_headers = dict(request.headers)
+    # Log ALL headers for complete diagnostic, with sensitive values redacted.
+    # cookie/authorization carry the session and bearer token; even at DEBUG we
+    # don't want them in logs.
+    _redacted_header_names = {"cookie", "authorization"}
+    all_headers = {
+        name: ("[REDACTED]" if name.lower() in _redacted_header_names else value)
+        for name, value in request.headers.items()
+    }
     logger.debug(f"[NGINX_AUTH_DEBUG] ALL REQUEST HEADERS: {all_headers}")
 
     # First, try to get user context from nginx headers (JWT Bearer token flow)

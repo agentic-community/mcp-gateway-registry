@@ -1,0 +1,19 @@
+{
+  "name": "Claude Opus 4.8",
+  "description": "Anthropic's most capable model; strong reasoning, agentic coding, and long-context synthesis.",
+  "visibility": "public",
+  "tags": ["anthropic", "frontier", "coding"],
+  "attributes": {
+    "provider": "anthropic",
+    "model_id": "claude-opus-4-8",
+    "modality": "multimodal",
+    "context_window": 200000,
+    "input_price_per_mtok": 15.0,
+    "output_price_per_mtok": 75.0,
+    "intended_use": "Complex multi-step agentic tasks, large-codebase reasoning, and high-stakes synthesis where quality matters more than cost.",
+    "limitations": "Higher per-token cost than Sonnet/Haiku; overkill for simple classification or extraction. Knowledge cutoff applies.",
+    "release_date": "2026-01-15",
+    "approved_for_prod": true,
+    "capabilities": ["reasoning", "tool-use", "vision", "long-context"]
+  }
+}

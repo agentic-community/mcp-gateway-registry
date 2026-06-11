@@ -109,6 +109,15 @@ spec:
             # DCR scope-allowlist alignment
             - name: MCP_ADVERTISED_SCOPES
               value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}
+            # Custom entity types (admin-defined, schema-driven catalog types)
+            - name: CUSTOM_ENTITY_TYPES_ENABLED
+              value: {{ .Values.app.customEntityTypesEnabled | default false | toString | quote }}
+            - name: CUSTOM_TYPE_CACHE_TTL_SECONDS
+              value: {{ .Values.app.customTypeCacheTtlSeconds | default 60 | toString | quote }}
+            - name: MAX_CUSTOM_RECORDS_PER_TYPE
+              value: {{ .Values.app.maxCustomRecordsPerType | default 1000 | toString | quote }}
+            - name: MAX_CUSTOM_TYPES
+              value: {{ .Values.app.maxCustomTypes | default 50 | toString | quote }}
             {{- if .Values.awsRegistry.federationEnabled }}
             - name: AWS_REGISTRY_FEDERATION_ENABLED
               value: "true"
@@ -168,6 +177,55 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.auth0.managementApiTokenExistingSecret }}
                   key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.pingfederate.clientSecretExistingSecret }}
+            - name: PINGFEDERATE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pingfederate.clientSecretExistingSecret }}
+                  key: {{ .Values.pingfederate.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if .Values.pingfederate.m2mClientSecretExistingSecret }}
+            - name: PINGFEDERATE_M2M_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pingfederate.m2mClientSecretExistingSecret }}
+                  key: {{ .Values.pingfederate.m2mClientSecretExistingSecretKey }}
+            {{- end }}
+            # PingFederate Admin API (registry only). URL and USER are not secrets.
+            # PASS comes from the chart-managed secret via envFrom unless
+            # passwordExistingSecret is set, in which case we explicitly source it
+            # from the external secret (mirrors PINGFEDERATE_CLIENT_SECRET pattern).
+            - name: PF_ADMIN_URL
+              value: {{ .Values.pingfederateAdmin.url | quote }}
+            - name: PF_ADMIN_USER
+              value: {{ .Values.pingfederateAdmin.user | quote }}
+            {{- if .Values.pingfederateAdmin.passwordExistingSecret }}
+            - name: PF_ADMIN_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pingfederateAdmin.passwordExistingSecret }}
+                  key: {{ .Values.pingfederateAdmin.passwordExistingSecretKey }}
+            {{- end }}
+            {{- if eq (.Values.global.authProvider.type | default "keycloak") "pingfederate" }}
+            - name: PINGFEDERATE_ENABLED
+              value: "true"
+            - name: PINGFEDERATE_BASE_URL
+              value: {{ .Values.pingfederate.baseUrl | quote }}
+            - name: PINGFEDERATE_EXTERNAL_URL
+              value: {{ .Values.pingfederate.externalUrl | quote }}
+            - name: PINGFEDERATE_CLIENT_ID
+              value: {{ .Values.pingfederate.clientId | quote }}
+            {{- if .Values.pingfederate.m2mClientId }}
+            - name: PINGFEDERATE_M2M_CLIENT_ID
+              value: {{ .Values.pingfederate.m2mClientId | quote }}
+            {{- end }}
+            {{- if .Values.pingfederate.applicationIdUri }}
+            - name: PINGFEDERATE_APPLICATION_ID_URI
+              value: {{ .Values.pingfederate.applicationIdUri | quote }}
+            {{- end }}
+            - name: PINGFEDERATE_GROUPS_CLAIM
+              value: {{ .Values.pingfederate.groupsClaim | default "groups" | quote }}
             {{- end }}
             {{- if .Values.app.registryApiKeysExistingSecret }}
             - name: REGISTRY_API_KEYS

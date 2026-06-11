@@ -9,6 +9,7 @@ from .cognito import CognitoProvider
 from .entra import EntraIdProvider
 from .keycloak import KeycloakProvider
 from .okta import OktaProvider
+from .pingfederate import PingFederateProvider
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +46,8 @@ def get_auth_provider(provider_type: str | None = None) -> AuthProvider:
         return _create_okta_provider()
     elif provider_type == "auth0":
         return _create_auth0_provider()
+    elif provider_type == "pingfederate":
+        return _create_pingfederate_provider()
     else:
         raise ValueError(f"Unknown auth provider: {provider_type}")
 
@@ -228,6 +231,43 @@ def _create_auth0_provider() -> Auth0Provider:
         audience=audience,
         m2m_client_id=m2m_client_id,
         m2m_client_secret=m2m_client_secret,
+        groups_claim=groups_claim,
+    )
+
+
+def _create_pingfederate_provider() -> PingFederateProvider:
+    """Create and configure PingFederate provider."""
+    base_url = os.environ.get("PINGFEDERATE_BASE_URL")
+    client_id = os.environ.get("PINGFEDERATE_CLIENT_ID")
+    client_secret = os.environ.get("PINGFEDERATE_CLIENT_SECRET")
+    m2m_client_id = os.environ.get("PINGFEDERATE_M2M_CLIENT_ID")
+    m2m_client_secret = os.environ.get("PINGFEDERATE_M2M_CLIENT_SECRET")
+    application_id_uri = os.environ.get("PINGFEDERATE_APPLICATION_ID_URI")
+    groups_claim = os.environ.get("PINGFEDERATE_GROUPS_CLAIM", "groups")
+
+    missing_vars = []
+    if not base_url:
+        missing_vars.append("PINGFEDERATE_BASE_URL")
+    if not client_id:
+        missing_vars.append("PINGFEDERATE_CLIENT_ID")
+    if not client_secret:
+        missing_vars.append("PINGFEDERATE_CLIENT_SECRET")
+
+    if missing_vars:
+        raise ValueError(
+            f"Missing required PingFederate configuration: {', '.join(missing_vars)}. "
+            "Please set these environment variables."
+        )
+
+    logger.info(f"Initializing PingFederate provider for base URL '{base_url}'")
+
+    return PingFederateProvider(
+        base_url=base_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        m2m_client_id=m2m_client_id,
+        m2m_client_secret=m2m_client_secret,
+        application_id_uri=application_id_uri,
         groups_claim=groups_claim,
     )
 

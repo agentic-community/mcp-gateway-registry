@@ -591,6 +591,47 @@ variable "idp_group_filter_prefix" {
   default     = ""
 }
 
+variable "idp_user_group_fallback_enabled_providers" {
+  description = "Comma-separated list of IdP providers (e.g. pingfederate) for which the registry's local idp_user_groups collection is consulted to populate empty JWT groups claims. Empty list disables the fallback for all providers. Default: pingfederate."
+  type        = string
+  default     = "pingfederate"
+}
+
+# =============================================================================
+# AMAZON COGNITO CONFIGURATION
+# =============================================================================
+
+variable "cognito_enabled" {
+  description = "Enable Amazon Cognito as the authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "cognito_user_pool_id" {
+  description = "Cognito User Pool ID (e.g. us-east-1_XXXXXXXXX)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_client_id" {
+  description = "Cognito App Client ID for web login"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_client_secret" {
+  description = "Cognito App Client secret for web login"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "cognito_domain" {
+  description = "Optional Cognito hosted UI domain prefix or custom domain. Leave empty to derive it from the User Pool ID."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # OKTA CONFIGURATION
 # =============================================================================
@@ -704,6 +745,89 @@ variable "auth0_management_api_token" {
   description = "Auth0 Management API token (alternative to M2M credentials, expires after 24h)"
   type        = string
   default     = ""
+  sensitive   = true
+}
+
+# =============================================================================
+# PINGFEDERATE CONFIGURATION
+# =============================================================================
+
+variable "pingfederate_enabled" {
+  description = "Enable PingFederate as authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "pingfederate_base_url" {
+  description = "PingFederate runtime base URL (internal, server-to-server), e.g. https://pf.example.com:9031"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_external_url" {
+  description = "PingFederate external URL (browser-facing, for auth redirects)"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_client_id" {
+  description = "PingFederate OAuth client ID for the gateway web app"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_client_secret" {
+  description = "PingFederate OAuth client secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pingfederate_m2m_client_id" {
+  description = "PingFederate M2M client ID (defaults to web client if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_m2m_client_secret" {
+  description = "PingFederate M2M client secret (defaults to web client secret if empty)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pingfederate_application_id_uri" {
+  description = "Optional resource-server identifier accepted as the JWT aud claim"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_groups_claim" {
+  description = "JWT claim name carrying group memberships (default: groups)"
+  type        = string
+  default     = "groups"
+}
+
+# -----------------------------------------------------------------------------
+# PINGFEDERATE ADMIN API (registry only)
+# -----------------------------------------------------------------------------
+
+variable "pf_admin_url" {
+  description = "PingFederate admin API URL (used by registry to create OAuth clients and PCV users)"
+  type        = string
+  default     = "https://pingfederate:9999"
+}
+
+variable "pf_admin_user" {
+  description = "PingFederate admin API username"
+  type        = string
+  default     = "administrator"
+}
+
+variable "pf_admin_pass" {
+  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production."
+  type        = string
+  default     = "2FederateM0re"
   sensitive   = true
 }
 
@@ -1087,6 +1211,30 @@ variable "tool_filter_audit_log_level" {
   description = "Log level for tool-pruning audit lines during the launch window. Valid values: DEBUG, INFO, WARNING."
   type        = string
   default     = "INFO"
+}
+
+variable "custom_entity_types_enabled" {
+  description = "Main switch for the custom-entity-types feature (dynamic tabs + endpoints). Off by default = no behavior change for existing deployments."
+  type        = bool
+  default     = false
+}
+
+variable "custom_type_cache_ttl_seconds" {
+  description = "TTL (seconds) for the in-process custom-type descriptor cache used by the config tab list and default search scope."
+  type        = number
+  default     = 60
+}
+
+variable "max_custom_records_per_type" {
+  description = "Soft cap on records per custom type (0 = unlimited). When non-zero, record creation is rejected with HTTP 409 once a type reaches the cap. Best-effort (concurrent creates may overshoot slightly)."
+  type        = number
+  default     = 1000
+}
+
+variable "max_custom_types" {
+  description = "Cap on the number of custom entity types an admin can define (0 = unlimited). When non-zero, type creation is rejected with HTTP 409 once the limit is reached."
+  type        = number
+  default     = 50
 }
 
 variable "mcp_advertised_scopes" {

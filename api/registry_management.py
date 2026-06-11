@@ -113,6 +113,24 @@ Group Management (IAM):
     # Delete an IAM group
     uv run python registry_management.py group-delete --name developers --force
 
+User Groups (IdP Fallback - issue #1127):
+    # Register a user-to-groups mapping (admin only)
+    uv run python registry_management.py user-group-create \\
+        --username alice --groups registry-admins,public-mcp-users
+
+    # List user-group mappings
+    uv run python registry_management.py user-group-list
+
+    # Update a user's groups
+    uv run python registry_management.py user-group-update \\
+        --username alice --groups registry-admins
+
+    # Delete a user-group mapping
+    uv run python registry_management.py user-group-delete --username alice
+
+    # Create a user inside PingFederate Simple PCV (PingFederate-only)
+    uv run python registry_management.py pingfederate-user-create --username alice
+
 Federation Management:
     # Get federation configuration
     uv run python registry_management.py federation-get
@@ -233,6 +251,7 @@ Local Development (running against local Docker Compose setup):
 """
 
 import argparse
+import getpass
 import json
 import logging
 import os
@@ -700,6 +719,117 @@ def _create_client(args: argparse.Namespace) -> RegistryClient:
         )
 
     return RegistryClient(registry_url=registry_url, token=token)
+
+
+def cmd_custom_type_create(args: argparse.Namespace) -> int:
+    """
+    Define a new custom entity type from a JSON descriptor file (admin only).
+
+    Args:
+        args: Command arguments (expects args.config)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        descriptor = _load_json_config(args.config)
+        client = _create_client(args)
+        response = client.create_custom_type(descriptor)
+        logger.info(f"Custom type created: {response.get('name')}")
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        return 0
+    except FileNotFoundError as e:
+        logger.error(f"Configuration file error: {e}")
+        return 1
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON configuration: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Custom type creation failed: {e}")
+        return 1
+
+
+def cmd_custom_type_list(args: argparse.Namespace) -> int:
+    """
+    List all defined custom entity type descriptors.
+
+    Args:
+        args: Command arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.list_custom_types()
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        else:
+            types = response.get("custom_types", [])
+            logger.info(f"Custom types ({response.get('total_count', len(types))}):")
+            for t in types:
+                field_count = len(t.get("fields", []))
+                logger.info(f"  {t.get('name')} ({field_count} fields): {t.get('display_name')}")
+        return 0
+    except Exception as e:
+        logger.error(f"Listing custom types failed: {e}")
+        return 1
+
+
+def cmd_custom_record_create(args: argparse.Namespace) -> int:
+    """
+    Create a record of a custom type from a JSON file.
+
+    Args:
+        args: Command arguments (expects args.type and args.config)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        record = _load_json_config(args.config)
+        client = _create_client(args)
+        response = client.create_custom_record(args.type, record)
+        logger.info(f"Custom record created: {response.get('path')}")
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        return 0
+    except FileNotFoundError as e:
+        logger.error(f"Configuration file error: {e}")
+        return 1
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON configuration: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Custom record creation failed: {e}")
+        return 1
+
+
+def cmd_custom_record_list(args: argparse.Namespace) -> int:
+    """
+    List records of a custom type the caller can view.
+
+    Args:
+        args: Command arguments (expects args.type)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.list_custom_records(args.type)
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        else:
+            records = response.get("records", [])
+            logger.info(f"{args.type} records ({response.get('total_count', len(records))}):")
+            for r in records:
+                logger.info(f"  {r.get('name')} ({r.get('path')}) owner={r.get('owner')}")
+        return 0
+    except Exception as e:
+        logger.error(f"Listing custom records failed: {e}")
+        return 1
 
 
 def cmd_register(args: argparse.Namespace) -> int:
@@ -3642,6 +3772,204 @@ def cmd_m2m_client_delete(args: argparse.Namespace) -> int:
         return 1
 
 
+def _print_user_group(record: Any) -> None:
+    """Print one user-group record."""
+    print(f"Username: {record.username}")
+    print(f"Groups: {', '.join(record.groups) if record.groups else 'None'}")
+    print(f"Email: {record.email or '-'}")
+    print(f"Provider: {record.provider}")
+    print(f"Enabled: {record.enabled}")
+    if record.created_at:
+        print(f"Created: {record.created_at}")
+    if record.updated_at:
+        print(f"Updated: {record.updated_at}")
+
+
+def cmd_user_group_create(args: argparse.Namespace) -> int:
+    """Register a new user-to-groups mapping in idp_user_groups (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        groups = [g.strip() for g in args.groups.split(",") if g.strip()] if args.groups else []
+        client = _create_client(args)
+        result = client.register_user_group(
+            username=args.username,
+            groups=groups,
+            email=args.email,
+            provider=args.provider,
+            enabled=not args.disabled,
+        )
+        logger.info("User-group registered successfully\n")
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+        _print_user_group(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Register user-group failed: {e}")
+        return 1
+
+
+def cmd_user_group_list(args: argparse.Namespace) -> int:
+    """List user-group records (paginated).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        client = _create_client(args)
+        result = client.list_user_groups(
+            skip=args.skip,
+            limit=args.limit,
+            provider=args.provider,
+            q=args.q,
+        )
+
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+
+        print(f"Total: {result.total}\n")
+        for item in result.items:
+            _print_user_group(item)
+            print("---")
+        return 0
+    except Exception as e:
+        logger.error(f"List user-groups failed: {e}")
+        return 1
+
+
+def cmd_user_group_get(args: argparse.Namespace) -> int:
+    """Get a single user-group record by username.
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        client = _create_client(args)
+        result = client.get_user_group(args.username)
+
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+
+        _print_user_group(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Get user-group failed: {e}")
+        return 1
+
+
+def cmd_user_group_update(args: argparse.Namespace) -> int:
+    """Update fields on an existing user-group record (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        # Only forward fields the user actually set on the command line.
+        groups: list[str] | None = None
+        if args.groups is not None:
+            groups = [g.strip() for g in args.groups.split(",") if g.strip()]
+
+        enabled: bool | None = None
+        if args.enabled:
+            enabled = True
+        elif args.disabled:
+            enabled = False
+
+        client = _create_client(args)
+        result = client.patch_user_group(
+            username=args.username,
+            groups=groups,
+            email=args.email,
+            enabled=enabled,
+        )
+        logger.info("User-group updated successfully\n")
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+        _print_user_group(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Update user-group failed: {e}")
+        return 1
+
+
+def cmd_user_group_delete(args: argparse.Namespace) -> int:
+    """Delete a user-group record by username (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        if not args.force:
+            confirmation = input(f"Delete user-group '{args.username}'? (yes/no): ")
+            if confirmation.lower() != "yes":
+                logger.info("Operation cancelled")
+                return 0
+
+        client = _create_client(args)
+        client.delete_user_group(args.username)
+        print(f"Deleted: {args.username}")
+        return 0
+    except Exception as e:
+        logger.error(f"Delete user-group failed: {e}")
+        return 1
+
+
+def cmd_pingfederate_user_create(args: argparse.Namespace) -> int:
+    """Create or update a user inside PingFederate's Simple PCV (admin only).
+
+    Requires AUTH_PROVIDER=pingfederate server-side. The password is collected
+    via interactive prompt (so it never appears in shell history) unless
+    --password-stdin is passed in which case one line is read from stdin.
+    The registry never stores the password.
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        if args.password_stdin:
+            password = sys.stdin.readline().rstrip("\n")
+        else:
+            password = getpass.getpass(f"Password for PingFederate user '{args.username}': ")
+
+        if not password:
+            logger.error("Empty password is not allowed")
+            return 1
+
+        client = _create_client(args)
+        result = client.create_pingfederate_user(args.username, password)
+
+        outcome = result.created_or_updated.capitalize()
+        print(f"{outcome} user in PingFederate: {result.username}")
+        return 0
+    except Exception as e:
+        logger.error(f"Create PingFederate user failed: {e}")
+        return 1
+
+
 def cmd_group_create(args: argparse.Namespace) -> int:
     """
     Create a new IAM group.
@@ -5238,6 +5566,47 @@ Examples:
         "--overwrite", action="store_true", help="Overwrite if server already exists"
     )
 
+    # Custom entity type commands (admin-defined, schema-driven catalog types)
+    custom_type_create_parser = subparsers.add_parser(
+        "custom-type-create", help="Define a new custom entity type from a JSON descriptor (admin)"
+    )
+    custom_type_create_parser.add_argument(
+        "--config", required=True, help="Path to custom type descriptor JSON file"
+    )
+    custom_type_create_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
+    custom_type_list_parser = subparsers.add_parser(
+        "custom-type-list", help="List all custom entity type descriptors"
+    )
+    custom_type_list_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
+    custom_record_create_parser = subparsers.add_parser(
+        "custom-record-create", help="Create a record of a custom type from a JSON file"
+    )
+    custom_record_create_parser.add_argument(
+        "--type", required=True, help="Custom type name (entity_type discriminator)"
+    )
+    custom_record_create_parser.add_argument(
+        "--config", required=True, help="Path to custom record JSON file"
+    )
+    custom_record_create_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
+    custom_record_list_parser = subparsers.add_parser(
+        "custom-record-list", help="List records of a custom type"
+    )
+    custom_record_list_parser.add_argument(
+        "--type", required=True, help="Custom type name"
+    )
+    custom_record_list_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
     # List command
     list_parser = subparsers.add_parser("list", help="List all servers")
     list_parser.add_argument("--query", help="Search query string")
@@ -5964,6 +6333,125 @@ Examples:
     m2m_delete_parser.add_argument("--client-id", required=True, help="IdP client ID")
     m2m_delete_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
+    # -------------------------------------------------------------------------
+    # User-group fallback commands (issue #1127)
+    # Write to idp_user_groups for IdPs (e.g. PingFederate) that don't carry
+    # group memberships in JWTs. Admin only for mutations.
+    # -------------------------------------------------------------------------
+
+    user_group_create_parser = subparsers.add_parser(
+        "user-group-create",
+        help="Register a username -> groups mapping in idp_user_groups (admin only)",
+    )
+    user_group_create_parser.add_argument(
+        "--username", required=True, help="IdP username (sub, email, or login id)"
+    )
+    user_group_create_parser.add_argument(
+        "--groups",
+        required=True,
+        help="Comma-separated group names (use empty string for no groups)",
+    )
+    user_group_create_parser.add_argument("--email", help="Optional user email")
+    user_group_create_parser.add_argument(
+        "--provider", help="Optional provider hint (server forces 'manual' today)"
+    )
+    user_group_create_parser.add_argument(
+        "--disabled",
+        action="store_true",
+        help="Create the record in disabled state (default: enabled)",
+    )
+    user_group_create_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    user_group_list_parser = subparsers.add_parser(
+        "user-group-list",
+        help="List user-group fallback records (paginated)",
+    )
+    user_group_list_parser.add_argument(
+        "--skip", type=int, default=0, help="Offset for pagination (default 0)"
+    )
+    user_group_list_parser.add_argument(
+        "--limit", type=int, default=50, help="Max records per page (default 50)"
+    )
+    user_group_list_parser.add_argument(
+        "--provider", help="Filter by provider (e.g. manual, pingfederate)"
+    )
+    user_group_list_parser.add_argument(
+        "--q", help="Substring filter on username/email"
+    )
+    user_group_list_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    user_group_get_parser = subparsers.add_parser(
+        "user-group-get",
+        help="Get a single user-group record by username",
+    )
+    user_group_get_parser.add_argument(
+        "--username", required=True, help="IdP username to look up"
+    )
+    user_group_get_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    user_group_update_parser = subparsers.add_parser(
+        "user-group-update",
+        help="Update fields on an existing user-group record (admin only)",
+    )
+    user_group_update_parser.add_argument(
+        "--username", required=True, help="IdP username to update"
+    )
+    user_group_update_parser.add_argument(
+        "--groups",
+        help="Comma-separated new groups list; empty string clears groups; omit to leave unchanged",
+    )
+    user_group_update_parser.add_argument(
+        "--email", help="New email (omit to leave unchanged)"
+    )
+    user_group_update_enabled = user_group_update_parser.add_mutually_exclusive_group()
+    user_group_update_enabled.add_argument(
+        "--enabled", action="store_true", help="Set enabled=True"
+    )
+    user_group_update_enabled.add_argument(
+        "--disabled", action="store_true", help="Set enabled=False"
+    )
+    user_group_update_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    user_group_delete_parser = subparsers.add_parser(
+        "user-group-delete",
+        help="Delete a user-group record by username (admin only)",
+    )
+    user_group_delete_parser.add_argument(
+        "--username", required=True, help="IdP username to delete"
+    )
+    user_group_delete_parser.add_argument(
+        "--force", action="store_true", help="Skip confirmation prompt"
+    )
+
+    pingfederate_user_create_parser = subparsers.add_parser(
+        "pingfederate-user-create",
+        help="Create or update a user inside PingFederate's Simple PCV (admin only)",
+        description=(
+            "Create or update a user inside PingFederate's Simple Password "
+            "Credential Validator (PCV). Requires AUTH_PROVIDER=pingfederate "
+            "server-side. The password is collected via an interactive prompt "
+            "(so it never appears in shell history) unless --password-stdin is "
+            "passed in which case one line is read from stdin. The registry "
+            "never stores the password."
+        ),
+    )
+    pingfederate_user_create_parser.add_argument(
+        "--username", required=True, help="Target username inside PingFederate"
+    )
+    pingfederate_user_create_parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read password from stdin instead of prompting interactively",
+    )
+
     # Create IAM group command
     group_create_parser = subparsers.add_parser("group-create", help="Create a new IAM group")
     group_create_parser.add_argument("--name", required=True, help="Group name")
@@ -6373,6 +6861,10 @@ Examples:
 
     command_handlers = {
         "register": cmd_register,
+        "custom-type-create": cmd_custom_type_create,
+        "custom-type-list": cmd_custom_type_list,
+        "custom-record-create": cmd_custom_record_create,
+        "custom-record-list": cmd_custom_record_list,
         "list": cmd_list,
         "toggle": cmd_toggle,
         "remove": cmd_remove,
@@ -6442,6 +6934,13 @@ Examples:
         "m2m-client-get": cmd_m2m_client_get,
         "m2m-client-update": cmd_m2m_client_update,
         "m2m-client-delete": cmd_m2m_client_delete,
+        # Direct user-group fallback registration (issue #1127)
+        "user-group-create": cmd_user_group_create,
+        "user-group-list": cmd_user_group_list,
+        "user-group-get": cmd_user_group_get,
+        "user-group-update": cmd_user_group_update,
+        "user-group-delete": cmd_user_group_delete,
+        "pingfederate-user-create": cmd_pingfederate_user_create,
         "group-create": cmd_group_create,
         "group-delete": cmd_group_delete,
         "group-list": cmd_group_list,

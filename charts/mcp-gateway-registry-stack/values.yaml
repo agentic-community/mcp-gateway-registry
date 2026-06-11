@@ -363,6 +363,11 @@ registry:
     mcpToolsListFilterEnabled: true    # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
     toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
+    # Custom entity types (admin-defined, schema-driven catalog types)
+    customEntityTypesEnabled: false    # Main switch for dynamic tabs + endpoints; off = no behavior change
+    customTypeCacheTtlSeconds: 60      # TTL (s) for the in-process custom-type descriptor cache
+    maxCustomRecordsPerType: 0         # Soft cap on records per type (0 = unlimited); rejects create at cap
+
     # PRM `scopes_supported` override. Default matches Keycloak-DCR setup
     # (Claude Code, Claude.ai, Cursor) — the three scopes are present in every
     # Keycloak realm by default, so DCR succeeds. Set to "" to derive from the
@@ -400,6 +405,26 @@ registry:
   # When set, only groups whose name starts with any of these prefixes are shown in IAM > Groups
   # Example: "mcp-,registry-,ai-"
   idpGroupFilterPrefix: ""
+
+  # IdP user-to-group fallback (issue #1127)
+  # Comma-separated list of IdP providers (e.g. pingfederate) for which the
+  # registry's local idp_user_groups collection is consulted to populate empty
+  # JWT groups claims. Empty string disables the fallback for all providers.
+  # Forwarded to both the registry and auth-server subcharts.
+  # Default: "pingfederate"
+  idpUserGroupFallbackEnabledProviders: "pingfederate"
+
+  # PingFederate Admin API (registry only).
+  # Used by the registry to call the PF admin API to create OAuth clients
+  # and Simple PCV users at runtime. The PASS is sensitive; the URL and
+  # USER are not. To source PF_ADMIN_PASS from an existing K8s Secret,
+  # set passwordExistingSecret instead of password.
+  pingfederateAdmin:
+    url: "https://pingfederate:9999"
+    user: "administrator"
+    password: ""
+    passwordExistingSecret: ""
+    passwordExistingSecretKey: "PF_ADMIN_PASS"
 
   ingress:
     enabled: true
@@ -506,6 +531,14 @@ auth-server:
     clientSecret: ""
     domain: ""  # Optional: custom Cognito domain
     region: "us-east-1"
+
+  # IdP user-to-group fallback (issue #1127)
+  # Comma-separated list of IdP providers (e.g. pingfederate) for which the
+  # registry's local idp_user_groups collection is consulted to populate empty
+  # JWT groups claims. Empty string disables the fallback for all providers.
+  # Keep in sync with registry.idpUserGroupFallbackEnabledProviders above.
+  # Default: "pingfederate"
+  idpUserGroupFallbackEnabledProviders: "pingfederate"
 
   nodeSelector: {}
 

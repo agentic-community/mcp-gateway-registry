@@ -1,0 +1,75 @@
+{
+  "name": "model_card",
+  "display_name": "Models",
+  "description": "Catalog of LLM model cards: provider, modality, context window, pricing, and intended-use / limitation notes for models approved in the org.",
+  "fields": [
+    {
+      "name": "provider",
+      "label": "Provider",
+      "datatype": "enum",
+      "enum_values": ["amazon", "anthropic", "cohere", "deepseek", "google", "meta", "minimax", "mistral", "moonshot", "nvidia", "openai", "qwen", "twelvelabs", "writer", "zai", "other"],
+      "required": true,
+      "show_in_list": true
+    },
+    {
+      "name": "model_id",
+      "label": "Model ID",
+      "datatype": "string",
+      "required": true,
+      "semantic": true,
+      "show_in_list": true
+    },
+    {
+      "name": "modality",
+      "label": "Modality",
+      "datatype": "enum",
+      "enum_values": ["text", "vision", "multimodal", "embedding"],
+      "show_in_list": true
+    },
+    {
+      "name": "context_window",
+      "label": "Context Window (tokens)",
+      "datatype": "number",
+      "show_in_list": true
+    },
+    {
+      "name": "input_price_per_mtok",
+      "label": "Input $/Mtok",
+      "datatype": "number"
+    },
+    {
+      "name": "output_price_per_mtok",
+      "label": "Output $/Mtok",
+      "datatype": "number"
+    },
+    {
+      "name": "intended_use",
+      "label": "Intended Use",
+      "datatype": "text",
+      "semantic": true
+    },
+    {
+      "name": "limitations",
+      "label": "Limitations",
+      "datatype": "text",
+      "semantic": true
+    },
+    {
+      "name": "release_date",
+      "label": "Release Date",
+      "datatype": "date"
+    },
+    {
+      "name": "approved_for_prod",
+      "label": "Approved for Production",
+      "datatype": "bool",
+      "show_in_list": true
+    },
+    {
+      "name": "capabilities",
+      "label": "Capabilities",
+      "datatype": "array<string>",
+      "semantic": true
+    }
+  ]
+}

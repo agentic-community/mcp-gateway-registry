@@ -11,7 +11,10 @@ To update: edit charts/registry/reserved-env-names.txt and run
 `helm dep update` on any parent chart that depends on this subchart.
 
 Sections (in order below):
-  1. env: block — feature flags and IdP secrets via valueFrom
+  1. env: block — feature flags and IdP secrets via valueFrom. Includes
+     PingFederate plain env vars (BASE_URL, EXTERNAL_URL, CLIENT_ID,
+     M2M_CLIENT_ID, APPLICATION_ID_URI, GROUPS_CLAIM, ENABLED) and
+     valueFrom-sourced secrets (CLIENT_SECRET, M2M_CLIENT_SECRET).
   2. registry-app-log-config configmap
   3. registry-otel-config configmap
   4. registry-batch-config configmap

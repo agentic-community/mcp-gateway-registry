@@ -19,13 +19,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Extract version and move tag
         run: |
-          BRANCH="${{ github.event.pull_request.head.ref }}"
+          BRANCH="${GITHUB_EVENT_PULL_REQUEST_HEAD_REF}"
           VERSION="${BRANCH#helm-update-}"
 
           # Pre-1.23.0 releases used a `v` prefix (e.g. v1.0.22). From 1.23.0
@@ -47,3 +48,5 @@ jobs:
 
           git tag -f "$TAG"
           git push origin "$TAG" --force
+        env:
+          GITHUB_EVENT_PULL_REQUEST_HEAD_REF: ${{ github.event.pull_request.head.ref }}

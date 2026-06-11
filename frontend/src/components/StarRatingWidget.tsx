@@ -14,7 +14,7 @@ interface RatingInfoResponse {
 }
 
 interface StarRatingWidgetProps {
-  resourceType: 'agents' | 'servers' | 'skills' | 'virtual-servers';
+  resourceType: 'agents' | 'servers' | 'skills' | 'virtual-servers' | 'custom';
   path: string;
   initialRating?: number;
   initialCount?: number;
@@ -44,6 +44,10 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Singular noun for labels (e.g. "servers" -> "server"). "custom" has no
+  // trailing plural to strip, so it maps to a generic "entry".
+  const singularLabel = resourceType === 'custom' ? 'entry' : resourceType.slice(0, -1);
 
 
   // Load current rating on mount
@@ -206,8 +210,8 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
           setIsDropdownOpen(!isDropdownOpen);
         }}
         className="flex items-center gap-2 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 p-2 rounded-lg transition-colors duration-200"
-        title={`Click to rate this ${resourceType.slice(0, -1)}`}
-        aria-label={`Rate this ${resourceType.slice(0, -1)}`}
+        title={`Click to rate this ${singularLabel}`}
+        aria-label={`Rate this ${singularLabel}`}
         aria-expanded={isDropdownOpen}
         aria-haspopup="dialog"
       >
@@ -230,7 +234,7 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
           className="fixed w-80 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 p-4"
           style={{ top: dropdownPos.top, left: dropdownPos.left, zIndex: 9999 }}
           role="dialog"
-          aria-label={`${resourceType.slice(0, -1)} rating form`}
+          aria-label={`${singularLabel} rating form`}
         >
           {/* Success State */}
           {showSuccess ? (
@@ -274,7 +278,7 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
             // Rating Form
             <>
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">
-                {currentUserRating ? 'Update your rating:' : `Rate this ${resourceType.slice(0, -1)}:`}
+                {currentUserRating ? 'Update your rating:' : `Rate this ${singularLabel}:`}
               </h4>
               {currentUserRating && (
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">

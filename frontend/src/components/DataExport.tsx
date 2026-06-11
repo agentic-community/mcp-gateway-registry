@@ -158,6 +158,30 @@ const EXPORTABLE_COLLECTIONS: ExportableCollection[] = [
     isPaginated: false,
     paginationLimit: 500,
   },
+  {
+    id: 'custom-types',
+    label: 'Custom Types',
+    description: 'All custom entity type descriptors (admin-defined schemas)',
+    endpoint: '/api/export/custom-types',
+    queryParams: {},
+    dataKey: 'custom_types',
+    countKey: 'total_count',
+    filename: 'custom-types',
+    isPaginated: false,
+    paginationLimit: 500,
+  },
+  {
+    id: 'custom-entities',
+    label: 'Custom Entities',
+    description: 'All custom entity records across every custom type',
+    endpoint: '/api/export/custom-entities',
+    queryParams: {},
+    dataKey: 'custom_entities',
+    countKey: 'total_count',
+    filename: 'custom-entities',
+    isPaginated: false,
+    paginationLimit: 500,
+  },
 ];
 
 

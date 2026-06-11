@@ -573,44 +573,56 @@ class NginxConfigService:
                 logger.info(
                     f"AUTH_PROVIDER is '{auth_provider}', removed Keycloak location blocks from nginx config"
                 )
+
+            # Strip PingFederate location blocks from nginx config when not using PingFederate
+            if auth_provider != "pingfederate":
+                template_content = re.sub(
+                    r"    # \{\{PINGFEDERATE_LOCATIONS_START\}\}.*?# \{\{PINGFEDERATE_LOCATIONS_END\}\}\n?",
+                    "",
+                    template_content,
+                    flags=re.DOTALL,
+                )
+                logger.info(
+                    f"AUTH_PROVIDER is '{auth_provider}', removed PingFederate location blocks from nginx config"
+                )
+
+            # Parse Keycloak configuration from KEYCLOAK_URL environment variable.
+            # This always runs so the Keycloak template placeholders are filled even
+            # when another provider is active (the location blocks are stripped above).
+            keycloak_url = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
+            try:
+                parsed_keycloak = urlparse(keycloak_url)
+                keycloak_scheme = parsed_keycloak.scheme or "http"
+                keycloak_host = parsed_keycloak.hostname or "keycloak"
+                # Use default port based on scheme if not specified
+                if parsed_keycloak.port:
+                    keycloak_port = str(parsed_keycloak.port)
+                else:
+                    keycloak_port = "443" if keycloak_scheme == "https" else "8080"
+
+                # Validate that we can actually resolve the hostname
+                if not keycloak_host or keycloak_host == "keycloak":
+                    # If we end up with just 'keycloak', use the full URL's netloc instead
+                    keycloak_host = (
+                        parsed_keycloak.netloc.split(":")[0]
+                        if parsed_keycloak.netloc
+                        else "keycloak"
+                    )
+                    logger.warning(
+                        f"Keycloak hostname is 'keycloak', using netloc instead: {keycloak_host}"
+                    )
+
+                logger.info(
+                    f"Using Keycloak configuration from KEYCLOAK_URL '{keycloak_url}': "
+                    f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to parse KEYCLOAK_URL '{keycloak_url}': {e}. Using defaults."
+                )
                 keycloak_scheme = "http"
                 keycloak_host = "keycloak"
                 keycloak_port = "8080"
-            else:
-                keycloak_url = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
-                try:
-                    parsed_keycloak = urlparse(keycloak_url)
-                    keycloak_scheme = parsed_keycloak.scheme or "http"
-                    keycloak_host = parsed_keycloak.hostname or "keycloak"
-                    # Use default port based on scheme if not specified
-                    if parsed_keycloak.port:
-                        keycloak_port = str(parsed_keycloak.port)
-                    else:
-                        keycloak_port = "443" if keycloak_scheme == "https" else "8080"
-
-                    # Validate that we can actually resolve the hostname
-                    if not keycloak_host or keycloak_host == "keycloak":
-                        # If we end up with just 'keycloak', use the full URL's netloc instead
-                        keycloak_host = (
-                            parsed_keycloak.netloc.split(":")[0]
-                            if parsed_keycloak.netloc
-                            else "keycloak"
-                        )
-                        logger.warning(
-                            f"Keycloak hostname is 'keycloak', using netloc instead: {keycloak_host}"
-                        )
-
-                    logger.info(
-                        f"Using Keycloak configuration from KEYCLOAK_URL '{keycloak_url}': "
-                        f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to parse KEYCLOAK_URL '{keycloak_url}': {e}. Using defaults."
-                    )
-                    keycloak_scheme = "http"
-                    keycloak_host = "keycloak"
-                    keycloak_port = "8080"
 
             # Generate version map for multi-version servers
             # In registry-only mode, skip version map generation (use empty string)
@@ -631,6 +643,25 @@ class NginxConfigService:
             config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
             config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
             config_content = config_content.replace("{{KEYCLOAK_PORT}}", keycloak_port)
+
+            # Parse PingFederate configuration, falling back to defaults on any error
+            # so a malformed PINGFEDERATE_BASE_URL never breaks config generation.
+            pingfederate_url = os.environ.get("PINGFEDERATE_BASE_URL", "http://pingfederate:9032")
+            try:
+                pf_parsed = urlparse(pingfederate_url)
+                pf_scheme = pf_parsed.scheme or "http"
+                pf_host = pf_parsed.hostname or "pingfederate"
+                pf_port = str(pf_parsed.port or ("443" if pf_scheme == "https" else "9032"))
+            except Exception as e:
+                logger.warning(
+                    f"Failed to parse PINGFEDERATE_BASE_URL '{pingfederate_url}': {e}. Using defaults."
+                )
+                pf_scheme = "http"
+                pf_host = "pingfederate"
+                pf_port = "9032"
+            config_content = config_content.replace("{{PINGFEDERATE_SCHEME}}", pf_scheme)
+            config_content = config_content.replace("{{PINGFEDERATE_HOST}}", pf_host)
+            config_content = config_content.replace("{{PINGFEDERATE_PORT}}", pf_port)
 
             # Generate registry-only block (503 response for MCP proxy requests)
             registry_only_block = self._generate_registry_only_block()
@@ -936,6 +967,34 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         return re.sub(r"[/\-.]", "_", path)
 
     @staticmethod
+    def _is_host_resolvable_at_startup(
+        hostname: str,
+    ) -> bool:
+        """Decide whether an upstream host is safe to resolve at nginx config load.
+
+        Nginx resolves literal proxy_pass hosts when it loads the config and
+        fails to start ("host not found in upstream") if any cannot be resolved.
+        A fully-qualified domain name (contains a dot, e.g. "api.github.com") or
+        an IP address is expected to resolve in any environment, so it is safe to
+        emit as a literal proxy_pass (resolved once, no per-request DNS cost).
+
+        A bare hostname with no dot (e.g. a docker-compose service name like
+        "currenttime-server") only resolves inside the environment that defines
+        it. Treat it as NOT safe so the caller defers resolution to request time.
+
+        Args:
+            hostname: The upstream hostname (no scheme or port), may be empty.
+
+        Returns:
+            True if the host can be safely resolved at config load, else False.
+        """
+        if not hostname:
+            return False
+        # A dot indicates an FQDN or an IPv4 literal; both resolve everywhere.
+        # IPv6 literals contain colons and are also always resolvable.
+        return "." in hostname or ":" in hostname
+
+    @staticmethod
     def _sanitize_for_nginx_comment(
         value: str,
     ) -> str:
@@ -1089,10 +1148,44 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 # can include a URI path for the MCP endpoint
                 location_path = f"/_vs_backend{sanitized}"
 
+                # Decide how to emit proxy_pass based on whether the backend host
+                # is safe to resolve at config-load time.
+                #
+                # Normal external hosts (with a dot, like api.github.com, or an IP)
+                # use a literal proxy_pass: nginx resolves them once at startup and
+                # caches for the worker's life, so there is no per-request DNS cost.
+                #
+                # Bare hostnames (no dot, e.g. a docker-compose service name like
+                # "currenttime-server") are NOT resolvable in every environment.
+                # A literal proxy_pass to such a host makes nginx fail to start with
+                # "host not found in upstream", crashing the whole registry
+                # container. For those we pass the URL through a variable plus a
+                # resolver so nginx resolves at request time instead; an
+                # unresolvable backend then degrades to a per-request 502 for only
+                # that backend rather than taking the gateway down at boot.
+                backend_hostname = parsed_url.hostname or ""
+                host_is_resolvable_at_startup = self._is_host_resolvable_at_startup(
+                    backend_hostname
+                )
+
+                if host_is_resolvable_at_startup:
+                    proxy_directive = f"proxy_pass {mcp_proxy_url};"
+                else:
+                    # sanitized is already underscore-safe (valid nginx var name).
+                    backend_var = f"$vs_backend{sanitized}"
+                    dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
+                    dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
+                    proxy_directive = (
+                        f"resolver {dns_resolver} valid=10s;\n"
+                        f"        resolver_timeout {dns_resolver_timeout}s;\n"
+                        f'        set {backend_var} "{mcp_proxy_url}";\n'
+                        f"        proxy_pass {backend_var};"
+                    )
+
                 block = f"""
     location {location_path} {{
         internal;
-        proxy_pass {mcp_proxy_url};
+        {proxy_directive}
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
         proxy_set_header Host {upstream_host};

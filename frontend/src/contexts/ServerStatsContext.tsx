@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, Rea
 import axios from 'axios';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import type { LocalRuntime } from '../types/server';
+import type { CustomEntityRecord, CustomTypeDescriptor } from '../types/customEntity';
 
 interface ServerVersion {
   version: string;
@@ -68,10 +69,20 @@ interface ServerStats {
   withIssues: number;
 }
 
+/** Records for one custom type, shared by the tabs, Discover counts, and sidebar. */
+export interface CustomTypeRecords {
+  name: string;
+  displayName: string;
+  /** Schema descriptor, needed to render record cards outside the dedicated tab. */
+  descriptor: CustomTypeDescriptor | null;
+  records: CustomEntityRecord[];
+}
+
 interface ServerStatsContextType {
   stats: ServerStats;
   servers: Server[];
   agents: Server[];
+  customRecordsByType: CustomTypeRecords[];
   setServers: React.Dispatch<React.SetStateAction<Server[]>>;
   setAgents: React.Dispatch<React.SetStateAction<Server[]>>;
   activeFilter: string;
@@ -105,6 +116,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
   });
   const [servers, setServers] = useState<Server[]>([]);
   const [agents, setAgents] = useState<Server[]>([]);
+  const [customRecordsByType, setCustomRecordsByType] = useState<CustomTypeRecords[]>([]);
   const [activeFilter, setActiveFilter] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +125,12 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
   const { config: registryConfig } = useRegistryConfig();
 
   const fetchData = useCallback(async () => {
+    // Wait for registry config before fetching. Without it we don't yet know
+    // which custom types exist, so computing stats now would show a core-only
+    // total that visibly jumps when the custom counts arrive a moment later.
+    if (!registryConfig) {
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -147,7 +165,54 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
         fetchPromises.push(Promise.resolve({ data: { skills: [] } }));
       }
 
-      const [serversResponse, agentsResponse, skillsResponse] = await Promise.all(fetchPromises);
+      // Fetch custom entity records (one call per type) alongside the core
+      // entities so every count lands in the SAME stats update — no visible
+      // jump from a core-only total to the full total. Each type 404s only if
+      // deleted mid-session.
+      const customTypes = registryConfig?.features.custom_types
+        ? (registryConfig.custom_types ?? [])
+        : [];
+      const customPromises = customTypes.map((t) =>
+        axios.get(`/api/custom/${t.name}?limit=1000`).catch((err) => {
+          // Treat as zero records so one stale type doesn't blank the sidebar.
+          // Log so a real failure (auth, 422, 5xx) is visible rather than
+          // silently zeroed out.
+          console.error(`Failed to fetch custom records for "${t.name}":`, err);
+          return { data: { records: [] } };
+        }),
+      );
+      // One bulk fetch of every descriptor so Discover can render record cards
+      // (which need the schema) without a per-type round-trip. Falls back to an
+      // empty list — sections then render via the per-tab descriptor fetch.
+      const descriptorsPromise = customTypes.length
+        ? axios
+            .get('/api/custom-types')
+            .catch((err) => {
+              console.error('Failed to fetch custom type descriptors:', err);
+              return { data: { custom_types: [] } };
+            })
+        : Promise.resolve({ data: { custom_types: [] } });
+
+      const [coreResponses, customResponses, descriptorsResponse] = await Promise.all([
+        Promise.all(fetchPromises),
+        Promise.all(customPromises),
+        descriptorsPromise,
+      ]);
+      const [serversResponse, agentsResponse, skillsResponse] = coreResponses;
+
+      const descriptorsByName = new Map<string, CustomTypeDescriptor>(
+        ((descriptorsResponse.data?.custom_types ?? []) as CustomTypeDescriptor[]).map(
+          (d) => [d.name, d],
+        ),
+      );
+      const customByType: CustomTypeRecords[] = customTypes.map((t, i) => ({
+        name: t.name,
+        displayName: t.display_name,
+        descriptor: descriptorsByName.get(t.name) ?? null,
+        records: (customResponses[i].data?.records ?? []) as CustomEntityRecord[],
+      }));
+      setCustomRecordsByType(customByType);
+      const customRecords = customByType.flatMap((ct) => ct.records);
 
       // The API returns {"servers": [...]}
       const responseData = serversResponse.data || {};
@@ -277,6 +342,17 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
         });
       }
 
+      // Include custom entity records. They have no health status and no
+      // disable toggle in the UI, so each record counts as enabled.
+      customRecords.forEach((record: CustomEntityRecord) => {
+        total++;
+        if (record.is_enabled !== false) {
+          enabled++;
+        } else {
+          disabled++;
+        }
+      });
+
       const newStats = {
         total,
         enabled,
@@ -289,6 +365,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
       setError(err.response?.data?.detail || 'Failed to fetch data');
       setServers([]);
       setAgents([]);
+      setCustomRecordsByType([]);
       setStats({ total: 0, enabled: 0, disabled: 0, withIssues: 0 });
     } finally {
       setLoading(false);
@@ -303,6 +380,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
     stats,
     servers,
     agents,
+    customRecordsByType,
     setServers,
     setAgents,
     activeFilter,

@@ -21,12 +21,14 @@ import AuditLogsPage from './AuditLogsPage';
 import IAMGroups from '../components/IAMGroups';
 import IAMUsers from '../components/IAMUsers';
 import IAMM2M from '../components/IAMM2M';
+import IAMUserGroups from '../components/IAMUserGroups';
 import RegistryCardSettings from '../components/RegistryCardSettings';
 import ApplicationLogs from '../components/ApplicationLogs';
 import ExternalRegistries from '../components/ExternalRegistries';
 import DataExport from '../components/DataExport';
 import { useAuth } from '../contexts/AuthContext';
 import { canAccessSettings } from '../utils/permissions';
+import { useRegistryConfig } from '../hooks/useRegistryConfig';
 
 
 interface ToastState {
@@ -113,6 +115,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
       { id: 'groups', label: 'Groups', path: '/settings/iam/groups' },
       { id: 'users', label: 'Users', path: '/settings/iam/users' },
       { id: 'm2m', label: 'M2M Accounts', path: '/settings/iam/m2m' },
+      { id: 'user-groups', label: 'User Groups', path: '/settings/iam/user-groups' },
     ],
   },
   {
@@ -153,9 +156,29 @@ const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, loading } = useAuth();
+  const { config } = useRegistryConfig();
 
-  // All settings categories require admin -- no per-category filtering
-  const visibleCategories = canAccessSettings(user) ? SETTINGS_CATEGORIES : [];
+  // Issue #1127: the User Groups tab is only useful when the active auth
+  // provider is in the IDP fallback allowlist (e.g. PingFederate). For
+  // Keycloak/Okta/Entra/etc. JWTs already carry groups, so the tab does
+  // nothing useful. Backend exposes `user_group_management_enabled` to gate
+  // this from a single source of truth.
+  const userGroupsEnabled = config?.user_group_management_enabled ?? false;
+
+  // All settings categories require admin -- no per-category filtering.
+  // Within the IAM category we additionally drop the User Groups entry when
+  // the backend has it disabled, so the tab disappears from the nav.
+  const visibleCategories = canAccessSettings(user)
+    ? SETTINGS_CATEGORIES.map((category) => {
+        if (category.id !== 'iam') return category;
+        return {
+          ...category,
+          items: category.items.filter(
+            (item) => item.id !== 'user-groups' || userGroupsEnabled
+          ),
+        };
+      })
+    : [];
 
   // Track which categories are expanded - auto-expand based on current path
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(() => {
@@ -315,6 +338,21 @@ const SettingsPage: React.FC = () => {
     // IAM > M2M Accounts
     if (path === '/settings/iam/m2m') {
       return <IAMM2M onShowToast={showToast} />;
+    }
+
+    // IAM > User Groups (idp_user_groups fallback records).
+    // Issue #1127: gated by the backend's user_group_management_enabled flag.
+    // When disabled, surface an inline empty state instead of the component so
+    // a deep link or stale bookmark does not yield a tab-less broken view.
+    if (path === '/settings/iam/user-groups') {
+      if (!userGroupsEnabled) {
+        return (
+          <div className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">
+            User Groups management is not available for the active auth provider.
+          </div>
+        );
+      }
+      return <IAMUserGroups onShowToast={showToast} />;
     }
 
     // Default to Audit Logs (all settings require admin)

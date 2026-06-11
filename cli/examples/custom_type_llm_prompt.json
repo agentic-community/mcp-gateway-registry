@@ -1,0 +1,52 @@
+{
+  "name": "llm_prompt",
+  "display_name": "Prompts",
+  "description": "Reusable, versioned LLM prompts shared across teams: system prompts, task templates, and few-shot scaffolds.",
+  "fields": [
+    {
+      "name": "prompt_text",
+      "label": "Prompt Text",
+      "datatype": "text",
+      "required": true,
+      "semantic": true
+    },
+    {
+      "name": "role",
+      "label": "Role",
+      "datatype": "enum",
+      "enum_values": ["system", "user", "assistant", "developer"],
+      "required": true,
+      "show_in_list": true
+    },
+    {
+      "name": "target_model",
+      "label": "Target Model",
+      "datatype": "string",
+      "show_in_list": true
+    },
+    {
+      "name": "use_case",
+      "label": "Use Case",
+      "datatype": "string",
+      "semantic": true,
+      "show_in_list": true
+    },
+    {
+      "name": "temperature",
+      "label": "Suggested Temperature",
+      "datatype": "number"
+    },
+    {
+      "name": "tested",
+      "label": "Production Tested",
+      "datatype": "bool",
+      "show_in_list": true
+    },
+    {
+      "name": "tags_freeform",
+      "label": "Keywords",
+      "datatype": "array<string>",
+      "semantic": true
+    }
+  ]
+}

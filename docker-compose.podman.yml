@@ -72,6 +72,22 @@ services:
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
       - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
       - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
+      # PingFederate configuration
+      - PINGFEDERATE_BASE_URL=${PINGFEDERATE_BASE_URL:-}
+      - PINGFEDERATE_EXTERNAL_URL=${PINGFEDERATE_EXTERNAL_URL:-}
+      - PINGFEDERATE_CLIENT_ID=${PINGFEDERATE_CLIENT_ID:-}
+      - PINGFEDERATE_CLIENT_SECRET=${PINGFEDERATE_CLIENT_SECRET:-}
+      - PINGFEDERATE_M2M_CLIENT_ID=${PINGFEDERATE_M2M_CLIENT_ID:-}
+      - PINGFEDERATE_M2M_CLIENT_SECRET=${PINGFEDERATE_M2M_CLIENT_SECRET:-}
+      - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
+      - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
+      - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
+      # PingFederate Admin API (registry only)
+      - PF_ADMIN_URL=${PF_ADMIN_URL:-https://pingfederate:9999}
+      - PF_ADMIN_USER=${PF_ADMIN_USER:-administrator}
+      - PF_ADMIN_PASS=${PF_ADMIN_PASS:-2FederateM0re}
+      # IdP user-to-group fallback (issue #1127)
+      - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # External Registry Configuration
       - EXTERNAL_REGISTRY_TAGS=${EXTERNAL_REGISTRY_TAGS:-anthropic-registry,workday-asor}
       - ASOR_ACCESS_TOKEN=${ASOR_ACCESS_TOKEN}
@@ -189,6 +205,11 @@ services:
       # Tool-level access control (Issue #1026)
       - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
       - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
+      # Custom entity types (admin-defined, schema-driven catalog types)
+      - CUSTOM_ENTITY_TYPES_ENABLED=${CUSTOM_ENTITY_TYPES_ENABLED:-false}
+      - CUSTOM_TYPE_CACHE_TTL_SECONDS=${CUSTOM_TYPE_CACHE_TTL_SECONDS:-60}
+      - MAX_CUSTOM_RECORDS_PER_TYPE=${MAX_CUSTOM_RECORDS_PER_TYPE:-1000}
+      - MAX_CUSTOM_TYPES=${MAX_CUSTOM_TYPES:-50}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -314,6 +335,18 @@ services:
       - OKTA_M2M_CLIENT_SECRET=${OKTA_M2M_CLIENT_SECRET:-}
       - OKTA_API_TOKEN=${OKTA_API_TOKEN:-}
       - OKTA_AUTH_SERVER_ID=${OKTA_AUTH_SERVER_ID:-}
+      # PingFederate configuration
+      - PINGFEDERATE_BASE_URL=${PINGFEDERATE_BASE_URL:-}
+      - PINGFEDERATE_EXTERNAL_URL=${PINGFEDERATE_EXTERNAL_URL:-}
+      - PINGFEDERATE_CLIENT_ID=${PINGFEDERATE_CLIENT_ID:-}
+      - PINGFEDERATE_CLIENT_SECRET=${PINGFEDERATE_CLIENT_SECRET:-}
+      - PINGFEDERATE_M2M_CLIENT_ID=${PINGFEDERATE_M2M_CLIENT_ID:-}
+      - PINGFEDERATE_M2M_CLIENT_SECRET=${PINGFEDERATE_M2M_CLIENT_SECRET:-}
+      - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
+      - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
+      - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
+      # IdP user-to-group fallback (issue #1127)
+      - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Storage Backend Configuration
       - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
@@ -586,6 +619,29 @@ services:
       retries: 3
       start_period: 60s
 
+  pingfederate:
+    image: pingidentity/pingfederate:13.0.2
+    container_name: pingfederate
+    profiles: ["pingfederate"]
+    environment:
+      - PING_IDENTITY_ACCEPT_EULA=${PING_IDENTITY_ACCEPT_EULA}
+      - PING_IDENTITY_DEVOPS_USER=${PING_IDENTITY_DEVOPS_USER}
+      - PING_IDENTITY_DEVOPS_KEY=${PING_IDENTITY_DEVOPS_KEY}
+      - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
+      - SERVER_PROFILE_PATH=getting-started/pingfederate
+    ports:
+      - "9031:9031"
+      - "9999:9999"
+    volumes:
+      - pingfederate-data:/opt/out/instance/server/default/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -ksf https://localhost:9031/pf/heartbeat.ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+
   # MongoDB Community Edition 8.2 (alternative to DocumentDB for local development)
   # Vector search is implemented in application code (see search_repository.py)
   # Running without authentication for local development simplicity
@@ -648,3 +704,4 @@ volumes:
   grafana-data:
   mongodb-data:
   mongodb-config:
+  pingfederate-data:

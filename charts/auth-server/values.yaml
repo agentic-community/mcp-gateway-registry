@@ -71,9 +71,9 @@ app:
   toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
 # Authentication Provider Configuration
-# Choose ONE provider: keycloak, entra, okta, auth0, or cognito
+# Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:
-  # Provider type: "keycloak", "entra", "okta", "auth0", or "cognito"
+  # Provider type: "keycloak", "entra", "okta", "auth0", "cognito", or "pingfederate"
   type: keycloak
 
 # Keycloak integration (used when authProvider.type = "keycloak")
@@ -133,6 +133,29 @@ cognito:
   clientSecret: ""
   domain: ""  # Optional: custom Cognito domain
   region: "us-east-1"  # AWS region for the User Pool
+
+# PingFederate integration (used when authProvider.type = "pingfederate")
+pingfederate:
+  enabled: false
+  baseUrl: ""             # Internal URL (server-to-server), e.g. https://pf:9031
+  externalUrl: ""         # Browser-facing URL, e.g. https://pf.example.com:9031
+  clientId: ""
+  clientSecret: ""
+  clientSecretExistingSecret: ""
+  clientSecretExistingSecretKey: "PINGFEDERATE_CLIENT_SECRET"
+  m2mClientId: ""
+  m2mClientSecret: ""
+  m2mClientSecretExistingSecret: ""
+  m2mClientSecretExistingSecretKey: "PINGFEDERATE_M2M_CLIENT_SECRET"
+  applicationIdUri: ""
+  groupsClaim: "groups"
+
+# IdP user-to-group fallback (issue #1127)
+# Comma-separated list of IdP providers (e.g. pingfederate) for which the
+# registry's local idp_user_groups collection is consulted to populate empty
+# JWT groups claims. Empty string disables the fallback for all providers.
+# Default: "pingfederate"
+idpUserGroupFallbackEnabledProviders: "pingfederate"
 
 # Service configuration
 service:

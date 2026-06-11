@@ -23,8 +23,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-EntityType = Literal["mcp_server", "tool", "a2a_agent", "skill", "virtual_server"]
-
 
 def get_search_repo() -> SearchRepositoryBase:
     """Dependency injection function for search repository."""
@@ -210,14 +208,39 @@ class VirtualServerSearchResult(BaseModel):
     )
 
 
+class CustomEntitySearchResult(BaseModel):
+    """Search result for a custom entity record.
+
+    Custom types have no fixed schema, so this carries the entity_type
+    discriminator and the common envelope only; the schema-driven UI renders
+    per-type attributes from the type descriptor.
+    """
+
+    entity_type: str
+    path: str
+    name: str
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    visibility: str | None = None
+    owner: str | None = None
+    is_enabled: bool = False
+    relevance_score: float = Field(..., ge=0.0, le=1.0)
+    match_context: str | None = None
+
+
 class SemanticSearchRequest(BaseModel):
     query: str = Field(
         default="",
         max_length=512,
         description="Natural language query. Can be empty when filtering by tags only.",
     )
-    entity_types: list[EntityType] | None = Field(
-        default=None, description="Optional entity filters"
+    entity_types: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional entity filters. The built-in types are "
+            "mcp_server, tool, a2a_agent, skill, virtual_server; "
+            "custom entity type names (e.g. prompt_template) are also accepted."
+        ),
     )
     tags: list[str] | None = Field(
         default=None,
@@ -250,11 +273,13 @@ class SemanticSearchResponse(BaseModel):
     agents: list[AgentSearchResult] = Field(default_factory=list)
     skills: list[SkillSearchResult] = Field(default_factory=list)
     virtual_servers: list[VirtualServerSearchResult] = Field(default_factory=list)
+    custom: list[CustomEntitySearchResult] = Field(default_factory=list)
     total_servers: int = 0
     total_tools: int = 0
     total_agents: int = 0
     total_skills: int = 0
     total_virtual_servers: int = 0
+    total_custom: int = 0
 
 
 async def _get_tool_schema_for_virtual_server(
@@ -315,6 +340,9 @@ async def _get_tool_schema_for_virtual_server(
 # don't have to change.
 from ..services.visibility import (
     user_can_access_agent as _user_can_access_agent,
+)
+from ..services.visibility import (
+    user_can_access_custom_entity as _user_can_access_custom_entity,
 )
 from ..services.visibility import (
     user_can_access_server as _user_can_access_server,
@@ -748,6 +776,52 @@ async def semantic_search(
             )
         )
 
+    # Process custom entity records. The embedding docs are NOT visibility-scoped
+    # at query time, so every hit MUST pass the same public / private-owner /
+    # group-restricted check used by the list/single-record paths
+    # (see custom_entity_visibility._user_can_view) before being surfaced.
+    #
+    # Feature-flag symmetry: when CUSTOM_ENTITY_TYPES_ENABLED is off the feature
+    # is invisible (routers unregistered, tabs hidden, types excluded from the
+    # search scope). Gate this result loop too so a custom hit is never surfaced
+    # even if one reaches here (e.g. a stale scope cache), keeping all paths in
+    # agreement: off = feature invisible, existing records dormant.
+    custom_results = (
+        raw_results.get("custom", []) if settings.custom_entity_types_enabled else []
+    )
+    filtered_custom: list[CustomEntitySearchResult] = []
+    for record in custom_results:
+        record_path = record.get("path", "")
+        if not record_path:
+            continue
+
+        visibility = record.get("visibility", "private")
+        owner = record.get("owner") or ""
+        allowed_groups = record.get("allowed_groups", []) or []
+
+        if not await _user_can_access_custom_entity(
+            visibility, owner, allowed_groups, user_context
+        ):
+            continue
+
+        filtered_custom.append(
+            CustomEntitySearchResult(
+                entity_type=record.get("entity_type", ""),
+                path=record_path,
+                name=record.get("name", ""),
+                description=record.get("description"),
+                tags=record.get("tags", []),
+                visibility=visibility,
+                owner=record.get("owner"),
+                # Default True to match the CustomEntityRecord model default; a
+                # record whose embedding doc predates the field shouldn't be
+                # mislabeled disabled (which would hide it from default search).
+                is_enabled=record.get("is_enabled", True),
+                relevance_score=record.get("relevance_score", 0.0),
+                match_context=record.get("match_context"),
+            )
+        )
+
     # Filter results by required tags (from #tag syntax or explicit tags param)
     if required_tags:
         filtered_servers = [
@@ -779,6 +853,9 @@ async def semantic_search(
         filtered_virtual_servers = [
             vs for vs in filtered_virtual_servers if _entity_has_all_tags(vs.tags, required_tags)
         ]
+        filtered_custom = [
+            c for c in filtered_custom if _entity_has_all_tags(c.tags, required_tags)
+        ]
 
     # Filter results based on registry mode
     # In skills-only mode, only return skills; in servers-only mode, only return servers, etc.
@@ -800,7 +877,10 @@ async def semantic_search(
         filtered_tools = []
         filtered_skills = []
         filtered_virtual_servers = []
-    # In FULL mode, return all results (no filtering needed)
+    # In FULL mode, return all results (no filtering needed).
+    # Custom entities are gated by CUSTOM_ENTITY_TYPES_ENABLED, not registry_mode,
+    # so they are deliberately not cleared by the core-type mode filter above —
+    # nothing is indexed unless the feature is on.
 
     # Increment semantic search counter (fail-silent)
     from ..repositories.stats_repository import increment_search_counter
@@ -814,11 +894,13 @@ async def semantic_search(
         agents=filtered_agents,
         skills=filtered_skills,
         virtual_servers=filtered_virtual_servers,
+        custom=filtered_custom,
         total_servers=len(filtered_servers),
         total_tools=len(filtered_tools),
         total_agents=len(filtered_agents),
         total_skills=len(filtered_skills),
         total_virtual_servers=len(filtered_virtual_servers),
+        total_custom=len(filtered_custom),
     )
 
 

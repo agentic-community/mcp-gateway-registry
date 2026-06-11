@@ -145,13 +145,21 @@ module "mcp_gateway" {
   security_add_pending_tag      = var.security_add_pending_tag
 
   # Microsoft Entra ID configuration
-  entra_enabled           = var.entra_enabled
-  entra_tenant_id         = var.entra_tenant_id
-  entra_client_id         = var.entra_client_id
-  entra_client_secret     = var.entra_client_secret
-  entra_login_base_url    = var.entra_login_base_url
-  entra_graph_base_url    = var.entra_graph_base_url
-  idp_group_filter_prefix = var.idp_group_filter_prefix
+  entra_enabled                             = var.entra_enabled
+  entra_tenant_id                           = var.entra_tenant_id
+  entra_client_id                           = var.entra_client_id
+  entra_client_secret                       = var.entra_client_secret
+  entra_login_base_url                      = var.entra_login_base_url
+  entra_graph_base_url                      = var.entra_graph_base_url
+  idp_group_filter_prefix                   = var.idp_group_filter_prefix
+  idp_user_group_fallback_enabled_providers = var.idp_user_group_fallback_enabled_providers
+
+  # Amazon Cognito configuration
+  cognito_enabled       = var.cognito_enabled
+  cognito_user_pool_id  = var.cognito_user_pool_id
+  cognito_client_id     = var.cognito_client_id
+  cognito_client_secret = var.cognito_client_secret
+  cognito_domain        = var.cognito_domain
 
   # Okta configuration
   okta_enabled           = var.okta_enabled
@@ -173,6 +181,22 @@ module "mcp_gateway" {
   auth0_m2m_client_id        = var.auth0_m2m_client_id
   auth0_m2m_client_secret    = var.auth0_m2m_client_secret
   auth0_management_api_token = var.auth0_management_api_token
+
+  # PingFederate configuration
+  pingfederate_enabled            = var.pingfederate_enabled
+  pingfederate_base_url           = var.pingfederate_base_url
+  pingfederate_external_url       = var.pingfederate_external_url
+  pingfederate_client_id          = var.pingfederate_client_id
+  pingfederate_client_secret      = var.pingfederate_client_secret
+  pingfederate_m2m_client_id      = var.pingfederate_m2m_client_id
+  pingfederate_m2m_client_secret  = var.pingfederate_m2m_client_secret
+  pingfederate_application_id_uri = var.pingfederate_application_id_uri
+  pingfederate_groups_claim       = var.pingfederate_groups_claim
+
+  # PingFederate Admin API (registry only)
+  pf_admin_url  = var.pf_admin_url
+  pf_admin_user = var.pf_admin_user
+  pf_admin_pass = var.pf_admin_pass
 
   # Registry static token auth
   registry_static_token_auth_enabled = var.registry_static_token_auth_enabled
@@ -254,6 +278,12 @@ module "mcp_gateway" {
   mcp_tools_list_filter_enabled = var.mcp_tools_list_filter_enabled
   mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
   tool_filter_audit_log_level   = var.tool_filter_audit_log_level
+
+  # Custom entity types (admin-defined, schema-driven catalog types)
+  custom_entity_types_enabled   = var.custom_entity_types_enabled
+  custom_type_cache_ttl_seconds = var.custom_type_cache_ttl_seconds
+  max_custom_records_per_type   = var.max_custom_records_per_type
+  max_custom_types              = var.max_custom_types
 
   # Deployment mode configuration
   deployment_mode = var.deployment_mode

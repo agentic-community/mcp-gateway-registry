@@ -173,7 +173,34 @@ class TestGenerateVirtualBackendLocations:
 
         assert "/_vs_backend" in result
         assert "internal;" in result
-        assert "proxy_pass https://api.github.com" in result
+        # A normal external host (has a dot) uses a literal proxy_pass that nginx
+        # resolves once at startup, so there is no per-request DNS cost and no
+        # resolver directive for this common case.
+        assert "proxy_pass https://api.github.com/mcp" in result
+        assert "resolver " not in result
+
+    @pytest.mark.asyncio
+    async def test_bare_hostname_backend_uses_deferred_resolution(
+        self, mock_server_repository
+    ):
+        """Bare hostnames defer DNS resolution so they cannot crash nginx at startup."""
+        vs = _make_vs_config()
+        # A docker-compose-style service name (no dot) is not resolvable in every
+        # environment; a literal proxy_pass to it would make nginx fail to start.
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "http://currenttime-server:8000/",
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        result = await service._generate_virtual_backend_locations([vs])
+
+        # Resolver + variable form means nginx resolves at request time, turning an
+        # unresolvable backend into a per-request 502 instead of a startup crash.
+        assert "resolver " in result
+        assert 'set $vs_backend_github "http://currenttime-server:8000/mcp"' in result
+        assert "proxy_pass $vs_backend_github" in result
 
     @pytest.mark.asyncio
     async def test_deduplicates_backends(self, mock_server_repository):
@@ -420,3 +447,40 @@ class TestSanitizePathForLocation:
         assert "/" not in result
         assert "-" not in result
         assert "." not in result
+
+
+class TestIsHostResolvableAtStartup:
+    """Tests for the upstream host resolvability heuristic."""
+
+    def test_fqdn_is_resolvable(self):
+        """A dotted hostname (FQDN) is safe to resolve at config load."""
+        from registry.core.nginx_service import NginxConfigService
+
+        assert NginxConfigService._is_host_resolvable_at_startup("api.github.com") is True
+
+    def test_ipv4_is_resolvable(self):
+        """An IPv4 literal is safe to resolve at config load."""
+        from registry.core.nginx_service import NginxConfigService
+
+        assert NginxConfigService._is_host_resolvable_at_startup("10.0.0.5") is True
+
+    def test_ipv6_is_resolvable(self):
+        """An IPv6 literal (contains colons) is safe to resolve at config load."""
+        from registry.core.nginx_service import NginxConfigService
+
+        assert NginxConfigService._is_host_resolvable_at_startup("::1") is True
+
+    def test_bare_hostname_is_not_resolvable(self):
+        """A bare service name with no dot is not safe to resolve at startup."""
+        from registry.core.nginx_service import NginxConfigService
+
+        assert (
+            NginxConfigService._is_host_resolvable_at_startup("currenttime-server")
+            is False
+        )
+
+    def test_empty_hostname_is_not_resolvable(self):
+        """An empty hostname is treated as not safe."""
+        from registry.core.nginx_service import NginxConfigService
+
+        assert NginxConfigService._is_host_resolvable_at_startup("") is False

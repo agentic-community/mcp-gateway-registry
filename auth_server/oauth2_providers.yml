@@ -111,6 +111,23 @@ providers:
     name_claim: "name"
     enabled: "${AUTH0_ENABLED}"
 
+  pingfederate:
+    display_name: "PingFederate"
+    client_id: "${PINGFEDERATE_CLIENT_ID}"
+    client_secret: "${PINGFEDERATE_CLIENT_SECRET}"
+    auth_url: "${PINGFEDERATE_EXTERNAL_URL}/as/authorization.oauth2"
+    token_url: "${PINGFEDERATE_BASE_URL}/as/token.oauth2"
+    user_info_url: "${PINGFEDERATE_BASE_URL}/idp/userinfo.openid"
+    logout_url: "${PINGFEDERATE_EXTERNAL_URL}/idp/startSLO.ping"
+    scopes: ["openid", "email", "profile", "groups"]
+    response_type: "code"
+    grant_type: "authorization_code"
+    username_claim: "preferred_username"
+    groups_claim: "${PINGFEDERATE_GROUPS_CLAIM}"
+    email_claim: "email"
+    name_claim: "name"
+    enabled: "${PINGFEDERATE_ENABLED}"
+
   google:
     display_name: "Google"
     client_id: "${GOOGLE_CLIENT_ID}"

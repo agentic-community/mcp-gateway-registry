@@ -189,6 +189,27 @@ class TestGetIAMManagerFactory:
         # Assert
         assert isinstance(manager, iam_module.OktaIAMManager)
 
+    def test_returns_cognito_manager_when_auth_provider_is_cognito(
+        self,
+        monkeypatch,
+    ):
+        """Test returns CognitoIAMManager when AUTH_PROVIDER is 'cognito'."""
+        # Arrange
+        monkeypatch.setenv("AUTH_PROVIDER", "cognito")
+
+        # Need to reimport to pick up the new env var
+        import importlib
+
+        import registry.utils.iam_manager as iam_module
+
+        importlib.reload(iam_module)
+
+        # Act
+        manager = iam_module.get_iam_manager()
+
+        # Assert
+        assert isinstance(manager, iam_module.CognitoIAMManager)
+
     def test_defaults_to_keycloak_when_auth_provider_not_set(
         self,
         monkeypatch,
@@ -756,3 +777,65 @@ class TestIAMManagerProtocol:
         assert callable(manager.create_group)
         assert callable(manager.delete_group)
         assert callable(manager.create_service_account)
+
+
+# =============================================================================
+# TEST: CognitoIAMManager (read-only)
+# =============================================================================
+
+
+class TestCognitoIAMManager:
+    """Tests for the read-only Cognito IAM manager."""
+
+    @pytest.mark.asyncio
+    async def test_list_groups_delegates_to_cognito_helper(self):
+        """list_groups returns the groups from the cognito helper."""
+        from registry.utils.iam_manager import CognitoIAMManager
+
+        sample = [{"id": "registry-admins", "name": "registry-admins", "description": "", "path": "registry-admins"}]
+        manager = CognitoIAMManager()
+        with patch(
+            "registry.utils.cognito_manager.list_cognito_groups",
+            new=AsyncMock(return_value=sample),
+        ):
+            result = await manager.list_groups()
+
+        assert result == sample
+
+    @pytest.mark.asyncio
+    async def test_list_users_delegates_to_cognito_helper(self):
+        """list_users forwards max_results/include_groups and returns the users."""
+        from registry.utils.iam_manager import CognitoIAMManager
+
+        sample = [{"id": "u1", "username": "u1", "email": "u1@example.com", "groups": ["public-mcp-users"]}]
+        manager = CognitoIAMManager()
+        with patch(
+            "registry.utils.cognito_manager.list_cognito_users",
+            new=AsyncMock(return_value=sample),
+        ) as mock_list:
+            result = await manager.list_users(max_results=10, include_groups=True)
+
+        assert result == sample
+        mock_list.assert_awaited_once_with(max_results=10, include_groups=True)
+
+    @pytest.mark.asyncio
+    async def test_write_methods_raise_not_implemented(self):
+        """Every write method raises NotImplementedError with a clear message."""
+        from registry.utils.iam_manager import CognitoIAMManager
+
+        manager = CognitoIAMManager()
+
+        with pytest.raises(NotImplementedError):
+            await manager.create_group("g")
+        with pytest.raises(NotImplementedError):
+            await manager.delete_group("g")
+        with pytest.raises(NotImplementedError):
+            await manager.update_group("g", "desc")
+        with pytest.raises(NotImplementedError):
+            await manager.create_human_user("u", "u@example.com", "U", "Ser", [])
+        with pytest.raises(NotImplementedError):
+            await manager.delete_user("u")
+        with pytest.raises(NotImplementedError):
+            await manager.update_user_groups("u", [])
+        with pytest.raises(NotImplementedError):
+            await manager.create_service_account("client", [])

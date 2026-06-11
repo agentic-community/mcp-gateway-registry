@@ -1,0 +1,259 @@
+name: Weekly dependency update
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Every Monday at 09:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: dependency-update
+  cancel-in-progress: true
+
+jobs:
+  update-lockfiles:
+    name: Update lockfiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # push lockfile update branch
+      pull-requests: write # create PR via gh cli
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Compute 7-day cutoff timestamp
+        id: cutoff
+        run: |
+          CUTOFF=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          echo "timestamp=$CUTOFF" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u -d '7 days ago' +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "Cutoff: $CUTOFF (packages published after this are excluded)"
+
+      - name: Snapshot current uv lockfiles
+        run: |
+          mkdir -p /tmp/locks-before/uv
+          for lock in $(find . -name uv.lock -not -path '*/.venv/*' -not -path '*/node_modules/*' | sort); do
+            dest="/tmp/locks-before/uv/$(echo "$lock" | sed 's|/|__|g')"
+            cp "$lock" "$dest"
+          done
+
+      - name: Snapshot current npm lockfiles
+        run: |
+          mkdir -p /tmp/locks-before/npm
+          for lock in $(find . -name package-lock.json -not -path '*/node_modules/*' | sort); do
+            dest="/tmp/locks-before/npm/$(echo "$lock" | sed 's|/|__|g')"
+            cp "$lock" "$dest"
+          done
+
+      - name: Update uv lockfiles (7-day quarantine)
+        env:
+          UV_EXCLUDE_NEWER: ${{ steps.cutoff.outputs.timestamp }}
+        run: make uv-update-locks
+
+      - name: Update npm lockfiles (7-day quarantine)
+        env:
+          CUTOFF_EPOCH: ${{ steps.cutoff.outputs.timestamp }}
+        run: make npm-update-locks
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          CHANGELOG=""
+          HAS_CHANGES="false"
+
+          # --- uv lockfile diffs ---
+          for lock in $(find . -name uv.lock -not -path '*/.venv/*' -not -path '*/node_modules/*' | sort); do
+            before="/tmp/locks-before/uv/$(echo "$lock" | sed 's|/|__|g')"
+            if [ ! -f "$before" ]; then
+              continue
+            fi
+            if diff -q "$before" "$lock" >/dev/null 2>&1; then
+              continue
+            fi
+            HAS_CHANGES="true"
+
+            # Parse version changes from uv.lock (TOML-like [[package]] blocks)
+            python3 - "$before" "$lock" << 'PYEOF' >> /tmp/changelog_uv.md
+          import sys
+          import re
+          import json
+          import urllib.request
+          from datetime import datetime
+
+          def parse_uv_lock(path):
+              packages = {}
+              current_name = None
+              with open(path) as f:
+                  for line in f:
+                      m = re.match(r'^name\s*=\s*"(.+)"', line)
+                      if m:
+                          current_name = m.group(1)
+                      m = re.match(r'^version\s*=\s*"(.+)"', line)
+                      if m and current_name:
+                          packages[current_name] = m.group(1)
+                          current_name = None
+              return packages
+
+          def get_pypi_release_date(name, version):
+              try:
+                  url = f"https://pypi.org/pypi/{name}/{version}/json"
+                  req = urllib.request.Request(url, headers={"Accept": "application/json"})
+                  with urllib.request.urlopen(req, timeout=10) as resp:
+                      data = json.loads(resp.read())
+                      upload_time = data.get("urls", [{}])[0].get("upload_time_iso_8601", "")
+                      if upload_time:
+                          return upload_time[:10]
+              except Exception:
+                  pass
+              return "unknown"
+
+          before = parse_uv_lock(sys.argv[1])
+          after = parse_uv_lock(sys.argv[2])
+          lock_path = sys.argv[2] if sys.argv[2].startswith("./") else "./" + sys.argv[2]
+
+          changes = []
+          for name, new_ver in sorted(after.items()):
+              old_ver = before.get(name)
+              if old_ver and old_ver != new_ver:
+                  release_date = get_pypi_release_date(name, new_ver)
+                  changes.append((name, old_ver, new_ver, release_date))
+
+          if changes:
+              print(f"\n### `{lock_path}`\n")
+              print("| Package | Old | New | Released |")
+              print("|---------|-----|-----|----------|")
+              for name, old_ver, new_ver, rel_date in changes:
+                  print(f"| {name} | {old_ver} | {new_ver} | {rel_date} |")
+          PYEOF
+          done
+
+          # --- npm lockfile diffs ---
+          for lock in $(find . -name package-lock.json -not -path '*/node_modules/*' | sort); do
+            before="/tmp/locks-before/npm/$(echo "$lock" | sed 's|/|__|g')"
+            if [ ! -f "$before" ]; then
+              continue
+            fi
+            if diff -q "$before" "$lock" >/dev/null 2>&1; then
+              continue
+            fi
+            HAS_CHANGES="true"
+
+            python3 - "$before" "$lock" << 'PYEOF' >> /tmp/changelog_npm.md
+          import sys
+          import json
+          import urllib.request
+
+          def parse_npm_lock(path):
+              with open(path) as f:
+                  data = json.load(f)
+              packages = {}
+              # lockfileVersion 2/3 uses "packages" key
+              pkgs = data.get("packages", {})
+              for key, info in pkgs.items():
+                  if not key or not info.get("version"):
+                      continue
+                  # key is like "node_modules/@scope/pkg"
+                  name = key.replace("node_modules/", "")
+                  if "/" in name and not name.startswith("@"):
+                      # nested dep, take last segment
+                      name = name.split("node_modules/")[-1]
+                  packages[name] = info["version"]
+              return packages
+
+          def get_npm_release_date(name, version):
+              try:
+                  url = f"https://registry.npmjs.org/{name}/{version}"
+                  req = urllib.request.Request(url, headers={"Accept": "application/json"})
+                  with urllib.request.urlopen(req, timeout=10) as resp:
+                      data = json.loads(resp.read())
+                      # npm stores publish time in the root document's "time" field
+                      # but per-version endpoint doesn't always have it; try registry root
+                  url2 = f"https://registry.npmjs.org/{name}"
+                  req2 = urllib.request.Request(url2, headers={"Accept": "application/json"})
+                  with urllib.request.urlopen(req2, timeout=10) as resp2:
+                      data2 = json.loads(resp2.read())
+                      time_map = data2.get("time", {})
+                      pub_time = time_map.get(version, "")
+                      if pub_time:
+                          return pub_time[:10]
+              except Exception:
+                  pass
+              return "unknown"
+
+          before = parse_npm_lock(sys.argv[1])
+          after = parse_npm_lock(sys.argv[2])
+          lock_path = sys.argv[2] if sys.argv[2].startswith("./") else "./" + sys.argv[2]
+
+          changes = []
+          for name in sorted(set(after.keys()) | set(before.keys())):
+              old_ver = before.get(name)
+              new_ver = after.get(name)
+              if old_ver and new_ver and old_ver != new_ver:
+                  release_date = get_npm_release_date(name, new_ver)
+                  changes.append((name, old_ver, new_ver, release_date))
+
+          if changes:
+              print(f"\n### `{lock_path}`\n")
+              print("| Package | Old | New | Released |")
+              print("|---------|-----|-----|----------|")
+              for name, old_ver, new_ver, rel_date in changes:
+                  print(f"| {name} | {old_ver} | {new_ver} | {rel_date} |")
+          PYEOF
+          done
+
+          # Combine changelogs
+          {
+            echo "## Dependency Updates"
+            echo ""
+            echo "Lockfiles refreshed with a **7-day supply-chain quarantine** (packages published after ${STEPS_CUTOFF_OUTPUTS_DATE} excluded)."
+            echo ""
+            if [ -f /tmp/changelog_uv.md ]; then
+              echo "## Python (uv)"
+              cat /tmp/changelog_uv.md
+            fi
+            if [ -f /tmp/changelog_npm.md ]; then
+              echo ""
+              echo "## Node.js (npm)"
+              cat /tmp/changelog_npm.md
+            fi
+          } > /tmp/pr_body.md
+
+          echo "has_changes=$HAS_CHANGES" >> "$GITHUB_OUTPUT"
+        env:
+          STEPS_CUTOFF_OUTPUTS_DATE: ${{ steps.cutoff.outputs.date }}
+
+      - name: Create pull request
+        if: steps.changelog.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="chore/dependency-update-$(date +%Y-%m-%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A '*.lock' '**/package-lock.json'
+          git commit -m "chore(deps): weekly lockfile update ($(date +%Y-%m-%d))"
+          git push -u --force origin "$BRANCH"
+
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            echo "PR already exists for $BRANCH; branch updated."
+          else
+            gh pr create \
+              --title "chore(deps): weekly lockfile update ($(date +%Y-%m-%d))" \
+              --body-file /tmp/pr_body.md \
+              --base main \
+              --label "dependencies"
+          fi

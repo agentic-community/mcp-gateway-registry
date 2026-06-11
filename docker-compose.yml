@@ -158,6 +158,8 @@ services:
       - ENTRA_APPLICATION_ID_URI=${ENTRA_APPLICATION_ID_URI:-}
       # IdP group filtering (applies to all identity providers)
       - IDP_GROUP_FILTER_PREFIX=${IDP_GROUP_FILTER_PREFIX:-}
+      # IdP user-to-group fallback (issue #1127)
+      - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Okta configuration
       - OKTA_DOMAIN=${OKTA_DOMAIN:-}
       - OKTA_CLIENT_ID=${OKTA_CLIENT_ID:-}
@@ -175,6 +177,20 @@ services:
       - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
       - AUTH0_M2M_CLIENT_ID=${AUTH0_M2M_CLIENT_ID:-}
       - AUTH0_M2M_CLIENT_SECRET=${AUTH0_M2M_CLIENT_SECRET:-}
+      # PingFederate configuration
+      - PINGFEDERATE_BASE_URL=${PINGFEDERATE_BASE_URL:-}
+      - PINGFEDERATE_EXTERNAL_URL=${PINGFEDERATE_EXTERNAL_URL:-}
+      - PINGFEDERATE_CLIENT_ID=${PINGFEDERATE_CLIENT_ID:-}
+      - PINGFEDERATE_CLIENT_SECRET=${PINGFEDERATE_CLIENT_SECRET:-}
+      - PINGFEDERATE_M2M_CLIENT_ID=${PINGFEDERATE_M2M_CLIENT_ID:-}
+      - PINGFEDERATE_M2M_CLIENT_SECRET=${PINGFEDERATE_M2M_CLIENT_SECRET:-}
+      - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
+      - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
+      - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
+      # PingFederate Admin API (registry only)
+      - PF_ADMIN_URL=${PF_ADMIN_URL:-https://pingfederate:9999}
+      - PF_ADMIN_USER=${PF_ADMIN_USER:-administrator}
+      - PF_ADMIN_PASS=${PF_ADMIN_PASS:-2FederateM0re}
       # External Registry Configuration
       - EXTERNAL_REGISTRY_TAGS=${EXTERNAL_REGISTRY_TAGS:-anthropic-registry,workday-asor}
       - ASOR_ACCESS_TOKEN=${ASOR_ACCESS_TOKEN}
@@ -300,6 +316,11 @@ services:
       # Tool-level access control (Issue #1026)
       - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
       - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
+      # Custom entity types (admin-defined, schema-driven catalog types)
+      - CUSTOM_ENTITY_TYPES_ENABLED=${CUSTOM_ENTITY_TYPES_ENABLED:-false}
+      - CUSTOM_TYPE_CACHE_TTL_SECONDS=${CUSTOM_TYPE_CACHE_TTL_SECONDS:-60}
+      - MAX_CUSTOM_RECORDS_PER_TYPE=${MAX_CUSTOM_RECORDS_PER_TYPE:-1000}
+      - MAX_CUSTOM_TYPES=${MAX_CUSTOM_TYPES:-50}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -433,6 +454,8 @@ services:
       - ENTRA_APPLICATION_ID_URI=${ENTRA_APPLICATION_ID_URI:-}
       # IdP group filtering (applies to all identity providers)
       - IDP_GROUP_FILTER_PREFIX=${IDP_GROUP_FILTER_PREFIX:-}
+      # IdP user-to-group fallback (issue #1127)
+      - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Okta configuration
       - OKTA_DOMAIN=${OKTA_DOMAIN:-}
       - OKTA_CLIENT_ID=${OKTA_CLIENT_ID:-}
@@ -450,6 +473,16 @@ services:
       - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
       - AUTH0_M2M_CLIENT_ID=${AUTH0_M2M_CLIENT_ID:-}
       - AUTH0_M2M_CLIENT_SECRET=${AUTH0_M2M_CLIENT_SECRET:-}
+      # PingFederate configuration
+      - PINGFEDERATE_BASE_URL=${PINGFEDERATE_BASE_URL:-}
+      - PINGFEDERATE_EXTERNAL_URL=${PINGFEDERATE_EXTERNAL_URL:-}
+      - PINGFEDERATE_CLIENT_ID=${PINGFEDERATE_CLIENT_ID:-}
+      - PINGFEDERATE_CLIENT_SECRET=${PINGFEDERATE_CLIENT_SECRET:-}
+      - PINGFEDERATE_M2M_CLIENT_ID=${PINGFEDERATE_M2M_CLIENT_ID:-}
+      - PINGFEDERATE_M2M_CLIENT_SECRET=${PINGFEDERATE_M2M_CLIENT_SECRET:-}
+      - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
+      - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
+      - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
       # Storage Backend Configuration
       - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
@@ -770,6 +803,31 @@ services:
       retries: 3
       start_period: 60s
 
+  pingfederate:
+    image: pingidentity/pingfederate:latest
+    container_name: pingfederate
+    profiles: ["pingfederate"]
+    environment:
+      - PING_IDENTITY_ACCEPT_EULA=${PING_IDENTITY_ACCEPT_EULA}
+      - PING_IDENTITY_DEVOPS_USER=${PING_IDENTITY_DEVOPS_USER}
+      - PING_IDENTITY_DEVOPS_KEY=${PING_IDENTITY_DEVOPS_KEY}
+      - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
+      - SERVER_PROFILE_PATH=baseline/pingfederate
+    ports:
+      - "9031:9031"
+      - "9032:9032"
+      - "9999:9999"
+    volumes:
+      - pingfederate-data:/opt/out/instance/server/default/data
+      - ./pingfederate/config/run.properties:/opt/staging/instance/bin/run.properties
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -ksf https://localhost:9031/pf/heartbeat.ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+
 volumes:
   ssl_data:
   keycloak_db_data:
@@ -778,6 +836,7 @@ volumes:
   grafana-data:
   mongodb-data:
   mongodb-config:
+  pingfederate-data:
   # Application logs and scans (managed by containers, proper permissions)
   registry-logs:
   registry-scans:

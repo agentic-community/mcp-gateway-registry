@@ -36,6 +36,7 @@ All links verified working as of 2026-06-04.
 | **Authentication / Trust** | Agent Name Service (ANS) Integration Walkthrough | ~few min | 2026-03-26 | Amit Arora | [Watch](https://app.vidcast.io/share/c2240a78-8899-46ad-9375-6fb0cc1345f3?playerMode=vidcast) |
 | **Security** | Security Scanning Demo | 0m 35s | 2026-01-08 | Amit Arora | [Watch](https://github.com/user-attachments/assets/9450f027-ef7f-4ed7-a55c-ce970bf26fd8) |
 | **Agent Skills** | Agent Skills | 0m 28s | 2026-02-07 | Amit Arora | [Watch](https://github.com/user-attachments/assets/5d1f227a-25f8-480d-9ff9-acba2498844b) |
+| **Custom Entities** | Custom Entity Types — define schema-driven catalog types at runtime | 1m 00s | 2026-06-10 | Amit Arora | [Watch](https://github.com/user-attachments/assets/3858e990-e26e-4d49-b408-1e64ca42e2fd) |
 | **Virtual Servers** | Virtual MCP Server creation & management | ~few min | 2026-02-17 | Amit Arora | [Watch](https://app.vidcast.io/share/954e6296-f217-4559-8d86-88cec25af763) |
 | **Federation** | Federation Operational Guide demo | 0m 58s | 2026-02-05 | Amit Arora | [Watch](https://github.com/user-attachments/assets/630ce847-b151-4eaa-9cc9-2ec77797f2b5) |
 | **Federation** | AWS Agent Registry Federation | ~few min | 2026-04-11 | Amit Arora | [Watch](https://app.vidcast.io/share/6d2e0a43-4a68-477e-b5b9-2b3e2aa59f83?playerMode=vidcast) |

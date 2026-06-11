@@ -92,6 +92,8 @@ All collections are suffixed with the configured namespace (e.g., `_default`, `_
 5. **mcp_security_scans_{namespace}** - Security scan results
 6. **mcp_federation_config_{namespace}** - Federation configuration
 7. **oauth_sessions_{namespace}** - Server-side OAuth session records (cookie-based browser login)
+8. **mcp_custom_types_{namespace}** - Custom entity type descriptors (admin-defined schemas)
+9. **mcp_custom_entities_{namespace}** - Custom entity records (instances of custom types)
 
 **Key Differences:**
 
@@ -491,6 +493,103 @@ for the end-to-end browser login flow that uses this collection.
 - Writer: [auth_server/session_store.py](../auth_server/session_store.py) (create / resolve / delete + index management).
 - Reader: [registry/auth/session_store.py](../registry/auth/session_store.py) (resolve / delete only).
 - Crypto: [registry/auth/session_crypto.py](../registry/auth/session_crypto.py) (HKDF-derived AES-GCM cipher, shared by writer and reader).
+
+---
+
+### 8. Custom Entity Types
+
+**Collection:** `mcp_custom_types_{namespace}`
+
+Stores admin-defined custom entity type descriptors (the schemas). Each document
+is one type; its `_id` is the URL-safe, immutable type name. See
+[Custom Entity Types](custom-entities.md) for the feature overview.
+
+**Document Structure:**
+
+```json
+{
+  "_id": "llm_prompt",
+  "name": "llm_prompt",
+  "display_name": "Prompts",
+  "description": "Reusable, versioned LLM prompts shared across teams.",
+  "fields": [
+    {
+      "name": "prompt_text",
+      "label": "Prompt Text",
+      "datatype": "text",
+      "enum_values": null,
+      "required": true,
+      "semantic": true,
+      "show_in_list": false
+    },
+    {
+      "name": "role",
+      "label": "Role",
+      "datatype": "enum",
+      "enum_values": ["system", "user", "assistant", "developer"],
+      "required": true,
+      "semantic": false,
+      "show_in_list": true
+    }
+  ],
+  "schema_version": 1,
+  "created_by": "admin",
+  "created_at": "2026-06-10T12:00:00Z"
+}
+```
+
+- `_id` / `name` are immutable (the name is also the record path prefix and the
+  `entity_type` discriminator). Only `display_name`/`description` are mutable
+  (via `PATCH`).
+- `datatype` is one of `string`, `text`, `number`, `bool`, `enum`, `date`,
+  `array<string>`. `enum_values` is required iff `datatype == enum`.
+- Read paths use a short-TTL in-process descriptor cache; write paths read
+  authoritatively from this collection.
+
+### 9. Custom Entity Records
+
+**Collection:** `mcp_custom_entities_{namespace}`
+
+Stores records (instances) of custom types. A single collection holds records of
+all custom types, discriminated by `entity_type`. The `_id` is the synthetic
+`path` (`/{entity_type}/{uuid}`).
+
+**Document Structure:**
+
+```json
+{
+  "_id": "/llm_prompt/2d687ddf-4d84-47e5-8182-b05359f07813",
+  "path": "/llm_prompt/2d687ddf-4d84-47e5-8182-b05359f07813",
+  "entity_type": "llm_prompt",
+  "name": "Concise Code Reviewer",
+  "description": "System prompt for terse, high-signal code review.",
+  "visibility": "public",
+  "allowed_groups": [],
+  "owner": "admin",
+  "tags": ["code-review", "engineering"],
+  "is_enabled": true,
+  "num_stars": 0.0,
+  "rating_details": [],
+  "created_at": "2026-06-10T12:00:00Z",
+  "updated_at": "2026-06-10T12:00:00Z",
+  "attributes": {
+    "prompt_text": "You are a senior engineer reviewing a PR...",
+    "role": "system"
+  }
+}
+```
+
+- The **envelope** (name, description, visibility, allowed_groups, owner, tags,
+  is_enabled, ratings, timestamps) is uniform across all custom types.
+- The **`attributes`** sub-document holds the per-type, user-defined fields,
+  validated against the type's descriptor at write time. User field names live
+  only inside `attributes`, never as top-level keys, so they cannot collide with
+  envelope keys or Mongo-interpreted keys.
+- `owner` is always server-derived from the caller, never the request body.
+- Records are visibility-filtered on read (`public` / `private`-owner /
+  `group-restricted` via `allowed_groups`). Each record also has a vector
+  embedding in the shared embeddings collection (fields marked `semantic` in the
+  descriptor contribute to the embedding text).
 
 ---
 

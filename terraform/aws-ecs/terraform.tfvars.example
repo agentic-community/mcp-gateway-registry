@@ -631,18 +631,60 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # tool_filter_audit_log_level = "INFO"
 
 # ============================================================================
+# CUSTOM ENTITY TYPES (admin-defined, schema-driven catalog types)
+# ============================================================================
+# Main switch for the custom-entity-types feature (dynamic tabs + endpoints).
+# Off by default = no behavior change for existing deployments. When enabled, a
+# registry-admin can define new catalog entity types at runtime.
+# Default: false
+# custom_entity_types_enabled = false
+
+# TTL (seconds) for the in-process custom-type descriptor cache used by the
+# config tab list and default search scope. Lower for faster cross-replica
+# convergence under bursty admin writes. Default: 60
+# custom_type_cache_ttl_seconds = 60
+
+# Soft cap on records per custom type (0 = unlimited). When non-zero, record
+# creation is rejected with HTTP 409 once a type reaches the cap. Best-effort
+# (concurrent creates may overshoot slightly); guards against runaway imports
+# hitting the embedding-collection scaling ceiling. Default: 1000
+# max_custom_records_per_type = 1000
+
+# Cap on the number of custom entity TYPES an admin can define (0 = unlimited).
+# When non-zero, type creation is rejected with HTTP 409 once the limit is
+# reached. Each type carries its own embedding collection. Default: 50
+# max_custom_types = 50
+
+# ============================================================================
 # AUTHENTICATION PROVIDER CONFIGURATION
 # ============================================================================
 #
-# IMPORTANT: Only ONE authentication provider should be enabled at a time!
+# Enable exactly ONE authentication provider. If you enable none, Keycloak is
+# the default.
 #
-# Three authentication provider options:
-#   1. Keycloak (default) - Leave both okta_enabled and entra_enabled as false/unset
-#   2. Microsoft Entra ID - Set entra_enabled = true
-#   3. Okta - Set okta_enabled = true
+# There is NO `auth_provider` variable in this Terraform module. Unlike the
+# Docker (.env: AUTH_PROVIDER) and Helm (values.yaml: authProvider.type)
+# surfaces, you select the provider here by setting ONE boolean `*_enabled`
+# flag to true. The module derives the AUTH_PROVIDER value passed to the
+# containers from that flag.
 #
-# If multiple providers are enabled simultaneously, priority order is:
-#   okta_enabled > entra_enabled > keycloak (default)
+# To use a non-default provider, set its flag to true and leave the others
+# false, then fill in that provider's configuration block further down:
+#   - Microsoft Entra ID -> entra_enabled        = true
+#   - Okta               -> okta_enabled         = true
+#   - Auth0              -> auth0_enabled         = true
+#   - PingFederate       -> pingfederate_enabled = true
+#
+# To use Keycloak (the default), leave ALL of the flags below false/unset.
+# (The Keycloak default applies when a Keycloak domain is configured, which the
+# standard setup does via use_regional_domains = true in the DOMAIN section.)
+#
+# --- Provider selector (leave all false for the Keycloak default) ---------
+# entra_enabled        = false
+# okta_enabled         = false
+# auth0_enabled        = false
+# pingfederate_enabled = false
+# --------------------------------------------------------------------------
 #
 # ============================================================================
 
@@ -683,6 +725,21 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # idp_group_filter_prefix = "mcp-"
 # Example with multiple prefixes:
 # idp_group_filter_prefix = "mcp-,registry-,ai-"
+
+# IdP User-to-Group Fallback Providers (issue #1127, comma-separated)
+# Comma-separated list of IdP providers (e.g. pingfederate) for which the
+# registry's local idp_user_groups collection is consulted to populate empty
+# JWT groups claims. Set to "" to disable the fallback for all providers.
+# Default: "pingfederate"
+# idp_user_group_fallback_enabled_providers = "pingfederate"
+
+# PingFederate Admin API (registry only)
+# Used by the registry to call the PF admin API to create OAuth clients and
+# Simple PCV users at runtime. PF_ADMIN_PASS is wired through AWS Secrets
+# Manager. Defaults are dev-only — override in production.
+# pf_admin_url  = "https://pingfederate:9999"
+# pf_admin_user = "administrator"
+# pf_admin_pass = "change-password-to-some-secret-password"
 
 # ============================================================================
 # OKTA CONFIGURATION (Alternative to Keycloak)
@@ -961,3 +1018,16 @@ aws_registry_federation_enabled = true
 # mcpgw_extra_env = [
 #   { name = "MY_MCPGW_VAR", value = "test" },
 # ]
+
+# ============================================================================
+# PINGFEDERATE IdP (opt-in)
+# ============================================================================
+# pingfederate_enabled              = false
+# pingfederate_base_url             = ""
+# pingfederate_external_url         = ""
+# pingfederate_client_id            = ""
+# pingfederate_client_secret        = ""
+# pingfederate_m2m_client_id        = ""
+# pingfederate_m2m_client_secret    = ""
+# pingfederate_application_id_uri   = ""
+# pingfederate_groups_claim         = "groups"

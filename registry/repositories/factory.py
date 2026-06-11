@@ -3,13 +3,19 @@ Repository factory - creates concrete implementations based on configuration.
 """
 
 import logging
+from typing import TYPE_CHECKING, Any
 
 from ..core.config import MONGODB_BACKENDS, settings
+
+if TYPE_CHECKING:
+    from ..services.custom_entity_service import CustomEntityService
 from .app_log_repository import AppLogRepository
 from .audit_repository import AuditRepositoryBase
 from .interfaces import (
     AgentRepositoryBase,
     BackendSessionRepositoryBase,
+    CustomEntityRepositoryBase,
+    CustomTypeRepositoryBase,
     FederationConfigRepositoryBase,
     PeerFederationRepositoryBase,
     RegistryCardRepositoryBase,
@@ -39,6 +45,9 @@ _backend_session_repo: BackendSessionRepositoryBase | None = None
 _skill_security_scan_repo: SkillSecurityScanRepositoryBase | None = None
 _registry_card_repo: RegistryCardRepositoryBase | None = None
 _app_log_repo: AppLogRepository | None = None
+_custom_type_repo: CustomTypeRepositoryBase | None = None
+_custom_entity_repo: CustomEntityRepositoryBase | None = None
+_custom_entity_service: Any = None
 
 
 def get_server_repository() -> ServerRepositoryBase:
@@ -357,6 +366,51 @@ def get_app_log_repository() -> AppLogRepository | None:
     return _app_log_repo
 
 
+def get_custom_type_repository() -> CustomTypeRepositoryBase:
+    """Get custom type descriptor repository singleton (DocumentDB only)."""
+    global _custom_type_repo
+
+    if _custom_type_repo is not None:
+        return _custom_type_repo
+
+    backend = settings.storage_backend
+    logger.info(f"Creating custom type repository with backend: {backend}")
+
+    from .documentdb.custom_type_repository import DocumentDBCustomTypeRepository
+
+    _custom_type_repo = DocumentDBCustomTypeRepository()
+    return _custom_type_repo
+
+
+def get_custom_entity_repository() -> CustomEntityRepositoryBase:
+    """Get custom entity record repository singleton (DocumentDB only)."""
+    global _custom_entity_repo
+
+    if _custom_entity_repo is not None:
+        return _custom_entity_repo
+
+    backend = settings.storage_backend
+    logger.info(f"Creating custom entity repository with backend: {backend}")
+
+    from .documentdb.custom_entity_repository import DocumentDBCustomEntityRepository
+
+    _custom_entity_repo = DocumentDBCustomEntityRepository()
+    return _custom_entity_repo
+
+
+def get_custom_entity_service() -> "CustomEntityService":
+    """Get custom entity service singleton."""
+    global _custom_entity_service
+
+    if _custom_entity_service is not None:
+        return _custom_entity_service
+
+    from ..services.custom_entity_service import CustomEntityService
+
+    _custom_entity_service = CustomEntityService()
+    return _custom_entity_service
+
+
 def reset_repositories() -> None:
     """Reset all repository singletons. USE ONLY IN TESTS."""
     global \
@@ -373,7 +427,10 @@ def reset_repositories() -> None:
         _backend_session_repo, \
         _skill_security_scan_repo, \
         _registry_card_repo, \
-        _app_log_repo
+        _app_log_repo, \
+        _custom_type_repo, \
+        _custom_entity_repo, \
+        _custom_entity_service
     _server_repo = None
     _agent_repo = None
     _scope_repo = None
@@ -388,3 +445,6 @@ def reset_repositories() -> None:
     _skill_security_scan_repo = None
     _registry_card_repo = None
     _app_log_repo = None
+    _custom_type_repo = None
+    _custom_entity_repo = None
+    _custom_entity_service = None

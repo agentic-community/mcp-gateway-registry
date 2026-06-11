@@ -20,7 +20,11 @@ from pydantic import (
 
 from ..audit import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
-from ..repositories.factory import get_scope_repository
+from ..repositories.factory import (
+    get_custom_entity_repository,
+    get_custom_type_repository,
+    get_scope_repository,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -108,3 +112,46 @@ async def export_scopes(
         f"'{user_context.get('username', 'unknown')}'"
     )
     return {"scopes": scopes, "total_count": len(scopes)}
+
+
+@router.get("/custom-types")
+async def export_custom_types(
+    user_context: Annotated[dict, Depends(_require_admin)],
+) -> dict[str, Any]:
+    """Export all custom entity type descriptors (the admin-defined schemas).
+
+    Returns the raw descriptor documents from the mcp_custom_types collection.
+    """
+    type_repo = get_custom_type_repository()
+    collection = await type_repo._get_collection()
+    cursor = collection.find({})
+    custom_types = []
+    async for doc in cursor:
+        custom_types.append(doc)
+    logger.info(
+        f"Exported {len(custom_types)} custom type documents for user "
+        f"'{user_context.get('username', 'unknown')}'"
+    )
+    return {"custom_types": custom_types, "total_count": len(custom_types)}
+
+
+@router.get("/custom-entities")
+async def export_custom_entities(
+    user_context: Annotated[dict, Depends(_require_admin)],
+) -> dict[str, Any]:
+    """Export all custom entity records across every custom type.
+
+    Returns the raw record documents from the single mcp_custom_entities
+    collection (records of all types, discriminated by entity_type).
+    """
+    entity_repo = get_custom_entity_repository()
+    collection = await entity_repo._get_collection()
+    cursor = collection.find({})
+    custom_entities = []
+    async for doc in cursor:
+        custom_entities.append(doc)
+    logger.info(
+        f"Exported {len(custom_entities)} custom entity records for user "
+        f"'{user_context.get('username', 'unknown')}'"
+    )
+    return {"custom_entities": custom_entities, "total_count": len(custom_entities)}

@@ -558,6 +558,51 @@ variable "idp_group_filter_prefix" {
   default     = ""
 }
 
+variable "idp_user_group_fallback_enabled_providers" {
+  description = "Comma-separated list of IdP providers (e.g. pingfederate) for which the registry's local idp_user_groups collection is consulted to populate empty JWT groups claims. Empty list disables the fallback for all providers. Default: pingfederate."
+  type        = string
+  default     = "pingfederate"
+}
+
+# =============================================================================
+# AMAZON COGNITO CONFIGURATION
+# =============================================================================
+# Bring-your-own User Pool: create the User Pool and App Client in the Cognito
+# console (or separately), then pass the values below. This module does not
+# create the User Pool. AWS_REGION is already injected into both containers and
+# is reused as the Cognito region.
+
+variable "cognito_enabled" {
+  description = "Enable Amazon Cognito as the authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "cognito_user_pool_id" {
+  description = "Cognito User Pool ID (e.g. us-east-1_XXXXXXXXX)"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_client_id" {
+  description = "Cognito App Client ID for web login"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_client_secret" {
+  description = "Cognito App Client secret for web login"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "cognito_domain" {
+  description = "Optional Cognito hosted UI domain prefix or custom domain. Leave empty to derive it from the User Pool ID (e.g. https://<pool-id-without-underscore>.auth.<region>.amazoncognito.com)."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # OKTA CONFIGURATION
 # =============================================================================
@@ -671,6 +716,89 @@ variable "auth0_management_api_token" {
   description = "Auth0 Management API Token (alternative to M2M credentials)"
   type        = string
   default     = ""
+  sensitive   = true
+}
+
+# =============================================================================
+# PINGFEDERATE CONFIGURATION
+# =============================================================================
+
+variable "pingfederate_enabled" {
+  description = "Enable PingFederate as authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "pingfederate_base_url" {
+  description = "PingFederate runtime base URL (internal, server-to-server), e.g. https://pf.example.com:9031"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_external_url" {
+  description = "PingFederate external URL (browser-facing, for auth redirects)"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_client_id" {
+  description = "PingFederate OAuth client ID for the gateway web app"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_client_secret" {
+  description = "PingFederate OAuth client secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pingfederate_m2m_client_id" {
+  description = "PingFederate M2M client ID (defaults to web client if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_m2m_client_secret" {
+  description = "PingFederate M2M client secret (defaults to web client secret if empty)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pingfederate_application_id_uri" {
+  description = "Optional resource-server identifier accepted as the JWT aud claim"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_groups_claim" {
+  description = "JWT claim name carrying group memberships (default: groups)"
+  type        = string
+  default     = "groups"
+}
+
+# =============================================================================
+# PINGFEDERATE ADMIN API (registry only)
+# =============================================================================
+
+variable "pf_admin_url" {
+  description = "PingFederate admin API URL (used by registry to create OAuth clients and PCV users)"
+  type        = string
+  default     = "https://pingfederate:9999"
+}
+
+variable "pf_admin_user" {
+  description = "PingFederate admin API username"
+  type        = string
+  default     = "administrator"
+}
+
+variable "pf_admin_pass" {
+  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production."
+  type        = string
+  default     = "2FederateM0re"
   sensitive   = true
 }
 
@@ -1075,6 +1203,49 @@ variable "tool_filter_audit_log_level" {
 }
 
 # =============================================================================
+# CUSTOM ENTITY TYPES (admin-defined, schema-driven catalog types)
+# =============================================================================
+
+variable "custom_entity_types_enabled" {
+  description = "Main switch for the custom-entity-types feature (dynamic tabs + endpoints). Off by default = no behavior change for existing deployments. When enabled, a registry-admin can define new catalog entity types at runtime."
+  type        = bool
+  default     = false
+}
+
+variable "custom_type_cache_ttl_seconds" {
+  description = "TTL (seconds) for the in-process custom-type descriptor cache used by the config tab list and default search scope. Lower for faster cross-replica convergence under bursty admin writes."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.custom_type_cache_ttl_seconds > 0
+    error_message = "custom_type_cache_ttl_seconds must be greater than 0"
+  }
+}
+
+variable "max_custom_records_per_type" {
+  description = "Soft cap on records per custom type (0 = unlimited). When non-zero, record creation is rejected with HTTP 409 once a type reaches the cap. Best-effort (concurrent creates may overshoot slightly); guards against runaway imports hitting the embedding-collection scaling ceiling."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.max_custom_records_per_type >= 0
+    error_message = "max_custom_records_per_type must be 0 (unlimited) or a positive integer"
+  }
+}
+
+variable "max_custom_types" {
+  description = "Cap on the number of custom entity types an admin can define (0 = unlimited). When non-zero, type creation is rejected with HTTP 409 once the limit is reached. Each type carries its own embedding collection, so this guards against unbounded type creation."
+  type        = number
+  default     = 50
+
+  validation {
+    condition     = var.max_custom_types >= 0
+    error_message = "max_custom_types must be 0 (unlimited) or a positive integer"
+  }
+}
+
+# =============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # =============================================================================
 
@@ -1351,57 +1522,24 @@ variable "enable_waf" {
 # =============================================================================
 
 variable "registry_extra_env" {
-  description = "Extra environment variables for the registry service. List of objects with 'name' and 'value' fields. Reserved names are rejected at terraform plan time via validation against charts/registry/reserved-env-names.txt (shared source of truth across Docker, Terraform, and Helm). For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block (see mongodb_connection_string_secret_arn as a reference pattern)."
+  description = "Extra environment variables for the registry service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/registry/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block (see mongodb_connection_string_secret_arn as a reference pattern)."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
-
-  validation {
-    condition = length([
-      for env in var.registry_extra_env : env.name
-      if contains(
-        compact(split("\n", file("${path.module}/../../charts/registry/reserved-env-names.txt"))),
-        env.name
-      )
-    ]) == 0
-    error_message = "registry_extra_env contains one or more reserved environment variable names that are managed by the chart. See charts/registry/reserved-env-names.txt for the full list. Configure reserved variables via their canonical Terraform variable or Helm value instead."
-  }
 }
 
 variable "auth_server_extra_env" {
-  description = "Extra environment variables for the auth-server service. List of objects with 'name' and 'value' fields. Reserved names are rejected at terraform plan time via validation against charts/auth-server/reserved-env-names.txt. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
+  description = "Extra environment variables for the auth-server service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/auth-server/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
-
-  validation {
-    condition = length([
-      for env in var.auth_server_extra_env : env.name
-      if contains(
-        compact(split("\n", file("${path.module}/../../charts/auth-server/reserved-env-names.txt"))),
-        env.name
-      )
-    ]) == 0
-    error_message = "auth_server_extra_env contains one or more reserved environment variable names that are managed by the chart. See charts/auth-server/reserved-env-names.txt for the full list. Configure reserved variables via their canonical Terraform variable or Helm value instead."
-  }
 }
 
 variable "mcpgw_extra_env" {
-  description = "Extra environment variables for the mcpgw service. List of objects with 'name' and 'value' fields. Reserved names are rejected at terraform plan time via validation against charts/mcpgw/reserved-env-names.txt. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
+  description = "Extra environment variables for the mcpgw service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/mcpgw/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
-
-  validation {
-    condition = length([
-      for env in var.mcpgw_extra_env : env.name
-      if contains(
-        compact(split("\n", file("${path.module}/../../charts/mcpgw/reserved-env-names.txt"))),
-        env.name
-      )
-    ]) == 0
-    error_message = "mcpgw_extra_env contains one or more reserved environment variable names that are managed by the chart. See charts/mcpgw/reserved-env-names.txt for the full list. Configure reserved variables via their canonical Terraform variable or Helm value instead."
-  }
 }
 
 variable "autoscaling_min_capacity" {

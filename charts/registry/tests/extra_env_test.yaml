@@ -46,16 +46,22 @@ tests:
       # Order: chart-managed env vars start with NODE_NAME (downward API,
       # env[0]); DEPLOYMENT_MODE is env[1]; CODING_ASSISTANTS is env[7];
       # UI_TITLE is env[8]; the tool-level access control pair (issue #1026)
-      # is env[9]/env[10]; MCP_ADVERTISED_SCOPES is env[11];
-      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[12];
-      # user extraEnv entries are appended at the end.
+      # is env[9]/env[10]; MCP_ADVERTISED_SCOPES is env[11]; the custom-entity-
+      # types quartet (CUSTOM_ENTITY_TYPES_ENABLED, CUSTOM_TYPE_CACHE_TTL_SECONDS,
+      # MAX_CUSTOM_RECORDS_PER_TYPE, MAX_CUSTOM_TYPES) is
+      # env[12]/env[13]/env[14]/env[15];
+      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[16];
+      # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
+      # env[17]/env[18]; user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
-      # (set at the suite level) and awsRegistry.federationEnabled=false.
-      # Enabling federation or changing the auth provider shifts these
-      # indices. If you add a new conditional env block between the
-      # SHOW_*_TAB entries and KEYCLOAK_ADMIN_PASSWORD, update the
-      # expected index below.
+      # (set at the suite level), awsRegistry.federationEnabled=false, and
+      # pingfederateAdmin.passwordExistingSecret=""  (so PF_ADMIN_PASS is
+      # NOT explicitly emitted into env: — it comes via envFrom from the
+      # chart-managed secret instead). Enabling federation, changing the
+      # auth provider, or setting pingfederateAdmin.passwordExistingSecret
+      # shifts these indices. If you add a new unconditional env block
+      # before the extraEnv append, update the expected indices below.
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: NODE_NAME
@@ -79,12 +85,30 @@ tests:
           value: MCP_ADVERTISED_SCOPES
       - equal:
           path: spec.template.spec.containers[0].env[12].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: CUSTOM_ENTITY_TYPES_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[13].name
-          value: MY_FLAG
+          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[14].name
+          value: MAX_CUSTOM_RECORDS_PER_TYPE
+      - equal:
+          path: spec.template.spec.containers[0].env[15].name
+          value: MAX_CUSTOM_TYPES
+      - equal:
+          path: spec.template.spec.containers[0].env[16].name
+          value: KEYCLOAK_ADMIN_PASSWORD
+      - equal:
+          path: spec.template.spec.containers[0].env[17].name
+          value: PF_ADMIN_URL
+      - equal:
+          path: spec.template.spec.containers[0].env[18].name
+          value: PF_ADMIN_USER
+      - equal:
+          path: spec.template.spec.containers[0].env[19].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[20].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -225,6 +249,67 @@ tests:
           content:
             name: UI_TITLE
             value: "Acme AI Portal"
+
+  - it: emits custom-entity-types flags with defaults (feature off)
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUSTOM_ENTITY_TYPES_ENABLED
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUSTOM_TYPE_CACHE_TTL_SECONDS
+            value: "60"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MAX_CUSTOM_RECORDS_PER_TYPE
+            value: "1000"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MAX_CUSTOM_TYPES
+            value: "50"
+
+  - it: emits custom-entity-types overrides when app values are set
+    set:
+      app:
+        customEntityTypesEnabled: true
+        customTypeCacheTtlSeconds: 120
+        maxCustomRecordsPerType: 500
+        maxCustomTypes: 25
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUSTOM_ENTITY_TYPES_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUSTOM_TYPE_CACHE_TTL_SECONDS
+            value: "120"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MAX_CUSTOM_RECORDS_PER_TYPE
+            value: "500"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MAX_CUSTOM_TYPES
+            value: "25"
+
+  - it: fails when extraEnv contains CUSTOM_ENTITY_TYPES_ENABLED
+    set:
+      extraEnv:
+        - name: CUSTOM_ENTITY_TYPES_ENABLED
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"CUSTOM_ENTITY_TYPES_ENABLED\" is a reserved variable"
 
   - it: emits Keycloak-DCR-aligned MCP_ADVERTISED_SCOPES by default
     asserts:

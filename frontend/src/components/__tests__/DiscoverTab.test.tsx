@@ -1,7 +1,12 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import DiscoverTab from '../DiscoverTab';
+import type { CustomEntitySection } from '../DiscoverTab';
 import type { Skill } from '../../types/skill';
+import type {
+  CustomEntityRecord,
+  CustomTypeDescriptor,
+} from '../../types/customEntity';
 
 
 // Mock useSemanticSearch hook
@@ -54,6 +59,55 @@ const makeSkill = (overrides: Partial<Skill> = {}): Skill => ({
   visibility: 'public',
   is_enabled: true,
   num_stars: 0,
+  ...overrides,
+});
+
+
+const makeDescriptor = (
+  overrides: Partial<CustomTypeDescriptor> = {}
+): CustomTypeDescriptor => ({
+  name: 'prompt_template',
+  display_name: 'Prompt Templates',
+  description: null,
+  fields: [],
+  schema_version: 1,
+  created_at: '2026-01-01T00:00:00Z',
+  ...overrides,
+});
+
+
+const makeRecord = (
+  overrides: Partial<CustomEntityRecord> = {}
+): CustomEntityRecord => ({
+  path: '/prompt_template/abc',
+  entity_type: 'prompt_template',
+  name: 'My Record',
+  description: '',
+  visibility: 'public',
+  allowed_groups: [],
+  owner: null,
+  tags: [],
+  is_enabled: true,
+  num_stars: 0,
+  rating_details: [],
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+  attributes: {},
+  ...overrides,
+});
+
+
+const makeCustomSection = (
+  overrides: Partial<CustomEntitySection> = {}
+): CustomEntitySection => ({
+  name: 'prompt_template',
+  displayName: 'Prompt Templates',
+  descriptor: makeDescriptor(),
+  records: [],
+  canModify: () => true,
+  onView: jest.fn(),
+  onEdit: jest.fn(),
+  onDelete: jest.fn(),
   ...overrides,
 });
 
@@ -143,6 +197,70 @@ describe('DiscoverTab', () => {
     expect(screen.getByText('MCP Servers')).toBeInTheDocument();
     expect(screen.getByText('Agents')).toBeInTheDocument();
     expect(screen.getByText('Skills')).toBeInTheDocument();
+  });
+
+  test('renders a section per custom type that has records', () => {
+    render(
+      <DiscoverTab
+        {...defaultProps}
+        customSections={[
+          makeCustomSection({
+            name: 'prompt_template',
+            displayName: 'Prompt Templates',
+            records: [makeRecord({ name: 'Summarizer', path: '/prompt_template/p1' })],
+          }),
+          makeCustomSection({
+            name: 'runbook',
+            displayName: 'Runbooks',
+            descriptor: makeDescriptor({ name: 'runbook', display_name: 'Runbooks' }),
+            records: [makeRecord({ name: 'Failover', path: '/runbook/r1' })],
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Prompt Templates')).toBeInTheDocument();
+    expect(screen.getByText('Runbooks')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-custom-/prompt_template/p1')).toBeInTheDocument();
+    expect(screen.getByTestId('list-row-custom-/runbook/r1')).toBeInTheDocument();
+  });
+
+  test('omits custom sections with no records', () => {
+    render(
+      <DiscoverTab
+        {...defaultProps}
+        customSections={[
+          makeCustomSection({ displayName: 'Prompt Templates', records: [] }),
+        ]}
+      />
+    );
+
+    expect(screen.queryByText('Prompt Templates')).not.toBeInTheDocument();
+  });
+
+  test('keyword search filters custom records', () => {
+    render(
+      <DiscoverTab
+        {...defaultProps}
+        customSections={[
+          makeCustomSection({
+            displayName: 'Prompt Templates',
+            records: [
+              makeRecord({ name: 'Summarizer', path: '/prompt_template/p1' }),
+              makeRecord({ name: 'Classifier', path: '/prompt_template/p2' }),
+            ],
+          }),
+        ]}
+      />
+    );
+
+    fireEvent.change(
+      screen.getByPlaceholderText(/search servers, agents, skills/i),
+      { target: { value: 'summar' } }
+    );
+
+    expect(screen.getByTestId('list-row-custom-/prompt_template/p1')).toBeInTheDocument();
+    expect(screen.queryByTestId('list-row-custom-/prompt_template/p2')).not.toBeInTheDocument();
   });
 
   test('renders list rows for each item type', () => {

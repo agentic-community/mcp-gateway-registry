@@ -160,3 +160,29 @@ async def user_can_access_skill(
         skill_groups = set(allowed_groups or [])
         return bool(user_groups & skill_groups)
     return False
+
+
+async def user_can_access_custom_entity(
+    visibility: str,
+    owner: str,
+    allowed_groups: list[Any],
+    user_context: dict,
+) -> bool:
+    """Visibility check for a custom entity record.
+
+    Mirrors :func:`user_can_access_agent`'s value set (``group-restricted``,
+    not skills' legacy ``group``) so it stays in lockstep with the custom
+    entity list/single-record paths (``custom_entity_visibility._user_can_view``).
+    Branch order MUST match those so a record can't be visible in one surface
+    and 404 in another.
+    """
+    if user_context.get("is_admin"):
+        return True
+    if visibility == "public":
+        return True
+    if visibility == "private":
+        return owner == user_context.get("username")
+    if visibility == "group-restricted":
+        user_groups = set(user_context.get("groups", []) or [])
+        return bool(user_groups & set(allowed_groups or []))
+    return False  # deny-by-default for any unknown visibility

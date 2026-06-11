@@ -211,6 +211,33 @@ NGINX_TEMPLATE_HTTP_ONLY="/app/docker/nginx_rev_proxy_http_only.conf"
 NGINX_TEMPLATE_HTTP_AND_HTTPS="/app/docker/nginx_rev_proxy_http_and_https.conf"
 NGINX_CONFIG_PATH="/etc/nginx/conf.d/nginx_rev_proxy.conf"
 
+# Optionally add IPv6 listeners for IPv6-only / dual-stack clusters (opt-in).
+# The conf templates ship IPv4-only listen directives so they keep working on
+# IPv4-only hosts where binding [::] would fail. Operators on IPv6-only or
+# dual-stack Kubernetes clusters set NGINX_ENABLE_IPV6=true so the load
+# balancer and kubelet readiness probe can reach the pod over IPv6. This is
+# the nginx counterpart to the app's BIND_HOST=:: support.
+#
+# Patch the *templates*, not the rendered $NGINX_CONFIG_PATH: the registry
+# re-renders the active config from these templates at startup and on every
+# server change (see registry/core/nginx_service.py::_render_config_impl).
+# Patching the rendered file is overwritten by the first render, dropping the
+# IPv6 listeners. The grep guards keep this idempotent across restarts.
+if [ "${NGINX_ENABLE_IPV6:-false}" = "true" ]; then
+    echo "NGINX_ENABLE_IPV6=true: adding IPv6 listen directives to nginx templates..."
+    for nginx_template in "$NGINX_TEMPLATE_HTTP_ONLY" "$NGINX_TEMPLATE_HTTP_AND_HTTPS"; do
+        [ -f "$nginx_template" ] || continue
+        if ! grep -q 'listen \[::\]:8080;' "$nginx_template"; then
+            sed -i 's|listen 8080;|listen 8080;\
+    listen [::]:8080;|' "$nginx_template"
+        fi
+        if grep -q 'listen 8443 ssl;' "$nginx_template" && ! grep -q 'listen \[::\]:8443 ssl;' "$nginx_template"; then
+            sed -i 's|listen 8443 ssl;|listen 8443 ssl;\
+    listen [::]:8443 ssl;|' "$nginx_template"
+        fi
+    done
+fi
+
 # Check if SSL certificates exist and use appropriate config
 if [ ! -f "$SSL_CERT_PATH" ] || [ ! -f "$SSL_KEY_PATH" ]; then
     echo "Using HTTP-only Nginx configuration (no SSL certificates)..."
@@ -220,20 +247,6 @@ else
     echo "Using HTTP + HTTPS Nginx configuration (SSL certificates found)..."
     cp "$NGINX_TEMPLATE_HTTP_AND_HTTPS" "$NGINX_CONFIG_PATH"
     echo "HTTP + HTTPS Nginx configuration installed."
-fi
-
-# Optionally add IPv6 listeners for IPv6-only / dual-stack clusters (opt-in).
-# The conf templates ship IPv4-only listen directives so they keep working on
-# IPv4-only hosts where binding [::] would fail. Operators on IPv6-only or
-# dual-stack Kubernetes clusters set NGINX_ENABLE_IPV6=true so the load
-# balancer and kubelet readiness probe can reach the pod over IPv6. This is
-# the nginx counterpart to the app's BIND_HOST=:: support.
-if [ "${NGINX_ENABLE_IPV6:-false}" = "true" ]; then
-    echo "NGINX_ENABLE_IPV6=true: adding IPv6 listen directives to nginx config..."
-    sed -i 's|listen 8080;|listen 8080;\
-    listen [::]:8080;|' "$NGINX_CONFIG_PATH"
-    sed -i 's|listen 8443 ssl;|listen 8443 ssl;\
-    listen [::]:8443 ssl;|' "$NGINX_CONFIG_PATH"
 fi
 
 # --- Embeddings Configuration ---

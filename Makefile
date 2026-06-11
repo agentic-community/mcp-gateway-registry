@@ -11,7 +11,7 @@ help:
 	@echo "Testing:"
 	@echo "  test            Run full test suite with coverage"
 	@echo "  test-unit       Run unit tests only"
-	@echo "  test-integration Run integration tests only" 
+	@echo "  test-integration Run integration tests only"
 	@echo "  test-e2e        Run end-to-end tests only"
 	@echo "  test-fast       Run fast tests (exclude slow tests)"
 	@echo "  test-coverage   Generate coverage reports"
@@ -74,6 +74,8 @@ help:
 	@echo "Dependency Management:"
 	@echo "  uv-update-locks             Refresh every uv.lock under the repo with a 7-day"
 	@echo "                              supply-chain quarantine (UV_EXCLUDE_NEWER=now-7d)"
+	@echo "  npm-update-locks            Refresh every package-lock.json under the repo with a 7-day"
+	@echo "                              supply-chain quarantine (CUTOFF_EPOCH=now-7d)"
 
 # Installation
 install-dev:
@@ -319,3 +321,19 @@ uv-update-locks:
 	done; \
 	echo ""; \
 	echo "All uv.lock files refreshed with cutoff $$UV_EXCLUDE_NEWER"
+
+npm-update-locks:
+	@set -e; \
+	if date -u -v-$(UV_EXCLUDE_NEWER_DAYS)d +%Y-%m-%dT%H:%M:%SZ >/dev/null 2>&1; then \
+		CUTOFF=$$(date -u -v-$(UV_EXCLUDE_NEWER_DAYS)d +%Y-%m-%dT%H:%M:%SZ); \
+	else \
+		CUTOFF=$$(date -u -d '$(UV_EXCLUDE_NEWER_DAYS) days ago' +%Y-%m-%dT%H:%M:%SZ); \
+	fi; \
+	export CUTOFF_EPOCH=$$CUTOFF; \
+	echo "CUTOFF_EPOCH=$$CUTOFF_EPOCH"; \
+	for lock in $$(find . -name package-lock.json  | sort); do \
+	  	dir=$$(dirname $$lock); \
+		echo ""; \
+		echo "==> Updating $$dir"; \
+		(cd $$dir && npm update --package-lock-only); \
+	done

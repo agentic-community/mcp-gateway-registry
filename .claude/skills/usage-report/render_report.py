@@ -704,10 +704,24 @@ def _build_template_vars(
 
     proven_7d = ltv_last_7d.get("proven_total_usd", 0)
     all_days_7d = ltv_last_7d.get("all_days_total_usd", 0)
+    persisted_7d = ltv_last_7d.get("persisted_total_usd", 0)
     proven_avg = proven_7d / 7 if proven_7d else 0
     all_days_avg = all_days_7d / 7 if all_days_7d else 0
+    persisted_avg = persisted_7d / 7 if persisted_7d else 0
     arr_proven = (proven_avg * 365) / 1_000_000
     arr_all_days = (all_days_avg * 365) / 1_000_000
+    arr_persisted = (persisted_avg * 365) / 1_000_000
+
+    # Instance-day decomposition for the formula-clarification block. The three
+    # rules differ only in which (instance, day) pairs they count; the per-day
+    # rate is identical. all-days >= persisted >= proven, and the two gaps are:
+    #   all-days - persisted = single-calendar-day (install-and-vanish) days
+    #   persisted - proven   = exactly one free first-day per persisted instance
+    id_all_days = ltv_total.get("all_days", {}).get("total_instance_days", 0)
+    id_persisted = ltv_total.get("persisted", {}).get("total_instance_days", 0)
+    id_proven = ltv_total.get("proven", {}).get("total_instance_days", 0)
+    gap_install_vanish_days = id_all_days - id_persisted
+    gap_first_free_days = id_persisted - id_proven
 
     # Forecast
     fc_linear = forecast.get("linear", {})
@@ -848,14 +862,24 @@ def _build_template_vars(
         "yesterday_label": ltv_yesterday.get("date", "?"),
         "ltv_yesterday_proven": f"${ltv_yesterday.get('proven', {}).get('total_usd', 0):,.2f}",
         "ltv_yesterday_all_days": f"${ltv_yesterday.get('all_days', {}).get('total_usd', 0):,.2f}",
+        "ltv_yesterday_persisted": f"${ltv_yesterday.get('persisted', {}).get('total_usd', 0):,.2f}",
         "ltv_last_7_days_proven": f"${proven_7d:,.2f}",
         "ltv_last_7_days_all_days": f"${all_days_7d:,.2f}",
+        "ltv_last_7_days_persisted": f"${persisted_7d:,.2f}",
         "ltv_7day_daily_avg_proven": f"${proven_avg:,.2f}",
         "ltv_7day_daily_avg_all_days": f"${all_days_avg:,.2f}",
+        "ltv_7day_daily_avg_persisted": f"${persisted_avg:,.2f}",
         "ltv_cumulative_proven": f"${ltv_total.get('proven', {}).get('total_usd', 0):,.0f}",
         "ltv_cumulative_all_days": f"${ltv_total.get('all_days', {}).get('total_usd', 0):,.0f}",
+        "ltv_cumulative_persisted": f"${ltv_total.get('persisted', {}).get('total_usd', 0):,.0f}",
         "arr_proven_str": f"${arr_proven:.2f}M",
         "arr_all_days_str": f"${arr_all_days:.2f}M",
+        "arr_persisted_str": f"${arr_persisted:.2f}M",
+        "ltv_instance_days_all_days": f"{id_all_days:,}",
+        "ltv_instance_days_persisted": f"{id_persisted:,}",
+        "ltv_instance_days_proven": f"{id_proven:,}",
+        "ltv_gap_install_vanish_days": f"{gap_install_vanish_days:,}",
+        "ltv_gap_first_free_days": f"{gap_first_free_days:,}",
 
         # Comparison-with-previous
         "prev_total_events": f"{prev_metrics.get('key_metrics', {}).get('total_events', 0):,}",

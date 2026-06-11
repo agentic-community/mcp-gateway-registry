@@ -445,3 +445,4 @@ tests/fixtures/search_dataset/benchmark_results.md
 
 # Benchmark search results (generated, not committed)
 results*.json
+pingfederate/setup/pingfederate-ca-bundle.pem

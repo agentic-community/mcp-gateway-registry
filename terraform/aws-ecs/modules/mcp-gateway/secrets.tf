@@ -203,6 +203,30 @@ resource "aws_secretsmanager_secret_version" "entra_client_secret" {
 }
 
 
+# Amazon Cognito App Client secret (for OAuth authentication)
+#checkov:skip=CKV2_AWS_57:IdP client secret managed in the Cognito App Client, not rotatable via Secrets Manager
+resource "aws_secretsmanager_secret" "cognito_client_secret" {
+  count = var.cognito_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-cognito-client-secret-"
+  description             = "Amazon Cognito App Client secret for OAuth authentication"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "cognito_client_secret" {
+  count = var.cognito_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.cognito_client_secret[0].id
+  secret_string = var.cognito_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+
 # Okta client secret (for OAuth authentication)
 #checkov:skip=CKV2_AWS_57:IdP client secret managed in Okta admin console, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "okta_client_secret" {
@@ -322,6 +346,80 @@ resource "aws_secretsmanager_secret_version" "auth0_m2m_client_secret" {
 
   secret_id     = aws_secretsmanager_secret.auth0_m2m_client_secret[0].id
   secret_string = var.auth0_m2m_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+
+# =============================================================================
+# PINGFEDERATE SECRETS
+# =============================================================================
+
+# PingFederate client secret (for OAuth authentication)
+#checkov:skip=CKV2_AWS_57:IdP client secret managed in PingFederate admin console
+resource "aws_secretsmanager_secret" "pingfederate_client_secret" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-pingfederate-client-secret-"
+  description             = "PingFederate client secret for OAuth authentication"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "pingfederate_client_secret" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.pingfederate_client_secret[0].id
+  secret_string = var.pingfederate_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# PingFederate M2M client secret (for service account operations)
+#checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in PingFederate admin console
+resource "aws_secretsmanager_secret" "pingfederate_m2m_client_secret" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-pingfederate-m2m-client-secret-"
+  description             = "PingFederate M2M client secret for service account operations"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "pingfederate_m2m_client_secret" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.pingfederate_m2m_client_secret[0].id
+  secret_string = var.pingfederate_m2m_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# PingFederate Admin API password (used by registry to call PF admin API)
+#checkov:skip=CKV2_AWS_57:PingFederate admin password managed in PingFederate admin console
+resource "aws_secretsmanager_secret" "pf_admin_pass" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-pf-admin-pass-"
+  description             = "PingFederate admin API password used by registry to create OAuth clients and PCV users"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "pf_admin_pass" {
+  count = var.pingfederate_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.pf_admin_pass[0].id
+  secret_string = var.pf_admin_pass
 
   lifecycle {
     ignore_changes = [secret_string]

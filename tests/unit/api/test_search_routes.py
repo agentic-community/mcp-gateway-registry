@@ -492,12 +492,20 @@ class TestPydanticModels:
             SemanticSearchRequest(query="test", max_results=51)
         assert "max_results" in str(exc_info.value)
 
-    def test_semantic_search_request_entity_types_validation(self):
-        """Test SemanticSearchRequest entity_types must be valid."""
-        # Act & Assert - invalid entity type
-        with pytest.raises(ValidationError) as exc_info:
-            SemanticSearchRequest(query="test", entity_types=["invalid_type"])
-        assert "entity_types" in str(exc_info.value)
+    def test_semantic_search_request_entity_types_accepts_builtin_and_custom(self):
+        """entity_types accepts built-in names and custom type names.
+
+        Custom entity type names are dynamic (admin-defined), so the field is a
+        list[str] rather than a fixed Literal. Restricting it would 422 any
+        custom-type search and break the custom-resource tab.
+        """
+        # Built-in types
+        builtin = SemanticSearchRequest(query="test", entity_types=["mcp_server", "skill"])
+        assert builtin.entity_types == ["mcp_server", "skill"]
+
+        # Custom type name (e.g. an admin-defined "prompt_template")
+        custom = SemanticSearchRequest(query="test", entity_types=["prompt_template"])
+        assert custom.entity_types == ["prompt_template"]
 
     def test_semantic_search_response_valid(self):
         """Test SemanticSearchResponse with valid data."""
@@ -1607,3 +1615,150 @@ class TestSemanticSearchIntegration:
         assert response.total_servers == 1
         assert response.total_tools == 1
         assert response.total_agents == 1
+
+
+def _custom_record(
+    path: str,
+    name: str,
+    visibility: str,
+    owner: str = "",
+    allowed_groups: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a custom-entity search hit in the shape _format_custom_result emits."""
+    return {
+        "entity_type": "prompt_template",
+        "path": path,
+        "name": name,
+        "description": f"{name} description",
+        "tags": tags or [],
+        "visibility": visibility,
+        "owner": owner,
+        "allowed_groups": allowed_groups or [],
+        "is_enabled": True,
+        "relevance_score": 0.9,
+        "match_context": f"{name} description",
+    }
+
+
+class TestSemanticSearchCustomEntities:
+    """The custom-entity bucket must surface through the route WITH per-record
+    visibility filtering — the embedding docs are not visibility-scoped at query
+    time, so every hit has to pass the same public / private-owner /
+    group-restricted check used by the list/single-record paths.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _enable_custom_entities(self):
+        """The custom-result bucket is only processed when the feature flag is
+        on (feature-invisible kill switch when off). These tests assert on the
+        custom bucket, so enable the flag for the whole class.
+        """
+        with patch(
+            "registry.api.search_routes.settings.custom_entity_types_enabled",
+            True,
+        ):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_admin_sees_all_custom_records(
+        self, mock_http_request, mock_search_repo, admin_user_context
+    ):
+        mock_search_repo.search = AsyncMock(
+            return_value={
+                "servers": [],
+                "tools": [],
+                "agents": [],
+                "custom": [
+                    _custom_record("/prompt_template/a", "Public", "public"),
+                    _custom_record(
+                        "/prompt_template/b", "Private", "private", owner="someone-else"
+                    ),
+                    _custom_record(
+                        "/prompt_template/c",
+                        "Group",
+                        "group-restricted",
+                        allowed_groups=["other-group"],
+                    ),
+                ],
+            }
+        )
+        request = SemanticSearchRequest(query="prompt")
+
+        response = await semantic_search(
+            mock_http_request, request, admin_user_context, mock_search_repo
+        )
+
+        assert len(response.custom) == 3
+        assert response.total_custom == 3
+        assert response.custom[0].entity_type == "prompt_template"
+
+    @pytest.mark.asyncio
+    async def test_regular_user_visibility_filter(
+        self, mock_http_request, mock_search_repo, regular_user_context
+    ):
+        # regular_user_context: username="regular_user", groups=["registry-users-lob1"]
+        mock_search_repo.search = AsyncMock(
+            return_value={
+                "servers": [],
+                "tools": [],
+                "agents": [],
+                "custom": [
+                    _custom_record("/prompt_template/pub", "Public", "public"),
+                    _custom_record(
+                        "/prompt_template/mine", "Mine", "private", owner="regular_user"
+                    ),
+                    _custom_record(
+                        "/prompt_template/theirs", "Theirs", "private", owner="someone-else"
+                    ),
+                    _custom_record(
+                        "/prompt_template/mygroup",
+                        "MyGroup",
+                        "group-restricted",
+                        allowed_groups=["registry-users-lob1"],
+                    ),
+                    _custom_record(
+                        "/prompt_template/othergroup",
+                        "OtherGroup",
+                        "group-restricted",
+                        allowed_groups=["registry-users-lob2"],
+                    ),
+                    _custom_record("/prompt_template/weird", "Weird", "unknown-visibility"),
+                ],
+            }
+        )
+        request = SemanticSearchRequest(query="prompt")
+
+        response = await semantic_search(
+            mock_http_request, request, regular_user_context, mock_search_repo
+        )
+
+        # public + own-private + matching-group only; not others' private,
+        # other group, or unknown visibility (deny-by-default).
+        visible = {c.name for c in response.custom}
+        assert visible == {"Public", "Mine", "MyGroup"}
+        assert response.total_custom == 3
+
+    @pytest.mark.asyncio
+    async def test_custom_records_filtered_by_required_tags(
+        self, mock_http_request, mock_search_repo, admin_user_context
+    ):
+        mock_search_repo.search = AsyncMock(
+            return_value={
+                "servers": [],
+                "tools": [],
+                "agents": [],
+                "custom": [
+                    _custom_record("/prompt_template/a", "Tagged", "public", tags=["nlp", "demo"]),
+                    _custom_record("/prompt_template/b", "Untagged", "public", tags=["other"]),
+                ],
+            }
+        )
+        request = SemanticSearchRequest(query="prompt", tags=["nlp"])
+
+        response = await semantic_search(
+            mock_http_request, request, admin_user_context, mock_search_repo
+        )
+
+        assert {c.name for c in response.custom} == {"Tagged"}
+        assert response.total_custom == 1
