@@ -152,7 +152,9 @@ def test_client_admin(mock_settings, mock_server_service, _mock_auth_admin, admi
 
 
 @pytest.fixture
-def test_client_regular(mock_settings, mock_server_service, _mock_auth_regular, regular_user_context):
+def test_client_regular(
+    mock_settings, mock_server_service, _mock_auth_regular, regular_user_context
+):
     yield from _create_test_client(mock_server_service, regular_user_context)
 
 
@@ -162,7 +164,9 @@ def test_client_regular(mock_settings, mock_server_service, _mock_auth_regular, 
 
 
 class TestCanonicalEndpoint:
-    def test_returns_canonical_shape(self, test_client_admin, mock_server_service, canonical_server_info):
+    def test_returns_canonical_shape(
+        self, test_client_admin, mock_server_service, canonical_server_info
+    ):
         """200 + canonical shape. The $schema field also confirms the request
         routed here and not to the catch-all /servers/{path}."""
         mock_server_service.get_server_info.return_value = canonical_server_info
@@ -188,7 +192,9 @@ class TestCanonicalEndpoint:
         response = test_client_regular.get(URL)
         assert response.status_code == 403
 
-    def test_admin_bypasses_access_check(self, test_client_admin, mock_server_service, canonical_server_info):
+    def test_admin_bypasses_access_check(
+        self, test_client_admin, mock_server_service, canonical_server_info
+    ):
         mock_server_service.get_server_info.return_value = canonical_server_info
         response = test_client_admin.get(URL)
         assert response.status_code == 200
@@ -201,14 +207,18 @@ class TestCanonicalEndpoint:
         test_client_admin.get(URL)
         mock_server_service.get_server_info.assert_called_once_with("/calculator")
 
-    def test_nested_path_matches(self, test_client_admin, mock_server_service, canonical_server_info):
+    def test_nested_path_matches(
+        self, test_client_admin, mock_server_service, canonical_server_info
+    ):
         """Greedy {path:path} must capture a nested path before the .json suffix."""
         mock_server_service.get_server_info.return_value = canonical_server_info
         response = test_client_admin.get("/api/servers/team/calculator/server.json")
         assert response.status_code == 200
         mock_server_service.get_server_info.assert_called_once_with("/team/calculator")
 
-    def test_local_server_returns_packages(self, test_client_admin, mock_server_service, local_server_info):
+    def test_local_server_returns_packages(
+        self, test_client_admin, mock_server_service, local_server_info
+    ):
         mock_server_service.get_server_info.return_value = local_server_info
         response = test_client_admin.get("/api/servers/local-calc/server.json")
         assert response.status_code == 200
@@ -224,7 +234,9 @@ class TestCanonicalEndpoint:
         mock_server_service.get_server_info.return_value = dict(canonical_server_info)
         mock_server_service.user_can_access_server_path.return_value = True
 
-        with patch("registry.api.server_routes.settings.deployment_mode", DeploymentMode.WITH_GATEWAY):
+        with patch(
+            "registry.api.server_routes.settings.deployment_mode", DeploymentMode.WITH_GATEWAY
+        ):
             response = test_client_regular.get(URL)
 
         assert response.status_code == 200
@@ -239,7 +251,9 @@ class TestCanonicalEndpoint:
         mock_server_service.get_server_info.return_value = dict(canonical_server_info)
         mock_server_service.user_can_access_server_path.return_value = True
 
-        with patch("registry.api.server_routes.settings.deployment_mode", DeploymentMode.REGISTRY_ONLY):
+        with patch(
+            "registry.api.server_routes.settings.deployment_mode", DeploymentMode.REGISTRY_ONLY
+        ):
             response = test_client_regular.get(URL)
 
         assert response.status_code == 200
@@ -252,7 +266,9 @@ class TestCanonicalEndpoint:
 
         mock_server_service.get_server_info.return_value = dict(canonical_server_info)
 
-        with patch("registry.api.server_routes.settings.deployment_mode", DeploymentMode.WITH_GATEWAY):
+        with patch(
+            "registry.api.server_routes.settings.deployment_mode", DeploymentMode.WITH_GATEWAY
+        ):
             response = test_client_admin.get(URL)
 
         assert response.status_code == 200
@@ -261,7 +277,9 @@ class TestCanonicalEndpoint:
     def test_truncation_header_present_when_truncated(
         self, test_client_admin, mock_server_service, canonical_server_info
     ):
-        mock_server_service.get_server_info.return_value = dict(canonical_server_info, description="x" * 150)
+        mock_server_service.get_server_info.return_value = dict(
+            canonical_server_info, description="x" * 150
+        )
         response = test_client_admin.get(URL)
         assert response.status_code == 200
         assert response.headers.get("X-Description-Truncated") == "true"

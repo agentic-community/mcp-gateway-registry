@@ -4,9 +4,9 @@ Read-only, pure functions. See issue #1187 and the LLD for the field mapping.
 Private helpers (prefixed _) first, public functions after.
 """
 
+import copy
 import logging
 import re
-import copy
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
@@ -172,9 +172,7 @@ def _build_internal_meta(
             internal[extra_key] = lr[extra_key]
 
     extra_meta = {
-        k: v
-        for k, v in (stored.get("metadata") or {}).items()
-        if k != "mcp_registry_spec"
+        k: v for k, v in (stored.get("metadata") or {}).items() if k != "mcp_registry_spec"
     }
     if extra_meta:
         internal["metadata"] = extra_meta

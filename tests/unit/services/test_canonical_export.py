@@ -5,22 +5,19 @@ exercise the round-trip path (when metadata.mcp_registry_spec is present),
 the synthesis fallback path (legacy/bespoke documents), the description
 truncation rule, and the reverse-DNS namespace derivation.
 """
+
 import copy
 
 import pytest
 
-
-
 from registry.services import canonical_export
-
 from registry.services.canonical_export import (
     DEFAULT_SCHEMA_URL,
     MAX_CANONICAL_DESCRIPTION,
     _reverse_dns_base,
-    to_canonical,
     redact_backend_urls,
+    to_canonical,
 )
-
 
 # =============================================================================
 # Fixtures and helpers
@@ -274,7 +271,7 @@ class TestSynthesizesValidDocNoSpec:
         out, _ = to_canonical(stored)
 
         # The three top-level required canonical fields must always appear.
-        assert set(["name", "description", "version"]).issubset(out.keys())
+        assert {"name", "description", "version"}.issubset(out.keys())
         assert out["$schema"] == DEFAULT_SCHEMA_URL
         assert out["version"] == "0.5.0"
 
@@ -529,6 +526,7 @@ class TestRoundtripByteEquality:
         assert out["packages"] == preserved_packages
         assert "remotes" not in out
 
+
 def test_redaction_does_not_mutate_source_server():
     """Redaction works on a copy: source untouched, output stripped."""
     stored = {
@@ -536,16 +534,14 @@ def test_redaction_does_not_mutate_source_server():
         "description": "test server",
         "metadata": {
             "mcp_registry_spec": {
-                "remotes": [
-                    {"type": "streamable-http", "url": "http://backend:8000/mcp"}
-                ]
+                "remotes": [{"type": "streamable-http", "url": "http://backend:8000/mcp"}]
             }
         },
     }
     before = copy.deepcopy(stored)
 
     canonical, _ = to_canonical(stored)
-    redacted = redact_backend_urls(canonical)   # capture the returned copy
+    redacted = redact_backend_urls(canonical)  # capture the returned copy
 
     # source the caller passed in is untouched (no cache corruption)...
     assert stored == before, "redaction leaked back into the stored server"
