@@ -5,6 +5,13 @@ the admin config view/export, and the per-server model fields (oauth_client_id,
 append_mcp_path) that drive the token-less, login-button Connect config.
 """
 
+from unittest.mock import (
+    AsyncMock,
+    MagicMock,
+    patch,
+)
+
+from registry.api import server_routes
 from registry.api.config_routes import (
     CONFIG_GROUPS,
     _export_as_env,
@@ -57,3 +64,62 @@ class TestPerServerConnectFields:
 
         assert server.oauth_client_id == "mcp-gateway"
         assert server.append_mcp_path is False
+
+
+class TestConnectConfigResolution:
+    """connect-config endpoint resolves the effective oauth_client_id.
+
+    Covers the per-server || global-default fallback chain plus the
+    append_mcp_path pass-through.
+    """
+
+    @staticmethod
+    async def _call(server_info: dict, global_default: str):
+        """Invoke the endpoint directly with an admin context (skips ACL)."""
+        with (
+            patch.object(
+                server_routes.server_service,
+                "get_server_info",
+                AsyncMock(return_value=server_info),
+            ),
+            patch.object(server_routes, "set_audit_action", MagicMock()),
+            patch.object(settings, "ide_oauth_client_id", global_default),
+        ):
+            return await server_routes.get_server_connect_config(
+                request=MagicMock(),
+                service_path="aws-knowledge",
+                user_context={"is_admin": True},
+                _csrf=None,
+            )
+
+    async def test_per_server_client_id_wins_over_global_default(self):
+        result = await self._call(
+            {
+                "server_name": "AWS Knowledge",
+                "custom_headers_encrypted": [],
+                "oauth_client_id": "kagent-public",
+                "append_mcp_path": False,
+            },
+            global_default="global-default-client",
+        )
+
+        assert result["oauth_client_id"] == "kagent-public"
+        assert result["append_mcp_path"] is False
+
+    async def test_falls_back_to_global_default_when_unset(self):
+        result = await self._call(
+            {"server_name": "AWS Knowledge", "custom_headers_encrypted": []},
+            global_default="global-default-client",
+        )
+
+        assert result["oauth_client_id"] == "global-default-client"
+        # Absent per-server override → None (auto-detect downstream).
+        assert result["append_mcp_path"] is None
+
+    async def test_none_when_neither_set(self):
+        result = await self._call(
+            {"server_name": "AWS Knowledge", "custom_headers_encrypted": []},
+            global_default="",
+        )
+
+        assert result["oauth_client_id"] is None
