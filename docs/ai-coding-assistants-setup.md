@@ -149,13 +149,23 @@ cp .oauth-tokens/vscode-mcp.json ~/.cursor/mcp-settings.json
 
 **OAuth login button (no embedded token):**
 
-By default the Connect dialog embeds a static gateway token in the Cursor
-config. If your deployment runs an OAuth provider but has **anonymous Dynamic
-Client Registration disabled** (common with enterprise Keycloak), register a
-public PKCE client for IDEs and set `IDE_OAUTH_CLIENT_ID` to that client id on
-the registry. The Connect dialog then emits a token-less config:
+By default the Connect dialog embeds a static gateway token. If your deployment
+runs an OAuth provider but has **anonymous Dynamic Client Registration disabled**
+(common with enterprise Keycloak), register a public PKCE client for IDEs and
+expose it as a client id on the registry. You can set it two ways:
+
+- **Registry-wide default:** set `IDE_OAUTH_CLIENT_ID` on the registry. Every
+  server's Connect dialog uses it.
+- **Per-server override:** set `oauth_client_id` on an individual server entry
+  (registration form or server JSON). This wins over the global default for that
+  server — useful when a specific server has its own public client.
+
+When a client id resolves for a server, the Connect dialog drops the static
+token and emits an OAuth/login config. The exact shape depends on the selected
+IDE:
 
 ```json
+// Cursor (and other JSON-config IDEs)
 {
   "mcpServers": {
     "my-server": {
@@ -166,9 +176,30 @@ the registry. The Connect dialog then emits a token-less config:
 }
 ```
 
-Cursor renders a **Login** button for the server and runs the OAuth/PKCE flow
-instead of using a pasted token. The client id is public (not a secret); the
-public client must allow the loopback redirect URIs Cursor uses.
+```bash
+# Claude Code — pre-registered public client, no secret
+claude mcp add --transport http --client-id <your-public-client-id> \
+  my-server https://gateway.example.com/my-server/mcp
+```
+
+```bash
+# Codex — pre-registered public client
+codex mcp add "my-server" --url "https://gateway.example.com/my-server/mcp" \
+  --oauth-client-id "<your-public-client-id>"
+```
+
+The IDE renders a **Login** button (or runs `/mcp` / `codex mcp login`) and
+completes the OAuth/PKCE flow instead of using a pasted token. The client id is
+public (not a secret); the public client must allow the loopback redirect URIs
+the IDE uses.
+
+**Stripping the `/mcp` suffix:**
+
+The gateway Connect URL normally appends `/mcp`. Some servers (e.g. AWS
+Knowledge) serve MCP at the server path itself and break on `/mcp`. Set
+`append_mcp_path: false` on that server entry to emit the URL without the
+suffix; set `true` to force it. For an entirely custom endpoint, use
+`mcp_endpoint`.
 
 ### Cline (formerly Claude Dev)
 

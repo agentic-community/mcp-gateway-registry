@@ -5287,12 +5287,18 @@ async def get_server_connect_config(
     custom_headers = decrypt_custom_headers(encrypted)
     decrypt_failures = len(encrypted) - len(custom_headers)
 
+    # OAuth IDE login: per-server client_id overrides the registry-wide default.
+    # When present, the frontend emits a token-less, login-button Connect config.
+    oauth_client_id = server_info.get("oauth_client_id") or (settings.ide_oauth_client_id or None)
+
     return {
         "path": service_path,
         "server_name": server_info.get("server_name"),
         "auth_scheme": server_info.get("auth_scheme", "none"),
         "auth_header_name": server_info.get("auth_header_name"),
         "custom_headers": custom_headers,
+        "oauth_client_id": oauth_client_id,
+        "append_mcp_path": server_info.get("append_mcp_path"),
         "decrypt_failures": decrypt_failures,
     }
 

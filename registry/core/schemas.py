@@ -222,6 +222,25 @@ class ServerInfo(BaseModel):
         default=None,
         description="Full URL for the SSE endpoint. If set, used directly for health checks and client connections instead of appending /sse to proxy_pass_url. Example: 'https://server.com/events'",
     )
+    oauth_client_id: str | None = Field(
+        default=None,
+        description=(
+            "Pre-registered public OAuth client_id advertised in this server's "
+            "Connect config so IDEs (Cursor, Claude Code, Codex) run the OAuth/PKCE "
+            "login flow instead of embedding a static gateway token. Overrides the "
+            "registry-wide IDE_OAUTH_CLIENT_ID default. Use when anonymous Dynamic "
+            "Client Registration is disabled and a fixed public client is registered."
+        ),
+    )
+    append_mcp_path: bool | None = Field(
+        default=None,
+        description=(
+            "Override whether the gateway Connect URL gets a trailing '/mcp' "
+            "transport segment. None (default) auto-detects from proxy_pass_url. "
+            "Set false for root-endpoint servers (e.g. AWS Knowledge) that serve "
+            "MCP at the server path itself; set true to force the suffix."
+        ),
+    )
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional custom metadata for organization, compliance, or integration purposes",

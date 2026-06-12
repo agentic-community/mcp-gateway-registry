@@ -719,9 +719,6 @@ async def get_config() -> dict[str, Any]:
         "deployment_mode": settings.deployment_mode.value,
         "registry_mode": settings.registry_mode.value,
         "auth_provider": settings.auth_provider,
-        # Pre-registered public OAuth client_id for IDE login (empty when unset).
-        # Drives the token-less, login-button Connect config in the frontend.
-        "ide_oauth_client_id": settings.ide_oauth_client_id or None,
         "idp_user_group_fallback_enabled_providers": list(
             settings.idp_user_group_fallback_enabled_providers
         ),

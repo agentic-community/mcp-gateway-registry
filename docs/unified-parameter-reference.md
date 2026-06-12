@@ -250,12 +250,23 @@ Single URL; disables itself when unset.
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Provider type | `AUTH_PROVIDER` | Derived from `entra_enabled` / `okta_enabled` / `auth0_enabled` flags | `global.authProvider.type` | `keycloak`, `cognito`, `entra`, `okta`, `auth0`. |
-| IDE OAuth client id | `IDE_OAUTH_CLIENT_ID` | `ide_oauth_client_id` | — (use `extraEnv`) | Pre-registered **public** OAuth client_id that IDEs (e.g. Cursor) use to start the gateway login flow. When set, the server Connect config advertises this client_id and omits the static gateway token, so the IDE shows a login button and runs the OAuth/PKCE flow. Use when anonymous Dynamic Client Registration is disabled and a fixed public client is registered instead. Empty (default) keeps the static-token Connect config. Not a secret. |
+| IDE OAuth client id | `IDE_OAUTH_CLIENT_ID` | `ide_oauth_client_id` | — (use `extraEnv`) | Registry-wide **default** pre-registered **public** OAuth client_id that IDEs (Cursor, Claude Code, Codex) use to start the gateway login flow. When set, a server's Connect config advertises this client_id and omits the static gateway token, so the IDE shows a login button and runs the OAuth/PKCE flow. A per-server `oauth_client_id` (see below) overrides this default. Use when anonymous Dynamic Client Registration is disabled and a fixed public client is registered instead. Empty (default) keeps the static-token Connect config. Not a secret. |
 | IdP group filter prefixes | `IDP_GROUP_FILTER_PREFIX` | `idp_group_filter_prefix` | `registry.idpGroupFilterPrefix` | Comma-separated prefixes for IAM > Groups. |
 | IdP user-to-group fallback providers | `IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS` | `idp_user_group_fallback_enabled_providers` | `registry.idpUserGroupFallbackEnabledProviders` / `auth-server.idpUserGroupFallbackEnabledProviders` | Issue #1127. Comma-separated IdP providers (e.g. `pingfederate`) for which the registry's local `idp_user_groups` collection is consulted to populate empty JWT groups claims. Empty disables fallback for all providers. Default: `pingfederate`. Read by both registry and auth-server. |
 | PingFederate admin URL | `PF_ADMIN_URL` | `pf_admin_url` | `registry.pingfederateAdmin.url` | Issue #1127. Admin API URL used by the registry to create OAuth clients and Simple PCV users. Default: dev-only `https://pingfederate:9999`; override for BYO PingFederate. Read by registry only. |
 | PingFederate admin user | `PF_ADMIN_USER` | `pf_admin_user` | `registry.pingfederateAdmin.user` | Issue #1127. Basic-auth user for the PF admin API. Default: dev-only `administrator`; override in production. Read by registry only. |
 | PingFederate admin password **(secret)** | `PF_ADMIN_PASS` | `pf_admin_pass` | `registry.pingfederateAdmin.password` / `registry.pingfederateAdmin.passwordExistingSecret` | Issue #1127. **Secret.** Basic-auth password for the PF admin API. Used by registry to create OAuth clients and Simple PCV users. Default: dev-only `2FederateM0re`; override in production. Wired through AWS Secrets Manager (Terraform) and `secretKeyRef` (Helm). Read by registry only. |
+
+#### Per-server Connect overrides
+
+These live on the **server entry** (registration form / server JSON), not in global
+config, and are surfaced through `GET /api/servers/{path}/connect-config` to shape
+that server's Connect dialog:
+
+| Server field | Type | Purpose |
+|--------------|------|---------|
+| `oauth_client_id` | string | Per-server public OAuth client_id. Overrides the registry-wide `IDE_OAUTH_CLIENT_ID` default for this server. When resolved (per-server or global), the Connect config for Cursor (`auth.CLIENT_ID`), Claude Code (`--client-id`), and Codex (`--oauth-client-id`) drops the static gateway token and runs the OAuth/PKCE login flow. |
+| `append_mcp_path` | bool \| null | Override the trailing `/mcp` transport segment on the gateway Connect URL. `null` (default) auto-detects from `proxy_pass_url`. Set `false` for root-endpoint servers (e.g. AWS Knowledge) that serve MCP at the server path itself; set `true` to force the suffix. For an entirely custom URL, use `mcp_endpoint`. |
 
 ### 12a — Keycloak
 

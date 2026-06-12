@@ -1,7 +1,12 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import axios from 'axios';
 import ServerConfigModal from '../ServerConfigModal';
 import type { Server } from '../ServerCard';
+
+// Mock axios so the connect-config / csrf / token fetches resolve deterministically.
+jest.mock('axios');
+const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 // Mock the useRegistryConfig hook
 const mockUseRegistryConfig = jest.fn();
@@ -21,7 +26,36 @@ const baseServer: Server = {
   proxy_pass_url: 'http://internal-host:8080/mcp',
 };
 
-function renderModal(serverOverrides: Partial<Server> = {}, configOverride?: ReturnType<typeof mockUseRegistryConfig>) {
+// Mutable connect-config payload for the current test.
+let connectConfig: Record<string, unknown> = { custom_headers: [] };
+
+function withGatewayConfig() {
+  return {
+    config: {
+      deployment_mode: 'with-gateway',
+      registry_mode: 'full',
+      nginx_updates_enabled: true,
+      features: { mcp_servers: true, agents: true, skills: true, federation: true, gateway_proxy: true },
+    },
+    loading: false,
+    error: null,
+  };
+}
+
+function registryOnlyConfig() {
+  return {
+    config: {
+      deployment_mode: 'registry-only',
+      registry_mode: 'full',
+      nginx_updates_enabled: false,
+      features: { mcp_servers: true, agents: true, skills: true, federation: true, gateway_proxy: false },
+    },
+    loading: false,
+    error: null,
+  };
+}
+
+function renderModal(serverOverrides: Partial<Server> = {}) {
   const server = { ...baseServer, ...serverOverrides };
   return render(
     <ServerConfigModal
@@ -39,164 +73,127 @@ function getDisplayedConfig(): any {
   return JSON.parse(preElement.textContent || '');
 }
 
-describe('ServerConfigModal URL generation', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    // Default: jsdom sets window.location.origin to http://localhost
+beforeEach(() => {
+  jest.clearAllMocks();
+  connectConfig = { custom_headers: [] };
+  mockedAxios.get.mockImplementation((url: string) => {
+    if (url.includes('csrf-token')) {
+      return Promise.resolve({ data: { csrf_token: 'test-csrf' } });
+    }
+    if (url.includes('connect-config')) {
+      return Promise.resolve({ data: connectConfig });
+    }
+    return Promise.resolve({ data: {} });
   });
+  mockedAxios.post.mockResolvedValue({ data: { token: 'test-jwt' } });
+  mockUseRegistryConfig.mockReturnValue(withGatewayConfig());
+});
 
-  test('should use gateway URL in with-gateway mode', () => {
-    mockUseRegistryConfig.mockReturnValue({
-      config: {
-        deployment_mode: 'with-gateway',
-        registry_mode: 'full',
-        nginx_updates_enabled: true,
-        features: { mcp_servers: true, agents: true, skills: true, federation: true, gateway_proxy: true },
-      },
-      loading: false,
-      error: null,
-    });
-
+describe('ServerConfigModal URL generation', () => {
+  test('should use gateway URL in with-gateway mode', async () => {
     // proxy_pass_url without an MCP transport suffix, so the gateway appends /mcp
     renderModal({ proxy_pass_url: 'http://internal-host:8080' });
-    const config = getDisplayedConfig();
 
-    // Cursor is the default IDE — config uses the "mcpServers" key
-    const serverConfig = config.mcpServers['test-server'];
-    expect(serverConfig.url).toBe('http://localhost/test-server/mcp');
-    // Gateway mode embeds the gateway token via the X-Authorization header
-    expect(serverConfig.headers).toBeDefined();
-    expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
+    await waitFor(() => {
+      // Cursor is the default IDE — config uses the "mcpServers" key
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.url).toBe('http://localhost/test-server/mcp');
+      // Gateway mode embeds the gateway token via the X-Authorization header
+      expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
+    });
   });
 
-  test('should use proxy_pass_url in registry-only mode', () => {
-    mockUseRegistryConfig.mockReturnValue({
-      config: {
-        deployment_mode: 'registry-only',
-        registry_mode: 'full',
-        nginx_updates_enabled: false,
-        features: { mcp_servers: true, agents: true, skills: true, federation: true, gateway_proxy: false },
-      },
-      loading: false,
-      error: null,
-    });
+  test('should use proxy_pass_url in registry-only mode', async () => {
+    mockUseRegistryConfig.mockReturnValue(registryOnlyConfig());
 
     renderModal({ proxy_pass_url: 'http://internal-host:8080/mcp' });
-    const config = getDisplayedConfig();
 
-    const serverConfig = config.mcpServers['test-server'];
-    expect(serverConfig.url).toBe('http://internal-host:8080/mcp');
-    // Registry-only mode should NOT include auth headers
-    expect(serverConfig.headers).toBeUndefined();
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.url).toBe('http://internal-host:8080/mcp');
+      // Registry-only mode should NOT include auth headers
+      expect(serverConfig.headers).toBeUndefined();
+    });
   });
 
-  test('should always use mcp_endpoint when provided', () => {
-    // Test with with-gateway mode
-    mockUseRegistryConfig.mockReturnValue({
-      config: {
-        deployment_mode: 'with-gateway',
-        registry_mode: 'full',
-        nginx_updates_enabled: true,
-        features: { mcp_servers: true, agents: true, skills: true, federation: true, gateway_proxy: true },
-      },
-      loading: false,
-      error: null,
-    });
-
-    const { unmount } = renderModal({
-      mcp_endpoint: 'https://custom-endpoint.example.com/mcp',
-      proxy_pass_url: 'http://internal-host:8080/mcp',
-    });
-    let config = getDisplayedConfig();
-    let serverConfig = config.mcpServers['test-server'];
-    expect(serverConfig.url).toBe('https://custom-endpoint.example.com/mcp');
-
-    unmount();
-
-    // Test with registry-only mode — mcp_endpoint still takes precedence
-    mockUseRegistryConfig.mockReturnValue({
-      config: {
-        deployment_mode: 'registry-only',
-        registry_mode: 'full',
-        nginx_updates_enabled: false,
-        features: { mcp_servers: true, agents: true, skills: true, federation: true, gateway_proxy: false },
-      },
-      loading: false,
-      error: null,
-    });
-
+  test('should always use mcp_endpoint when provided', async () => {
     renderModal({
       mcp_endpoint: 'https://custom-endpoint.example.com/mcp',
       proxy_pass_url: 'http://internal-host:8080/mcp',
     });
-    config = getDisplayedConfig();
-    serverConfig = config.mcpServers['test-server'];
-    expect(serverConfig.url).toBe('https://custom-endpoint.example.com/mcp');
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.url).toBe('https://custom-endpoint.example.com/mcp');
+    });
   });
 });
 
-describe('ServerConfigModal IDE OAuth login (ide_oauth_client_id)', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
+describe('ServerConfigModal per-server append_mcp_path override', () => {
+  test('append_mcp_path:false strips the auto /mcp suffix', async () => {
+    // proxy_pass_url has no transport suffix → would normally get /mcp appended
+    connectConfig = { custom_headers: [], append_mcp_path: false };
+
+    renderModal({ proxy_pass_url: 'http://internal-host:8080' });
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.url).toBe('http://localhost/test-server');
+    });
   });
 
-  function withGatewayConfig(extra: Record<string, unknown> = {}) {
-    return {
-      config: {
-        deployment_mode: 'with-gateway',
-        registry_mode: 'full',
-        auth_provider: 'keycloak',
-        nginx_updates_enabled: true,
-        features: { mcp_servers: true, agents: true, skills: true, federation: true, gateway_proxy: true },
-        ...extra,
-      },
-      loading: false,
-      error: null,
-    };
-  }
+  test('append_mcp_path:true forces the /mcp suffix even when proxy already ends in /mcp', async () => {
+    connectConfig = { custom_headers: [], append_mcp_path: true };
 
-  test('emits auth.CLIENT_ID and omits the gateway token when ide_oauth_client_id is set', () => {
-    mockUseRegistryConfig.mockReturnValue(
-      withGatewayConfig({ ide_oauth_client_id: 'mcp-gateway' })
-    );
+    renderModal({ proxy_pass_url: 'http://internal-host:8080/mcp' });
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.url).toBe('http://localhost/test-server/mcp');
+    });
+  });
+});
+
+describe('ServerConfigModal IDE OAuth login (oauth_client_id)', () => {
+  test('Cursor: emits auth.CLIENT_ID and omits the gateway token when oauth_client_id is set', async () => {
+    connectConfig = { custom_headers: [], oauth_client_id: 'mcp-gateway' };
 
     renderModal();
-    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
 
-    // Cursor (default IDE) advertises the pre-registered client for the login flow
-    expect(serverConfig.auth).toEqual({ CLIENT_ID: 'mcp-gateway' });
-    // No static gateway token is embedded
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.auth).toEqual({ CLIENT_ID: 'mcp-gateway' });
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
     expect(serverConfig.headers).toBeUndefined();
   });
 
-  test('keeps the static gateway token when ide_oauth_client_id is not set', () => {
-    mockUseRegistryConfig.mockReturnValue(withGatewayConfig());
+  test('Cursor: keeps the static gateway token when oauth_client_id is absent', async () => {
+    connectConfig = { custom_headers: [] };
 
     renderModal();
-    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
 
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
     expect(serverConfig.auth).toBeUndefined();
-    expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
   });
 
-  test('does not enable OAuth login in registry-only mode', () => {
-    mockUseRegistryConfig.mockReturnValue({
-      config: {
-        deployment_mode: 'registry-only',
-        registry_mode: 'full',
-        auth_provider: 'keycloak',
-        ide_oauth_client_id: 'mcp-gateway',
-        nginx_updates_enabled: false,
-        features: { mcp_servers: true, agents: true, skills: true, federation: true, gateway_proxy: false },
-      },
-      loading: false,
-      error: null,
-    });
+  test('registry-only deployment never enables OAuth login', async () => {
+    mockUseRegistryConfig.mockReturnValue(registryOnlyConfig());
+    connectConfig = { custom_headers: [], oauth_client_id: 'mcp-gateway' };
 
     renderModal({ proxy_pass_url: 'http://internal-host:8080/mcp' });
-    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
 
-    // Registry-only servers are reached directly, so no gateway OAuth login
+    await waitFor(() => {
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        expect.stringContaining('connect-config'),
+        expect.anything()
+      );
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
     expect(serverConfig.auth).toBeUndefined();
     expect(serverConfig.headers).toBeUndefined();
   });

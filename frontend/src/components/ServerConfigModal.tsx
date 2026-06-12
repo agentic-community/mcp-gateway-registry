@@ -76,17 +76,19 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   // automatically without needing pre-configured tokens in the config.
   const isDCR = !configLoading && registryConfig?.auth_provider === 'keycloak';
 
-  // Pre-registered public OAuth client_id for IDE login. When the deployment
-  // sets this (because anonymous DCR is disabled), the Connect config advertises
-  // the client_id and drops the static gateway token so the IDE shows a login
-  // button and runs the OAuth/PKCE flow instead of pasting a token.
-  const ideOAuthClientId =
-    (!configLoading && registryConfig?.ide_oauth_client_id) || '';
-  const useOAuthLogin = !!ideOAuthClientId && !isRegistryOnly;
-
-  // Custom headers from connect-config endpoint
+  // Custom headers + OAuth login config from the connect-config endpoint
   const [customHeaders, setCustomHeaders] = useState<Array<{name: string; value: string}>>([]);
   const [connectConfigError, setConnectConfigError] = useState<string | null>(null);
+  // Pre-registered public OAuth client_id (per-server, resolved server-side with
+  // the registry-wide IDE_OAUTH_CLIENT_ID default). When set, the Connect config
+  // advertises it and drops the static gateway token so the IDE shows a login
+  // button and runs the OAuth/PKCE flow instead of pasting a token.
+  const [oauthClientId, setOauthClientId] = useState<string>('');
+  // Per-server override for the trailing '/mcp' transport segment on the gateway
+  // URL. null = auto-detect from proxy_pass_url.
+  const [appendMcpPath, setAppendMcpPath] = useState<boolean | null>(null);
+
+  const useOAuthLogin = !!oauthClientId && !isRegistryOnly;
 
   // Fetch JWT token when modal opens (only in gateway mode, and only for remote servers).
   // Local stdio servers don't go through the gateway — no token needed.
@@ -105,6 +107,8 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     if (!isOpen) return;
     setConnectConfigError(null);
     setCustomHeaders([]);
+    setOauthClientId('');
+    setAppendMcpPath(null);
     const serverPath = server.path.replace(/^\/+/, '');
     // Fetch CSRF token first, then include it as header for the GET request
     // (required by verify_csrf_token_header_only for cookie-authenticated sessions)
@@ -120,6 +124,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       })
       .then(resp => {
         setCustomHeaders(resp.data.custom_headers ?? []);
+        setOauthClientId(resp.data.oauth_client_id ?? '');
+        setAppendMcpPath(
+          typeof resp.data.append_mcp_path === 'boolean' ? resp.data.append_mcp_path : null
+        );
         if (resp.data.decrypt_failures > 0) {
           setConnectConfigError(
             `${resp.data.decrypt_failures} custom header(s) could not be decrypted.`
@@ -234,6 +242,25 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     }
   }, [server.local_runtime]);
 
+  // Build the remote connect URL with a single fallback chain:
+  //   1. mcp_endpoint (explicit full-URL override) - always wins
+  //   2. proxy_pass_url (registry-only mode - client reaches the server directly)
+  //   3. gateway URL = origin + base + server.path, optionally + "/mcp"
+  // The trailing "/mcp" transport segment is auto-detected from proxy_pass_url
+  // but can be forced on/off per-server via append_mcp_path (e.g. root-endpoint
+  // servers like AWS Knowledge that serve MCP at the server path itself).
+  const buildConnectUrl = useCallback(() => {
+    if (server.mcp_endpoint) return server.mcp_endpoint;
+    if (isRegistryOnly && server.proxy_pass_url) return server.proxy_pass_url;
+
+    const baseUrl = `${window.location.origin}${getBaseURL()}`;
+    const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
+    const proxyUrl = server.proxy_pass_url || '';
+    const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
+    const shouldAppend = appendMcpPath ?? !hasMcpPath;
+    return shouldAppend ? `${baseUrl}${cleanPath}/mcp` : `${baseUrl}${cleanPath}`;
+  }, [server.mcp_endpoint, server.proxy_pass_url, server.path, isRegistryOnly, appendMcpPath]);
+
   const generateMCPConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
@@ -262,27 +289,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       }
     }
 
-    // URL determination with fallback chain:
-    // 1. mcp_endpoint (custom override) - always takes precedence
-    // 2. proxy_pass_url (in registry-only mode)
-    // 3. Constructed gateway URL (default/fallback)
-    let url: string;
-
-    if (server.mcp_endpoint) {
-      url = server.mcp_endpoint;
-    } else if (isRegistryOnly && server.proxy_pass_url) {
-      url = server.proxy_pass_url;
-    } else {
-      // Gateway URL = origin + ROOT_PATH + server.path + optional "/mcp".
-      // Only append /mcp if the proxy_pass_url does NOT already end with a
-      // known MCP transport path (/mcp, /sse, /v1, etc.). When the upstream
-      // already includes the full endpoint path, appending /mcp would double it.
-      const baseUrl = `${window.location.origin}${getBaseURL()}`;
-      const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-      const proxyUrl = server.proxy_pass_url || '';
-      const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
-      url = hasMcpPath ? `${baseUrl}${cleanPath}` : `${baseUrl}${cleanPath}/mcp`;
-    }
+    const url = buildConnectUrl();
 
     // In registry-only mode, don't include gateway auth headers
     const includeAuthHeaders = !isRegistryOnly;
@@ -332,7 +339,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 ...(Object.keys(oauthHeaders).length > 0 && {
                   headers: oauthHeaders,
                 }),
-                auth: { CLIENT_ID: ideOAuthClientId },
+                auth: { CLIENT_ID: oauthClientId },
               },
             },
           };
@@ -401,46 +408,27 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           },
         };
     }
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, isDCR, useOAuthLogin, ideOAuthClientId, jwtToken, customHeaders]);
+  }, [server.name, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, isDCR, useOAuthLogin, oauthClientId, jwtToken, customHeaders, buildConnectUrl]);
 
   const generateCodexCommand = useCallback(() => {
-    let url: string;
-    if (server.mcp_endpoint) {
-      url = server.mcp_endpoint;
-    } else if (isRegistryOnly && server.proxy_pass_url) {
-      url = server.proxy_pass_url;
-    } else {
-      const baseUrl = `${window.location.origin}${getBaseURL()}`;
-      const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-      const proxyUrl = server.proxy_pass_url || '';
-      const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
-      url = hasMcpPath ? `${baseUrl}${cleanPath}` : `${baseUrl}${cleanPath}/mcp`;
-    }
+    const url = buildConnectUrl();
 
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
     let cmd = `codex mcp add "${serverName}" --url "${url}"`;
 
-    if (!isDCR && !isRegistryOnly) {
+    if (useOAuthLogin) {
+      // Codex runs OAuth/PKCE with the pre-registered public client id.
+      cmd += ` --oauth-client-id "${oauthClientId}"`;
+    } else if (!isDCR && !isRegistryOnly) {
       cmd += ' --bearer-token-env-var "MCP_AUTH_TOKEN"';
     }
 
     return cmd;
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, isRegistryOnly, isDCR]);
+  }, [server.name, isRegistryOnly, isDCR, useOAuthLogin, oauthClientId, buildConnectUrl]);
 
   const generateCurlCommands = useCallback(() => {
-    let url: string;
-    if (server.mcp_endpoint) {
-      url = server.mcp_endpoint;
-    } else if (isRegistryOnly && server.proxy_pass_url) {
-      url = server.proxy_pass_url;
-    } else {
-      const baseUrl = `${window.location.origin}${getBaseURL()}`;
-      const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-      const proxyUrl = server.proxy_pass_url || '';
-      const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
-      url = hasMcpPath ? `${baseUrl}${cleanPath}` : `${baseUrl}${cleanPath}/mcp`;
-    }
+    const url = buildConnectUrl();
 
     const headerLines: string[] = [
       '-H "Content-Type: application/json"',
@@ -463,7 +451,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     const toolsCmd = `curl -X POST "${url}" \\\n  ${headers} \\\n  -H "Mcp-Session-Id: <session-id-from-step-1>" \\\n  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'`;
 
     return { initCmd, toolsCmd };
-  }, [server.path, server.proxy_pass_url, server.mcp_endpoint, isRegistryOnly, jwtToken, customHeaders]);
+  }, [isRegistryOnly, jwtToken, customHeaders, buildConnectUrl]);
 
   const generateGooseConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -498,18 +486,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       return lines.join('\n');
     }
 
-    let url: string;
-    if (server.mcp_endpoint) {
-      url = server.mcp_endpoint;
-    } else if (isRegistryOnly && server.proxy_pass_url) {
-      url = server.proxy_pass_url;
-    } else {
-      const baseUrl = `${window.location.origin}${getBaseURL()}`;
-      const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-      const proxyUrl = server.proxy_pass_url || '';
-      const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
-      url = hasMcpPath ? `${baseUrl}${cleanPath}` : `${baseUrl}${cleanPath}/mcp`;
-    }
+    const url = buildConnectUrl();
 
     const includeAuthHeaders = !isRegistryOnly;
     const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
@@ -547,7 +524,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     lines.push('    timeout: 300');
 
     return lines.join('\n');
-  }, [server.name, server.mcp_endpoint, server.proxy_pass_url, server.auth_scheme, server.description, server.path, server.auth_header_name, isRegistryOnly, jwtToken, customHeaders]);
+  }, [server.name, server.auth_scheme, server.description, server.auth_header_name, isRegistryOnly, jwtToken, customHeaders, buildConnectUrl]);
 
   const generateClaudeCodeCommand = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -569,25 +546,18 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       return command;
     }
 
-    // URL determination (same logic as generateMCPConfig)
-    let url: string;
-    if (server.mcp_endpoint) {
-      url = server.mcp_endpoint;
-    } else if (isRegistryOnly && server.proxy_pass_url) {
-      url = server.proxy_pass_url;
-    } else {
-      const baseUrl = `${window.location.origin}${getBaseURL()}`;
-      const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-      const proxyUrl = server.proxy_pass_url || '';
-      const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
-      url = hasMcpPath ? `${baseUrl}${cleanPath}` : `${baseUrl}${cleanPath}/mcp`;
-    }
+    const url = buildConnectUrl();
 
     const includeAuthHeaders = !isRegistryOnly;
     const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
 
-    // Build command with headers
-    let command = `claude mcp add --transport http ${serverName} ${url}`;
+    // Build command with headers. OAuth login mode passes the pre-registered
+    // public client id (--client-id) so Claude Code runs OAuth/PKCE; no token.
+    let command = `claude mcp add --transport http`;
+    if (useOAuthLogin) {
+      command += ` --client-id ${oauthClientId}`;
+    }
+    command += ` ${serverName} ${url}`;
 
     // Custom headers first
     for (const h of customHeaders) {
@@ -604,13 +574,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       }
     }
 
-    // Gateway auth header last (skip when DCR handles it automatically)
-    if (includeAuthHeaders && !isDCR) {
+    // Gateway auth header last (skip when DCR or OAuth login handles it)
+    if (includeAuthHeaders && !isDCR && !useOAuthLogin) {
       command += ` \\\n  --header "X-Authorization: Bearer ${authToken}"`;
     }
 
     return command;
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, isRegistryOnly, isDCR, jwtToken, customHeaders]);
+  }, [server.name, server.auth_scheme, server.auth_header_name, isRegistryOnly, isDCR, useOAuthLogin, oauthClientId, jwtToken, customHeaders, buildConnectUrl]);
 
 
   const copyConfigToClipboard = useCallback(async () => {
@@ -854,6 +824,8 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               </pre>
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
                 Run this command in your terminal to add the MCP server to Claude Code.
+                {useOAuthLogin && ' It passes the pre-registered public client id (--client-id) ' +
+                  'so Claude Code runs the OAuth login flow — no gateway token is embedded.'}
               </p>
             </div>
           ) : selectedIDE === 'codex' ? (
@@ -862,7 +834,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Codex CLI:</h4>
                 <p className="text-sm text-blue-800 dark:text-blue-200">
                   Run this command in your terminal to add the MCP server to Codex.
-                  {isDCR && ' OAuth authentication is handled automatically via DCR.'}
+                  {useOAuthLogin
+                    ? ' It registers the pre-registered public client id (--oauth-client-id) ' +
+                      'so Codex runs the OAuth login flow — no gateway token is embedded.'
+                    : isDCR && ' OAuth authentication is handled automatically via DCR.'}
                 </p>
               </div>
               <div className="flex items-center justify-between">
@@ -880,7 +855,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap break-all">
                 {generateCodexCommand()}
               </pre>
-              {!isDCR && !isRegistryOnly && (
+              {!isDCR && !isRegistryOnly && !useOAuthLogin && (
                 <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
                   Set the <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">MCP_AUTH_TOKEN</code> environment variable to your JWT token before running Codex.
                 </p>
