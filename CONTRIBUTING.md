@@ -20,6 +20,21 @@ reported the issue. Please try to include as much information as you can. Detail
 * Anything unusual about your environment or deployment
 
 
+## Setting up your development environment
+Before you make your first commit, install the pre-commit hooks. The repository ships a `.pre-commit-config.yaml` that runs `ruff` (linter and formatter), Bandit, and a few file checks, but pre-commit is opt-in per clone: it only runs if you install it.
+
+```bash
+# one-time per clone
+pip install pre-commit
+pre-commit install
+
+# optional: run the hooks against the whole tree
+pre-commit run --all-files
+```
+
+Once installed, `git commit` automatically runs `ruff check --fix` and `ruff format` on your changes, so formatting and lint issues are fixed locally instead of failing CI later. If you skip this step, the same `ruff check` and `ruff format --check` run in CI and will fail the pull request until the formatting is fixed.
+
+
 ## Contributing via Pull Requests
 Contributions via pull requests are much appreciated. Before sending us a pull request, please ensure that:
 
