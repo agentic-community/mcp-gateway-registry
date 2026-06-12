@@ -147,6 +147,29 @@ cp .oauth-tokens/vscode-mcp.json ~/.cursor/mcp-settings.json
 - Predictive tool suggestions based on code context
 - Integrated diff view for tool-generated changes
 
+**OAuth login button (no embedded token):**
+
+By default the Connect dialog embeds a static gateway token in the Cursor
+config. If your deployment runs an OAuth provider but has **anonymous Dynamic
+Client Registration disabled** (common with enterprise Keycloak), register a
+public PKCE client for IDEs and set `IDE_OAUTH_CLIENT_ID` to that client id on
+the registry. The Connect dialog then emits a token-less config:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "url": "https://gateway.example.com/my-server/mcp",
+      "auth": { "CLIENT_ID": "<your-public-client-id>" }
+    }
+  }
+}
+```
+
+Cursor renders a **Login** button for the server and runs the OAuth/PKCE flow
+instead of using a pasted token. The client id is public (not a secret); the
+public client must allow the loopback redirect URIs Cursor uses.
+
 ### Cline (formerly Claude Dev)
 
 Autonomous coding agent compatible with VS Code.

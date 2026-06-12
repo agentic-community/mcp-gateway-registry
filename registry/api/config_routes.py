@@ -75,6 +75,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("session_max_age_seconds", "Session Max Age", False),
             ("session_cookie_secure", "Secure Cookie", False),
             ("session_cookie_domain", "Cookie Domain", False),
+            ("ide_oauth_client_id", "IDE OAuth Client ID", False),
             ("registry_static_token_auth_enabled", "Static Token Auth Enabled", False),
             ("registry_api_token", "Registry API Token", True),
             ("registry_api_keys", "Registry API Keys", True),
@@ -718,6 +719,9 @@ async def get_config() -> dict[str, Any]:
         "deployment_mode": settings.deployment_mode.value,
         "registry_mode": settings.registry_mode.value,
         "auth_provider": settings.auth_provider,
+        # Pre-registered public OAuth client_id for IDE login (empty when unset).
+        # Drives the token-less, login-button Connect config in the frontend.
+        "ide_oauth_client_id": settings.ide_oauth_client_id or None,
         "idp_user_group_fallback_enabled_providers": list(
             settings.idp_user_group_fallback_enabled_providers
         ),

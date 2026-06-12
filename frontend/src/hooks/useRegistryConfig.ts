@@ -11,6 +11,13 @@ interface RegistryConfig {
   deployment_mode: 'with-gateway' | 'registry-only';
   registry_mode: 'full' | 'skills-only' | 'mcp-servers-only' | 'agents-only';
   auth_provider?: string;
+  /**
+   * Pre-registered public OAuth client_id for IDE login. When set, the Connect
+   * config advertises this client_id and omits the static gateway token so the
+   * IDE (e.g. Cursor) shows a login button and runs the OAuth/PKCE flow. Used
+   * when anonymous Dynamic Client Registration is disabled on the auth provider.
+   */
+  ide_oauth_client_id?: string | null;
   nginx_updates_enabled: boolean;
   coding_assistants: string[];
   dedup_registration_hint_enabled: boolean;

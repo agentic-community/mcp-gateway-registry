@@ -76,6 +76,14 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   // automatically without needing pre-configured tokens in the config.
   const isDCR = !configLoading && registryConfig?.auth_provider === 'keycloak';
 
+  // Pre-registered public OAuth client_id for IDE login. When the deployment
+  // sets this (because anonymous DCR is disabled), the Connect config advertises
+  // the client_id and drops the static gateway token so the IDE shows a login
+  // button and runs the OAuth/PKCE flow instead of pasting a token.
+  const ideOAuthClientId =
+    (!configLoading && registryConfig?.ide_oauth_client_id) || '';
+  const useOAuthLogin = !!ideOAuthClientId && !isRegistryOnly;
+
   // Custom headers from connect-config endpoint
   const [customHeaders, setCustomHeaders] = useState<Array<{name: string; value: string}>>([]);
   const [connectConfigError, setConnectConfigError] = useState<string | null>(null);
@@ -282,8 +290,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     // Use actual JWT token if available, otherwise show placeholder
     const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
 
-    // Build headers object: custom first, then auth_scheme, then gateway auth
-    const buildHeaders = () => {
+    // Build headers object: custom first, then auth_scheme, then gateway auth.
+    // When the IDE handles login via OAuth (useOAuthLogin), the static gateway
+    // token is omitted - the IDE obtains it through the OAuth/PKCE flow.
+    const buildHeaders = (includeGatewayToken = true) => {
       const headers: Record<string, string> = {};
 
       // Custom headers go first so auth_scheme and gateway auth overwrite collisions
@@ -302,13 +312,31 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       }
 
       // Add gateway authentication header last - cannot be overridden
-      headers['X-Authorization'] = `Bearer ${authToken}`;
+      if (includeGatewayToken) {
+        headers['X-Authorization'] = `Bearer ${authToken}`;
+      }
 
       return headers;
     };
 
     switch (selectedIDE) {
-      case 'cursor':
+      case 'cursor': {
+        // OAuth login mode: advertise the pre-registered client_id and omit the
+        // gateway token so Cursor renders a login button (auth.CLIENT_ID).
+        if (useOAuthLogin) {
+          const oauthHeaders = buildHeaders(false);
+          return {
+            mcpServers: {
+              [serverName]: {
+                url,
+                ...(Object.keys(oauthHeaders).length > 0 && {
+                  headers: oauthHeaders,
+                }),
+                auth: { CLIENT_ID: ideOAuthClientId },
+              },
+            },
+          };
+        }
         return {
           mcpServers: {
             [serverName]: {
@@ -319,6 +347,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             },
           },
         };
+      }
       case 'roo-code':
         return {
           mcpServers: {
@@ -372,7 +401,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           },
         };
     }
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, isDCR, jwtToken, customHeaders]);
+  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, isDCR, useOAuthLogin, ideOAuthClientId, jwtToken, customHeaders]);
 
   const generateCodexCommand = useCallback(() => {
     let url: string;
@@ -977,6 +1006,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto">
                 {JSON.stringify(generateMCPConfig(), null, 2)}
               </pre>
+              {useOAuthLogin && selectedIDE === 'cursor' && (
+                <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                  This config uses OAuth login: no gateway token is embedded.
+                  Your IDE shows a login button and authenticates via the
+                  gateway's OAuth flow using the pre-registered client.
+                </p>
+              )}
             </div>
           )}
         </div>

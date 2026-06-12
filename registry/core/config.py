@@ -90,6 +90,18 @@ class Settings(BaseSettings):
     registry_api_token: str = ""  # Static API token for registry access
     registry_api_keys: str = ""  # Multi-key static tokens JSON (Issue #779)
     max_tokens_per_user_per_hour: int = 100  # JWT token vending rate limit
+    ide_oauth_client_id: str = Field(
+        default="",
+        description=(
+            "Pre-registered public OAuth client_id that IDEs (e.g. Cursor) use to "
+            "initiate the gateway login flow. When set, the server's Connect config "
+            "advertises this client_id and omits the static gateway token, so the IDE "
+            "shows a login button and runs the OAuth/PKCE flow. Use this when anonymous "
+            "Dynamic Client Registration is disabled on the auth provider and a fixed "
+            "public client is registered instead. Empty (default) keeps the legacy "
+            "static-token Connect config."
+        ),
+    )
 
     # Registration webhook settings (Issue #742)
     registration_webhook_url: str | None = Field(
