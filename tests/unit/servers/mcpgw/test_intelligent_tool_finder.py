@@ -33,6 +33,7 @@ if _mcpgw_path not in sys.path:
 
 from servers.mcpgw.server import (
     _build_discovery_receipt,
+    _dedupe_candidates,
     _validate_top_n,
     intelligent_tool_finder,
     search_registry,
@@ -294,6 +295,15 @@ async def test_discovery_receipt_records_exposed_and_withheld_tools():
     assert receipt["withheld"] == {
         "candidate_result_count": 2,
         "reason": "outside_intent_or_budget",
+        "top_withheld": [
+            {"asset_type": "tool", "service_path": "/a", "name": "tool_2", "similarity_score": 0.9},
+            {
+                "asset_type": "tool",
+                "service_path": "/a",
+                "name": "tool_3",
+                "similarity_score": 0.85,
+            },
+        ],
     }
     assert receipt["stop_reason"] == "results_returned"
 
@@ -340,10 +350,12 @@ async def test_search_registry_receipt_counts_withheld_matching_tools():
         {"asset_type": "tool", "service_path": "/a", "name": "tool_0", "similarity_score": 1.0},
         {"asset_type": "tool", "service_path": "/a", "name": "tool_1", "similarity_score": 0.95},
     ]
-    assert receipt["withheld"] == {
-        "candidate_result_count": 2,
-        "reason": "outside_intent_or_budget",
-    }
+    assert receipt["withheld"]["candidate_result_count"] == 2
+    assert receipt["withheld"]["reason"] == "outside_intent_or_budget"
+    assert receipt["withheld"]["top_withheld"] == [
+        {"asset_type": "tool", "service_path": "/a", "name": "tool_2", "similarity_score": 0.9},
+        {"asset_type": "tool", "service_path": "/a", "name": "tool_3", "similarity_score": 0.85},
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +418,12 @@ async def test_search_registry_receipt_counts_agents_and_skills():
     assert result["total_results"] == 3
     assert receipt["exposed_results"] == [
         {"asset_type": "tool", "service_path": "/a", "name": "tool_0", "similarity_score": 1.0},
-        {"asset_type": "agent", "service_path": "/agent", "name": "agent_0", "similarity_score": 0.9},
+        {
+            "asset_type": "agent",
+            "service_path": "/agent",
+            "name": "agent_0",
+            "similarity_score": 0.9,
+        },
     ]
     assert receipt["withheld"]["candidate_result_count"] == 1
 
@@ -429,7 +446,20 @@ def test_discovery_receipt_helper_does_not_leak_payloads():
                 "similarity_score": 0.9,
             }
         ],
-        total_candidates=3,
+        withheld_results=[
+            {
+                "asset_type": "tool",
+                "service_path": "/crm",
+                "name": "list_orders",
+                "similarity_score": 0.4,
+            },
+            {
+                "asset_type": "tool",
+                "service_path": "/crm",
+                "name": "list_tickets",
+                "similarity_score": 0.3,
+            },
+        ],
         status="success",
         stop_reason="results_returned",
     )
@@ -437,3 +467,122 @@ def test_discovery_receipt_helper_does_not_leak_payloads():
     assert "raw_args" not in receipt
     assert "raw_result" not in receipt
     assert receipt["withheld"]["candidate_result_count"] == 2
+    assert receipt["withheld"]["top_withheld"] == [
+        {
+            "asset_type": "tool",
+            "service_path": "/crm",
+            "name": "list_orders",
+            "similarity_score": 0.4,
+        },
+        {
+            "asset_type": "tool",
+            "service_path": "/crm",
+            "name": "list_tickets",
+            "similarity_score": 0.3,
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# test_search_registry_receipt_dedupes_tool_in_both_arrays
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_registry_receipt_dedupes_tool_in_both_arrays():
+    """A tool returned in both tools[] and matching_tools is counted once.
+
+    The real registry returns a matched tool in both arrays. Without dedup the
+    receipt double-counts it: exposed_results lists it twice and withheld is
+    inflated. This is the case the pre-fix unit tests missed.
+    """
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [
+            {
+                "server_name": "server-a",
+                "path": "/a",
+                "matching_tools": [
+                    {"tool_name": "get_weather", "relevance_score": 0.45},
+                ],
+            }
+        ],
+        "tools": [
+            {"server_path": "/a", "tool_name": "get_weather", "relevance_score": 0.45},
+        ],
+        "agents": [],
+        "skills": [],
+    }
+
+    result = await _call_search_registry(
+        mock_resp,
+        query="weather forecast",
+        max_results=2,
+        include_discovery_receipt=True,
+    )
+
+    receipt = result["discovery_receipt"]
+    # One unique tool: exposed once, nothing withheld.
+    assert receipt["exposed_results"] == [
+        {
+            "asset_type": "tool",
+            "service_path": "/a",
+            "name": "get_weather",
+            "similarity_score": 0.45,
+        },
+    ]
+    assert receipt["withheld"]["candidate_result_count"] == 0
+    assert receipt["withheld"]["top_withheld"] == []
+
+
+# ---------------------------------------------------------------------------
+# test_dedupe_candidates_keeps_higher_score
+# ---------------------------------------------------------------------------
+
+
+def test_dedupe_candidates_keeps_higher_score():
+    """Dedup keeps one entry per (asset_type, service_path, name), higher score."""
+    candidates = [
+        {"asset_type": "tool", "service_path": "/a", "name": "foo", "similarity_score": 0.3},
+        {"asset_type": "tool", "service_path": "/a", "name": "foo", "similarity_score": 0.9},
+        {"asset_type": "tool", "service_path": "/b", "name": "bar", "similarity_score": 0.5},
+    ]
+
+    deduped = _dedupe_candidates(candidates)
+
+    assert deduped == [
+        {"asset_type": "tool", "service_path": "/a", "name": "foo", "similarity_score": 0.9},
+        {"asset_type": "tool", "service_path": "/b", "name": "bar", "similarity_score": 0.5},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# test_discovery_receipt_caps_top_withheld_items
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discovery_receipt_caps_top_withheld_items():
+    """top_withheld is capped (MAX_WITHHELD_ITEMS) while the count stays full."""
+    server = _make_server_with_tools(10, server_name="server-a", path="/a")
+    mock_resp = _make_mock_response(servers=[server])
+
+    result = await _call_search_registry(
+        mock_resp,
+        query="many tools",
+        max_results=1,
+        include_discovery_receipt=True,
+    )
+
+    receipt = result["discovery_receipt"]
+    # 10 unique tools, 1 exposed, 9 withheld; only 5 itemized.
+    assert receipt["withheld"]["candidate_result_count"] == 9
+    assert len(receipt["withheld"]["top_withheld"]) == 5
+    # The itemized ones are the highest-scoring withheld (tool_1..tool_5).
+    assert [item["name"] for item in receipt["withheld"]["top_withheld"]] == [
+        "tool_1",
+        "tool_2",
+        "tool_3",
+        "tool_4",
+        "tool_5",
+    ]

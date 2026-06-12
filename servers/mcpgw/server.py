@@ -42,6 +42,11 @@ MAX_QUERY_LENGTH: int = 500
 MIN_TOP_N: int = 1
 MAX_TOP_N: int = 50
 
+# Max number of withheld candidates itemized in a discovery receipt. The full
+# count is always reported; this caps the listed near-miss items so the receipt
+# stays compact and low-token for eval/agent-dev callers.
+MAX_WITHHELD_ITEMS: int = 5
+
 logger.info(f"Registry URL: {REGISTRY_URL}")
 if REGISTRY_EXTERNAL_URL:
     logger.info(f"Registry External URL: {REGISTRY_EXTERNAL_URL}")
@@ -205,12 +210,46 @@ def _validate_query(query: str) -> str:
     return query.strip()
 
 
+def _dedupe_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove duplicate discovery candidates while preserving order.
+
+    The registry can return the same tool in both the top-level ``tools`` array
+    and a server's ``matching_tools`` list. Without dedup the receipt counts that
+    single tool twice, which inflates exposed_results and skews the withheld
+    count. Candidates are keyed by (asset_type, service_path, name); on a
+    collision the entry with the higher similarity_score is kept.
+    """
+    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str, str]] = []
+    for candidate in candidates:
+        key = (
+            candidate.get("asset_type", ""),
+            candidate.get("service_path", ""),
+            candidate.get("name", ""),
+        )
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = candidate
+            order.append(key)
+            continue
+
+        # Keep the higher score on collision (scores may be None).
+        existing_score = existing.get("similarity_score") or 0
+        new_score = candidate.get("similarity_score") or 0
+        if new_score > existing_score:
+            deduped[key] = candidate
+
+    return [deduped[key] for key in order]
+
+
 def _build_discovery_receipt(
     *,
     query: str,
     limit: int,
     exposed_results: list[dict[str, Any]],
-    total_candidates: int,
+    withheld_results: list[dict[str, Any]],
     status: str,
     stop_reason: str,
 ) -> dict[str, Any]:
@@ -219,6 +258,10 @@ def _build_discovery_receipt(
     The receipt deliberately records shapes/counts and ranking metadata rather
     than raw tool arguments, tool outputs, or user data. It is an opt-in
     eval/agent-development signal; server-side audit should use logs or OTel.
+
+    Withheld candidates are itemized (capped at MAX_WITHHELD_ITEMS) so an eval
+    can see whether the right tool was starved out by a tight limit, not just
+    how many were held back.
     """
     return {
         "event": "registry.discovery_receipt",
@@ -226,8 +269,9 @@ def _build_discovery_receipt(
         "limits": {"max_results": limit},
         "exposed_results": exposed_results,
         "withheld": {
-            "candidate_result_count": max(total_candidates - len(exposed_results), 0),
+            "candidate_result_count": len(withheld_results),
             "reason": "outside_intent_or_budget",
+            "top_withheld": withheld_results[:MAX_WITHHELD_ITEMS],
         },
         "status": status,
         "stop_reason": stop_reason,
@@ -667,7 +711,12 @@ async def search_registry(
                     "similarity_score": skill.get("relevance_score") or skill.get("score"),
                 }
             )
+        # Dedupe so a tool returned in both tools[] and a server's matching_tools
+        # is counted once. Then split into what the caller saw vs what the limit
+        # held back.
+        candidate_results = _dedupe_candidates(candidate_results)
         exposed_results = candidate_results[:max_results]
+        withheld_results = candidate_results[max_results:]
 
         total_results = len(servers) + len(tools) + len(agents) + len(skills)
         result = {
@@ -684,7 +733,7 @@ async def search_registry(
                 query=query,
                 limit=max_results,
                 exposed_results=exposed_results,
-                total_candidates=len(candidate_results),
+                withheld_results=withheld_results,
                 status="success",
                 stop_reason="results_returned" if total_results else "no_match",
             )
@@ -762,7 +811,7 @@ async def intelligent_tool_finder(
 
         # Flatten matching_tools from all servers into ToolSearchResult objects
         result_list = []
-        exposed_tools = []
+        candidate_results = []
         for server in servers:
             server_path = server.get("path", "")
             server_name = server.get("server_name", "")
@@ -776,19 +825,17 @@ async def intelligent_tool_finder(
                         path=server_path,
                     ).model_dump()
                 )
-                exposed_tools.append(
+                candidate_results.append(
                     {
+                        "asset_type": "tool",
                         "service_path": server_path,
-                        "tool_name": tool.get("tool_name", ""),
+                        "name": tool.get("tool_name", ""),
                         "similarity_score": tool.get("relevance_score"),
                     }
                 )
 
-        total_candidates = len(result_list)
-
         # Enforce client-side limit (safety net in case registry returns more)
         result_list = result_list[:top_n]
-        exposed_tools = exposed_tools[:top_n]
         result = {
             "results": result_list,
             "query": query,
@@ -796,19 +843,13 @@ async def intelligent_tool_finder(
             "status": "success",
         }
         if include_discovery_receipt:
+            # Dedupe before splitting so a duplicate tool isn't reported as withheld.
+            candidate_results = _dedupe_candidates(candidate_results)
             result["discovery_receipt"] = _build_discovery_receipt(
                 query=query,
                 limit=top_n,
-                exposed_results=[
-                    {
-                        "asset_type": "tool",
-                        "service_path": tool["service_path"],
-                        "name": tool["tool_name"],
-                        "similarity_score": tool["similarity_score"],
-                    }
-                    for tool in exposed_tools
-                ],
-                total_candidates=total_candidates,
+                exposed_results=candidate_results[:top_n],
+                withheld_results=candidate_results[top_n:],
                 status="success",
                 stop_reason="results_returned" if result_list else "no_match",
             )

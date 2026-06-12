@@ -45,21 +45,21 @@ The receipt is a caller-visible eval/debugging signal, not an operator audit tra
 
 A useful receipt answers four questions:
 
-1. **What was requested?** The natural-language discovery query and correlation identifiers.
-2. **What was exposed?** The tools, agents, or skills returned to the agent, with scores and the configured result limits.
-3. **What stayed out?** The count or categories of candidate results that were intentionally withheld because they were outside the current intent, policy scope, or result budget.
-4. **What happened next?** Whether a discovered tool was invoked, skipped, denied, or fell back to another path.
+1. **What was requested?** The natural-language discovery query.
+2. **What was exposed?** The tools, agents, or skills returned to the agent, with scores and the configured result limit.
+3. **What stayed out?** How many candidate results were withheld because they fell outside the result budget, plus the highest-scoring withheld items themselves (`top_withheld`) so you can tell whether the tool you wanted was a near miss or genuinely absent.
+4. **What was the outcome?** The overall `status` and a `stop_reason` describing why discovery ended.
+
+The receipt is built from the candidate results the registry returned, after de-duplicating tools that appear in both the top-level `tools` array and a server's `matching_tools` list. Candidates beyond the requested limit (`max_results` / `top_n`) become the withheld set; the full withheld count is always reported, while `top_withheld` lists at most the first few (capped by `MAX_WITHHELD_ITEMS`, default 5) to keep the receipt compact.
 
 Example shape:
 
 ```json
 {
   "event": "registry.discovery_receipt",
-  "request_id": "req_123",
-  "session_id": "sess_456",
   "query": "weather forecast for tomorrow",
   "limits": {
-    "max_results": 1
+    "max_results": 2
   },
   "exposed_results": [
     {
@@ -67,32 +67,43 @@ Example shape:
       "service_path": "/weather",
       "name": "get_forecast",
       "similarity_score": 0.91
+    },
+    {
+      "asset_type": "tool",
+      "service_path": "/weather",
+      "name": "get_current_conditions",
+      "similarity_score": 0.78
     }
   ],
   "withheld": {
-    "candidate_result_count": 42,
-    "reason": "outside_intent_or_budget"
+    "candidate_result_count": 3,
+    "reason": "outside_intent_or_budget",
+    "top_withheld": [
+      {
+        "asset_type": "agent",
+        "service_path": "/travel-planner",
+        "name": "trip_advisor_agent",
+        "similarity_score": 0.55
+      },
+      {
+        "asset_type": "skill",
+        "service_path": "/packing",
+        "name": "what_to_pack",
+        "similarity_score": 0.41
+      }
+    ]
   },
-  "invocation": {
-    "tool_name": "get_forecast",
-    "status": "ok",
-    "args_shape": {
-      "fields": ["location", "days"],
-      "redacted": true
-    },
-    "result_shape": "forecast",
-    "duration_ms": 245
-  },
-  "stop_reason": "tool_invoked"
+  "status": "success",
+  "stop_reason": "results_returned"
 }
 ```
 
 Keep discovery receipts compact and privacy-safe:
 
-- Store shapes, counts, categories, scores, and correlation IDs; avoid raw user prompts beyond the discovery query unless your retention policy allows them.
-- Redact tool arguments and results by default. The receipt should show the class of data used, not copy sensitive payloads into observability storage.
+- Store shapes, counts, categories, and scores; avoid raw user prompts beyond the discovery query unless your retention policy allows them.
+- The receipt records result metadata (asset type, service path, name, similarity score), never raw tool arguments or tool outputs. Keep it that way if you extend the shape.
 - Keep metrics lower-cardinality than receipts. Good metric labels include service family, status, and stop reason; avoid labels such as raw query text, user IDs, arguments, or result values.
-- Treat withheld results as a first-class signal. If many useful tools, agents, or skills are repeatedly withheld for the same task, split services, improve descriptions, or adjust discovery limits.
+- Treat withheld results as a first-class signal. If useful tools, agents, or skills repeatedly show up in `top_withheld` for the same task, raise the discovery limit, split services, or improve descriptions so the right candidate ranks high enough to be exposed.
 
 ## Architecture
 
