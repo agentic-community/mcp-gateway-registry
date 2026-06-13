@@ -1,0 +1,83 @@
+{
+  "server_name": "Xquik",
+  "description": "Remote MCP server for X data workflows, including tweet search, profile lookup, follower exports, media downloads, monitoring, webhooks, and confirmation-gated account actions.",
+  "path": "/xquik/",
+  "proxy_pass_url": "https://xquik.com/mcp",
+  "supported_transports": ["streamable-http"],
+  "auth_scheme": "api_key",
+  "tags": ["x", "twitter", "social-data", "automation", "mcp"],
+  "headers": [
+    {
+      "X-API-Key": "$XQUIK_API_KEY"
+    }
+  ],
+  "num_tools": 2,
+  "license": "MIT",
+  "metadata": {
+    "homepage": "https://docs.xquik.com",
+    "documentation": "https://docs.xquik.com/mcp/overview",
+    "repository": "https://github.com/Xquik-dev/x-twitter-scraper"
+  },
+  "tool_list": [
+    {
+      "name": "explore",
+      "parsed_description": {
+        "main": "Search the Xquik API endpoint catalog without making network calls.",
+        "args": "query: Optional search text used to filter documented endpoints.",
+        "returns": "Matching endpoint metadata, including method, path, category, parameters, and response shape.",
+        "raises": null
+      },
+      "schema": {
+        "properties": {
+          "query": {
+            "description": "Optional text used to filter the endpoint catalog.",
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "title": "exploreArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "xquik",
+      "parsed_description": {
+        "main": "Send a confirmed request to the documented Xquik REST API.",
+        "args": "path: API path, method: HTTP method, query: optional query parameters, body: optional JSON body.",
+        "returns": "The documented REST API response for the requested operation.",
+        "raises": "Exception: If validation or the API request fails."
+      },
+      "schema": {
+        "properties": {
+          "path": {
+            "description": "Documented Xquik API path.",
+            "title": "Path",
+            "type": "string"
+          },
+          "method": {
+            "default": "GET",
+            "description": "HTTP method for the documented API operation.",
+            "enum": ["GET", "POST", "PATCH", "DELETE"],
+            "title": "Method",
+            "type": "string"
+          },
+          "query": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional query parameters.",
+            "title": "Query",
+            "type": "object"
+          },
+          "body": {
+            "description": "Optional JSON request body.",
+            "title": "Body"
+          }
+        },
+        "required": ["path"],
+        "title": "xquikArguments",
+        "type": "object"
+      }
+    }
+  ]
+}
