@@ -84,6 +84,11 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   // advertises it and drops the static gateway token so the IDE shows a login
   // button and runs the OAuth/PKCE flow instead of pasting a token.
   const [oauthClientId, setOauthClientId] = useState<string>('');
+  // Fixed loopback callback port for OAuth login. 0/null = let the IDE pick one
+  // (fine for Keycloak's wildcard redirect). For IdPs that match redirect_uri
+  // literally (Okta/Entra/Cognito), the operator sets a fixed port and we emit
+  // --callback-port so the IDE does not use a random port the IdP rejects.
+  const [oauthCallbackPort, setOauthCallbackPort] = useState<number | null>(null);
   // Per-server override for the trailing '/mcp' transport segment on the gateway
   // URL. null = auto-detect from proxy_pass_url.
   const [appendMcpPath, setAppendMcpPath] = useState<boolean | null>(null);
@@ -108,6 +113,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     setConnectConfigError(null);
     setCustomHeaders([]);
     setOauthClientId('');
+    setOauthCallbackPort(null);
     setAppendMcpPath(null);
     const serverPath = server.path.replace(/^\/+/, '');
     // Fetch CSRF token first, then include it as header for the GET request
@@ -125,6 +131,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       .then(resp => {
         setCustomHeaders(resp.data.custom_headers ?? []);
         setOauthClientId(resp.data.oauth_client_id ?? '');
+        setOauthCallbackPort(
+          typeof resp.data.oauth_callback_port === 'number' ? resp.data.oauth_callback_port : null
+        );
         setAppendMcpPath(
           typeof resp.data.append_mcp_path === 'boolean' ? resp.data.append_mcp_path : null
         );
@@ -572,9 +581,15 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
     // Build command with headers. OAuth login mode passes the pre-registered
     // public client id (--client-id) so Claude Code runs OAuth/PKCE; no token.
+    // A configured callback port is emitted as --callback-port so the IDE uses a
+    // fixed loopback port (required for Okta/Entra/Cognito, which match the
+    // redirect_uri literally including the port).
     let command = `claude mcp add --transport http`;
     if (useOAuthLogin) {
       command += ` --client-id ${oauthClientId}`;
+      if (oauthCallbackPort) {
+        command += ` --callback-port ${oauthCallbackPort}`;
+      }
     }
     command += ` ${serverName} ${url}`;
 
@@ -599,7 +614,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     }
 
     return command;
-  }, [server.name, server.auth_scheme, server.auth_header_name, isRegistryOnly, isDCR, useOAuthLogin, oauthClientId, jwtToken, customHeaders, buildConnectUrl]);
+  }, [server.name, server.auth_scheme, server.auth_header_name, isRegistryOnly, isDCR, useOAuthLogin, oauthClientId, oauthCallbackPort, jwtToken, customHeaders, buildConnectUrl]);
 
 
   const copyConfigToClipboard = useCallback(async () => {
@@ -854,6 +869,8 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 Run this command in your terminal to add the MCP server to Claude Code.
                 {useOAuthLogin && ' It passes the pre-registered public client id (--client-id) ' +
                   'so Claude Code runs the OAuth login flow — no gateway token is embedded.'}
+                {useOAuthLogin && oauthCallbackPort ? ' --callback-port pins the OAuth redirect ' +
+                  'port so it matches what the identity provider has registered.' : ''}
               </p>
             </div>
           ) : selectedIDE === 'codex' ? (
@@ -867,6 +884,14 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                       'so Codex runs the OAuth login flow — no gateway token is embedded.'
                     : isDCR && ' OAuth authentication is handled automatically via DCR.'}
                 </p>
+                {useOAuthLogin && oauthCallbackPort ? (
+                  <p className="text-xs text-amber-800 dark:text-amber-300 mt-2">
+                    Note: Codex does not support pinning the OAuth callback port, so it uses a
+                    random loopback port. If your identity provider requires the redirect URI
+                    (including the port) to be pre-registered (e.g. Okta, Entra, Cognito), Codex
+                    login may fail. Claude Code supports a fixed port via --callback-port.
+                  </p>
+                ) : null}
               </div>
               <div className="flex items-center justify-between">
                 <h4 className="font-medium text-gray-900 dark:text-white">Command:</h4>

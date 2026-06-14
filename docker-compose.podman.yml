@@ -72,6 +72,9 @@ services:
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
       # IDE OAuth login public client_id (PR #1224). Public, not a secret.
       - IDE_OAUTH_CLIENT_ID=${IDE_OAUTH_CLIENT_ID:-}
+      # Fixed OAuth callback port for IdPs that match redirect_uri literally
+      # (Okta/Entra/Cognito). 0/unset = let the IDE pick (Keycloak/DCR).
+      - IDE_OAUTH_CALLBACK_PORT=${IDE_OAUTH_CALLBACK_PORT:-0}
       # Scopes advertised in the PRM for IDE OAuth login.
       - MCP_ADVERTISED_SCOPES=${MCP_ADVERTISED_SCOPES:-}
       # Entra ID configuration

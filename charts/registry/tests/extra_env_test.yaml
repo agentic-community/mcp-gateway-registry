@@ -77,12 +77,14 @@ tests:
       # INTERNAL_ONLY_DEPLOYMENT/INTERNAL_DEPLOYMENT_TYPE is env[3]/env[4];
       # CODING_ASSISTANTS is env[9]; UI_TITLE is env[10]; the tool-level access
       # control pair (issue #1026) is env[11]/env[12]; MCP_ADVERTISED_SCOPES is
-      # env[13]; the custom-entity-types quartet (CUSTOM_ENTITY_TYPES_ENABLED,
-      # CUSTOM_TYPE_CACHE_TTL_SECONDS, MAX_CUSTOM_RECORDS_PER_TYPE,
-      # MAX_CUSTOM_TYPES) is env[14]/env[15]/env[16]/env[17];
-      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[18];
+      # env[13]; the IDE OAuth login pair (PR #1224) IDE_OAUTH_CLIENT_ID/
+      # IDE_OAUTH_CALLBACK_PORT is env[14]/env[15]; the custom-entity-types
+      # quartet (CUSTOM_ENTITY_TYPES_ENABLED, CUSTOM_TYPE_CACHE_TTL_SECONDS,
+      # MAX_CUSTOM_RECORDS_PER_TYPE, MAX_CUSTOM_TYPES) is
+      # env[16]/env[17]/env[18]/env[19];
+      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[20];
       # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
-      # env[19]/env[20]; user extraEnv entries are appended at the end.
+      # env[21]/env[22]; user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
       # (set at the suite level), awsRegistry.federationEnabled=false, and
@@ -121,30 +123,36 @@ tests:
           value: MCP_ADVERTISED_SCOPES
       - equal:
           path: spec.template.spec.containers[0].env[14].name
-          value: CUSTOM_ENTITY_TYPES_ENABLED
+          value: IDE_OAUTH_CLIENT_ID
       - equal:
           path: spec.template.spec.containers[0].env[15].name
-          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
+          value: IDE_OAUTH_CALLBACK_PORT
       - equal:
           path: spec.template.spec.containers[0].env[16].name
-          value: MAX_CUSTOM_RECORDS_PER_TYPE
+          value: CUSTOM_ENTITY_TYPES_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[17].name
-          value: MAX_CUSTOM_TYPES
+          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[18].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: MAX_CUSTOM_RECORDS_PER_TYPE
       - equal:
           path: spec.template.spec.containers[0].env[19].name
-          value: PF_ADMIN_URL
+          value: MAX_CUSTOM_TYPES
       - equal:
           path: spec.template.spec.containers[0].env[20].name
-          value: PF_ADMIN_USER
+          value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[21].name
-          value: MY_FLAG
+          value: PF_ADMIN_URL
       - equal:
           path: spec.template.spec.containers[0].env[22].name
+          value: PF_ADMIN_USER
+      - equal:
+          path: spec.template.spec.containers[0].env[23].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[24].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

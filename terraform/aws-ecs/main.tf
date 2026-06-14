@@ -333,8 +333,9 @@ module "mcp_gateway" {
   github_api_base_url        = var.github_api_base_url
 
   # MCP OAuth discovery / IDE login (PR #1224)
-  mcp_advertised_scopes = var.mcp_advertised_scopes
-  ide_oauth_client_id   = var.ide_oauth_client_id
+  mcp_advertised_scopes   = var.mcp_advertised_scopes
+  ide_oauth_client_id     = var.ide_oauth_client_id
+  ide_oauth_callback_port = var.ide_oauth_callback_port
 
   # Extra environment variables for custom configuration (Issue #1000)
   registry_extra_env    = var.registry_extra_env

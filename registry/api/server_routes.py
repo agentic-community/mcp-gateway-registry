@@ -5349,6 +5349,12 @@ async def get_server_connect_config(
     # When present, the frontend emits a token-less, login-button Connect config.
     oauth_client_id = server_info.get("oauth_client_id") or (settings.ide_oauth_client_id or None)
 
+    # Fixed loopback callback port for IdPs that match redirect_uri literally
+    # (Okta/Entra/Cognito). 0 means "omit" (Keycloak/DCR don't need it). Only
+    # meaningful alongside a resolved oauth_client_id. Surfaced so the dialog can
+    # emit --callback-port and the IDE stops using a random port the IdP rejects.
+    callback_port = settings.ide_oauth_callback_port or None
+
     return {
         "path": service_path,
         "server_name": server_info.get("server_name"),
@@ -5356,6 +5362,7 @@ async def get_server_connect_config(
         "auth_header_name": server_info.get("auth_header_name"),
         "custom_headers": custom_headers,
         "oauth_client_id": oauth_client_id,
+        "oauth_callback_port": callback_port,
         "append_mcp_path": server_info.get("append_mcp_path"),
         "decrypt_failures": decrypt_failures,
     }

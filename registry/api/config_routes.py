@@ -76,6 +76,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("session_cookie_secure", "Secure Cookie", False),
             ("session_cookie_domain", "Cookie Domain", False),
             ("ide_oauth_client_id", "IDE OAuth Client ID", False),
+            ("ide_oauth_callback_port", "IDE OAuth Callback Port", False),
             ("registry_static_token_auth_enabled", "Static Token Auth Enabled", False),
             ("registry_api_token", "Registry API Token", True),
             ("registry_api_keys", "Registry API Keys", True),

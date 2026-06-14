@@ -905,6 +905,13 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Empty (default) keeps the static-token Connect config. Public, not a secret.
 # ide_oauth_client_id = "mcp-gateway-ide"
 
+# Fixed loopback callback port the IDE uses for the OAuth login redirect
+# (http://localhost:<port>/callback). Needed for IdPs that match the redirect_uri
+# literally including the port (Okta, Entra, Cognito): register that exact URI on
+# the public client and set the same port here so the Connect dialog emits
+# --callback-port. 0 (default) lets the IDE pick a port (correct for Keycloak).
+# ide_oauth_callback_port = 56789
+
 # Container image URIs for observability services (required when enable_observability = true)
 # metrics_service_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-metrics-service:latest"
 # grafana_image_uri         = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-grafana:latest"

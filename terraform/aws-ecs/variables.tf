@@ -1570,6 +1570,17 @@ variable "ide_oauth_client_id" {
   default     = ""
 }
 
+variable "ide_oauth_callback_port" {
+  description = <<-EOT
+    Fixed loopback callback port the IDE uses for the OAuth login redirect.
+    Needed for IdPs that match the redirect_uri literally including the port
+    (Okta, Entra, Cognito). 0 (default) lets the IDE pick a port, correct for
+    Keycloak. Passed through to the mcp_gateway module.
+  EOT
+  type        = number
+  default     = 0
+}
+
 variable "registry_extra_env" {
   description = "Extra environment variables for the registry service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/registry/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block (see mongodb_connection_string_secret_arn as a reference pattern)."
   type        = list(object({ name = string, value = string }))

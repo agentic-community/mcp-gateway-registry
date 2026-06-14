@@ -102,6 +102,21 @@ class Settings(BaseSettings):
             "static-token Connect config."
         ),
     )
+    ide_oauth_callback_port: int = Field(
+        default=0,
+        description=(
+            "Fixed loopback callback port the IDE should use for the OAuth login "
+            "redirect (http://localhost:<port>/callback). Needed for IdPs that match "
+            "the redirect_uri literally including the port (Okta, Entra, Cognito): the "
+            "operator registers http://localhost:<port>/callback on the public client, "
+            "and the Connect dialog emits the matching --callback-port so the IDE does "
+            "not pick a random port. 0 (default) omits it, which is correct for Keycloak "
+            "(wildcard loopback redirect) and DCR flows. Only used when "
+            "ide_oauth_client_id (or a per-server oauth_client_id) is set."
+        ),
+        ge=0,
+        le=65535,
+    )
 
     # Registration webhook settings (Issue #742)
     registration_webhook_url: str | None = Field(

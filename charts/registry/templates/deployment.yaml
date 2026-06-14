@@ -114,6 +114,11 @@ spec:
             # DCR scope-allowlist alignment
             - name: MCP_ADVERTISED_SCOPES
               value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}
+            # IDE OAuth login (PR #1224): public client_id + fixed callback port
+            - name: IDE_OAUTH_CLIENT_ID
+              value: {{ .Values.app.ideOauthClientId | default "" | quote }}
+            - name: IDE_OAUTH_CALLBACK_PORT
+              value: {{ .Values.app.ideOauthCallbackPort | default 0 | toString | quote }}
             # Custom entity types (admin-defined, schema-driven catalog types)
             - name: CUSTOM_ENTITY_TYPES_ENABLED
               value: {{ .Values.app.customEntityTypesEnabled | default false | toString | quote }}

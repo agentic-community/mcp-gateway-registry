@@ -247,6 +247,18 @@ app:
   # See docs/ai-coding-assistant-registry-integration.md for the rationale.
   mcpAdvertisedScopes: "profile email offline_access"
 
+  # IDE OAuth login (PR #1224). Pre-registered PUBLIC OAuth client_id that IDEs
+  # (Cursor, Claude Code, Codex) use to start the gateway login flow. When set,
+  # the Connect config advertises it and drops the static gateway token. Empty
+  # (default) keeps the static-token Connect config. Public, NOT a secret.
+  ideOauthClientId: ""
+  # Fixed loopback callback port the IDE uses for the OAuth redirect. Needed for
+  # IdPs that match redirect_uri literally including the port (Okta, Entra,
+  # Cognito): register http://localhost:<port>/callback on the public client and
+  # set the same value here so the Connect dialog emits --callback-port. 0
+  # (default) lets the IDE pick a port (correct for Keycloak's wildcard redirect).
+  ideOauthCallbackPort: 0
+
 # Metrics scrape configuration (Issue #1122)
 # Controls the NetworkPolicy that gates the OTel exporter-prometheus port.
 metricsScrape:

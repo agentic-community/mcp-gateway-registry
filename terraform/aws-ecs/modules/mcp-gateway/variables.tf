@@ -1266,6 +1266,19 @@ variable "ide_oauth_client_id" {
   default     = ""
 }
 
+variable "ide_oauth_callback_port" {
+  description = <<-EOT
+    Fixed loopback callback port the IDE uses for the OAuth login redirect
+    (http://localhost:<port>/callback). Needed for IdPs that match the
+    redirect_uri literally including the port (Okta, Entra, Cognito): register
+    http://localhost:<port>/callback on the public client and set the same value
+    here so the Connect dialog emits --callback-port. 0 (default) lets the IDE
+    pick a port, which is correct for Keycloak (wildcard loopback redirect).
+  EOT
+  type        = number
+  default     = 0
+}
+
 # =============================================================================
 # DEPLOYMENT MODE CONFIGURATION
 # =============================================================================

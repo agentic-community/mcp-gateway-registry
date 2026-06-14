@@ -1195,6 +1195,12 @@ module "ecs_service_registry" {
           name  = "IDE_OAUTH_CLIENT_ID"
           value = var.ide_oauth_client_id
         },
+        # Fixed OAuth callback port for IdPs that match redirect_uri literally
+        # (Okta/Entra/Cognito). 0 = let the IDE pick (Keycloak/DCR).
+        {
+          name  = "IDE_OAUTH_CALLBACK_PORT"
+          value = tostring(var.ide_oauth_callback_port)
+        },
         {
           name  = "DEPLOYMENT_MODE"
           value = var.deployment_mode

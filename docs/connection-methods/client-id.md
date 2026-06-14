@@ -126,13 +126,21 @@ The IDE runs a local loopback listener for the OAuth redirect, with a
 ephemeral (different each attempt). IdPs differ on how they match it:
 
 - **Keycloak** accepts a wildcard redirect URI (`http://localhost/*`), so any
-  port works.
+  port works. No port pinning needed.
 - **Okta / Entra / Cognito** require the redirect URI to be registered EXACTLY,
   including the port. A rotating port can never match.
 
-For strict IdPs, **pin the port** with Claude Code's `--callback-port` flag (or
-`oauth.callbackPort` in `.mcp.json`), then register exactly
-`http://localhost:<PORT>/callback`:
+For strict IdPs, pin the port with the **`IDE_OAUTH_CALLBACK_PORT`** registry
+setting. When set (non-zero), the Connect dialog emits the matching
+`--callback-port` in the Claude Code command automatically, so the IDE uses that
+fixed port instead of a random one:
+
+```
+IDE_OAUTH_CALLBACK_PORT=33418
+```
+
+You must register `http://localhost:<PORT>/callback` (the same port) on the
+public client in the IdP. With the setting in place, the dialog produces:
 
 ```bash
 claude mcp add --transport http \
@@ -141,7 +149,21 @@ claude mcp add --transport http \
   my-server https://gateway.example.com/my-server/mcp
 ```
 
-The callback path is always `/callback` and is not configurable.
+`0` (default) omits `--callback-port` — correct for Keycloak and DCR flows. The
+callback path is always `/callback` and is not configurable.
+
+### IDE support for fixed ports (important)
+
+Only **Claude Code** supports pinning the callback port (`--callback-port`). So:
+
+- **Claude Code:** works with strict IdPs once `IDE_OAUTH_CALLBACK_PORT` is set
+  and the matching redirect URI is registered.
+- **Codex / Cursor:** have no way to pin the loopback port (Codex's
+  `mcp add` has no `--callback-port`; Cursor's JSON config has no port field).
+  They use a random port, so OAuth login against a strict IdP (Okta/Entra/
+  Cognito) will fail for them. The Connect dialog surfaces a warning in the
+  Codex tab when a callback port is configured. These IDEs work fine against
+  Keycloak (wildcard redirect) or any DCR-enabled provider.
 
 ## Per-IdP setup
 
@@ -180,9 +202,10 @@ Creates an OIDC **native** (public) app (`token_endpoint_auth_method=none`,
 authorization_code + refresh_token). After that, four more things are required -
 Okta is stricter than Keycloak at every layer:
 
-1. **Pin the callback port** (see above) and register exactly
-   `http://localhost:<PORT>/callback` on the app. Okta does literal redirect_uri
-   matching (no wildcard, no port-agnostic loopback).
+1. **Pin the callback port:** set `IDE_OAUTH_CALLBACK_PORT` on the registry
+   (e.g. `56789`) and register exactly `http://localhost:56789/callback` on the
+   app. Okta does literal redirect_uri matching (no wildcard, no port-agnostic
+   loopback), and the dialog emits the matching `--callback-port` for Claude Code.
 2. **Assign the user (or a group) to the app.** Okta grants nothing until the
    user is assigned. Symptom otherwise: `user_not_assigned`.
 3. **Add a `groups` claim to the authorization server.** By default an Okta

@@ -383,6 +383,13 @@ registry:
     # docs/ai-coding-assistant-registry-integration.md.
     mcpAdvertisedScopes: "profile email offline_access"
 
+    # IDE OAuth login (PR #1224). Public client_id IDEs use for the gateway login
+    # flow (empty = static-token Connect config; NOT a secret) and the fixed
+    # loopback callback port for IdPs that match redirect_uri literally (Okta,
+    # Entra, Cognito). 0 lets the IDE pick a port (correct for Keycloak).
+    ideOauthClientId: ""
+    ideOauthCallbackPort: 0
+
     # Demo server configuration
     disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
 
