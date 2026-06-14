@@ -133,14 +133,17 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
               {useCanonical ? 'Canonical server.json:' : 'Server JSON Schema:'}
             </h4>
             <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer select-none">
+              <label
+                className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer select-none"
+                title="Show and copy the canonical server.json, compliant with the MCP Registry server schema"
+              >
                 <input
                   type="checkbox"
                   checked={useCanonical}
                   onChange={(e) => handleToggleCanonical(e.target.checked)}
                   className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-                Copy canonical
+                Canonical
               </label>
               <button
                 onClick={handleCopy}
@@ -165,6 +168,12 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
               </button>
             </div>
           </div>
+
+          {useCanonical && !canonicalError && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Canonical server.json, compliant with the MCP Registry server schema.
+            </p>
+          )}
 
           {useCanonical && canonicalError && (
             <p className="text-sm text-red-600 dark:text-red-400">{canonicalError}</p>
