@@ -363,20 +363,20 @@ Embed the chart in a section titled "Cloud Detection Outcomes by Version" placed
 
 Collect community-growth signals for the upstream repo (`agentic-community/mcp-gateway-registry`) using the authenticated `gh` CLI. These numbers complement telemetry by showing project interest outside of deployed instances.
 
-```bash
-# Star, fork, watcher, open-issue counts (single API call)
-gh api repos/agentic-community/mcp-gateway-registry \
-  --jq '{stars: .stargazers_count, forks: .forks_count, watchers: .subscribers_count, open_issues: .open_issues_count}' \
-  > $DATE_DIR/github_stats.json
+Run the helper script with the dated output directory as its only argument. It
+writes `github_stats.json` and `github_contributors_count.txt` into that
+directory and prints both for confirmation. Keep this as a single script call
+(do NOT inline the `gh api` pipelines into a larger `&&` chain): one script
+invocation is one allow-listed command, so it runs without a permission prompt
+on every report date.
 
-# Unique contributors (paginate through all pages, count unique logins)
-gh api --paginate repos/agentic-community/mcp-gateway-registry/contributors \
-  --jq '.[].login' | sort -u | wc -l > $DATE_DIR/github_contributors_count.txt
+```bash
+.claude/skills/usage-report/fetch_github_stats.sh $DATE_DIR
 ```
 
 Record these numbers in the report and compare them against the previous report's `github_stats.json` (if present in the previous dated subfolder). Compute deltas for stars, forks, and contributors the same way telemetry metrics are compared.
 
-**Note**: If `gh` is not authenticated or the API call fails, skip the GitHub section in the report and log a short note instead of failing the entire run.
+**Note**: If `gh` is not authenticated or an API call fails, the script logs a short note and exits 0 (the file is omitted). Skip the GitHub section in the report in that case instead of failing the entire run.
 
 ### Step 5h: Generate Community-vs-Internal Chart and Breakdown
 
