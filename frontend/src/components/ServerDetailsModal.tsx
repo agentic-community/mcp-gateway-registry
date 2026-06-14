@@ -135,7 +135,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
             <div className="flex items-center gap-4">
               <label
                 className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer select-none"
-                title="Show and copy the canonical server.json, compliant with the MCP Registry server schema"
+                title="Show and copy the canonical server.json, compliant with the official Model Context Protocol (MCP) server schema"
               >
                 <input
                   type="checkbox"
@@ -171,7 +171,8 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
 
           {useCanonical && !canonicalError && (
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Canonical server.json, compliant with the MCP Registry server schema.
+              Canonical server.json, compliant with the official Model Context Protocol (MCP) server
+              schema.
             </p>
           )}
 
