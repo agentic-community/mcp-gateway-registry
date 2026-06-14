@@ -1011,6 +1011,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
         onClose={() => { setShowDetails(false); setFullServerDetails(null); }}
         loading={detailsLoading}
         fullDetails={fullServerDetails}
+        authToken={authToken}
       />
 
     </>
