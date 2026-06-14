@@ -33,6 +33,28 @@ FIGURE_WIDTH: int = 16
 FIGURE_HEIGHT: int = 6
 
 
+MAX_X_TICKS: int = 12
+
+
+def _choose_tick_step(
+    max_age: int,
+) -> int:
+    """Pick a round tick step so the x-axis shows at most MAX_X_TICKS labels.
+
+    Labeling every integer day overlaps badly once the age range grows, so
+    snap the step up to the next "nice" value (1, 2, 5, 10, 20, ...).
+    """
+    if max_age <= MAX_X_TICKS:
+        return 1
+
+    raw_step = max_age / MAX_X_TICKS
+    nice_steps = [1, 2, 5, 10, 20, 25, 50, 100]
+    for step in nice_steps:
+        if step >= raw_step:
+            return step
+    return 200
+
+
 def _load_lifetime_data(
     metrics_path: str,
 ) -> list[int]:
@@ -109,8 +131,10 @@ def _generate_chart(
     ax_hist.set_ylabel("Number of Instances", fontsize=11)
     ax_hist.set_title("Age Distribution", fontsize=12, fontweight="bold")
 
-    # Set x-axis to integer ticks
-    ax_hist.set_xticks(range(0, max_age + 1))
+    # Set evenly spaced integer x-ticks. Labeling every day overlaps badly
+    # for large age ranges, so pick a round step that yields ~12 ticks.
+    tick_step = _choose_tick_step(max_age)
+    ax_hist.set_xticks(range(0, max_age + 1, tick_step))
 
     # Add stats annotation
     stats_text = (

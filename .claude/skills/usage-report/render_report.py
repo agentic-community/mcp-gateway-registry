@@ -275,14 +275,36 @@ def _build_engagement_table(
     return "\n".join(lines)
 
 
+def _semver_sort_key(
+    version: str,
+) -> tuple[int, int, int]:
+    """Parse a version string into a (major, minor, patch) tuple for sorting.
+
+    Strips a leading "v" and any "-..." suffix (git-describe, branch, -pN),
+    then splits on ".". Non-numeric or non-semver strings (commit hashes,
+    "dev") yield (0, 0, 0) so they sort to the bottom in descending order.
+    """
+    core = version.lstrip("v").split("-")[0]
+    parts = core.split(".")
+    nums = [int(p) if p.isdigit() else 0 for p in parts[:3]]
+    while len(nums) < 3:
+        nums.append(0)
+    return (nums[0], nums[1], nums[2])
+
+
 def _build_version_adoption_table(
     metrics: dict,
     top_n: int = 15,
 ) -> str:
-    """Render the version-adoption table from metrics.version_adoption (top N)."""
+    """Render the version-adoption table from metrics.version_adoption.
+
+    Selects the top N versions (by the metric's existing order, i.e. events),
+    then displays them sorted by semantic version descending.
+    """
     rows = metrics.get("version_adoption", [])[:top_n]
     if not rows:
         return "| (no data) | | | | | |"
+    rows = sorted(rows, key=lambda r: _semver_sort_key(r["version"]), reverse=True)
     lines = [
         "| Version | Type | Events | % Events | Instances | % Instances |",
         "|---------|------|-------:|---------:|----------:|------------:|",
@@ -605,6 +627,35 @@ def _read_compute_snapshots(
     return "\n".join(lines[: top_n + 3])
 
 
+def _build_prod_internal_version_table(
+    prod_internal: dict,
+    class_key: str,
+    top_n: int = 15,
+) -> str:
+    """Render a per-version instance-count table for one class.
+
+    class_key is "community" or "internal". Rows beyond top_n are folded
+    into a single "(N more versions)" summary row so the table stays short.
+    """
+    rows = prod_internal.get("per_version", {}).get(class_key, [])
+    if not rows:
+        return "| (no data) | |"
+
+    lines = [
+        "| Version | Instances |",
+        "|---------|----------:|",
+    ]
+    for r in rows[:top_n]:
+        lines.append(f"| `{r['version']}` | {r['instances']} |")
+
+    remaining = rows[top_n:]
+    if remaining:
+        other_instances = sum(r["instances"] for r in remaining)
+        noun = "version" if len(remaining) == 1 else "versions"
+        lines.append(f"| _({len(remaining)} more {noun})_ | {other_instances} |")
+    return "\n".join(lines)
+
+
 def _build_template_vars(
     args: argparse.Namespace,
 ) -> dict:
@@ -624,12 +675,14 @@ def _build_template_vars(
     lifetime_buckets_csv_path = output_dir / f"lifetime-buckets-{date_str}.csv"
     compute_snapshots_path = output_dir / f"compute-platform-snapshots-{date_str}.md"
     tables_md_path = output_dir / f"tables-{date_str}.md"
+    prod_internal_path = output_dir / f"prod-internal-{date_str}.json"
 
     metrics = _read_json(str(metrics_path))
     liveness = _read_json(str(liveness_path))
     ltv = _read_json(str(ltv_path))
     forecast = _read_json(str(forecast_path))
     github = _read_json(str(github_path))
+    prod_internal = _read_json(str(prod_internal_path)) if prod_internal_path.exists() else {}
 
     # Previous report
     prev_metrics_path = _find_previous_metrics(search_dir, date_str)
@@ -722,6 +775,21 @@ def _build_template_vars(
     id_proven = ltv_total.get("proven", {}).get("total_instance_days", 0)
     gap_install_vanish_days = id_all_days - id_persisted
     gap_first_free_days = id_persisted - id_proven
+
+    # Community vs internal (by version-string classification)
+    pi_yesterday = prod_internal.get("yesterday", {})
+    pi_cumulative = prod_internal.get("cumulative", {})
+    pi_yesterday_date = prod_internal.get("yesterday_date", prev_date)
+    pi_y_prod = pi_yesterday.get("community", 0)
+    pi_y_internal = pi_yesterday.get("internal", 0)
+    pi_y_total = pi_yesterday.get("total", 0)
+    pi_c_prod = pi_cumulative.get("community", 0)
+    pi_c_internal = pi_cumulative.get("internal", 0)
+    pi_c_total = pi_cumulative.get("total", 0)
+    pi_y_prod_pct = f"{(pi_y_prod / pi_y_total * 100):.1f}" if pi_y_total else "0.0"
+    pi_y_internal_pct = f"{(pi_y_internal / pi_y_total * 100):.1f}" if pi_y_total else "0.0"
+    pi_c_prod_pct = f"{(pi_c_prod / pi_c_total * 100):.1f}" if pi_c_total else "0.0"
+    pi_c_internal_pct = f"{(pi_c_internal / pi_c_total * 100):.1f}" if pi_c_total else "0.0"
 
     # Forecast
     fc_linear = forecast.get("linear", {})
@@ -966,6 +1034,21 @@ def _build_template_vars(
             str(output_dir / f"detection-by-version-{date_str}.csv")
         ),
         "architecture_patterns": _build_architecture_patterns(metrics, liveness),
+
+        # Community vs internal split (by version-string classification)
+        "prod_internal_yesterday_date": pi_yesterday_date,
+        "prod_internal_yesterday_total": pi_y_total,
+        "prod_internal_yesterday_production": pi_y_prod,
+        "prod_internal_yesterday_internal": pi_y_internal,
+        "prod_internal_yesterday_production_pct": pi_y_prod_pct,
+        "prod_internal_yesterday_internal_pct": pi_y_internal_pct,
+        "prod_internal_cumulative_total": pi_c_total,
+        "prod_internal_cumulative_production": pi_c_prod,
+        "prod_internal_cumulative_internal": pi_c_internal,
+        "prod_internal_cumulative_production_pct": pi_c_prod_pct,
+        "prod_internal_cumulative_internal_pct": pi_c_internal_pct,
+        "prod_version_table": _build_prod_internal_version_table(prod_internal, "community"),
+        "internal_version_table": _build_prod_internal_version_table(prod_internal, "internal"),
     }
 
     return vars_

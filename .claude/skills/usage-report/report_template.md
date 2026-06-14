@@ -131,6 +131,30 @@ The Confirmed-Alive instances skew toward AWS, with ECS, Kubernetes, and Docker 
 
 <!-- COMMENTARY:version_adoption -->
 
+## Community vs Internal Deployments
+
+Instances are classified by their reported version string. A clean release tag (`MAJOR.MINOR.PATCH`, optionally prefixed with `v` or suffixed with `-pN`, e.g. `1.24.4`, `v1.0.22-p1`) marks a **community** deployment. Anything else (git-describe builds like `1.24.1-25-g5b4b2a30-main`, bare commit hashes, `dev`, branch-suffixed builds) marks an **internal/development** deployment. Instances in the known-internal allowlist are always counted as internal.
+
+**Yesterday ({prod_internal_yesterday_date}):** {prod_internal_yesterday_total} active instances, **{prod_internal_yesterday_production} community** ({prod_internal_yesterday_production_pct}%) and **{prod_internal_yesterday_internal} internal** ({prod_internal_yesterday_internal_pct}%).
+
+**Cumulative (all-time):** {prod_internal_cumulative_total} unique instances, **{prod_internal_cumulative_production} community** ({prod_internal_cumulative_production_pct}%) and **{prod_internal_cumulative_internal} internal** ({prod_internal_cumulative_internal_pct}%).
+
+![Community vs Internal Installs](prod-internal-timeseries-{date}.png)
+
+### Community Deployments by Version
+
+Cumulative unique instances per clean release tag (each instance attributed to its latest reported version):
+
+{prod_version_table}
+
+### Internal Deployments by Version
+
+Cumulative unique instances per development/git-describe version:
+
+{internal_version_table}
+
+<!-- COMMENTARY:prod_internal -->
+
 ## Version Upgrade Trajectories
 
 {upgrade_trajectories_count} customer instances have reported more than one distinct version. Top chains:
