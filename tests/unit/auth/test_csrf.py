@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from registry.auth.csrf import (
     generate_csrf_token,
     verify_csrf_token_flexible,
+    verify_csrf_token_header_only,
 )
 
 
@@ -138,3 +139,79 @@ class TestVerifyCsrfTokenFlexibleEnforcement:
         )
 
         await verify_csrf_token_flexible(request)
+
+
+class TestVerifyCsrfTokenHeaderOnly:
+    """Tests for verify_csrf_token_header_only (used by GET endpoints like
+    connect-config).
+
+    Regression guard for the bug where this dependency compared the CSRF token
+    against the RAW session cookie blob instead of the resolved session_id. The
+    token is signed with the resolved session_id, so the raw-cookie comparison
+    always failed -> 403 on every cookie-authenticated GET. The happy-path test
+    below (valid token + resolvable cookie must PASS) is what was missing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_skip_csrf_when_no_session_cookie(self):
+        """No session cookie (Bearer-token / CLI client) skips the CSRF check."""
+        request = _make_request(cookies={}, headers={})
+        await verify_csrf_token_header_only(request)
+
+    @pytest.mark.asyncio
+    async def test_pass_when_cookie_resolves_and_token_valid(self, mock_session_resolver):
+        """The regression case: a valid CSRF token (signed with the resolved
+        session_id) plus a resolvable session cookie must PASS.
+
+        The cookie value is intentionally DIFFERENT from the session_id to prove
+        the dependency resolves the cookie rather than comparing the raw blob.
+        """
+        # mock_session_resolver resolves any cookie to session_id 'sid-1'.
+        csrf_token = generate_csrf_token("sid-1")
+
+        request = _make_request(
+            cookies={"mcp_gateway_session": "opaque-cookie-blob-not-the-session-id"},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+
+        await verify_csrf_token_header_only(request)
+
+    @pytest.mark.asyncio
+    async def test_reject_when_cookie_resolves_but_no_token(self, mock_session_resolver):
+        """Resolvable session cookie but missing X-CSRF-Token header → 403."""
+        request = _make_request(
+            cookies={"mcp_gateway_session": "test-session"},
+            headers={},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_csrf_token_header_only(request)
+
+        assert exc_info.value.status_code == 403
+        assert "X-CSRF-Token header required" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_reject_when_cookie_resolves_and_token_invalid(self, mock_session_resolver):
+        """Resolvable session cookie + invalid CSRF token → 403."""
+        request = _make_request(
+            cookies={"mcp_gateway_session": "test-session"},
+            headers={"X-CSRF-Token": "invalid-token-value"},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_csrf_token_header_only(request)
+
+        assert exc_info.value.status_code == 403
+        assert "invalid token" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_skip_when_cookie_present_but_unresolvable(self, mock_session_resolver):
+        """Cookie present but unresolvable (legacy/expired/tampered) skips the
+        check (the downstream auth dependency rejects with 401 anyway)."""
+        mock_session_resolver.next_value = None
+        request = _make_request(
+            cookies={"mcp_gateway_session": "stale-or-tampered"},
+            headers={},
+        )
+
+        await verify_csrf_token_header_only(request)

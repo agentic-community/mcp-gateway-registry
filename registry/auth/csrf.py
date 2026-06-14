@@ -175,8 +175,19 @@ async def verify_csrf_token_header_only(
     with credentials:"include" even without the CSRF header. Requiring
     the header closes that read vector.
     """
-    session_id = request.cookies.get(settings.session_cookie_name)
+    cookie = request.cookies.get(settings.session_cookie_name)
+    if not cookie:
+        return
+
+    # Resolve the cookie to the underlying session_id before validating. The
+    # CSRF token is signed with the resolved session_id (see generate_csrf_token
+    # in auth/routes.py), NOT the raw cookie blob, so comparing against the raw
+    # cookie always fails. This mirrors verify_csrf_token / _flexible above.
+    session_id = await _resolve_session_id(request)
     if not session_id:
+        # Cookie present but unresolvable (legacy/expired/tampered). Skip CSRF
+        # here; the downstream auth dependency rejects with 401 anyway.
+        logger.debug("Session cookie present but unresolved; skipping CSRF check")
         return
 
     token = request.headers.get("X-CSRF-Token")
