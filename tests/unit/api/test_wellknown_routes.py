@@ -441,10 +441,10 @@ def fake_provider(fake_as_metadata):
     provider.authorization_server_issuer.return_value = fake_as_metadata["issuer"]
     # Use the real default protected_resource_metadata implementation by binding it
     provider.protected_resource_metadata.side_effect = (
-        lambda resource,
-        scopes_supported,
-        resource_documentation=None: AuthProvider.protected_resource_metadata(
-            provider, resource, scopes_supported, resource_documentation
+        lambda resource, scopes_supported, resource_documentation=None: (
+            AuthProvider.protected_resource_metadata(
+                provider, resource, scopes_supported, resource_documentation
+            )
         )
     )
     return provider
@@ -465,15 +465,6 @@ class TestOAuthProtectedResourceEndpoint:
                 "registry.api.wellknown_routes._get_active_auth_provider",
                 return_value=fake_provider,
             ),
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                AsyncMock(
-                    return_value={
-                        "group_mappings": {"admins": ["mcp-admin"]},
-                        "mcp-admin": [],
-                    }
-                ),
-            ),
             patch("registry.auth.oauth_metadata.settings", mock_settings),
             patch("registry.api.wellknown_routes.settings", mock_settings),
         ):
@@ -485,7 +476,9 @@ class TestOAuthProtectedResourceEndpoint:
             data = response.json()
             assert data["resource"] == "https://gw.example.com"
             assert data["authorization_servers"] == ["https://idp.example.com/realms/test"]
-            assert data["scopes_supported"] == ["mcp-admin"]
+            # With no mcp_advertised_scopes override, the PRM advertises the basic
+            # IdP-universal OIDC scopes (NOT registry group names like 'mcp-admin').
+            assert data["scopes_supported"] == ["openid", "email", "profile", "offline_access"]
             assert data["bearer_methods_supported"] == ["header"]
             assert data["resource_documentation"] == "https://gw.example.com/docs/oauth"
 
@@ -499,10 +492,6 @@ class TestOAuthProtectedResourceEndpoint:
             patch(
                 "registry.api.wellknown_routes._get_active_auth_provider",
                 return_value=fake_provider,
-            ),
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                AsyncMock(return_value={"group_mappings": {}}),
             ),
             patch("registry.auth.oauth_metadata.settings", mock_settings),
             patch("registry.api.wellknown_routes.settings", mock_settings),
@@ -544,10 +533,6 @@ class TestOAuthProtectedResourceEndpoint:
                 "registry.api.wellknown_routes._get_active_auth_provider",
                 return_value=fake_provider,
             ),
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                AsyncMock(return_value={"group_mappings": {}}),
-            ),
             patch("registry.auth.oauth_metadata.settings", mock_settings),
             patch("registry.api.wellknown_routes.settings", mock_settings),
         ):
@@ -568,10 +553,6 @@ class TestOAuthProtectedResourceEndpoint:
             patch(
                 "registry.api.wellknown_routes._get_active_auth_provider",
                 return_value=fake_provider,
-            ),
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                AsyncMock(return_value={"group_mappings": {}}),
             ),
             patch("registry.auth.oauth_metadata.settings", mock_settings),
             patch("registry.api.wellknown_routes.settings", mock_settings),
@@ -600,10 +581,6 @@ class TestOAuthProtectedResourceEndpoint:
                 "registry.api.wellknown_routes._get_active_auth_provider",
                 return_value=provider,
             ),
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                AsyncMock(return_value={"group_mappings": {}}),
-            ),
             patch("registry.auth.oauth_metadata.settings", mock_settings),
             patch("registry.api.wellknown_routes.settings", mock_settings),
         ):
@@ -630,10 +607,6 @@ class TestOAuthProtectedResourceEndpoint:
             patch(
                 "registry.api.wellknown_routes._get_active_auth_provider",
                 return_value=provider,
-            ),
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                AsyncMock(return_value={"group_mappings": {}}),
             ),
             patch("registry.auth.oauth_metadata.settings", mock_settings),
             patch("registry.api.wellknown_routes.settings", mock_settings),
@@ -729,10 +702,6 @@ class TestPrmAndResourceMetadataMatchByteForByte:
             patch(
                 "registry.api.wellknown_routes._get_active_auth_provider",
                 return_value=fake_provider,
-            ),
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                AsyncMock(return_value={"group_mappings": {}}),
             ),
             patch("registry.auth.oauth_metadata.settings", mock_settings),
             patch("registry.api.wellknown_routes.settings", mock_settings),

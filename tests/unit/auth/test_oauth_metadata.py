@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from registry.auth.oauth_metadata import (
+    DEFAULT_ADVERTISED_SCOPES,
     WELLKNOWN_PRM_PATH,
     build_canonical_resource_url,
     build_resource_documentation_url,
@@ -17,7 +18,6 @@ from registry.auth.oauth_metadata import (
     derive_supported_scopes,
     enforce_https,
 )
-
 
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
 
@@ -77,7 +77,9 @@ class TestBuildWWWAuthenticateHeader:
     """RFC 9728 §5.1 header format."""
 
     def test_includes_realm_and_resource_metadata(self):
-        header = build_www_authenticate_header("https://gw.example.com/.well-known/oauth-protected-resource")
+        header = build_www_authenticate_header(
+            "https://gw.example.com/.well-known/oauth-protected-resource"
+        )
         assert header.startswith("Bearer ")
         assert 'realm="mcp"' in header
         assert (
@@ -95,93 +97,47 @@ class TestBuildWWWAuthenticateHeader:
 
 
 class TestDeriveSupportedScopes:
-    """derive_supported_scopes() builds the PRM `scopes_supported` array."""
+    """derive_supported_scopes() builds the PRM `scopes_supported` array.
 
-    @pytest.fixture(autouse=True)
-    def _no_scope_override(self):
-        """By default these tests cover the no-override path.
+    Regression guard for the bug where the no-override path advertised every
+    `mcp_scopes` `_id` (registry group/scope names) as OAuth scopes, which any
+    scope-validating IdP rejects with `invalid_scope`. The default must now be
+    the basic IdP-universal OIDC scopes only.
+    """
 
-        The TestAdvertisedScopesOverride class below covers the override path.
-        """
+    @pytest.mark.asyncio
+    async def test_default_returns_basic_oidc_scopes(self):
+        """With no override, only the basic IdP-universal OIDC scopes are
+        advertised - NOT the registry's internal scope/group names."""
         with patch("registry.auth.oauth_metadata.settings") as mock_settings:
             mock_settings.mcp_advertised_scopes = ""
-            yield
-
-    @pytest.mark.asyncio
-    async def test_unions_scope_names_and_group_mappings(self):
-        config = {
-            "group_mappings": {
-                "keycloak-admins": ["mcp-admin", "registry-users"],
-                "keycloak-readers": ["mcp-read"],
-            },
-            "UI-Scopes": {"mcp-admin": {"can_modify_servers": True}},
-            "mcp-admin": [{"server": "x"}],
-            "mcp-read": [{"server": "y"}],
-            "registry-users": [{"server": "z"}],
-        }
-
-        with patch(
-            "registry.auth.oauth_metadata.reload_scopes_config",
-            return_value=config,
-        ):
             scopes = await derive_supported_scopes()
 
-        # mcp-admin, mcp-read, registry-users; UI-Scopes and group_mappings keys excluded
-        assert scopes == ["mcp-admin", "mcp-read", "registry-users"]
+        assert scopes == DEFAULT_ADVERTISED_SCOPES
+        assert scopes == ["openid", "email", "profile", "offline_access"]
 
     @pytest.mark.asyncio
-    async def test_empty_config_returns_empty_list(self):
-        with patch(
-            "registry.auth.oauth_metadata.reload_scopes_config",
-            return_value={"group_mappings": {}},
-        ):
+    async def test_default_never_includes_registry_group_names(self):
+        """The default must not leak internal authorization/group names (the
+        exact bug: names like `registry-admins` are not IdP OAuth scopes)."""
+        with patch("registry.auth.oauth_metadata.settings") as mock_settings:
+            mock_settings.mcp_advertised_scopes = ""
             scopes = await derive_supported_scopes()
 
-        assert scopes == []
-
-    @pytest.mark.asyncio
-    async def test_dedupes_overlapping_sources(self):
-        """Same scope name appearing in both top-level keys and group_mappings is deduped."""
-        config = {
-            "group_mappings": {
-                "g1": ["mcp-read"],
-                "g2": ["mcp-read", "mcp-admin"],
-            },
-            "mcp-read": [],
-            "mcp-admin": [],
-        }
-
-        with patch(
-            "registry.auth.oauth_metadata.reload_scopes_config",
-            return_value=config,
-        ):
-            scopes = await derive_supported_scopes()
-
-        assert scopes == ["mcp-admin", "mcp-read"]
+        for leaked in ("registry-admins", "mcp-registry-admin", "tla-consumer-empty"):
+            assert leaked not in scopes
 
 
 class TestAdvertisedScopesOverride:
-    """`mcp_advertised_scopes` setting overrides what derive_supported_scopes() returns.
+    """`mcp_advertised_scopes` setting overrides the default advertised scopes.
 
-    Operators set this when the IdP performs RFC 7591 DCR and would reject
-    registration requests containing scope names it doesn't recognize."""
+    Operators set this when their IdP exposes/validates a specific scope set."""
 
     @pytest.mark.asyncio
-    async def test_override_replaces_dynamic_scopes(self):
-        """When the override is set, scopes from the registry config are ignored."""
-        config = {
-            "group_mappings": {"g1": ["mcp-admin"]},
-            "mcp-admin": [],
-        }
-        with (
-            patch("registry.auth.oauth_metadata.settings") as mock_settings,
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                return_value=config,
-            ),
-        ):
+    async def test_override_replaces_default_scopes(self):
+        """When the override is set, it is used verbatim."""
+        with patch("registry.auth.oauth_metadata.settings") as mock_settings:
             mock_settings.mcp_advertised_scopes = "openid profile email offline_access"
-
             scopes = await derive_supported_scopes()
 
         assert scopes == ["openid", "profile", "email", "offline_access"]
@@ -189,58 +145,29 @@ class TestAdvertisedScopesOverride:
     @pytest.mark.asyncio
     async def test_override_preserves_caller_order(self):
         """Operators may want a specific order; the override doesn't sort."""
-        with (
-            patch("registry.auth.oauth_metadata.settings") as mock_settings,
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                return_value={"group_mappings": {}},
-            ),
-        ):
+        with patch("registry.auth.oauth_metadata.settings") as mock_settings:
             mock_settings.mcp_advertised_scopes = "zeta alpha mu"
-
             scopes = await derive_supported_scopes()
 
         assert scopes == ["zeta", "alpha", "mu"]
 
     @pytest.mark.asyncio
-    async def test_empty_override_falls_back_to_dynamic(self):
-        """Empty string is not an override; the registry config is still used."""
-        config = {
-            "group_mappings": {},
-            "mcp-admin": [],
-        }
-        with (
-            patch("registry.auth.oauth_metadata.settings") as mock_settings,
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                return_value=config,
-            ),
-        ):
+    async def test_empty_override_falls_back_to_default(self):
+        """Empty string is not an override; the basic default is used."""
+        with patch("registry.auth.oauth_metadata.settings") as mock_settings:
             mock_settings.mcp_advertised_scopes = ""
-
             scopes = await derive_supported_scopes()
 
-        assert scopes == ["mcp-admin"]
+        assert scopes == DEFAULT_ADVERTISED_SCOPES
 
     @pytest.mark.asyncio
-    async def test_whitespace_only_override_falls_back_to_dynamic(self):
+    async def test_whitespace_only_override_falls_back_to_default(self):
         """Whitespace-only override is treated as unset."""
-        config = {
-            "group_mappings": {},
-            "mcp-admin": [],
-        }
-        with (
-            patch("registry.auth.oauth_metadata.settings") as mock_settings,
-            patch(
-                "registry.auth.oauth_metadata.reload_scopes_config",
-                return_value=config,
-            ),
-        ):
+        with patch("registry.auth.oauth_metadata.settings") as mock_settings:
             mock_settings.mcp_advertised_scopes = "   "
-
             scopes = await derive_supported_scopes()
 
-        assert scopes == ["mcp-admin"]
+        assert scopes == DEFAULT_ADVERTISED_SCOPES
 
 
 class TestBuildResourceDocumentationUrl:

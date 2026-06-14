@@ -8,9 +8,7 @@ them with provider-supplied IdP metadata to assemble a final response.
 """
 
 import logging
-from typing import Any
 
-from ..common.scopes_loader import reload_scopes_config
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -18,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 WELLKNOWN_PRM_PATH: str = "/.well-known/oauth-protected-resource"
 WELLKNOWN_AS_METADATA_PATH: str = "/.well-known/oauth-authorization-server"
+
+# Basic, IdP-universal OIDC scopes advertised by default in the PRM. These exist
+# on every supported IdP (Keycloak, Entra, Okta, Auth0, Cognito), so the IDE
+# OAuth login handshake succeeds everywhere. A user's actual access is NOT
+# derived from these advertised scopes - it comes from the token's `groups`
+# claim, which the auth server maps to registry scopes. So advertising only the
+# basics does not reduce access. Operators can override with the
+# `mcp_advertised_scopes` setting (env `MCP_ADVERTISED_SCOPES`).
+DEFAULT_ADVERTISED_SCOPES: list[str] = ["openid", "email", "profile", "offline_access"]
 
 
 def build_canonical_resource_url(registry_url: str) -> str:
@@ -79,43 +86,31 @@ async def derive_supported_scopes() -> list[str]:
     """Build the `scopes_supported` array for the PRM document.
 
     When `mcp_advertised_scopes` is set, returns that explicit list (split on
-    whitespace). Useful when the IdP performs RFC 7591 DCR and rejects scopes
-    that don't exist in its realm.
+    whitespace). This is the operator override for any IdP that validates the
+    requested scopes against its own registered scope set.
 
-    Otherwise pulls from the same scopes config used by the auth server's
-    authorization decisions (DocumentDB-backed in production, YAML-backed in
-    local dev). The result is the stable-sorted union of:
+    When unset, returns the basic IdP-universal OIDC scopes
+    (`DEFAULT_ADVERTISED_SCOPES`). It deliberately does NOT advertise the
+    registry's internal scope/group names from the `mcp_scopes` collection.
+    Those names (e.g. `registry-admins`, `tla-consumer-*`) are authorization
+    identifiers, NOT IdP OAuth scopes; advertising them makes the IDE request
+    scopes the IdP has never heard of, and any scope-validating IdP (Keycloak
+    without DCR, Okta, Entra, Auth0) rejects the authorization request with
+    `invalid_scope`. Access is group-derived (see `map_groups_to_scopes` in the
+    auth server), so omitting these names does not reduce any user's access.
 
-      * scope names defined in the registry (entries other than the
-        `group_mappings` and `UI-Scopes` keys)
-      * scope names referenced by group mappings
-
-    Sorting is stable so the PRM document is byte-stable across requests
-    (cache-friendly, per acceptance criterion).
+    The result is stable across requests (cache-friendly): the override
+    preserves operator order, and the default is a fixed list.
 
     Returns:
-        Stable-sorted, deduplicated list of scope name strings.
+        List of scope name strings for the PRM `scopes_supported` array.
     """
     override = getattr(settings, "mcp_advertised_scopes", "") or ""
     if override.strip():
         # Preserve operator-specified order so it is byte-stable across requests.
         return [s for s in override.split() if s]
 
-    config = await reload_scopes_config()
-
-    scope_names: set[str] = set()
-    for key in config.keys():
-        if key in ("group_mappings", "UI-Scopes"):
-            continue
-        scope_names.add(key)
-
-    group_mappings = config.get("group_mappings", {})
-    if isinstance(group_mappings, dict):
-        for mapped_scopes in group_mappings.values():
-            if isinstance(mapped_scopes, list):
-                scope_names.update(mapped_scopes)
-
-    return sorted(scope_names)
+    return list(DEFAULT_ADVERTISED_SCOPES)
 
 
 def build_resource_documentation_url() -> str:

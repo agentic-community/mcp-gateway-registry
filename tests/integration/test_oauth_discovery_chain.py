@@ -26,12 +26,10 @@ from urllib.parse import urlparse
 
 import pytest
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from registry.api.wellknown_routes import router as wellknown_router
 from registry.middleware.mcp_www_authenticate import WWWAuthenticateMiddleware
-
 
 pytestmark = [pytest.mark.integration]
 
@@ -83,8 +81,8 @@ def discovery_app(monkeypatch):
     """Build a FastAPI app with PRM + AS-metadata routes + WWW-Authenticate middleware,
     plus a stub /<server>/mcp endpoint that returns 401 (simulating an unauthenticated
     request to a protected MCP server)."""
-    from registry.auth import oauth_metadata as om
     from registry.api import wellknown_routes as wkr
+    from registry.auth import oauth_metadata as om
 
     # Patch settings used by both the routes and the helpers
     class _StubSettings:
@@ -96,15 +94,9 @@ def discovery_app(monkeypatch):
     monkeypatch.setattr(wkr, "settings", stub_settings)
     monkeypatch.setattr(om, "settings", stub_settings)
 
-    # Patch the scopes loader so we don't need a DB
-    async def _fake_reload_scopes_config(*args, **kwargs):
-        return {
-            "group_mappings": {"admins": ["mcp-admin"], "readers": ["mcp-read"]},
-            "mcp-admin": [{"server": "airegistry-tools"}],
-            "mcp-read": [{"server": "airegistry-tools"}],
-        }
-
-    monkeypatch.setattr(om, "reload_scopes_config", _fake_reload_scopes_config)
+    # derive_supported_scopes() returns the basic default OIDC scopes when
+    # mcp_advertised_scopes is unset; it no longer reads the scopes DB, so no
+    # scopes-loader patching is needed here.
 
     # Patch the provider factory used by the route
     fake_provider = FakeProvider()
@@ -146,10 +138,7 @@ class TestDiscoveryChainStep1Unauthenticated401:
         assert match is not None, f"Could not extract resource_metadata from {header!r}"
 
         resource_metadata_url = match.group(1)
-        assert (
-            resource_metadata_url
-            == f"{TEST_GATEWAY_URL}/.well-known/oauth-protected-resource"
-        )
+        assert resource_metadata_url == f"{TEST_GATEWAY_URL}/.well-known/oauth-protected-resource"
 
 
 class TestDiscoveryChainStep2FetchPRM:
