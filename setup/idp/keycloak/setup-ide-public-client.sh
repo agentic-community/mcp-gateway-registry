@@ -21,10 +21,10 @@
 #
 # Usage:
 #   export KEYCLOAK_ADMIN_PASSWORD="your-password"
-#   bash keycloak/setup/setup-ide-public-client.sh
+#   bash setup/idp/keycloak/setup-ide-public-client.sh
 #
 #   # Optional overrides:
-#   IDE_CLIENT_ID="my-ide-client" bash keycloak/setup/setup-ide-public-client.sh
+#   IDE_CLIENT_ID="my-ide-client" bash setup/idp/keycloak/setup-ide-public-client.sh
 
 set -e
 

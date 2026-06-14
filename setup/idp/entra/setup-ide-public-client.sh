@@ -1,7 +1,7 @@
 #!/bin/bash
 # Setup IDE Public OAuth Client in Microsoft Entra ID (for PR #1224 - IDE_OAUTH_CLIENT_ID)
 #
-# Entra equivalent of keycloak/setup/setup-ide-public-client.sh. Creates a
+# Entra equivalent of setup/idp/keycloak/setup-ide-public-client.sh. Creates a
 # PUBLIC client (authorization_code + PKCE, no secret) that IDEs (Cursor,
 # Claude Code, Codex) use to run the gateway login flow. In Entra terms this is
 # an app registration with a "Mobile and desktop applications" platform, the
@@ -31,7 +31,7 @@
 #   export ENTRA_TENANT_ID="..."
 #   export ENTRA_GRAPH_CLIENT_ID="..."
 #   export ENTRA_GRAPH_CLIENT_SECRET="..."
-#   bash keycloak/setup/setup-ide-public-client-entra.sh
+#   bash setup/idp/entra/setup-ide-public-client.sh
 #
 # NOTE: the existing ENTRA_CLIENT_ID/SECRET in your .env is the gateway's WEB
 # auth app. It is a different app and almost certainly does NOT have

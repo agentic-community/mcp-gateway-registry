@@ -1,7 +1,7 @@
 #!/bin/bash
 # Setup IDE Public OAuth Client in Okta (for PR #1224 - IDE_OAUTH_CLIENT_ID)
 #
-# Okta equivalent of keycloak/setup/setup-ide-public-client.sh. Creates a PUBLIC
+# Okta equivalent of setup/idp/keycloak/setup-ide-public-client.sh. Creates a PUBLIC
 # OIDC client (authorization_code + PKCE, no secret) that IDEs (Cursor, Claude
 # Code, Codex) use to run the gateway login flow. In Okta terms this is an OIDC
 # "native" application with token_endpoint_auth_method=none and PKCE required.
@@ -43,7 +43,7 @@
 # Usage:
 #   export OKTA_ORG_URL="https://dev-12345.okta.com"
 #   export OKTA_API_TOKEN="00abc..."
-#   bash keycloak/setup/setup-ide-public-client-okta.sh
+#   bash setup/idp/okta/setup-ide-public-client.sh
 
 set -e
 

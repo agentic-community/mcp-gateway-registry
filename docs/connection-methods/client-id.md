@@ -174,7 +174,7 @@ for each IdP. All are env-var driven (secrets via env, never CLI args).
 
 ```bash
 export KEYCLOAK_ADMIN_PASSWORD="<admin pw>"
-bash keycloak/setup/setup-ide-public-client.sh
+bash setup/idp/keycloak/setup-ide-public-client.sh
 # prints a client id; then set on the registry and restart:
 #   IDE_OAUTH_CLIENT_ID=mcp-gateway-ide
 #   MCP_ADVERTISED_SCOPES="openid email profile offline_access"
@@ -195,7 +195,7 @@ pinning and no extra claim configuration. It works in one step.
 ```bash
 export OKTA_ORG_URL="https://<your-org>.okta.com"
 export OKTA_API_TOKEN="<admin SSWS token>"
-bash keycloak/setup/setup-ide-public-client-okta.sh
+bash setup/idp/okta/setup-ide-public-client.sh
 ```
 
 Creates an OIDC **native** (public) app (`token_endpoint_auth_method=none`,
@@ -220,13 +220,49 @@ Okta is stricter than Keycloak at every layer:
 Verified end-to-end: with all five in place, an Okta user in `registry-admins`
 connects and is authorized as admin.
 
+### Amazon Cognito (works - validated on ECS)
+
+```bash
+export COGNITO_USER_POOL_ID="us-east-1_XXXXXXXXX"
+export AWS_REGION="us-east-1"
+bash setup/idp/cognito/setup-ide-public-client.sh
+```
+
+Creates a Cognito user-pool app client with **no secret** (`--no-generate-secret`),
+authorization_code + PKCE. Cognito uses the AWS API, so the script relies on your
+AWS credentials/role rather than an admin token. After that:
+
+1. **Pin the callback port:** set `IDE_OAUTH_CALLBACK_PORT` (e.g. `56789`) and the
+   script registers `http://localhost:56789/callback` on the client. Cognito
+   matches the callback URL literally including the port (no wildcard on
+   localhost), so a fixed port is required - the dialog emits the matching
+   `--callback-port` for Claude Code.
+2. **Advertise Cognito-valid scopes only:** set
+   `MCP_ADVERTISED_SCOPES="openid email profile"`. Cognito's hosted UI does NOT
+   offer `offline_access` as a selectable OAuth scope, so including it causes
+   `invalid_scope`.
+3. **Group membership + mapping:** put the user in a Cognito group whose name
+   matches a registry scope in `mcp_scopes` (e.g. `registry-admins`). NO claim
+   configuration is needed - Cognito includes the `cognito:groups` claim in
+   access tokens by default, and the registry's Cognito provider reads it.
+
+One provider-code detail (fixed in this feature): Cognito **access tokens have no
+`aud` claim** (they carry `client_id` + `token_use=access`). The Cognito provider
+validates the `client_id` against an allowlist (the web client plus
+`IDE_OAUTH_CLIENT_ID`) instead of `aud`, so IDE access tokens are accepted.
+
+Verified end-to-end on the ECS/Terraform deployment: a Cognito user in
+`registry-admins` logs in via Claude Code (`--callback-port`) and makes
+authorized tool calls. Same caveat as Okta: only Claude Code can pin the port,
+so Codex/Cursor will fail Cognito's literal callback match.
+
 ### Microsoft Entra ID (currently blocked - see note)
 
 ```bash
 export ENTRA_TENANT_ID="<tenant>"
 export ENTRA_GRAPH_CLIENT_ID="<app with Application.ReadWrite.All>"
 export ENTRA_GRAPH_CLIENT_SECRET="<secret>"
-bash keycloak/setup/setup-ide-public-client-entra.sh
+bash setup/idp/entra/setup-ide-public-client.sh
 ```
 
 Creates an app registration as a public client (`isFallbackPublicClient=true`,

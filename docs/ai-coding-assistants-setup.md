@@ -37,6 +37,49 @@ a **per-user** token; the client id only identifies the application, not the
 user. Actual access is derived from the token's `groups` claim, not from the
 requested OAuth scopes.
 
+### Compatibility matrix: coding assistant x identity provider
+
+Which connection method works for each coding assistant against each IdP. **CIMD
+(Client ID Metadata Documents) is not yet implemented; it is on the roadmap** -
+so it is omitted from the cells below. Each cell lists the methods that work
+today.
+
+Legend: **Client ID** = pre-registered public client (`IDE_OAUTH_CLIENT_ID`).
+**DCR** = Dynamic Client Registration. A "fixed port" note means the IdP requires
+`IDE_OAUTH_CALLBACK_PORT` and only Claude Code can honor it.
+
+| Coding assistant | Keycloak | Amazon Cognito | Okta | Microsoft Entra ID |
+| --- | --- | --- | --- | --- |
+| **Claude Code** | Client ID + DCR | Client ID (fixed port) | Client ID (fixed port) | Not yet (blocked on #990) |
+| **Cursor** | Client ID + DCR | Static token only | Static token only | Not yet (blocked on #990) |
+| **Codex** | Client ID + DCR | Static token only | Static token only | Not yet (blocked on #990) |
+| **Other IDEs** | DCR (if the IDE supports it) | Static token | Static token | Not yet |
+
+Notes:
+
+- **Keycloak** is the most flexible: it accepts a wildcard loopback redirect
+  (`http://localhost/*`), so no fixed port is needed, and it supports anonymous
+  DCR. Both methods work for all assistants.
+- **Cognito / Okta** match the redirect URI literally (including the port), so the
+  Client ID method requires a fixed callback port (`IDE_OAUTH_CALLBACK_PORT`).
+  Only **Claude Code** can pin the port (`--callback-port`), so it is the only
+  assistant that completes the Client ID login flow there today. Codex has no
+  port-pinning flag and Cursor's JSON config has no port field, so they use a
+  random port that fails the literal redirect match - they fall back to the
+  static gateway token.
+- The Connect dialog only presents the **DCR**-style (token-less) config when the
+  provider is **Keycloak** (the dialog treats `auth_provider == "keycloak"` as
+  "DCR available"; see
+  [the DCR method doc](connection-methods/dynamic-client-registration.md#how-the-connect-dialog-decides-to-rely-on-dcr-important-nuance)).
+  So for Cognito/Okta, non-Claude-Code assistants get the static-token config,
+  not DCR, even though those IdPs technically support DCR.
+- **Entra** IDE login is blocked pending resource-qualified PRM scopes (issue
+  #990), regardless of assistant.
+- Validated this release: Keycloak (Client ID + DCR), Cognito (Client ID with
+  Claude Code, on ECS), Okta (Client ID with Claude Code). See
+  [the client-id method doc](connection-methods/client-id.md#per-idp-setup) for
+  per-IdP setup.
+
 ## Prerequisites
 
 - MCP Gateway & Registry deployed and running
