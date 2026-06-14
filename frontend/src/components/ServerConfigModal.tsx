@@ -136,10 +136,23 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       })
       .catch((err) => {
         console.error("Failed to fetch connect config", err);
-        setConnectConfigError(
-          "Could not load custom headers for this server. " +
-          "The copied configuration may be missing headers your server requires."
-        );
+        // A 403 here is almost always a stale CSRF/session after a redeploy.
+        // Surface an actionable message rather than silently falling back to
+        // the static-token config (which hides that OAuth login was configured).
+        const status = err?.response?.status;
+        if (status === 403) {
+          setConnectConfigError(
+            "Could not load connect configuration (403): your session may be stale. " +
+            "Log out and back in, then reopen this dialog. The configuration shown " +
+            "below is a fallback and may omit OAuth login or required headers."
+          );
+        } else {
+          setConnectConfigError(
+            "Could not load connect configuration for this server. " +
+            "The configuration shown below is a fallback and may omit OAuth login " +
+            "or headers your server requires."
+          );
+        }
       });
   }, [isOpen, server.path]);
 
@@ -329,7 +342,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     switch (selectedIDE) {
       case 'cursor': {
         // OAuth login mode: advertise the pre-registered client_id and omit the
-        // gateway token so Cursor renders a login button (auth.CLIENT_ID).
+        // gateway token so Cursor renders a login button. The `auth.CLIENT_ID`
+        // key (upper-snake) is Cursor's documented MCP OAuth config shape; it
+        // intentionally differs from the lowercase keys elsewhere in this file.
         if (useOAuthLogin) {
           const oauthHeaders = buildHeaders(false);
           return {
@@ -355,6 +370,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           },
         };
       }
+      // The IDEs below intentionally do NOT emit the OAuth-login (client_id)
+      // config even when useOAuthLogin is true: they have no verified
+      // fixed-public-client OAuth config syntax, so they keep the static-token
+      // behavior. Only Cursor / Claude Code / Codex support the login config.
       case 'roo-code':
         return {
           mcpServers: {
@@ -681,6 +700,15 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               <li>Restart your AI coding assistant to load the new configuration</li>
             </ol>
           </div>
+
+          {connectConfigError && (
+            <div
+              role="alert"
+              className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-800 rounded-lg p-4"
+            >
+              <p className="text-sm text-amber-800 dark:text-amber-200">{connectConfigError}</p>
+            </div>
+          )}
 
           {isLocal ? (
             <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">

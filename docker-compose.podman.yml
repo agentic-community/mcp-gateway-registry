@@ -70,6 +70,10 @@ services:
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      # IDE OAuth login public client_id (PR #1224). Public, not a secret.
+      - IDE_OAUTH_CLIENT_ID=${IDE_OAUTH_CLIENT_ID:-}
+      # Scopes advertised in the PRM for IDE OAuth login.
+      - MCP_ADVERTISED_SCOPES=${MCP_ADVERTISED_SCOPES:-}
       # Entra ID configuration
       - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}

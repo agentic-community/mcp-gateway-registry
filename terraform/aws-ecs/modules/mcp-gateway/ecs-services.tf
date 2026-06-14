@@ -1189,6 +1189,12 @@ module "ecs_service_registry" {
           name  = "MCP_ADVERTISED_SCOPES"
           value = var.mcp_advertised_scopes
         },
+        # Public OAuth client_id advertised in Connect configs for IDE login
+        # (PR #1224). Public, not a secret; empty = static-token Connect config.
+        {
+          name  = "IDE_OAUTH_CLIENT_ID"
+          value = var.ide_oauth_client_id
+        },
         {
           name  = "DEPLOYMENT_MODE"
           value = var.deployment_mode

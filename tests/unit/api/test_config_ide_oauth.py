@@ -123,3 +123,31 @@ class TestConnectConfigResolution:
         )
 
         assert result["oauth_client_id"] is None
+
+    async def test_append_mcp_path_true_round_trips_from_stored_doc(self):
+        """A stored append_mcp_path=True passes through connect-config unchanged."""
+        result = await self._call(
+            {
+                "server_name": "AWS Knowledge",
+                "custom_headers_encrypted": [],
+                "append_mcp_path": True,
+            },
+            global_default="",
+        )
+
+        assert result["append_mcp_path"] is True
+
+    async def test_append_mcp_path_false_round_trips_from_stored_doc(self):
+        """A stored append_mcp_path=False passes through (distinct from None)."""
+        result = await self._call(
+            {
+                "server_name": "AWS Knowledge",
+                "custom_headers_encrypted": [],
+                "append_mcp_path": False,
+            },
+            global_default="",
+        )
+
+        # Must be exactly False, not None - the endpoint must preserve the
+        # stored boolean so the frontend can strip /mcp for root-endpoint servers.
+        assert result["append_mcp_path"] is False

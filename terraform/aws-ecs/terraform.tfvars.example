@@ -897,6 +897,14 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # major IdPs ship with by default.
 # mcp_advertised_scopes = "profile email offline_access"
 
+# Pre-registered PUBLIC OAuth client_id that IDEs (Cursor, Claude Code, Codex)
+# use to start the gateway login flow. When set, a server's Connect config
+# advertises this client_id and omits the static gateway token, so the IDE
+# shows a login button and runs the OAuth/PKCE flow. Use when anonymous Dynamic
+# Client Registration is disabled and a fixed public client is registered.
+# Empty (default) keeps the static-token Connect config. Public, not a secret.
+# ide_oauth_client_id = "mcp-gateway-ide"
+
 # Container image URIs for observability services (required when enable_observability = true)
 # metrics_service_image_uri = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-metrics-service:latest"
 # grafana_image_uri         = "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/mcp-gateway-grafana:latest"

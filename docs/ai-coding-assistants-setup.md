@@ -6,6 +6,37 @@ Complete guide for integrating the MCP Gateway & Registry with popular AI develo
 
 The MCP Gateway automatically generates configuration files for various AI coding assistants, enabling seamless access to enterprise-curated MCP servers with proper authentication and governance.
 
+## How coding assistants connect (three methods)
+
+A coding assistant connecting to a gateway-protected MCP server needs an OAuth
+`client_id` to start the login flow. There are three ways to provide it. They are
+not ranked alternatives - each fits a different scale and IdP posture. Pick based
+on your deployment.
+
+| Method | Who creates the OAuth client | When | Best for | Status |
+| --- | --- | --- | --- | --- |
+| [Pre-registered public client id](connection-methods/client-id.md) | An operator, once | Ahead of time | Enterprise registries; IdPs with DCR disabled | Supported |
+| [Dynamic Client Registration (DCR)](connection-methods/dynamic-client-registration.md) | The IDE, automatically | At connect time | Public / multi-tenant registries | Supported |
+| [Client ID Metadata Documents (CIMD)](connection-methods/client-id-metadata-documents.md) | Nobody (id is a URL) | At connect time | Zero-touch without client sprawl | Coming soon |
+
+Short version:
+
+- **Pre-registered public client id** - an operator registers one public PKCE
+  client and the registry advertises its id (`IDE_OAUTH_CLIENT_ID`, or per-server
+  `oauth_client_id`). Simple, no client sprawl, full per-user audit. The right
+  default for an enterprise registry, and the only option when the IdP has
+  anonymous DCR disabled.
+- **DCR** - the IDE self-registers a client on the fly. Zero-touch and scalable,
+  but needs DCR enabled and creates client sprawl in the IdP.
+- **CIMD** - the `client_id` is an `https` URL to a metadata document; nothing is
+  registered. Zero-touch with no sprawl, but newest and least supported. Not yet
+  implemented here.
+
+In all three, the user logs in as themselves in the browser and the IDE receives
+a **per-user** token; the client id only identifies the application, not the
+user. Actual access is derived from the token's `groups` claim, not from the
+requested OAuth scopes.
+
 ## Prerequisites
 
 - MCP Gateway & Registry deployed and running
@@ -147,59 +178,10 @@ cp .oauth-tokens/vscode-mcp.json ~/.cursor/mcp-settings.json
 - Predictive tool suggestions based on code context
 - Integrated diff view for tool-generated changes
 
-**OAuth login button (no embedded token):**
-
-By default the Connect dialog embeds a static gateway token. If your deployment
-runs an OAuth provider but has **anonymous Dynamic Client Registration disabled**
-(common with enterprise Keycloak), register a public PKCE client for IDEs and
-expose it as a client id on the registry. You can set it two ways:
-
-- **Registry-wide default:** set `IDE_OAUTH_CLIENT_ID` on the registry. Every
-  server's Connect dialog uses it.
-- **Per-server override:** set `oauth_client_id` on an individual server entry
-  (registration form or server JSON). This wins over the global default for that
-  server — useful when a specific server has its own public client.
-
-When a client id resolves for a server, the Connect dialog drops the static
-token and emits an OAuth/login config. The exact shape depends on the selected
-IDE:
-
-```json
-// Cursor (and other JSON-config IDEs)
-{
-  "mcpServers": {
-    "my-server": {
-      "url": "https://gateway.example.com/my-server/mcp",
-      "auth": { "CLIENT_ID": "<your-public-client-id>" }
-    }
-  }
-}
-```
-
-```bash
-# Claude Code — pre-registered public client, no secret
-claude mcp add --transport http --client-id <your-public-client-id> \
-  my-server https://gateway.example.com/my-server/mcp
-```
-
-```bash
-# Codex — pre-registered public client
-codex mcp add "my-server" --url "https://gateway.example.com/my-server/mcp" \
-  --oauth-client-id "<your-public-client-id>"
-```
-
-The IDE renders a **Login** button (or runs `/mcp` / `codex mcp login`) and
-completes the OAuth/PKCE flow instead of using a pasted token. The client id is
-public (not a secret); the public client must allow the loopback redirect URIs
-the IDE uses.
-
-**Stripping the `/mcp` suffix:**
-
-The gateway Connect URL normally appends `/mcp`. Some servers (e.g. AWS
-Knowledge) serve MCP at the server path itself and break on `/mcp`. Set
-`append_mcp_path: false` on that server entry to emit the URL without the
-suffix; set `true` to force it. For an entirely custom endpoint, use
-`mcp_endpoint`.
+**OAuth login button (no embedded token):** see
+[How coding assistants connect](#how-coding-assistants-connect-three-methods)
+below, in particular the
+[pre-registered public client id](connection-methods/client-id.md) method.
 
 ### Cline (formerly Claude Dev)
 

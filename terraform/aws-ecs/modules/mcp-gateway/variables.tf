@@ -1252,6 +1252,20 @@ variable "mcp_advertised_scopes" {
   default     = "profile email offline_access"
 }
 
+variable "ide_oauth_client_id" {
+  description = <<-EOT
+    Pre-registered PUBLIC OAuth client_id that IDEs (Cursor, Claude Code, Codex)
+    use to start the gateway login flow. When set, a server's Connect config
+    advertises this client_id and omits the static gateway token, so the IDE
+    shows a login button and runs the OAuth/PKCE flow. Use when anonymous
+    Dynamic Client Registration is disabled and a fixed public client is
+    registered instead. Empty (default) keeps the static-token Connect config.
+    This is a public client identifier, NOT a secret.
+  EOT
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # DEPLOYMENT MODE CONFIGURATION
 # =============================================================================

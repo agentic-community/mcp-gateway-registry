@@ -1546,6 +1546,30 @@ variable "enable_waf" {
 # EXTRA ENVIRONMENT VARIABLES (Issue #1000)
 # =============================================================================
 
+variable "mcp_advertised_scopes" {
+  description = <<-EOT
+    Space-separated override for the `scopes_supported` array in the gateway's
+    /.well-known/oauth-protected-resource document. Default
+    ("profile email offline_access") is the safe set of OIDC scopes that all
+    major IdPs ship with. Set to "" to fall back to the registry's scope config.
+    Passed through to the mcp_gateway module.
+  EOT
+  type        = string
+  default     = "profile email offline_access"
+}
+
+variable "ide_oauth_client_id" {
+  description = <<-EOT
+    Pre-registered PUBLIC OAuth client_id that IDEs (Cursor, Claude Code, Codex)
+    use to start the gateway login flow. When set, a server's Connect config
+    advertises this client_id and omits the static gateway token. Empty (default)
+    keeps the static-token Connect config. Public, NOT a secret. Passed through
+    to the mcp_gateway module.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "registry_extra_env" {
   description = "Extra environment variables for the registry service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/registry/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block (see mongodb_connection_string_secret_arn as a reference pattern)."
   type        = list(object({ name = string, value = string }))
