@@ -28,21 +28,35 @@ class CognitoProvider(AuthProvider):
         client_secret: str,
         region: str,
         domain: str | None = None,
+        ide_oauth_client_id: str | None = None,
     ):
         """Initialize Cognito provider.
 
         Args:
             user_pool_id: AWS Cognito User Pool ID
-            client_id: OAuth2 client ID
+            client_id: OAuth2 client ID (the web/confidential client)
             client_secret: OAuth2 client secret
             region: AWS region
             domain: Optional custom domain name
+            ide_oauth_client_id: Optional public IDE client_id (IDE_OAUTH_CLIENT_ID).
+                Cognito access tokens minted by this client are also accepted, so
+                the IDE OAuth login flow works alongside the web client.
         """
         self.user_pool_id = user_pool_id
         self.client_id = client_id
         self.client_secret = client_secret
         self.region = region
         self.domain = domain
+
+        # Client ids whose Cognito ACCESS tokens are accepted. Access tokens are
+        # not audience-bound (no "aud"), so we validate the "client_id" claim
+        # against this allowlist instead. The web client plus the optional public
+        # IDE client (IDE_OAUTH_CLIENT_ID) are trusted; both live in the same
+        # user pool and the user's groups (which drive authorization) come from
+        # the pool, not the client.
+        self.accepted_client_ids = [client_id]
+        if ide_oauth_client_id and ide_oauth_client_id != client_id:
+            self.accepted_client_ids.append(ide_oauth_client_id)
 
         # Cache for JWKS
         self._jwks_cache: dict[str, Any] | None = None
@@ -96,15 +110,45 @@ class CognitoProvider(AuthProvider):
             if not signing_key:
                 raise ValueError(f"No matching key found for kid: {kid}")
 
-            # Validate and decode token
-            claims = jwt.decode(
-                token,
-                signing_key,
-                algorithms=["RS256"],
-                issuer=self.issuer,
-                audience=self.client_id,
-                options={"verify_exp": True, "verify_iat": True, "verify_aud": True},
-            )
+            # Cognito issues two token types and they carry the client binding
+            # DIFFERENTLY:
+            #   - id token:     has an "aud" claim equal to the client_id
+            #   - access token: has NO "aud" claim; the client is in "client_id"
+            #     (token_use == "access"). MCP clients send the ACCESS token to
+            #     the resource server, so validating "aud" rejects every access
+            #     token ("missing aud claim"). Branch on token_use and verify the
+            #     right claim instead.
+            unverified = jwt.decode(token, options={"verify_signature": False})
+            is_access_token = unverified.get("token_use") == "access"
+
+            if is_access_token:
+                # Access token: no aud; verify signature/issuer/expiry, then check
+                # the client_id claim against the allowlist (web + IDE clients).
+                # Cognito access tokens are not audience-bound, so jwt can't do
+                # this for us.
+                claims = jwt.decode(
+                    token,
+                    signing_key,
+                    algorithms=["RS256"],
+                    issuer=self.issuer,
+                    options={"verify_exp": True, "verify_iat": True, "verify_aud": False},
+                )
+                token_client_id = claims.get("client_id")
+                if token_client_id not in self.accepted_client_ids:
+                    raise ValueError(
+                        f"Access token client_id '{token_client_id}' is not in the "
+                        f"accepted client list {self.accepted_client_ids}"
+                    )
+            else:
+                # ID token: audience-bound to the client_id.
+                claims = jwt.decode(
+                    token,
+                    signing_key,
+                    algorithms=["RS256"],
+                    issuer=self.issuer,
+                    audience=self.client_id,
+                    options={"verify_exp": True, "verify_iat": True, "verify_aud": True},
+                )
 
             logger.debug(
                 f"Token validation successful for user: {claims.get('username', 'unknown')}"

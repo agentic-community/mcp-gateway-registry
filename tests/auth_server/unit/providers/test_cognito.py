@@ -11,10 +11,10 @@ because CodeQL flags substring URL checks under py/incomplete-url-substring-sani
 The parsed-host comparison is also a stricter test.
 """
 
+from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
 
 import pytest
-
 
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
 
@@ -110,3 +110,89 @@ class TestCognitoAuthorizationServerMetadata:
         metadata = provider.authorization_server_metadata()
 
         assert "S256" in metadata["code_challenge_methods_supported"]
+
+
+class TestCognitoValidateToken:
+    """Token validation: id tokens are audience-bound; access tokens are not
+    (no `aud`) and must be checked against the accepted client_id allowlist.
+
+    Regression guard for the bug where access tokens were rejected with
+    'Token is missing the "aud" claim' because verify_aud was always True.
+    """
+
+    @staticmethod
+    def _provider(ide_client_id=None):
+        from auth_server.providers.cognito import CognitoProvider
+
+        return CognitoProvider(
+            user_pool_id="us-east-1_abc123",
+            client_id="web-client",
+            client_secret="s",
+            region="us-east-1",
+            ide_oauth_client_id=ide_client_id,
+        )
+
+    def _run_validate(self, provider, decoded_claims):
+        """Run validate_token offline.
+
+        Bypasses JWKS/signature handling by mocking get_jwks, the unverified
+        header, PyJWK, and jwt.decode. jwt.decode is called twice (unverified to
+        read token_use, then verified); both return the same claims here, which
+        is fine for exercising the token_use / client_id allowlist branch.
+        """
+        with (
+            patch.object(provider, "get_jwks", return_value={"keys": [{"kid": "k1"}]}),
+            patch(
+                "auth_server.providers.cognito.jwt.get_unverified_header",
+                return_value={"kid": "k1"},
+            ),
+            patch("jwt.PyJWK", return_value=MagicMock(key="key")),
+            patch(
+                "auth_server.providers.cognito.jwt.decode",
+                return_value=decoded_claims,
+            ),
+        ):
+            return provider.validate_token("fake.jwt.token")
+
+    def test_access_token_accepted_for_ide_client(self):
+        """An access token (no aud) from the IDE public client is accepted when
+        that client id is in the allowlist."""
+        provider = self._provider(ide_client_id="ide-public-client")
+        result = self._run_validate(
+            provider,
+            {
+                "token_use": "access",
+                "client_id": "ide-public-client",
+                "sub": "user-1",
+                "cognito:groups": ["registry-admins"],
+                "scope": "openid email profile",
+            },
+        )
+
+        assert result["valid"] is True
+        assert result["groups"] == ["registry-admins"]
+        assert result["client_id"] == "ide-public-client"
+
+    def test_access_token_rejected_for_unknown_client(self):
+        """An access token from a client id NOT in the allowlist is rejected."""
+        provider = self._provider(ide_client_id="ide-public-client")
+        with pytest.raises(ValueError, match="not in the accepted client"):
+            self._run_validate(
+                provider,
+                {"token_use": "access", "client_id": "some-other-client", "sub": "user-1"},
+            )
+
+    def test_access_token_accepted_for_web_client(self):
+        """The configured web client_id is always accepted (no IDE client set)."""
+        provider = self._provider()
+        result = self._run_validate(
+            provider,
+            {
+                "token_use": "access",
+                "client_id": "web-client",
+                "sub": "user-1",
+                "cognito:groups": [],
+            },
+        )
+
+        assert result["valid"] is True

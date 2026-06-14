@@ -140,6 +140,12 @@ module "ecs_service_auth" {
           name  = "COGNITO_DOMAIN"
           value = var.cognito_domain
         },
+        # IDE OAuth login public client_id (PR #1224). The auth-server accepts
+        # access tokens from this client (e.g. Cognito allowlist). Not a secret.
+        {
+          name  = "IDE_OAUTH_CLIENT_ID"
+          value = var.ide_oauth_client_id
+        },
         {
           name  = "KEYCLOAK_URL"
           value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""

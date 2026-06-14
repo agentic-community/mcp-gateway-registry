@@ -454,6 +454,9 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID:-mcp-gateway-m2m}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      # IDE OAuth login public client_id (PR #1224). The auth-server accepts
+      # access tokens from this client (Cognito allowlist). Public, not a secret.
+      - IDE_OAUTH_CLIENT_ID=${IDE_OAUTH_CLIENT_ID:-}
       # Entra ID configuration
       - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}

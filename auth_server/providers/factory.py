@@ -105,6 +105,9 @@ def _create_cognito_provider() -> CognitoProvider:
 
     # Optional configuration
     domain = os.environ.get("COGNITO_DOMAIN")
+    # Public IDE client (PR #1224). Its access tokens are also accepted so the
+    # IDE OAuth login flow works alongside the web client. Empty = not used.
+    ide_oauth_client_id = os.environ.get("IDE_OAUTH_CLIENT_ID") or None
 
     # Validate required configuration
     missing_vars = []
@@ -131,6 +134,7 @@ def _create_cognito_provider() -> CognitoProvider:
         client_secret=client_secret,
         region=region,
         domain=domain,
+        ide_oauth_client_id=ide_oauth_client_id,
     )
 
 
