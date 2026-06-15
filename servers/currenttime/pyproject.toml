@@ -8,7 +8,7 @@ dependencies = [
     "fastmcp>=2.0.0",
     "pydantic>=2.11.3",
     "pytz>=2025.2",
-    "pyjwt>=2.12.0",
+    "pyjwt>=2.13.0",
 ]
 
 [tool.uv]
