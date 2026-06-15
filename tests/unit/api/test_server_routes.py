@@ -1860,6 +1860,37 @@ class TestEditLocalServer:
         assert updated_entry["deployment"] == "remote"
         assert updated_entry["proxy_pass_url"] == "http://upstream:9001"
 
+    def test_edit_remote_persists_connect_config_overrides(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """Per-server oauth_client_id + append_mcp_path are persisted on edit."""
+        mock_server_service.get_server_info.return_value = self.REMOTE_SERVER_INFO
+        mock_server_service.is_service_enabled.return_value = True
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/edit/remote-srv",
+                headers={"accept": "application/json"},
+                data={
+                    "name": "Existing Remote",
+                    "description": "updated",
+                    "proxy_pass_url": "https://knowledge-mcp.example.com",
+                    "tags": "",
+                    "oauth_client_id": "mcp-gateway",
+                    "append_mcp_path": "false",
+                },
+            )
+        assert response.status_code == 200
+        updated_entry = mock_server_service.update_server.call_args[0][1]
+        assert updated_entry["oauth_client_id"] == "mcp-gateway"
+        assert updated_entry["append_mcp_path"] is False
+
     def test_edit_remote_requires_proxy_pass_url(
         self,
         test_client_admin,
