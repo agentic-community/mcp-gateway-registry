@@ -124,6 +124,10 @@ class ServerUpdateRequest(BaseModel):
     supported_transports: list[str] | None = None
     headers: list[dict[str, Any]] | None = None
 
+    # Per-server Connect-config overrides (token-less IDE OAuth login + /mcp path).
+    oauth_client_id: str | None = None
+    append_mcp_path: bool | None = None
+
     # NOTE: Credential-shaped fields (auth_scheme, auth_credential,
     # auth_header_name, custom_headers) are intentionally absent.
     # They are owned by PATCH /api/servers/{path}/auth-credential.
@@ -211,6 +215,9 @@ class ServerCardPatch(BaseModel):
     transport: str | None = None
     supported_transports: list[str] | None = None
     headers: list[dict[str, Any]] | None = None
+    # Per-server Connect-config overrides (token-less IDE OAuth login + /mcp path).
+    oauth_client_id: str | None = None
+    append_mcp_path: bool | None = None
     # NOTE: Credential-shaped fields (auth_scheme, auth_credential,
     # auth_header_name, custom_headers, custom_header_names) are
     # intentionally absent and rejected by extra="forbid" with 422.
