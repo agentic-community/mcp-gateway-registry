@@ -44,8 +44,14 @@ COPY pyproject.toml /app/pyproject.toml
 COPY uv.lock        /app/uv.lock
 
 # Install dependencies from uv.lock. --locked fails the build if the
-# lock is out of sync with pyproject.toml.
-RUN uv sync --locked --no-dev
+# lock is out of sync with pyproject.toml. If the lock pins a
+# supply-chain quarantine cutoff ([options] exclude-newer), re-export it
+# as UV_EXCLUDE_NEWER so --locked re-resolves under the SAME constraint
+# that produced the lock (otherwise uv treats the missing global cutoff
+# as drift and fails). Mirrors .github/workflows/uv-lock-check.yml.
+RUN CUTOFF=$(awk '/^\[options\]/{o=1;next} /^\[/{o=0} o&&/^exclude-newer/{gsub(/.*= *"|" *$/,"");print;exit}' uv.lock) && \
+    if [ -n "$CUTOFF" ]; then export UV_EXCLUDE_NEWER="$CUTOFF"; echo "Using UV_EXCLUDE_NEWER=$CUTOFF from uv.lock"; fi && \
+    uv sync --locked --no-dev
 
 # Copy the application code
 COPY . /app/

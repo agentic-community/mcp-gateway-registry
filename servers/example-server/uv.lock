@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.14"
 
 [options]
-exclude-newer = "2026-06-08T17:57:34Z"
+exclude-newer = "2026-06-09T02:12:58Z"
 
 [[package]]
 name = "aiohappyeyeballs"
