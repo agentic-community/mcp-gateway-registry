@@ -17,6 +17,7 @@ Design notes:
 """
 
 import asyncio
+import json
 import logging
 import os
 from datetime import UTC, datetime
@@ -98,14 +99,10 @@ async def _fetch_latest_release() -> tuple[str, str] | None:
                 headers={"Accept": "application/vnd.github+json"},
             )
             if response.status_code != 200:
-                logger.info(
-                    f"[update-check] GitHub releases API returned {response.status_code}"
-                )
+                logger.info(f"[update-check] GitHub releases API returned {response.status_code}")
                 return None
 
             content = response.content[:MAX_RESPONSE_BYTES]
-            import json
-
             data = json.loads(content)
             tag = data.get("tag_name")
             html_url = data.get("html_url")
@@ -154,9 +151,7 @@ async def _run_check_once() -> None:
     _state.checked_at = datetime.now(UTC)
 
     if _state.update_available:
-        logger.info(
-            f"[update-check] Update available: {current} -> {latest} ({html_url})"
-        )
+        logger.info(f"[update-check] Update available: {current} -> {latest} ({html_url})")
     else:
         logger.debug(f"[update-check] Up to date at {current}")
 
@@ -174,8 +169,7 @@ class UpdateCheckScheduler:
         self._running = True
         self._task = asyncio.create_task(self._loop())
         logger.info(
-            f"[update-check] Scheduler started "
-            f"(interval={settings.update_check_interval_hours}h)"
+            f"[update-check] Scheduler started (interval={settings.update_check_interval_hours}h)"
         )
 
     async def stop(self) -> None:

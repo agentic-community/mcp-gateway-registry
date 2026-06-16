@@ -372,6 +372,14 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("max_custom_types", "Max Custom Types (0 = unlimited)", False),
         ],
     },
+    "update_check": {
+        "title": "Update Check",
+        "order": 24,
+        "fields": [
+            ("update_check_enabled", "Enabled", False),
+            ("update_check_interval_hours", "Poll Interval (hours)", False),
+        ],
+    },
 }
 
 
