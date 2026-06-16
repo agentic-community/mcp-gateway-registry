@@ -77,10 +77,23 @@ async def load_scopes_from_repository(
                 if ui_permissions:
                     ui_scopes[group_name] = ui_permissions
 
-            logger.info(
-                f"Loaded from repository: {len(group_mappings)} group mappings, "
-                f"{len(scopes_config)} scope definitions, {len(ui_scopes)} UI scopes"
-            )
+            if not group_mappings:
+                # An empty scopes collection means every authenticated user
+                # falls back to read-only access regardless of group membership.
+                # Scopes are not auto-seeded; this is almost always a skipped
+                # post-deployment step rather than an intentional empty config.
+                logger.warning(
+                    "Loaded from repository: 0 group mappings, "
+                    f"{len(scopes_config)} scope definitions, {len(ui_scopes)} UI scopes. "
+                    "The scopes collection is EMPTY — all users will be read-only. "
+                    "Seed scopes via the post-deployment init (run-documentdb-init.sh) "
+                    "or load-scopes.py."
+                )
+            else:
+                logger.info(
+                    f"Loaded from repository: {len(group_mappings)} group mappings, "
+                    f"{len(scopes_config)} scope definitions, {len(ui_scopes)} UI scopes"
+                )
 
             # Build the complete config structure
             config = {"group_mappings": group_mappings, "UI-Scopes": ui_scopes}

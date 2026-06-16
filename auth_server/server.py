@@ -178,6 +178,29 @@ def _read_mcp_proxy_max_body_bytes() -> int:
 # Global scopes configuration (will be loaded during FastAPI startup)
 SCOPES_CONFIG = {}
 
+
+def _log_scopes_loaded(scopes_config: dict) -> None:
+    """Log the loaded scopes config, loudly when the collection is empty.
+
+    An empty scopes collection means every authenticated user falls back to
+    read-only access regardless of group membership. Scopes are not auto-seeded,
+    so an empty config is almost always a skipped post-deployment step. Emit a
+    WARNING with actionable remediation in that case (issue #1248); otherwise
+    keep the existing INFO line unchanged.
+    """
+    group_mappings = scopes_config.get("group_mappings", {})
+    if not group_mappings:
+        logger.warning(
+            "Loaded scopes configuration on startup with 0 group mappings. "
+            "The scopes collection is EMPTY — all users will be read-only. "
+            "Seed scopes via the post-deployment init (run-documentdb-init.sh) "
+            "or load-scopes.py."
+        )
+    else:
+        logger.info(
+            f"Loaded scopes configuration on startup with {len(group_mappings)} group mappings"
+        )
+
 # Static token auth: use static API key instead of IdP JWT for Registry API
 _registry_static_token_requested: bool = (
     os.environ.get("REGISTRY_STATIC_TOKEN_AUTH_ENABLED", "false").lower() == "true"
@@ -1113,9 +1136,7 @@ async def lifespan(app: FastAPI):
     global SCOPES_CONFIG
     try:
         SCOPES_CONFIG = await reload_scopes_config()
-        logger.info(
-            f"Loaded scopes configuration on startup with {len(SCOPES_CONFIG.get('group_mappings', {}))} group mappings"
-        )
+        _log_scopes_loaded(SCOPES_CONFIG)
     except Exception as e:
         logger.error(f"Failed to load scopes configuration on startup: {e}", exc_info=True)
         # Fall back to empty config
@@ -1187,9 +1208,7 @@ async def startup_event():
     global SCOPES_CONFIG
     try:
         SCOPES_CONFIG = await reload_scopes_config()
-        logger.info(
-            f"Loaded scopes configuration on startup with {len(SCOPES_CONFIG.get('group_mappings', {}))} group mappings"
-        )
+        _log_scopes_loaded(SCOPES_CONFIG)
     except Exception as e:
         logger.error(f"Failed to load scopes configuration on startup: {e}", exc_info=True)
         # Fall back to empty config

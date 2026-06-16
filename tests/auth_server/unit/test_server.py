@@ -2832,3 +2832,53 @@ class TestMcpProxyEndpointHeaderPassthrough:
         assert response.status_code == 401
         assert response.headers.get("www-authenticate", "").startswith("Bearer")
         assert response.headers.get("retry-after") == "15"
+
+
+# =============================================================================
+# SCOPES STARTUP LOGGING TESTS (issue #1248)
+# =============================================================================
+
+
+class TestLogScopesLoaded:
+    """Tests for _log_scopes_loaded empty-vs-populated startup logging.
+
+    The auth-server reconfigures the root logger with custom handlers
+    (registry.utils.logging_setup), which makes pytest's caplog fixture
+    unreliable here. Patch the module logger directly and assert on the calls.
+    """
+
+    def test_empty_scopes_emits_warning_with_remediation(self):
+        """0 group mappings -> WARNING with actionable seeding hint."""
+        from auth_server import server as server_module
+
+        with patch.object(server_module, "logger") as mock_logger:
+            server_module._log_scopes_loaded({"group_mappings": {}})
+
+        mock_logger.warning.assert_called_once()
+        mock_logger.info.assert_not_called()
+        msg = mock_logger.warning.call_args[0][0]
+        assert "EMPTY" in msg
+        assert "read-only" in msg
+        assert "load-scopes.py" in msg
+
+    def test_missing_group_mappings_key_treated_as_empty(self):
+        """A config dict with no group_mappings key still warns."""
+        from auth_server import server as server_module
+
+        with patch.object(server_module, "logger") as mock_logger:
+            server_module._log_scopes_loaded({})
+
+        mock_logger.warning.assert_called_once()
+
+    def test_populated_scopes_logs_info_no_warning(self):
+        """Non-empty group mappings -> INFO only, no warning (unchanged behaviour)."""
+        from auth_server import server as server_module
+
+        with patch.object(server_module, "logger") as mock_logger:
+            server_module._log_scopes_loaded(
+                {"group_mappings": {"mcp-registry-admin": ["admin"]}}
+            )
+
+        mock_logger.warning.assert_not_called()
+        mock_logger.info.assert_called_once()
+        assert "1 group mappings" in mock_logger.info.call_args[0][0]
