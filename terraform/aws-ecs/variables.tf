@@ -1246,6 +1246,27 @@ variable "max_custom_types" {
 }
 
 # =============================================================================
+# UPDATE CHECK (admin "newer release available" banner)
+# =============================================================================
+
+variable "update_check_enabled" {
+  description = "Enable background polling of the GitHub Releases API to surface newer registry versions in an admin-only banner. Fail-silent and air-gap safe. Set false for air-gapped deployments or to silence the banner."
+  type        = bool
+  default     = true
+}
+
+variable "update_check_interval_hours" {
+  description = "Polling interval in hours for the update-check background task."
+  type        = number
+  default     = 24
+
+  validation {
+    condition     = var.update_check_interval_hours >= 1
+    error_message = "update_check_interval_hours must be 1 or greater"
+  }
+}
+
+# =============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # =============================================================================
 

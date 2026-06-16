@@ -398,17 +398,14 @@ tabs and `/api/custom*` endpoints are not registered, so there is no behavior ch
 
 Background poll of the GitHub Releases API that surfaces a newer registry version in an admin-only banner
 (`GET /api/system/update-check`). **Registry-only** and non-sensitive. Fail-silent (never affects registry
-operation, so it is air-gap safe) and skipped on dev builds (when `BUILD_VERSION` is unset). Set the enable flag
-to `false` for air-gapped clusters or to silence the banner.
+operation, so it is air-gap safe) and skipped on dev/local builds (a plain `docker compose up` has `BUILD_VERSION`
+unset; `build_and_run.sh` sets it to a non-semver git-describe string that the version parser skips). Set the
+enable flag to `false` for air-gapped clusters or to silence the banner.
 
-> Terraform/ECS wiring is not yet implemented (tracked as a follow-up). On ECS the feature runs with its
-> defaults (enabled, 24h); to disable it there today, add `UPDATE_CHECK_ENABLED=false` via the `registry_extra_env`
-> escape hatch until first-class variables land.
-
-| Parameter            | Docker (`.env`)               | Terraform (`.tfvars`)      | Helm (`values.yaml`)                  | Purpose                                                                                              |
-|----------------------|-------------------------------|----------------------------|---------------------------------------|------------------------------------------------------------------------------------------------------|
-| Enable update check  | `UPDATE_CHECK_ENABLED`        | *(pending — use extraEnv)* | `registry.app.updateCheck.enabled`    | Enable the background GitHub-release poll + admin banner. Default `true`. Set `false` for air-gapped. |
-| Poll interval (hours)| `UPDATE_CHECK_INTERVAL_HOURS` | *(pending — use extraEnv)* | `registry.app.updateCheck.intervalHours` | Polling interval in hours (minimum 1). Default `24`.                                              |
+| Parameter            | Docker (`.env`)               | Terraform (`.tfvars`)         | Helm (`values.yaml`)                     | Purpose                                                                                              |
+|----------------------|-------------------------------|-------------------------------|------------------------------------------|------------------------------------------------------------------------------------------------------|
+| Enable update check  | `UPDATE_CHECK_ENABLED`        | `update_check_enabled`        | `registry.app.updateCheck.enabled`       | Enable the background GitHub-release poll + admin banner. Default `true`. Set `false` for air-gapped. |
+| Poll interval (hours)| `UPDATE_CHECK_INTERVAL_HOURS` | `update_check_interval_hours` | `registry.app.updateCheck.intervalHours` | Polling interval in hours (minimum 1). Default `24`.                                              |
 
 ---
 

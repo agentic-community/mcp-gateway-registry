@@ -1237,6 +1237,18 @@ variable "max_custom_types" {
   default     = 50
 }
 
+variable "update_check_enabled" {
+  description = "Enable background polling of the GitHub Releases API to surface newer registry versions in an admin-only banner. Fail-silent and air-gap safe. Set false for air-gapped deployments or to silence the banner."
+  type        = bool
+  default     = true
+}
+
+variable "update_check_interval_hours" {
+  description = "Polling interval in hours for the update-check background task."
+  type        = number
+  default     = 24
+}
+
 variable "mcp_advertised_scopes" {
   description = <<-EOT
     Space-separated override for the `scopes_supported` array in the gateway's

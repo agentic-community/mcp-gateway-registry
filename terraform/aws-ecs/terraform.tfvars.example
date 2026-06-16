@@ -656,6 +656,19 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # max_custom_types = 50
 
 # ============================================================================
+# UPDATE CHECK (admin "newer release available" banner)
+# ============================================================================
+# Background poll of the GitHub Releases API to surface newer registry versions
+# in an admin-only banner. Fail-silent (never affects registry operation, so it
+# is air-gap safe). Set to false for air-gapped deployments or to silence the
+# banner. Default: true
+# update_check_enabled = true
+
+# Polling interval in hours for the update-check background task. Minimum 1.
+# Default: 24
+# update_check_interval_hours = 24
+
+# ============================================================================
 # AUTHENTICATION PROVIDER CONFIGURATION
 # ============================================================================
 #

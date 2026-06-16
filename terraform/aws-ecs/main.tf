@@ -285,6 +285,10 @@ module "mcp_gateway" {
   max_custom_records_per_type   = var.max_custom_records_per_type
   max_custom_types              = var.max_custom_types
 
+  # Update check (admin "newer release available" banner)
+  update_check_enabled        = var.update_check_enabled
+  update_check_interval_hours = var.update_check_interval_hours
+
   # Deployment mode configuration
   deployment_mode = var.deployment_mode
   registry_mode   = var.registry_mode

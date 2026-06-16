@@ -1185,6 +1185,15 @@ module "ecs_service_registry" {
           name  = "MAX_CUSTOM_TYPES"
           value = tostring(var.max_custom_types)
         },
+        # Update check (admin "newer release available" banner)
+        {
+          name  = "UPDATE_CHECK_ENABLED"
+          value = tostring(var.update_check_enabled)
+        },
+        {
+          name  = "UPDATE_CHECK_INTERVAL_HOURS"
+          value = tostring(var.update_check_interval_hours)
+        },
         # Override the scopes_supported array advertised in the gateway's
         # /.well-known/oauth-protected-resource document. Required when the
         # IdP's RFC 7591 DCR rejects scopes that don't exist as client-scope
