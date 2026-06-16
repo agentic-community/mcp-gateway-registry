@@ -9,9 +9,16 @@ can read it without I/O.
 Design notes:
 - Fail-silent: any network/parse error is logged at INFO and never affects
   registry operation (air-gapped safe).
-- Dev builds are skipped: when ``BUILD_VERSION`` is unset the running version
-  came from ``git describe`` or the ``DEFAULT_VERSION`` fallback, neither of
-  which should be nudged.
+- Dev/local builds never show the banner, via two independent guards:
+  1. ``_is_dev_build()``: when ``BUILD_VERSION`` is unset (e.g. a plain
+     ``docker compose up``) the version came from ``git describe`` or the
+     ``DEFAULT_VERSION`` fallback, so the poller is skipped entirely.
+  2. Unparseable-version skip: ``build_and_run.sh`` DOES set ``BUILD_VERSION``,
+     but to a git-describe string like ``1.24.5-11-g<sha>-<branch>`` that is
+     not valid semver. ``_parse_release_tag`` returns ``None`` for it, so the
+     check bails before comparing and the banner still never appears locally.
+  Only a real release image (``BUILD_VERSION`` = a clean tag such as ``1.24.5``)
+  yields a parseable version that can surface an update.
 - The GitHub Releases API URL is hardcoded — it tracks this repo and is not
   operator-configurable.
 """
@@ -67,11 +74,15 @@ def get_state() -> UpdateCheckState:
 
 
 def _is_dev_build() -> bool:
-    """Return True when the running version is a local/dev build.
+    """Return True when ``BUILD_VERSION`` is unset (one of two dev guards).
 
-    Production images set ``BUILD_VERSION`` at Docker build time. When that
-    env var is absent the version came from git or the default fallback, and
-    we should not nudge.
+    Production and ``build_and_run.sh`` builds both set ``BUILD_VERSION`` at
+    Docker build time; a plain ``docker compose up`` does not. An unset value
+    means the version came from ``git describe`` or the default fallback, so we
+    skip outright. Note this is only the FIRST guard: a local ``build_and_run.sh``
+    build sets ``BUILD_VERSION`` to a non-semver git-describe string and is
+    instead caught later by the unparseable-version skip in ``_run_check_once``
+    (see the module docstring).
     """
     return not os.getenv("BUILD_VERSION")
 

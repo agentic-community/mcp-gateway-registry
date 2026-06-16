@@ -4,7 +4,7 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from registry.auth.dependencies import enhanced_auth
+from registry.auth.dependencies import nginx_proxied_auth
 from registry.main import app
 
 
@@ -41,7 +41,7 @@ def _mock_non_admin_auth():
 @pytest.mark.unit
 class TestUpdateCheckRoute:
     def test_admin_receives_payload(self) -> None:
-        app.dependency_overrides[enhanced_auth] = _mock_admin_auth
+        app.dependency_overrides[nginx_proxied_auth] = _mock_admin_auth
         try:
             client = TestClient(app)
             response = client.get("/api/system/update-check")
@@ -57,7 +57,7 @@ class TestUpdateCheckRoute:
             app.dependency_overrides.clear()
 
     def test_non_admin_forbidden(self) -> None:
-        app.dependency_overrides[enhanced_auth] = _mock_non_admin_auth
+        app.dependency_overrides[nginx_proxied_auth] = _mock_non_admin_auth
         try:
             client = TestClient(app)
             response = client.get("/api/system/update-check")
@@ -66,7 +66,8 @@ class TestUpdateCheckRoute:
             app.dependency_overrides.clear()
 
     def test_unauthenticated_rejected(self) -> None:
-        # No override → real enhanced_auth runs and rejects the missing session.
+        # No override → real nginx_proxied_auth runs and rejects a request with
+        # neither a session cookie nor nginx-forwarded identity headers.
         client = TestClient(app)
         response = client.get("/api/system/update-check")
         assert response.status_code in (
