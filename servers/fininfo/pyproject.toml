@@ -10,7 +10,7 @@ dependencies = [
     "requests>=2.32.3",
     "python-dotenv>=1.0.0",
     "PyYAML>=6.0.0",
-    "cryptography>=41.0.0",
+    "cryptography>=48.0.1",
 ]
 
 [tool.uv]
