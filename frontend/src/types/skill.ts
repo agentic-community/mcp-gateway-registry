@@ -82,6 +82,16 @@ export interface Skill {
   auth_scheme?: 'none' | 'global_credentials' | 'bearer' | 'api_key';
   auth_header_name?: string;
   num_stars?: number;
+  rating_details?: Array<{ user: string; rating: number }>;
+  // Lightweight scan summary from the list payload, used to colour the shield
+  // icon without a per-card /security-scan fetch. Undefined if not yet scanned.
+  security_scan?: {
+    scan_failed?: boolean;
+    critical_issues?: number;
+    high_severity?: number;
+    medium_severity?: number;
+    low_severity?: number;
+  } | null;
   status?: 'active' | 'draft' | 'deprecated' | 'beta';
   health_status?: string;
   last_checked_time?: string;

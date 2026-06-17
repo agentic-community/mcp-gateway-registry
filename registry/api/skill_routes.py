@@ -215,6 +215,7 @@ async def list_skills(
                 auth_scheme=s.auth_scheme,
                 auth_header_name=s.auth_header_name,
                 num_stars=s.num_stars,
+                rating_details=s.rating_details,
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
                 status=s.status,
@@ -234,6 +235,15 @@ async def list_skills(
         page_skills = all_skills[offset : offset + limit]
 
     has_next = (offset + limit) < total_count
+
+    # Bulk-load security-scan summaries once and attach to the page so each card
+    # colours its shield icon from the list payload instead of fetching
+    # /skills/{path}/security-scan on mount (N+1 over the page).
+    from ..services.skill_scanner import skill_scanner_service
+
+    scan_summaries = await skill_scanner_service.get_scan_summaries()
+    for skill in page_skills:
+        skill.security_scan = scan_summaries.get(skill.path)
 
     logger.info(
         f"Returning {len(page_skills)} skills for user "

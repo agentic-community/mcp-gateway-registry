@@ -723,6 +723,18 @@ class AgentInfo(BaseModel):
         alias="numStars",
         description="Average community rating (0.0-5.0)",
     )
+    rating_details: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="ratingDetails",
+        description="Individual user ratings; included so cards render the rating "
+        "widget without a per-card /rating fetch.",
+    )
+    security_scan: dict[str, Any] | None = Field(
+        default=None,
+        alias="securityScan",
+        description="Lightweight scan summary (scan_failed + severity counts) for "
+        "the shield icon. None if the agent has not been scanned.",
+    )
     is_enabled: bool = Field(
         False,
         alias="isEnabled",

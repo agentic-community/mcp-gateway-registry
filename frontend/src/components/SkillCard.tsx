@@ -28,6 +28,7 @@ import SecurityScanModal from './SecurityScanModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 import SkillResources from './SkillResources';
+import { toScanSummary } from '../utils/securityScan';
 
 /**
  * Props for the SkillCard component.
@@ -152,7 +153,10 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
     skill.last_checked_time || null
   );
   const [showSecurityScan, setShowSecurityScan] = useState(false);
-  const [securityScanResult, setSecurityScanResult] = useState<any>(null);
+  // Seed from the list payload's lightweight scan summary so the shield icon
+  // colours correctly with no per-card fetch. The on-click handler upgrades this
+  // to the full scan document for the modal.
+  const [securityScanResult, setSecurityScanResult] = useState<any>(skill.security_scan ?? null);
   const [loadingSecurityScan, setLoadingSecurityScan] = useState(false);
 
   // Sync health status from props when skill changes
@@ -172,22 +176,20 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
   };
   const skillApiPath = getSkillApiPath(skill.path);
 
-  // Fetch security scan status on mount to show correct icon color
+  // Keep the icon in sync with the list payload's scan summary. No fetch: the
+  // summary (scan_failed + severity counts) arrives inline on /api/skills, so a
+  // page of cards costs zero extra requests instead of one /security-scan each.
+  // Skip when the user has already opened the full detail (a richer object).
+  //
+  // Invariant: handleRescan MUST update the parent (onSkillUpdate) synchronously
+  // so skill.security_scan is fresh by the time the modal closes and this effect
+  // re-syncs. React 18 batches the rescan's state updates, so the prop is current
+  // on the next render; wrapping the modal close in setTimeout would break this.
   useEffect(() => {
-    const fetchSecurityScan = async () => {
-      try {
-        const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-        const response = await axios.get(
-          `/api/skills${skillApiPath}/security-scan`,
-          headers ? { headers } : undefined
-        );
-        setSecurityScanResult(response.data);
-      } catch {
-        // Silently ignore - no scan result available
-      }
-    };
-    fetchSecurityScan();
-  }, [skillApiPath, authToken]);
+    if (!showSecurityScan) {
+      setSecurityScanResult(skill.security_scan ?? null);
+    }
+  }, [skill.security_scan, showSecurityScan]);
 
   const getVisibilityIcon = () => {
     switch (skill.visibility) {
@@ -341,8 +343,13 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
       undefined,
       headers ? { headers } : undefined
     );
+    // Show the full result in the open modal, and push the lightweight summary
+    // up so skill.security_scan (the list entry) reflects the new scan. Without
+    // this the prop-sync effect would revert the badge to the stale list value
+    // when the modal closes.
     setSecurityScanResult(response.data);
-  }, [skillApiPath, authToken]);
+    onSkillUpdate?.(skill.path, { security_scan: toScanSummary(response.data) });
+  }, [skillApiPath, skill.path, authToken, onSkillUpdate]);
 
   const getSecurityIconState = () => {
     if (!securityScanResult) {
@@ -534,6 +541,8 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
               resourceType="skills"
               path={skillApiPath}
               initialRating={skill.num_stars || 0}
+              initialCount={skill.rating_details?.length || 0}
+              ratingDetails={skill.rating_details}
               authToken={authToken}
               onShowToast={onShowToast}
             />

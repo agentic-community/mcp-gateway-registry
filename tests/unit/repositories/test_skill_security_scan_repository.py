@@ -108,6 +108,35 @@ class TestListAll:
         assert await repo.list_all() == []
 
 
+class TestListLatest:
+    async def test_groups_by_skill_path_unwrapping_doc(self, repo, mock_collection):
+        mock_collection.aggregate = MagicMock(
+            return_value=_make_cursor(
+                [
+                    {"_id": "/a", "doc": {"_id": "x", "skill_path": "/a", "low_severity": 2}},
+                    {"_id": "/b", "doc": {"_id": "y", "skill_path": "/b", "critical_issues": 1}},
+                ]
+            )
+        )
+        result = await repo.list_latest()
+        assert result == [
+            {"skill_path": "/a", "low_severity": 2},
+            {"skill_path": "/b", "critical_issues": 1},
+        ]
+
+    async def test_pipeline_sorts_desc_then_groups_first(self, repo, mock_collection):
+        mock_collection.aggregate = MagicMock(return_value=_make_cursor([]))
+        await repo.list_latest()
+        pipeline = mock_collection.aggregate.call_args[0][0]
+        assert pipeline[0] == {"$sort": {"scan_timestamp": -1}}
+        assert pipeline[1]["$group"]["_id"] == "$skill_path"
+        assert pipeline[1]["$group"]["doc"] == {"$first": "$$ROOT"}
+
+    async def test_error_returns_empty(self, repo, mock_collection):
+        mock_collection.aggregate = MagicMock(side_effect=Exception("db error"))
+        assert await repo.list_latest() == []
+
+
 class TestCreate:
     async def test_missing_skill_path_returns_false(self, repo, mock_collection):
         assert await repo.create({"scan_status": "done"}) is False

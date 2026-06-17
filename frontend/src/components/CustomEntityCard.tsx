@@ -137,6 +137,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
           path={record.path}
           initialRating={record.num_stars}
           initialCount={record.rating_details?.length ?? 0}
+          ratingDetails={record.rating_details}
           authToken={authToken}
           onShowToast={onShowToast}
         />
