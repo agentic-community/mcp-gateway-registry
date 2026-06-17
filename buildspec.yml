@@ -1,0 +1,93 @@
+version: 0.2
+
+env:
+  variables:
+    DOCKER_BUILDKIT: "1"
+
+phases:
+  pre_build:
+    commands:
+      - echo "=== Building MCP Gateway container images ==="
+      - echo "Source version - $CODEBUILD_RESOLVED_SOURCE_VERSION"
+      - export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - export ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+      - export IMAGE_TAG="sha-${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}"
+      - echo "ECR Registry - $ECR_REGISTRY"
+      - echo "Image tag - $IMAGE_TAG"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+      - echo "Pre-pulling base images for layer caching..."
+      - docker pull public.ecr.aws/docker/library/python:3.14-slim || true
+      - docker tag public.ecr.aws/docker/library/python:3.14-slim python:3.14-slim
+      - docker pull quay.io/keycloak/keycloak:23.0 || true
+      - docker pull grafana/grafana:12.3.1 || true
+      - echo "Pulling existing images for cache..."
+      - for repo in mcp-gateway-registry mcp-gateway-auth-server keycloak mcp-gateway-currenttime mcp-gateway-mcpgw mcp-gateway-realserverfaketools mcp-gateway-flight-booking-agent mcp-gateway-travel-assistant-agent mcp-gateway-scopes-init mcp-gateway-metrics-service mcp-gateway-grafana; do docker pull $ECR_REGISTRY/$repo:latest 2>/dev/null || true; done
+      - echo "Setting up A2A agent dependencies..."
+      - mkdir -p agents/a2a/src/flight-booking-agent/.tmp agents/a2a/src/travel-assistant-agent/.tmp
+      - cp agents/a2a/pyproject.toml agents/a2a/uv.lock agents/a2a/src/flight-booking-agent/.tmp/ 2>/dev/null || true
+      - cp agents/a2a/pyproject.toml agents/a2a/uv.lock agents/a2a/src/travel-assistant-agent/.tmp/ 2>/dev/null || true
+  build:
+    commands:
+      - echo "=== Building all container images in parallel ==="
+      - |
+        build_and_push() {
+          local name=$1
+          local dockerfile=$2
+          local context=$3
+          echo "Starting build: $name"
+          if docker build --cache-from $ECR_REGISTRY/$name:latest \
+               -t $ECR_REGISTRY/$name:$IMAGE_TAG \
+               --build-arg BUILD_VERSION=$IMAGE_TAG \
+               -f $dockerfile $context && \
+             docker tag $ECR_REGISTRY/$name:$IMAGE_TAG $ECR_REGISTRY/$name:latest && \
+             docker push $ECR_REGISTRY/$name:$IMAGE_TAG && \
+             docker push $ECR_REGISTRY/$name:latest; then
+            echo "Completed: $name"
+          else
+            echo "FAILED: $name"
+            return 1
+          fi
+        }
+
+        # Core services
+        build_and_push mcp-gateway-registry docker/Dockerfile.registry-cpu . &
+        build_and_push mcp-gateway-auth-server docker/Dockerfile.auth . &
+
+        # MCP servers
+        build_and_push mcp-gateway-currenttime docker/Dockerfile.mcp-server servers/currenttime &
+        (docker build --cache-from $ECR_REGISTRY/mcp-gateway-mcpgw:latest \
+          -t $ECR_REGISTRY/mcp-gateway-mcpgw:$IMAGE_TAG \
+          --build-arg SERVER_DIR=servers/mcpgw --build-arg BUILD_VERSION=$IMAGE_TAG \
+          -f docker/Dockerfile.mcp-server-cpu . && \
+          docker tag $ECR_REGISTRY/mcp-gateway-mcpgw:$IMAGE_TAG $ECR_REGISTRY/mcp-gateway-mcpgw:latest && \
+          docker push $ECR_REGISTRY/mcp-gateway-mcpgw:$IMAGE_TAG && \
+          docker push $ECR_REGISTRY/mcp-gateway-mcpgw:latest && \
+          echo "Completed: mcp-gateway-mcpgw" || { echo "FAILED: mcp-gateway-mcpgw"; exit 1; }) &
+        build_and_push mcp-gateway-realserverfaketools docker/Dockerfile.mcp-server servers/realserverfaketools &
+
+        # A2A agents
+        build_and_push mcp-gateway-flight-booking-agent agents/a2a/src/flight-booking-agent/Dockerfile agents/a2a/src/flight-booking-agent &
+        build_and_push mcp-gateway-travel-assistant-agent agents/a2a/src/travel-assistant-agent/Dockerfile agents/a2a/src/travel-assistant-agent &
+
+        # Utilities
+        build_and_push mcp-gateway-scopes-init docker/Dockerfile.scopes-init . &
+
+        # Observability pipeline
+        build_and_push mcp-gateway-metrics-service metrics-service/Dockerfile metrics-service &
+        build_and_push mcp-gateway-grafana terraform/aws-ecs/grafana/Dockerfile terraform/aws-ecs/grafana &
+
+        # Wait for all background jobs
+        FAILED=0
+        for job in $(jobs -p); do
+          wait $job || FAILED=$((FAILED+1))
+        done
+
+        if [ $FAILED -gt 0 ]; then
+          echo "$FAILED build(s) failed"
+          exit 1
+        fi
+        echo "All builds completed successfully"
+  post_build:
+    commands:
+      - echo "Build completed on $(date)"
+      - echo "All images pushed to $ECR_REGISTRY with tags $IMAGE_TAG and latest"

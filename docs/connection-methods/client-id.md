@@ -28,9 +28,10 @@ preserves full per-user auditability (see "Auditability" below).
 2. The registry advertises that client id. Configure it two ways:
    - **Registry-wide default:** set `IDE_OAUTH_CLIENT_ID` on the registry. Every
      server's Connect dialog uses it.
-   - **Per-server override:** set `oauth_client_id` on an individual server entry
-     (registration form or server JSON). This wins over the global default for
-     that server.
+   - **Per-server override:** set `oauth_client_id` on an individual server entry.
+     This wins over the global default for that server. See
+     "[Setting the per-server overrides](#setting-the-per-server-overrides)" below
+     for the API/UI fields that write it.
    Resolution happens server-side in `GET /api/servers/{path}/connect-config`
    (`server_info.oauth_client_id` || `settings.ide_oauth_client_id`), so the
    frontend receives a single resolved value.
@@ -308,6 +309,55 @@ Knowledge) serve MCP at the server path itself and break on `/mcp`. Set
 `append_mcp_path: false` on that server entry to emit the URL without the suffix;
 set `true` to force it; leave unset to auto-detect from `proxy_pass_url`. For an
 entirely custom endpoint, use `mcp_endpoint`.
+
+## Setting the per-server overrides
+
+Both per-server overrides (`oauth_client_id` and `append_mcp_path`) are written
+through the same surfaces that manage any other server field. Omitting a field leaves
+it unset, so existing servers are unaffected (`oauth_client_id` falls back to the
+registry-wide `IDE_OAUTH_CLIENT_ID`; `append_mcp_path` auto-detects from
+`proxy_pass_url`).
+
+### Registry UI
+
+Set both fields on the server **Register** and **Edit** forms. After saving, the
+server's **Connect** dialog reflects the values immediately.
+
+### Register API (JWT Bearer)
+
+Pass them as optional form fields to `POST /api/servers/register`:
+
+```bash
+curl -X POST https://registry.example.com/api/servers/register \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -F "name=AWS Knowledge" \
+  -F "description=Root-endpoint MCP server" \
+  -F "path=/aws-knowledge" \
+  -F "proxy_pass_url=https://knowledge-mcp.example.com" \
+  -F "oauth_client_id=mcp-gateway" \
+  -F "append_mcp_path=false"
+```
+
+### Update API (PUT / PATCH)
+
+`PUT /api/servers/{path}` (full replace) and `PATCH /api/servers/{path}` (partial)
+both accept the fields in the JSON body:
+
+```bash
+curl -X PATCH https://registry.example.com/api/servers/aws-knowledge \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"oauth_client_id": "mcp-gateway", "append_mcp_path": false}'
+```
+
+PATCH merges (only the fields you send change); PUT replaces, so a field omitted from a
+PUT body is cleared back to unset.
+
+### Reading back the resolved values
+
+`GET /api/servers/{path}/connect-config` returns the effective `oauth_client_id`
+(per-server value, else the registry-wide default) and the stored `append_mcp_path`.
+This is the value the frontend Connect dialog consumes.
 
 ## Related
 

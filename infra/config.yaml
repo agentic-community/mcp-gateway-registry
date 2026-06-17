@@ -1,0 +1,197 @@
+# MCP Gateway Registry - CDK Configuration
+#
+# This file controls the CDK deployment of the MCP Gateway Registry.
+# Sensitive values (passwords, tokens, keys) should be set via environment
+# variables with the CDK_ prefix. See registry-config.ts for the full list.
+#
+# Environment variables for sensitive values:
+#   CDK_KEYCLOAK_ADMIN_PASSWORD
+#   CDK_KEYCLOAK_DATABASE_PASSWORD
+#   CDK_DOCUMENTDB_ADMIN_PASSWORD
+#   CDK_GRAFANA_ADMIN_PASSWORD
+#   CDK_REGISTRY_API_TOKEN
+#   CDK_FEDERATION_STATIC_TOKEN
+#   CDK_FEDERATION_ENCRYPTION_KEY
+#   CDK_ENTRA_CLIENT_SECRET
+#   CDK_OKTA_CLIENT_SECRET
+#   CDK_OKTA_M2M_CLIENT_SECRET
+#   CDK_OKTA_API_TOKEN
+#   CDK_AUTH0_CLIENT_SECRET
+#   CDK_AUTH0_M2M_CLIENT_SECRET
+#   CDK_AUTH0_MANAGEMENT_API_TOKEN
+#   CDK_EMBEDDINGS_API_KEY
+#   CDK_ANS_API_KEY
+#   CDK_ANS_API_SECRET
+#   CDK_GITHUB_PAT
+#   CDK_GITHUB_APP_PRIVATE_KEY
+#   CDK_OTEL_EXPORTER_OTLP_HEADERS
+
+registry:
+  enabled: true
+  name: mcp-gateway
+  awsRegion: us-east-1
+  # awsAccountId: "123456789012"  # Set to your AWS account ID
+
+  # Network
+  vpcCidr: "10.0.0.0/16"
+  ingressCidrBlocks:
+    - "0.0.0.0/0"
+
+  # DNS (set enableRoute53Dns to true and configure baseDomain for custom domains)
+  enableRoute53Dns: false
+  useRegionalDomains: true
+  baseDomain: mycorp.click
+  # certificateArn: ""
+
+  # Storage
+  storageBackend: documentdb
+
+  # Deployment
+  deploymentMode: with-gateway
+  registryMode: full
+  enableObservability: true
+  enableWaf: false
+  createCodebuild: false
+  disableAiRegistryToolsServer: "false"
+
+  # DocumentDB (only used when storageBackend is 'documentdb')
+  documentdb:
+    adminUsername: docdbadmin
+    shardCapacity: 2
+    shardCount: 1
+    instanceClass: db.t3.medium
+    replicaCount: 0
+    database: mcp_registry
+    namespace: default
+    useTls: true
+    useIam: false
+
+  # Keycloak
+  keycloak:
+    adminUser: admin
+    databaseUsername: keycloak
+    databaseMinAcu: 0.5
+    databaseMaxAcu: 2
+    logLevel: INFO
+
+  # Container images (leave empty to use defaults or set to ECR URIs)
+  images:
+    registry: "mcpgateway/registry:latest"
+    authServer: "mcpgateway/auth-server:latest"
+    keycloak: "quay.io/keycloak/keycloak:26.2.4"
+    currenttime: ""
+    mcpgw: ""
+    realserverfaketools: ""
+    flightBookingAgent: ""
+    travelAssistantAgent: ""
+    metricsService: "mcpgateway/metrics-service:latest"
+    grafana: "grafana/grafana:11.6.0"
+
+  # Service replicas
+  replicas:
+    registry: 1
+    auth: 1
+    currenttime: 1
+    mcpgw: 1
+    realserverfaketools: 1
+    flightBookingAgent: 1
+    travelAssistantAgent: 1
+
+  # Embeddings
+  embeddings:
+    provider: sentence-transformers
+    modelName: all-MiniLM-L6-v2
+    modelDimensions: 384
+    awsRegion: us-east-1
+
+  # Security scanning
+  security:
+    scanEnabled: false
+    scanOnRegistration: false
+    blockUnsafeServers: false
+    analyzers: yara
+    scanTimeout: 60
+    addPendingTag: false
+
+  # Federation
+  federation:
+    registryId: ""
+    staticTokenAuthEnabled: false
+    awsRegistryFederationEnabled: false
+
+  # Audit logging
+  audit:
+    logEnabled: true
+    logTtlDays: 7
+
+  # OpenTelemetry
+  otel:
+    otlpEndpoint: ""
+    otlpExportIntervalMs: 30000
+    exporterOtlpMetricsTemporalityPreference: cumulative
+
+  # Identity providers (disabled by default)
+  entra:
+    enabled: false
+  okta:
+    enabled: false
+  auth0:
+    enabled: false
+    groupsClaim: "https://mcp-gateway/groups"
+
+  # GitHub private repo auth
+  github:
+    apiBaseUrl: "https://api.github.com"
+
+  # ANS (Agent Naming Service)
+  ans:
+    integrationEnabled: false
+    apiEndpoint: "https://api.godaddy.com"
+    apiTimeoutSeconds: 30
+    syncIntervalHours: 6
+    verificationCacheTtlSeconds: 3600
+
+  # Telemetry
+  telemetry:
+    disabled: ""
+    optOut: ""
+    heartbeatIntervalMinutes: "1440"
+    debug: "false"
+
+  # Registry card (federation metadata)
+  registryCard:
+    name: "mcp-gateway"
+    organizationName: "MCP Gateway"
+    description: "MCP Gateway Registry"
+    contactEmail: ""
+    contactUrl: ""
+
+  # CloudFront
+  cloudfront:
+    enabled: false
+    prefixListName: ""
+
+  # Session
+  session:
+    cookieSecure: false
+    cookieDomain: ""
+    oauthStoreTokensInSession: false
+
+  # UI tabs
+  uiTabs:
+    showServersTab: true
+    showVirtualServersTab: true
+    showSkillsTab: true
+    showAgentsTab: true
+
+  # Static token auth
+  staticTokenAuth:
+    registryStaticTokenAuthEnabled: false
+    maxTokensPerUserPerHour: 100
+    m2mDirectRegistrationEnabled: true
+
+  # Monitoring
+  monitoring:
+    enabled: true
+    alarmEmail: ""
+    alarmSnsTopicArn: ""

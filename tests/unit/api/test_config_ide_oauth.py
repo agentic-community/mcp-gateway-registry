@@ -66,6 +66,38 @@ class TestPerServerConnectFields:
         assert server.append_mcp_path is False
 
 
+class TestUpdateModelsAcceptConnectFields:
+    """PUT/PATCH bodies accept the per-server connect-config overrides.
+
+    Without these fields on the update models (which are extra="forbid"),
+    a PUT/PATCH carrying oauth_client_id / append_mcp_path would 422 — i.e.
+    there would be no API write path for the values the connect-config GET
+    reads back.
+    """
+
+    def test_server_update_request_accepts_fields(self):
+        from registry.schemas.server_update_models import ServerUpdateRequest
+
+        body = ServerUpdateRequest(
+            server_name="AWS Knowledge",
+            description="AWS docs MCP",
+            oauth_client_id="mcp-gateway",
+            append_mcp_path=False,
+        )
+
+        assert body.oauth_client_id == "mcp-gateway"
+        assert body.append_mcp_path is False
+
+    def test_server_card_patch_accepts_fields(self):
+        from registry.schemas.server_update_models import ServerCardPatch
+
+        patch_body = ServerCardPatch(oauth_client_id="mcp-gateway", append_mcp_path=False)
+        dumped = patch_body.model_dump(exclude_unset=True)
+
+        assert dumped["oauth_client_id"] == "mcp-gateway"
+        assert dumped["append_mcp_path"] is False
+
+
 class TestConnectConfigResolution:
     """connect-config endpoint resolves the effective oauth_client_id.
 

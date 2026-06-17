@@ -1,0 +1,20 @@
+#!/bin/bash
+# Copy to set-env.sh, fill in values, then `source ./scripts/set-env.sh` before deploy.
+# set-env.sh is gitignored — never commit real secrets.
+
+# Required (≥8 printable-ASCII chars, no '/' '@' '"' or spaces)
+export CDK_KEYCLOAK_ADMIN_PASSWORD=""
+export CDK_KEYCLOAK_DATABASE_PASSWORD=""
+export CDK_DOCUMENTDB_ADMIN_PASSWORD=""
+export CDK_GRAFANA_ADMIN_PASSWORD=""
+# Optional
+export AWS_REGION="us-east-1"
+
+# export CDK_EMBEDDINGS_API_KEY=""
+# export CDK_ENTRA_CLIENT_SECRET=""
+# export CDK_OKTA_CLIENT_SECRET=""
+# export CDK_OKTA_M2M_CLIENT_SECRET=""
+# export CDK_AUTH0_CLIENT_SECRET=""
+# export CDK_AUTH0_M2M_CLIENT_SECRET=""
+# export CDK_GITHUB_PAT=""
+# export CDK_OTEL_EXPORTER_OTLP_HEADERS=""

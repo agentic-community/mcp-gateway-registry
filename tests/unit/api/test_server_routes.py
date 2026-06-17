@@ -1051,6 +1051,83 @@ class TestRegisterService:
             server_entry = mock_server_service.register_server.call_args[0][0]
             assert server_entry["metadata"] == {"team": "platform", "tier": "gold"}
 
+    def test_register_service_persists_connect_config_overrides(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+        mock_nginx_reload_scheduler,
+        mock_health_service,
+    ):
+        """Per-server oauth_client_id + append_mcp_path are persisted on register."""
+        # Arrange
+        mock_server_service.register_server.return_value = {
+            "success": True,
+            "message": "Server registered successfully",
+            "is_new_version": False,
+        }
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            # Act - a root-endpoint server that drops the /mcp suffix and uses a
+            # fixed public OAuth client for the IDE login flow.
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "AWS Knowledge",
+                    "description": "Test",
+                    "path": "/aws-knowledge",
+                    "proxy_pass_url": "https://knowledge-mcp.example.com",
+                    "oauth_client_id": "mcp-gateway",
+                    "append_mcp_path": "false",
+                },
+            )
+
+            # Assert
+            assert response.status_code == 201
+            server_entry = mock_server_service.register_server.call_args[0][0]
+            assert server_entry["oauth_client_id"] == "mcp-gateway"
+            assert server_entry["append_mcp_path"] is False
+
+    def test_register_service_omits_connect_config_when_unset(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+        mock_nginx_reload_scheduler,
+        mock_health_service,
+    ):
+        """Absent overrides are not persisted (None = auto-detect / global default)."""
+        # Arrange
+        mock_server_service.register_server.return_value = {
+            "success": True,
+            "message": "Server registered successfully",
+            "is_new_version": False,
+        }
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            # Act
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Plain Server",
+                    "description": "Test",
+                    "path": "/plain",
+                    "proxy_pass_url": "http://localhost:9000",
+                },
+            )
+
+            # Assert
+            assert response.status_code == 201
+            server_entry = mock_server_service.register_server.call_args[0][0]
+            assert "oauth_client_id" not in server_entry
+            assert "append_mcp_path" not in server_entry
+
     def test_register_service_metadata_json_null_defaults_to_empty_dict(
         self,
         test_client_admin,
@@ -1783,6 +1860,37 @@ class TestEditLocalServer:
         assert updated_entry["deployment"] == "remote"
         assert updated_entry["proxy_pass_url"] == "http://upstream:9001"
 
+    def test_edit_remote_persists_connect_config_overrides(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """Per-server oauth_client_id + append_mcp_path are persisted on edit."""
+        mock_server_service.get_server_info.return_value = self.REMOTE_SERVER_INFO
+        mock_server_service.is_service_enabled.return_value = True
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/edit/remote-srv",
+                headers={"accept": "application/json"},
+                data={
+                    "name": "Existing Remote",
+                    "description": "updated",
+                    "proxy_pass_url": "https://knowledge-mcp.example.com",
+                    "tags": "",
+                    "oauth_client_id": "mcp-gateway",
+                    "append_mcp_path": "false",
+                },
+            )
+        assert response.status_code == 200
+        updated_entry = mock_server_service.update_server.call_args[0][1]
+        assert updated_entry["oauth_client_id"] == "mcp-gateway"
+        assert updated_entry["append_mcp_path"] is False
+
     def test_edit_remote_requires_proxy_pass_url(
         self,
         test_client_admin,
@@ -2192,6 +2300,24 @@ class TestServerRegisterVisibility:
         call_args = mock_server_service.register_server.call_args
         server_entry = call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
         assert server_entry["visibility"] == "public"
+
+    def test_register_persists_connect_config_overrides(
+        self, test_client_admin, mock_server_service
+    ):
+        """oauth_client_id + append_mcp_path round-trip through the API register handler."""
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={
+                **self._BASE_FORM,
+                "oauth_client_id": "mcp-gateway",
+                "append_mcp_path": "false",
+            },
+        )
+        assert response.status_code == 201
+        call_args = mock_server_service.register_server.call_args
+        server_entry = call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+        assert server_entry["oauth_client_id"] == "mcp-gateway"
+        assert server_entry["append_mcp_path"] is False
 
     def test_register_rejects_invalid_visibility(
         self, test_client_admin, mock_server_service

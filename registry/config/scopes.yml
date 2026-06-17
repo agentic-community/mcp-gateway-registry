@@ -117,7 +117,7 @@ UI-Scopes:
 # Maps Keycloak groups to internal scope group names
 group_mappings:
   mcp-registry-admin:
-  - mcp-registry-admin
+  - registry-admins
   - mcp-servers-unrestricted/read
   - mcp-servers-unrestricted/execute
   registry-admins:

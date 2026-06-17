@@ -1097,6 +1097,8 @@ async def register_service(
     source_updated_at: Annotated[str | None, Form()] = None,
     deployment: Annotated[str, Form()] = "remote",
     local_runtime: Annotated[str | None, Form()] = None,
+    oauth_client_id: Annotated[str | None, Form()] = None,
+    append_mcp_path: Annotated[bool | None, Form()] = None,
     user_context: Annotated[dict, Depends(enhanced_auth)] = None,
 ):
     """Register a new service (requires register_service UI permission).
@@ -1211,6 +1213,13 @@ async def register_service(
             server_entry["mcp_endpoint"] = mcp_endpoint
         if sse_endpoint:
             server_entry["sse_endpoint"] = sse_endpoint
+
+    # Per-server Connect-config overrides (token-less IDE OAuth login + /mcp path).
+    # None = unset (auto-detect / fall back to the registry-wide default).
+    if oauth_client_id is not None:
+        server_entry["oauth_client_id"] = oauth_client_id
+    if append_mcp_path is not None:
+        server_entry["append_mcp_path"] = append_mcp_path
 
     # Add metadata if provided (expects JSON string)
     if metadata:
@@ -2088,6 +2097,8 @@ async def edit_server_submit(
     deployment: Annotated[str | None, Form()] = None,
     local_runtime: Annotated[str | None, Form()] = None,
     custom_headers: Annotated[str | None, Form()] = None,
+    oauth_client_id: Annotated[str | None, Form()] = None,
+    append_mcp_path: Annotated[bool | None, Form()] = None,
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Handle server edit form submission (requires modify_service UI permission).
@@ -2260,6 +2271,13 @@ async def edit_server_submit(
             updated_server_entry["mcp_endpoint"] = mcp_endpoint
         if sse_endpoint:
             updated_server_entry["sse_endpoint"] = sse_endpoint
+
+    # Per-server Connect-config overrides (token-less IDE OAuth login + /mcp path).
+    # None = unset (auto-detect / fall back to the registry-wide default).
+    if oauth_client_id is not None:
+        updated_server_entry["oauth_client_id"] = oauth_client_id
+    if append_mcp_path is not None:
+        updated_server_entry["append_mcp_path"] = append_mcp_path
 
     # Add optional status if provided
     if service_status:
@@ -3497,6 +3515,8 @@ async def register_service_api(
     local_runtime: Annotated[str | None, Form()] = None,
     visibility: Annotated[str, Form()] = "public",
     allowed_groups: Annotated[str | None, Form()] = None,
+    oauth_client_id: Annotated[str | None, Form()] = None,
+    append_mcp_path: Annotated[bool | None, Form()] = None,
 ):
     """Register a service via JWT Bearer Token authentication (External API).
 
@@ -3526,6 +3546,13 @@ async def register_service_api(
     - `metadata` (optional): JSON string of custom metadata
     - `version` (optional): Server version (e.g., v1.0.0)
     - `status` (optional): Lifecycle status (active, deprecated, draft, beta)
+    - `oauth_client_id` (optional): Per-server public OAuth client_id advertised in
+      the Connect config so IDEs run the OAuth/PKCE login instead of embedding a
+      static token. Overrides the registry-wide IDE_OAUTH_CLIENT_ID default.
+    - `append_mcp_path` (optional, bool): Force/suppress the trailing '/mcp' transport
+      segment on the gateway Connect URL. Omit to auto-detect from proxy_pass_url;
+      set false for root-endpoint servers (e.g. AWS Knowledge) that serve MCP at the
+      server path itself.
 
     **Example (remote):**
     ```bash
@@ -3700,6 +3727,13 @@ async def register_service_api(
     server_entry["visibility"] = visibility
     if allowed_groups_list:
         server_entry["allowed_groups"] = allowed_groups_list
+
+    # Per-server Connect-config overrides (token-less IDE OAuth login + /mcp path).
+    # None = unset (auto-detect / fall back to the registry-wide default).
+    if oauth_client_id is not None:
+        server_entry["oauth_client_id"] = oauth_client_id
+    if append_mcp_path is not None:
+        server_entry["append_mcp_path"] = append_mcp_path
 
     if version:
         server_entry["version"] = version

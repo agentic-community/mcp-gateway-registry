@@ -1,0 +1,13 @@
+{
+  "app": "npx ts-node bin/main.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["node_modules", "dist", "**/*.js", "**/*.d.ts"]
+  },
+  "context": {
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
+    "@aws-cdk/customresources:installLatestAwsSdkDefault": false
+  }
+}
