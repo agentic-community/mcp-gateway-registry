@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.24.5"
+    "version": "1.24.7"
   },
   "paths": {
     "/api/version": {
@@ -1738,7 +1738,7 @@
           "Server Management"
         ],
         "summary": "Register Service Api",
-        "description": "Register a service via JWT Bearer Token authentication (External API).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores the\n  launch recipe for stdio MCP servers; it does NOT execute the server.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token. Local registration requires admin.\n\n**Request body (form data):**\n- `name` (required): Service name\n- `description` (required): Service description\n- `path` (required): Service path (e.g., /myservice)\n- `deployment` (optional): 'remote' (default) or 'local'\n- `proxy_pass_url` (required for remote): Proxy URL (e.g., http://localhost:8000)\n- `local_runtime` (required for local): JSON-encoded launch recipe\n- `tags` (optional): Comma-separated tags\n- `num_tools` (optional): Number of tools\n- `license` (optional): License name\n- `overwrite` (optional): Overwrite if exists (boolean, default true)\n- `auth_scheme` (optional): Auth scheme (none, bearer, api_key). Forced to 'none' for local.\n- `auth_credential` (optional): Plaintext credential (encrypted before storage)\n- `mcp_endpoint` (optional): Full URL for custom MCP endpoint (remote only)\n- `sse_endpoint` (optional): Full URL for custom SSE endpoint (remote only)\n- `metadata` (optional): JSON string of custom metadata\n- `version` (optional): Server version (e.g., v1.0.0)\n- `status` (optional): Lifecycle status (active, deprecated, draft, beta)\n\n**Example (remote):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Service\" \\\n  -F \"description=My MCP Service\" \\\n  -F \"path=/myservice\" \\\n  -F \"proxy_pass_url=http://localhost:8000\"\n```\n\n**Example (local):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Local MCP\" \\\n  -F \"description=Stdio MCP server\" \\\n  -F \"path=/my-local-mcp\" \\\n  -F \"deployment=local\" \\\n  -F 'local_runtime={\"type\":\"npx\",\"package\":\"@acme/mcp\",\"version\":\"1.0.0\",\"args\":[],\"env\":{},\"required_env\":[\"API_KEY\"]}'\n```",
+        "description": "Register a service via JWT Bearer Token authentication (External API).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores the\n  launch recipe for stdio MCP servers; it does NOT execute the server.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token. Local registration requires admin.\n\n**Request body (form data):**\n- `name` (required): Service name\n- `description` (required): Service description\n- `path` (required): Service path (e.g., /myservice)\n- `deployment` (optional): 'remote' (default) or 'local'\n- `proxy_pass_url` (required for remote): Proxy URL (e.g., http://localhost:8000)\n- `local_runtime` (required for local): JSON-encoded launch recipe\n- `tags` (optional): Comma-separated tags\n- `num_tools` (optional): Number of tools\n- `license` (optional): License name\n- `overwrite` (optional): Overwrite if exists (boolean, default true)\n- `auth_scheme` (optional): Auth scheme (none, bearer, api_key). Forced to 'none' for local.\n- `auth_credential` (optional): Plaintext credential (encrypted before storage)\n- `mcp_endpoint` (optional): Full URL for custom MCP endpoint (remote only)\n- `sse_endpoint` (optional): Full URL for custom SSE endpoint (remote only)\n- `metadata` (optional): JSON string of custom metadata\n- `version` (optional): Server version (e.g., v1.0.0)\n- `status` (optional): Lifecycle status (active, deprecated, draft, beta)\n- `oauth_client_id` (optional): Per-server public OAuth client_id advertised in\n  the Connect config so IDEs run the OAuth/PKCE login instead of embedding a\n  static token. Overrides the registry-wide IDE_OAUTH_CLIENT_ID default.\n- `append_mcp_path` (optional, bool): Force/suppress the trailing '/mcp' transport\n  segment on the gateway Connect URL. Omit to auto-detect from proxy_pass_url;\n  set false for root-endpoint servers (e.g. AWS Knowledge) that serve MCP at the\n  server path itself.\n\n**Example (remote):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Service\" \\\n  -F \"description=My MCP Service\" \\\n  -F \"path=/myservice\" \\\n  -F \"proxy_pass_url=http://localhost:8000\"\n```\n\n**Example (local):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Local MCP\" \\\n  -F \"description=Stdio MCP server\" \\\n  -F \"path=/my-local-mcp\" \\\n  -F \"deployment=local\" \\\n  -F 'local_runtime={\"type\":\"npx\",\"package\":\"@acme/mcp\",\"version\":\"1.0.0\",\"args\":[],\"env\":{},\"required_env\":[\"API_KEY\"]}'\n```",
         "operationId": "register_service_api_api_servers_register_post",
         "requestBody": {
           "content": {
@@ -14031,6 +14031,28 @@
               }
             ],
             "title": "Custom Headers"
+          },
+          "oauth_client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Client Id"
+          },
+          "append_mcp_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append Mcp Path"
           }
         },
         "type": "object",
@@ -14583,6 +14605,28 @@
               }
             ],
             "title": "Allowed Groups"
+          },
+          "oauth_client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Client Id"
+          },
+          "append_mcp_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append Mcp Path"
           }
         },
         "type": "object",
@@ -14790,6 +14834,28 @@
               }
             ],
             "title": "Local Runtime"
+          },
+          "oauth_client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Client Id"
+          },
+          "append_mcp_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append Mcp Path"
           }
         },
         "type": "object",
@@ -18438,6 +18504,28 @@
             ],
             "title": "Headers"
           },
+          "oauth_client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Client Id"
+          },
+          "append_mcp_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append Mcp Path"
+          },
           "auth_provider": {
             "anyOf": [
               {
@@ -19056,6 +19144,28 @@
               }
             ],
             "title": "Headers"
+          },
+          "oauth_client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Client Id"
+          },
+          "append_mcp_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append Mcp Path"
           },
           "auth_provider": {
             "anyOf": [
