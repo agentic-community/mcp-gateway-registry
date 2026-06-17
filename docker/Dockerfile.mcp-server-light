@@ -1,0 +1,104 @@
+# Lightweight MCP Server Dockerfile for simple servers in the servers/ directory.
+# Each server must have pyproject.toml, uv.lock, and server.py.
+# Skips git + build-essential; use this when none of the server's locked
+# dependencies need to compile from source. For servers that do (e.g.
+# anything pulling a sdist without a wheel for the build target), use
+# Dockerfile.mcp-server.
+FROM python:3.14.5-slim
+
+# Build arg for server directory (when building from repo root)
+ARG SERVER_DIR
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    UV_NO_CACHE=1
+
+# Install minimal system dependencies.
+# apt-get upgrade pulls in security patches against the base image's
+# already-installed packages (e.g. libc6 / glibc CVE updates) that would
+# otherwise stay at whatever version was baked into python:3.14-slim.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    curl \
+    netcat-openbsd \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user early (before creating any app files)
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
+
+WORKDIR /app
+
+# Install uv as root (global tool)
+RUN pip install uv==0.11.14
+
+# Create /app with correct ownership
+RUN chown appuser:appuser /app
+
+# Switch to appuser for venv creation (avoids need to chown .venv later)
+USER appuser
+
+# Setup Python environment as appuser
+RUN uv venv .venv --python 3.14
+
+# Switch back to root for COPY operations
+USER root
+
+# Copy dependency manifests first so the install layer caches on the
+# (pyproject, lock) pair, not on source changes.
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/pyproject.toml /app/pyproject.toml
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/uv.lock        /app/uv.lock
+
+# Install dependencies from uv.lock. --locked fails the build if the
+# lock is out of sync with pyproject.toml. If the lock pins a
+# supply-chain quarantine cutoff ([options] exclude-newer), re-export it
+# as UV_EXCLUDE_NEWER so --locked re-resolves under the SAME constraint
+# that produced the lock (otherwise uv treats the missing global cutoff
+# as drift and fails). Mirrors .github/workflows/uv-lock-check.yml.
+USER appuser
+RUN CUTOFF=$(awk '/^\[options\]/{o=1;next} /^\[/{o=0} o&&/^exclude-newer/{gsub(/.*= *"|" *$/,"");print;exit}' uv.lock) && \
+    if [ -n "$CUTOFF" ]; then export UV_EXCLUDE_NEWER="$CUTOFF"; echo "Using UV_EXCLUDE_NEWER=$CUTOFF from uv.lock"; fi && \
+    uv sync --locked --no-dev
+
+# Copy source last.
+USER root
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/ /app/
+
+USER appuser
+
+# Expose default port (can be overridden by environment variable)
+EXPOSE 8000
+
+# Health check (generic for all MCP servers)
+HEALTHCHECK --interval=500s --timeout=10s --start-period=30s --retries=3 \
+    CMD nc -z localhost ${PORT:-8000} || exit 1
+
+# Switch to root to create entrypoint script
+USER root
+
+# Create entrypoint script that handles environment setup and runs server.py
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Set default port\n\
+SERVER_PORT=${PORT:-8000}\n\
+\n\
+# Create .env file if needed (for servers that require it)\n\
+if [ ! -z "$POLYGON_API_KEY" ]; then\n\
+    echo "POLYGON_API_KEY=$POLYGON_API_KEY" > /app/.env\n\
+fi\n\
+\n\
+# Activate virtual environment and run the server\n\
+source .venv/bin/activate\n\
+exec python server.py --port $SERVER_PORT' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh && \
+    chown appuser:appuser /entrypoint.sh
+
+# Bake the build version into the image (issue #919). Requires
+# `docker build --build-arg BUILD_VERSION=$VERSION`; defaults to "1.0.0".
+ARG BUILD_VERSION="1.0.0"
+ENV BUILD_VERSION=$BUILD_VERSION
+
+# Switch to non-root user for runtime (no chown needed - files already owned by appuser)
+USER appuser
+
+ENTRYPOINT ["/entrypoint.sh"]
