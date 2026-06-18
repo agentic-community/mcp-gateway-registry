@@ -269,10 +269,11 @@ class TestCleanupStaleEmbeddings:
         """Admin can remove orphaned embeddings by path."""
         mock_search_repo.remove_stale_embeddings = AsyncMock(
             return_value={
-                "success": 1,
+                "removed": 1,
+                "not_found": 0,
                 "failed": 0,
                 "total": 1,
-                "details": [{"path": "/ghost-server", "status": "success", "error": None}],
+                "details": [{"path": "/ghost-server", "status": "removed", "error": None}],
             }
         )
 
@@ -283,6 +284,29 @@ class TestCleanupStaleEmbeddings:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["success"] == 1
+        assert data["removed"] == 1
+        assert data["not_found"] == 0
         assert data["failed"] == 0
+
+    def test_reports_not_found_for_noop_path(self, admin_client, mock_search_repo):
+        """A path that matched nothing is reported as not_found, not removed."""
+        mock_search_repo.remove_stale_embeddings = AsyncMock(
+            return_value={
+                "removed": 0,
+                "not_found": 1,
+                "failed": 0,
+                "total": 1,
+                "details": [{"path": "/typo-path", "status": "not_found", "error": None}],
+            }
+        )
+
+        response = admin_client.post(
+            "/api/admin/embeddings/stale/cleanup",
+            json={"paths": ["/typo-path"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["removed"] == 0
+        assert data["not_found"] == 1
 

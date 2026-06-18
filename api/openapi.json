@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.24.7"
+    "version": "1.24.8"
   },
   "paths": {
     "/api/version": {
@@ -84,6 +84,45 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/system/update-check": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get Update Check",
+        "description": "Return cached update-check state for admins.\n\nReads the most recent result of the background poller defined in\n``registry.core.update_check``. Never makes a network call itself.\nNon-admins receive 403 \u2014 the registry running version is admin-only\noperational metadata, and the GitHub release tag would otherwise leak\nto any authenticated user.\n\nUses ``nginx_proxied_auth`` (not ``enhanced_auth``) so the endpoint works\nwith both a browser session cookie AND a Bearer JWT (validated by nginx,\nforwarded as identity headers). This matches the sibling ``/api/stats`` and\n``/api/system/telemetry-detection`` routes and lets CLI / token-file callers\nreach it the same way they reach the rest of ``/api/*``.",
+        "operationId": "get_update_check_api_system_update_check_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Update Check Api System Update Check Get"
+                }
               }
             }
           },
@@ -7528,7 +7567,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CustomTypeDescriptor-Input"
+                "$ref": "#/components/schemas/CustomTypeDescriptor"
               }
             }
           },
@@ -7540,7 +7579,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CustomTypeDescriptor-Output"
+                  "$ref": "#/components/schemas/CustomTypeDescriptor"
                 }
               }
             }
@@ -7591,7 +7630,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CustomTypeDescriptor-Output"
+                  "$ref": "#/components/schemas/CustomTypeDescriptor"
                 }
               }
             }
@@ -7650,7 +7689,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CustomTypeDescriptor-Output"
+                  "$ref": "#/components/schemas/CustomTypeDescriptor"
                 }
               }
             }
@@ -10988,6 +11027,90 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MissingEmbeddingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/embeddings/stale": {
+      "get": {
+        "tags": [
+          "Embeddings Admin"
+        ],
+        "summary": "Get Stale Embeddings",
+        "description": "Scan for orphaned embeddings with no source registry document.\n\nCompares the embeddings collection against source collections\n(servers, agents, skills, virtual servers) and returns index entries\nwhose source entity was deleted without removing the vector (issue #1145).",
+        "operationId": "get_stale_embeddings_api_admin_embeddings_stale_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleEmbeddingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/embeddings/stale/cleanup": {
+      "post": {
+        "tags": [
+          "Embeddings Admin"
+        ],
+        "summary": "Cleanup Stale Embeddings",
+        "description": "Remove orphaned embedding documents from the search index.",
+        "operationId": "cleanup_stale_embeddings_api_admin_embeddings_stale_cleanup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaleCleanupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleCleanupResponse"
                 }
               }
             }
@@ -15602,82 +15725,7 @@
         "title": "CustomFieldType",
         "description": "Allowed datatypes for a custom-type field (v1: scalars + scalar arrays)."
       },
-      "CustomTypeDescriptor-Input": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z0-9_-]+$",
-            "title": "Name",
-            "description": "URL-safe, IMMUTABLE type name; used as path prefix and entity_type"
-          },
-          "display_name": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Display Name",
-            "description": "Optional human label for the tab"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 2000
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "fields": {
-            "items": {
-              "$ref": "#/components/schemas/CustomFieldDescriptor"
-            },
-            "type": "array",
-            "maxItems": 100,
-            "minItems": 1,
-            "title": "Fields"
-          },
-          "schema_version": {
-            "type": "integer",
-            "title": "Schema Version",
-            "description": "Descriptor schema version for future compat",
-            "default": 1
-          },
-          "created_by": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created By"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "fields"
-        ],
-        "title": "CustomTypeDescriptor",
-        "description": "Admin-authored schema for a custom entity type. Stored in mcp_custom_types.\n\n``extra=\"ignore\"``: the type repo splats raw Mongo docs\n(``CustomTypeDescriptor(**doc)``) which carry an ``_id`` key, so the\nmodel must tolerate the extra key."
-      },
-      "CustomTypeDescriptor-Output": {
+      "CustomTypeDescriptor": {
         "properties": {
           "name": {
             "type": "string",
@@ -20291,6 +20339,154 @@
         ],
         "title": "SkillTier1_Metadata",
         "description": "Tier 1: Always available, ~100 tokens."
+      },
+      "StaleCleanupDetailEntry": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "status"
+        ],
+        "title": "StaleCleanupDetailEntry",
+        "description": "Per-path result of stale embedding removal.\n\n``status`` is ``removed`` (a stale embedding existed and was deleted),\n``not_found`` (no-op: nothing indexed at this path), or ``failed``."
+      },
+      "StaleCleanupRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Paths",
+            "description": "Embedding paths to remove (max 100)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paths"
+        ],
+        "title": "StaleCleanupRequest",
+        "description": "Request body for removing orphaned embedding documents."
+      },
+      "StaleCleanupResponse": {
+        "properties": {
+          "removed": {
+            "type": "integer",
+            "title": "Removed"
+          },
+          "not_found": {
+            "type": "integer",
+            "title": "Not Found"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "details": {
+            "items": {
+              "$ref": "#/components/schemas/StaleCleanupDetailEntry"
+            },
+            "type": "array",
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "removed",
+          "not_found",
+          "failed",
+          "total",
+          "details"
+        ],
+        "title": "StaleCleanupResponse",
+        "description": "Response for the stale embedding cleanup operation.\n\nCounts are reported separately so admins can tell a real cleanup from a\nno-op: ``removed`` paths actually had an orphaned embedding deleted, while\n``not_found`` paths matched nothing (e.g. a typo or an already-clean path)."
+      },
+      "StaleEmbeddingEntry": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "is_enabled": {
+            "type": "boolean",
+            "title": "Is Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "entity_type",
+          "name"
+        ],
+        "title": "StaleEmbeddingEntry",
+        "description": "An embedding-index document with no matching source registry record."
+      },
+      "StaleEmbeddingsResponse": {
+        "properties": {
+          "stale": {
+            "items": {
+              "$ref": "#/components/schemas/StaleEmbeddingEntry"
+            },
+            "type": "array",
+            "title": "Stale"
+          },
+          "total_stale": {
+            "type": "integer",
+            "title": "Total Stale"
+          },
+          "total_indexed": {
+            "type": "integer",
+            "title": "Total Indexed"
+          },
+          "total_source": {
+            "type": "integer",
+            "title": "Total Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stale",
+          "total_stale",
+          "total_indexed",
+          "total_source"
+        ],
+        "title": "StaleEmbeddingsResponse",
+        "description": "Response for the stale embeddings scan."
       },
       "StatusDistribution": {
         "properties": {

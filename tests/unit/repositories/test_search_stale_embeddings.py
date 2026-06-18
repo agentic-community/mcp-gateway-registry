@@ -62,35 +62,44 @@ class TestRemoveStaleEmbeddings:
     """Tests for remove_stale_embeddings."""
 
     @pytest.mark.asyncio
-    async def test_calls_remove_entity_per_path(self):
+    async def test_reports_removed_when_embedding_existed(self):
+        # delete_one reporting deleted_count > 0 means a stale embedding was
+        # actually removed -> status "removed".
         repo = _make_repo()
+        repo._collection.delete_one = AsyncMock(return_value=MagicMock(deleted_count=1))
 
-        with patch.object(
-            repo,
-            "remove_entity",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_remove:
-            result = await repo.remove_stale_embeddings(["/ghost-a", "/ghost-b"])
+        result = await repo.remove_stale_embeddings(["/ghost-a", "/ghost-b"])
 
-        assert result["success"] == 2
+        assert result["removed"] == 2
+        assert result["not_found"] == 0
         assert result["failed"] == 0
         assert result["total"] == 2
-        assert mock_remove.await_count == 2
+        assert all(d["status"] == "removed" for d in result["details"])
 
     @pytest.mark.asyncio
-    async def test_records_failure_when_remove_returns_false(self):
+    async def test_reports_not_found_for_noop_path(self):
+        # deleted_count == 0 means nothing was indexed at that path (typo or
+        # already-clean) -> status "not_found", NOT a misleading success.
         repo = _make_repo()
+        repo._collection.delete_one = AsyncMock(return_value=MagicMock(deleted_count=0))
 
-        with patch.object(
-            repo,
-            "remove_entity",
-            new_callable=AsyncMock,
-            side_effect=[True, False],
-        ):
-            result = await repo.remove_stale_embeddings(["/ghost-a", "/ghost-b"])
+        result = await repo.remove_stale_embeddings(["/does-not-exist"])
 
-        assert result["success"] == 1
+        assert result["removed"] == 0
+        assert result["not_found"] == 1
+        assert result["failed"] == 0
+        assert result["details"][0]["status"] == "not_found"
+
+    @pytest.mark.asyncio
+    async def test_records_failure_when_delete_raises(self):
+        repo = _make_repo()
+        repo._collection.delete_one = AsyncMock(
+            side_effect=[MagicMock(deleted_count=1), Exception("db error")]
+        )
+
+        result = await repo.remove_stale_embeddings(["/ghost-a", "/ghost-b"])
+
+        assert result["removed"] == 1
         assert result["failed"] == 1
         assert result["details"][1]["status"] == "failed"
 

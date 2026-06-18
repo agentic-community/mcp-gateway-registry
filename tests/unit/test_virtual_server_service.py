@@ -327,7 +327,18 @@ class TestVirtualServerServiceCRUD:
         )
         mock_vs_repo.delete.return_value = True
 
-        with patch.object(service, "_trigger_nginx_reload", new_callable=AsyncMock):
+        # Delete now removes the search-index embedding first (and aborts if that
+        # fails), so the search repo must report a successful removal.
+        mock_search_repo = MagicMock()
+        mock_search_repo.remove_entity = AsyncMock(return_value=True)
+
+        with (
+            patch.object(service, "_trigger_nginx_reload", new_callable=AsyncMock),
+            patch(
+                "registry.services.virtual_server_service.get_search_repository",
+                return_value=mock_search_repo,
+            ),
+        ):
             result = await service.delete_virtual_server("/virtual/dev")
 
         assert result is True
@@ -738,7 +749,18 @@ class TestNginxTrigger:
         )
         mock_vs_repo.delete.return_value = True
 
-        with patch.object(service, "_trigger_nginx_reload", new_callable=AsyncMock) as mock_reload:
+        mock_search_repo = MagicMock()
+        mock_search_repo.remove_entity = AsyncMock(return_value=True)
+
+        with (
+            patch.object(
+                service, "_trigger_nginx_reload", new_callable=AsyncMock
+            ) as mock_reload,
+            patch(
+                "registry.services.virtual_server_service.get_search_repository",
+                return_value=mock_search_repo,
+            ),
+        ):
             await service.delete_virtual_server("/virtual/dev")
             mock_reload.assert_called_once()
 
@@ -1198,11 +1220,20 @@ class TestNginxReloadFailureHandling:
         )
         mock_vs_repo.delete.return_value = True
 
-        with patch.object(
-            service,
-            "_trigger_nginx_reload",
-            new_callable=AsyncMock,
-            return_value=False,
+        mock_search_repo = MagicMock()
+        mock_search_repo.remove_entity = AsyncMock(return_value=True)
+
+        with (
+            patch.object(
+                service,
+                "_trigger_nginx_reload",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "registry.services.virtual_server_service.get_search_repository",
+                return_value=mock_search_repo,
+            ),
         ):
             result = await service.delete_virtual_server("/virtual/dev")
 

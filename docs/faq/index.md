@@ -23,6 +23,8 @@ Common questions and answers about the MCP Gateway Registry.
 
 - [How do I monitor the health of MCP servers?](monitoring-server-health.md)
 - [How do I configure MongoDB Atlas instead of MongoDB CE?](configuring-mongodb-atlas-backend.md)
+- [Why are some of my assets not showing up in semantic search?](fix-missing-search-embeddings.md)
+- [Why do I sometimes see search results for assets that no longer exist?](fix-stale-search-embeddings.md)
 
 ## Amazon Bedrock AgentCore
 

@@ -106,7 +106,11 @@ class StaleCleanupRequest(BaseModel):
 
 
 class StaleCleanupDetailEntry(BaseModel):
-    """Per-path result of stale embedding removal."""
+    """Per-path result of stale embedding removal.
+
+    ``status`` is ``removed`` (a stale embedding existed and was deleted),
+    ``not_found`` (no-op: nothing indexed at this path), or ``failed``.
+    """
 
     path: str
     status: str
@@ -114,9 +118,15 @@ class StaleCleanupDetailEntry(BaseModel):
 
 
 class StaleCleanupResponse(BaseModel):
-    """Response for the stale embedding cleanup operation."""
+    """Response for the stale embedding cleanup operation.
 
-    success: int
+    Counts are reported separately so admins can tell a real cleanup from a
+    no-op: ``removed`` paths actually had an orphaned embedding deleted, while
+    ``not_found`` paths matched nothing (e.g. a typo or an already-clean path).
+    """
+
+    removed: int
+    not_found: int
     failed: int
     total: int
     details: list[StaleCleanupDetailEntry]
@@ -209,8 +219,9 @@ async def cleanup_stale_embeddings(
     result = await remove_stale(request.paths)
 
     logger.info(
-        "Stale embedding cleanup: %d success, %d failed",
-        result["success"],
+        "Stale embedding cleanup: %d removed, %d not_found, %d failed",
+        result["removed"],
+        result["not_found"],
         result["failed"],
     )
 

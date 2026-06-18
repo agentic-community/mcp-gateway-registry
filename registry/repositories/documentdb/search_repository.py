@@ -1527,25 +1527,36 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
     ) -> dict[str, Any]:
         """Remove orphaned embedding documents by path.
 
+        Deletes inline (not via ``remove_entity``) so the caller can see whether
+        each path was actually removed or was a no-op. ``remove_entity`` returns
+        True for a not-found path on purpose (delete flows must proceed when no
+        embedding exists), which would otherwise mask a typo'd or already-clean
+        path here as ``removed``. Distinguishing the two gives admins honest
+        feedback during manual cleanup.
+
+        Per-path ``status`` is one of:
+          - ``removed``   - a stale embedding existed and was deleted
+          - ``not_found`` - nothing to delete at this path (no-op)
+          - ``failed``    - the delete raised an error
+
         Args:
             paths: Embedding index paths to remove (max 100).
 
         Returns:
-            Dictionary with success/failed counts and per-path details.
+            Dictionary with removed/not_found/failed counts and per-path details.
         """
-        details = []
+        collection = await self._get_collection()
+        details: list[dict[str, Any]] = []
 
         for path in paths:
             try:
-                removed = await self.remove_entity(path)
-                if removed:
-                    details.append({"path": path, "status": "success"})
+                result = await collection.delete_one({"_id": path})
+                if result.deleted_count > 0:
+                    logger.info("Removed stale embedding '%s' from search index", path)
+                    details.append({"path": path, "status": "removed", "error": None})
                 else:
-                    details.append({
-                        "path": path,
-                        "status": "failed",
-                        "error": "Failed to remove stale embedding",
-                    })
+                    logger.warning("Stale embedding '%s' not found (no-op)", path)
+                    details.append({"path": path, "status": "not_found", "error": None})
             except Exception as e:
                 logger.error("Failed to remove stale embedding '%s': %s", path, e)
                 details.append({
@@ -1554,18 +1565,21 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "error": "Failed to remove stale embedding",
                 })
 
-        success_count = sum(1 for d in details if d["status"] == "success")
+        removed_count = sum(1 for d in details if d["status"] == "removed")
+        not_found_count = sum(1 for d in details if d["status"] == "not_found")
         failed_count = sum(1 for d in details if d["status"] == "failed")
 
         logger.info(
-            "Stale embedding cleanup: %d success, %d failed out of %d paths",
-            success_count,
+            "Stale embedding cleanup: %d removed, %d not_found, %d failed out of %d paths",
+            removed_count,
+            not_found_count,
             failed_count,
             len(paths),
         )
 
         return {
-            "success": success_count,
+            "removed": removed_count,
+            "not_found": not_found_count,
             "failed": failed_count,
             "total": len(paths),
             "details": details,

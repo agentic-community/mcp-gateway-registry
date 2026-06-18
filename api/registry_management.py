@@ -5494,6 +5494,131 @@ def cmd_embeddings_reindex(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_embeddings_stale(args: argparse.Namespace) -> int:
+    """Find orphaned embeddings (indexed but no source document).
+
+    The inverse of ``embeddings-missing``: detects vectors left in the search
+    index after a server/agent/skill was deleted (issue #1145).
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+
+        response = client._make_request(
+            method="GET",
+            endpoint="/api/admin/embeddings/stale",
+        )
+
+        data = response.json()
+        total_stale = data.get("total_stale", 0)
+        total_indexed = data.get("total_indexed", 0)
+        total_source = data.get("total_source", 0)
+
+        if getattr(args, "json", False):
+            print(json.dumps(data, indent=2))
+            return 0
+
+        print("\nEmbeddings Index Status:")
+        print(f"  Source documents:  {total_source}")
+        print(f"  Indexed:           {total_indexed}")
+        print(f"  Stale (orphaned):  {total_stale}")
+
+        if total_stale == 0:
+            print("\n  No stale embeddings found.")
+            return 0
+
+        print(f"\nStale embeddings ({total_stale}):\n")
+        print(f"  {'Path':<50} {'Type':<15} {'Name'}")
+        print(f"  {'-' * 50} {'-' * 15} {'-' * 30}")
+        for entry in data.get("stale", []):
+            print(f"  {entry['path']:<50} {entry['entity_type']:<15} {entry['name']}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Embeddings stale check failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_embeddings_stale_cleanup(args: argparse.Namespace) -> int:
+    """Remove orphaned embeddings by path, or all stale ones with --all-stale.
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+
+        paths = getattr(args, "paths", None)
+
+        if getattr(args, "all_stale", False):
+            response = client._make_request(
+                method="GET",
+                endpoint="/api/admin/embeddings/stale",
+            )
+            stale_data = response.json()
+            paths = [entry["path"] for entry in stale_data.get("stale", [])]
+            if not paths:
+                print("No stale embeddings found. Nothing to clean up.")
+                return 0
+            print(f"Found {len(paths)} stale embeddings. Cleaning up...")
+
+        if not paths:
+            print("Error: provide --paths or --all-stale", file=sys.stderr)
+            return 1
+
+        batch_size = 100
+        total_removed = 0
+        total_not_found = 0
+        total_failed = 0
+
+        for i in range(0, len(paths), batch_size):
+            batch = paths[i : i + batch_size]
+            response = client._make_request(
+                method="POST",
+                endpoint="/api/admin/embeddings/stale/cleanup",
+                data={"paths": batch},
+            )
+            result = response.json()
+            total_removed += result.get("removed", 0)
+            total_not_found += result.get("not_found", 0)
+            total_failed += result.get("failed", 0)
+
+            if getattr(args, "json", False):
+                print(json.dumps(result, indent=2))
+            else:
+                print(
+                    f"  Batch {i // batch_size + 1}: "
+                    f"{result.get('removed', 0)} removed, "
+                    f"{result.get('not_found', 0)} not_found, "
+                    f"{result.get('failed', 0)} failed"
+                )
+
+                for detail in result.get("details", []):
+                    if detail.get("status") == "failed":
+                        print(f"    FAILED: {detail['path']} - {detail.get('error', 'unknown')}")
+
+        print(
+            f"\nCleanup complete: {total_removed} removed, "
+            f"{total_not_found} not_found, {total_failed} failed"
+        )
+        return 0 if total_failed == 0 else 1
+
+    except Exception as e:
+        logger.error(f"Embeddings stale cleanup failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     """
     Main entry point for the CLI.
@@ -6828,6 +6953,30 @@ Examples:
         "--json", action="store_true", help="Output raw JSON per batch"
     )
 
+    embeddings_stale_parser = subparsers.add_parser(
+        "embeddings-stale",
+        help="Find orphaned embeddings with no source document (admin only)",
+    )
+    embeddings_stale_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    embeddings_stale_cleanup_parser = subparsers.add_parser(
+        "embeddings-stale-cleanup",
+        help="Remove orphaned embeddings from the search index (admin only)",
+    )
+    embeddings_stale_cleanup_parser.add_argument(
+        "--paths",
+        nargs="+",
+        help="Specific stale paths to remove (e.g. /old-server /old-agent)",
+    )
+    embeddings_stale_cleanup_parser.add_argument(
+        "--all-stale",
+        action="store_true",
+        help="Remove all orphaned embeddings detected by embeddings-stale",
+    )
+    embeddings_stale_cleanup_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON per batch"
+    )
+
     logs_parser = subparsers.add_parser("logs", help="Query application logs (admin only)")
     logs_parser.add_argument("--service", help="Filter by service name")
     logs_parser.add_argument(
@@ -6986,6 +7135,8 @@ Examples:
         # Embeddings admin commands
         "embeddings-missing": cmd_embeddings_missing,
         "embeddings-reindex": cmd_embeddings_reindex,
+        "embeddings-stale": cmd_embeddings_stale,
+        "embeddings-stale-cleanup": cmd_embeddings_stale_cleanup,
     }
 
     handler = command_handlers.get(args.command)
