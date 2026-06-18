@@ -123,11 +123,10 @@ class ContentIntegrity(BaseModel):
     file_hashes: list[FileHash] = Field(default_factory=list)
     computed_at: datetime = Field(default_factory=_utc_now)
     drift_detected: bool = Field(
-        default=False, description="True when a drift check found content differs from this baseline"
+        default=False,
+        description="True when a drift check found content differs from this baseline",
     )
-    last_drift_check: datetime | None = Field(
-        None, description="When drift was last checked"
-    )
+    last_drift_check: datetime | None = Field(None, description="When drift was last checked")
     drifted_files: list[str] = Field(
         default_factory=list, description="Paths of files that changed since baseline"
     )
@@ -341,6 +340,16 @@ class SkillInfo(BaseModel):
         description="Custom header name for credential (default: Authorization for bearer, PRIVATE-TOKEN for api_key)",
     )
     num_stars: float = Field(default=0.0, ge=0.0, le=5.0, description="Average rating (1-5 stars)")
+    rating_details: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Individual user ratings; included so cards render the rating "
+        "widget without a per-card /rating fetch.",
+    )
+    security_scan: dict[str, Any] | None = Field(
+        default=None,
+        description="Lightweight scan summary (scan_failed + severity counts) for "
+        "the shield icon. None if the skill has not been scanned.",
+    )
     health_status: Literal["healthy", "unhealthy", "unknown"] = Field(
         default="unknown", description="Health status from last SKILL.md accessibility check"
     )

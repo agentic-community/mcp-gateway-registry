@@ -31,6 +31,7 @@ import useEscapeKey from '../hooks/useEscapeKey';
 import { formatRelativeTime } from '../utils/dateUtils';
 import { normalizeHealthStatus } from '../utils/healthStatus';
 import { useAuth } from '../contexts/AuthContext';
+import { toScanSummary } from '../utils/securityScan';
 import type { LocalRuntime } from '../types/server';
 
 interface ServerVersion {
@@ -62,7 +63,17 @@ export interface Server {
   tags?: string[];
   last_checked_time?: string;
   usersCount?: number;
+  rating?: number;
   rating_details?: Array<{ user: string; rating: number }>;
+  // Lightweight scan summary from the list payload, used to colour the shield
+  // icon without a per-card /security-scan fetch. Undefined if not yet scanned.
+  security_scan?: {
+    scan_failed?: boolean;
+    critical_issues?: number;
+    high_severity?: number;
+    medium_severity?: number;
+    low_severity?: number;
+  } | null;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown' | 'local';
   num_tools?: number;
   proxy_pass_url?: string;
@@ -130,23 +141,23 @@ const formatTimeSince = (timestamp: string | null | undefined): string | null =>
   if (!timestamp) {
     return null;
   }
-  
+
   try {
     const now = new Date();
     const lastChecked = new Date(timestamp);
-    
+
     // Check if the date is valid
     if (isNaN(lastChecked.getTime())) {
       return null;
     }
-    
+
     const diffMs = now.getTime() - lastChecked.getTime();
-    
+
     const diffSeconds = Math.floor(diffMs / 1000);
     const diffMinutes = Math.floor(diffSeconds / 60);
     const diffHours = Math.floor(diffMinutes / 60);
     const diffDays = Math.floor(diffHours / 24);
-    
+
     let result;
     if (diffSeconds < 0) {
       result = 'just now';
@@ -159,7 +170,7 @@ const formatTimeSince = (timestamp: string | null | undefined): string | null =>
     } else {
       result = `${diffSeconds}s ago`;
     }
-    
+
     return result;
   } catch (error) {
     console.error('formatTimeSince error:', error, 'for timestamp:', timestamp);
@@ -176,7 +187,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   const [showConfig, setShowConfig] = useState(false);
   const [loadingRefresh, setLoadingRefresh] = useState(false);
   const [showSecurityScan, setShowSecurityScan] = useState(false);
-  const [securityScanResult, setSecurityScanResult] = useState<any>(null);
+  // Seed from the list payload's lightweight scan summary so the shield icon
+  // colours correctly with no per-card fetch. The on-click handler upgrades this
+  // to the full scan document (analysis_results, tool_results) for the modal.
+  const [securityScanResult, setSecurityScanResult] = useState<any>(server.security_scan ?? null);
   const [loadingSecurityScan, setLoadingSecurityScan] = useState(false);
   const [showVersionSelector, setShowVersionSelector] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -194,25 +208,20 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   useEscapeKey(closeToolsModal, showTools);
   useEscapeKey(() => setShowDeleteConfirm(false), showDeleteConfirm);
 
-  // Fetch security scan status on mount to show correct icon color.
-  // Local (stdio) servers are never auto-scanned (no HTTP endpoint to probe);
-  // skip the request — it would 404 anyway.
+  // Keep the icon in sync with the list payload's scan summary. No fetch: the
+  // summary (scan_failed + severity counts) arrives inline on /api/servers, so a
+  // page of cards costs zero extra requests instead of one /security-scan each.
+  // Skip when the user has already opened the full detail (a richer object).
+  //
+  // Invariant: handleRescan MUST update the parent (onServerUpdate) synchronously
+  // so server.security_scan is fresh by the time the modal closes and this effect
+  // re-syncs. React 18 batches the rescan's state updates, so the prop is current
+  // on the next render; wrapping the modal close in setTimeout would break this.
   useEffect(() => {
-    if (server.deployment === 'local') return;
-    const fetchSecurityScan = async () => {
-      try {
-        const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-        const response = await axios.get(
-          `/api/servers${server.path}/security-scan`,
-          headers ? { headers } : undefined
-        );
-        setSecurityScanResult(response.data);
-      } catch {
-        // Silently ignore - no scan result available
-      }
-    };
-    fetchSecurityScan();
-  }, [server.path, server.deployment, authToken]);
+    if (!showSecurityScan) {
+      setSecurityScanResult(server.security_scan ?? null);
+    }
+  }, [server.security_scan, showSecurityScan]);
 
   const getStatusIcon = () => {
     // Local servers: registry doesn't health-check, so show a neutral indicator.
@@ -249,7 +258,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
 
   const handleViewTools = useCallback(async () => {
     if (loadingTools) return;
-    
+
     setLoadingTools(true);
     try {
       const response = await axios.get(`/api/tools${server.path}`);
@@ -267,14 +276,14 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
 
   const handleRefreshHealth = useCallback(async () => {
     if (loadingRefresh) return;
-    
+
     setLoadingRefresh(true);
     try {
       // Extract service name from path (remove leading slash)
       const serviceName = server.path.replace(/^\//, '');
-      
+
       const response = await axios.post(`/api/refresh/${serviceName}`);
-      
+
       // Update just this server instead of triggering global refresh
       if (onServerUpdate && response.data) {
         const updates: Partial<Server> = {
@@ -282,13 +291,13 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
           last_checked_time: response.data.last_checked_iso,
           num_tools: response.data.num_tools
         };
-        
+
         onServerUpdate(server.path, updates);
       } else if (onRefreshSuccess) {
         // Fallback to global refresh if onServerUpdate is not provided
         onRefreshSuccess();
       }
-      
+
       if (onShowToast) {
         onShowToast('Health status refreshed successfully', 'success');
       }
@@ -334,8 +343,13 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
       undefined,
       headers ? { headers } : undefined
     );
+    // Show the full result in the open modal, and push the lightweight summary
+    // up so server.security_scan (the list entry) reflects the new scan. Without
+    // this the prop-sync effect would revert the badge to the stale list value
+    // when the modal closes.
     setSecurityScanResult(response.data);
-  }, [server.path, authToken]);
+    onServerUpdate?.(server.path, { security_scan: toScanSummary(response.data) });
+  }, [server.path, authToken, onServerUpdate]);
 
   const handleRefreshServerData = useCallback(async () => {
     try {
@@ -454,7 +468,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   return (
     <>
       <div className={`group rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 h-full flex flex-col ${
-        isAnthropicServer 
+        isAnthropicServer
           ? 'bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 border-2 border-purple-200 dark:border-purple-700 hover:border-purple-300 dark:hover:border-purple-600'
           : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 hover:border-gray-200 dark:hover:border-gray-600'
       }`}>
@@ -555,7 +569,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   </span>
                 )}
               </div>
-              
+
               <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
                 {server.path}
               </code>
@@ -672,8 +686,9 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             <StarRatingWidget
               resourceType="servers"
               path={server.path}
-              initialRating={0}
+              initialRating={server.rating || 0}
               initialCount={server.rating_details?.length || 0}
+              ratingDetails={server.rating_details}
               authToken={authToken}
               onShowToast={onShowToast}
             />
@@ -742,17 +757,17 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
               {/* Status Indicators */}
               <div className="flex items-center gap-2">
                 <div className={`w-3 h-3 rounded-full ${
-                  server.enabled 
-                    ? 'bg-green-400 shadow-lg shadow-green-400/30' 
+                  server.enabled
+                    ? 'bg-green-400 shadow-lg shadow-green-400/30'
                     : 'bg-gray-300 dark:bg-gray-600'
                 }`} />
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                   {server.enabled ? 'Enabled' : 'Disabled'}
                 </span>
               </div>
-              
+
               <div className="w-px h-4 bg-gray-200 dark:bg-gray-600" />
-              
+
               <div className="flex items-center gap-2">
                 <div className={`w-3 h-3 rounded-full ${
                   isLocal
@@ -875,7 +890,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 ✕
               </button>
             </div>
-            
+
             <div className="space-y-4">
               {tools.length > 0 ? (
                 tools.map((tool, index) => {

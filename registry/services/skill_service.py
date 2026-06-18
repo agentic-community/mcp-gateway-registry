@@ -40,6 +40,8 @@ from ..schemas.skill_models import (
     SkillInfo,
     SkillMetadata,
     SkillRegistrationRequest,
+    SkillResource,
+    SkillResourceManifest,
     VisibilityEnum,
 )
 from ..utils.path_utils import normalize_skill_path
@@ -1418,6 +1420,7 @@ class SkillService:
                 auth_scheme=s.auth_scheme,
                 auth_header_name=s.auth_header_name,
                 num_stars=s.num_stars,
+                rating_details=s.rating_details,
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
                 status=s.status,

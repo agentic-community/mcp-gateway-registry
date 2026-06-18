@@ -331,6 +331,29 @@ class SkillScannerService:
         )
         return is_safe, critical, high, medium, low
 
+    async def get_scan_summaries(self) -> dict[str, dict]:
+        """
+        Bulk-load lightweight scan summaries for all skills.
+
+        Returns a path -> summary map (scan_failed + per-severity counts) so the
+        skills list endpoint can attach icon data inline instead of forcing the
+        frontend to fetch each skill's scan individually (N+1).
+
+        Returns:
+            Mapping of skill path to its lightweight scan summary. Empty on error.
+        """
+        from .scan_summary import build_scan_summary_map
+
+        try:
+            # list_latest() collapses scan history to one (newest) doc per path
+            # at the data layer, so we don't transfer the full history. The map
+            # builder still dedups defensively in case a backend returns dupes.
+            scans = await self.scan_repo.list_latest()
+            return build_scan_summary_map(scans)
+        except Exception:
+            logger.exception("Failed to bulk-load skill security scan summaries")
+            return {}
+
     async def get_scan_result(self, skill_path: str) -> dict | None:
         """
         Get the latest scan result for a skill.

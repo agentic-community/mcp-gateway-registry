@@ -22,6 +22,7 @@ import DeleteConfirmation from './DeleteConfirmation';
 import StatusBadge from './StatusBadge';
 import { ANSBadge } from './ANSBadge';
 import { formatRelativeTime } from '../utils/dateUtils';
+import { toScanSummary } from '../utils/securityScan';
 
 interface SyncMetadata {
   is_federated?: boolean;
@@ -50,6 +51,15 @@ export interface Agent {
   usersCount?: number;
   rating?: number;
   rating_details?: Array<{ user: string; rating: number }>;
+  // Lightweight scan summary from the list payload, used to colour the shield
+  // icon without a per-card /security-scan fetch. Undefined if not yet scanned.
+  security_scan?: {
+    scan_failed?: boolean;
+    critical_issues?: number;
+    high_severity?: number;
+    medium_severity?: number;
+    low_severity?: number;
+  } | null;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   // Federation sync metadata
   sync_metadata?: SyncMetadata;
@@ -171,7 +181,10 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
   const [fullAgentDetails, setFullAgentDetails] = useState<any>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [showSecurityScan, setShowSecurityScan] = useState(false);
-  const [securityScanResult, setSecurityScanResult] = useState<any>(null);
+  // Seed from the list payload's lightweight scan summary so the shield icon
+  // colours correctly with no per-card fetch. The on-click handler upgrades this
+  // to the full scan document for the modal.
+  const [securityScanResult, setSecurityScanResult] = useState<any>(agent.security_scan ?? null);
   const [loadingSecurityScan, setLoadingSecurityScan] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -184,22 +197,20 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
   // Check if this agent is orphaned (no longer exists on peer registry)
   const isOrphanedAgent = agent.sync_metadata?.is_orphaned === true;
 
-  // Fetch security scan status on mount to show correct icon color
+  // Keep the icon in sync with the list payload's scan summary. No fetch: the
+  // summary (scan_failed + severity counts) arrives inline on /api/agents, so a
+  // page of cards costs zero extra requests instead of one /security-scan each.
+  // Skip when the user has already opened the full detail (a richer object).
+  //
+  // Invariant: handleRescan MUST update the parent (onAgentUpdate) synchronously
+  // so agent.security_scan is fresh by the time the modal closes and this effect
+  // re-syncs. React 18 batches the rescan's state updates, so the prop is current
+  // on the next render; wrapping the modal close in setTimeout would break this.
   useEffect(() => {
-    const fetchSecurityScan = async () => {
-      try {
-        const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-        const response = await axios.get(
-          `/api/agents${agent.path}/security-scan`,
-          headers ? { headers } : undefined
-        );
-        setSecurityScanResult(response.data);
-      } catch {
-        // Silently ignore - no scan result available
-      }
-    };
-    fetchSecurityScan();
-  }, [agent.path, authToken]);
+    if (!showSecurityScan) {
+      setSecurityScanResult(agent.security_scan ?? null);
+    }
+  }, [agent.security_scan, showSecurityScan]);
 
   const getStatusIcon = () => {
     switch (agent.status) {
@@ -328,8 +339,13 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
       undefined,
       headers ? { headers } : undefined
     );
+    // Show the full result in the open modal, and push the lightweight summary
+    // up so agent.security_scan (the list entry) reflects the new scan. Without
+    // this the prop-sync effect would revert the badge to the stale list value
+    // when the modal closes.
     setSecurityScanResult(response.data);
-  }, [agent.path, authToken]);
+    onAgentUpdate?.(agent.path, { security_scan: toScanSummary(response.data) });
+  }, [agent.path, authToken, onAgentUpdate]);
 
   const getSecurityIconState = () => {
     // Gray: no scan result yet
@@ -541,6 +557,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                 path={agent.path}
                 initialRating={agent.rating || 0}
                 initialCount={agent.rating_details?.length || 0}
+                ratingDetails={agent.rating_details}
                 authToken={authToken}
                 onShowToast={onShowToast}
                 onRatingUpdate={(newRating) => {

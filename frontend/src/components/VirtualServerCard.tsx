@@ -231,6 +231,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
               path={server.path}
               initialRating={server.num_stars || 0}
               initialCount={server.rating_details?.length || 0}
+              ratingDetails={server.rating_details}
               authToken={authToken}
               onShowToast={onShowToast}
               onRatingUpdate={(newRating) => {

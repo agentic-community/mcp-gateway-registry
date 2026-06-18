@@ -780,6 +780,13 @@ async def list_agents(
         else:
             accessible_agents = _filter_agents_by_access(all_agents, user_context)
 
+    # Bulk-load security-scan summaries once (path -> {scan_failed, severity counts})
+    # so each card colours its shield icon from the list payload instead of fetching
+    # /agents/{path}/security-scan on mount (N+1 over the page).
+    from ..services.agent_scanner import agent_scanner_service
+
+    scan_summaries = await agent_scanner_service.get_scan_summaries()
+
     filtered_agents = []
     search_query = query.lower() if query else ""
 
@@ -821,6 +828,8 @@ async def list_agents(
                 skills=[s.name for s in agent.skills],
                 num_skills=len(agent.skills),
                 num_stars=agent.num_stars,
+                rating_details=agent.rating_details,
+                security_scan=scan_summaries.get(agent.path),
                 is_enabled=agent_is_enabled,
                 provider=provider_name,
                 streaming=streaming,

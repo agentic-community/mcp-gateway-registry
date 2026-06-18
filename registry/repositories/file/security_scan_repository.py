@@ -66,6 +66,15 @@ class FileSecurityScanRepository(SecurityScanRepositoryBase):
         """List all security scan results."""
         return list(self._scans.values())
 
+    async def list_latest(self) -> list[dict[str, Any]]:
+        """List the latest security scan per server path.
+
+        The file backend keys ``self._scans`` by path and overwrites on each
+        save, so it already holds exactly one (the latest) scan per path —
+        list_all() is already collapsed.
+        """
+        return list(self._scans.values())
+
     async def create(
         self,
         scan_result: dict[str, Any],

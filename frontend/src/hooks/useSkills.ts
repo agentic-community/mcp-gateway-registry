@@ -52,6 +52,8 @@ export const useSkills = (): UseSkillsReturn => {
         auth_scheme: skillInfo.auth_scheme || 'none',
         auth_header_name: skillInfo.auth_header_name || undefined,
         num_stars: skillInfo.num_stars || 0,
+        rating_details: skillInfo.rating_details || [],
+        security_scan: skillInfo.security_scan ?? null,
         status: skillInfo.status || 'active',
         health_status: skillInfo.health_status || 'unknown',
         last_checked_time: skillInfo.last_checked_time,

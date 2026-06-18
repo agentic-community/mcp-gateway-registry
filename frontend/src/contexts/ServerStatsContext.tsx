@@ -29,6 +29,16 @@ interface Server {
   last_checked_time?: string;
   usersCount?: number;
   rating?: number;
+  rating_details?: Array<{ user: string; rating: number }>;
+  // Lightweight scan summary from the list payload, used to colour the shield
+  // icon without a per-card /security-scan fetch. Undefined if not yet scanned.
+  security_scan?: {
+    scan_failed?: boolean;
+    critical_issues?: number;
+    high_severity?: number;
+    medium_severity?: number;
+    low_severity?: number;
+  } | null;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown' | 'local';
   num_tools?: number;
   type: 'server' | 'agent';
@@ -239,6 +249,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           usersCount: 0, // Not available in backend
           rating: serverInfo.num_stars || 0,
           rating_details: serverInfo.rating_details || [],
+          security_scan: serverInfo.security_scan ?? null,
           status: mapHealthStatus(serverInfo.health_status || 'unknown'),
           num_tools: serverInfo.num_tools || 0,
           type: 'server' as const,
@@ -274,6 +285,8 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           last_checked_time: agentInfo.last_health_check || agentInfo.lastHealthCheck || undefined,
           usersCount: 0,
           rating: agentInfo.num_stars || 0,
+          rating_details: agentInfo.rating_details || agentInfo.ratingDetails || [],
+          security_scan: agentInfo.security_scan ?? agentInfo.securityScan ?? null,
           status: mapHealthStatus(agentInfo.health_status || agentInfo.healthStatus || 'unknown'),
           num_tools: agentInfo.num_skills || 0, // Use num_skills for agents
           type: 'agent' as const,

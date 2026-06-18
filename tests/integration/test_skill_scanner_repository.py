@@ -69,8 +69,51 @@ class TestRepositoryCreateRetrieveRoundTrip:
 
                 for key, value in scan_result.items():
                     assert key in retrieved, f"Missing key: {key}"
-                    assert retrieved[key] == value, (
-                        f"Mismatch for key '{key}': expected {value!r}, got {retrieved[key]!r}"
-                    )
+                    assert (
+                        retrieved[key] == value
+                    ), f"Mismatch for key '{key}': expected {value!r}, got {retrieved[key]!r}"
+
+        asyncio.run(_run())
+
+
+class TestListLatest:
+    """list_latest() returns one (latest) scan per path on the file backend."""
+
+    def test_returns_one_doc_per_path_after_repeat_scans(self):
+        async def _run():
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                repo = FileSkillSecurityScanRepository()
+                repo._scans_dir = Path(tmp_dir) / "skill_security_scans"
+                repo._scans = {}
+
+                # Two scans of the same skill (create overwrites) + one of another.
+                await repo.create(
+                    {
+                        "skill_path": "/a",
+                        "scan_timestamp": "2026-01-01T00:00:00Z",
+                        "critical_issues": 9,
+                    }
+                )
+                await repo.create(
+                    {
+                        "skill_path": "/a",
+                        "scan_timestamp": "2026-06-01T00:00:00Z",
+                        "critical_issues": 0,
+                    }
+                )
+                await repo.create(
+                    {
+                        "skill_path": "/b",
+                        "scan_timestamp": "2026-03-01T00:00:00Z",
+                        "high_severity": 1,
+                    }
+                )
+
+                latest = await repo.list_latest()
+                by_path = {s["skill_path"]: s for s in latest}
+
+                # One entry per path, and /a reflects the newer (overwriting) scan.
+                assert set(by_path) == {"/a", "/b"}
+                assert by_path["/a"]["critical_issues"] == 0
 
         asyncio.run(_run())

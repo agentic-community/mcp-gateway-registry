@@ -2,15 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import { StarIcon } from '@heroicons/react/24/solid';
 import { StarIcon as StarIconOutline } from '@heroicons/react/24/outline';
 import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
 
 interface RatingDetail {
   user: string;
   rating: number;
-}
-
-interface RatingInfoResponse {
-  num_stars: number;
-  rating_details: RatingDetail[];
 }
 
 interface StarRatingWidgetProps {
@@ -18,6 +14,10 @@ interface StarRatingWidgetProps {
   path: string;
   initialRating?: number;
   initialCount?: number;
+  // Full per-user rating list from the list payload. Supplying this lets the
+  // widget render the current user's own rating without a per-card /rating
+  // fetch (the N+1 this component used to cause across a page of cards).
+  ratingDetails?: RatingDetail[];
   authToken?: string | null;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
   onRatingUpdate?: (newRating: number) => void;
@@ -29,10 +29,12 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
   path,
   initialRating = 0,
   initialCount = 0,
+  ratingDetails,
   authToken,
   onShowToast,
   onRatingUpdate
 }) => {
+  const { user } = useAuth();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [selectedRating, setSelectedRating] = useState<number | null>(null);
   const [hoverRating, setHoverRating] = useState<number | null>(null);
@@ -50,10 +52,24 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
   const singularLabel = resourceType === 'custom' ? 'entry' : resourceType.slice(0, -1);
 
 
-  // Load current rating on mount
+  // Derive display + the current user's own rating from the list payload props.
+  // No fetch needed: the list endpoint already returns num_stars (initialRating),
+  // the rating count, and rating_details, so a page of cards costs zero extra
+  // requests instead of one /rating call per card.
   useEffect(() => {
-    loadCurrentRating();
-  }, [resourceType, path]);
+    setAverageRating(initialRating);
+    setRatingCount(ratingDetails ? ratingDetails.length : initialCount);
+
+    const username = user?.username;
+    const ownRating = ratingDetails?.find((detail) => detail.user === username);
+    if (ownRating) {
+      setCurrentUserRating(ownRating.rating);
+      setSelectedRating(ownRating.rating);
+    } else {
+      setCurrentUserRating(null);
+      setSelectedRating(null);
+    }
+  }, [resourceType, path, initialRating, initialCount, ratingDetails, user?.username]);
 
 
   // Close dropdown when clicking outside
@@ -72,36 +88,6 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [isDropdownOpen]);
-
-
-  const loadCurrentRating = async () => {
-    try {
-      // Build headers - use Bearer token if provided, otherwise rely on cookies
-      const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-      // Both servers and agents now use consistent path parameter pattern
-      const url = `/api/${resourceType}${path}/rating`;
-      const response = await axios.get<RatingInfoResponse>(
-        url,
-        headers ? { headers } : undefined
-      );
-
-      setAverageRating(response.data.num_stars);
-      setRatingCount(response.data.rating_details.length);
-
-      // Find current user's rating from the rating details
-      // The backend should return rating_details for the current authenticated user
-      if (response.data.rating_details && response.data.rating_details.length > 0) {
-        // For now, use the first rating (should be the current user's rating from backend)
-        const userRating = response.data.rating_details[0];
-        if (userRating) {
-          setCurrentUserRating(userRating.rating);
-          setSelectedRating(userRating.rating);
-        }
-      }
-    } catch (error: any) {
-      console.error('Failed to load rating:', error);
-    }
-  };
 
 
   const handleSubmitRating = async () => {

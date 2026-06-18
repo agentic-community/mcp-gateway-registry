@@ -203,6 +203,9 @@ def mock_security_scanner_service():
         )
     )
 
+    # Bulk scan-summary lookup used by the servers list endpoint (path -> summary).
+    mock_service.get_scan_summaries = AsyncMock(return_value={})
+
     return mock_service
 
 

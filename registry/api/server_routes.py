@@ -614,6 +614,11 @@ async def get_servers_json(
 
     sorted_server_paths = sorted(all_servers.keys(), key=lambda p: all_servers[p]["server_name"])
 
+    # Bulk-load security-scan summaries once (path -> {scan_failed, severity counts})
+    # so each card can colour its shield icon from the list payload. Previously each
+    # ServerCard fetched /servers/{path}/security-scan on mount, an N+1 over the page.
+    scan_summaries = await security_scanner_service.get_scan_summaries()
+
     # Normalize accessible_services by stripping slashes for comparison
     normalized_accessible_services = [s.strip("/") for s in accessible_services]
 
@@ -733,6 +738,9 @@ async def get_servers_json(
                     "ans_metadata": server_info.get("ans_metadata"),
                     "num_stars": server_info.get("num_stars", 0),
                     "rating_details": server_info.get("rating_details", []),
+                    # Lightweight scan summary for the shield icon (None if unscanned).
+                    # Full scan detail is still fetched lazily when the user opens it.
+                    "security_scan": scan_summaries.get(path),
                     # Local-server fields
                     "deployment": server_info.get("deployment", "remote"),
                     "local_runtime": server_info.get("local_runtime"),

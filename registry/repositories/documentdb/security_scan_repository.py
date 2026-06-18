@@ -84,6 +84,32 @@ class DocumentDBSecurityScanRepository(SecurityScanRepositoryBase):
             logger.error(f"Error listing security scans from DocumentDB: {e}", exc_info=True)
             return []
 
+    async def list_latest(self) -> list[dict[str, Any]]:
+        """List the latest security scan per server path.
+
+        Collapses scan history with a $group on server_path, keeping the first
+        document after sorting by scan_timestamp descending. This returns one
+        doc per path over the wire instead of the full history list_all() would
+        transfer, and is served by the (server_path, scan_timestamp) index.
+        """
+        collection = await self._get_collection()
+
+        pipeline = [
+            {"$sort": {"scan_timestamp": -1}},
+            {"$group": {"_id": "$server_path", "doc": {"$first": "$$ROOT"}}},
+        ]
+
+        try:
+            scans = []
+            async for group in collection.aggregate(pipeline):
+                doc = group["doc"]
+                doc.pop("_id", None)
+                scans.append(doc)
+            return scans
+        except Exception as e:
+            logger.error(f"Error listing latest security scans from DocumentDB: {e}", exc_info=True)
+            return []
+
     async def create(
         self,
         scan_result: dict[str, Any],
