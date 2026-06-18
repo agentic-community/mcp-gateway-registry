@@ -269,6 +269,20 @@ wheels = [
 ]
 
 [[package]]
+name = "cedarpy"
+version = "4.8.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/f5/7ab2cbf080253d81c9704a6ab04c3dc93759f0ae688b1e5e28ae8fdb2bf9/cedarpy-4.8.4.tar.gz", hash = "sha256:213ac129fe3b7f8aee437af656b1ecdab6c37414f9403ecaa47013b06574052a", size = 366525, upload-time = "2026-05-29T21:06:56.216Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/a8/0f33ad32bc2d1f2ff2cb34d7a7887afe4a117fa474f5feee14daf1151126/cedarpy-4.8.4-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:7ca32c9894f6f557a8f83843061f243a49cbe233e41006f381b35dbc1c171332", size = 4045673, upload-time = "2026-05-29T21:06:54.748Z" },
+    { url = "https://files.pythonhosted.org/packages/46/fc/1ce4992850b68f90622a42efdbb0eeea173b9346b1d0803e06686dfbd334/cedarpy-4.8.4-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:1e1e41d45fd8303b08d7c656df08edc3813d51227b914f07d3ed9ba3b95df5d7", size = 3928228, upload-time = "2026-05-29T21:06:49.177Z" },
+    { url = "https://files.pythonhosted.org/packages/44/bb/0b41c674136c7da58c6d02c9a97dca1c0f17730637d73b3582cd4dcf6476/cedarpy-4.8.4-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c0b561c3d7f28c29fc409abd202ceb2f2de18371f615cbefe708dc800247fd76", size = 4360952, upload-time = "2026-05-29T21:06:29.111Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/dd/5480f0e4d8ec579a9a698b9e85b2304dc8700ff226b79fdb619380d710b9/cedarpy-4.8.4-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:142442b6cab2f193d93c966f4ae09f95709b2a60a1028e5b7eeb61573555b07f", size = 4447872, upload-time = "2026-05-29T21:06:40.629Z" },
+    { url = "https://files.pythonhosted.org/packages/28/f3/520c45d9a4dce78b49089f80b9bfcca8435c4e1050fc5d911dd12155cbff/cedarpy-4.8.4-cp314-cp314-win_amd64.whl", hash = "sha256:21f74d4dbdb85ec81468219bbd33006ceedefd2973012d27981a7034b74d43e9", size = 3842222, upload-time = "2026-05-29T21:07:03.538Z" },
+    { url = "https://files.pythonhosted.org/packages/93/7c/25d99b911863046a8091e817619c33a7df945e63b05924a56f7254c8f4de/cedarpy-4.8.4-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3c252d69084d0e13fc4a49afa0e34e41a5087a1a65bc435c9169b34010ef9bf6", size = 4360186, upload-time = "2026-05-29T21:06:30.769Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.5.20"
 source = { registry = "https://pypi.org/simple" }
@@ -1615,6 +1629,7 @@ dependencies = [
     { name = "awscli" },
     { name = "bandit" },
     { name = "boto3" },
+    { name = "cedarpy" },
     { name = "cisco-ai-a2a-scanner" },
     { name = "cisco-ai-mcp-scanner" },
     { name = "cisco-ai-skill-scanner" },
@@ -1716,6 +1731,7 @@ requires-dist = [
     { name = "awscli", specifier = ">=1.36.0" },
     { name = "bandit", specifier = ">=1.8.3" },
     { name = "boto3", specifier = ">=1.42.87" },
+    { name = "cedarpy", specifier = ">=4.8.4" },
     { name = "cisco-ai-a2a-scanner", git = "https://github.com/cisco-ai-defense/a2a-scanner.git?rev=8f6e27f" },
     { name = "cisco-ai-mcp-scanner", specifier = ">=3.0.1" },
     { name = "cisco-ai-skill-scanner", specifier = ">=1.0.0" },

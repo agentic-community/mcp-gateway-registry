@@ -1,0 +1,27 @@
+# Local development override — adds the Cedar policy authorizer for testing
+# AUTHORIZER_MODE=both or AUTHORIZER_MODE=custom.
+# This file is picked up automatically by `docker compose` alongside docker-compose.yml.
+# Do NOT commit this file with secrets or host-specific paths.
+
+services:
+  cedar-authorizer:
+    image: python:3.14-slim
+    command: >
+      sh -c "pip install fastapi uvicorn pydantic cedarpy -q &&
+             uvicorn app:app --host 0.0.0.0 --port 8090"
+    volumes:
+      - ./cedar-authorizer/app.py:/app/app.py:ro
+      - ./cedar-authorizer/policies.cedar:/app/policies.cedar:ro
+    working_dir: /app
+    ports:
+      - "8090:8090"
+    environment:
+      - POLICIES_FILE=policies.cedar
+      - API_KEY=${CUSTOM_AUTHORIZER_API_KEY:-default_api_key}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
