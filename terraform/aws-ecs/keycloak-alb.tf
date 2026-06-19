@@ -16,7 +16,7 @@ resource "aws_lb" "keycloak" {
     [aws_security_group.keycloak_lb.id],
     local.cloudfront_prefix_list_name != "" ? [aws_security_group.keycloak_lb_cloudfront[0].id] : []
   )
-  subnets = module.vpc.public_subnets
+  subnets = local.selected_public_subnet_ids
 
   access_logs {
     bucket  = aws_s3_bucket.alb_logs.id
@@ -50,7 +50,7 @@ resource "aws_lb_target_group" "keycloak" {
   port                 = 8080
   protocol             = "HTTP"
   target_type          = "ip"
-  vpc_id               = module.vpc.vpc_id
+  vpc_id               = local.selected_vpc_id
   deregistration_delay = 30
 
   health_check {
@@ -103,7 +103,7 @@ resource "aws_lb_listener" "keycloak_https" {
 }
 
 # HTTP Listener - behavior depends on deployment mode
-# Mode 2 (Custom Domain → ALB): redirect to HTTPS
+# Mode 2 (Custom Domain â†’ ALB): redirect to HTTPS
 # Mode 1 & 3 (CloudFront enabled): forward to target (CloudFront handles HTTPS)
 resource "aws_lb_listener" "keycloak_http" {
   load_balancer_arn = aws_lb.keycloak.arn

@@ -18,7 +18,7 @@ resource "aws_security_group" "documentdb" {
 
   name        = "${var.name}-v2-documentdb-sg"
   description = "Security group for DocumentDB Elastic Cluster" # Keep original description to avoid recreation
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.selected_vpc_id
 
   tags = merge(
     local.common_tags,
@@ -261,7 +261,7 @@ resource "aws_docdb_subnet_group" "registry" {
   count = local.is_aws_documentdb ? 1 : 0
 
   name       = "${var.name}-registry-subnet-group"
-  subnet_ids = module.vpc.private_subnets
+  subnet_ids = local.selected_private_subnet_ids
 
   tags = merge(
     local.common_tags,

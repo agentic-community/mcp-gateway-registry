@@ -15,7 +15,7 @@ resource "aws_db_proxy" "keycloak" {
   }
 
   role_arn               = aws_iam_role.rds_proxy_role.arn
-  vpc_subnet_ids         = module.vpc.private_subnets
+  vpc_subnet_ids         = local.selected_private_subnet_ids
   vpc_security_group_ids = [aws_security_group.keycloak_db.id]
 
   require_tls = false
@@ -98,7 +98,7 @@ resource "aws_rds_cluster_instance" "keycloak" {
 # DB Subnet Group
 resource "aws_db_subnet_group" "keycloak" {
   name       = "keycloak-subnet-group"
-  subnet_ids = module.vpc.private_subnets
+  subnet_ids = local.selected_private_subnet_ids
 
   tags = merge(
     local.common_tags,

@@ -3,22 +3,22 @@
 # VPC Outputs
 output "vpc_id" {
   description = "VPC ID"
-  value       = module.vpc.vpc_id
+  value       = local.selected_vpc_id
 }
 
 output "vpc_cidr" {
   description = "VPC CIDR block"
-  value       = module.vpc.vpc_cidr_block
+  value       = local.selected_vpc_cidr_block
 }
 
 output "private_subnet_ids" {
   description = "Private subnet IDs"
-  value       = module.vpc.private_subnets
+  value       = local.selected_private_subnet_ids
 }
 
 output "public_subnet_ids" {
   description = "Public subnet IDs"
-  value       = module.vpc.public_subnets
+  value       = local.selected_public_subnet_ids
 }
 
 # ECS Cluster Outputs
@@ -93,8 +93,9 @@ output "deployment_summary" {
     mcp_gateway_deployed = true
     https_enabled        = var.enable_route53_dns || var.enable_cloudfront
     monitoring_enabled   = var.enable_monitoring
-    multi_az_nat         = true
+    multi_az_nat         = !var.use_existing_vpc
     autoscaling_enabled  = true
+    network_mode         = var.use_existing_vpc ? "existing-vpc" : "managed-vpc"
     deployment_mode      = var.enable_cloudfront && !var.enable_route53_dns ? "cloudfront" : (var.enable_route53_dns ? "custom-domain" : "development")
   }
 }

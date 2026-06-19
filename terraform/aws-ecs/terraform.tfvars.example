@@ -137,6 +137,42 @@ keycloak_database_password = "CHANGE-ME-DB-PASSWORD"
 # Default: "10.0.0.0/16"
 # vpc_cidr = "10.0.0.0/16"
 
+# Use an existing VPC instead of creating a new VPC and subnets.
+# Default: false
+# use_existing_vpc = false
+#
+# When use_existing_vpc = true, provide the VPC and subnet IDs below.
+# existing_vpc_id = "vpc-0123456789abcdef0"
+# existing_public_subnet_ids = [
+#   "subnet-0123456789abcdef0",
+#   "subnet-0123456789abcdef1",
+# ]
+# existing_private_subnet_ids = [
+#   "subnet-0123456789abcdef2",
+#   "subnet-0123456789abcdef3",
+# ]
+#
+# Required only when use_existing_vpc = true and create_vpc_endpoints = true.
+# existing_private_route_table_ids = [
+#   "rtb-0123456789abcdef0",
+#   "rtb-0123456789abcdef1",
+# ]
+#
+# Optional. Add the public egress IPs that private ECS tasks use when they call
+# the Keycloak public ALB URL through a NAT gateway, firewall, or proxy.
+# This is only needed when Keycloak ALB ingress is restricted and those egress
+# IPs are not already included in ingress_cidr_blocks or managed elsewhere.
+# existing_nat_public_ips = [
+#   "203.0.113.10",
+#   "203.0.113.11",
+# ]
+#
+# Create STS and S3 VPC endpoints.
+# Default: true
+# Set false when using an existing VPC that already provides endpoints,
+# firewall egress, or internet/NAT routing.
+# create_vpc_endpoints = true
+
 # Enable CloudWatch monitoring
 # Default: true
 # enable_monitoring = true

@@ -139,7 +139,7 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_execution" {
 resource "aws_security_group" "rotation_lambda" {
   name        = "${var.name}-rotation-lambda-sg"
   description = "Security group for secret rotation Lambda functions"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.selected_vpc_id
 
   tags = merge(
     local.common_tags,
@@ -327,7 +327,7 @@ resource "aws_lambda_function" "documentdb_rotation" {
   memory_size      = 256
 
   vpc_config {
-    subnet_ids         = module.vpc.private_subnets
+    subnet_ids         = local.selected_private_subnet_ids
     security_group_ids = [aws_security_group.rotation_lambda.id]
   }
 
@@ -374,7 +374,7 @@ resource "aws_lambda_function" "rds_rotation" {
   memory_size      = 256
 
   vpc_config {
-    subnet_ids         = module.vpc.private_subnets
+    subnet_ids         = local.selected_private_subnet_ids
     security_group_ids = [aws_security_group.rotation_lambda.id]
   }
 

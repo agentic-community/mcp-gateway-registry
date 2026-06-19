@@ -20,7 +20,7 @@ locals {
     {
       # Issue #1122: KC_PROXY=edge was deprecated in Keycloak 24+; KC25 ignores
       # it. Replaced with KC_PROXY_HEADERS=xforwarded so Keycloak trusts the
-      # X-Forwarded-Proto/Host headers from CloudFront → ALB and recognizes
+      # X-Forwarded-Proto/Host headers from CloudFront â†’ ALB and recognizes
       # the connection as HTTPS. Without this, KC25 returns "HTTPS required"
       # for all OIDC endpoints.
       name  = "KC_PROXY_HEADERS"
@@ -40,7 +40,7 @@ locals {
     {
       # Issue #1122: KC25 listens HTTPS-only (8443) by default; KC23 listened
       # HTTP (8080). The ALB target group health checks port 8080, so we must
-      # explicitly enable the HTTP listener on KC25. CloudFront → ALB is
+      # explicitly enable the HTTP listener on KC25. CloudFront â†’ ALB is
       # already TLS-terminated by ALB/CloudFront, so HTTP between ALB and
       # Keycloak is fine within the VPC. KC_PROXY_HEADERS=xforwarded above
       # makes Keycloak still recognize the client connection as HTTPS.
@@ -348,7 +348,7 @@ resource "aws_ecs_service" "keycloak" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = module.vpc.private_subnets
+    subnets          = local.selected_private_subnet_ids
     security_groups  = [aws_security_group.keycloak_ecs.id]
     assign_public_ip = false
   }

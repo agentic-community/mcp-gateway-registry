@@ -14,10 +14,18 @@ locals {
   gateway_endpoint_prefix   = "com.amazonaws"
 }
 
+data "aws_vpc" "existing" {
+  count = var.use_existing_vpc && trimspace(var.existing_vpc_id) != "" ? 1 : 0
+
+  id = var.existing_vpc_id
+}
+
 #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 6.0"
+
+  create_vpc = !var.use_existing_vpc
 
   name = "${var.name}-vpc"
   cidr = var.vpc_cidr
@@ -46,36 +54,77 @@ module "vpc" {
   }
 }
 
+locals {
+  selected_vpc_id                  = var.use_existing_vpc ? var.existing_vpc_id : module.vpc.vpc_id
+  selected_vpc_cidr_block          = var.use_existing_vpc ? try(data.aws_vpc.existing[0].cidr_block, "") : module.vpc.vpc_cidr_block
+  selected_private_subnet_ids      = var.use_existing_vpc ? var.existing_private_subnet_ids : module.vpc.private_subnets
+  selected_public_subnet_ids       = var.use_existing_vpc ? var.existing_public_subnet_ids : module.vpc.public_subnets
+  selected_private_route_table_ids = var.use_existing_vpc ? var.existing_private_route_table_ids : module.vpc.private_route_table_ids
+  selected_nat_public_ips          = var.use_existing_vpc ? var.existing_nat_public_ips : module.vpc.nat_public_ips
+}
+
+resource "terraform_data" "existing_vpc_configuration" {
+  input = var.use_existing_vpc ? var.existing_vpc_id : "managed-vpc"
+
+  lifecycle {
+    precondition {
+      condition     = !var.use_existing_vpc || trimspace(var.existing_vpc_id) != ""
+      error_message = "existing_vpc_id must be set when use_existing_vpc is true."
+    }
+
+    precondition {
+      condition     = !var.use_existing_vpc || length(var.existing_private_subnet_ids) >= 2
+      error_message = "existing_private_subnet_ids must contain at least two subnet IDs when use_existing_vpc is true."
+    }
+
+    precondition {
+      condition     = !var.use_existing_vpc || length(var.existing_public_subnet_ids) >= 2
+      error_message = "existing_public_subnet_ids must contain at least two subnet IDs when use_existing_vpc is true."
+    }
+
+    precondition {
+      condition     = !var.use_existing_vpc || !var.create_vpc_endpoints || length(var.existing_private_route_table_ids) > 0
+      error_message = "existing_private_route_table_ids must be set when use_existing_vpc and create_vpc_endpoints are both true."
+    }
+  }
+}
+
 # VPC Endpoints for AWS services
 resource "aws_vpc_endpoint" "sts" {
-  vpc_id             = module.vpc.vpc_id
+  count = var.create_vpc_endpoints ? 1 : 0
+
+  vpc_id             = local.selected_vpc_id
   service_name       = "${local.interface_endpoint_prefix}.${data.aws_region.current.region}.sts"
   vpc_endpoint_type  = "Interface"
-  subnet_ids         = module.vpc.private_subnets
-  security_group_ids = [aws_security_group.vpc_endpoints.id]
+  subnet_ids         = local.selected_private_subnet_ids
+  security_group_ids = [aws_security_group.vpc_endpoints[0].id]
 
   private_dns_enabled = true
 }
 
 resource "aws_vpc_endpoint" "s3" {
-  vpc_id            = module.vpc.vpc_id
+  count = var.create_vpc_endpoints ? 1 : 0
+
+  vpc_id            = local.selected_vpc_id
   service_name      = "${local.gateway_endpoint_prefix}.${data.aws_region.current.region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = module.vpc.private_route_table_ids
+  route_table_ids   = local.selected_private_route_table_ids
 }
 
 # Security group for VPC endpoints
 resource "aws_security_group" "vpc_endpoints" {
+  count = var.create_vpc_endpoints ? 1 : 0
+
   name        = "${var.name}-vpc-endpoints"
   description = "Security group for VPC interface endpoints allowing HTTPS from within VPC"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.selected_vpc_id
 
   ingress {
     description = "Allow HTTPS from VPC CIDR for AWS service endpoints"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [module.vpc.vpc_cidr_block]
+    cidr_blocks = [local.selected_vpc_cidr_block]
   }
 
   tags = merge(

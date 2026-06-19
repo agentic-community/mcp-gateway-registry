@@ -16,6 +16,48 @@ variable "vpc_cidr" {
   default     = "10.0.0.0/16"
 }
 
+variable "use_existing_vpc" {
+  description = "Use an existing VPC and subnet IDs instead of creating a new VPC for this deployment."
+  type        = bool
+  default     = false
+}
+
+variable "existing_vpc_id" {
+  description = "Existing VPC ID to use when use_existing_vpc is true."
+  type        = string
+  default     = ""
+}
+
+variable "existing_public_subnet_ids" {
+  description = "Existing public subnet IDs for internet-facing ALBs when use_existing_vpc is true."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_private_subnet_ids" {
+  description = "Existing private subnet IDs for ECS tasks, databases, Lambda functions, and EFS when use_existing_vpc is true."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_private_route_table_ids" {
+  description = "Existing private route table IDs used for VPC gateway endpoints when use_existing_vpc is true and create_vpc_endpoints is true."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_nat_public_ips" {
+  description = "Optional public NAT or firewall egress IPs for existing-VPC deployments, used to allow private tasks to reach the Keycloak ALB via its public URL."
+  type        = list(string)
+  default     = []
+}
+
+variable "create_vpc_endpoints" {
+  description = "Create STS and S3 VPC endpoints. Set false when using an existing VPC that already provides endpoint, firewall, or internet egress routing."
+  type        = bool
+  default     = true
+}
+
 variable "ingress_cidr_blocks" {
   description = "List of CIDR blocks allowed to access the ALB (main ALB + auth server + registry)"
   type        = list(string)

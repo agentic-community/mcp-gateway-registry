@@ -302,6 +302,38 @@ If you are running this from an EC2 instance, you may also want to run `curl -s 
 
 **Warning:** Setting `ingress_cidr_blocks` to `["0.0.0.0/0"]` opens access to anyone on the internet. While authentication (username/password) is still required, this is not recommended for production environments.
 
+#### Optional: Use an Existing VPC
+
+By default, this deployment creates a new VPC, public subnets, private subnets, NAT gateways, and VPC endpoints. To deploy into a VPC that is already managed by your organization, set `use_existing_vpc = true` and provide the VPC and subnet IDs.
+
+```hcl
+use_existing_vpc = true
+existing_vpc_id  = "vpc-0123456789abcdef0"
+
+existing_public_subnet_ids = [
+  "subnet-0123456789abcdef0",
+  "subnet-0123456789abcdef1",
+]
+
+existing_private_subnet_ids = [
+  "subnet-0123456789abcdef2",
+  "subnet-0123456789abcdef3",
+]
+```
+
+When `create_vpc_endpoints = true`, also provide the private route table IDs so Terraform can attach the S3 gateway endpoint:
+
+```hcl
+existing_private_route_table_ids = [
+  "rtb-0123456789abcdef0",
+  "rtb-0123456789abcdef1",
+]
+```
+
+Set `create_vpc_endpoints = false` when the existing VPC already provides the required AWS service access through centrally managed endpoints, NAT, firewall, or proxy routing.
+
+`existing_nat_public_ips` is optional. Add the public egress IPs that private ECS tasks use when they call the Keycloak public ALB URL through a NAT gateway, firewall, or proxy. This is only needed when Keycloak ALB ingress is restricted and those egress IPs are not already included in `ingress_cidr_blocks` or managed elsewhere.
+
 **Example terraform.tfvars for Mode 1 (CloudFront Only - Easiest):**
 
 ```hcl

@@ -27,9 +27,9 @@ module "mcp_gateway" {
   name = "${var.name}-v2"
 
   # Network configuration
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnets
-  public_subnet_ids   = module.vpc.public_subnets
+  vpc_id              = local.selected_vpc_id
+  private_subnet_ids  = local.selected_private_subnet_ids
+  public_subnet_ids   = local.selected_public_subnet_ids
   ingress_cidr_blocks = var.ingress_cidr_blocks
 
   # ALB logging
@@ -48,8 +48,8 @@ module "mcp_gateway" {
   # Domain name for the registry - determines REGISTRY_URL and OAuth redirect URIs
   # Simplified to 3 modes (no dual-access):
   #   Mode 1: CloudFront-only - use CloudFront domain
-  #   Mode 2: Custom Domain → ALB - use custom domain
-  #   Mode 3: Custom Domain → CloudFront - use custom domain (traffic flows through CloudFront)
+  #   Mode 2: Custom Domain â†’ ALB - use custom domain
+  #   Mode 3: Custom Domain â†’ CloudFront - use custom domain (traffic flows through CloudFront)
   domain_name = var.enable_route53_dns ? "registry.${local.root_domain}" : (
     var.enable_cloudfront ? aws_cloudfront_distribution.mcp_gateway[0].domain_name : ""
   )
@@ -394,12 +394,12 @@ resource "null_resource" "dual_ingress_warning" {
     command = <<-EOT
       echo ""
       echo "============================================================"
-      echo "INFO: Custom Domain → CloudFront Configuration (Mode 3)"
+      echo "INFO: Custom Domain â†’ CloudFront Configuration (Mode 3)"
       echo "============================================================"
       echo "Both CloudFront (enable_cloudfront=true) and Route53 DNS"
       echo "(enable_route53_dns=true) are enabled."
       echo ""
-      echo "Traffic flow: Custom Domain → CloudFront → ALB → ECS"
+      echo "Traffic flow: Custom Domain â†’ CloudFront â†’ ALB â†’ ECS"
       echo ""
       echo "Access URL: https://registry.${local.root_domain}"
       echo ""

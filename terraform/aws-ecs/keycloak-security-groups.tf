@@ -6,7 +6,7 @@
 resource "aws_security_group" "keycloak_ecs" {
   name        = "keycloak-ecs"
   description = "Security group for Keycloak ECS tasks"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.selected_vpc_id
 
   tags = merge(
     local.common_tags,
@@ -76,7 +76,7 @@ resource "aws_security_group_rule" "keycloak_ecs_ingress_lb_cloudfront" {
 resource "aws_security_group" "keycloak_lb" {
   name        = "keycloak-lb"
   description = "Security group for Keycloak load balancer"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.selected_vpc_id
 
   tags = merge(
     local.common_tags,
@@ -112,7 +112,7 @@ resource "aws_security_group" "keycloak_lb_cloudfront" {
   count       = local.cloudfront_prefix_list_name != "" ? 1 : 0
   name        = "keycloak-lb-cloudfront"
   description = "Security group for CloudFront access to Keycloak ALB"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.selected_vpc_id
 
   tags = merge(
     local.common_tags,
@@ -173,12 +173,14 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_auth_server" {
 # When ECS tasks in private subnets call Keycloak's public DNS name, traffic goes through NAT gateway.
 # The source IP becomes the NAT gateway's public IP, not the ECS task's security group.
 resource "aws_security_group_rule" "keycloak_lb_ingress_nat_gateway" {
+  count = length(local.selected_nat_public_ips) > 0 ? 1 : 0
+
   description       = "Ingress from NAT gateways to Keycloak load balancer (HTTPS)"
   type              = "ingress"
   from_port         = 443
   to_port           = 443
   protocol          = "tcp"
-  cidr_blocks       = [for ip in module.vpc.nat_public_ips : "${ip}/32"]
+  cidr_blocks       = [for ip in local.selected_nat_public_ips : "${ip}/32"]
   security_group_id = aws_security_group.keycloak_lb.id
 }
 
@@ -208,7 +210,7 @@ resource "aws_security_group_rule" "keycloak_lb_egress_ecs" {
 resource "aws_security_group" "keycloak_db" {
   name        = "keycloak-db"
   description = "Security group for Keycloak database"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.selected_vpc_id
 
   tags = merge(
     local.common_tags,
