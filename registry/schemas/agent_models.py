@@ -1254,3 +1254,57 @@ class AgentBatchJob(BaseModel):
     lease_expires_at: datetime | None = None
     items: list[AgentBatchItem]  # original submission (immutable)
     results: list[AgentBatchItemResult] = Field(default_factory=list)
+
+
+class PullCardFieldChange(BaseModel):
+    """A single field that differs between local and remote agent card."""
+
+    field: str = Field(
+        ...,
+        description="Field name that changed",
+    )
+    current_value: Any = Field(
+        ...,
+        description="Current value in the local registry",
+    )
+    remote_value: Any = Field(
+        ...,
+        description="Value from the remote agent card",
+    )
+
+
+class PullCardResponse(BaseModel):
+    """Response from the pull-card endpoint (dry-run and overwrite modes)."""
+
+    agent_path: str = Field(
+        ...,
+        description="Agent path in the registry",
+    )
+    dry_run: bool = Field(
+        ...,
+        description="Whether this was a dry-run (preview only)",
+    )
+    remote_card_url: str = Field(
+        ...,
+        description="URL the remote card was fetched from",
+    )
+    changes: list[PullCardFieldChange] = Field(
+        default_factory=list,
+        description="List of fields that differ between local and remote",
+    )
+    has_changes: bool = Field(
+        ...,
+        description="Whether any A2A-spec fields differ",
+    )
+    applied: bool = Field(
+        False,
+        description="Whether changes were applied (only true when dry_run=false and has_changes=true)",
+    )
+    health_status: str = Field(
+        "healthy",
+        description="Health status updated as side effect of successful fetch",
+    )
+    remote_card: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The full remote agent card as received",
+    )
