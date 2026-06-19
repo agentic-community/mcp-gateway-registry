@@ -103,7 +103,7 @@ resource "aws_lb_listener" "keycloak_https" {
 }
 
 # HTTP Listener - behavior depends on deployment mode
-# Mode 2 (Custom Domain â†’ ALB): redirect to HTTPS
+# Mode 2 (Custom Domain → ALB): redirect to HTTPS
 # Mode 1 & 3 (CloudFront enabled): forward to target (CloudFront handles HTTPS)
 resource "aws_lb_listener" "keycloak_http" {
   load_balancer_arn = aws_lb.keycloak.arn
