@@ -584,6 +584,15 @@ class NewModel(BaseModel):
 ### Database Schema Changes
 {If applicable, show collection/table changes}
 
+### Data Access Plan (avoid N+1)
+{For each read path the feature introduces, state how the data is fetched.
+Any time you need a count or lookup over a list of items, design a single bulk
+query or aggregation (`$group`/`$sum`/`$in`/batched fetch) rather than one
+query per item. Do NOT design a `for` loop that awaits a repository call per
+element. If a per-item read seems unavoidable, justify why and bound the item
+count. Note any new repository method (e.g. a `count_*` aggregation) the design
+needs so it does not fall back to loading and counting in Python.}
+
 ## API Design
 
 ### New Endpoints
@@ -1080,6 +1089,16 @@ Create a review document with feedback from multiple expert personas:
 
 #### Strengths
 - {Positive aspects from backend perspective}
+
+#### N+1 Access Pattern Check (MANDATORY)
+Inspect every data-access path in the design. Flag any pattern that reads from
+a database or data source once per item (a `count()` / `find_one()` / `get()` /
+`distinct()` or repository call inside a `for`/`while`/comprehension/per-item
+callback, or a service that internally queries per element). State the fix: a
+single bulk query or aggregation (`$group`/`$sum`/`$in`/batched fetch) outside
+the loop. `asyncio.gather` over a per-item list is still N+1 round-trips; flag
+it unless the item count is small and bounded.
+- **N+1 patterns:** {None found / FLAGGED: <where + the per-item read and the bulk-query fix>}
 
 #### Concerns
 - {Issues or risks identified}

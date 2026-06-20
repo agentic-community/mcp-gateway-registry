@@ -16,6 +16,14 @@ interface GovernanceScope {
   identities_active: number;
 }
 
+interface RegisteredAssets {
+  servers: number;
+  tools: number;
+  agents: number;
+  skills: number;
+  custom_entities: number;
+}
+
 interface ActiveUsers {
   dau: number;
   wau: number;
@@ -54,6 +62,7 @@ interface ExecutiveSummaryResponse {
   window_days: number;
   retention_days: number;
   governance: GovernanceScope;
+  registered_assets: RegisteredAssets;
   active_users: ActiveUsers;
   active_agents: ActiveAgents;
   traffic_split: TrafficSplit;
@@ -309,13 +318,15 @@ const AuditExecutiveSummary: React.FC = () => {
               </p>
             ) : null}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {/* Tile 1: Governance scope (the blast radius we control) */}
+            {/* Tile 1: Registered assets (total catalog inventory, not
+                activity-scoped). Headline = servers, with the rest of the
+                inventory on the sub-line. */}
             <HeroTile
               icon={<ServerStackIcon className="h-4 w-4" />}
-              label="Governance Scope"
+              label="Registered Assets"
               value={
                 <span className="whitespace-nowrap">
-                  {data.governance.mcp_servers_governed.toLocaleString()}
+                  {data.registered_assets.servers.toLocaleString()}
                   <span className="text-sm font-normal text-gray-400 dark:text-gray-500">
                     {' '}
                     servers
@@ -324,11 +335,13 @@ const AuditExecutiveSummary: React.FC = () => {
               }
               subLine={
                 <span>
-                  {data.governance.tools_under_policy.toLocaleString()} tools under policy &middot;{' '}
-                  {data.governance.identities_active.toLocaleString()} identities
+                  {data.registered_assets.tools.toLocaleString()} tools &middot;{' '}
+                  {data.registered_assets.agents.toLocaleString()} agents &middot;{' '}
+                  {data.registered_assets.skills.toLocaleString()} skills &middot;{' '}
+                  {data.registered_assets.custom_entities.toLocaleString()} custom
                 </span>
               }
-              title="Servers governed, tools under policy, and active identities under control"
+              title="Total registered inventory in the catalog: servers, the tools they expose, agents, skills, and custom entities"
             />
 
             {/* Tile 2: Weekly Active Users and Agents, side by side with a

@@ -184,3 +184,12 @@ class DocumentDBCustomEntityRepository(CustomEntityRepositoryBase):
         if visibility_filter:
             query.update(visibility_filter)
         return await coll.count_documents(query)
+
+    async def count_all(self) -> int:
+        """Count custom entity records across every type in one query.
+
+        Returns:
+            Total number of custom entity records, all types combined.
+        """
+        coll = await self._get_collection()
+        return await coll.count_documents({})

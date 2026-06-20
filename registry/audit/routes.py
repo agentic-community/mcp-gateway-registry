@@ -295,6 +295,16 @@ class GovernanceScope(BaseModel):
     )
 
 
+class RegisteredAssets(BaseModel):
+    """Total registered inventory in the registry catalog (not activity-scoped)."""
+
+    servers: int = Field(default=0, description="Total registered MCP servers")
+    tools: int = Field(default=0, description="Total tools exposed across all servers")
+    agents: int = Field(default=0, description="Total registered agents")
+    skills: int = Field(default=0, description="Total registered skills")
+    custom_entities: int = Field(default=0, description="Total custom entity records")
+
+
 class ActiveUsers(BaseModel):
     """Active identity counts over rolling windows."""
 
@@ -388,6 +398,7 @@ class ExecutiveSummaryResponse(BaseModel):
         description="Configured audit retention (TTL) in days; gates window-N metric availability",
     )
     governance: GovernanceScope = Field(default_factory=GovernanceScope)
+    registered_assets: RegisteredAssets = Field(default_factory=RegisteredAssets)
     active_users: ActiveUsers = Field(default_factory=ActiveUsers)
     active_agents: ActiveAgents = Field(default_factory=ActiveAgents)
     traffic_split: TrafficSplit = Field(default_factory=TrafficSplit)
@@ -877,6 +888,50 @@ def _build_momentum(
     )
 
 
+async def _get_registered_assets() -> RegisteredAssets:
+    """
+    Gather total registered inventory counts from the asset repositories.
+
+    All counts run concurrently and each uses an efficient count/aggregation
+    (no per-document loads), so this stays O(1) round-trips rather than N+1.
+
+    Returns:
+        RegisteredAssets with servers, tools, agents, skills, and custom
+        entity totals; zeros for any asset type whose count fails.
+    """
+    from registry.repositories.factory import (
+        get_agent_repository,
+        get_custom_entity_repository,
+        get_server_repository,
+        get_skill_repository,
+    )
+
+    server_repo = get_server_repository()
+    agent_repo = get_agent_repository()
+    skill_repo = get_skill_repository()
+    custom_entity_repo = get_custom_entity_repository()
+
+    try:
+        servers, tools, agents, skills, custom_entities = await asyncio.gather(
+            server_repo.count(),
+            server_repo.count_tools(),
+            agent_repo.count(),
+            skill_repo.count(),
+            custom_entity_repo.count_all(),
+        )
+    except Exception:
+        logger.exception("Failed to gather registered asset counts")
+        return RegisteredAssets()
+
+    return RegisteredAssets(
+        servers=servers,
+        tools=tools,
+        agents=agents,
+        skills=skills,
+        custom_entities=custom_entities,
+    )
+
+
 @router.get("/executive-summary", response_model=ExecutiveSummaryResponse)
 async def get_executive_summary(
     user_context: Annotated[dict[str, Any], Depends(require_admin)],
@@ -948,6 +1003,7 @@ async def get_executive_summary(
         _count_distinct_usernames(repository, daa_match),
         _count_distinct_usernames(repository, waa_match),
         _count_distinct_usernames(repository, maa_match),
+        _get_registered_assets(),
     )
 
     governance = GovernanceScope(
@@ -955,6 +1011,7 @@ async def get_executive_summary(
         tools_under_policy=len([t for t in results[2] if t]),
         identities_active=results[0],
     )
+    registered_assets = results[17]
     active_users = ActiveUsers(
         dau=results[3],
         wau=results[4],
@@ -990,6 +1047,7 @@ async def get_executive_summary(
         window_days=days,
         retention_days=retention_days,
         governance=governance,
+        registered_assets=registered_assets,
         active_users=active_users,
         active_agents=active_agents,
         traffic_split=traffic_split,

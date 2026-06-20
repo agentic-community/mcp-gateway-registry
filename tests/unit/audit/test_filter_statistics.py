@@ -461,9 +461,17 @@ class TestExecutiveSummaryEndpoint:
         mock_repo.distinct = AsyncMock(side_effect=mock_distinct)
         mock_repo.count = AsyncMock(side_effect=mock_count)
 
-        with patch(
-            "registry.audit.routes.get_audit_repository",
-            return_value=mock_repo,
+        from registry.audit.routes import RegisteredAssets
+
+        with (
+            patch(
+                "registry.audit.routes.get_audit_repository",
+                return_value=mock_repo,
+            ),
+            patch(
+                "registry.audit.routes._get_registered_assets",
+                new=AsyncMock(return_value=RegisteredAssets()),
+            ),
         ):
             from registry.audit.routes import get_executive_summary
 
@@ -489,6 +497,10 @@ class TestExecutiveSummaryEndpoint:
             assert result.active_agents.maa == 1
             assert result.active_agents.waa_available is True
             assert result.active_agents.maa_available is False
+
+            # Registered assets come from the patched helper (zeros here)
+            assert result.registered_assets.servers == 0
+            assert result.registered_assets.tools == 0
 
             # Traffic split: 60 human, 40 agent -> 60.0 / 40.0
             assert result.traffic_split.human_events == 60
@@ -530,9 +542,17 @@ class TestExecutiveSummaryEndpoint:
         mock_repo.distinct = AsyncMock(side_effect=mock_distinct)
         mock_repo.count = AsyncMock(side_effect=mock_count)
 
-        with patch(
-            "registry.audit.routes.get_audit_repository",
-            return_value=mock_repo,
+        from registry.audit.routes import RegisteredAssets
+
+        with (
+            patch(
+                "registry.audit.routes.get_audit_repository",
+                return_value=mock_repo,
+            ),
+            patch(
+                "registry.audit.routes._get_registered_assets",
+                new=AsyncMock(return_value=RegisteredAssets()),
+            ),
         ):
             from registry.audit.routes import get_executive_summary
 
@@ -571,11 +591,17 @@ class TestExecutiveSummaryEndpoint:
         mock_repo.distinct = AsyncMock(side_effect=mock_distinct)
         mock_repo.count = AsyncMock(side_effect=mock_count)
 
+        from registry.audit.routes import RegisteredAssets
+
         # Retention must cover the prior window (days*2 = 14) for WoW to be honest.
         with (
             patch(
                 "registry.audit.routes.get_audit_repository",
                 return_value=mock_repo,
+            ),
+            patch(
+                "registry.audit.routes._get_registered_assets",
+                new=AsyncMock(return_value=RegisteredAssets()),
             ),
             patch.object(settings, "audit_log_mongodb_ttl_days", 30),
         ):
@@ -611,11 +637,17 @@ class TestExecutiveSummaryEndpoint:
         mock_repo.distinct = AsyncMock(side_effect=mock_distinct)
         mock_repo.count = AsyncMock(side_effect=mock_count)
 
+        from registry.audit.routes import RegisteredAssets
+
         # days=7 needs 14d retention for the prior window; 7d is not enough.
         with (
             patch(
                 "registry.audit.routes.get_audit_repository",
                 return_value=mock_repo,
+            ),
+            patch(
+                "registry.audit.routes._get_registered_assets",
+                new=AsyncMock(return_value=RegisteredAssets()),
             ),
             patch.object(settings, "audit_log_mongodb_ttl_days", 7),
         ):
@@ -631,3 +663,43 @@ class TestExecutiveSummaryEndpoint:
             assert result.momentum.has_prior_data is False
             assert result.momentum.events_wow_pct is None
             assert result.active_users.mau_available is False
+
+    async def test_registered_assets_counts(self):
+        """_get_registered_assets gathers counts from each asset repository."""
+        server_repo = MagicMock()
+        server_repo.count = AsyncMock(return_value=5)
+        server_repo.count_tools = AsyncMock(return_value=13)
+        agent_repo = MagicMock()
+        agent_repo.count = AsyncMock(return_value=4)
+        skill_repo = MagicMock()
+        skill_repo.count = AsyncMock(return_value=7)
+        custom_entity_repo = MagicMock()
+        custom_entity_repo.count_all = AsyncMock(return_value=2)
+
+        with (
+            patch(
+                "registry.repositories.factory.get_server_repository",
+                return_value=server_repo,
+            ),
+            patch(
+                "registry.repositories.factory.get_agent_repository",
+                return_value=agent_repo,
+            ),
+            patch(
+                "registry.repositories.factory.get_skill_repository",
+                return_value=skill_repo,
+            ),
+            patch(
+                "registry.repositories.factory.get_custom_entity_repository",
+                return_value=custom_entity_repo,
+            ),
+        ):
+            from registry.audit.routes import _get_registered_assets
+
+            assets = await _get_registered_assets()
+
+            assert assets.servers == 5
+            assert assets.tools == 13
+            assert assets.agents == 4
+            assert assets.skills == 7
+            assert assets.custom_entities == 2

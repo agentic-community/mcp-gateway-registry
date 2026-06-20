@@ -34,6 +34,16 @@
 - Caching strategies
 - Memory usage
 - Response time
+- **N+1 access patterns (MANDATORY CHECK):** Any code that reads from a
+  database or other data source inside a loop, comprehension, or per-item
+  callback is an N+1 pattern and must be flagged. This includes: a `count()` /
+  `find_one()` / `get()` / `distinct()` call per item, awaiting a repository
+  method inside `for`/`while`/`map`, or calling a service that internally
+  queries once per element of a list. The fix is a single bulk query or
+  aggregation (e.g. `$group` / `$sum` / `$in` / batched fetch) outside the
+  loop. Concurrent calls via `asyncio.gather` over a per-item list are still
+  N+1 round-trips and should also be flagged unless the count is small and
+  bounded. Check every changed read path against this before approving.
 
 ### 5. Integration
 - External service integration
@@ -46,6 +56,7 @@
 - What's the data model for this feature?
 - How do we validate incoming requests?
 - What are the performance implications (O(n) vs O(log n))?
+- Does any changed read path query a database or data source inside a loop or per item (N+1)? If so, can it be a single bulk query or aggregation instead?
 - How do we handle concurrent updates?
 - What's the error handling strategy?
 - Do we need database migrations or schema changes?
@@ -78,6 +89,7 @@
 
 #### Performance
 - **Query Efficiency:** {Good/Needs Work}
+- **N+1 Access Patterns:** {None found / FLAGGED: <file:line + the per-item query and the bulk-query fix>}
 - **Memory Usage:** {Good/Needs Work}
 - **Caching:** {Implemented/Not Needed/Should Add}
 
