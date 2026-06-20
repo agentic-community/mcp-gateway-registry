@@ -4,6 +4,7 @@ import AuditFilterBar, { AuditFilters } from '../components/AuditFilterBar';
 import AuditLogTable, { AuditEvent } from '../components/AuditLogTable';
 import AuditEventDetail from '../components/AuditEventDetail';
 import AuditStatistics from '../components/AuditStatistics';
+import AuditExecutiveSummary from '../components/AuditExecutiveSummary';
 import { ShieldExclamationIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 
 interface AuditLogsPageProps {
@@ -126,6 +127,9 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
           />
         </div>
 
+        {/* Executive Summary - hero tiles for platform leads */}
+        <AuditExecutiveSummary />
+
         {/* Statistics Dashboard */}
         <AuditStatistics stream={filters.stream} username={filters.username} />
 
@@ -198,6 +202,9 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
             onRefresh={handleRefresh}
           />
         </div>
+
+        {/* Executive Summary - hero tiles for platform leads */}
+        <AuditExecutiveSummary />
 
         {/* Statistics Dashboard */}
         <AuditStatistics stream={filters.stream} username={filters.username} />

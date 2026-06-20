@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..auth.dependencies import enhanced_auth
+from ..core.config import settings
 from ..repositories.audit_repository import DocumentDBAuditRepository
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,100 @@ router = APIRouter(prefix="/audit", tags=["Audit Logs"])
 
 # Singleton repository instance
 _audit_repository: DocumentDBAuditRepository | None = None
+
+# Credential type that marks non-interactive (agent / programmatic) callers.
+# The web UI authenticates with a session cookie; agents and service accounts
+# send a Bearer token. credential_type is set on every audit record, so it is
+# the reliable signal for the human-vs-agent split. Note: a human using a CLI
+# with a bearer token is counted as agent traffic by this definition, which is
+# acceptable for a gateway whose purpose is non-interactive agent access.
+AGENT_CREDENTIAL_TYPE: str = "bearer_token"
+HUMAN_CREDENTIAL_TYPE: str = "session_cookie"
+# Username assigned to unauthenticated traffic
+ANONYMOUS_USERNAME: str = "anonymous"
+
+
+def _window_match(
+    start: datetime,
+    end: datetime,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Build a MongoDB match filter for a timestamp window.
+
+    Args:
+        start: Inclusive start of the window
+        end: Inclusive end of the window
+        extra: Additional match conditions merged into the filter
+
+    Returns:
+        MongoDB match dictionary spanning [start, end]
+    """
+    match: dict[str, Any] = {"timestamp": {"$gte": start, "$lte": end}}
+    if extra:
+        match.update(extra)
+    return match
+
+
+async def _count_distinct_usernames(
+    repository: DocumentDBAuditRepository,
+    match: dict[str, Any],
+) -> int:
+    """
+    Count distinct non-anonymous usernames matching a filter.
+
+    The repository's distinct() already drops falsy values; this helper
+    additionally drops the anonymous username so only real identities count.
+
+    Args:
+        repository: Audit repository instance
+        match: MongoDB match filter scoping the distinct values
+
+    Returns:
+        Number of distinct non-anonymous usernames
+    """
+    usernames = await repository.distinct("identity.username", match)
+    return len([u for u in usernames if u and u != ANONYMOUS_USERNAME])
+
+
+def _percentage(
+    part: int,
+    total: int,
+) -> float:
+    """
+    Compute a one-decimal percentage of part over total.
+
+    Args:
+        part: Numerator value
+        total: Denominator value
+
+    Returns:
+        Percentage rounded to one decimal, 0.0 when total is zero
+    """
+    if total <= 0:
+        return 0.0
+    return round(part / total * 100, 1)
+
+
+def _non_anonymous_match(
+    start: datetime,
+    end: datetime,
+) -> dict[str, Any]:
+    """
+    Build a window match that excludes anonymous and empty usernames.
+
+    Args:
+        start: Inclusive start of the window
+        end: Inclusive end of the window
+
+    Returns:
+        MongoDB match dictionary scoped to real (non-anonymous) identities
+    """
+    return _window_match(
+        start,
+        end,
+        {"identity.username": {"$nin": [ANONYMOUS_USERNAME, None, ""]}},
+    )
 
 
 def get_audit_repository() -> DocumentDBAuditRepository:
@@ -166,6 +261,13 @@ class AuditStatisticsResponse(BaseModel):
         default_factory=list,
         description="Daily event counts for the time range",
     )
+    activity_timeline_prior: list[TimeSeriesBucket] = Field(
+        default_factory=list,
+        description=(
+            "Daily event counts for the prior window of equal length, "
+            "for week-over-week overlay"
+        ),
+    )
     status_distribution: StatusDistribution = Field(
         default_factory=StatusDistribution,
         description="Distribution of HTTP status codes",
@@ -174,6 +276,122 @@ class AuditStatisticsResponse(BaseModel):
         default_factory=list,
         description="Per-user breakdown of top operations",
     )
+
+
+class GovernanceScope(BaseModel):
+    """Scope of assets currently governed by the gateway."""
+
+    mcp_servers_governed: int = Field(
+        default=0,
+        description="Distinct MCP servers accessed in the current window",
+    )
+    tools_under_policy: int = Field(
+        default=0,
+        description="Distinct MCP tools invoked in the current window",
+    )
+    identities_active: int = Field(
+        default=0,
+        description="Distinct non-anonymous identities active in the current window",
+    )
+
+
+class ActiveUsers(BaseModel):
+    """Active identity counts over rolling windows."""
+
+    dau: int = Field(default=0, description="Distinct non-anonymous usernames, last 1 day")
+    wau: int = Field(default=0, description="Distinct non-anonymous usernames, last 7 days")
+    mau: int = Field(default=0, description="Distinct non-anonymous usernames, last 30 days")
+    wau_available: bool = Field(
+        default=True,
+        description="True when retention covers the 7-day window; WAU is honest only then",
+    )
+    mau_available: bool = Field(
+        default=False,
+        description="True when retention covers the 30-day window; MAU is honest only then",
+    )
+
+
+class ActiveAgents(BaseModel):
+    """Active agent (bearer-token caller) counts over rolling windows."""
+
+    daa: int = Field(default=0, description="Distinct agent identities, last 1 day")
+    waa: int = Field(default=0, description="Distinct agent identities, last 7 days")
+    maa: int = Field(default=0, description="Distinct agent identities, last 30 days")
+    waa_available: bool = Field(
+        default=True,
+        description="True when retention covers the 7-day window; WAA is honest only then",
+    )
+    maa_available: bool = Field(
+        default=False,
+        description="True when retention covers the 30-day window; MAA is honest only then",
+    )
+
+
+class TrafficSplit(BaseModel):
+    """Human vs agent traffic split for the current window."""
+
+    human_events: int = Field(default=0, description="Authenticated, non-agent events")
+    agent_events: int = Field(default=0, description="Agent/service-account events (jwt_bearer)")
+    human_pct: float = Field(
+        default=0.0,
+        description="Human share over (human+agent), one decimal, 0 when denominator 0",
+    )
+    agent_pct: float = Field(
+        default=0.0,
+        description="Agent share over (human+agent), one decimal, 0 when denominator 0",
+    )
+
+
+class AdoptionMomentum(BaseModel):
+    """Week-over-week adoption momentum metrics."""
+
+    events_current: int = Field(
+        default=0,
+        description="Non-anonymous events in the current window",
+    )
+    events_prior: int = Field(
+        default=0,
+        description="Non-anonymous events in the prior window",
+    )
+    events_wow_pct: float | None = Field(
+        default=None,
+        description="Week-over-week event change percent, None when prior is zero",
+    )
+    active_identities_current: int = Field(
+        default=0,
+        description="Distinct non-anonymous identities in the current window",
+    )
+    active_identities_prior: int = Field(
+        default=0,
+        description="Distinct non-anonymous identities in the prior window",
+    )
+    active_agents_current: int = Field(
+        default=0,
+        description="Distinct agent identities in the current window",
+    )
+    active_agents_prior: int = Field(
+        default=0,
+        description="Distinct agent identities in the prior window",
+    )
+    has_prior_data: bool = Field(
+        default=False,
+        description="True when the prior window has at least one event",
+    )
+
+
+class ExecutiveSummaryResponse(BaseModel):
+    """Global, cross-stream executive summary of gateway activity."""
+
+    window_days: int = Field(description="Length of the comparison window in days")
+    retention_days: int = Field(
+        default=0,
+        description="Configured audit retention (TTL) in days; gates window-N metric availability",
+    )
+    governance: GovernanceScope = Field(default_factory=GovernanceScope)
+    active_users: ActiveUsers = Field(default_factory=ActiveUsers)
+    active_agents: ActiveAgents = Field(default_factory=ActiveAgents)
+    traffic_split: TrafficSplit = Field(default_factory=TrafficSplit)
+    momentum: AdoptionMomentum = Field(default_factory=AdoptionMomentum)
 
 
 def _build_query(
@@ -345,12 +563,22 @@ async def get_statistics(
         "mcp_access": "mcp_server_access",
     }
     log_type = log_type_map.get(stream, stream)
-    cutoff = datetime.now(UTC) - timedelta(days=days)
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=days)
     base_match: dict[str, Any] = {"log_type": log_type, "timestamp": {"$gte": cutoff}}
+
+    # Prior window of equal length, ending where the current window starts
+    prior_start = now - timedelta(days=days * 2)
+    prior_match: dict[str, Any] = {
+        "log_type": log_type,
+        "timestamp": {"$gte": prior_start, "$lt": cutoff},
+    }
 
     if username:
         escaped_username = re.escape(username)
-        base_match["identity.username"] = {"$regex": f"^{escaped_username}$", "$options": "i"}
+        username_filter = {"$regex": f"^{escaped_username}$", "$options": "i"}
+        base_match["identity.username"] = username_filter
+        prior_match["identity.username"] = username_filter
 
     repository = get_audit_repository()
 
@@ -460,6 +688,19 @@ async def get_statistics(
                 {"$limit": 10},
             ]
         ),
+        # Prior-window daily timeline for week-over-week overlay
+        repository.aggregate(
+            [
+                {"$match": prior_match},
+                {
+                    "$group": {
+                        "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}},
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        ),
     ]
 
     # Conditionally add MCP server aggregation
@@ -484,7 +725,8 @@ async def get_statistics(
     timeline_raw = results[3]
     status_raw = results[4]
     user_activity_raw = results[5]
-    top_servers_raw = results[6] if stream == "mcp_access" else []
+    timeline_prior_raw = results[6]
+    top_servers_raw = results[7] if stream == "mcp_access" else []
 
     # Transform results
     top_users = [
@@ -510,6 +752,10 @@ async def get_statistics(
     ]
 
     activity_timeline = [TimeSeriesBucket(period=r["_id"], count=r["count"]) for r in timeline_raw]
+
+    activity_timeline_prior = [
+        TimeSeriesBucket(period=r["_id"], count=r["count"]) for r in timeline_prior_raw
+    ]
 
     status_dist = StatusDistribution()
     if stream == "mcp_access":
@@ -559,8 +805,195 @@ async def get_statistics(
         top_servers=top_servers,
         top_operations=top_operations,
         activity_timeline=activity_timeline,
+        activity_timeline_prior=activity_timeline_prior,
         status_distribution=status_dist,
         user_activity=user_activity,
+    )
+
+
+def _build_traffic_split(
+    human_events: int,
+    agent_events: int,
+) -> TrafficSplit:
+    """
+    Build the human vs agent traffic split with percentages.
+
+    Args:
+        human_events: Count of authenticated non-agent events
+        agent_events: Count of agent (jwt_bearer) events
+
+    Returns:
+        TrafficSplit with counts and one-decimal percentages
+    """
+    total = human_events + agent_events
+    return TrafficSplit(
+        human_events=human_events,
+        agent_events=agent_events,
+        human_pct=_percentage(human_events, total),
+        agent_pct=_percentage(agent_events, total),
+    )
+
+
+def _build_momentum(
+    events_current: int,
+    events_prior: int,
+    identities_current: int,
+    identities_prior: int,
+    agents_current: int,
+    agents_prior: int,
+    prior_window_retained: bool,
+) -> AdoptionMomentum:
+    """
+    Build the week-over-week adoption momentum block.
+
+    Args:
+        events_current: Non-anonymous events in the current window
+        events_prior: Non-anonymous events in the prior window
+        identities_current: Distinct identities in the current window
+        identities_prior: Distinct identities in the prior window
+        agents_current: Distinct agents in the current window
+        agents_prior: Distinct agents in the prior window
+        prior_window_retained: True when retention covers the full prior window,
+            so a zero prior count means genuinely no traffic rather than expired data
+
+    Returns:
+        AdoptionMomentum with computed week-over-week change
+    """
+    # Only trust the prior window when retention covers it AND it has events.
+    # Without retention coverage a zero prior count is expired data, not real zero.
+    has_prior_data = prior_window_retained and events_prior > 0
+    wow_pct = None
+    if has_prior_data:
+        wow_pct = round((events_current - events_prior) / events_prior * 100, 1)
+    return AdoptionMomentum(
+        events_current=events_current,
+        events_prior=events_prior,
+        events_wow_pct=wow_pct,
+        active_identities_current=identities_current,
+        active_identities_prior=identities_prior,
+        active_agents_current=agents_current,
+        active_agents_prior=agents_prior,
+        has_prior_data=has_prior_data,
+    )
+
+
+@router.get("/executive-summary", response_model=ExecutiveSummaryResponse)
+async def get_executive_summary(
+    user_context: Annotated[dict[str, Any], Depends(require_admin)],
+    days: int = Query(
+        7,
+        ge=1,
+        le=30,
+        description="Length of the comparison window in days",
+    ),
+) -> ExecutiveSummaryResponse:
+    """Get a global, cross-stream executive summary. Requires admin access."""
+    start_time = time.time()
+    repository = get_audit_repository()
+
+    # Retention (TTL) gates which rolling-window metrics are honest. A window of
+    # N days is only meaningful when audit events are retained for at least N days.
+    retention_days = settings.audit_log_mongodb_ttl_days
+
+    now = datetime.now(UTC)
+    cur_start = now - timedelta(days=days)
+    prior_start = now - timedelta(days=days * 2)
+    mcp_match = {"log_type": "mcp_server_access"}
+    # Agents are non-anonymous callers using a bearer token (non-interactive).
+    agent_filter = {
+        "identity.username": {"$nin": [ANONYMOUS_USERNAME, None, ""]},
+        "identity.credential_type": AGENT_CREDENTIAL_TYPE,
+    }
+
+    # Current window matches scoped to MCP-only metrics
+    cur_window = _window_match(cur_start, now)
+    cur_mcp = _window_match(cur_start, now, mcp_match)
+    cur_non_anon = _non_anonymous_match(cur_start, now)
+    prior_non_anon = _non_anonymous_match(prior_start, cur_start)
+
+    # Split by credential_type: humans use session cookies (interactive web UI),
+    # agents use bearer tokens (programmatic). Both exclude anonymous traffic.
+    cur_agents = _window_match(cur_start, now, agent_filter)
+    cur_humans = _window_match(
+        cur_start,
+        now,
+        {
+            "identity.username": {"$nin": [ANONYMOUS_USERNAME, None, ""]},
+            "identity.credential_type": HUMAN_CREDENTIAL_TYPE,
+        },
+    )
+    prior_agents = _window_match(prior_start, cur_start, agent_filter)
+
+    # Rolling DAA/WAA/MAA windows: distinct agent identities over 1/7/30 days.
+    daa_match = _window_match(now - timedelta(days=1), now, agent_filter)
+    waa_match = _window_match(now - timedelta(days=7), now, agent_filter)
+    maa_match = _window_match(now - timedelta(days=30), now, agent_filter)
+
+    # Run all independent queries concurrently
+    results = await asyncio.gather(
+        _count_distinct_usernames(repository, cur_window),
+        repository.distinct("mcp_server.name", cur_mcp),
+        repository.distinct("mcp_request.tool_name", cur_mcp),
+        _count_distinct_usernames(repository, _window_match(now - timedelta(days=1), now)),
+        _count_distinct_usernames(repository, _window_match(now - timedelta(days=7), now)),
+        _count_distinct_usernames(repository, _window_match(now - timedelta(days=30), now)),
+        repository.count(cur_humans),
+        repository.count(cur_agents),
+        repository.count(cur_non_anon),
+        repository.count(prior_non_anon),
+        _count_distinct_usernames(repository, cur_non_anon),
+        _count_distinct_usernames(repository, prior_non_anon),
+        _count_distinct_usernames(repository, cur_agents),
+        _count_distinct_usernames(repository, prior_agents),
+        _count_distinct_usernames(repository, daa_match),
+        _count_distinct_usernames(repository, waa_match),
+        _count_distinct_usernames(repository, maa_match),
+    )
+
+    governance = GovernanceScope(
+        mcp_servers_governed=len([s for s in results[1] if s]),
+        tools_under_policy=len([t for t in results[2] if t]),
+        identities_active=results[0],
+    )
+    active_users = ActiveUsers(
+        dau=results[3],
+        wau=results[4],
+        mau=results[5],
+        wau_available=retention_days >= 7,
+        mau_available=retention_days >= 30,
+    )
+    active_agents = ActiveAgents(
+        daa=results[14],
+        waa=results[15],
+        maa=results[16],
+        waa_available=retention_days >= 7,
+        maa_available=retention_days >= 30,
+    )
+    traffic_split = _build_traffic_split(human_events=results[6], agent_events=results[7])
+    momentum = _build_momentum(
+        events_current=results[8],
+        events_prior=results[9],
+        identities_current=results[10],
+        identities_prior=results[11],
+        agents_current=results[12],
+        agents_prior=results[13],
+        prior_window_retained=retention_days >= days * 2,
+    )
+
+    elapsed = time.time() - start_time
+    logger.info(
+        f"Executive summary computed in {elapsed:.2f}s "
+        f"(days={days}, retention_days={retention_days})"
+    )
+
+    return ExecutiveSummaryResponse(
+        window_days=days,
+        retention_days=retention_days,
+        governance=governance,
+        active_users=active_users,
+        active_agents=active_agents,
+        traffic_split=traffic_split,
+        momentum=momentum,
     )
 
 

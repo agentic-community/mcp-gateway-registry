@@ -35,6 +35,7 @@ interface AuditStatisticsData {
   top_servers: UsageSummaryItem[];
   top_operations: UsageSummaryItem[];
   activity_timeline: TimeSeriesBucket[];
+  activity_timeline_prior: TimeSeriesBucket[];
   status_distribution: StatusDistribution;
   user_activity: UserActivityItem[];
 }
@@ -143,6 +144,26 @@ function _fillTimelineDays(timeline: TimeSeriesBucket[], days: number): TimeSeri
   return filled;
 }
 
+/**
+ * Align prior-week buckets to the current day slots by index position.
+ * The prior buckets correspond day-for-day to the current filled timeline,
+ * so slot i uses prior[i]. If lengths differ we pad with 0 or truncate so
+ * the returned array is always the same length as the current timeline.
+ */
+function _alignPriorByIndex(
+  prior: TimeSeriesBucket[],
+  currentLength: number
+): number[] {
+  const sorted = [...prior].sort((a, b) => a.period.localeCompare(b.period));
+  const counts: number[] = [];
+
+  for (let i = 0; i < currentLength; i++) {
+    counts.push(sorted[i] ? sorted[i].count : 0);
+  }
+
+  return counts;
+}
+
 function _formatDateLabel(period: string): string {
   const d = new Date(period + 'T00:00:00');
   const weekday = WEEKDAY_NAMES[d.getDay()];
@@ -155,10 +176,24 @@ const VB_W = 600;
 const VB_H = 180;
 const PAD = { top: 20, right: 50, bottom: 32, left: 45 };
 
-const TimelineChart: React.FC<{ timeline: TimeSeriesBucket[]; days: number }> = ({ timeline, days }) => {
+const TimelineChart: React.FC<{
+  timeline: TimeSeriesBucket[];
+  days: number;
+  priorTimeline?: TimeSeriesBucket[];
+}> = ({ timeline, days, priorTimeline }) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const filled = _fillTimelineDays(timeline, days);
-  const maxCount = Math.max(...filled.map((t) => t.count), 1);
+
+  // Align prior-week counts to the current day slots by index position.
+  const hasPrior = Boolean(priorTimeline && priorTimeline.length);
+  const priorCounts = hasPrior
+    ? _alignPriorByIndex(priorTimeline as TimeSeriesBucket[], filled.length)
+    : [];
+
+  // Scale the y-axis to the max across BOTH series so the comparison is honest.
+  const currentMax = Math.max(...filled.map((t) => t.count), 1);
+  const priorMax = hasPrior ? Math.max(...priorCounts, 0) : 0;
+  const maxCount = Math.max(currentMax, priorMax, 1);
 
   if (!filled.length) {
     return <p className="text-sm text-gray-400 italic py-2">No data available</p>;
@@ -167,14 +202,28 @@ const TimelineChart: React.FC<{ timeline: TimeSeriesBucket[]; days: number }> = 
   const plotW = VB_W - PAD.left - PAD.right;
   const plotH = VB_H - PAD.top - PAD.bottom;
 
+  const _xForIndex = (i: number): number =>
+    PAD.left + (filled.length > 1 ? (i / (filled.length - 1)) * plotW : plotW / 2);
+
+  const _yForCount = (count: number): number =>
+    PAD.top + plotH - (count / maxCount) * plotH;
+
   const points = filled.map((b, i) => {
-    const x = PAD.left + (filled.length > 1 ? (i / (filled.length - 1)) * plotW : plotW / 2);
-    const y = PAD.top + plotH - (b.count / maxCount) * plotH;
+    const x = _xForIndex(i);
+    const y = _yForCount(b.count);
     return { x, y, ...b };
   });
 
   const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
   const areaPath = `${linePath} L${points[points.length - 1].x},${PAD.top + plotH} L${points[0].x},${PAD.top + plotH} Z`;
+
+  // Prior-week overlay line (dashed, muted, no area fill, no data points).
+  const priorPoints = hasPrior
+    ? priorCounts.map((count, i) => ({ x: _xForIndex(i), y: _yForCount(count) }))
+    : [];
+  const priorLinePath = priorPoints
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`)
+    .join(' ');
 
   const gridValues = [0, Math.round(maxCount / 2), maxCount];
   const gridLines = gridValues.map((v) => ({
@@ -213,6 +262,19 @@ const TimelineChart: React.FC<{ timeline: TimeSeriesBucket[]; days: number }> = 
             </text>
           </g>
         ))}
+
+        {/* Prior-week line (drawn underneath the current line) */}
+        {hasPrior && (
+          <path
+            d={priorLinePath}
+            fill="none"
+            className="stroke-gray-400 dark:stroke-gray-500"
+            strokeWidth="1.5"
+            strokeDasharray="4,3"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
 
         {/* Area fill */}
         <path d={areaPath} className="fill-blue-500/15 dark:fill-blue-400/15" />
@@ -301,6 +363,22 @@ const TimelineChart: React.FC<{ timeline: TimeSeriesBucket[]; days: number }> = 
           </text>
         ))}
       </svg>
+
+      {/* Legend */}
+      {hasPrior && (
+        <div className="flex items-center justify-end gap-4 text-xs text-gray-500 dark:text-gray-400 mt-1">
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-4 h-0.5 bg-blue-500 dark:bg-blue-400" />
+            This week
+          </span>
+          <span className="flex items-center gap-1">
+            <span
+              className="inline-block w-4 border-t border-dashed border-gray-400 dark:border-gray-500"
+            />
+            Prior week
+          </span>
+        </div>
+      )}
     </div>
   );
 };
@@ -358,9 +436,10 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
   const [collapsed, setCollapsed] = useState(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      return stored === null ? true : stored === 'true';
+      // Expanded by default; only respect an explicit prior collapse choice.
+      return stored === null ? false : stored === 'true';
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -538,7 +617,11 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
                     <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                       Activity Timeline (Last {days} Days)
                     </h4>
-                    <TimelineChart timeline={data.activity_timeline} days={days} />
+                    <TimelineChart
+                      timeline={data.activity_timeline}
+                      priorTimeline={data.activity_timeline_prior}
+                      days={days}
+                    />
                   </div>
                 </div>
               </div>
