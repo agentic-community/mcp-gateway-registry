@@ -804,16 +804,19 @@ class ScopeRepositoryBase(ABC):
         Get all group mappings.
 
         Returns:
-            Dictionary mapping group names to lists of scope names.
+            Dictionary mapping scope names to lists of IdP/Keycloak groups
+            that grant each scope.  Both the DocumentDB and file backends
+            return this canonical shape so ``map_cognito_groups_to_scopes``
+            can invert it uniformly.
 
         Example:
             {
                 "mcp-registry-admin": [
-                    "mcp-registry-admin",
-                    "mcp-servers-unrestricted/read"
+                    "mcp-registry-admin"
                 ],
-                "mcp-registry-user": [
-                    "mcp-servers-unrestricted/read"
+                "mcp-servers-unrestricted/read": [
+                    "mcp-registry-admin",
+                    "registry-admins"
                 ]
             }
         """

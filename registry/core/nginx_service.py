@@ -674,6 +674,34 @@ class NginxConfigService:
             config_content = config_content.replace("{{PINGFEDERATE_HOST}}", pf_host)
             config_content = config_content.replace("{{PINGFEDERATE_PORT}}", pf_port)
 
+            # Parse AUTH_SERVER_URL so nginx templates can reference the
+            # auth-server by its actual hostname/FQDN instead of the
+            # hard-coded Docker-Compose service name (#553).  Follows the
+            # same pattern used for Keycloak and PingFederate above.
+            auth_server_url = os.environ.get("AUTH_SERVER_URL", "http://auth-server:8888")
+            try:
+                parsed_auth = urlparse(auth_server_url)
+                auth_host = parsed_auth.hostname or "auth-server"
+                if parsed_auth.port:
+                    auth_port = str(parsed_auth.port)
+                else:
+                    auth_scheme = parsed_auth.scheme or "http"
+                    auth_port = "443" if auth_scheme == "https" else "8888"
+
+                logger.info(
+                    f"Using auth-server configuration from AUTH_SERVER_URL "
+                    f"'{auth_server_url}': {auth_host}:{auth_port}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to parse AUTH_SERVER_URL '{auth_server_url}': {e}. "
+                    "Using defaults."
+                )
+                auth_host = "auth-server"
+                auth_port = "8888"
+            config_content = config_content.replace("{{AUTH_SERVER_HOST}}", auth_host)
+            config_content = config_content.replace("{{AUTH_SERVER_PORT}}", auth_port)
+
             # Generate registry-only block (503 response for MCP proxy requests)
             registry_only_block = self._generate_registry_only_block()
             config_content = config_content.replace("{{REGISTRY_ONLY_BLOCK}}", registry_only_block)

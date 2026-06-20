@@ -683,6 +683,57 @@ class TestGetUIPermissionsForUser:
         # Assert
         assert permissions == {}
 
+    @pytest.mark.asyncio
+    async def test_admin_ui_permissions_with_mixed_scopes(
+        self, mock_scopes_config: dict[str, Any]
+    ):
+        """Test admin gets permissions when scopes include non-UI server scopes (#930).
+
+        In production, the admin group maps to both UI scopes (with permissions)
+        and server-access scopes (without permissions). The function must still
+        return the admin UI permissions, not an empty dict.
+        """
+        # Arrange — realistic scope list produced by map_cognito_groups_to_scopes
+        user_scopes = [
+            "mcp-registry-admin",
+            "mcp-servers-unrestricted/read",
+            "mcp-servers-unrestricted/execute",
+        ]
+
+        # Act
+        permissions = await get_ui_permissions_for_user(user_scopes)
+
+        # Assert — admin UI permissions must be present
+        assert "list_agents" in permissions
+        assert "all" in permissions["list_agents"]
+        assert "list_service" in permissions
+        assert "all" in permissions["list_service"]
+        assert "register_service" in permissions
+        assert "all" in permissions["register_service"]
+
+
+class TestMapAndResolveEndToEnd:
+    """End-to-end test: group → scopes → ui_permissions (#930).
+
+    Verifies the full chain that was broken on the file backend
+    because get_all_group_mappings returned the wrong dict shape.
+    """
+
+    @pytest.mark.asyncio
+    async def test_admin_group_to_ui_permissions(
+        self, mock_scopes_config: dict[str, Any]
+    ):
+        """Admin group must produce non-empty ui_permissions."""
+        # Step 1: map groups → scopes
+        scopes = await map_cognito_groups_to_scopes(["mcp-registry-admin"])
+        assert len(scopes) > 0, "Admin group should map to at least one scope"
+
+        # Step 2: scopes → ui_permissions
+        permissions = await get_ui_permissions_for_user(scopes)
+        assert permissions, "Admin scopes must produce non-empty ui_permissions"
+        assert "list_service" in permissions
+        assert "all" in permissions["list_service"]
+
 
 # =============================================================================
 # TEST: user_has_ui_permission_for_service

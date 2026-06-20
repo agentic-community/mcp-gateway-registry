@@ -1007,6 +1007,151 @@ server {
 
 
 # =============================================================================
+# AUTH_SERVER_URL PLACEHOLDER SUBSTITUTION (#553)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generate_config_async_auth_server_url_parsing(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """Test AUTH_SERVER_URL parsing substitutes placeholders (#553)."""
+    template_content = """
+server {
+    proxy_pass http://{{AUTH_SERVER_HOST}}:{{AUTH_SERVER_PORT}}/validate;
+{{LOCATION_BLOCKS}}
+}
+"""
+
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                mock_health_service.server_health_status = {
+                    "/test-server": HealthStatus.HEALTHY,
+                }
+
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        env_values = {
+                            "AUTH_PROVIDER": "keycloak",
+                            "KEYCLOAK_URL": "http://keycloak:8080",
+                            "AUTH_SERVER_URL": "http://auth.internal.svc.cluster.local:8888",
+                            "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+                        }
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+
+                            assert result is True
+
+                            written_content = mock_atomic_write.call_args_list[0][0][1]
+                            assert "auth.internal.svc.cluster.local" in written_content
+                            assert "8888" in written_content
+                            assert "{{AUTH_SERVER_HOST}}" not in written_content
+                            assert "{{AUTH_SERVER_PORT}}" not in written_content
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generate_config_async_auth_server_url_default(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """Test AUTH_SERVER_URL defaults to auth-server:8888 when unset (#553)."""
+    template_content = """
+server {
+    proxy_pass http://{{AUTH_SERVER_HOST}}:{{AUTH_SERVER_PORT}}/validate;
+{{LOCATION_BLOCKS}}
+}
+"""
+
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                mock_health_service.server_health_status = {}
+
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        env_values = {
+                            "AUTH_PROVIDER": "keycloak",
+                            "KEYCLOAK_URL": "http://keycloak:8080",
+                            "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+                        }
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+
+                            assert result is True
+                            written_content = mock_atomic_write.call_args_list[0][0][1]
+                            assert "auth-server" in written_content
+                            assert "8888" in written_content
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generate_config_async_auth_server_url_parse_fallback(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """Test AUTH_SERVER_URL falls back to defaults on parse exception (#553)."""
+    template_content = """
+server {
+    proxy_pass http://{{AUTH_SERVER_HOST}}:{{AUTH_SERVER_PORT}}/validate;
+{{LOCATION_BLOCKS}}
+}
+"""
+
+    env_values = {
+        "AUTH_PROVIDER": "keycloak",
+        "KEYCLOAK_URL": "http://keycloak:8080",
+        "AUTH_SERVER_URL": "http://auth.example.com:9999",
+        "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+    }
+
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                mock_health_service.server_health_status = {}
+
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            # Force urlparse to raise when parsing AUTH_SERVER_URL.
+                            # We need a targeted side_effect: let Keycloak/PF parses
+                            # succeed but fail the auth-server parse.
+                            original_urlparse = urlparse
+                            call_count = {"n": 0}
+
+                            def _selective_urlparse(url):
+                                call_count["n"] += 1
+                                # The auth-server parse is the 3rd urlparse call
+                                # (after Keycloak and PingFederate).
+                                if "auth.example.com" in url:
+                                    raise Exception("parse error")
+                                return original_urlparse(url)
+
+                            with patch(
+                                "registry.core.nginx_service.urlparse",
+                                side_effect=_selective_urlparse,
+                            ):
+                                result = await nginx_service.generate_config_async(
+                                    sample_servers
+                                )
+
+                                assert result is True
+                                written_content = mock_atomic_write.call_args_list[0][0][1]
+                                # Should fall back to defaults
+                                assert "auth-server" in written_content
+                                assert "8888" in written_content
+
+
+# =============================================================================
 # server-scope $backend_url default must NOT exist in conf templates
 # =============================================================================
 
