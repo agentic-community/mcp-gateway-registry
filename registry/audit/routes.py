@@ -44,6 +44,12 @@ HUMAN_CREDENTIAL_TYPE: str = "session_cookie"
 # Username assigned to unauthenticated traffic
 ANONYMOUS_USERNAME: str = "anonymous"
 
+# Executive summary cache: this endpoint runs many aggregations per call, so a
+# short TTL cache (keyed by the days window) shields the database from repeated
+# page loads / refreshes. Mirrors the /api/stats caching precedent.
+EXEC_SUMMARY_CACHE_TTL_SECONDS: int = 30
+_exec_summary_cache: dict[int, tuple[datetime, ExecutiveSummaryResponse]] = {}
+
 
 def _window_match(
     start: datetime,
@@ -913,7 +919,7 @@ async def _get_registered_assets() -> RegisteredAssets:
 
     try:
         servers, tools, agents, skills, custom_entities = await asyncio.gather(
-            server_repo.count(),
+            server_repo.count(exclude_versions=True),
             server_repo.count_tools(),
             agent_repo.count(),
             skill_repo.count(),
@@ -932,17 +938,21 @@ async def _get_registered_assets() -> RegisteredAssets:
     )
 
 
-@router.get("/executive-summary", response_model=ExecutiveSummaryResponse)
-async def get_executive_summary(
-    user_context: Annotated[dict[str, Any], Depends(require_admin)],
-    days: int = Query(
-        7,
-        ge=1,
-        le=30,
-        description="Length of the comparison window in days",
-    ),
+async def _compute_executive_summary(
+    days: int,
 ) -> ExecutiveSummaryResponse:
-    """Get a global, cross-stream executive summary. Requires admin access."""
+    """
+    Compute the global, cross-stream executive summary.
+
+    Runs all audit aggregations and inventory counts. Caching is handled by the
+    route wrapper, so this always computes fresh.
+
+    Args:
+        days: Length of the comparison window in days
+
+    Returns:
+        The computed ExecutiveSummaryResponse
+    """
     start_time = time.time()
     repository = get_audit_repository()
 
@@ -1053,6 +1063,49 @@ async def get_executive_summary(
         traffic_split=traffic_split,
         momentum=momentum,
     )
+
+
+async def _get_cached_executive_summary(
+    days: int,
+) -> ExecutiveSummaryResponse:
+    """
+    Return the executive summary for a window, using a short-TTL cache.
+
+    The summary runs many aggregations, so results are cached per ``days`` for
+    EXEC_SUMMARY_CACHE_TTL_SECONDS to shield the database from repeated page
+    loads and manual refreshes.
+
+    Args:
+        days: Length of the comparison window in days
+
+    Returns:
+        Cached or freshly computed ExecutiveSummaryResponse
+    """
+    now = datetime.now(UTC)
+    cached = _exec_summary_cache.get(days)
+    if cached is not None:
+        cached_at, cached_value = cached
+        if (now - cached_at).total_seconds() < EXEC_SUMMARY_CACHE_TTL_SECONDS:
+            logger.debug(f"Executive summary cache hit (days={days})")
+            return cached_value
+
+    summary = await _compute_executive_summary(days)
+    _exec_summary_cache[days] = (now, summary)
+    return summary
+
+
+@router.get("/executive-summary", response_model=ExecutiveSummaryResponse)
+async def get_executive_summary(
+    user_context: Annotated[dict[str, Any], Depends(require_admin)],
+    days: int = Query(
+        7,
+        ge=1,
+        le=30,
+        description="Length of the comparison window in days",
+    ),
+) -> ExecutiveSummaryResponse:
+    """Get a global, cross-stream executive summary. Requires admin access."""
+    return await _get_cached_executive_summary(days)
 
 
 @router.get("/events", response_model=AuditEventsResponse)

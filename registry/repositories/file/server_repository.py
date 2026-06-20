@@ -414,12 +414,22 @@ class FileServerRepository(ServerRepositoryBase):
 
         return True
 
-    async def count(self) -> int:
+    async def count(
+        self,
+        exclude_versions: bool = False,
+    ) -> int:
         """Get total count of servers.
+
+        Args:
+            exclude_versions: When True, exclude version documents (keys
+                containing ":") so the count reflects distinct servers only.
+                Defaults to False to preserve the historical count.
 
         Returns:
             Total number of servers in the repository.
         """
+        if exclude_versions:
+            return len([path for path in self._servers if ":" not in path])
         return len(self._servers)
 
     async def update_field(

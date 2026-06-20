@@ -186,8 +186,16 @@ class ServerRepositoryBase(ABC):
         pass
 
     @abstractmethod
-    async def count(self) -> int:
+    async def count(
+        self,
+        exclude_versions: bool = False,
+    ) -> int:
         """Get total count of servers.
+
+        Args:
+            exclude_versions: When True, exclude version documents so the count
+                reflects distinct servers only. Defaults to False to preserve
+                the historical count of all documents.
 
         Returns:
             Total number of servers in the repository.

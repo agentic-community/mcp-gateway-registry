@@ -9,6 +9,8 @@ Validates: Issue #572
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from registry.core.config import settings
 from registry.repositories.audit_repository import DocumentDBAuditRepository
 
@@ -431,6 +433,15 @@ def _is_human_query(query: dict) -> bool:
 class TestExecutiveSummaryEndpoint:
     """Tests for GET /api/audit/executive-summary endpoint."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_summary_cache(self):
+        """Clear the module-level summary cache so tests do not see stale data."""
+        import registry.audit.routes as routes
+
+        routes._exec_summary_cache.clear()
+        yield
+        routes._exec_summary_cache.clear()
+
     async def test_happy_path_computes_metrics(self):
         """Computes governance, active users, traffic split, and momentum."""
         mock_repo = MagicMock()
@@ -703,3 +714,29 @@ class TestExecutiveSummaryEndpoint:
             assert assets.agents == 4
             assert assets.skills == 7
             assert assets.custom_entities == 2
+
+    async def test_summary_is_cached_within_ttl(self):
+        """A second call within the TTL returns the cache without recomputing."""
+        from registry.audit.routes import (
+            ExecutiveSummaryResponse,
+            RegisteredAssets,
+            get_executive_summary,
+        )
+
+        compute = AsyncMock(
+            return_value=ExecutiveSummaryResponse(
+                window_days=7,
+                registered_assets=RegisteredAssets(),
+            )
+        )
+
+        with patch(
+            "registry.audit.routes._compute_executive_summary",
+            new=compute,
+        ):
+            user_context = {"is_admin": True, "username": "admin"}
+            await get_executive_summary(user_context=user_context, days=7)
+            await get_executive_summary(user_context=user_context, days=7)
+
+        # Two requests, but the expensive computation ran only once
+        assert compute.await_count == 1

@@ -25,6 +25,11 @@ def _make_cursor(items: list[dict]) -> MagicMock:
         return item
 
     cursor.__anext__ = anext_impl
+
+    async def to_list_impl(length=None):
+        return list(items) if length is None else list(items)[:length]
+
+    cursor.to_list = to_list_impl
     return cursor
 
 
@@ -274,9 +279,43 @@ class TestCount:
         mock_collection.count_documents.return_value = 42
         assert await repo.count() == 42
 
+    async def test_counts_all_documents_by_default(self, repo, mock_collection):
+        mock_collection.count_documents.return_value = 42
+        await repo.count()
+        mock_collection.count_documents.assert_called_once_with({})
+
+    async def test_exclude_versions_filters_version_docs(self, repo, mock_collection):
+        mock_collection.count_documents.return_value = 5
+        result = await repo.count(exclude_versions=True)
+        assert result == 5
+        # Version documents (_id containing ":") are excluded from the count
+        mock_collection.count_documents.assert_called_once_with(
+            {"_id": {"$not": {"$regex": ":"}}}
+        )
+
     async def test_error_returns_zero(self, repo, mock_collection):
         mock_collection.count_documents.side_effect = Exception("db error")
         assert await repo.count() == 0
+
+
+class TestCountTools:
+    async def test_sums_tool_list_sizes(self, repo, mock_collection):
+        mock_collection.aggregate = MagicMock(return_value=_make_cursor([{"_id": None, "total": 13}]))
+
+        result = await repo.count_tools()
+
+        assert result == 13
+        # Version documents are excluded so tools are not double-counted
+        pipeline = mock_collection.aggregate.call_args[0][0]
+        assert pipeline[0] == {"$match": {"_id": {"$not": {"$regex": ":"}}}}
+
+    async def test_empty_collection_returns_zero(self, repo, mock_collection):
+        mock_collection.aggregate = MagicMock(return_value=_make_cursor([]))
+        assert await repo.count_tools() == 0
+
+    async def test_error_returns_zero(self, repo, mock_collection):
+        mock_collection.aggregate = MagicMock(side_effect=Exception("db error"))
+        assert await repo.count_tools() == 0
 
 
 class TestUpdateField:

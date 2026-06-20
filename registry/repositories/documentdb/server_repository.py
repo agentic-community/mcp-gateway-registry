@@ -484,8 +484,17 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             logger.error(f"Failed to update server state in DocumentDB: {e}", exc_info=True)
             return False
 
-    async def count(self) -> int:
+    async def count(
+        self,
+        exclude_versions: bool = False,
+    ) -> int:
         """Get total count of servers.
+
+        Args:
+            exclude_versions: When True, exclude version documents (``_id``
+                containing ":") so the count reflects distinct servers only,
+                matching the basis used by ``count_tools()``. Defaults to False
+                to preserve the historical count of all documents.
 
         Returns:
             Total number of servers in the repository.
@@ -493,8 +502,10 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         logger.debug(f"DocumentDB COUNT: Counting servers in collection '{self._collection_name}'")
         collection = await self._get_collection()
 
+        query: dict[str, Any] = {"_id": {"$not": {"$regex": ":"}}} if exclude_versions else {}
+
         try:
-            count = await collection.count_documents({})
+            count = await collection.count_documents(query)
             logger.debug(f"DocumentDB COUNT: Found {count} servers")
             return count
         except Exception as e:
