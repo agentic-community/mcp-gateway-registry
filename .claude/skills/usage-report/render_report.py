@@ -195,6 +195,33 @@ def _read_active_instances_csv(
         return list(csv.DictReader(f))
 
 
+def _count_reporters_on_day(
+    csv_path: str,
+    day: str,
+    internal_ids: set[str],
+) -> int:
+    """Count unique customer registry instances that sent any event on a day.
+
+    Reads the raw registry_metrics.csv and counts distinct registry_id values
+    whose `ts` falls on the given day, excluding known-internal instances. Used
+    for the report-day reporter count in the executive summary. The report day
+    is typically in-progress at export time, so this is a partial-day figure.
+    """
+    if not os.path.exists(csv_path):
+        return 0
+
+    reporters = set()
+    with open(csv_path) as f:
+        for row in csv.DictReader(f):
+            registry_id = row.get("registry_id") or ""
+            if not registry_id or registry_id in internal_ids:
+                continue
+            if (row.get("ts") or "")[:10] == day:
+                reporters.add(registry_id)
+
+    return len(reporters)
+
+
 def _read_lifetime_buckets_csv(
     path: str,
 ) -> list[dict]:
@@ -836,6 +863,18 @@ def _build_template_vars(
     prev_confirmed = prev_liveness.get("counts", {}).get("confirmed", 0) if prev_liveness else 0
     instance_delta = total_instances - prev_metrics.get("key_metrics", {}).get("identified_instances", total_instances) if prev_metrics else 0
 
+    # Customer instances that reported on the last complete day (report date - 1).
+    # The report day itself is usually in-progress at export time, so we use the
+    # previous calendar day to cover a full 24-hour window.
+    last_complete_day = _previous_date(date_str)
+    report_day_reporters = _count_reporters_on_day(
+        str(output_dir / f"registry_metrics-{date_str}.csv")
+        if (output_dir / f"registry_metrics-{date_str}.csv").exists()
+        else str(output_dir / "registry_metrics.csv"),
+        last_complete_day,
+        set(metrics.get("internal_instance_ids", [])),
+    )
+
     exec_lead_parts = []
     if instance_delta > 0:
         exec_lead_parts.append(f"{instance_delta} new install{'s' if instance_delta != 1 else ''} since the previous report.")
@@ -843,6 +882,11 @@ def _build_template_vars(
         exec_lead_parts.append(f"Confirmed Alive moved from {prev_confirmed} to {confirmed_now}.")
     elif confirmed_now == prev_confirmed and confirmed_now > 0:
         exec_lead_parts.append(f"Confirmed Alive holds steady at {confirmed_now}.")
+    if report_day_reporters > 0:
+        exec_lead_parts.append(
+            f"**{report_day_reporters} customer instances reported in on {last_complete_day} "
+            f"(last complete day).**"
+        )
     executive_summary_lead = " ".join(exec_lead_parts) or "No major shifts since the last report."
 
     # ===== Build the variable dict =====
