@@ -96,6 +96,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "order": 4,
         "fields": [
             ("idp_group_filter_prefix", "Group Filter Prefixes (comma-separated)", False),
+            ("allowed_idp_groups", "Allowed IdP Groups (comma-separated, blank = auto)", False),
         ],
         "subgroups": [
             {

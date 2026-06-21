@@ -163,6 +163,27 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             logger.error(f"Error getting group mappings for '{keycloak_group}': {e}", exc_info=True)
             return []
 
+    async def get_all_mapped_group_names(self) -> set[str]:
+        """Union of every scope document's group_mappings array.
+
+        Uses a single projected query (not the in-memory cache) so the result
+        reflects group mappings added after the process last loaded scopes.
+        Returns an empty set on error so callers can fail open.
+        """
+        logger.debug("DocumentDB READ: Getting all mapped group names from DB")
+        collection = await self._get_collection()
+
+        names: set[str] = set()
+        try:
+            cursor = collection.find({}, {"group_mappings": 1})
+            async for doc in cursor:
+                names.update(doc.get("group_mappings") or [])
+            logger.debug(f"DocumentDB READ: Found {len(names)} distinct mapped group names")
+            return names
+        except Exception as e:
+            logger.error(f"Error getting all mapped group names: {e}", exc_info=True)
+            return set()
+
     async def get_server_scopes(
         self,
         scope_name: str,

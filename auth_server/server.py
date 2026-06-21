@@ -3855,6 +3855,20 @@ async def oauth2_callback(
                 f"{mapped_user['username']} (provider={provider}): {e}"
             )
 
+        # Filter the (possibly enriched) group list down to the scope-relevant
+        # subset BEFORE persisting it. IdPs such as Entra ID can return hundreds
+        # or thousands of groups; storing them all bloats the X-Groups header
+        # (nginx buffer overflow -> 500s) and makes the per-request groups->scopes
+        # lookup do one DB query per group. Filtering here is lossless for
+        # authorization because unmapped groups never produce scopes. Runs after
+        # enrichment so the final set is filtered.
+        from group_filter import filter_session_groups
+
+        session_groups = await filter_session_groups(
+            session_groups,
+            username_hash=hash_username(mapped_user["username"]),
+        )
+
         # Persist the full session record server-side and put only an opaque
         # session_id in the browser cookie. This prevents cookie-size failures
         # for IdPs that return large groups claims (e.g. Entra ID with many

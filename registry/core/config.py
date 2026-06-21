@@ -527,6 +527,17 @@ class Settings(BaseSettings):
         description="Comma-separated prefixes to filter IdP groups in IAM > Groups page",
     )
 
+    # Login-time group allowlist (applies to all identity providers). When set,
+    # only these exact group names/IDs are stored in a user's session at login.
+    # When empty, the registry auto-derives the allowlist from scope mappings.
+    allowed_idp_groups: str = Field(
+        default="",
+        description=(
+            "Comma-separated exact IdP group names/IDs to keep in the session at "
+            "login. Empty means auto-derive from scope mappings (recommended)."
+        ),
+    )
+
     # M2M direct registration (issue #851)
     m2m_direct_registration_enabled: bool = Field(
         default=True,

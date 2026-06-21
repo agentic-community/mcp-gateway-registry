@@ -490,6 +490,22 @@ class ScopeRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def get_all_mapped_group_names(self) -> set[str]:
+        """
+        Get every IdP group name/ID that is mapped to at least one scope.
+
+        This is the union of every scope document's ``group_mappings`` array,
+        i.e. the set of groups the registry actually grants access through.
+        Groups outside this set produce zero scopes, so they are safe to drop
+        from a user's session at login.
+
+        Returns:
+            Set of group names/IDs. Returns an empty set if no scope has any
+            group mappings.
+        """
+        pass
+
+    @abstractmethod
     async def get_server_scopes(
         self,
         scope_name: str,

@@ -103,6 +103,11 @@ class FileScopeRepository(ScopeRepositoryBase):
         group_mappings = self._scopes_data.get("group_mappings", {})
         return group_mappings.get(keycloak_group, [])
 
+    async def get_all_mapped_group_names(self) -> set[str]:
+        """Keys of the in-memory group_mappings dict (every mapped group)."""
+        group_mappings = self._scopes_data.get("group_mappings", {})
+        return set(group_mappings.keys())
+
     async def get_server_scopes(
         self,
         scope_name: str,

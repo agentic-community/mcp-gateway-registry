@@ -191,6 +191,10 @@ module "ecs_service_auth" {
           value = var.idp_group_filter_prefix
         },
         {
+          name  = "ALLOWED_IDP_GROUPS"
+          value = var.allowed_idp_groups
+        },
+        {
           name  = "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS"
           value = var.idp_user_group_fallback_enabled_providers
         },
@@ -854,6 +858,10 @@ module "ecs_service_registry" {
         {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
+        },
+        {
+          name  = "ALLOWED_IDP_GROUPS"
+          value = var.allowed_idp_groups
         },
         {
           name  = "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS"
