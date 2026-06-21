@@ -16,7 +16,7 @@ Switch between providers with simple configuration changes - no code modificatio
 
 - **Vendor-agnostic**: Switch between embeddings providers with configuration changes
 - **Local & Cloud Support**: Use local models or cloud APIs (OpenAI, Cohere, Amazon Bedrock, etc.)
-- **Backward Compatible**: Works seamlessly with existing FAISS indices
+- **Backward Compatible**: Works seamlessly with existing DocumentDB vector search
 - **Easy Configuration**: Simple environment variable setup
 - **Extensible**: Easy to add new providers
 - **AWS Deployable**: Terraform support for AWS deployments
@@ -174,7 +174,7 @@ LiteLLM supports 100+ embedding models from various providers:
 When you switch embedding providers or models with different dimensions, the registry automatically:
 
 1. Detects dimension mismatch
-2. Rebuilds the FAISS index
+2. Rebuilds the search index
 3. Regenerates embeddings for all registered items
 
 Example logs when switching from sentence-transformers (384) to OpenAI (1536):
@@ -183,7 +183,7 @@ Example logs when switching from sentence-transformers (384) to OpenAI (1536):
 WARNING: Embedding dimension mismatch detected
   Expected: 384 (from existing index)
   Got: 1536 (from current model)
-Rebuilding FAISS index with new dimensions...
+Rebuilding search index with new dimensions...
 Regenerating embeddings for all items...
 Index rebuild complete
 ```
@@ -248,15 +248,15 @@ EmbeddingsClient (Abstract Base Class)
 └── LiteLLMClient (Cloud APIs via LiteLLM)
 ```
 
-### Integration with FAISS Search
+### Integration with Search Service
 
-The embeddings module integrates seamlessly with the FAISS search service:
+The embeddings module integrates seamlessly with the search service, which uses DocumentDB vector search:
 
 ```python
 # In registry/search/service.py
 from registry.embeddings import create_embeddings_client
 
-class FaissService:
+class SearchService:
     async def _load_embedding_model(self):
         self.embedding_model = create_embeddings_client(
             provider=settings.embeddings_provider,
@@ -410,7 +410,7 @@ dim = client.get_embedding_dimension()
 - [OpenAI Embeddings Guide](https://platform.openai.com/docs/guides/embeddings)
 - [Amazon Bedrock Embeddings](https://docs.aws.amazon.com/bedrock/latest/userguide/embeddings.html)
 - [Sentence Transformers Models](https://www.sbert.net/docs/pretrained_models.html)
-- [FAISS Search Implementation](../registry/search/service.py)
+- [Search Service Implementation](../registry/search/service.py)
 
 ## Contributing
 

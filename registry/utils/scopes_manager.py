@@ -4,7 +4,7 @@ DEPRECATED: This module is deprecated. Use registry.services.scope_service inste
 This module is kept for backward compatibility only. All functions are thin
 wrappers around the new scope_service module with deprecation warnings.
 
-The old implementation has been preserved in scopes_manager_old.py for reference.
+The old YAML-based implementation has been removed.
 """
 
 import logging
@@ -96,7 +96,7 @@ async def add_server_to_groups(
     """
     DEPRECATED: Use registry.services.scope_service.add_server_to_groups instead.
 
-    Add a server and all its known tools/methods to specific groups in scopes.yml.
+    Add a server and all its known tools/methods to specific groups in the scopes repository.
 
     Args:
         server_path: The server's path (e.g., '/example-server')
@@ -119,7 +119,7 @@ async def remove_server_from_groups(
     """
     DEPRECATED: Use registry.services.scope_service.remove_server_from_groups instead.
 
-    Remove a server from specific groups in scopes.yml.
+    Remove a server from specific groups in the scopes repository.
 
     Args:
         server_path: The server's path (e.g., '/example-server')
@@ -142,7 +142,7 @@ async def create_group_in_scopes(
     """
     DEPRECATED: Use registry.services.scope_service.create_group instead.
 
-    Create a new group entry in scopes.yml and add it to group_mappings.
+    Create a new group entry in the scopes repository and add it to group_mappings.
 
     Args:
         group_name: Name of the group (e.g., 'mcp-servers-custom/read')
@@ -165,7 +165,7 @@ async def delete_group_from_scopes(
     """
     DEPRECATED: Use registry.services.scope_service.delete_group instead.
 
-    Delete a group from scopes.yml and optionally from group_mappings.
+    Delete a group from the scopes repository and optionally from group_mappings.
 
     Args:
         group_name: Name of the group to delete
@@ -185,7 +185,7 @@ async def list_groups_from_scopes() -> dict[str, Any]:
     """
     DEPRECATED: Use registry.services.scope_service.list_groups instead.
 
-    List all groups defined in scopes.yml.
+    List all groups defined in the scopes repository.
 
     Returns:
         Dict with group information including server counts and mappings
@@ -203,7 +203,7 @@ async def group_exists_in_scopes(
     """
     DEPRECATED: Use registry.services.scope_service.group_exists instead.
 
-    Check if a group exists in scopes.yml.
+    Check if a group exists in the scopes repository.
 
     Args:
         group_name: Name of the group to check

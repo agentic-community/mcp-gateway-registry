@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
-from registry.core.config import MONGODB_BACKENDS, settings
+from registry.core.config import settings
 from registry.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -524,48 +524,41 @@ async def _get_or_create_instance_id() -> str:
     """
     Get or create anonymous instance ID.
 
-    - For MongoDB/DocumentDB: Store in _telemetry_state collection
-    - For file-based storage: Store in {data_dir}/.telemetry_id
+    Stored in the _telemetry_state MongoDB collection. Falls back to a local
+    file ({data_dir}/.telemetry_id) if the database call fails.
 
     Returns:
         UUID v4 string (e.g., "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
     """
-    if settings.storage_backend in MONGODB_BACKENDS:
-        # MongoDB-based storage
-        from registry.repositories.documentdb.client import get_documentdb_client
+    from registry.repositories.documentdb.client import get_documentdb_client
 
-        try:
-            db = await get_documentdb_client()
-            collection = db["_telemetry_state"]
+    try:
+        db = await get_documentdb_client()
+        collection = db["_telemetry_state"]
 
-            # Try to get existing document
-            doc = await collection.find_one({"_id": "telemetry_config"})
+        doc = await collection.find_one({"_id": "telemetry_config"})
 
-            if doc and "instance_id" in doc:
-                return doc["instance_id"]
+        if doc and "instance_id" in doc:
+            return doc["instance_id"]
 
-            # Create new instance ID
-            instance_id = str(uuid.uuid4())
-            now = datetime.now(UTC).isoformat()
+        instance_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
 
-            # Insert or update
-            await collection.update_one(
-                {"_id": "telemetry_config"},
-                {"$setOnInsert": {"instance_id": instance_id, "created_at": now}},
-                upsert=True,
-            )
+        await collection.update_one(
+            {"_id": "telemetry_config"},
+            {"$setOnInsert": {"instance_id": instance_id, "created_at": now}},
+            upsert=True,
+        )
 
-            return instance_id
+        return instance_id
 
-        except Exception as e:
-            logger.warning(f"Failed to get instance ID from MongoDB: {e}")
-            # Fall through to file-based fallback
+    except Exception as e:
+        logger.warning(f"Failed to get instance ID from MongoDB: {e}")
 
     # File-based fallback
     telemetry_file = settings.data_dir / ".telemetry_id"
 
     try:
-        # Ensure data directory exists
         settings.data_dir.mkdir(parents=True, exist_ok=True)
 
         if telemetry_file.exists():
@@ -573,14 +566,12 @@ async def _get_or_create_instance_id() -> str:
             if instance_id:
                 return instance_id
 
-        # Create new instance ID
         instance_id = str(uuid.uuid4())
         telemetry_file.write_text(instance_id)
         return instance_id
 
     except Exception as e:
         logger.warning(f"Failed to read/write telemetry ID file: {e}")
-        # Last resort: generate ephemeral ID (will be different each startup)
         return str(uuid.uuid4())
 
 
@@ -598,10 +589,6 @@ async def _acquire_telemetry_lock(event_type: str, interval_seconds: int) -> boo
     Returns:
         True if lock acquired (caller should send), False if already sent recently
     """
-    if settings.storage_backend not in MONGODB_BACKENDS:
-        # File-based storage: no multi-replica concerns, always allow
-        return True
-
     try:
         from registry.repositories.documentdb.client import get_documentdb_client
 
@@ -739,10 +726,8 @@ async def _build_heartbeat_payload() -> dict:
         logger.warning(f"[telemetry] Failed to get peer count: {e}")
         peers_count = 0
 
-    # Determine search backend from storage backend. All MongoDB-compatible
-    # aliases (documentdb / mongodb-ce / mongodb / mongodb-atlas) use the
-    # DocumentDB search repository; file uses FAISS.
-    search_backend = "documentdb" if settings.storage_backend in MONGODB_BACKENDS else "faiss"
+    # All storage backends use the DocumentDB search repository.
+    search_backend = "documentdb"
 
     counts = await get_search_counts()
     registry_id = await _get_registry_id()
@@ -884,9 +869,6 @@ async def _initialize_telemetry_collection() -> None:
     Called during application startup to ensure MongoDB permissions are correct
     and avoid silent failures on first telemetry send.
     """
-    if settings.storage_backend not in MONGODB_BACKENDS:
-        return  # File-based storage, no collection needed
-
     try:
         from registry.repositories.documentdb.client import get_documentdb_client
 

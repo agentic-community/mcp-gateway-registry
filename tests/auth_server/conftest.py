@@ -570,28 +570,6 @@ def mock_scopes_config() -> dict:
 
 
 @pytest.fixture
-def mock_scopes_config_file(tmp_path, mock_scopes_config):
-    """
-    Create a temporary scopes.yml file for testing.
-
-    Args:
-        tmp_path: Pytest temporary path fixture
-        mock_scopes_config: Mock scopes configuration
-
-    Returns:
-        Path to temporary scopes.yml file
-    """
-    import yaml
-
-    scopes_file = tmp_path / "scopes.yml"
-    with open(scopes_file, "w") as f:
-        yaml.dump(mock_scopes_config, f)
-
-    logger.debug(f"Created mock scopes config file: {scopes_file}")
-    return scopes_file
-
-
-@pytest.fixture
 def mock_scope_repository_with_data(mock_scopes_config):
     """
     Create a mocked scope repository that returns data from mock_scopes_config.

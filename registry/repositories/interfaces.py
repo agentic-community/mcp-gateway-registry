@@ -452,7 +452,6 @@ class ScopeRepositoryBase(ABC):
     Abstract base class for authorization scopes data access.
 
     Implementations:
-    - FileScopeRepository: reads auth_server/scopes.yml
     - DocumentDBScopeRepository: reads mcp-scopes collection
     """
 
@@ -1148,7 +1147,7 @@ class SkillSecurityScanRepositoryBase(ABC):
 
 
 class SearchRepositoryBase(ABC):
-    """Abstract base class for semantic/hybrid search using FAISS or DocumentDB."""
+    """Abstract base class for semantic/hybrid search using DocumentDB."""
 
     @abstractmethod
     async def initialize(self) -> None:

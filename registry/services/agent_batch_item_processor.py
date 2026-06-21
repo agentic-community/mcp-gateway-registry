@@ -222,10 +222,11 @@ async def _do_register(
 
     await agent_service.register_agent(card)
 
-    from ..search.service import faiss_service
+    from ..repositories.factory import get_search_repository
 
+    search_repo = get_search_repository()
     is_enabled = await agent_service.is_agent_enabled(path)
-    await faiss_service.add_or_update_entity(path, card.model_dump(), "a2a_agent", is_enabled)
+    await search_repo.index_agent(path, card, is_enabled)
 
     _fire_webhook("registration", card.model_dump(mode="json"), submitted_by)
     return _result(index, item.op, path, 201)
@@ -335,9 +336,10 @@ async def _do_delete(
     if not success:
         return _result(index, item.op, path, 500, "internal", "failed to delete agent")
 
-    from ..search.service import faiss_service
+    from ..repositories.factory import get_search_repository
 
-    await faiss_service.remove_entity(path)
+    search_repo = get_search_repository()
+    await search_repo.remove_entity(path)
 
     _fire_webhook("deletion", existing.model_dump(mode="json"), submitted_by)
     return _result(index, item.op, path, 204)

@@ -1,6 +1,6 @@
 # Dynamic Tool Discovery and Invocation
 
-The MCP Gateway & Registry provides a powerful **Dynamic Tool Discovery and Invocation** feature that enables AI agents to autonomously discover and execute tools beyond their initial capabilities. This feature uses advanced semantic search with FAISS indexing and sentence transformers to intelligently match natural language queries to the most relevant MCP tools across all registered servers.
+The MCP Gateway & Registry provides a powerful **Dynamic Tool Discovery and Invocation** feature that enables AI agents to autonomously discover and execute tools beyond their initial capabilities. This feature uses advanced semantic search with DocumentDB vector search and sentence transformers to intelligently match natural language queries to the most relevant MCP tools across all registered servers.
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ The dynamic tool discovery process follows these steps:
 
 1. **Natural Language Query**: Agent receives a user request requiring specialized capabilities
 2. **Semantic Search**: The `intelligent_tool_finder` tool processes the query using sentence transformers
-3. **FAISS Index Search**: Searches through embeddings of all registered MCP tools
+3. **Vector Search**: Searches through embeddings of all registered MCP tools
 4. **Relevance Ranking**: Returns tools ranked by semantic similarity to the query
 5. **Tool Invocation**: Agent uses the discovered tool information to invoke the appropriate MCP tool
 
@@ -119,7 +119,7 @@ graph TB
     subgraph "Discovery Layer"
         B --> C[intelligent_tool_finder]
         C --> D[Sentence Transformer]
-        C --> E[FAISS Index]
+        C --> E[Vector Search Index]
         E --> F[Tool Metadata]
         F --> G[Server Information]
         G --> K[Tool Discovery Results]
@@ -135,7 +135,7 @@ graph TB
 
 ### Key Technologies
 
-- **FAISS (Facebook AI Similarity Search)**: High-performance vector similarity search
+- **DocumentDB Vector Search**: High-performance vector similarity search
 - **Sentence Transformers**: Neural network models for semantic text understanding
 - **Cosine Similarity**: Mathematical measure of semantic similarity between queries and tools
 - **MCP Protocol**: Standardized communication with tool servers
@@ -276,7 +276,7 @@ Finds the most relevant MCP tool(s) across all registered and enabled services b
 | `username` | `str` | No* | Username for mcpgw server authentication |
 | `password` | `str` | No* | Password for mcpgw server authentication |
 | `session_cookie` | `str` | No* | Session cookie for registry authentication |
-| `top_k_services` | `int` | No | Number of top services to consider from initial FAISS search (default: 3) |
+| `top_k_services` | `int` | No | Number of top services to consider from initial vector search (default: 3) |
 | `top_n_tools` | `int` | No | Number of best matching tools to return (default: 1) |
 
 *Either `session_cookie` OR (`username` AND `password`) must be provided for authentication.
@@ -328,13 +328,13 @@ tools = await intelligent_tool_finder(
 
 ## Technical Implementation
 
-### FAISS Index Creation
+### Search Index Creation
 
-The registry automatically creates and maintains a FAISS index of all registered MCP tools:
+The registry automatically creates and maintains a vector search index of all registered MCP tools:
 
 1. **Tool Metadata Collection**: Gathers tool descriptions, schemas, and server information
 2. **Text Embedding**: Uses sentence transformers to create vector embeddings
-3. **Index Building**: Constructs FAISS index for fast similarity search
+3. **Index Building**: Constructs vector search index for fast similarity search
 4. **Automatic Updates**: Refreshes index when servers are added/modified
 
 ### Semantic Search Process
@@ -344,8 +344,8 @@ The registry automatically creates and maintains a FAISS index of all registered
 query_embedding = await asyncio.to_thread(_embedding_model_mcpgw.encode, [natural_language_query])
 query_embedding_np = np.array(query_embedding, dtype=np.float32)
 
-# 2. Search FAISS for top_k_services
-distances, faiss_ids = await asyncio.to_thread(_faiss_index_mcpgw.search, query_embedding_np, top_k_services)
+# 2. Search vector index for top_k_services
+distances, search_ids = await asyncio.to_thread(search_index.search, query_embedding_np, top_k_services)
 
 # 3. Collect tools from top services
 candidate_tools = []
@@ -369,7 +369,7 @@ ranked_tools = sorted(tools_with_scores, key=lambda x: x["similarity_score"], re
 
 ### Performance Optimizations
 
-- **Lazy Loading**: FAISS index and models are loaded on-demand
+- **Lazy Loading**: Search index and models are loaded on-demand
 - **Caching**: Embeddings and metadata are cached and reloaded only when files change
 - **Async Processing**: All embedding operations run in separate threads
 - **Memory Efficiency**: Uses float32 precision for embeddings to reduce memory usage
@@ -426,7 +426,7 @@ _Coming soon._
 
 ### For System Administrators
 
-1. **Index Maintenance**: Monitor FAISS index updates and performance
+1. **Index Maintenance**: Monitor search index updates and performance
 2. **Model Updates**: Consider updating sentence transformer models periodically
 3. **Server Health**: Ensure registered servers are healthy and responsive
 4. **Access Control**: Configure proper authentication and authorization

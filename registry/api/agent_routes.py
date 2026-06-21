@@ -95,7 +95,7 @@ async def _perform_agent_security_scan_on_registration(
     - Running the security scan with configured analyzers
     - Adding security-pending tag if scan fails
     - Disabling agent if configured and scan fails
-    - Updating FAISS with disabled state if agent disabled
+    - Updating search index with disabled state if agent disabled
 
     All scan failures are non-fatal and will be logged but not raised.
 
@@ -107,7 +107,6 @@ async def _perform_agent_security_scan_on_registration(
     Returns:
         bool: True if agent should remain enabled, False if disabled due to scan
     """
-    from ..repositories.factory import get_search_repository
     from ..services.agent_scanner import agent_scanner_service
 
     scan_config = agent_scanner_service.get_scan_config()
@@ -855,15 +854,12 @@ async def register_agent(
             },
         )
 
-    from ..search.service import faiss_service
-
     is_enabled = await agent_service.is_agent_enabled(path)
-    await faiss_service.add_or_update_entity(
-        path,
-        agent_card.model_dump(),
-        "a2a_agent",
-        is_enabled,
-    )
+    try:
+        search_repo = get_search_repository()
+        await search_repo.index_agent(path, agent_card, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {path}: {e}")
 
     logger.info(
         f"New agent registered: '{request.name}' at path '{path}' "
@@ -1386,14 +1382,11 @@ async def toggle_agent(
             content={"detail": "Failed to toggle agent state"},
         )
 
-    from ..search.service import faiss_service
-
-    await faiss_service.add_or_update_entity(
-        path,
-        agent_card.model_dump(),
-        "a2a_agent",
-        enabled,
-    )
+    try:
+        search_repo = get_search_repository()
+        await search_repo.index_agent(path, agent_card, enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {path}: {e}")
 
     logger.info(
         f"Agent '{agent_card.name}' ({path}) toggled to {enabled} by user "
@@ -1786,15 +1779,12 @@ async def pull_agent_card(
             )
     else:
         if not dry_run and has_changes:
-            from ..search.service import faiss_service
-
             is_enabled = await agent_service.is_agent_enabled(path)
-            await faiss_service.add_or_update_entity(
-                path,
-                updated_agent.model_dump(),
-                "a2a_agent",
-                is_enabled,
-            )
+            try:
+                search_repo = get_search_repository()
+                await search_repo.index_agent(path, updated_agent, is_enabled)
+            except Exception as e:
+                logger.warning(f"Failed to update search index for {path}: {e}")
             applied = True
             logger.info(
                 f"Applied {len(changes)} A2A card changes to agent {path} "
@@ -2008,15 +1998,12 @@ async def update_agent(
             content={"detail": "Failed to save updated agent data"},
         )
 
-    from ..search.service import faiss_service
-
     is_enabled = await agent_service.is_agent_enabled(path)
-    await faiss_service.add_or_update_entity(
-        path,
-        updated_agent.model_dump(),
-        "a2a_agent",
-        is_enabled,
-    )
+    try:
+        search_repo = get_search_repository()
+        await search_repo.index_agent(path, updated_agent, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {path}: {e}")
 
     logger.info(
         f"Agent '{updated_agent.name}' ({path}) updated by user '{user_context['username']}'"
@@ -2263,9 +2250,11 @@ async def delete_agent(
             content={"detail": "Failed to delete agent"},
         )
 
-    from ..search.service import faiss_service
-
-    await faiss_service.remove_entity(path)
+    try:
+        search_repo = get_search_repository()
+        await search_repo.remove_entity(path)
+    except Exception as e:
+        logger.warning(f"Failed to remove search index for {path}: {e}")
 
     logger.info(f"Agent at path '{path}' deleted by user '{user_context['username']}'")
 
@@ -2411,7 +2400,7 @@ async def discover_agents_semantic(
     """
     Discover agents using natural language semantic search.
 
-    Uses search repository (FAISS or DocumentDB) to find agents matching the query intent.
+    Uses search repository (DocumentDB) to find agents matching the query intent.
 
     Args:
         query: Natural language query describing needed capabilities

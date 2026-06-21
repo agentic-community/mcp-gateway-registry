@@ -2,7 +2,7 @@
 
 Exercises agent_routes.patch_agent, submit_agent_batch, and get_agent_batch_job
 through a FastAPI TestClient with the auth dependency overridden. Service-layer
-collaborators (agent_service, agent_batch_service, validator, faiss, gate,
+collaborators (agent_service, agent_batch_service, validator, gate,
 webhook) are mocked so these stay unit-level.
 """
 

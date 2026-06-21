@@ -348,45 +348,6 @@ else
     log "WARNING: cli/examples directory not found - seed agents will not be copied"
 fi
 
-# Copy scopes.yml to ${HOME}/mcp-gateway/auth_server
-AUTH_SERVER_DIR="${HOME}/mcp-gateway/auth_server"
-TARGET_SCOPES_FILE="$AUTH_SERVER_DIR/scopes.yml"
-
-log "Checking scopes.yml configuration..."
-if [ -f "auth_server/scopes.yml" ]; then
-    # Create the target directory if it doesn't exist
-    mkdir -p "$AUTH_SERVER_DIR"
-
-    # Check if scopes.yml already exists in the target directory
-    if [ -f "$TARGET_SCOPES_FILE" ]; then
-        echo ""
-        echo "╔════════════════════════════════════════════════════════════════════════════╗"
-        echo "║                            SCOPES.YML EXISTS                               ║"
-        echo "╠════════════════════════════════════════════════════════════════════════════╣"
-        echo "║                                                                            ║"
-        echo "║  An existing scopes.yml file was found at:                                ║"
-        echo "║  $TARGET_SCOPES_FILE"
-        echo "║                                                                            ║"
-        echo "║  This file contains your custom groups and server configurations.         ║"
-        echo "║  To preserve your settings, this file will NOT be overwritten.            ║"
-        echo "║                                                                            ║"
-        echo "║  If you need to restore the default scopes.yml from the codebase:         ║"
-        echo "║  1. Delete the existing file:                                             ║"
-        echo "║     rm $TARGET_SCOPES_FILE"
-        echo "║  2. Re-run this script                                                    ║"
-        echo "║                                                                            ║"
-        echo "╚════════════════════════════════════════════════════════════════════════════╝"
-        echo ""
-        log "Keeping existing scopes.yml - NOT overwriting"
-    else
-        # Copy scopes.yml for first-time setup
-        cp auth_server/scopes.yml "$AUTH_SERVER_DIR/"
-        log "scopes.yml copied successfully to $AUTH_SERVER_DIR (initial setup)"
-    fi
-else
-    log "WARNING: auth_server/scopes.yml not found in codebase"
-fi
-
 # Create empty security_scans directory for Docker mount
 SECURITY_SCANS_DIR="${HOME}/mcp-gateway/security_scans"
 log "Creating empty security_scans directory for Docker mount"

@@ -10,12 +10,12 @@ The test suite includes:
 - **38 test files** with over 14,000 lines of test code
 - Heavy dependencies including:
   - Sentence-transformers embedding models (~120-200MB per process)
-  - FAISS vector indexes
+  - Vector search indexes
   - Full FastAPI application stack
 
 When using pytest-xdist with `-n auto`, pytest spawns one worker process per CPU core (4 workers on a 4-core EC2 instance). Each worker loads:
 - The embedding model
-- FAISS indexes
+- Vector search indexes
 - Test fixtures and data
 - The full application
 
@@ -160,7 +160,7 @@ pytest -n 2
 
 To further reduce memory usage:
 
-1. **Mock Heavy Dependencies**: Mock sentence-transformers and FAISS in unit tests
+1. **Mock Heavy Dependencies**: Mock sentence-transformers and search dependencies in unit tests
 2. **Test Fixtures Optimization**: Share model loading across tests using session-scoped fixtures
 3. **Test Categorization**: Split heavy integration tests from lightweight unit tests
 4. **Lazy Loading**: Only load ML models when actually needed in tests

@@ -550,36 +550,6 @@ class TestSettingsFixedPaths:
         assert result == expected
 
     @patch.object(
-        Settings, "servers_dir", new_callable=lambda: property(lambda self: Path("/test/servers"))
-    )
-    def test_faiss_index_path(self, mock_servers_dir) -> None:
-        """Test faiss_index_path property."""
-        # Arrange
-        settings = Settings()
-
-        # Act
-        result = settings.faiss_index_path
-
-        # Assert
-        expected = Path("/test/servers") / "service_index.faiss"
-        assert result == expected
-
-    @patch.object(
-        Settings, "servers_dir", new_callable=lambda: property(lambda self: Path("/test/servers"))
-    )
-    def test_faiss_metadata_path(self, mock_servers_dir) -> None:
-        """Test faiss_metadata_path property."""
-        # Arrange
-        settings = Settings()
-
-        # Act
-        result = settings.faiss_metadata_path
-
-        # Assert
-        expected = Path("/test/servers") / "service_index_metadata.json"
-        assert result == expected
-
-    @patch.object(
         Settings, "agents_dir", new_callable=lambda: property(lambda self: Path("/test/agents"))
     )
     def test_agent_state_file_path(self, mock_agents_dir) -> None:

@@ -15,7 +15,6 @@ tests/
 │   ├── helpers.py                       # Helper functions for tests
 │   └── mocks/                          # Mock implementations
 │       ├── __init__.py
-│       ├── mock_faiss.py               # Mock FAISS index
 │       ├── mock_embeddings.py          # Mock embeddings clients
 │       ├── mock_http.py                # Mock HTTP clients
 │       └── mock_auth.py                # Mock authentication
@@ -24,7 +23,7 @@ tests/
 │   ├── conftest.py                     # Unit test fixtures
 │   ├── core/                           # Core infrastructure tests
 │   ├── services/                       # Service layer tests
-│   ├── search/                         # Search and FAISS tests
+│   ├── search/                         # Search and vector search tests
 │   ├── embeddings/                     # Embeddings tests
 │   ├── health/                         # Health monitoring tests
 │   ├── auth/                          # Auth tests
@@ -47,7 +46,7 @@ tests/
 
 The root `conftest.py` automatically mocks heavy dependencies BEFORE they are imported:
 
-- **FAISS**: Mocked to avoid loading the native library
+- **Vector search**: Mocked to avoid loading native dependencies
 - **sentence-transformers**: Mocked to avoid loading ML models
 - **litellm**: Mocked for embeddings testing
 
@@ -89,20 +88,6 @@ agent = create_agent_with_skills(num_skills=5)
 ```
 
 ### Mock Implementations
-
-#### Mock FAISS Index
-
-```python
-from tests.fixtures.mocks.mock_faiss import MockFaissIndex
-
-index = MockFaissIndex(dimension=384)
-vectors = np.random.randn(10, 384).astype(np.float32)
-ids = np.arange(10)
-index.add_with_ids(vectors, ids)
-
-# Search
-distances, indices = index.search(query_vector, k=5)
-```
 
 #### Mock Embeddings Client
 
@@ -286,9 +271,9 @@ cd /home/ubuntu/mcp-gateway-registry-MAIN
 pytest tests/
 ```
 
-### FAISS Not Mocked
+### Search Dependencies Not Mocked
 
-If FAISS loads during tests, ensure `conftest.py` is being loaded:
+If search dependencies load during tests, ensure `conftest.py` is being loaded:
 
 ```bash
 pytest tests/ -v --setup-show

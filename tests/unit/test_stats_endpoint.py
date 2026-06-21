@@ -51,76 +51,6 @@ def mock_documentdb_client():
 # =============================================================================
 
 
-@pytest.mark.unit
-@pytest.mark.repositories
-class TestRepositoryCountMethods:
-    """Tests for count() methods in repositories."""
-
-    @pytest.mark.asyncio
-    async def test_file_server_repository_count(self):
-        """Test FileServerRepository count() method."""
-        from registry.repositories.file.server_repository import FileServerRepository
-
-        with patch("registry.repositories.file.server_repository.settings") as mock_settings:
-            # Setup mock settings
-            mock_servers_dir = MagicMock()
-            mock_servers_dir.mkdir = MagicMock()
-            mock_state_path = MagicMock()
-            mock_state_path.exists = MagicMock(return_value=False)
-
-            mock_settings.servers_dir = mock_servers_dir
-            mock_settings.state_file_path = mock_state_path
-
-            # Create repository
-            repo = FileServerRepository()
-
-            # Add some test servers
-            repo._servers = {
-                "/server1": {"path": "/server1", "server_name": "Server 1"},
-                "/server2": {"path": "/server2", "server_name": "Server 2"},
-                "/server3": {"path": "/server3", "server_name": "Server 3"},
-            }
-
-            # Act
-            count = await repo.count()
-
-            # Assert
-            assert count == 3
-
-    @pytest.mark.asyncio
-    async def test_file_agent_repository_count(self):
-        """Test FileAgentRepository count() method."""
-        from registry.repositories.file.agent_repository import FileAgentRepository
-        from registry.schemas.agent_models import AgentCard
-
-        with patch("registry.repositories.file.agent_repository.settings") as mock_settings:
-            # Setup mock settings
-            mock_agents_dir = MagicMock()
-            mock_agents_dir.mkdir = MagicMock()
-            mock_agents_dir.glob = MagicMock(return_value=[])
-            mock_state_file = MagicMock()
-            mock_state_file.exists = MagicMock(return_value=False)
-
-            mock_settings.agents_dir = mock_agents_dir
-            mock_settings.agent_state_file_path = mock_state_file
-
-            # Create repository
-            repo = FileAgentRepository()
-
-            # Mock get_all to return test data
-            with patch.object(repo, "get_all", new_callable=AsyncMock) as mock_get_all:
-                mock_get_all.return_value = {
-                    "/agent1": MagicMock(spec=AgentCard),
-                    "/agent2": MagicMock(spec=AgentCard),
-                }
-
-                # Act
-                count = await repo.count()
-
-                # Assert
-                assert count == 2
-
-
 # =============================================================================
 # TEST: Helper Functions
 # =============================================================================
@@ -230,22 +160,6 @@ class TestGetDatabaseStatus:
     """Tests for _get_database_status function."""
 
     @pytest.mark.asyncio
-    async def test_database_status_file_backend(self):
-        """Test database status with file backend."""
-        from registry.api.system_routes import _get_database_status
-
-        with patch("registry.api.system_routes.settings") as mock_settings:
-            mock_settings.storage_backend = "file"
-
-            # Act
-            status = await _get_database_status()
-
-            # Assert
-            assert status["backend"] == "file"
-            assert status["status"] == "N/A"
-            assert status["host"] == "N/A"
-
-    @pytest.mark.asyncio
     async def test_database_status_documentdb_healthy(self, mock_documentdb_client):
         """Test database status with healthy DocumentDB."""
         from registry.api.system_routes import _get_database_status
@@ -348,8 +262,9 @@ class TestGetCachedStats:
                     "registry.repositories.factory.get_skill_repository",
                     return_value=mock_repositories["skill"],
                 ):
-                    with patch("registry.api.system_routes.settings") as mock_settings:
-                        mock_settings.storage_backend = "file"
+                    with patch("registry.api.system_routes.settings") as mock_settings, \
+                         patch("registry.api.system_routes._get_database_status", new_callable=AsyncMock, return_value={"backend": "mongodb-ce", "status": "Healthy"}):
+                        mock_settings.storage_backend = "mongodb-ce"
                         mock_settings.deployment_mode.value = "standalone"
 
                         # Act
@@ -413,8 +328,9 @@ class TestStatsEndpoint:
                     "registry.repositories.factory.get_skill_repository",
                     return_value=mock_repositories["skill"],
                 ):
-                    with patch("registry.api.system_routes.settings") as mock_settings:
-                        mock_settings.storage_backend = "file"
+                    with patch("registry.api.system_routes.settings") as mock_settings, \
+                         patch("registry.api.system_routes._get_database_status", new_callable=AsyncMock, return_value={"backend": "mongodb-ce", "status": "Healthy"}):
+                        mock_settings.storage_backend = "mongodb-ce"
                         mock_settings.deployment_mode.value = "standalone"
 
                         from registry.main import app

@@ -43,7 +43,7 @@ Sent at a configurable interval (default: every 24 hours). Includes all Tier 1 f
 | `agents_count` | `8` | Number of registered A2A agents |
 | `skills_count` | `23` | Number of registered skills |
 | `peers_count` | `2` | Number of federation peers |
-| `search_backend` | `documentdb` | Search backend (faiss or documentdb) |
+| `search_backend` | `documentdb` | Search backend (e.g., documentdb) |
 | `embeddings_provider` | `sentence-transformers` | Embeddings code path: `sentence-transformers` or `litellm` |
 | `embeddings_backend_kind` | `bedrock` | Derived coarse backend category: `sentence-transformers`, `bedrock`, `openai`, `azure-openai`, `voyage`, `cohere`, `other`, or `unknown` (added in schema v2) |
 | `uptime_hours` | `48` | Hours since server started |

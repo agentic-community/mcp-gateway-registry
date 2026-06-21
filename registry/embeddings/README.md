@@ -10,7 +10,7 @@ This module provides a unified interface for generating text embeddings from mul
 
 - **Vendor-agnostic**: Switch between embeddings providers with configuration changes
 - **Local & Cloud Support**: Use local models or cloud APIs (OpenAI, Cohere, Amazon Bedrock, etc.)
-- **Backward Compatible**: Works seamlessly with existing FAISS indices
+- **Backward Compatible**: Works seamlessly with existing DocumentDB vector search
 - **Easy Configuration**: Simple environment variable setup
 - **Extensible**: Easy to add new providers
 
@@ -249,15 +249,15 @@ Creates an embeddings client based on the provider type.
 - `aws_region`: AWS region (litellm with Bedrock only)
 - `embedding_dimension`: Expected dimension
 
-## Integration with FAISS Service
+## Integration with Search Service
 
-The embeddings module integrates seamlessly with the existing FAISS search service:
+The embeddings module integrates seamlessly with the search service, which uses DocumentDB vector search:
 
 ```python
 # In registry/search/service.py
 from registry.embeddings import create_embeddings_client
 
-class FaissService:
+class SearchService:
     async def _load_embedding_model(self):
         self.embedding_model = create_embeddings_client(
             provider=settings.embeddings_provider,

@@ -277,10 +277,6 @@ module "ecs_service_auth" {
           value = var.pingfederate_groups_claim
         },
         {
-          name  = "SCOPES_CONFIG_PATH"
-          value = "/efs/auth_config/auth_config/scopes.yml"
-        },
-        {
           name  = "SESSION_COOKIE_SECURE"
           value = tostring(var.session_cookie_secure)
         },
@@ -957,10 +953,6 @@ module "ecs_service_registry" {
         {
           name  = "AWS_REGION"
           value = data.aws_region.current.id
-        },
-        {
-          name  = "SCOPES_CONFIG_PATH"
-          value = "/app/auth_server/scopes.yml"
         },
         {
           name  = "EMBEDDINGS_PROVIDER"

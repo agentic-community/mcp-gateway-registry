@@ -3,10 +3,6 @@ Unit tests for Peer Federation Service.
 
 Tests for peer registry federation configuration management,
 including CRUD operations, security, and state management.
-
-Note: Helper functions (_validate_peer_id, _get_safe_file_path, etc.) have been
-moved to registry.repositories.file.peer_federation_repository and are tested
-in tests/unit/repositories/test_file_peer_federation_repository.py.
 """
 
 from threading import Thread
@@ -14,10 +10,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from registry.repositories.file.peer_federation_repository import (
-    _get_safe_file_path,
-    _validate_peer_id,
-)
 from registry.schemas.peer_federation_schema import (
     PeerRegistryConfig,
     PeerSyncStatus,
@@ -34,14 +26,6 @@ def reset_singleton():
     PeerFederationService._instance = None
     yield
     PeerFederationService._instance = None
-
-
-@pytest.fixture
-def temp_peers_dir(tmp_path):
-    """Create temp directory for peer configs."""
-    peers_dir = tmp_path / "peers"
-    peers_dir.mkdir()
-    return peers_dir
 
 
 @pytest.fixture
@@ -85,76 +69,6 @@ def sample_peer_config_2():
         whitelist_servers=["/server1", "/server2"],
         sync_interval_minutes=120,
     )
-
-
-@pytest.mark.unit
-class TestValidatePeerId:
-    """Tests for _validate_peer_id helper function from file repository."""
-
-    def test_valid_peer_id(self):
-        """Test that valid peer IDs pass validation."""
-        # Should not raise
-        _validate_peer_id("valid-peer-123")
-        _validate_peer_id("peer_with_underscore")
-        _validate_peer_id("alphanumeric123")
-
-    def test_empty_peer_id_rejected(self):
-        """Test that empty peer ID is rejected."""
-        with pytest.raises(ValueError, match="peer_id cannot be empty"):
-            _validate_peer_id("")
-
-    def test_path_traversal_dotdot_rejected(self):
-        """Test that .. path traversal is rejected."""
-        with pytest.raises(ValueError, match="path traversal detected"):
-            _validate_peer_id("../etc/passwd")
-
-    def test_path_traversal_forward_slash_rejected(self):
-        """Test that forward slash is rejected."""
-        with pytest.raises(ValueError, match="path traversal detected"):
-            _validate_peer_id("path/to/file")
-
-    def test_path_traversal_backslash_rejected(self):
-        """Test that backslash is rejected."""
-        with pytest.raises(ValueError, match="path traversal detected"):
-            _validate_peer_id("path\\to\\file")
-
-    def test_invalid_character_less_than_rejected(self):
-        """Test that < character is rejected."""
-        with pytest.raises(ValueError, match="invalid character"):
-            _validate_peer_id("peer<name")
-
-    def test_reserved_name_con_rejected(self):
-        """Test that reserved name CON is rejected."""
-        with pytest.raises(ValueError, match="reserved name"):
-            _validate_peer_id("con")
-        with pytest.raises(ValueError, match="reserved name"):
-            _validate_peer_id("CON")
-
-
-@pytest.mark.unit
-class TestGetSafeFilePath:
-    """Tests for _get_safe_file_path helper function from file repository."""
-
-    def test_normal_path_returns_valid(self, temp_peers_dir):
-        """Test that normal peer ID returns valid path."""
-        result = _get_safe_file_path("valid-peer", temp_peers_dir)
-        assert result == temp_peers_dir / "valid-peer.json"
-
-    def test_path_traversal_rejected(self, temp_peers_dir):
-        """Test that path traversal attempts are rejected."""
-        with pytest.raises(ValueError, match="path traversal detected"):
-            _get_safe_file_path("../etc/passwd", temp_peers_dir)
-
-    def test_invalid_chars_rejected(self, temp_peers_dir):
-        """Test that invalid characters are rejected."""
-        with pytest.raises(ValueError, match="invalid character"):
-            _get_safe_file_path("peer|name", temp_peers_dir)
-
-    def test_resolved_path_within_peers_dir(self, temp_peers_dir):
-        """Test that resolved path is within peers directory."""
-        result = _get_safe_file_path("normal-peer", temp_peers_dir)
-        resolved = result.resolve()
-        assert resolved.is_relative_to(temp_peers_dir.resolve())
 
 
 @pytest.mark.unit

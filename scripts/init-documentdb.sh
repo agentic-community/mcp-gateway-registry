@@ -119,23 +119,5 @@ echo ""
 echo "${GREEN}Collections and indexes created successfully!${NC}"
 echo ""
 
-# Load scopes if scopes.yml exists
-# Check both auth_server/scopes.yml (repository location) and config/scopes.yml (custom location)
-SCOPES_FILE="${PARENT_DIR}/auth_server/scopes.yml"
-if [ ! -f "$SCOPES_FILE" ]; then
-    SCOPES_FILE="${PARENT_DIR}/config/scopes.yml"
-fi
-
-if [ -f "$SCOPES_FILE" ]; then
-    echo "Step 2: Loading scopes from scopes.yml..."
-    echo ""
-    $PYTHON_CMD scripts/load-scopes.py --scopes-file "$SCOPES_FILE"
-    echo ""
-    echo "${GREEN}Scopes loaded successfully!${NC}"
-else
-    echo "${YELLOW}Note: scopes.yml not found at ${PARENT_DIR}/auth_server/scopes.yml or ${PARENT_DIR}/config/scopes.yml${NC}"
-    echo "${YELLOW}You can load scopes later using: python scripts/load-scopes.py --scopes-file /path/to/scopes.yml${NC}"
-fi
-
 echo ""
 echo "${GREEN}DocumentDB initialization complete!${NC}"

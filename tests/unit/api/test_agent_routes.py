@@ -480,7 +480,6 @@ class TestRegisterAgent:
         with (
             patch("registry.api.agent_routes.agent_service") as mock_agent_service,
             patch("registry.utils.agent_validator.agent_validator") as mock_validator,
-            patch("registry.search.service.faiss_service") as mock_faiss,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
             mock_agent_service.register_agent = AsyncMock(return_value=True)
@@ -491,7 +490,6 @@ class TestRegisterAgent:
             mock_validation_result.errors = []
             mock_validation_result.warnings = []
             mock_validator.validate_agent_card = AsyncMock(return_value=mock_validation_result)
-            mock_faiss.add_or_update_entity = AsyncMock()
 
             # Act
             response = test_app.post("/agents/register", json=request_data)
@@ -1203,11 +1201,9 @@ class TestToggleAgent:
             patch(
                 "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
             ),
-            patch("registry.search.service.faiss_service") as mock_faiss,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.toggle_agent = AsyncMock(return_value=True)
-            mock_faiss.add_or_update_entity = AsyncMock()
 
             # Act
             response = test_app.post("/agents/test-agent/toggle?enabled=true")
@@ -1330,7 +1326,6 @@ class TestUpdateAgent:
                 "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
             ),
             patch("registry.utils.agent_validator.agent_validator") as mock_validator,
-            patch("registry.search.service.faiss_service") as mock_faiss,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.update_agent = AsyncMock(return_value=True)
@@ -1339,7 +1334,6 @@ class TestUpdateAgent:
             mock_validation_result = MagicMock()
             mock_validation_result.is_valid = True
             mock_validator.validate_agent_card = AsyncMock(return_value=mock_validation_result)
-            mock_faiss.add_or_update_entity = AsyncMock()
 
             # Act
             response = test_app.put("/agents/test-agent", json=update_data)
@@ -1422,13 +1416,9 @@ class TestDeleteAgent:
     async def test_delete_agent_success(self, test_app, mock_user_context, sample_agent_card):
         """Test successfully deleting an agent."""
         # Arrange
-        with (
-            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
-            patch("registry.search.service.faiss_service") as mock_faiss,
-        ):
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.remove_agent = AsyncMock(return_value=True)
-            mock_faiss.remove_entity = AsyncMock()
 
             # Act
             response = test_app.delete("/agents/test-agent")
@@ -1600,13 +1590,8 @@ class TestDiscoverAgentsSemantic:
             }
         ]
 
-        # Patch faiss_service where it's dynamically imported in the route function
-        with (
-            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
-            patch("registry.search.service.faiss_service") as mock_faiss,
-        ):
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
-            mock_faiss.search_entities = AsyncMock(return_value=mock_search_results)
 
             # Act - query sent as body string, max_results as query param
             response = test_app.post(
@@ -1812,7 +1797,7 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
             "registry.services.agent_scanner.agent_scanner_service",
             new=scanner_mock,
         ), patch(
-            "registry.repositories.factory.get_search_repository",
+            "registry.api.agent_routes.get_search_repository",
             return_value=search_repo_mock,
         ):
             # Act

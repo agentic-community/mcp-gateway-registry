@@ -149,20 +149,6 @@ def mock_server_service():
 
 
 @pytest.fixture
-def mock_faiss_service():
-    """Mock faiss_service dependency."""
-    mock_service = MagicMock()
-    mock_service.add_or_update_service = AsyncMock()
-    mock_service.remove_service = AsyncMock()
-    # POST /api/servers/register schedules `asyncio.create_task(save_data())`
-    # after a successful registration; if save_data is a plain MagicMock the
-    # call returns a non-coroutine and create_task() raises, turning a 201
-    # into a 500.
-    mock_service.save_data = AsyncMock()
-    return mock_service
-
-
-@pytest.fixture
 def mock_health_service():
     """Mock health_service dependency."""
     mock_service = MagicMock()
@@ -255,7 +241,6 @@ def sample_server_info() -> dict[str, Any]:
 def test_client_admin(
     mock_settings,
     mock_server_service,
-    mock_faiss_service,
     mock_health_service,
     mock_nginx_service,
     mock_nginx_reload_scheduler,
@@ -271,10 +256,8 @@ def test_client_admin(
 
     # Patch services - server_service is imported at module level, others are lazy imports
     # For module-level imports, patch where used: registry.api.server_routes.server_service
-    # For lazy imports (inside functions), patch at definition: registry.search.service.faiss_service
     with (
         patch("registry.api.server_routes.server_service", mock_server_service),
-        patch("registry.search.service.faiss_service", mock_faiss_service),
         patch("registry.health.service.health_service", mock_health_service),
         patch("registry.core.nginx_service.nginx_service", mock_nginx_service),
         patch("registry.core.nginx_service.nginx_reload_scheduler", mock_nginx_reload_scheduler),
@@ -299,7 +282,6 @@ def test_client_admin(
 def test_client_regular(
     mock_settings,
     mock_server_service,
-    mock_faiss_service,
     mock_health_service,
     mock_nginx_service,
     mock_nginx_reload_scheduler,
@@ -316,7 +298,6 @@ def test_client_regular(
     # Patch services - server_service is imported at module level, others are lazy imports
     with (
         patch("registry.api.server_routes.server_service", mock_server_service),
-        patch("registry.search.service.faiss_service", mock_faiss_service),
         patch("registry.health.service.health_service", mock_health_service),
         patch("registry.core.nginx_service.nginx_service", mock_nginx_service),
         patch("registry.core.nginx_service.nginx_reload_scheduler", mock_nginx_reload_scheduler),
@@ -341,7 +322,6 @@ def test_client_regular(
 def test_client_no_auth(
     mock_settings,
     mock_server_service,
-    mock_faiss_service,
     mock_health_service,
     mock_nginx_service,
     mock_security_scanner_service,
@@ -350,7 +330,6 @@ def test_client_no_auth(
     # Patch services - server_service is imported at module level, others are lazy imports
     with (
         patch("registry.api.server_routes.server_service", mock_server_service),
-        patch("registry.search.service.faiss_service", mock_faiss_service),
         patch("registry.health.service.health_service", mock_health_service),
         patch("registry.core.nginx_service.nginx_service", mock_nginx_service),
         patch("registry.api.server_routes.security_scanner_service", mock_security_scanner_service),
@@ -685,7 +664,6 @@ class TestToggleService:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -709,14 +687,12 @@ class TestToggleService:
             assert data["new_enabled_state"] is True
             assert data["service_path"] == "/test-server"
             mock_server_service.toggle_service.assert_called_once_with("/test-server", True)
-            mock_faiss_service.add_or_update_service.assert_called_once()
             mock_nginx_reload_scheduler.flush_now.assert_called()
 
     def test_toggle_service_off_success(
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
         mock_nginx_service,
         sample_server_info,
     ):
@@ -830,7 +806,6 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -866,7 +841,6 @@ class TestRegisterService:
             assert data["message"] == "Service registered successfully"
             assert data["service"]["server_name"] == "New Server"
             mock_server_service.register_server.assert_called_once()
-            mock_faiss_service.add_or_update_service.assert_called_once()
             mock_nginx_reload_scheduler.mark_dirty.assert_called()
 
     def test_register_service_no_permission(self, test_client_regular, mock_server_service):
@@ -948,7 +922,7 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -984,7 +958,7 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1021,7 +995,7 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1058,7 +1032,7 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1098,7 +1072,7 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1135,7 +1109,7 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1184,7 +1158,7 @@ class TestInternalRegister:
         self,
         test_client_no_auth,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
         mock_health_service,
     ):
@@ -1220,7 +1194,6 @@ class TestInternalRegister:
             data = response.json()
             assert data["message"] == "Service registered successfully"
             mock_server_service.register_server.assert_called_once()
-            mock_faiss_service.add_or_update_service.assert_called_once()
 
     def test_internal_register_missing_auth_header(self, test_client_no_auth):
         """Test internal registration fails without Authorization header."""
@@ -1343,7 +1316,7 @@ class TestInternalRegister:
             assert "already exists" in response.json()["reason"].lower()
 
     def test_internal_register_auto_enables_service(
-        self, test_client_no_auth, mock_server_service, mock_faiss_service, mock_nginx_service
+        self, test_client_no_auth, mock_server_service, mock_nginx_service
     ):
         """Test that internal registration auto-enables the service."""
         # Arrange - register_server returns a dict now
@@ -1536,7 +1509,7 @@ class TestRegisterLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
         mock_security_scanner_service,
     ):
@@ -1625,7 +1598,7 @@ class TestRegisterLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         """Unpinned npx package gets the 'unpinned-version' soft warning tag."""
@@ -1671,7 +1644,7 @@ class TestRegisterLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         """Remote registration without explicit deployment still works (default)."""
@@ -1731,7 +1704,7 @@ class TestEditLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         """Admin can edit a local server's launch recipe."""
@@ -1837,7 +1810,7 @@ class TestEditLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         """Remote edit still works when deployment field is omitted (preserves existing)."""
@@ -1867,7 +1840,7 @@ class TestEditLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         """Per-server oauth_client_id + append_mcp_path are persisted on edit."""
@@ -2046,7 +2019,7 @@ class TestEditLocalSecurityReviewReset:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         """Identical recipe → tag stays cleared (review preserved)."""
@@ -2081,7 +2054,7 @@ class TestEditLocalSecurityReviewReset:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         """Different recipe (version bump) → tag re-added even though it had
@@ -2116,7 +2089,7 @@ class TestEditLocalSecurityReviewReset:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         """args list change (e.g. swapping a flag) is also a material change."""
@@ -2164,7 +2137,7 @@ class TestRefreshLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
         mock_nginx_service,
     ):
         mock_server_service.get_server_info.return_value = {
@@ -2213,7 +2186,7 @@ class TestClearSecurityPendingLocal:
         self,
         test_client_admin,
         mock_server_service,
-        mock_faiss_service,
+
     ):
         mock_server_service.get_server_info.return_value = self.LOCAL_PENDING
         mock_server_service.is_service_enabled.return_value = True

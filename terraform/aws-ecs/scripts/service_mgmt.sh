@@ -136,51 +136,6 @@ verify_server_in_list() {
     fi
 }
 
-verify_scopes_yml() {
-    local service_name="$1"
-    local should_exist="$2"  # "true" or "false"
-
-    print_info "Checking scopes.yml files..."
-
-    # Check container scopes.yml
-    local container_count
-    container_count=$(docker exec mcp-gateway-registry-auth-server-1 grep -c "$service_name" /app/scopes.yml 2>/dev/null || echo "0")
-    # Ensure we only get the last line if multiple lines are returned
-    container_count=$(echo "$container_count" | tail -1)
-
-    if [ "$should_exist" = "true" ] && [ "$container_count" -gt "0" ]; then
-        print_success "Server found in container scopes.yml ($container_count occurrences)"
-    elif [ "$should_exist" = "false" ] && [ "$container_count" -eq "0" ]; then
-        print_success "Server not found in container scopes.yml (expected)"
-    else
-        if [ "$should_exist" = "true" ]; then
-            print_error "Server not found in container scopes.yml"
-        else
-            print_error "Server still exists in container scopes.yml ($container_count occurrences)"
-        fi
-        return 1
-    fi
-
-    # Check host scopes.yml
-    local host_count
-    host_count=$(grep -c "$service_name" "${HOME}/mcp-gateway/auth_server/scopes.yml" 2>/dev/null || echo "0")
-    # Ensure we only get the last line if multiple lines are returned
-    host_count=$(echo "$host_count" | tail -1)
-
-    if [ "$should_exist" = "true" ] && [ "$host_count" -gt "0" ]; then
-        print_success "Server found in host scopes.yml ($host_count occurrences)"
-    elif [ "$should_exist" = "false" ] && [ "$host_count" -eq "0" ]; then
-        print_success "Server not found in host scopes.yml (expected)"
-    else
-        if [ "$should_exist" = "true" ]; then
-            print_error "Server not found in host scopes.yml"
-        else
-            print_error "Server still exists in host scopes.yml ($host_count occurrences)"
-        fi
-        return 1
-    fi
-}
-
 verify_faiss_metadata() {
     local service_name="$1"
     local should_exist="$2"  # "true" or "false"
@@ -949,8 +904,8 @@ show_usage() {
     echo "  remove-from-groups <server-name> <groups> - Remove server from specific scopes groups (comma-separated)"
     echo ""
     echo "Group Management Commands:"
-    echo "  create-group <group-name> [description] - Create a new group in Keycloak and scopes.yml"
-    echo "  delete-group <group-name>    - Delete a group from Keycloak and scopes.yml"
+    echo "  create-group <group-name> [description] - Create a new group in Keycloak"
+    echo "  delete-group <group-name>    - Delete a group from Keycloak"
     echo "  list-groups                  - List all groups with synchronization status"
     echo ""
     echo "Config File Requirements:"
@@ -1144,25 +1099,6 @@ create_group() {
         exit 1
     fi
 
-    # Verify in scopes.yml (container)
-    print_info "Verifying group in container scopes.yml..."
-    if docker exec mcp-gateway-registry-auth-server-1 cat /app/scopes.yml | grep -q "^$group_name:"; then
-        print_success "Group found in container scopes.yml"
-    else
-        print_error "Group NOT found in container scopes.yml"
-    fi
-
-    # Verify in scopes.yml (host)
-    local host_scopes_file="$HOME/mcp-gateway/auth_server/scopes.yml"
-    if [ -f "$host_scopes_file" ]; then
-        print_info "Verifying group in host scopes.yml..."
-        if grep -q "^$group_name:" "$host_scopes_file"; then
-            print_success "Group found in host scopes.yml"
-        else
-            print_error "Group NOT found in host scopes.yml"
-        fi
-    fi
-
     echo ""
     print_success "Create group operation completed!"
 }
@@ -1191,25 +1127,6 @@ delete_group() {
         exit 1
     fi
 
-    # Verify removal from scopes.yml (container)
-    print_info "Verifying group removal from container scopes.yml..."
-    if docker exec mcp-gateway-registry-auth-server-1 cat /app/scopes.yml | grep -q "^$group_name:"; then
-        print_error "Group still found in container scopes.yml"
-    else
-        print_success "Group removed from container scopes.yml"
-    fi
-
-    # Verify removal from scopes.yml (host)
-    local host_scopes_file="$HOME/mcp-gateway/auth_server/scopes.yml"
-    if [ -f "$host_scopes_file" ]; then
-        print_info "Verifying group removal from host scopes.yml..."
-        if grep -q "^$group_name:" "$host_scopes_file"; then
-            print_error "Group still found in host scopes.yml"
-        else
-            print_success "Group removed from host scopes.yml"
-        fi
-    fi
-
     echo ""
     print_success "Delete group operation completed!"
 }
@@ -1224,7 +1141,7 @@ list_groups() {
     # Call list_groups MCP tool
     local args="{}"
 
-    print_info "Fetching groups from Keycloak and scopes.yml..."
+    print_info "Fetching groups from Keycloak..."
 
     if output=$(cd "$PROJECT_ROOT" && uv run cli/mcp_client.py --url "${GATEWAY_URL}/mcpgw/mcp" call --tool list_groups --args "$args" 2>&1); then
         print_success "Groups retrieved successfully"

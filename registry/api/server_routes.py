@@ -327,7 +327,7 @@ async def _perform_security_scan_on_registration(
     - Running the security scan with configured analyzers
     - Adding security-pending tag if scan fails
     - Disabling server if configured and scan fails
-    - Updating FAISS and regenerating Nginx config if server disabled
+    - Updating search index and regenerating Nginx config if server disabled
 
     All scan failures are non-fatal and will be logged but not raised.
 
@@ -780,7 +780,6 @@ async def toggle_service_route(
     """Toggle a service on/off (requires toggle_service UI permission)."""
     from ..auth.dependencies import user_has_ui_permission_for_service
     from ..health.service import health_service
-    from ..search.service import faiss_service
 
     if not service_path.startswith("/"):
         service_path = "/" + service_path
@@ -851,9 +850,6 @@ async def toggle_service_route(
         # When disabling, set status to disabled
         health_status = "disabled"
         logger.info(f"Service {service_path} toggled OFF. Status set to disabled.")
-
-    # Update FAISS metadata with new enabled state
-    await faiss_service.add_or_update_service(service_path, server_info, new_state)
 
     # Update DocumentDB search index with new enabled state so semantic search
     # reflects the toggle immediately (pre-existing gap: toggle did not re-index).
@@ -1121,7 +1117,6 @@ async def register_service(
          "args": [...], "env": {...}, "required_env": [...]}
     """
     from ..health.service import health_service
-    from ..search.service import faiss_service
     from ..utils.local_runtime_validation import (
         add_unpinned_warning_tag,
         parse_and_validate_local_runtime,
@@ -1356,9 +1351,15 @@ async def register_service(
         )
 
     # New server - proceed with full setup
-    # Add to FAISS index with current enabled state
+    # Index in DocumentDB search with current enabled state
     is_enabled = await server_service.is_service_enabled(path)
-    await faiss_service.add_or_update_service(path, server_entry, is_enabled)
+    try:
+        from ..repositories.factory import get_search_repository
+
+        search_repo = get_search_repository()
+        await search_repo.index_server(path, server_entry, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {path}: {e}")
 
     # Signal nginx config needs regeneration (debounced, not immediate)
     from ..core.nginx_service import nginx_reload_scheduler
@@ -1428,7 +1429,6 @@ async def internal_register_service(
     )  # TODO: replace with debug
 
     from ..health.service import health_service
-    from ..search.service import faiss_service
 
     logger.warning(
         f"INTERNAL REGISTER: Request parameters - name={name}, path={path}, proxy_pass_url={proxy_pass_url}"
@@ -1641,7 +1641,7 @@ async def internal_register_service(
         "INTERNAL REGISTER: Auto-enabling newly registered server"
     )  # TODO: replace with debug
 
-    # Automatically enable the newly registered server BEFORE FAISS indexing
+    # Automatically enable the newly registered server before search indexing
     try:
         toggle_success = await server_service.toggle_service(path, True)
         if toggle_success:
@@ -1653,12 +1653,18 @@ async def internal_register_service(
         # Non-fatal error - server is registered but not enabled
 
     logger.warning(
-        "INTERNAL REGISTER: Server registered successfully, adding to FAISS index"
+        "INTERNAL REGISTER: Server registered successfully, updating search index"
     )  # TODO: replace with debug
 
-    # Add to FAISS index with current enabled state (should be True after auto-enable)
+    # Index in DocumentDB search with current enabled state (should be True after auto-enable)
     is_enabled = await server_service.is_service_enabled(path)
-    await faiss_service.add_or_update_service(path, server_entry, is_enabled)
+    try:
+        from ..repositories.factory import get_search_repository
+
+        search_repo = get_search_repository()
+        await search_repo.index_server(path, server_entry, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {path}: {e}")
 
     # Signal nginx config needs regeneration (debounced, not immediate)
     from ..core.nginx_service import nginx_reload_scheduler
@@ -1673,10 +1679,10 @@ async def internal_register_service(
     await health_service.broadcast_health_update(path)
 
     logger.warning(
-        "INTERNAL REGISTER: Updating scopes.yml for new server"
+        "INTERNAL REGISTER: Updating scopes for new server"
     )  # TODO: replace with debug
 
-    # Update scopes.yml with the new server's tools
+    # Update scopes with the new server's tools
     from ..services.scope_service import update_server_scopes
 
     # Get the tool list from the server entry
@@ -1731,8 +1737,6 @@ async def clear_security_pending_local(
     endpoint provides a discoverable way to do that — the alternative is
     editing the tags string via the edit form.
     """
-    from ..search.service import faiss_service
-
     if not user_context.get("is_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1767,7 +1771,13 @@ async def clear_security_pending_local(
         )
 
     is_enabled = await server_service.is_service_enabled(service_path)
-    await faiss_service.add_or_update_service(service_path, updated_entry, is_enabled)
+    try:
+        from ..repositories.factory import get_search_repository
+
+        search_repo = get_search_repository()
+        await search_repo.index_server(service_path, updated_entry, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {service_path}: {e}")
 
     logger.info(
         f"Cleared security-pending-local from '{service_path}' by user '{user_context['username']}'"
@@ -1784,7 +1794,6 @@ async def internal_remove_service(
 ):
     """Internal service removal endpoint for mcpgw-server (requires admin authentication)."""
     from ..health.service import health_service
-    from ..search.service import faiss_service
 
     logger.warning(
         "INTERNAL REMOVE: Function called - starting execution"
@@ -1838,11 +1847,17 @@ async def internal_remove_service(
         )
 
     logger.warning(
-        "INTERNAL REMOVE: Service removed successfully, updating FAISS index"
+        "INTERNAL REMOVE: Service removed successfully, updating search index"
     )  # TODO: replace with debug
 
-    # Remove from FAISS index
-    await faiss_service.remove_service(service_path)
+    # Remove from DocumentDB search index
+    try:
+        from ..repositories.factory import get_search_repository
+
+        search_repo = get_search_repository()
+        await search_repo.remove_entity(service_path)
+    except Exception as e:
+        logger.warning(f"Failed to remove search index for {service_path}: {e}")
 
     logger.warning("INTERNAL REMOVE: Regenerating Nginx configuration")  # TODO: replace with debug
 
@@ -1857,9 +1872,9 @@ async def internal_remove_service(
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(service_path)
 
-    logger.warning("INTERNAL REMOVE: Removing server from scopes.yml")  # TODO: replace with debug
+    logger.warning("INTERNAL REMOVE: Removing server from scopes")  # TODO: replace with debug
 
-    # Remove server from scopes.yml and reload auth server
+    # Remove server from scopes and reload auth server
     from ..services.scope_service import remove_server_scopes
 
     try:
@@ -1891,7 +1906,6 @@ async def internal_toggle_service(
 ):
     """Internal service toggle endpoint for mcpgw-server (requires admin authentication)."""
     from ..health.service import health_service
-    from ..search.service import faiss_service
 
     logger.warning(
         "INTERNAL TOGGLE: Function called - starting execution"
@@ -1962,9 +1976,6 @@ async def internal_toggle_service(
         # When disabling, set status to disabled
         status_result = "disabled"
         logger.info(f"Service {service_path} toggled OFF. Status set to disabled.")
-
-    # Update FAISS metadata with new enabled state
-    await faiss_service.add_or_update_service(service_path, server_info, new_state)
 
     # Update DocumentDB search index with new enabled state
     from ..repositories.factory import get_search_repository
@@ -2117,7 +2128,6 @@ async def edit_server_submit(
     is omitted, the existing server's deployment is preserved.
     """
     from ..auth.dependencies import user_has_ui_permission_for_service
-    from ..search.service import faiss_service
     from ..utils.local_runtime_validation import (
         add_unpinned_warning_tag,
         parse_and_validate_local_runtime,
@@ -2408,11 +2418,8 @@ async def edit_server_submit(
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save updated server data")
 
-    # Update FAISS metadata (keep current enabled state)
-    is_enabled = await server_service.is_service_enabled(service_path)
-    await faiss_service.add_or_update_service(service_path, updated_server_entry, is_enabled)
-
     # Update DocumentDB search embeddings
+    is_enabled = await server_service.is_service_enabled(service_path)
     try:
         from ..repositories.factory import get_search_repository
 
@@ -2583,7 +2590,6 @@ async def get_service_tools(
 ):
     """Get tool list for a service (filtered by permissions)."""
     from ..core.mcp_client import mcp_client_service
-    from ..search.service import faiss_service
 
     if not service_path.startswith("/"):
         service_path = "/" + service_path
@@ -2710,11 +2716,17 @@ async def get_service_tools(
             if success:
                 logger.info(f"Successfully updated tool list for {service_path}")
 
-                # Update FAISS index with new tool data
-                await faiss_service.add_or_update_service(
-                    service_path, updated_server_info, is_enabled
-                )
-                logger.info(f"Updated FAISS index for {service_path}")
+                # Update DocumentDB search index with new tool data
+                try:
+                    from ..repositories.factory import get_search_repository
+
+                    search_repo = get_search_repository()
+                    await search_repo.index_server(
+                        service_path, updated_server_info, is_enabled
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update search index for {service_path}: {e}")
+                logger.info(f"Updated search index for {service_path}")
             else:
                 logger.error(f"Failed to save updated tool list for {service_path}")
 
@@ -2756,7 +2768,6 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
     """Refresh service health and tool information (requires health_check_service permission)."""
     from ..auth.dependencies import user_has_ui_permission_for_service
     from ..health.service import health_service
-    from ..search.service import faiss_service
 
     if not service_path.startswith("/"):
         service_path = "/" + service_path
@@ -2840,8 +2851,14 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
         await health_service.broadcast_health_update(service_path)
         raise HTTPException(status_code=500, detail=f"Refresh check failed: {e}")
 
-    # Update FAISS index
-    await faiss_service.add_or_update_service(service_path, server_info, is_enabled)
+    # Update DocumentDB search index
+    try:
+        from ..repositories.factory import get_search_repository
+
+        search_repo = get_search_repository()
+        await search_repo.index_server(service_path, server_info, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {service_path}: {e}")
 
     # Broadcast the updated status
     await health_service.broadcast_health_update(service_path)
@@ -3051,7 +3068,7 @@ async def internal_create_group(
     description: Annotated[str, Form()] = "",
     create_in_idp: Annotated[bool, Form()] = False,
 ):
-    """Internal endpoint to create a new group in both IdP and scopes.yml (requires admin authentication)."""
+    """Internal endpoint to create a new group in both IdP and scopes repository (requires admin authentication)."""
     logger.info(f"Creating group '{group_name}' via internal endpoint by caller '{caller}'")
 
     # Call the shared implementation
@@ -3594,7 +3611,6 @@ async def register_service_api(
     from fastapi import status as fastapi_status
 
     from ..health.service import health_service
-    from ..search.service import faiss_service
     from ..utils.local_runtime_validation import (
         add_unpinned_warning_tag,
         parse_and_validate_local_runtime,
@@ -3903,9 +3919,8 @@ async def register_service_api(
                 )
             )
 
-        # Trigger async tasks for health check and FAISS sync
+        # Trigger async task for health check
         asyncio.create_task(health_service.perform_immediate_health_check(path))
-        asyncio.create_task(faiss_service.save_data())
 
         # Registration webhook (Issue #742)
         asyncio.create_task(
@@ -4086,7 +4101,6 @@ async def toggle_service_api(
     ```
     """
     from ..health.service import health_service
-    from ..search.service import faiss_service
 
     # Set audit action for server toggle
     set_audit_action(
@@ -4136,9 +4150,6 @@ async def toggle_service_api(
         # When disabling, set status to disabled
         health_status = "disabled"
         logger.info(f"Service {path} toggled OFF. Status set to disabled.")
-
-    # Update FAISS metadata with new enabled state
-    await faiss_service.add_or_update_service(path, server_info, new_state)
 
     # Update DocumentDB search index with new enabled state
     from ..repositories.factory import get_search_repository
@@ -4197,7 +4208,6 @@ async def remove_service_api(
     ```
     """
     from ..health.service import health_service
-    from ..search.service import faiss_service
     from ..services.scope_service import remove_server_scopes
 
     # Set audit action for server removal
@@ -4274,8 +4284,14 @@ async def remove_service_api(
 
     logger.info(f"Service removed successfully: {path} by user {user_context.get('username')}")
 
-    # Remove from FAISS index
-    await faiss_service.remove_service(path)
+    # Remove from DocumentDB search index
+    try:
+        from ..repositories.factory import get_search_repository
+
+        search_repo = get_search_repository()
+        await search_repo.remove_entity(path)
+    except Exception as e:
+        logger.warning(f"Failed to remove search index for {path}: {e}")
 
     # Flush nginx config immediately (delete must take effect before response)
     from ..core.nginx_service import nginx_reload_scheduler
@@ -4286,7 +4302,7 @@ async def remove_service_api(
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
 
-    # Remove server from scopes.yml and reload auth server
+    # Remove server from scopes and reload auth server
     try:
         await remove_server_scopes(path)
         logger.info(f"Successfully removed server {path} from scopes")

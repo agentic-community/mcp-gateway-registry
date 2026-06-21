@@ -13,7 +13,7 @@ python scripts/test.py full
 ## Problem Solved
 
 Previously, running tests would crash EC2 instances due to:
-- Heavy ML model loading (sentence-transformers, FAISS)
+- Heavy ML model loading (sentence-transformers, vector search)
 - Parallel execution spawning multiple model copies
 - Memory multiplication across workers
 
@@ -53,7 +53,7 @@ python scripts/test.py unit -n 4
 ### 1. Mocked Dependencies (Automatic)
 
 All tests now automatically use mocked versions of:
-- FAISS vector database
+- Vector search service
 - Sentence-transformers embedding models
 - PyTorch model loading
 
@@ -113,7 +113,7 @@ import pytest
 
 @pytest.mark.unit
 def test_my_feature(server_service):
-    # FAISS and embeddings are automatically mocked
+    # Search service and embeddings are automatically mocked
     result = server_service.do_something()
     assert result is not None
 ```

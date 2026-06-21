@@ -47,13 +47,13 @@ The MCP Gateway Registry implements a **repository pattern with abstract base cl
 │ FileAgentRepo        │      │ DocumentDBAgentRepo      │
 │ FileScopeRepo        │      │ DocumentDBScopeRepo      │
 │ FileSecurityScanRepo │      │ DocumentDBSecurityRepo   │
-│ FaissSearchRepo      │      │ DocumentDBSearchRepo     │
+│ FileSearchRepo       │      │ DocumentDBSearchRepo     │
 │ FileFederationRepo   │      │ DocumentDBFederationRepo │
 └──────────┬───────────┘      └──────────┬───────────────┘
            │                             │
            ▼                             ▼
     Local File System         DocumentDB/MongoDB Cluster
-    (JSON files, FAISS)       (Collections, Vector Search)
+    (JSON files)               (Collections, Vector Search)
 ```
 
 ### Key Principles
@@ -88,7 +88,7 @@ The factory pattern manages **repository instantiation** by:
 
 Different storage backends are **strategies** implementing the same interface:
 
-- **File Strategy**: YAML/JSON files + FAISS for search
+- **File Strategy**: YAML/JSON files with application-level search
 - **DocumentDB/MongoDB Strategy**: Distributed document database with vector search and aggregation pipelines
 
 ## Abstract Base Classes
@@ -281,7 +281,7 @@ async def remove_entity(path: str) -> None
 ```
 
 **Implementations:**
-- [`registry/repositories/file/search_repository.py`](../../registry/repositories/file/search_repository.py) - FAISS (Facebook AI Similarity Search)
+- [`registry/repositories/file/search_repository.py`](../../registry/repositories/file/search_repository.py) - Application-level vector search (legacy)
 - [`registry/repositories/documentdb/search_repository.py`](../../registry/repositories/documentdb/search_repository.py) - DocumentDB/MongoDB Hybrid Search (BM25 + k-NN)
 
 ---
@@ -319,10 +319,10 @@ async def list_configs() -> List[Dict[str, Any]]
 **Purpose:** Local file system storage for development, testing, and backwards compatibility
 
 **Characteristics:**
-- **Simplicity**: JSON/YAML files, no external dependencies (except FAISS for search)
+- **Simplicity**: JSON/YAML files, no external dependencies
 - **Isolation**: No network calls required
 - **State Management**: Separate state files for enabled/disabled status
-- **Search**: FAISS (Facebook AI Similarity Search) for vector similarity
+- **Search**: Application-level vector search
 
 **Storage Structure:**
 ```
@@ -344,7 +344,7 @@ registry/
 │   └── scan_result_2.json
 ├── models/
 │   └── all-MiniLM-L6-v2/          # Embedding model weights
-└── service_index.faiss            # FAISS vector index
+└── service_index.bin              # Vector search index
 ```
 
 **Implementation Classes:**
@@ -352,7 +352,7 @@ registry/
 - [`FileAgentRepository`](../../registry/repositories/file/agent_repository.py)
 - [`FileScopeRepository`](../../registry/repositories/file/scope_repository.py)
 - [`FileSecurityScanRepository`](../../registry/repositories/file/security_scan_repository.py)
-- [`FaissSearchRepository`](../../registry/repositories/file/search_repository.py)
+- [`FileSearchRepository`](../../registry/repositories/file/search_repository.py)
 - [`FileFederationConfigRepository`](../../registry/repositories/file/federation_config_repository.py)
 
 **Advantages:**
@@ -366,7 +366,7 @@ registry/
 - Limited query capabilities
 - File locking issues in concurrent scenarios
 - Not suitable for production at scale
-- FAISS requires model file storage
+- Requires local model file storage for embeddings
 
 ---
 
@@ -631,7 +631,7 @@ registry/repositories/
 │   ├── agent_repository.py
 │   ├── scope_repository.py
 │   ├── security_scan_repository.py
-│   ├── search_repository.py             # FAISS-based
+│   ├── search_repository.py             # Application-level vector search
 │   └── federation_config_repository.py
 │
 └── documentdb/                          # DocumentDB/MongoDB implementations
@@ -660,7 +660,7 @@ registry/repositories/
 - `FileAgentRepository`
 - `FileScopeRepository`
 - `FileSecurityScanRepository`
-- `FaissSearchRepository` (special: uses FAISS, not files)
+- `FileSearchRepository` (application-level vector search)
 - `FileFederationConfigRepository`
 
 **DocumentDB/MongoDB Implementations** (in `documentdb/`):
@@ -753,7 +753,7 @@ Both implementations handle errors gracefully:
 **File Backend:**
 - Fast for small datasets (<1000 entities)
 - No network latency
-- FAISS search: O(n) linear scan (not scalable)
+- Vector search: O(n) linear scan (not scalable)
 - Not suitable for high concurrency
 
 **DocumentDB/MongoDB Backend:**
@@ -840,7 +840,7 @@ The database abstraction layer provides a **clean, extensible architecture** for
 |--------|------|-------------------|
 | **Use Case** | Development, testing | Production |
 | **Scalability** | ~1000 entities | Millions |
-| **Dependencies** | None (+ FAISS) | DocumentDB/MongoDB cluster |
+| **Dependencies** | None | DocumentDB/MongoDB cluster |
 | **Query Power** | Basic | Advanced (aggregation pipelines) |
 | **Concurrency** | Limited | High |
 | **Setup Complexity** | None | Moderate |

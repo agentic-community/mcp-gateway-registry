@@ -216,8 +216,8 @@ def user_with_all_servers_context() -> dict[str, Any]:
 
 
 @pytest.fixture
-def sample_faiss_search_results() -> dict[str, list[dict[str, Any]]]:
-    """Create sample FAISS search results."""
+def sample_search_results() -> dict[str, list[dict[str, Any]]]:
+    """Create sample search results."""
     return {
         "servers": [
             {
@@ -905,11 +905,11 @@ class TestSemanticSearchSuccess:
         mock_search_repo,
         mock_agent_service,
         admin_user_context,
-        sample_faiss_search_results,
+        sample_search_results,
     ):
         """Test admin user sees all search results."""
         # Arrange
-        mock_search_repo.search = AsyncMock(return_value=sample_faiss_search_results)
+        mock_search_repo.search = AsyncMock(return_value=sample_search_results)
         mock_agent_service.get_agent_info.side_effect = lambda path: AgentCardFactory(
             path=path,
             name=path.split("/")[-1],
@@ -949,11 +949,11 @@ class TestSemanticSearchSuccess:
         mock_search_repo,
         mock_agent_service,
         regular_user_context,
-        sample_faiss_search_results,
+        sample_search_results,
     ):
         """Test search filters servers by user access."""
         # Arrange
-        mock_search_repo.search = AsyncMock(return_value=sample_faiss_search_results)
+        mock_search_repo.search = AsyncMock(return_value=sample_search_results)
 
         async def get_agent_side_effect(path):
             return AgentCardFactory(path=path, visibility="public")
@@ -981,11 +981,11 @@ class TestSemanticSearchSuccess:
         mock_search_repo,
         mock_agent_service,
         regular_user_context,
-        sample_faiss_search_results,
+        sample_search_results,
     ):
         """Test search filters agents by user access."""
         # Arrange
-        mock_search_repo.search = AsyncMock(return_value=sample_faiss_search_results)
+        mock_search_repo.search = AsyncMock(return_value=sample_search_results)
 
         # Create mock agents with proper model_dump method
         def create_mock_agent(path, name, visibility):
@@ -1022,11 +1022,11 @@ class TestSemanticSearchSuccess:
         mock_http_request,
         mock_search_repo,
         restricted_user_context,
-        sample_faiss_search_results,
+        sample_search_results,
     ):
         """Test restricted user sees no results."""
         # Arrange
-        mock_search_repo.search = AsyncMock(return_value=sample_faiss_search_results)
+        mock_search_repo.search = AsyncMock(return_value=sample_search_results)
 
         request = SemanticSearchRequest(query="test query")
 
@@ -1070,11 +1070,11 @@ class TestSemanticSearchSuccess:
         mock_http_request,
         mock_search_repo,
         admin_user_context,
-        sample_faiss_search_results,
+        sample_search_results,
     ):
         """Test search with entity type filtering."""
         # Arrange
-        mock_search_repo.search = AsyncMock(return_value=sample_faiss_search_results)
+        mock_search_repo.search = AsyncMock(return_value=sample_search_results)
 
         request = SemanticSearchRequest(query="test query", entity_types=["mcp_server"])
 
@@ -1097,11 +1097,11 @@ class TestSemanticSearchSuccess:
         mock_http_request,
         mock_search_repo,
         admin_user_context,
-        sample_faiss_search_results,
+        sample_search_results,
     ):
         """Test search with custom max_results."""
         # Arrange
-        mock_search_repo.search = AsyncMock(return_value=sample_faiss_search_results)
+        mock_search_repo.search = AsyncMock(return_value=sample_search_results)
 
         request = SemanticSearchRequest(query="test query", max_results=25)
 
@@ -1142,11 +1142,11 @@ class TestSemanticSearchSuccess:
         mock_http_request,
         mock_search_repo,
         admin_user_context,
-        sample_faiss_search_results,
+        sample_search_results,
     ):
         """Test server result includes matching tools."""
         # Arrange
-        mock_search_repo.search = AsyncMock(return_value=sample_faiss_search_results)
+        mock_search_repo.search = AsyncMock(return_value=sample_search_results)
 
         request = SemanticSearchRequest(query="time")
 
@@ -1216,7 +1216,7 @@ class TestSemanticSearchErrorHandling:
     ):
         """Test search handles missing agent gracefully."""
         # Arrange
-        faiss_results = {
+        search_results = {
             "servers": [],
             "tools": [],
             "agents": [
@@ -1230,7 +1230,7 @@ class TestSemanticSearchErrorHandling:
                 }
             ],
         }
-        mock_search_repo.search = AsyncMock(return_value=faiss_results)
+        mock_search_repo.search = AsyncMock(return_value=search_results)
         mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
         request = SemanticSearchRequest(query="test")
@@ -1241,7 +1241,7 @@ class TestSemanticSearchErrorHandling:
         )
 
         # Assert
-        # Note: Current implementation uses fallback data from FAISS results
+        # Note: Current implementation uses fallback data from search results
         # even when agent_service.get_agent_info returns None, so agent is included
         assert len(response.agents) == 1
         assert response.agents[0].agent_card["name"] == "missing-agent"
@@ -1255,7 +1255,7 @@ class TestSemanticSearchErrorHandling:
     ):
         """Test search handles agent result without path."""
         # Arrange
-        faiss_results = {
+        search_results = {
             "servers": [],
             "tools": [],
             "agents": [
@@ -1266,7 +1266,7 @@ class TestSemanticSearchErrorHandling:
                 }
             ],
         }
-        mock_search_repo.search = AsyncMock(return_value=faiss_results)
+        mock_search_repo.search = AsyncMock(return_value=search_results)
 
         request = SemanticSearchRequest(query="test")
 
@@ -1314,7 +1314,7 @@ class TestSemanticSearchAgentFieldExtraction:
         }
         mock_agent_service.get_agent_info = AsyncMock(return_value=mock_agent)
 
-        faiss_results = {
+        search_results = {
             "servers": [],
             "tools": [],
             "agents": [
@@ -1326,7 +1326,7 @@ class TestSemanticSearchAgentFieldExtraction:
                 }
             ],
         }
-        mock_search_repo.search = AsyncMock(return_value=faiss_results)
+        mock_search_repo.search = AsyncMock(return_value=search_results)
 
         request = SemanticSearchRequest(query="test")
 
@@ -1369,7 +1369,7 @@ class TestSemanticSearchAgentFieldExtraction:
         }
         mock_agent_service.get_agent_info = AsyncMock(return_value=mock_agent)
 
-        faiss_results = {
+        search_results = {
             "servers": [],
             "tools": [],
             "agents": [
@@ -1380,7 +1380,7 @@ class TestSemanticSearchAgentFieldExtraction:
                 }
             ],
         }
-        mock_search_repo.search = AsyncMock(return_value=faiss_results)
+        mock_search_repo.search = AsyncMock(return_value=search_results)
 
         request = SemanticSearchRequest(query="test")
 
@@ -1394,7 +1394,7 @@ class TestSemanticSearchAgentFieldExtraction:
         assert response.agents[0].agent_card["skills"] == ["Skill 1", "Skill 2"]
 
     @pytest.mark.asyncio
-    async def test_semantic_search_fallback_to_faiss_agent_data(
+    async def test_semantic_search_fallback_to_search_agent_data(
         self,
         mock_http_request,
         mock_search_repo,
@@ -1405,7 +1405,7 @@ class TestSemanticSearchAgentFieldExtraction:
         # Arrange
         mock_agent_service.get_agent_info = AsyncMock(return_value=None)
 
-        faiss_results = {
+        search_results = {
             "servers": [],
             "tools": [],
             "agents": [
@@ -1422,7 +1422,7 @@ class TestSemanticSearchAgentFieldExtraction:
                 }
             ],
         }
-        mock_search_repo.search = AsyncMock(return_value=faiss_results)
+        mock_search_repo.search = AsyncMock(return_value=search_results)
 
         request = SemanticSearchRequest(query="test")
 
@@ -1434,7 +1434,7 @@ class TestSemanticSearchAgentFieldExtraction:
         # Assert
         assert len(response.agents) == 1
         agent = response.agents[0]
-        # Should use fallback data from agent_card in FAISS results
+        # Should use fallback data from agent_card in search results
         assert agent.agent_card["tags"] == ["from_card"]
         assert agent.agent_card["skills"] == [{"name": "Card Skill"}]
 
@@ -1460,7 +1460,7 @@ class TestSemanticSearchAgentFieldExtraction:
         }
         mock_agent_service.get_agent_info = AsyncMock(return_value=mock_agent)
 
-        faiss_results = {
+        search_results = {
             "servers": [],
             "tools": [],
             "agents": [
@@ -1471,7 +1471,7 @@ class TestSemanticSearchAgentFieldExtraction:
                 }
             ],
         }
-        mock_search_repo.search = AsyncMock(return_value=faiss_results)
+        mock_search_repo.search = AsyncMock(return_value=search_results)
 
         request = SemanticSearchRequest(query="test")
 
@@ -1511,7 +1511,7 @@ class TestSemanticSearchIntegration:
     ):
         """Test complete search workflow with mixed results and filtering."""
         # Arrange
-        faiss_results = {
+        search_results = {
             "servers": [
                 {
                     "path": "/servers/currenttime",
@@ -1571,7 +1571,7 @@ class TestSemanticSearchIntegration:
                 },
             ],
         }
-        mock_search_repo.search = AsyncMock(return_value=faiss_results)
+        mock_search_repo.search = AsyncMock(return_value=search_results)
 
         def create_mock_agent(path, name, visibility, registered_by="testuser"):
             agent = AgentCardFactory(

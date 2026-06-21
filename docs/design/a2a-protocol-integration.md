@@ -66,7 +66,7 @@ Filter results based on access control
 [Business Logic]
 Registry Services (agent_service.py)
 File-based persistence (agent_state.json)
-FAISS semantic search
+DocumentDB vector search
     ↓
 [Response]
 Agent cards, discovery results, or error
@@ -369,7 +369,7 @@ curl -X POST http://localhost/api/agents/register \
    - Skills have unique IDs
    - Security schemes are properly configured
 6. **agent_service.py** saves to `agent_state.json`
-7. **FAISS service** indexes the agent for semantic search
+7. **Search service** indexes the agent for semantic search
 8. **Response**: 201 Created with registered agent info
 
 **Success Response**:
@@ -432,7 +432,7 @@ curl -X PUT http://localhost/api/agents/code-reviewer \
 1. **Check permissions**: User must have `modify_agent` scope for this path
 2. **Validate new card**: Same validation as registration
 3. **Update in storage**: Modify `agent_state.json`
-4. **Re-index in FAISS**: Update semantic search index
+4. **Re-index in search**: Update semantic search index
 5. **Update timestamp**: Set `updated_at` to current time
 6. **Return**: Updated agent card
 
@@ -448,7 +448,7 @@ curl -X DELETE http://localhost/api/agents/code-reviewer \
 **What Happens**:
 1. **Check permissions**: User must have `delete_agent` scope
 2. **Remove from storage**: Delete from `agent_state.json`
-3. **Remove from FAISS**: Delete from semantic search index
+3. **Remove from search index**: Delete from semantic search index
 4. **Return**: 204 No Content or success message
 
 ### Toggling: POST /api/agents/{path}/toggle
@@ -463,7 +463,7 @@ curl -X POST http://localhost/api/agents/code-reviewer/toggle?enabled=true \
 **What Happens**:
 1. **Check permissions**: User must have modify permissions
 2. **Toggle state**: Set `is_enabled` to true or false
-3. **Update FAISS**: Enabled status affects search results
+3. **Update search index**: Enabled status affects search results
 4. **Return**: Updated agent info
 
 ---
@@ -490,7 +490,7 @@ curl -X POST http://localhost/api/agents/discover/semantic \
 **How It Works**:
 
 1. **Query Embedding**: The natural language query is converted to a vector using an embedding model
-2. **FAISS Search**: The vector is compared against all agent cards stored in the FAISS index
+2. **Vector Search**: The vector is compared against all agent cards stored in the search index
 3. **Ranking**: Results ranked by similarity score
 4. **Filtering**: Only agents visible to this user (based on groups and visibility)
 5. **Return**: Agents with `relevance_score`
@@ -514,7 +514,7 @@ curl -X POST http://localhost/api/agents/discover/semantic \
 }
 ```
 
-### How FAISS Indexing Works
+### How Search Indexing Works
 
 When an agent is registered, the registry creates an embedding for it:
 
@@ -541,11 +541,11 @@ def _get_agent_text_for_embedding(agent_card):
 
     return text.strip()
 
-# This text is embedded and stored in FAISS
+# This text is embedded and stored in the search index
 # When someone searches, their query is embedded and compared
 ```
 
-The FAISS index maintains metadata about each entity:
+The search index maintains metadata about each entity:
 
 ```json
 {
@@ -755,7 +755,7 @@ async def register_agent(request: Request, agent_card: AgentCard):
     # 2. Validate agent card using agent_validator
     # 3. Check path is unique
     # 4. Save to agent_state.json
-    # 5. Index in FAISS
+    # 5. Index in search
     # 6. Return 201 Created
 
 @router.get("/agents")
@@ -778,7 +778,7 @@ async def update_agent(request: Request, path: str, agent_card: AgentCard):
     # 1. Check user has modify_agent scope
     # 2. Validate new card
     # 3. Update agent_state.json
-    # 4. Re-index in FAISS
+    # 4. Re-index in search
     # 5. Return updated card
 
 @router.delete("/agents/{path}")
@@ -786,7 +786,7 @@ async def delete_agent(request: Request, path: str):
     """Delete agent (requires delete_agent scope for this path)"""
     # 1. Check user has delete_agent scope
     # 2. Remove from agent_state.json
-    # 3. Remove from FAISS index
+    # 3. Remove from search index
     # 4. Return 204 No Content
 
 @router.post("/agents/{path}/toggle")
@@ -800,7 +800,7 @@ async def toggle_agent(request: Request, path: str, enabled: bool):
 async def discover_agents_semantic(request: Request, query: DiscoveryQuery):
     """Semantic search for agents"""
     # 1. Embed the natural language query
-    # 2. Search FAISS index
+    # 2. Search vector index
     # 3. Filter results by user permissions
     # 4. Return ranked results
 ```
@@ -940,12 +940,12 @@ Central file tracking all registered agents:
 }
 ```
 
-### FAISS Search Integration (registry/search/service.py)
+### Search Integration (registry/search/service.py)
 
-The FAISS service indexes both MCP servers and agents:
+The search service indexes both MCP servers and agents using DocumentDB vector search:
 
 ```python
-class FaissService:
+class SearchService:
     """Semantic search for MCP servers and A2A agents"""
 
     async def add_or_update_entity(
@@ -954,7 +954,7 @@ class FaissService:
         entity_info: Dict[str, Any],
         entity_type: str  # "mcp_server" or "a2a_agent"
     ):
-        """Add or update entity in FAISS index"""
+        """Add or update entity in search index"""
 
         # Generate text for embedding
         if entity_type == "a2a_agent":
@@ -964,7 +964,7 @@ class FaissService:
 
         # Create embedding and add to index
         embedding = self.embedding_model.embed(text)
-        self.faiss_index.add(embedding)
+        self.search_index.add(embedding)
 
         # Store metadata
         metadata = {
@@ -1070,10 +1070,10 @@ X-Scopes: mcp-servers-unrestricted/read,mcp-servers-unrestricted/execute,a2a-age
 - Saves back to disk
 - Returns registered agent
 
-**9. FAISS Indexing**
+**9. Search Indexing**
 - Generates embedding text from agent card
 - Converts to vector using embedding model
-- Adds to FAISS index with metadata
+- Adds to search index with metadata
 
 **10. Response to Agent**
 ```json
@@ -1119,6 +1119,6 @@ Now the agent is discoverable by other agents and will appear in semantic search
 
 **File-Based Persistence**: Agent state is stored in `agent_state.json` with simple JSON format.
 
-**FAISS Indexing**: Agents are automatically indexed for semantic search alongside MCP servers.
+**Search Indexing**: Agents are automatically indexed for semantic search alongside MCP servers.
 
 This design enables autonomous agent ecosystems where agents discover and coordinate with each other while maintaining security and access control features.

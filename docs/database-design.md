@@ -8,7 +8,7 @@ The MCP Gateway Registry supports three storage backends for data persistence:
    - JSON file storage in the local filesystem
    - Maintained for backwards compatibility
    - Single-node deployments only
-   - FAISS-based vector search
+   - Application-level vector search
 
 2. **MongoDB CE** (Local Development)
    - MongoDB Community Edition 8.2
@@ -36,7 +36,7 @@ Application Services
 Repository Factory (factory.py)
         │
         ├─> File Backend (legacy)
-        │   └─> Local JSON files + FAISS
+        │   └─> Local JSON files
         │
         ├─> MongoDB CE (local dev)
         │   └─> Docker container + app-level vector search
@@ -54,7 +54,7 @@ Repository Factory (factory.py)
 | **Use Case** | Legacy/Testing | Local Development | Production |
 | **Setup** | None | Docker Compose | Terraform |
 | **Scalability** | ~1,000 entities | ~10,000 | Millions |
-| **Vector Search** | FAISS (local) | Python (app-level) | HNSW (native) |
+| **Vector Search** | App-level (Python) | App-level (Python) | HNSW (native) |
 | **Query Latency** | 50-100ms | 50-200ms | 10-50ms |
 | **Concurrency** | Limited | Good | Excellent |
 | **HA/Clustering** | No | Manual | Automatic |

@@ -130,7 +130,6 @@ def _create_test_client(mock_server_service, user_context):
 
     with (
         patch("registry.api.server_routes.server_service", mock_server_service),
-        patch("registry.search.service.faiss_service", MagicMock()),
         patch("registry.health.service.health_service", MagicMock()),
         patch("registry.core.nginx_service.nginx_service", MagicMock()),
         patch("registry.api.server_routes.security_scanner_service", MagicMock()),

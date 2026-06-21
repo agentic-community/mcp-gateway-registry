@@ -646,8 +646,8 @@ flowchart TD
     ServerExists -->|Yes| ShowConflictError[Show conflict error]
     ServerExists -->|No| CreateServer[Create server entry]
     
-    CreateServer --> UpdateFAISS[Update FAISS index]
-    UpdateFAISS --> UpdateNginx[Regenerate Nginx config]
+    CreateServer --> UpdateSearchIndex[Update search index]
+    UpdateSearchIndex --> UpdateNginx[Regenerate Nginx config]
     UpdateNginx --> BroadcastUpdate[Broadcast health update]
     BroadcastUpdate --> Success[Redirect to dashboard]
     
@@ -663,7 +663,7 @@ flowchart TD
     
     class Success success
     class ShowError,ShowValidationErrors,ShowConflictError error
-    class ShowForm,UserFillsForm,SubmitForm,BackendValidation,CreateServer,UpdateFAISS,UpdateNginx,BroadcastUpdate process
+    class ShowForm,UserFillsForm,SubmitForm,BackendValidation,CreateServer,UpdateSearchIndex,UpdateNginx,BroadcastUpdate process
          class CheckPerms,ValidateForm,ServerExists decision
 ```
 

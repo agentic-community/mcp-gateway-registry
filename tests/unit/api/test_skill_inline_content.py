@@ -123,7 +123,6 @@ def _create_test_client_with_mocks(
             "registry.api.skill_routes.get_skill_service",
             return_value=mock_skill_service,
         ),
-        patch("registry.search.service.faiss_service", MagicMock()),
         patch("registry.health.service.health_service", MagicMock()),
         patch("registry.core.nginx_service.nginx_service", MagicMock()),
     ):

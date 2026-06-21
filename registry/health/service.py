@@ -1156,7 +1156,7 @@ class HealthMonitoringService:
 
                         await server_service.update_server(service_path, updated_server_info)
 
-                        # Update scopes.yml with newly discovered tools
+                        # Update scopes with newly discovered tools
                         try:
                             from ..services.scope_service import update_server_scopes
 

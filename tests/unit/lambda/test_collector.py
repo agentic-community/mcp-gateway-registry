@@ -494,7 +494,7 @@ class TestLambdaHandler:
                     "agents_count": 5,
                     "skills_count": 20,
                     "peers_count": 1,
-                    "search_backend": "faiss",
+                    "search_backend": "documentdb",
                     "embeddings_provider": "sentence-transformers",
                     "uptime_hours": 24,
                     "ts": "2026-03-18T12:00:00Z",

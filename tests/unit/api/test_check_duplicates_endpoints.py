@@ -296,7 +296,7 @@ class TestServerCheckDuplicatesEndpoint:
         skill_repository = MagicMock()
         skill_repository.find_by_identity_url = AsyncMock(return_value=None)
         search_repository = MagicMock()
-        search_repository.search = AsyncMock(side_effect=RuntimeError("FAISS down"))
+        search_repository.search = AsyncMock(side_effect=RuntimeError("search unavailable"))
         factories = {
             "get_server_repository": lambda: server_repository,
             "get_agent_repository": lambda: agent_repository,

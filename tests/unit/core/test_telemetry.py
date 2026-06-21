@@ -188,7 +188,7 @@ class TestPayloadBuilding:
         ):
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.registry_mode.value = "full"
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
             mock_settings.auth_provider = "cognito"
             mock_settings.federation_static_token_auth_enabled = False
             mock_settings.internal_only_deployment = False
@@ -233,7 +233,7 @@ class TestPayloadBuilding:
         ):
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.registry_mode.value = "full"
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
             mock_settings.auth_provider = "cognito"
             mock_settings.federation_static_token_auth_enabled = False
             mock_settings.embeddings_provider = "sentence-transformers"
@@ -268,7 +268,7 @@ class TestPayloadBuilding:
                 return_value={"total": 99, "last_24h": 10, "last_1h": 2},
             ),
         ):
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
             mock_settings.embeddings_provider = "sentence-transformers"
 
             # Mock repository methods
@@ -344,10 +344,10 @@ class TestPayloadBuilding:
             payload = await _build_heartbeat_payload()
             assert payload["search_backend"] == "documentdb"
 
-            # Test file backend (FAISS)
-            mock_settings.storage_backend = "file"
+            # Test mongodb-ce backend (also DocumentDB search)
+            mock_settings.storage_backend = "mongodb-ce"
             payload = await _build_heartbeat_payload()
-            assert payload["search_backend"] == "faiss"
+            assert payload["search_backend"] == "documentdb"
 
 
 class TestInstanceID:
@@ -357,7 +357,7 @@ class TestInstanceID:
     async def test_instance_id_persistence_file_based(self, tmp_path, monkeypatch):
         """Test instance ID is stable across calls with file-based storage."""
         with patch("registry.core.telemetry.settings") as mock_settings:
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
             mock_settings.data_dir = tmp_path
 
             # First call creates new ID
@@ -372,7 +372,7 @@ class TestInstanceID:
     async def test_instance_id_file_creation(self, tmp_path):
         """Test instance ID file is created correctly."""
         with patch("registry.core.telemetry.settings") as mock_settings:
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
             mock_settings.data_dir = tmp_path
 
             instance_id = await _get_or_create_instance_id()
@@ -393,7 +393,7 @@ class TestLockAcquisition:
     async def test_acquire_lock_file_based_always_succeeds(self):
         """Test lock always succeeds for file-based storage."""
         with patch("registry.core.telemetry.settings") as mock_settings:
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
 
             result = await _acquire_telemetry_lock("startup", 60)
             assert result is True
@@ -609,7 +609,7 @@ class TestInitialization:
     async def test_initialize_telemetry_file_based(self):
         """Test initialization with file-based storage does nothing."""
         with patch("registry.core.telemetry.settings") as mock_settings:
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
 
             # Should not raise exception
             await _initialize_telemetry_collection()
@@ -720,7 +720,7 @@ class TestRepositoryFailures:
                 return_value={"total": 0, "last_24h": 0, "last_1h": 0},
             ),
         ):
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
             mock_settings.embeddings_provider = "sentence-transformers"
 
             # Mock server repo to raise exception
@@ -915,7 +915,7 @@ class TestEmbeddingsTelemetryFields:
         ):
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.registry_mode.value = "full"
-            mock_settings.storage_backend = "file"
+            mock_settings.storage_backend = "mongodb-ce"
             mock_settings.auth_provider = "keycloak"
             mock_settings.federation_static_token_auth_enabled = False
             mock_settings.embeddings_provider = "litellm"

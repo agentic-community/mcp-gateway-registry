@@ -42,14 +42,14 @@ These tools work together to provide:
 - **Access Control**: Fine-grained permissions via groups
 - **User Management**: M2M service accounts and human users
 - **Health Verification**: Confirms servers are working and discoverable
-- **FAISS Integration**: Automatic indexing for intelligent tool discovery
+- **Search Integration**: Automatic indexing for intelligent tool discovery
 
 ## What's New
 
 **Registry Management API** (New in v1.0.7):
 - Modern Python API for all registry operations
 - Type-safe interfaces using Pydantic models
-- Automatic FAISS indexing on server registration
+- Automatic search indexing on server registration
 - Integrated health checking and validation
 - RESTful HTTP endpoints for external integrations
 - Comprehensive error handling and logging
@@ -219,7 +219,7 @@ response = client.add_server(
 1. Config validation (required fields, constraints)
 2. Server registration with the gateway
 3. Nginx configuration update
-4. FAISS index update (automatic)
+4. Search index update (automatic)
 5. Health check verification
 
 ### Delete Server
@@ -246,10 +246,10 @@ for server in servers:
 ### Enable/Disable Server
 
 ```python
-# Disable a server (removes from FAISS, keeps in registry)
+# Disable a server (removes from search index, keeps in registry)
 client.disable_server("my-server")
 
-# Enable a server (adds back to FAISS)
+# Enable a server (adds back to search index)
 client.enable_server("my-server")
 ```
 
@@ -267,7 +267,7 @@ client.create_group(
 
 **What this does:**
 - Creates the group in Keycloak
-- Adds the group to scopes.yml
+- Adds the group to the scopes configuration in DocumentDB
 - Reloads the auth server to apply changes immediately
 
 ### List Groups

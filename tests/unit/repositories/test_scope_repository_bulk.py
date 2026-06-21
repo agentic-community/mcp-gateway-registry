@@ -5,9 +5,8 @@ the per-scope ``find_one`` fan-out on the ``/api/auth/me`` hot path into a
 single ``$in`` query (one round-trip instead of one-per-scope, which dominated
 latency on a remote Atlas cluster for users with many groups).
 
-The DocumentDB implementation overrides the methods with a single query; the
-file implementation inherits the base-class default that loops the per-scope
-getters. Both must produce the same dict-keyed-by-scope, empties-omitted shape.
+The DocumentDB implementation overrides the methods with a single query;
+both must produce the same dict-keyed-by-scope, empties-omitted shape.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -18,7 +17,6 @@ from registry.repositories.documentdb.scope_repository import (
     DocumentDBScopeRepository,
     _flatten_server_access,
 )
-from registry.repositories.file.scope_repository import FileScopeRepository
 
 
 def _make_cursor(items: list[dict]) -> MagicMock:
@@ -163,32 +161,6 @@ class TestGetUIScopesBulk:
         assert await repo.get_ui_scopes_bulk(["admin"]) == {}
 
 
-class TestFileBackendBulkDefault:
-    """The file backend has no override, so it uses the base-class default
-    that loops the per-scope getters. Verify the same shape contract."""
-
-    @pytest.fixture
-    def file_repo(self):
-        r = FileScopeRepository.__new__(FileScopeRepository)
-        r._scopes_data = {
-            "scope-a": [{"server": "x", "methods": ["all"]}],
-            "scope-empty": [],
-            "UI-Scopes": {
-                "admin": {"list_service": ["all"]},
-                "noperm": {},
-            },
-        }
-        return r
-
-    async def test_server_scopes_bulk_loops_singles(self, file_repo):
-        result = await file_repo.get_server_scopes_bulk(["scope-a", "scope-empty", "missing"])
-        assert result == {"scope-a": [{"server": "x", "methods": ["all"]}]}
-
-    async def test_ui_scopes_bulk_loops_singles(self, file_repo):
-        result = await file_repo.get_ui_scopes_bulk(["admin", "noperm", "missing"])
-        assert result == {"admin": {"list_service": ["all"]}}
-
-
 class TestGetGroupMappingsBulk:
     """DocumentDB overrides get_group_mappings_bulk with a single $in query
     returning the de-duplicated union of scope names across the groups."""
@@ -219,72 +191,4 @@ class TestGetGroupMappingsBulk:
         assert await repo.get_group_mappings_bulk(["g-a"]) == []
 
 
-class TestFileBackendGroupMappingsBulkDefault:
-    """File backend inherits the base-class default: loops the single getter
-    and unions the results, de-duplicated and order-stable."""
 
-    @pytest.fixture
-    def file_repo(self):
-        r = FileScopeRepository.__new__(FileScopeRepository)
-        r._scopes_data = {
-            "group_mappings": {
-                "g-a": ["read:servers", "read:tools"],
-                "g-b": ["read:servers", "write:servers"],
-            },
-        }
-        return r
-
-    async def test_unions_and_dedupes(self, file_repo):
-        result = await file_repo.get_group_mappings_bulk(["g-a", "g-b", "missing"])
-        assert result == ["read:servers", "read:tools", "write:servers"]
-
-    async def test_empty_returns_empty(self, file_repo):
-        assert await file_repo.get_group_mappings_bulk([]) == []
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-class TestFileGetAllGroupMappingsInversion:
-    """The file backend must invert the YAML ``{group: [scopes]}`` structure
-    into the canonical ``{scope: [groups]}`` shape that
-    ``map_cognito_groups_to_scopes`` expects (#930).
-    """
-
-    @pytest.fixture
-    def file_repo(self):
-        r = FileScopeRepository.__new__(FileScopeRepository)
-        r._scopes_data = {
-            "group_mappings": {
-                "mcp-registry-admin": [
-                    "registry-admins",
-                    "mcp-servers-unrestricted/read",
-                    "mcp-servers-unrestricted/execute",
-                ],
-                "registry-admins": ["registry-admins"],
-                "registry-users-lob1": ["registry-users-lob1"],
-            },
-        }
-        return r
-
-    async def test_inverts_yaml_to_canonical_shape(self, file_repo):
-        result = await file_repo.get_all_group_mappings()
-
-        # Keys must be scope names, values must be Keycloak groups
-        assert "registry-admins" in result
-        assert "mcp-registry-admin" in result["registry-admins"]
-        # registry-admins appears in two group entries
-        assert "registry-admins" in result["registry-admins"]
-
-        assert "mcp-servers-unrestricted/read" in result
-        assert result["mcp-servers-unrestricted/read"] == ["mcp-registry-admin"]
-
-        assert "mcp-servers-unrestricted/execute" in result
-        assert result["mcp-servers-unrestricted/execute"] == ["mcp-registry-admin"]
-
-        assert "registry-users-lob1" in result
-        assert result["registry-users-lob1"] == ["registry-users-lob1"]
-
-    async def test_empty_group_mappings(self, file_repo):
-        file_repo._scopes_data = {}
-        result = await file_repo.get_all_group_mappings()
-        assert result == {}
