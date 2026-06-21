@@ -744,6 +744,14 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Example with multiple prefixes:
 # idp_group_filter_prefix = "mcp-,registry-,ai-"
 
+# Login-time IdP group allowlist (optional, comma-separated EXACT group names/IDs)
+# When set, only these groups are stored in a user's session at login (Design B).
+# When empty (default), the registry auto-derives the allowlist from scope
+# mappings (Design C, recommended). Fixes session bloat / slowness for users with
+# very large IdP group memberships (e.g. Entra ID with hundreds of AD groups).
+# Example:
+# allowed_idp_groups = "registry_readonly,registry_write,ai_admins"
+
 # IdP User-to-Group Fallback Providers (issue #1127, comma-separated)
 # Comma-separated list of IdP providers (e.g. pingfederate) for which the
 # registry's local idp_user_groups collection is consulted to populate empty

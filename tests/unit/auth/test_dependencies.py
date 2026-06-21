@@ -287,7 +287,21 @@ def mock_scopes_config(sample_scopes_config: dict[str, Any], monkeypatch):
                 out[name] = scopes
         return out
 
+    # get_group_mappings_bulk returns the de-duplicated union of scopes across
+    # the given groups (mirrors the base-class default that loops the single
+    # getter). Production map_groups_to_scopes now calls this instead of looping.
+    async def mock_get_group_mappings_bulk(groups: list[str]):
+        seen: set[str] = set()
+        out: list[str] = []
+        for group in groups:
+            for scope in await mock_get_group_mappings(group):
+                if scope not in seen:
+                    seen.add(scope)
+                    out.append(scope)
+        return out
+
     mock_repo.get_group_mappings.side_effect = mock_get_group_mappings
+    mock_repo.get_group_mappings_bulk.side_effect = mock_get_group_mappings_bulk
     mock_repo.get_all_group_mappings.side_effect = mock_get_all_group_mappings
     mock_repo.get_ui_scopes.side_effect = mock_get_ui_scopes
     mock_repo.get_server_scopes.side_effect = mock_get_server_scopes

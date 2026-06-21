@@ -591,6 +591,12 @@ variable "idp_group_filter_prefix" {
   default     = ""
 }
 
+variable "allowed_idp_groups" {
+  description = "Comma-separated EXACT IdP group names/IDs to keep in a user's session at login. Empty means auto-derive from scope mappings (recommended). Applies to all identity providers."
+  type        = string
+  default     = ""
+}
+
 variable "idp_user_group_fallback_enabled_providers" {
   description = "Comma-separated list of IdP providers (e.g. pingfederate) for which the registry's local idp_user_groups collection is consulted to populate empty JWT groups claims. Empty list disables the fallback for all providers. Default: pingfederate."
   type        = string

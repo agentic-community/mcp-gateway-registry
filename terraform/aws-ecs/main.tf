@@ -152,6 +152,7 @@ module "mcp_gateway" {
   entra_login_base_url                      = var.entra_login_base_url
   entra_graph_base_url                      = var.entra_graph_base_url
   idp_group_filter_prefix                   = var.idp_group_filter_prefix
+  allowed_idp_groups                         = var.allowed_idp_groups
   idp_user_group_fallback_enabled_providers = var.idp_user_group_fallback_enabled_providers
 
   # Amazon Cognito configuration

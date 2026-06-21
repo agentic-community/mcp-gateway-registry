@@ -425,6 +425,14 @@ registry:
   # Example: "mcp-,registry-,ai-"
   idpGroupFilterPrefix: ""
 
+  # Login-time IdP group allowlist (applies to all identity providers)
+  # When set, only these EXACT group names/IDs are stored in a user's session at
+  # login. When empty, the registry auto-derives the allowlist from scope mappings
+  # (recommended). Fixes session bloat / slowness for users with very large IdP
+  # group memberships (e.g. Entra ID with hundreds of AD groups).
+  # Example: "registry_readonly,registry_write,ai_admins"
+  allowedIdpGroups: ""
+
   # IdP user-to-group fallback (issue #1127)
   # Comma-separated list of IdP providers (e.g. pingfederate) for which the
   # registry's local idp_user_groups collection is consulted to populate empty
@@ -553,6 +561,13 @@ auth-server:
     clientSecret: ""
     domain: ""  # Optional: custom Cognito domain
     region: "us-east-1"
+
+  # Login-time IdP group allowlist (applies to all identity providers)
+  # When set, only these EXACT group names/IDs are stored in a user's session at
+  # login. When empty, the registry auto-derives the allowlist from scope mappings
+  # (recommended). Keep in sync with registry.allowedIdpGroups above.
+  # Example: "registry_readonly,registry_write,ai_admins"
+  allowedIdpGroups: ""
 
   # IdP user-to-group fallback (issue #1127)
   # Comma-separated list of IdP providers (e.g. pingfederate) for which the

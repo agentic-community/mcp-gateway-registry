@@ -166,6 +166,8 @@ services:
       - ENTRA_APPLICATION_ID_URI=${ENTRA_APPLICATION_ID_URI:-}
       # IdP group filtering (applies to all identity providers)
       - IDP_GROUP_FILTER_PREFIX=${IDP_GROUP_FILTER_PREFIX:-}
+      # Login-time IdP group allowlist (blank = auto-derive from scope mappings)
+      - ALLOWED_IDP_GROUPS=${ALLOWED_IDP_GROUPS:-}
       # IdP user-to-group fallback (issue #1127)
       - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Okta configuration
@@ -467,6 +469,8 @@ services:
       - ENTRA_APPLICATION_ID_URI=${ENTRA_APPLICATION_ID_URI:-}
       # IdP group filtering (applies to all identity providers)
       - IDP_GROUP_FILTER_PREFIX=${IDP_GROUP_FILTER_PREFIX:-}
+      # Login-time IdP group allowlist (blank = auto-derive from scope mappings)
+      - ALLOWED_IDP_GROUPS=${ALLOWED_IDP_GROUPS:-}
       # IdP user-to-group fallback (issue #1127)
       - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Okta configuration

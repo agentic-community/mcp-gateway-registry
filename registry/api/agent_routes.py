@@ -43,6 +43,8 @@ from ..schemas.agent_models import (
     AgentInfo,
     AgentProvider,
     AgentRegistrationRequest,
+    PullCardFieldChange,
+    PullCardResponse,
 )
 from ..schemas.duplicate_check_models import (
     AgentDuplicateCheckRequest,
@@ -203,6 +205,234 @@ def _build_agent_health_urls(
     parsed = urlparse(base_url)
     agent_card_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/agent-card.json"
     return [agent_card_url, base_url]
+
+
+# A2A-spec fields the pull-card diff considers. Registry-extension fields
+# (tags, ratings, visibility, trust_level, etc.) are deliberately excluded so a
+# remote card can never overwrite registry-managed state.
+A2A_SPEC_FIELDS: set[str] = {
+    "protocol_version",
+    "name",
+    "description",
+    "url",
+    "version",
+    "capabilities",
+    "default_input_modes",
+    "default_output_modes",
+    "skills",
+    "preferred_transport",
+    "provider",
+    "icon_url",
+    "documentation_url",
+    "security_schemes",
+    "security",
+    "supports_authenticated_extended_card",
+}
+
+# Remote A2A cards use camelCase (A2A spec); our model uses snake_case.
+A2A_CAMEL_TO_SNAKE: dict[str, str] = {
+    "protocolVersion": "protocol_version",
+    "defaultInputModes": "default_input_modes",
+    "defaultOutputModes": "default_output_modes",
+    "preferredTransport": "preferred_transport",
+    "iconUrl": "icon_url",
+    "documentationUrl": "documentation_url",
+    "securitySchemes": "security_schemes",
+    "supportsAuthenticatedExtendedCard": "supports_authenticated_extended_card",
+}
+
+# Maximum size (bytes) we will read from a remote agent card. The card is
+# attacker-influenced (the agent owner hosts it), so we cap the read to avoid
+# a memory-exhaustion vector. 1 MiB is far larger than any real agent card.
+MAX_REMOTE_CARD_BYTES: int = 1_048_576
+
+
+async def _fetch_remote_agent_card(
+    base_url: str,
+) -> tuple[dict[str, Any], str]:
+    """Fetch the remote A2A agent card from the well-known endpoint.
+
+    Reads the response with a hard size cap (MAX_REMOTE_CARD_BYTES) before
+    parsing, since the remote card is hosted by the agent owner and is not
+    trusted input.
+
+    Args:
+        base_url: The agent's registered URL
+
+    Returns:
+        Tuple of (parsed card dict, URL that was fetched)
+
+    Raises:
+        HTTPException: 502 if fetch fails or the payload is too large
+    """
+    import json
+
+    urls = _build_agent_health_urls(base_url)
+    agent_card_url = urls[0]
+    timeout_seconds = max(1, settings.health_check_timeout_seconds)
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            response = await client.get(agent_card_url)
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Remote agent returned HTTP {response.status_code} from {agent_card_url}",
+            )
+
+        # S1: enforce a size limit before parsing untrusted JSON.
+        content = response.content
+        if len(content) > MAX_REMOTE_CARD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    f"Remote agent card from {agent_card_url} exceeds {MAX_REMOTE_CARD_BYTES} bytes"
+                ),
+            )
+
+        remote_card = json.loads(content)
+        if not isinstance(remote_card, dict):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Remote agent card from {agent_card_url} is not a JSON object",
+            )
+        return remote_card, agent_card_url
+
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Timeout fetching agent card from {agent_card_url}",
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch agent card from {agent_card_url}: {exc}",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Invalid response from {agent_card_url}: {exc}",
+        )
+
+
+def _normalize_remote_card_keys(
+    remote_card: dict[str, Any],
+) -> dict[str, Any]:
+    """Convert camelCase keys from a remote A2A card to snake_case.
+
+    Only known A2A-spec fields are converted; unknown keys pass through unchanged.
+    """
+    normalized = {}
+    for key, value in remote_card.items():
+        snake_key = A2A_CAMEL_TO_SNAKE.get(key, key)
+        normalized[snake_key] = value
+    return normalized
+
+
+def _compute_card_diff(
+    current_agent: AgentCard,
+    remote_card: dict[str, Any],
+) -> list[PullCardFieldChange]:
+    """Compute a field-by-field diff between the local agent and a remote card.
+
+    Only A2A-spec fields are compared. Registry-extension fields are ignored,
+    even if the remote card echoes them back.
+    """
+    current_dict = current_agent.model_dump()
+    changes: list[PullCardFieldChange] = []
+
+    for field_name in A2A_SPEC_FIELDS:
+        if field_name not in remote_card:
+            continue
+
+        current_value = current_dict.get(field_name)
+        remote_value = remote_card[field_name]
+
+        # Normalize Pydantic-dumped sub-objects to match how A2A remotes serialize.
+        # Remotes typically omit unset nullable fields (examples / input_modes /
+        # output_modes / security on AgentSkill, etc.) while the local-side
+        # current_dict = current_agent.model_dump() above includes them as
+        # explicit nulls. The drop-nulls step below makes both sides comparable
+        # so a skill list with any unset nullable field doesn't report a
+        # spurious diff.
+        def _drop_nulls(d: dict[str, Any]) -> dict[str, Any]:
+            return {k: v for k, v in d.items() if v is not None}
+
+        if field_name == "provider" and isinstance(current_value, dict):
+            current_value = _drop_nulls(current_value)
+            if isinstance(remote_value, dict):
+                remote_value = _drop_nulls(remote_value)
+
+        if field_name == "skills":
+            if isinstance(current_value, list):
+                current_value = [
+                    _drop_nulls(s) if isinstance(s, dict) else s for s in current_value
+                ]
+                # Sort by stable key so a reordered-but-equal remote list does
+                # not produce a spurious change.
+                current_value = sorted(
+                    current_value,
+                    key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
+                )
+            if isinstance(remote_value, list):
+                remote_value = [
+                    _drop_nulls(s) if isinstance(s, dict) else s for s in remote_value
+                ]
+                remote_value = sorted(
+                    remote_value,
+                    key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
+                )
+
+        if field_name == "security_schemes" and isinstance(current_value, dict):
+            current_value = {
+                k: _drop_nulls(v) if isinstance(v, dict) else v
+                for k, v in current_value.items()
+            }
+            if isinstance(remote_value, dict):
+                remote_value = {
+                    k: _drop_nulls(v) if isinstance(v, dict) else v
+                    for k, v in remote_value.items()
+                }
+
+        if current_value != remote_value:
+            changes.append(
+                PullCardFieldChange(
+                    field=field_name,
+                    current_value=current_value,
+                    remote_value=remote_value,
+                )
+            )
+
+    return changes
+
+
+def _build_safe_card_updates(
+    changes: list[PullCardFieldChange],
+) -> dict[str, Any]:
+    """Build the field-update dict to apply from a pull-card diff.
+
+    Only A2A-spec fields appear in the diff (see _compute_card_diff), but we
+    defensively reject anything in REGISTRANT_ONLY_FIELDS so the pull path can
+    never overwrite registry-managed state. This keeps a single source of truth
+    for "not client-writable" shared with the PATCH endpoint (S5).
+
+    Raises:
+        HTTPException: 400 if a registrant-only field is present in the diff.
+    """
+    updates: dict[str, Any] = {}
+    for change in changes:
+        if change.field in REGISTRANT_ONLY_FIELDS:
+            # Should never happen: A2A_SPEC_FIELDS and REGISTRANT_ONLY_FIELDS are
+            # disjoint. Fail loud rather than silently writing protected state.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Refusing to apply registrant-only field '{change.field}' from remote card",
+            )
+        updates[change.field] = change.remote_value
+    return updates
 
 
 def _normalize_path(
@@ -1406,6 +1636,180 @@ async def get_agent_batch_job(
     return job.model_dump(
         mode="json",
         exclude={"submitter_ui_permissions", "submitter_is_admin", "submitted_body_hash"},
+    )
+
+
+@router.post("/agents/{path:path}/pull-card", response_model=PullCardResponse)
+async def pull_agent_card(
+    request: Request,
+    path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    dry_run: bool = Query(True, description="Preview changes without applying"),
+):
+    """Pull the latest A2A agent card from the remote endpoint.
+
+    Fetches /.well-known/agent-card.json from the agent's host and compares
+    it with the local record. In dry-run mode (default), returns the diff
+    without applying changes. In overwrite mode, applies A2A-spec fields
+    while preserving registry-specific metadata.
+
+    Note: a successful remote fetch always refreshes `health_status` and
+    `last_health_check` on the local record regardless of `dry_run`, since
+    the fetch itself is the health signal. Other than that side effect,
+    dry-run mode performs no writes.
+
+    CSRF: not enforced here, matching the agent PUT/PATCH/DELETE endpoints,
+    which also rely on bearer-token auth rather than verify_csrf_token_flexible.
+
+    Args:
+        path: Agent path
+        dry_run: If true, preview only (apart from the health-fields refresh
+            documented above). If false, apply A2A-spec changes alongside the
+            health refresh in a single write.
+        user_context: Authenticated user context
+
+    Returns:
+        PullCardResponse with diff and optionally updated agent
+
+    Raises:
+        HTTPException: 400/403/404/502 depending on condition
+    """
+    set_audit_action(
+        request,
+        "pull_card" if not dry_run else "pull_card_preview",
+        "agent",
+        resource_id=path,
+        description=f"Pull agent card {'(dry-run)' if dry_run else '(apply)'}",
+    )
+
+    path = _normalize_path(path)
+
+    # 1. Check agent exists
+    existing_agent = await agent_service.get_agent_info(path)
+    if not existing_agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent not found at path '{path}'",
+        )
+
+    # 2. Check permissions (modify_service + owner or admin)
+    _check_agent_permission("modify_service", existing_agent.name, user_context)
+
+    if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only pull card updates for agents you registered",
+        )
+
+    # 3. Block federated/read-only agents
+    sync_metadata = existing_agent.sync_metadata or {}
+    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
+        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Agent '{path}' is synced from {source_peer} and cannot be updated locally.",
+        )
+
+    # 4. Check agent has a valid URL and is A2A protocol
+    if not existing_agent.url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent has no registered URL to fetch card from",
+        )
+
+    if existing_agent.supported_protocol and existing_agent.supported_protocol != "a2a":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pull card is only supported for A2A protocol agents",
+        )
+
+    # 5. Fetch remote card
+    base_url = str(existing_agent.url).rstrip("/")
+    remote_card_raw, remote_card_url = await _fetch_remote_agent_card(base_url)
+
+    # 6. Normalize camelCase keys to snake_case
+    remote_card = _normalize_remote_card_keys(remote_card_raw)
+
+    # 7. Compute diff (A2A-spec fields only)
+    changes = _compute_card_diff(existing_agent, remote_card)
+    has_changes = len(changes) > 0
+
+    # S3: a change to the agent's URL could indicate a redirect/takeover, so log
+    #     it explicitly even though the operator also sees it in the dry-run diff.
+    for change in changes:
+        if change.field == "url":
+            logger.warning(
+                f"pull-card: agent {path} URL would change from "
+                f"'{change.current_value}' to '{change.remote_value}' "
+                f"(requested by '{user_context['username']}')"
+            )
+
+    # R4: single structured log line per pull-card op so adoption/outcomes can be
+    #     scraped without a dedicated metric. The audit trail also records this.
+    logger.info(
+        "pull_card op=%s path=%s user=%s has_changes=%s change_count=%d",
+        "preview" if dry_run else "apply",
+        path,
+        user_context["username"],
+        has_changes,
+        len(changes),
+    )
+
+    # 8. Build the update dict. A successful fetch means the agent is healthy,
+    #    so health fields are always part of the write. When applying, the safe
+    #    A2A-field updates (S5) are merged into the SAME write (P1) so there is a
+    #    single DB write + single re-index per request instead of two.
+    health_now = datetime.now(UTC)
+    updates: dict[str, Any] = {
+        "health_status": "healthy",
+        "last_health_check": health_now,
+    }
+
+    applied = False
+    if not dry_run and has_changes:
+        updates.update(_build_safe_card_updates(changes))
+
+    # 9. Persist. In dry-run mode this is just the health side-effect; in apply
+    #    mode it is health + A2A fields in one call.
+    try:
+        updated_agent = await agent_service.update_agent(path, updates)
+    except Exception as e:
+        # In dry-run mode a failed health write should not fail the preview.
+        if dry_run or not has_changes:
+            logger.warning(f"Failed to update health status for agent {path}: {e}")
+            updated_agent = existing_agent
+        else:
+            logger.error(f"Failed to apply card changes to agent {path}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to apply card changes: {e}",
+            )
+    else:
+        if not dry_run and has_changes:
+            from ..search.service import faiss_service
+
+            is_enabled = await agent_service.is_agent_enabled(path)
+            await faiss_service.add_or_update_entity(
+                path,
+                updated_agent.model_dump(),
+                "a2a_agent",
+                is_enabled,
+            )
+            applied = True
+            logger.info(
+                f"Applied {len(changes)} A2A card changes to agent {path} "
+                f"by user '{user_context['username']}'"
+            )
+
+    return PullCardResponse(
+        agent_path=path,
+        dry_run=dry_run,
+        remote_card_url=remote_card_url,
+        changes=changes,
+        has_changes=has_changes,
+        applied=applied,
+        health_status="healthy",
+        remote_card=remote_card_raw,
     )
 
 

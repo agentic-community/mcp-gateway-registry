@@ -489,6 +489,54 @@ class ScopeRepositoryBase(ABC):
         """
         pass
 
+    async def get_group_mappings_bulk(
+        self,
+        groups: list[str],
+    ) -> list[str]:
+        """Get the union of scope names mapped to any of the given groups.
+
+        Batch equivalent of ``get_group_mappings``. ``map_groups_to_scopes``
+        on the auth hot path resolves a user's groups to scopes on every
+        authenticated request; issuing one query per group serializes a
+        round-trip per group — cheap on a local Mongo, seconds on a remote
+        cluster for a user with many groups (same fan-out that
+        ``get_server_scopes_bulk`` was added to fix). Backends that can fetch
+        all mappings in a single query (DocumentDB ``$in``) override this; the
+        default loops over the per-group method so in-memory backends (file)
+        stay correct with no extra cost.
+
+        Args:
+            groups: Group names/IDs to resolve.
+
+        Returns:
+            De-duplicated list of scope names, order-preserving across the
+            input groups. Empty list if none map.
+        """
+        seen: set[str] = set()
+        result: list[str] = []
+        for group in groups:
+            for scope in await self.get_group_mappings(group):
+                if scope not in seen:
+                    seen.add(scope)
+                    result.append(scope)
+        return result
+
+    @abstractmethod
+    async def get_all_mapped_group_names(self) -> set[str]:
+        """
+        Get every IdP group name/ID that is mapped to at least one scope.
+
+        This is the union of every scope document's ``group_mappings`` array,
+        i.e. the set of groups the registry actually grants access through.
+        Groups outside this set produce zero scopes, so they are safe to drop
+        from a user's session at login.
+
+        Returns:
+            Set of group names/IDs. Returns an empty set if no scope has any
+            group mappings.
+        """
+        pass
+
     @abstractmethod
     async def get_server_scopes(
         self,

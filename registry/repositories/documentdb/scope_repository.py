@@ -69,13 +69,33 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         self._collection: AsyncIOMotorCollection | None = None
         self._collection_name = get_collection_name("mcp_scopes")
         self._scopes_cache: dict[str, Any] = {}
+        self._indexes_created = False
 
     async def _get_collection(self) -> AsyncIOMotorCollection:
-        """Get DocumentDB collection."""
+        """Get DocumentDB collection, creating indexes on first access."""
         if self._collection is None:
             db = await get_documentdb_client()
             self._collection = db[self._collection_name]
+            await self._ensure_indexes()
         return self._collection
+
+    async def _ensure_indexes(self) -> None:
+        """Create the multikey index on group_mappings if not present.
+
+        ``get_group_mappings`` / ``get_group_mappings_bulk`` filter on
+        ``group_mappings`` (``find({"group_mappings": ...})`` and the bulk
+        ``$in``). Without an index on that array field each query is a full
+        collection scan; the multikey index turns it into an index seek and
+        is what makes the bulk ``$in`` actually cheap.
+        """
+        if self._indexes_created or self._collection is None:
+            return
+        try:
+            await self._collection.create_index("group_mappings")
+            self._indexes_created = True
+            logger.info(f"Created group_mappings index for {self._collection_name}")
+        except Exception as e:
+            logger.warning(f"Could not create group_mappings index for {self._collection_name}: {e}")
 
     async def load_all(self) -> None:
         """Load all scopes from DocumentDB."""
@@ -162,6 +182,60 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         except Exception as e:
             logger.error(f"Error getting group mappings for '{keycloak_group}': {e}", exc_info=True)
             return []
+
+    async def get_group_mappings_bulk(
+        self,
+        groups: list[str],
+    ) -> list[str]:
+        """Union of scope names mapped to any of the given groups in one query.
+
+        Collapses the per-group ``find`` fan-out into a single ``$in`` query,
+        backed by the ``group_mappings`` index. Returns a de-duplicated,
+        order-stable list of scope names.
+        """
+        unique = sorted({g for g in groups if g})
+        if not unique:
+            return []
+
+        collection = await self._get_collection()
+        try:
+            cursor = collection.find({"group_mappings": {"$in": unique}})
+            seen: set[str] = set()
+            scope_names: list[str] = []
+            async for doc in cursor:
+                scope_id = doc["_id"]
+                if scope_id not in seen:
+                    seen.add(scope_id)
+                    scope_names.append(scope_id)
+            logger.debug(
+                f"DocumentDB READ: bulk group mappings for {len(unique)} groups "
+                f"-> {len(scope_names)} scopes"
+            )
+            return scope_names
+        except Exception as e:
+            logger.error(f"Error getting bulk group mappings: {e}", exc_info=True)
+            return []
+
+    async def get_all_mapped_group_names(self) -> set[str]:
+        """Union of every scope document's group_mappings array.
+
+        Uses a single projected query (not the in-memory cache) so the result
+        reflects group mappings added after the process last loaded scopes.
+        Returns an empty set on error so callers can fail open.
+        """
+        logger.debug("DocumentDB READ: Getting all mapped group names from DB")
+        collection = await self._get_collection()
+
+        names: set[str] = set()
+        try:
+            cursor = collection.find({}, {"group_mappings": 1})
+            async for doc in cursor:
+                names.update(doc.get("group_mappings") or [])
+            logger.debug(f"DocumentDB READ: Found {len(names)} distinct mapped group names")
+            return names
+        except Exception as e:
+            logger.error(f"Error getting all mapped group names: {e}", exc_info=True)
+            return set()
 
     async def get_server_scopes(
         self,

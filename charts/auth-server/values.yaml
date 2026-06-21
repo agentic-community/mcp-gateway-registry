@@ -160,6 +160,14 @@ pingfederate:
 # Default: "pingfederate"
 idpUserGroupFallbackEnabledProviders: "pingfederate"
 
+# Login-time IdP group allowlist (applies to all identity providers)
+# When set, only these EXACT group names/IDs are stored in a user's session at
+# login. When empty, the registry auto-derives the allowlist from scope mappings
+# (recommended). Fixes session bloat / slowness for users with very large IdP
+# group memberships (e.g. Entra ID with hundreds of AD groups).
+# Example: "registry_readonly,registry_write,ai_admins"
+allowedIdpGroups: ""
+
 # Service configuration
 service:
   type: ClusterIP

@@ -3,6 +3,7 @@ import axios from 'axios';
 import {
   StarIcon,
   ArrowPathIcon,
+  CloudArrowDownIcon,
   PencilIcon,
   ClockIcon,
   CheckCircleIcon,
@@ -17,6 +18,7 @@ import {
 } from '@heroicons/react/24/outline';
 import AgentDetailsModal from './AgentDetailsModal';
 import SecurityScanModal from './SecurityScanModal';
+import PullCardPreviewModal from './PullCardPreviewModal';
 import StarRatingWidget from './StarRatingWidget';
 import DeleteConfirmation from './DeleteConfirmation';
 import StatusBadge from './StatusBadge';
@@ -187,6 +189,9 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
   const [securityScanResult, setSecurityScanResult] = useState<any>(agent.security_scan ?? null);
   const [loadingSecurityScan, setLoadingSecurityScan] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [loadingPullCard, setLoadingPullCard] = useState(false);
+  const [showPullCardModal, setShowPullCardModal] = useState(false);
+  const [pullCardResult, setPullCardResult] = useState<any>(null);
 
   // Check if this is a federated agent from a peer registry using sync_metadata
   const isFederatedAgent = agent.sync_metadata?.is_federated === true;
@@ -366,6 +371,72 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
     // Green: scan passed with no vulnerabilities
     return { Icon: ShieldCheckIcon, color: 'text-green-500 dark:text-green-400', title: 'Security scan passed' };
   };
+
+  const handlePullCard = useCallback(async () => {
+    if (loadingPullCard) return;
+
+    setLoadingPullCard(true);
+    setShowPullCardModal(true);
+    setPullCardResult(null);
+
+    try {
+      const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
+      const response = await axios.post(
+        `/api/agents${agent.path}/pull-card?dry_run=true`,
+        undefined,
+        headers ? { headers } : undefined
+      );
+      setPullCardResult(response.data);
+    } catch (error: any) {
+      console.error('Failed to pull agent card:', error);
+      if (onShowToast) {
+        onShowToast(
+          error.response?.data?.detail || 'Failed to fetch remote agent card',
+          'error'
+        );
+      }
+      setShowPullCardModal(false);
+    } finally {
+      setLoadingPullCard(false);
+    }
+  }, [agent.path, authToken, loadingPullCard, onShowToast]);
+
+  const handleApplyPullCard = useCallback(async () => {
+    try {
+      const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
+      const response = await axios.post(
+        `/api/agents${agent.path}/pull-card?dry_run=false`,
+        undefined,
+        headers ? { headers } : undefined
+      );
+
+      if (response.data.applied) {
+        if (onShowToast) {
+          onShowToast(
+            `Applied ${response.data.changes.length} field changes from remote card`,
+            'success'
+          );
+        }
+        if (onRefreshSuccess) {
+          onRefreshSuccess();
+        }
+      } else {
+        if (onShowToast) {
+          onShowToast('No changes to apply', 'success');
+        }
+      }
+      setShowPullCardModal(false);
+      setPullCardResult(null);
+    } catch (error: any) {
+      console.error('Failed to apply card changes:', error);
+      if (onShowToast) {
+        onShowToast(
+          error.response?.data?.detail || 'Failed to apply card changes',
+          'error'
+        );
+      }
+    }
+  }, [agent.path, authToken, onShowToast, onRefreshSuccess]);
 
   return (
     <>
@@ -640,6 +711,19 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     </button>
                   )}
 
+                  {/* Pull Card - only for A2A agents the user can modify and that aren't federated */}
+                  {canModify && agent.supported_protocol === 'a2a' && !isFederatedAgent && (
+                    <button
+                      onClick={handlePullCard}
+                      disabled={loadingPullCard}
+                      className="p-2.5 text-gray-500 hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                      title="Pull latest agent card from remote"
+                      aria-label="Pull latest agent card"
+                    >
+                      <CloudArrowDownIcon className={`h-4 w-4 ${loadingPullCard ? 'animate-pulse' : ''}`} />
+                    </button>
+                  )}
+
                   {/* Toggle Switch - only show if user has toggle_agent permission */}
                   {canToggle && (
                     <label className="relative inline-flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
@@ -689,6 +773,18 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
         onRescan={canModify ? handleRescan : undefined}
         canRescan={canModify}
         onShowToast={onShowToast}
+      />
+
+      <PullCardPreviewModal
+        isOpen={showPullCardModal}
+        onClose={() => {
+          setShowPullCardModal(false);
+          setPullCardResult(null);
+        }}
+        onApply={handleApplyPullCard}
+        loading={loadingPullCard}
+        result={pullCardResult}
+        agentName={agent.name}
       />
 
     </>
