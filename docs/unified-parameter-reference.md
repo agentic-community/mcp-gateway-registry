@@ -699,6 +699,13 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | `aws_region` | Deploy region. |
 | `name` | Deployment name prefix. |
 | `vpc_cidr` | VPC CIDR. |
+| `use_existing_vpc` | Deploy into an existing VPC/subnets instead of creating a new VPC. Defaults to `false`. |
+| `existing_vpc_id` | Existing VPC ID to use when `use_existing_vpc` is true. |
+| `existing_public_subnet_ids` | Existing public subnet IDs for internet-facing ALBs (existing-VPC mode). |
+| `existing_private_subnet_ids` | Existing private subnet IDs for ECS tasks, databases, Lambda, and EFS (existing-VPC mode). |
+| `existing_private_route_table_ids` | Existing private route table IDs for VPC gateway endpoints, required when `use_existing_vpc` and `create_vpc_endpoints` are both true. |
+| `existing_nat_public_ips` | Optional public egress IPs that private tasks use to reach the Keycloak public ALB (existing-VPC mode). |
+| `create_vpc_endpoints` | Create STS and S3 VPC endpoints. Set false when the existing VPC already provides endpoint/egress routing. Defaults to `true`. |
 | `enable_monitoring` | CloudWatch dashboards. |
 | `alarm_email` | SNS destination. |
 | `currenttime_replicas`, `mcpgw_replicas`, `realserverfaketools_replicas`, `flight_booking_agent_replicas`, `travel_assistant_agent_replicas` | ECS service desired counts. |
