@@ -351,22 +351,50 @@ def _compute_card_diff(
         current_value = current_dict.get(field_name)
         remote_value = remote_card[field_name]
 
-        # Normalize Pydantic sub-models to dicts so the comparison is dict-vs-dict.
-        if field_name == "provider" and current_value is not None:
-            if hasattr(current_value, "model_dump"):
-                current_value = current_value.model_dump()
+        # Normalize Pydantic-dumped sub-objects to match how A2A remotes serialize.
+        # Remotes typically omit unset nullable fields (examples / input_modes /
+        # output_modes / security on AgentSkill, etc.) while the local-side
+        # current_dict = current_agent.model_dump() above includes them as
+        # explicit nulls. The drop-nulls step below makes both sides comparable
+        # so a skill list with any unset nullable field doesn't report a
+        # spurious diff.
+        def _drop_nulls(d: dict[str, Any]) -> dict[str, Any]:
+            return {k: v for k, v in d.items() if v is not None}
+
+        if field_name == "provider" and isinstance(current_value, dict):
+            current_value = _drop_nulls(current_value)
+            if isinstance(remote_value, dict):
+                remote_value = _drop_nulls(remote_value)
 
         if field_name == "skills":
-            if current_value and isinstance(current_value, list):
+            if isinstance(current_value, list):
                 current_value = [
-                    s.model_dump() if hasattr(s, "model_dump") else s for s in current_value
+                    _drop_nulls(s) if isinstance(s, dict) else s for s in current_value
                 ]
+                # Sort by stable key so a reordered-but-equal remote list does
+                # not produce a spurious change.
+                current_value = sorted(
+                    current_value,
+                    key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
+                )
+            if isinstance(remote_value, list):
+                remote_value = [
+                    _drop_nulls(s) if isinstance(s, dict) else s for s in remote_value
+                ]
+                remote_value = sorted(
+                    remote_value,
+                    key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
+                )
 
-        if field_name == "security_schemes":
-            if current_value and isinstance(current_value, dict):
-                current_value = {
-                    k: v.model_dump() if hasattr(v, "model_dump") else v
-                    for k, v in current_value.items()
+        if field_name == "security_schemes" and isinstance(current_value, dict):
+            current_value = {
+                k: _drop_nulls(v) if isinstance(v, dict) else v
+                for k, v in current_value.items()
+            }
+            if isinstance(remote_value, dict):
+                remote_value = {
+                    k: _drop_nulls(v) if isinstance(v, dict) else v
+                    for k, v in remote_value.items()
                 }
 
         if current_value != remote_value:
@@ -1625,12 +1653,19 @@ async def pull_agent_card(
     without applying changes. In overwrite mode, applies A2A-spec fields
     while preserving registry-specific metadata.
 
+    Note: a successful remote fetch always refreshes `health_status` and
+    `last_health_check` on the local record regardless of `dry_run`, since
+    the fetch itself is the health signal. Other than that side effect,
+    dry-run mode performs no writes.
+
     CSRF: not enforced here, matching the agent PUT/PATCH/DELETE endpoints,
     which also rely on bearer-token auth rather than verify_csrf_token_flexible.
 
     Args:
         path: Agent path
-        dry_run: If true, preview only. If false, apply changes.
+        dry_run: If true, preview only (apart from the health-fields refresh
+            documented above). If false, apply A2A-spec changes alongside the
+            health refresh in a single write.
         user_context: Authenticated user context
 
     Returns:
