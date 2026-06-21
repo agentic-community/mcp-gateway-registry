@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.24.8"
+    "version": "1.24.7"
   },
   "paths": {
     "/api/version": {
@@ -3978,6 +3978,66 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{path}/pull-card": {
+      "post": {
+        "tags": [
+          "Agent Management"
+        ],
+        "summary": "Pull Agent Card",
+        "description": "Pull the latest A2A agent card from the remote endpoint.\n\nFetches /.well-known/agent-card.json from the agent's host and compares\nit with the local record. In dry-run mode (default), returns the diff\nwithout applying changes. In overwrite mode, applies A2A-spec fields\nwhile preserving registry-specific metadata.\n\nNote: a successful remote fetch always refreshes `health_status` and\n`last_health_check` on the local record regardless of `dry_run`, since\nthe fetch itself is the health signal. Other than that side effect,\ndry-run mode performs no writes.\n\nCSRF: not enforced here, matching the agent PUT/PATCH/DELETE endpoints,\nwhich also rely on bearer-token auth rather than verify_csrf_token_flexible.\n\nArgs:\n    path: Agent path\n    dry_run: If true, preview only (apart from the health-fields refresh\n        documented above). If false, apply A2A-spec changes alongside the\n        health refresh in a single write.\n    user_context: Authenticated user context\n\nReturns:\n    PullCardResponse with diff and optionally updated agent\n\nRaises:\n    HTTPException: 400/403/404/502 depending on condition",
+        "operationId": "pull_agent_card_api_agents__path__pull_card_post",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Preview changes without applying",
+              "default": true,
+              "title": "Dry Run"
+            },
+            "description": "Preview changes without applying"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullCardResponse"
+                }
               }
             }
           },
@@ -9736,6 +9796,76 @@
         ]
       }
     },
+    "/api/audit/executive-summary": {
+      "get": {
+        "tags": [
+          "Audit Logs",
+          "Audit Logs"
+        ],
+        "summary": "Get Executive Summary",
+        "description": "Get a global, cross-stream executive summary. Requires admin access.",
+        "operationId": "get_executive_summary_api_audit_executive_summary_get",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 30,
+              "minimum": 1,
+              "description": "Length of the comparison window in days",
+              "default": 7,
+              "title": "Days"
+            },
+            "description": "Length of the comparison window in days"
+          },
+          {
+            "name": "mcp_gateway_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Gateway Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutiveSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/audit/events": {
       "get": {
         "tags": [
@@ -12792,6 +12922,141 @@
   },
   "components": {
     "schemas": {
+      "ActiveAgents": {
+        "properties": {
+          "daa": {
+            "type": "integer",
+            "title": "Daa",
+            "description": "Distinct agent identities, last 1 day",
+            "default": 0
+          },
+          "waa": {
+            "type": "integer",
+            "title": "Waa",
+            "description": "Distinct agent identities, last 7 days",
+            "default": 0
+          },
+          "maa": {
+            "type": "integer",
+            "title": "Maa",
+            "description": "Distinct agent identities, last 30 days",
+            "default": 0
+          },
+          "waa_available": {
+            "type": "boolean",
+            "title": "Waa Available",
+            "description": "True when retention covers the 7-day window; WAA is honest only then",
+            "default": true
+          },
+          "maa_available": {
+            "type": "boolean",
+            "title": "Maa Available",
+            "description": "True when retention covers the 30-day window; MAA is honest only then",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ActiveAgents",
+        "description": "Active agent (bearer-token caller) counts over rolling windows."
+      },
+      "ActiveUsers": {
+        "properties": {
+          "dau": {
+            "type": "integer",
+            "title": "Dau",
+            "description": "Distinct non-anonymous usernames, last 1 day",
+            "default": 0
+          },
+          "wau": {
+            "type": "integer",
+            "title": "Wau",
+            "description": "Distinct non-anonymous usernames, last 7 days",
+            "default": 0
+          },
+          "mau": {
+            "type": "integer",
+            "title": "Mau",
+            "description": "Distinct non-anonymous usernames, last 30 days",
+            "default": 0
+          },
+          "wau_available": {
+            "type": "boolean",
+            "title": "Wau Available",
+            "description": "True when retention covers the 7-day window; WAU is honest only then",
+            "default": true
+          },
+          "mau_available": {
+            "type": "boolean",
+            "title": "Mau Available",
+            "description": "True when retention covers the 30-day window; MAU is honest only then",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ActiveUsers",
+        "description": "Active identity counts over rolling windows."
+      },
+      "AdoptionMomentum": {
+        "properties": {
+          "events_current": {
+            "type": "integer",
+            "title": "Events Current",
+            "description": "Non-anonymous events in the current window",
+            "default": 0
+          },
+          "events_prior": {
+            "type": "integer",
+            "title": "Events Prior",
+            "description": "Non-anonymous events in the prior window",
+            "default": 0
+          },
+          "events_wow_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events Wow Pct",
+            "description": "Week-over-week event change percent, None when prior is zero"
+          },
+          "active_identities_current": {
+            "type": "integer",
+            "title": "Active Identities Current",
+            "description": "Distinct non-anonymous identities in the current window",
+            "default": 0
+          },
+          "active_identities_prior": {
+            "type": "integer",
+            "title": "Active Identities Prior",
+            "description": "Distinct non-anonymous identities in the prior window",
+            "default": 0
+          },
+          "active_agents_current": {
+            "type": "integer",
+            "title": "Active Agents Current",
+            "description": "Distinct agent identities in the current window",
+            "default": 0
+          },
+          "active_agents_prior": {
+            "type": "integer",
+            "title": "Active Agents Prior",
+            "description": "Distinct agent identities in the prior window",
+            "default": 0
+          },
+          "has_prior_data": {
+            "type": "boolean",
+            "title": "Has Prior Data",
+            "description": "True when the prior window has at least one event",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AdoptionMomentum",
+        "description": "Week-over-week adoption momentum metrics."
+      },
       "AgentBatchRequest": {
         "properties": {
           "idempotency_key": {
@@ -13659,6 +13924,14 @@
             "type": "array",
             "title": "Activity Timeline",
             "description": "Daily event counts for the time range"
+          },
+          "activity_timeline_prior": {
+            "items": {
+              "$ref": "#/components/schemas/TimeSeriesBucket"
+            },
+            "type": "array",
+            "title": "Activity Timeline Prior",
+            "description": "Daily event counts for the prior window of equal length, for week-over-week overlay"
           },
           "status_distribution": {
             "$ref": "#/components/schemas/StatusDistribution",
@@ -15923,6 +16196,45 @@
         "title": "ErrorResponse",
         "description": "Standard error response."
       },
+      "ExecutiveSummaryResponse": {
+        "properties": {
+          "window_days": {
+            "type": "integer",
+            "title": "Window Days",
+            "description": "Length of the comparison window in days"
+          },
+          "retention_days": {
+            "type": "integer",
+            "title": "Retention Days",
+            "description": "Configured audit retention (TTL) in days; gates window-N metric availability",
+            "default": 0
+          },
+          "governance": {
+            "$ref": "#/components/schemas/GovernanceScope"
+          },
+          "registered_assets": {
+            "$ref": "#/components/schemas/RegisteredAssets"
+          },
+          "active_users": {
+            "$ref": "#/components/schemas/ActiveUsers"
+          },
+          "active_agents": {
+            "$ref": "#/components/schemas/ActiveAgents"
+          },
+          "traffic_split": {
+            "$ref": "#/components/schemas/TrafficSplit"
+          },
+          "momentum": {
+            "$ref": "#/components/schemas/AdoptionMomentum"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window_days"
+        ],
+        "title": "ExecutiveSummaryResponse",
+        "description": "Global, cross-stream executive summary of gateway activity."
+      },
       "ExistingEntity": {
         "properties": {
           "entity_type": {
@@ -16223,6 +16535,31 @@
         ],
         "title": "GetBackendSessionResponse",
         "description": "Response body for backend session lookup."
+      },
+      "GovernanceScope": {
+        "properties": {
+          "mcp_servers_governed": {
+            "type": "integer",
+            "title": "Mcp Servers Governed",
+            "description": "Distinct MCP servers accessed in the current window",
+            "default": 0
+          },
+          "tools_under_policy": {
+            "type": "integer",
+            "title": "Tools Under Policy",
+            "description": "Distinct MCP tools invoked in the current window",
+            "default": 0
+          },
+          "identities_active": {
+            "type": "integer",
+            "title": "Identities Active",
+            "description": "Distinct non-anonymous identities active in the current window",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "GovernanceScope",
+        "description": "Scope of assets currently governed by the gateway."
       },
       "GroupCreateRequest": {
         "properties": {
@@ -17884,6 +18221,127 @@
         ],
         "title": "PingFederateUserCreateRequest",
         "description": "Request body for POST /api/iam/user-groups/{username}/pingfederate-user.\n\nCarries the password an admin chose for the new PingFederate user. The\npassword is sent straight through to the PingFederate Simple Password\nCredential Validator (PCV) and is NOT stored in the registry."
+      },
+      "PullCardFieldChange": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field",
+            "description": "Field name that changed"
+          },
+          "current_value": {
+            "title": "Current Value",
+            "description": "Current value in the local registry"
+          },
+          "remote_value": {
+            "title": "Remote Value",
+            "description": "Value from the remote agent card"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "current_value",
+          "remote_value"
+        ],
+        "title": "PullCardFieldChange",
+        "description": "A single field that differs between local and remote agent card."
+      },
+      "PullCardResponse": {
+        "properties": {
+          "agent_path": {
+            "type": "string",
+            "title": "Agent Path",
+            "description": "Agent path in the registry"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "description": "Whether this was a dry-run (preview only)"
+          },
+          "remote_card_url": {
+            "type": "string",
+            "title": "Remote Card Url",
+            "description": "URL the remote card was fetched from"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/PullCardFieldChange"
+            },
+            "type": "array",
+            "title": "Changes",
+            "description": "List of fields that differ between local and remote"
+          },
+          "has_changes": {
+            "type": "boolean",
+            "title": "Has Changes",
+            "description": "Whether any A2A-spec fields differ"
+          },
+          "applied": {
+            "type": "boolean",
+            "title": "Applied",
+            "description": "Whether changes were applied (only true when dry_run=false and has_changes=true)",
+            "default": false
+          },
+          "health_status": {
+            "type": "string",
+            "title": "Health Status",
+            "description": "Health status updated as side effect of successful fetch",
+            "default": "healthy"
+          },
+          "remote_card": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Remote Card",
+            "description": "The full remote agent card as received"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_path",
+          "dry_run",
+          "remote_card_url",
+          "has_changes"
+        ],
+        "title": "PullCardResponse",
+        "description": "Response from the pull-card endpoint (dry-run and overwrite modes)."
+      },
+      "RegisteredAssets": {
+        "properties": {
+          "servers": {
+            "type": "integer",
+            "title": "Servers",
+            "description": "Total registered MCP servers",
+            "default": 0
+          },
+          "tools": {
+            "type": "integer",
+            "title": "Tools",
+            "description": "Total tools exposed across all servers",
+            "default": 0
+          },
+          "agents": {
+            "type": "integer",
+            "title": "Agents",
+            "description": "Total registered agents",
+            "default": 0
+          },
+          "skills": {
+            "type": "integer",
+            "title": "Skills",
+            "description": "Total registered skills",
+            "default": 0
+          },
+          "custom_entities": {
+            "type": "integer",
+            "title": "Custom Entities",
+            "description": "Total custom entity records",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "RegisteredAssets",
+        "description": "Total registered inventory in the registry catalog (not activity-scoped)."
       },
       "RegistryAuthConfig": {
         "properties": {
@@ -21087,6 +21545,37 @@
         ],
         "title": "ToolValidationResult",
         "description": "Result of tool availability validation."
+      },
+      "TrafficSplit": {
+        "properties": {
+          "human_events": {
+            "type": "integer",
+            "title": "Human Events",
+            "description": "Authenticated, non-agent events",
+            "default": 0
+          },
+          "agent_events": {
+            "type": "integer",
+            "title": "Agent Events",
+            "description": "Agent/service-account events (jwt_bearer)",
+            "default": 0
+          },
+          "human_pct": {
+            "type": "number",
+            "title": "Human Pct",
+            "description": "Human share over (human+agent), one decimal, 0 when denominator 0",
+            "default": 0.0
+          },
+          "agent_pct": {
+            "type": "number",
+            "title": "Agent Pct",
+            "description": "Agent share over (human+agent), one decimal, 0 when denominator 0",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "title": "TrafficSplit",
+        "description": "Human vs agent traffic split for the current window."
       },
       "UpdateUserGroupsRequest": {
         "properties": {

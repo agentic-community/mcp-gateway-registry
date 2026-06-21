@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.6
+    tag: 1.24.7
     pullPolicy: IfNotPresent
 
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
@@ -112,7 +112,9 @@ mongodb:
 keycloak:
   create: true  # Deploy Keycloak in this stack (set to false for external Keycloak or Entra)
   image:
-    registry: public.ecr.aws
+    registry: docker.io
+    repository: bitnamilegacy/keycloak
+    tag: 26.3.3-debian-12-r0
 
   global:
     security:
@@ -126,7 +128,9 @@ keycloak:
     auth:
       existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
     image:
-      registry: public.ecr.aws
+      registry: docker.io
+      repository: bitnamilegacy/postgresql
+      tag: 17.6.0-debian-12-r0
 
   # Keycloak always serves from its own root (httpRelativePath defaults
   # to "/" in the Bitnami chart). The registry pod's nginx rewrites
