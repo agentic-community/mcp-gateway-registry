@@ -44,7 +44,17 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def test_app(mock_user_context):
+def mock_search_repo():
+    """Mock search repository for search indexing calls."""
+    mock = AsyncMock()
+    mock.index_server = AsyncMock()
+    mock.index_agent = AsyncMock()
+    mock.remove_entity = AsyncMock()
+    return mock
+
+
+@pytest.fixture
+def test_app(mock_user_context, mock_search_repo):
     """Create a test FastAPI application with agent routes."""
     from fastapi import FastAPI
 
@@ -58,8 +68,12 @@ def test_app(mock_user_context):
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_user_context
     app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
 
-    client = TestClient(app)
-    yield client
+    with patch(
+        "registry.api.agent_routes.get_search_repository",
+        return_value=mock_search_repo,
+    ):
+        client = TestClient(app)
+        yield client
 
     # Cleanup
     app.dependency_overrides.clear()
@@ -128,7 +142,7 @@ def mock_limited_user_context() -> dict[str, Any]:
 
 
 @pytest.fixture
-def test_app_admin(mock_admin_context):
+def test_app_admin(mock_admin_context, mock_search_repo):
     """Create a test FastAPI application with admin auth."""
     from fastapi import FastAPI
 
@@ -141,13 +155,17 @@ def test_app_admin(mock_admin_context):
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_admin_context
     app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
 
-    client = TestClient(app)
-    yield client
+    with patch(
+        "registry.api.agent_routes.get_search_repository",
+        return_value=mock_search_repo,
+    ):
+        client = TestClient(app)
+        yield client
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def test_app_limited(mock_limited_user_context):
+def test_app_limited(mock_limited_user_context, mock_search_repo):
     """Create a test FastAPI application with limited user auth."""
     from fastapi import FastAPI
 
@@ -160,8 +178,12 @@ def test_app_limited(mock_limited_user_context):
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_limited_user_context
     app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
 
-    client = TestClient(app)
-    yield client
+    with patch(
+        "registry.api.agent_routes.get_search_repository",
+        return_value=mock_search_repo,
+    ):
+        client = TestClient(app)
+        yield client
     app.dependency_overrides.clear()
 
 

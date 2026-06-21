@@ -238,6 +238,16 @@ def sample_server_info() -> dict[str, Any]:
 
 
 @pytest.fixture
+def mock_search_repo():
+    """Mock search repository for search indexing calls."""
+    mock = AsyncMock()
+    mock.index_server = AsyncMock()
+    mock.index_agent = AsyncMock()
+    mock.remove_entity = AsyncMock()
+    return mock
+
+
+@pytest.fixture
 def test_client_admin(
     mock_settings,
     mock_server_service,
@@ -247,6 +257,7 @@ def test_client_admin(
     mock_security_scanner_service,
     mock_auth_admin,
     admin_user_context,
+    mock_search_repo,
 ):
     """Create FastAPI test client with admin auth and all services mocked."""
 
@@ -264,6 +275,7 @@ def test_client_admin(
         patch("registry.api.server_routes.security_scanner_service", mock_security_scanner_service),
         patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
         patch("registry.api.server_routes.enhanced_auth", mock_enhanced_auth_func),
+        patch("registry.repositories.factory.get_search_repository", return_value=mock_search_repo),
     ):
         from registry.auth.csrf import verify_csrf_token_flexible
         from registry.main import app
@@ -288,6 +300,7 @@ def test_client_regular(
     mock_security_scanner_service,
     mock_auth_regular,
     regular_user_context,
+    mock_search_repo,
 ):
     """Create FastAPI test client with regular user auth and all services mocked."""
 
@@ -304,6 +317,7 @@ def test_client_regular(
         patch("registry.api.server_routes.security_scanner_service", mock_security_scanner_service),
         patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
         patch("registry.api.server_routes.enhanced_auth", mock_enhanced_auth_func),
+        patch("registry.repositories.factory.get_search_repository", return_value=mock_search_repo),
     ):
         from registry.auth.csrf import verify_csrf_token_flexible
         from registry.main import app
@@ -325,6 +339,7 @@ def test_client_no_auth(
     mock_health_service,
     mock_nginx_service,
     mock_security_scanner_service,
+    mock_search_repo,
 ):
     """Create FastAPI test client without auth mocking."""
     # Patch services - server_service is imported at module level, others are lazy imports
@@ -334,6 +349,7 @@ def test_client_no_auth(
         patch("registry.core.nginx_service.nginx_service", mock_nginx_service),
         patch("registry.api.server_routes.security_scanner_service", mock_security_scanner_service),
         patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
+        patch("registry.repositories.factory.get_search_repository", return_value=mock_search_repo),
     ):
         from registry.main import app
 
