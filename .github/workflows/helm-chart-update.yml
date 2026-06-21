@@ -46,15 +46,20 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # Only update global.image.tag (4-space indent under `global.image:`).
-          # The per-service image.tag (2-space indent) is intentionally left
-          # empty so it falls back to global.image.tag — do not overwrite it.
+          # Only update global.image.tag (the shared app image tag). The
+          # per-service image.tag is intentionally left empty so it falls back
+          # to global.image.tag — do not overwrite it.
+          #
+          # We target the exact YAML path with yq instead of a sed indent
+          # match. The stack chart's keycloak.image.tag is also 4-space
+          # indented, so an indent-based sed would clobber it (it pins the
+          # Bitnami image, e.g. 26.3.3-debian-12-r0, not the app version).
           for VALUES_FILE in \
             charts/mcp-gateway-registry-stack/values.yaml \
             charts/auth-server/values.yaml \
             charts/registry/values.yaml \
             charts/mcpgw/values.yaml; do
-            sed -i "s/^\(    tag:\s*\).*/\1${VERSION}/" "$VALUES_FILE"
+            VERSION="$VERSION" yq -i '.global.image.tag = strenv(VERSION)' "$VALUES_FILE"
             echo "Updated $VALUES_FILE"
           done
 
