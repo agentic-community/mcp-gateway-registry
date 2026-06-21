@@ -315,6 +315,7 @@ def mock_scope_repository():
     mock = AsyncMock()
     mock.load_all = AsyncMock()
     mock.get_group_mappings.return_value = []
+    mock.get_group_mappings_bulk.return_value = []
     mock.get_all_mapped_group_names.return_value = set()
     mock.list_groups.return_value = {}  # Return empty dict, not list
     mock.get_group.return_value = None

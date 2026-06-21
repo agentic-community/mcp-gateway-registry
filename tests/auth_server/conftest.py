@@ -616,8 +616,22 @@ def mock_scope_repository_with_data(mock_scopes_config):
         group_mappings = mock_scopes_config.get("group_mappings", {})
         return group_mappings.get(group_name, [])
 
+    # get_group_mappings_bulk returns the de-duplicated union across groups
+    # (mirrors the base-class default). map_groups_to_scopes calls this now.
+    async def get_group_mappings_bulk_side_effect(groups: list[str]):
+        group_mappings = mock_scopes_config.get("group_mappings", {})
+        seen: set[str] = set()
+        out: list[str] = []
+        for group in groups:
+            for scope in group_mappings.get(group, []):
+                if scope not in seen:
+                    seen.add(scope)
+                    out.append(scope)
+        return out
+
     mock_repo.get_server_scopes.side_effect = get_server_scopes_side_effect
     mock_repo.get_group_mappings.side_effect = get_group_mappings_side_effect
+    mock_repo.get_group_mappings_bulk.side_effect = get_group_mappings_bulk_side_effect
     mock_repo.load_all = AsyncMock()
     mock_repo.list_groups.return_value = {}
     mock_repo.get_group.return_value = None

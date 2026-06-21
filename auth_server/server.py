@@ -784,18 +784,14 @@ async def map_groups_to_scopes(groups: list[str]) -> list[str]:
     """
     scopes = []
 
-    # Query DocumentDB directly for group mappings
+    # Resolve all groups to scopes in a single query. Issuing one query per
+    # group serialized a DB round-trip per group on every authenticated
+    # request, which dominated latency for users with many groups on a remote
+    # cluster. get_group_mappings_bulk collapses that into one $in query.
     try:
         scope_repo = get_scope_repository()
-
-        for group in groups:
-            # Query DocumentDB for this group's scope mappings
-            group_scopes = await scope_repo.get_group_mappings(group)
-            if group_scopes:
-                scopes.extend(group_scopes)
-                logger.debug(f"Mapped group '{group}' to scopes: {group_scopes}")
-            else:
-                logger.debug(f"No scope mapping found for group: {group}")
+        scopes = await scope_repo.get_group_mappings_bulk(groups)
+        logger.debug(f"Mapped {len(groups)} groups to scopes: {scopes}")
     except Exception as e:
         logger.error(f"Error querying group mappings from DocumentDB: {e}", exc_info=True)
         # Fall back to in-memory config if DocumentDB query fails

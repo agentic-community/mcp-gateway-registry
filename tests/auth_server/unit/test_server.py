@@ -176,12 +176,14 @@ class TestGroupToScopeMapping:
         """Test basic group to scope mapping."""
         from auth_server.server import map_groups_to_scopes
 
-        # Arrange - Mock the repository to return scopes for groups
+        # Arrange - Mock the repository to return the union of scopes in one
+        # bulk call (map_groups_to_scopes resolves all groups in a single query).
         mock_repo = AsyncMock()
-        mock_repo.get_group_mappings.side_effect = lambda group: {
-            "users": ["read:servers", "read:tools"],
-            "developers": ["write:servers"],
-        }.get(group, [])
+        mock_repo.get_group_mappings_bulk.return_value = [
+            "read:servers",
+            "read:tools",
+            "write:servers",
+        ]
 
         with patch("auth_server.server.get_scope_repository", return_value=mock_repo):
             groups = ["users", "developers"]
@@ -193,19 +195,21 @@ class TestGroupToScopeMapping:
             assert "read:servers" in scopes
             assert "write:servers" in scopes
             assert "read:tools" in scopes
+            mock_repo.get_group_mappings_bulk.assert_awaited_once_with(groups)
 
     @pytest.mark.asyncio
     async def test_map_groups_to_scopes_no_duplicates(self, mock_scopes_config):
         """Test that duplicate scopes are removed."""
         from auth_server.server import map_groups_to_scopes
 
-        # Arrange - Mock the repository to return scopes for groups
+        # Arrange - the bulk query returns the de-duplicated union; verify
+        # map_groups_to_scopes preserves that (no duplicate re-introduced).
         mock_repo = AsyncMock()
-        # Both groups return "read:servers" to test deduplication
-        mock_repo.get_group_mappings.side_effect = lambda group: {
-            "users": ["read:servers", "read:tools"],
-            "developers": ["read:servers", "write:servers"],
-        }.get(group, [])
+        mock_repo.get_group_mappings_bulk.return_value = [
+            "read:servers",
+            "read:tools",
+            "write:servers",
+        ]
 
         with patch("auth_server.server.get_scope_repository", return_value=mock_repo):
             # Both groups have "read:servers"
@@ -227,7 +231,7 @@ class TestGroupToScopeMapping:
 
         # Arrange - Mock repository to return empty list for unknown groups
         mock_repo = AsyncMock()
-        mock_repo.get_group_mappings.return_value = []
+        mock_repo.get_group_mappings_bulk.return_value = []
 
         with patch("auth_server.server.get_scope_repository", return_value=mock_repo):
             groups = ["unknown-group"]
@@ -2236,6 +2240,7 @@ class TestBuildStaticTokenMap:
 
         mock_repo = AsyncMock()
         mock_repo.get_group_mappings.return_value = ["mcp-readonly/read"]
+        mock_repo.get_group_mappings_bulk.return_value = ["mcp-readonly/read"]
 
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
