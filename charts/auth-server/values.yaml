@@ -5,22 +5,19 @@ global:
     registry: public.ecr.aws/p3v1o3c6
     tag: 1.24.7
     pullPolicy: IfNotPresent
-
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
 image:
-  registry: ""      # Overrides global.image.registry when set
-  repository: auth-server  # Image name within the registry
-  tag: ""           # Overrides global.image.tag when set
-  pullPolicy: ""    # Overrides global.image.pullPolicy when set
-
+  registry: "" # Overrides global.image.registry when set
+  repository: auth-server # Image name within the registry
+  tag: "" # Overrides global.image.tag when set
+  pullPolicy: "" # Overrides global.image.pullPolicy when set
 # Application configuration
 app:
   name: auth-server
   replicas: 1
   envSecretName: auth-server-secret
-  existingSecret: ""  # If set, use this existing secret instead of creating one
-
+  existingSecret: "" # If set, use this existing secret instead of creating one
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated.
   # When deployed via mcp-gateway-registry-stack, the key is shared with registry.
@@ -33,115 +30,101 @@ app:
   # to scope the cookie tighter, or to a different parent
   # (".team.example.com") if this stack lives under a subdomain.
   sessionCookieDomain: ""
-
   # Internal JWT configuration for service-to-service tokens
-  jwtIssuer: "mcp-auth-server"  # Issuer claim for internal JWT tokens
-  jwtAudience: "mcp-registry"  # Audience claim for internal JWT tokens
-
+  jwtIssuer: "mcp-auth-server" # Issuer claim for internal JWT tokens
+  jwtAudience: "mcp-registry" # Audience claim for internal JWT tokens
   # Static token authentication (alternative to IdP JWT for Registry API)
-  registryStaticTokenAuthEnabled: false  # Enable static API key auth for Registry API
-  registryApiToken: ""  # Static API key value (required when registryStaticTokenAuthEnabled is true)
-
+  registryStaticTokenAuthEnabled: false # Enable static API key auth for Registry API
+  registryApiToken: "" # Static API key value (required when registryStaticTokenAuthEnabled is true)
   # Rate limiting
-  maxTokensPerUserPerHour: "100"  # Max token generations per user per hour
-
+  maxTokensPerUserPerHour: "100" # Max token generations per user per hour
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
   federationStaticToken: # If not provided, a random token is auto-generated
   federationEncryptionKey: # If not provided, a Fernet key is auto-generated
   registryId: # Unique identifier for this registry instance (optional)
-
   # Application Log Configuration (centralized log rotation and retrieval)
-  appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
-  appLogBackupCount: "5"           # Number of rotated backup log files to keep
-  appLogCentralizedEnabled: "true"  # Write application logs to centralized store (requires MongoDB backend)
-  appLogCentralizedTtlDays: "1"    # Days to retain log entries in centralized store (TTL index)
-  appLogMongodbBufferSize: "50"    # Records to buffer before flushing to MongoDB
-  appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
-  appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
+  appLogMaxBytes: "52428800" # Max size per log file before rotation (default 50 MB)
+  appLogBackupCount: "5" # Number of rotated backup log files to keep
+  appLogCentralizedEnabled: "true" # Write application logs to centralized store (requires MongoDB backend)
+  appLogCentralizedTtlDays: "1" # Days to retain log entries in centralized store (TTL index)
+  appLogMongodbBufferSize: "50" # Records to buffer before flushing to MongoDB
+  appLogMongodbFlushIntervalSeconds: "5.0" # Seconds between periodic flushes
+  appLogLevel: "INFO" # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor" # Comma-separated logger names to exclude from MongoDB
   # Log file path and format (issue #987).
-  appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
-  appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
-  appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
-
+  appLogDir: "" # Empty uses backend default: /var/log/containers/ai-registry
+  appLogFileFormat: "json" # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
+  appLogConsoleFormat: "json" # "json" (default, structured logging) or "text" (human-readable)
   # Tool-level access control (issue #1026)
-  mcpToolsListFilterEnabled: true   # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
-  mcpProxyMaxBodyBytes: "2097152"   # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
-  toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
-
-  internalTokenTtlSeconds: "30"       # Token lifetime (seconds); the replay-window cap (min 5)
-  internalTokenLeewaySeconds: "5"     # Clock-skew leeway (seconds) on token exp/iat
-
+  mcpToolsListFilterEnabled: true # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
+  mcpProxyMaxBodyBytes: "2097152" # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
+  toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+  internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
+  internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:
   # Provider type: "keycloak", "entra", "okta", "auth0", "cognito", or "pingfederate"
   type: keycloak
-
 # Keycloak integration (used when authProvider.type = "keycloak")
 keycloak:
   enabled: true
   realm: mcp-gateway
-  m2mClientId: ""  # Optional: M2M client ID for machine-to-machine authentication
-  m2mClientSecret: ""  # Optional: M2M client secret
-
+  m2mClientId: "" # Optional: M2M client ID for machine-to-machine authentication
+  m2mClientSecret: "" # Optional: M2M client secret
 # Entra ID integration (used when authProvider.type = "entra")
 entra:
   clientId: ""
   clientSecret: ""
-  clientSecretExistingSecret: ""  # If set, read ENTRA_CLIENT_SECRET from this K8s secret instead of clientSecret
-  clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET"  # Key within the existing secret
+  clientSecretExistingSecret: "" # If set, read ENTRA_CLIENT_SECRET from this K8s secret instead of clientSecret
+  clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET" # Key within the existing secret
   tenantId: ""
-  loginBaseUrl: ""  # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com)
-  graphBaseUrl: ""  # Optional override for Microsoft Graph base URL. Leave unset on standard deployments — auto-inferred from loginBaseUrl. Set only for proxied or air-gapped deployments.
-
+  loginBaseUrl: "" # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com)
+  graphBaseUrl: "" # Optional override for Microsoft Graph base URL. Leave unset on standard deployments — auto-inferred from loginBaseUrl. Set only for proxied or air-gapped deployments.
 # Okta integration (used when authProvider.type = "okta")
 okta:
-  domain: ""  # e.g., dev-123456.okta.com
+  domain: "" # e.g., dev-123456.okta.com
   clientId: ""
   clientSecret: ""
-  clientSecretExistingSecret: ""  # If set, read OKTA_CLIENT_SECRET from this K8s secret
+  clientSecretExistingSecret: "" # If set, read OKTA_CLIENT_SECRET from this K8s secret
   clientSecretExistingSecretKey: "OKTA_CLIENT_SECRET"
-  m2mClientId: ""  # Optional: defaults to clientId
-  m2mClientSecret: ""  # Optional: defaults to clientSecret
-  m2mClientSecretExistingSecret: ""  # If set, read OKTA_M2M_CLIENT_SECRET from this K8s secret
+  m2mClientId: "" # Optional: defaults to clientId
+  m2mClientSecret: "" # Optional: defaults to clientSecret
+  m2mClientSecretExistingSecret: "" # If set, read OKTA_M2M_CLIENT_SECRET from this K8s secret
   m2mClientSecretExistingSecretKey: "OKTA_M2M_CLIENT_SECRET"
-  apiToken: ""  # Optional: required for IAM operations
-  apiTokenExistingSecret: ""  # If set, read OKTA_API_TOKEN from this K8s secret
+  apiToken: "" # Optional: required for IAM operations
+  apiTokenExistingSecret: "" # If set, read OKTA_API_TOKEN from this K8s secret
   apiTokenExistingSecretKey: "OKTA_API_TOKEN"
-  authServerId: ""  # Optional: uses default Org Authorization Server if not set
-
+  authServerId: "" # Optional: uses default Org Authorization Server if not set
 # Auth0 integration (used when authProvider.type = "auth0")
 auth0:
-  domain: ""  # e.g., your-tenant.us.auth0.com
+  domain: "" # e.g., your-tenant.us.auth0.com
   clientId: ""
   clientSecret: ""
-  clientSecretExistingSecret: ""  # If set, read AUTH0_CLIENT_SECRET from this K8s secret
+  clientSecretExistingSecret: "" # If set, read AUTH0_CLIENT_SECRET from this K8s secret
   clientSecretExistingSecretKey: "AUTH0_CLIENT_SECRET"
-  audience: ""  # Optional: API audience for M2M tokens
-  groupsClaim: "https://mcp-gateway/groups"  # Custom namespaced claim for groups
-  m2mClientId: ""  # Required for IAM Management (user/role administration)
-  m2mClientSecret: ""  # Required for IAM Management
-  m2mClientSecretExistingSecret: ""  # If set, read AUTH0_M2M_CLIENT_SECRET from this K8s secret
+  audience: "" # Optional: API audience for M2M tokens
+  groupsClaim: "https://mcp-gateway/groups" # Custom namespaced claim for groups
+  m2mClientId: "" # Required for IAM Management (user/role administration)
+  m2mClientSecret: "" # Required for IAM Management
+  m2mClientSecretExistingSecret: "" # If set, read AUTH0_M2M_CLIENT_SECRET from this K8s secret
   m2mClientSecretExistingSecretKey: "AUTH0_M2M_CLIENT_SECRET"
-  managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
-  managementApiTokenExistingSecret: ""  # If set, read AUTH0_MANAGEMENT_API_TOKEN from this K8s secret
+  managementApiToken: "" # Optional: alternative to M2M credentials (expires after 24h)
+  managementApiTokenExistingSecret: "" # If set, read AUTH0_MANAGEMENT_API_TOKEN from this K8s secret
   managementApiTokenExistingSecretKey: "AUTH0_MANAGEMENT_API_TOKEN"
-
 # Cognito integration (used when authProvider.type = "cognito")
 cognito:
-  userPoolId: ""  # Cognito User Pool ID
+  userPoolId: "" # Cognito User Pool ID
   clientId: ""
   clientSecret: ""
-  domain: ""  # Optional: custom Cognito domain
-  region: "us-east-1"  # AWS region for the User Pool
-
+  domain: "" # Optional: custom Cognito domain
+  region: "us-east-1" # AWS region for the User Pool
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false
-  baseUrl: ""             # Internal URL (server-to-server), e.g. https://pf:9031
-  externalUrl: ""         # Browser-facing URL, e.g. https://pf.example.com:9031
+  baseUrl: "" # Internal URL (server-to-server), e.g. https://pf:9031
+  externalUrl: "" # Browser-facing URL, e.g. https://pf.example.com:9031
   clientId: ""
   clientSecret: ""
   clientSecretExistingSecret: ""
@@ -152,14 +135,12 @@ pingfederate:
   m2mClientSecretExistingSecretKey: "PINGFEDERATE_M2M_CLIENT_SECRET"
   applicationIdUri: ""
   groupsClaim: "groups"
-
 # IdP user-to-group fallback (issue #1127)
 # Comma-separated list of IdP providers (e.g. pingfederate) for which the
 # registry's local idp_user_groups collection is consulted to populate empty
 # JWT groups claims. Empty string disables the fallback for all providers.
 # Default: "pingfederate"
 idpUserGroupFallbackEnabledProviders: "pingfederate"
-
 # Login-time IdP group allowlist (applies to all identity providers)
 # When set, only these EXACT group names/IDs are stored in a user's session at
 # login. When empty, the registry auto-derives the allowlist from scope mappings
@@ -167,13 +148,11 @@ idpUserGroupFallbackEnabledProviders: "pingfederate"
 # group memberships (e.g. Entra ID with hundreds of AD groups).
 # Example: "registry_readonly,registry_write,ai_admins"
 allowedIdpGroups: ""
-
 # Service configuration
 service:
   type: ClusterIP
   port: 8888
-  annotations: { }
-
+  annotations: {}
 # Resource limits and requests
 resources:
   requests:
@@ -182,7 +161,6 @@ resources:
   limits:
     cpu: 2
     memory: 2Gi
-
 # Extra environment variables appended to the container's `env:` list.
 # Uses the native Kubernetes EnvVar schema, so `valueFrom` is supported.
 #
@@ -208,7 +186,6 @@ resources:
 #         name: my-secret
 #         key: my-key
 extraEnv: []
-
 # Extra `envFrom:` sources appended to the container. Use this to inject
 # all keys from an external ConfigMap or Secret you manage (e.g. via
 # External Secrets Operator, SealedSecrets, or Vault CSI).
@@ -235,7 +212,6 @@ extraEnv: []
 #       name: my-external-config
 #       optional: true
 extraEnvFrom: []
-
 # OTel-native metric emission (Issue #1122)
 # In 1.25.0+ the auth-server emits metrics natively via the OTel SDK.
 # metricsLegacyHttpPost=true ALSO posts to metrics-service (one-release transition).
@@ -245,7 +221,6 @@ metrics:
   otelExportIntervalMs: "15000"
   exporterPrometheusHost: "0.0.0.0"
   exporterPrometheusPort: "9464"
-
 # Metrics scrape configuration (Issue #1122)
 # Controls the NetworkPolicy that gates the OTel exporter-prometheus port.
 metricsScrape:
@@ -256,5 +231,4 @@ metricsScrape:
       kubernetes.io/metadata.name: monitoring
     fromPodSelector:
       app.kubernetes.io/name: prometheus
-
 nodeSelector: {}

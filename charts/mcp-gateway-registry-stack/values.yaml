@@ -10,13 +10,10 @@ global:
     registry: public.ecr.aws/p3v1o3c6
     tag: 1.24.7
     pullPolicy: IfNotPresent
-
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
-
   # Domain configuration - update this to your actual domain
   domain: "DOMAIN"
-
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated
   # and shared between auth-server and registry via a shared secret.
@@ -27,25 +24,21 @@ global:
   # Shared secret name - automatically set for stack deployment
   # Both auth-server and registry will use this secret for SECRET_KEY and federation (if enabled)
   sharedSecretName: "shared-secret"
-
   # OAuth provider shared secret - contains auth provider type and IdP credentials
   # Both auth-server and registry reference this secret for Keycloak/Entra configuration
   oauthProviderSecretName: "oauth-provider-secret"
-
   # Existing secret references - set these to use pre-existing secrets instead of chart-managed ones.
   # When set, the chart skips creating the corresponding managed Secret resource.
   # The existing secret must contain the same keys the chart would have created.
-  existingSharedSecret: ""          # If set, skip creating shared-secret and use this name instead
-  existingOauthProviderSecret: ""   # If set, skip creating oauth-provider-secret and use this name instead
+  existingSharedSecret: "" # If set, skip creating shared-secret and use this name instead
+  existingOauthProviderSecret: "" # If set, skip creating oauth-provider-secret and use this name instead
   existingMongoCredentialsSecret: "" # If set, use this name instead of mongo-credentials in deployments
-
   # Federation configuration - shared between registry and auth-server
   federation:
     staticTokenAuthEnabled: false # If not provided, defaults to false
     staticToken: # If not provided, a random token is auto-generated
     encryptionKey: # If not provided, a Fernet key is auto-generated
     registryId: # Unique identifier for this registry instance (optional)
-
   # Authentication Provider Configuration
   # Choose ONE provider: keycloak, entra, okta, auth0, or cognito
   authProvider:
@@ -57,7 +50,6 @@ global:
       # Don't set password here - let Keycloak chart generate it
     entra:
       adminGroupId: # UUID of Entra admin group
-
   # Common ingress settings. Only the registry exposes a public ingress.
   # mcpgw is reached through the registry nginx at /airegistry-tools/*
   # (auto-registered at registry startup). auth-server and Keycloak are
@@ -84,14 +76,12 @@ global:
     # KEYCLOAK_EXTERNAL_URL.
     paths:
       registry: /registry
-
 mongodb-kubernetes:
   operator:
     enableClusterMongoDBRoles: false
     telemetry:
       installClusterRole: false
     nodeSelector: {}
-
 # MongoDB configuration
 mongodb:
   enabled: true
@@ -104,26 +94,22 @@ mongodb:
   # password/host-based assembly throughout the stack. For production,
   # prefer providing the URI via global.existingMongoCredentialsSecret.
   connectionString: &mongoConnectionString ""
-
 # Keycloak configuration
 # Set create: true to deploy Keycloak as part of this stack
 # Set create: false to use an external Keycloak instance
 # NOTE: When using Entra (global.authProvider.type: entra), set create: false
 keycloak:
-  create: true  # Deploy Keycloak in this stack (set to false for external Keycloak or Entra)
+  create: true # Deploy Keycloak in this stack (set to false for external Keycloak or Entra)
   image:
     registry: docker.io
     repository: bitnamilegacy/keycloak
     tag: 26.3.3-debian-12-r0
-
   global:
     security:
       allowInsecureImages: true
-
   auth:
     adminUser: *keycloakAdmin
     existingSecret: '{{ .Release.Name }}-keycloak'
-
   postgresql:
     auth:
       existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
@@ -131,7 +117,6 @@ keycloak:
       registry: docker.io
       repository: bitnamilegacy/postgresql
       tag: 17.6.0-debian-12-r0
-
   # Keycloak always serves from its own root (httpRelativePath defaults
   # to "/" in the Bitnami chart). The registry pod's nginx rewrites
   # browser traffic under /keycloak before forwarding, so Keycloak
@@ -149,12 +134,9 @@ keycloak:
       value: edge
     - name: KC_PROXY_HEADERS
       value: xforwarded
-
   ingress:
     enabled: false
-
   nodeSelector: {}
-
   # Lifecycle hook to configure realm SSL settings
   lifecycleHooks:
     postStart:
@@ -190,13 +172,12 @@ keycloak:
                 -s sslRequired=NONE
               echo "✓ $KC_SPI_ADMIN_REALM realm configured!"
             ) > /tmp/poststart-config.log 2>&1 &
-
 # Keycloak configuration job
 # Automatically enabled when global.authProvider.type = "keycloak"
 # Set to false to skip configuration (e.g., when using pre-configured Keycloak)
 # NOTE: When using Entra (global.authProvider.type: entra), set enabled: false
 keycloak-configure:
-  enabled: true  # Set to false to skip Keycloak configuration or when using Entra
+  enabled: true # Set to false to skip Keycloak configuration or when using Entra
   keycloak:
     realm: *keycloakRealm
     adminUser: *keycloakAdmin
@@ -212,7 +193,6 @@ keycloak-configure:
   # using a pre-configured external Keycloak with its own DCR setup.
   dcr:
     enabled: true
-
 # Mongodb configuration job
 mongodb-configure:
   enabled: true # Whether to run the MongoDB configuration job
@@ -221,7 +201,6 @@ mongodb-configure:
     password: *mongoPassword
     database: *mongoDatabase
     connectionString: *mongoConnectionString
-
 # Registry service configuration
 registry:
   app:
@@ -236,10 +215,8 @@ registry:
     sessionCookieDomain: ""
     # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
     deploymentMode: with-gateway
-
     # Registry mode: full, skills-only, mcp-servers-only, agents-only
     registryMode: full
-
     # Internal/workshop deployment classification (telemetry labels only; issue #1216).
     # Tags a deployment as one of our own internal/workshop installs so it can be
     # distinguished from community installs in telemetry. Does NOT change access control.
@@ -247,49 +224,40 @@ registry:
     # defaults to "dev" when internalOnlyDeployment is true and left unset.
     internalOnlyDeployment: false
     internalDeploymentType: "none"
-
     # Tab visibility overrides (AND-ed with registryMode)
     showServersTab: true
     showVirtualServersTab: true
     showSkillsTab: true
     showAgentsTab: true
-
     # Coding assistants allowlist for Server Configuration modal (IDE selector).
     # Comma-separated string. Empty means show all supported assistants.
     # Supported values: cursor, roo-code, claude-code, kiro
     # Example: "cursor,claude-code"
     codingAssistants: ""
-
     # UI title override. Empty string defers to the deployment-mode
     # default ("AI Gateway & Registry" for with-gateway, "AI Registry" for
     # registry-only). Set to brand the deployment with your organization's
     # product name (e.g., "Acme AI Portal").
     uiTitle: ""
-
     # Federation OAuth2 authentication (alternative to static token)
     federationTokenEndpoint: ""
     federationClientId: ""
     federationClientSecret: ""
-
     # ASOR (Workday) federation integration
     asorAccessToken: ""
     workdayTokenUrl: ""
-
     # Skill security scanning configuration
-    skillSecurityScanEnabled: true  # Enable/disable skill security scanning
-    skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
-
+    skillSecurityScanEnabled: true # Enable/disable skill security scanning
+    skillSecurityAnalyzers: "static" # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
     # Static API keys for registry path authentication (JSON string)
     registryApiKeys: ""
-    registryApiKeysExistingSecret: ""  # If set, read REGISTRY_API_KEYS from this K8s secret instead
-    registryApiKeysExistingSecretKey: "REGISTRY_API_KEYS"  # Key within the existing secret
-
+    registryApiKeysExistingSecret: "" # If set, read REGISTRY_API_KEYS from this K8s secret instead
+    registryApiKeysExistingSecretKey: "REGISTRY_API_KEYS" # Key within the existing secret
     # Registration webhook (issue #742)
     registrationWebhookUrl: ""
     registrationWebhookAuthHeader: "Authorization"
     registrationWebhookAuthToken: ""
     registrationWebhookTimeoutSeconds: "10"
-
     # Agent batch API (issue #956)
     # Lease-based claiming makes multi-worker operation safe: any number of
     # replicas may set batchWorkerEnabled=true.
@@ -301,7 +269,6 @@ registry:
     batchWorkerLeaseTtlSeconds: "60.0"
     batchWorkerLeaseHeartbeatSeconds: "15.0"
     batchMaxRequestBytes: "4194304"
-
     # Registration gate / admission control (issue #809)
     registrationGateEnabled: false
     registrationGateUrl: ""
@@ -314,12 +281,10 @@ registry:
     registrationGateOauth2ClientId: ""
     registrationGateOauth2ClientSecret: ""
     registrationGateOauth2Scope: ""
-
     # M2M direct client registration (issue #851)
     # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and
     # their group mappings directly, without requiring an IdP Admin API token.
     m2mDirectRegistrationEnabled: true
-
     # Registration deduplication (issue #913)
     # Advisory checks that surface likely-duplicate entities (servers, agents,
     # skills) before a user registers a new one. The /api/<entity>/check-duplicates
@@ -328,107 +293,92 @@ registry:
     # registration form pre-flights the check and renders the hint modal.
     # The check is advisory and never blocks registration.
     dedup:
-      registrationHintEnabled: true  # When true, registration UI pre-flights /check-duplicates and shows hint modal.
-      scoreThreshold: "0.7"          # Minimum similarity score (0.0..1.0) for advisory matches.
-      maxSuggestions: "3"            # Cap on advisory suggestions per request.
-
+      registrationHintEnabled: true # When true, registration UI pre-flights /check-duplicates and shows hint modal.
+      scoreThreshold: "0.7" # Minimum similarity score (0.0..1.0) for advisory matches.
+      maxSuggestions: "3" # Cap on advisory suggestions per request.
     # OpenTelemetry direct OTLP push export configuration
-    otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
-    otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
-    otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
-    otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
-
+    otelOtlpEndpoint: "" # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
+    otelExporterOtlpHeaders: "" # OTLP headers (e.g., dd-api-key=YOUR_KEY)
+    otelOtlpExportIntervalMs: "30000" # Export interval in milliseconds
+    otelExporterOtlpMetricsTemporalityPreference: "cumulative" # cumulative or delta
     # OTel-native metric emission (Issue #1122)
     metricsLegacyHttpPost: false
     otelMetricExportIntervalMs: "15000"
     otelExporterPrometheusHost: "0.0.0.0"
     otelExporterPrometheusPort: "9464"
-
     # Telemetry configuration
     # Anonymous usage telemetry (startup ping + daily heartbeat, both on by default)
-    mcpTelemetryDisabled: false  # Set to true to disable all telemetry
-    mcpTelemetryOptOut: false  # Set to true to disable daily heartbeat only (startup ping still sent)
-    telemetryHeartbeatIntervalMinutes: "1440"  # Heartbeat interval in minutes (default: 1440 = 24 hours)
-    telemetryDebug: false  # Set to true to log payloads instead of sending
-    mcpTelemetryImdsProbeDisabled: false  # Set to true to disable IMDS probing in cloud detection (issue #986)
-    mcpCloudProvider: ""  # Override cloud auto-detection: aws|azure|gcp|on_premises|other (issue #1120)
-
+    mcpTelemetryDisabled: false # Set to true to disable all telemetry
+    mcpTelemetryOptOut: false # Set to true to disable daily heartbeat only (startup ping still sent)
+    telemetryHeartbeatIntervalMinutes: "1440" # Heartbeat interval in minutes (default: 1440 = 24 hours)
+    telemetryDebug: false # Set to true to log payloads instead of sending
+    mcpTelemetryImdsProbeDisabled: false # Set to true to disable IMDS probing in cloud detection (issue #986)
+    mcpCloudProvider: "" # Override cloud auto-detection: aws|azure|gcp|on_premises|other (issue #1120)
     # Application Log Configuration (centralized log rotation and retrieval)
     # NOTE: Centralized logging is ON by default (appLogCentralizedEnabled: "true").
     # Set to "false" to disable writing application logs to centralized store for the /admin/logs API.
     # Anchor &appLogConfig is reused by auth-server below to keep values in sync.
-    <<: &appLogConfig
-      appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
-      appLogBackupCount: "5"           # Number of rotated backup log files to keep
-      appLogCentralizedEnabled: "true"  # Write application logs to centralized store (requires MongoDB backend)
-      appLogCentralizedTtlDays: "1"    # Days to retain log entries in centralized store (TTL index)
-      appLogMongodbBufferSize: "50"    # Records to buffer before flushing to MongoDB
-      appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
-      appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-      appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
+    !!merge <<: &appLogConfig
+      appLogMaxBytes: "52428800" # Max size per log file before rotation (default 50 MB)
+      appLogBackupCount: "5" # Number of rotated backup log files to keep
+      appLogCentralizedEnabled: "true" # Write application logs to centralized store (requires MongoDB backend)
+      appLogCentralizedTtlDays: "1" # Days to retain log entries in centralized store (TTL index)
+      appLogMongodbBufferSize: "50" # Records to buffer before flushing to MongoDB
+      appLogMongodbFlushIntervalSeconds: "5.0" # Seconds between periodic flushes
+      appLogLevel: "INFO" # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+      appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor" # Comma-separated logger names to exclude from MongoDB
       # Log file path and format (issue #987). Propagated to auth-server via YAML anchor.
-      appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
-      appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
-      appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
-
+      appLogDir: "" # Empty uses backend default: /var/log/containers/ai-registry
+      appLogFileFormat: "json" # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
+      appLogConsoleFormat: "json" # "json" (default, structured logging) or "text" (human-readable)
     # Tool-level access control (issue #1026)
-    mcpToolsListFilterEnabled: true    # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
-    toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
-
+    mcpToolsListFilterEnabled: true # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
+    toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
     # Registry-UI internal token verification (the /api/ hop; minted by auth-server)
-    internalTokenTtlSeconds: "30"      # Token lifetime (seconds); the replay-window cap (min 5)
-    internalTokenLeewaySeconds: "5"    # Clock-skew leeway (seconds) on token exp/iat
-
+    internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
+    internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
     # Custom entity types (admin-defined, schema-driven catalog types)
-    customEntityTypesEnabled: false    # Main switch for dynamic tabs + endpoints; off = no behavior change
-    customTypeCacheTtlSeconds: 60      # TTL (s) for the in-process custom-type descriptor cache
-    maxCustomRecordsPerType: 0         # Soft cap on records per type (0 = unlimited); rejects create at cap
-
+    customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
+    customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
+    maxCustomRecordsPerType: 0 # Soft cap on records per type (0 = unlimited); rejects create at cap
     # PRM `scopes_supported` override. Default matches Keycloak-DCR setup
     # (Claude Code, Claude.ai, Cursor) — the three scopes are present in every
     # Keycloak realm by default, so DCR succeeds. Set to "" to derive from the
     # registry's own scopes config; see
     # docs/ai-coding-assistant-registry-integration.md.
     mcpAdvertisedScopes: "profile email offline_access"
-
     # IDE OAuth login (PR #1224). Public client_id IDEs use for the gateway login
     # flow (empty = static-token Connect config; NOT a secret) and the fixed
     # loopback callback port for IdPs that match redirect_uri literally (Okta,
     # Entra, Cognito). 0 lets the IDE pick a port (correct for Keycloak).
     ideOauthClientId: ""
     ideOauthCallbackPort: 0
-
     # Demo server configuration
-    disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
-
+    disableAiRegistryToolsServer: false # Set to true to disable auto-registration of the built-in airegistry-tools server
   # AWS Agent Registry Federation
   awsRegistry:
-    federationEnabled: false  # Enable AWS Agent Registry federation (overrides MongoDB config on startup)
-
+    federationEnabled: false # Enable AWS Agent Registry federation (overrides MongoDB config on startup)
   # ANS (Agent Name Service) Integration
   ans:
-    enabled: false  # Enable ANS integration for trust verification
-    apiEndpoint: "https://api.godaddy.com"  # ANS API base URL
-    apiKey: ""  # GoDaddy API key (required when enabled)
-    apiSecret: ""  # GoDaddy API secret (required when enabled)
-    apiTimeoutSeconds: "30"  # HTTP request timeout for ANS API calls
-    syncIntervalHours: "6"  # Background re-verification interval
-    verificationCacheTtlSeconds: "3600"  # Cache TTL for verification results
-
+    enabled: false # Enable ANS integration for trust verification
+    apiEndpoint: "https://api.godaddy.com" # ANS API base URL
+    apiKey: "" # GoDaddy API key (required when enabled)
+    apiSecret: "" # GoDaddy API secret (required when enabled)
+    apiTimeoutSeconds: "30" # HTTP request timeout for ANS API calls
+    syncIntervalHours: "6" # Background re-verification interval
+    verificationCacheTtlSeconds: "3600" # Cache TTL for verification results
   # Registry Card Configuration (for federation and discovery)
   registryCard:
-    url: ""  # External URL of the registry (defaults to computed ingress URL)
-    name: "AI Registry"  # Human-readable name
-    organizationName: ""  # Organization operating the registry
-    description: ""  # Optional description
-    contactEmail: ""  # Optional contact email
-    contactUrl: ""  # Optional contact URL/website
-
+    url: "" # External URL of the registry (defaults to computed ingress URL)
+    name: "AI Registry" # Human-readable name
+    organizationName: "" # Organization operating the registry
+    description: "" # Optional description
+    contactEmail: "" # Optional contact email
+    contactUrl: "" # Optional contact URL/website
   # IdP group filtering (applies to all identity providers)
   # When set, only groups whose name starts with any of these prefixes are shown in IAM > Groups
   # Example: "mcp-,registry-,ai-"
   idpGroupFilterPrefix: ""
-
   # Login-time IdP group allowlist (applies to all identity providers)
   # When set, only these EXACT group names/IDs are stored in a user's session at
   # login. When empty, the registry auto-derives the allowlist from scope mappings
@@ -436,7 +386,6 @@ registry:
   # group memberships (e.g. Entra ID with hundreds of AD groups).
   # Example: "registry_readonly,registry_write,ai_admins"
   allowedIdpGroups: ""
-
   # IdP user-to-group fallback (issue #1127)
   # Comma-separated list of IdP providers (e.g. pingfederate) for which the
   # registry's local idp_user_groups collection is consulted to populate empty
@@ -444,7 +393,6 @@ registry:
   # Forwarded to both the registry and auth-server subcharts.
   # Default: "pingfederate"
   idpUserGroupFallbackEnabledProviders: "pingfederate"
-
   # PingFederate Admin API (registry only).
   # Used by the registry to call the PF admin API to create OAuth clients
   # and Simple PCV users at runtime. The PASS is sensitive; the URL and
@@ -456,20 +404,16 @@ registry:
     password: ""
     passwordExistingSecret: ""
     passwordExistingSecretKey: "PF_ADMIN_PASS"
-
   ingress:
     enabled: true
     ingressClassName: alb
-
   nodeSelector: {}
-
   # Extra env vars / envFrom sources appended to the registry container.
   # See charts/registry/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the registry
   # subchart unchanged.
   extraEnv: []
   extraEnvFrom: []
-
 # MCPGW MCP server configuration.
 # Reached externally through the registry ingress at /airegistry-tools/*
 # (the registry seeds an airegistry-tools server record at startup, and
@@ -479,22 +423,18 @@ mcpgw:
   enabled: true # Set to true to deploy the MCPGW MCP server
   app:
     replicas: 1
-
     # Application Log Configuration — reuses the &appLogConfig anchor from
     # registry.app so all three services share the same logging settings.
     # mcpgw only consumes a subset (no MongoDB writer); extra keys merged in
     # by the anchor are ignored by charts/mcpgw/templates/configmap-app-log.yaml.
-    <<: *appLogConfig
-
+    !!merge <<: *appLogConfig
   nodeSelector: {}
-
   # Extra env vars / envFrom sources appended to the mcpgw container.
   # See charts/mcpgw/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the mcpgw
   # subchart unchanged.
   extraEnv: []
   extraEnvFrom: []
-
 # Auth server configuration
 auth-server:
   app:
@@ -503,76 +443,66 @@ auth-server:
     # above for guidance — keep these two in sync.
     sessionCookieDomain: ""
     # Internal JWT configuration
-    jwtIssuer: "mcp-auth-server"  # Issuer claim for internal JWT tokens
-    jwtAudience: "mcp-registry"  # Audience claim for internal JWT tokens
+    jwtIssuer: "mcp-auth-server" # Issuer claim for internal JWT tokens
+    jwtAudience: "mcp-registry" # Audience claim for internal JWT tokens
     # Static token authentication (alternative to IdP JWT for Registry API)
     registryStaticTokenAuthEnabled: false
     registryApiToken: ""
     # Rate limiting
     maxTokensPerUserPerHour: "100"
-
     # Application Log Configuration - reuses anchor from registry.app above
-    <<: *appLogConfig
-
+    !!merge <<: *appLogConfig
     # Tool-level access control (issue #1026)
-    mcpToolsListFilterEnabled: true    # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
-    mcpProxyMaxBodyBytes: "2097152"    # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
-    toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
-
-    internalTokenTtlSeconds: "30"        # Token lifetime (seconds); the replay-window cap (min 5)
-    internalTokenLeewaySeconds: "5"      # Clock-skew leeway (seconds) on token exp/iat
-
+    mcpToolsListFilterEnabled: true # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
+    mcpProxyMaxBodyBytes: "2097152" # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
+    toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+    internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
+    internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
   keycloak:
     enabled: true
     realm: *keycloakRealm
-    m2mClientId: ""  # Optional: M2M client ID
-    m2mClientSecret: ""  # Optional: M2M client secret
+    m2mClientId: "" # Optional: M2M client ID
+    m2mClientSecret: "" # Optional: M2M client secret
     # externalUrl will be templated in the subchart using global.domain
-
   # Entra ID settings (used when global.authProvider.type = "entra")
   entra:
     clientId: ""
     clientSecret: ""
     tenantId: ""
-    loginBaseUrl: ""  # Custom Entra login base URL for sovereign clouds
-    graphBaseUrl: ""  # Optional Microsoft Graph base URL override (auto-inferred from loginBaseUrl)
-
+    loginBaseUrl: "" # Custom Entra login base URL for sovereign clouds
+    graphBaseUrl: "" # Optional Microsoft Graph base URL override (auto-inferred from loginBaseUrl)
   # Okta settings (used when global.authProvider.type = "okta")
   okta:
-    domain: ""  # e.g., dev-123456.okta.com
+    domain: "" # e.g., dev-123456.okta.com
     clientId: ""
     clientSecret: ""
-    m2mClientId: ""  # Optional: defaults to clientId
-    m2mClientSecret: ""  # Optional: defaults to clientSecret
-    apiToken: ""  # Optional: required for IAM operations
-    authServerId: ""  # Optional: uses default Org Authorization Server if not set
-
+    m2mClientId: "" # Optional: defaults to clientId
+    m2mClientSecret: "" # Optional: defaults to clientSecret
+    apiToken: "" # Optional: required for IAM operations
+    authServerId: "" # Optional: uses default Org Authorization Server if not set
   # Auth0 settings (used when global.authProvider.type = "auth0")
   auth0:
-    domain: ""  # e.g., your-tenant.us.auth0.com
+    domain: "" # e.g., your-tenant.us.auth0.com
     clientId: ""
     clientSecret: ""
-    audience: ""  # Optional: API audience for M2M tokens
+    audience: "" # Optional: API audience for M2M tokens
     groupsClaim: "https://mcp-gateway/groups"
     m2mClientId: ""
     m2mClientSecret: ""
-    managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
-
+    managementApiToken: "" # Optional: alternative to M2M credentials (expires after 24h)
   # Cognito settings (used when global.authProvider.type = "cognito")
   cognito:
     userPoolId: ""
     clientId: ""
     clientSecret: ""
-    domain: ""  # Optional: custom Cognito domain
+    domain: "" # Optional: custom Cognito domain
     region: "us-east-1"
-
   # Login-time IdP group allowlist (applies to all identity providers)
   # When set, only these EXACT group names/IDs are stored in a user's session at
   # login. When empty, the registry auto-derives the allowlist from scope mappings
   # (recommended). Keep in sync with registry.allowedIdpGroups above.
   # Example: "registry_readonly,registry_write,ai_admins"
   allowedIdpGroups: ""
-
   # IdP user-to-group fallback (issue #1127)
   # Comma-separated list of IdP providers (e.g. pingfederate) for which the
   # registry's local idp_user_groups collection is consulted to populate empty
@@ -580,9 +510,7 @@ auth-server:
   # Keep in sync with registry.idpUserGroupFallbackEnabledProviders above.
   # Default: "pingfederate"
   idpUserGroupFallbackEnabledProviders: "pingfederate"
-
   nodeSelector: {}
-
   # Extra env vars / envFrom sources appended to the auth-server container.
   # See charts/auth-server/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the auth-server
