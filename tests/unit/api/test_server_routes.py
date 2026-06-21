@@ -2620,3 +2620,89 @@ class TestServerGetMetadataNormalization:
         response = test_client_admin.get("/api/servers/legacy-meta")
         assert response.status_code == 200
         assert response.json()["metadata"] == {}
+
+
+# =============================================================================
+# TEST GET /servers/groups/{group_name} — datetime serialization (#573)
+# =============================================================================
+
+
+class TestGetGroupApi:
+    """Tests for GET /api/servers/groups/{group_name}.
+
+    Verifies that the endpoint correctly serializes datetime objects
+    returned by the DocumentDB scope repository instead of raising a
+    500 Internal Server Error (#573).
+    """
+
+    @pytest.fixture
+    def test_client_admin(self, mock_auth_admin):
+        """Test client authenticated as admin."""
+        from registry.main import app
+
+        return TestClient(app, cookies={"mcp_gateway_session": "test-session"})
+
+    def test_get_group_with_datetime_fields(self, test_client_admin):
+        """Datetime objects in group_data must be serialized to strings (#573)."""
+        from datetime import datetime
+
+        group_data = {
+            "scope_name": "test-group",
+            "scope_type": "server_scope",
+            "description": "A test group",
+            "server_access": [{"server": "test-server", "permissions": ["read"]}],
+            "group_mappings": ["test-group"],
+            "ui_permissions": {"list_service": ["test-server"]},
+            "created_at": datetime(2026, 1, 15, 10, 30, 0),
+            "updated_at": datetime(2026, 6, 1, 14, 0, 0),
+        }
+
+        with patch(
+            "registry.services.scope_service.get_group",
+            new_callable=AsyncMock,
+            return_value=group_data,
+        ):
+            response = test_client_admin.get("/api/servers/groups/test-group")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["scope_name"] == "test-group"
+        # datetime objects must be converted to strings, not cause a 500
+        assert isinstance(data["created_at"], str)
+        assert isinstance(data["updated_at"], str)
+        assert "2026" in data["created_at"]
+
+    def test_get_group_not_found(self, test_client_admin):
+        """Non-existent group returns 404."""
+        with patch(
+            "registry.services.scope_service.get_group",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            response = test_client_admin.get("/api/servers/groups/nonexistent")
+
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"]
+
+    def test_get_group_without_datetime_fields(self, test_client_admin):
+        """File-backend groups (string timestamps) still serialize correctly."""
+        group_data = {
+            "scope_name": "file-group",
+            "scope_type": "server_scope",
+            "description": "",
+            "server_access": [],
+            "group_mappings": ["file-group"],
+            "ui_permissions": {},
+            "created_at": "",
+            "updated_at": "",
+        }
+
+        with patch(
+            "registry.services.scope_service.get_group",
+            new_callable=AsyncMock,
+            return_value=group_data,
+        ):
+            response = test_client_admin.get("/api/servers/groups/file-group")
+
+        assert response.status_code == 200
+        assert response.json()["scope_name"] == "file-group"

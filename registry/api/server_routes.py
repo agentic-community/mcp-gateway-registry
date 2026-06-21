@@ -4756,7 +4756,12 @@ async def get_group_api(
                 detail=f"Group '{group_name}' not found",
             )
 
-        return JSONResponse(status_code=200, content=group_data)
+        # Round-trip through json.dumps with default=str to convert
+        # datetime objects from DocumentDB into ISO-format strings (#573).
+        return JSONResponse(
+            status_code=200,
+            content=json.loads(json.dumps(group_data, default=str)),
+        )
 
     except HTTPException:
         raise

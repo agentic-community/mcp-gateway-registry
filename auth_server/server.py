@@ -2983,7 +2983,20 @@ async def generate_user_token(
             )
 
             current_time = int(time.time())
-            expires_in = DEFAULT_TOKEN_LIFETIME_HOURS * 3600  # 8 hours default
+            # Honour the caller's requested lifetime, clamped to the
+            # server-wide maximum (#889).  Values <= 0 or above the cap
+            # are silently clamped; omitted values fall back to the
+            # default (8 h).
+            effective_hours = min(
+                max(request.expires_in_hours, 1),
+                MAX_TOKEN_LIFETIME_HOURS,
+            )
+            expires_in = effective_hours * 3600
+            if request.expires_in_hours != DEFAULT_TOKEN_LIFETIME_HOURS:
+                logger.info(
+                    f"Token lifetime: requested={request.expires_in_hours}h, "
+                    f"effective={effective_hours}h (max={MAX_TOKEN_LIFETIME_HOURS}h)"
+                )
 
             # Build JWT claims
             jwt_claims = {
