@@ -137,6 +137,12 @@ keycloak_database_password = "CHANGE-ME-DB-PASSWORD"
 # Default: "10.0.0.0/16"
 # vpc_cidr = "10.0.0.0/16"
 
+# Internal URL the registry/nginx use to reach the auth-server.
+# Default: "http://auth-server:8888" (works with the bundled auth-server service).
+# Override with a Cloud Map / ECS Service Connect FQDN when only FQDNs resolve,
+# e.g. http://auth-server.<namespace>.local:8888
+# auth_server_url = "http://auth-server:8888"
+
 # Use an existing VPC instead of creating a new VPC and subnets.
 # Default: false
 # use_existing_vpc = false

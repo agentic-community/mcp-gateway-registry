@@ -688,6 +688,7 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | Terraform variable | Purpose |
 |--------------------|---------|
 | `ingress_cidr_blocks` | CIDRs allowed to reach the main ALB. |
+| `auth_server_url` | Internal URL the registry/nginx use to reach the auth-server. Defaults to `http://auth-server:8888`; set to a Cloud Map / Service Connect FQDN for FQDN-only deployments. (Docker: `AUTH_SERVER_URL`; Helm: derived from the cluster service FQDN.) |
 | `use_regional_domains` | Regional subdomain pattern. |
 | `base_domain` | Root domain for regional pattern. |
 | `keycloak_domain` | Custom Keycloak hostname. |

@@ -109,7 +109,7 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_SERVER_URL"
-          value = "http://auth-server:8888"
+          value = var.auth_server_url
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
@@ -792,7 +792,7 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_SERVER_URL"
-          value = "http://auth-server:8888"
+          value = var.auth_server_url
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"

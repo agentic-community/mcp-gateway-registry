@@ -64,6 +64,12 @@ variable "ingress_cidr_blocks" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "auth_server_url" {
+  description = "Internal URL the registry/nginx use to reach the auth-server. Set to a Cloud Map / Service Connect FQDN (e.g. http://auth-server.<namespace>.local:8888) for deployments where only FQDNs resolve. Defaults to the Compose-style service name for backward compatibility."
+  type        = string
+  default     = "http://auth-server:8888"
+}
+
 variable "enable_monitoring" {
   description = "Whether to enable CloudWatch monitoring and alarms"
   type        = bool
