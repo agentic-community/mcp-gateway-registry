@@ -284,6 +284,44 @@ class AgentRescanResponse(BaseModel):
     output_file: str | None = Field(None, description="Path to scan output file")
 
 
+class PullCardFieldChange(BaseModel):
+    """A single field that differs between local and remote agent card."""
+
+    field: str = Field(..., description="Field name that changed")
+    current_value: Any = Field(..., description="Current value in the local registry")
+    remote_value: Any = Field(..., description="Value from the remote agent card")
+
+
+class PullCardResponse(BaseModel):
+    """Response from POST /api/agents/{path}/pull-card (dry-run and apply modes).
+
+    Note: a successful remote fetch always refreshes `health_status` and
+    `last_health_check` on the local record, regardless of `dry_run`. Apart
+    from that side effect, dry-run mode performs no writes.
+    """
+
+    agent_path: str = Field(..., description="Agent path in the registry")
+    dry_run: bool = Field(..., description="Whether this was a dry-run (preview only)")
+    remote_card_url: str = Field(..., description="URL the remote card was fetched from")
+    changes: list[PullCardFieldChange] = Field(
+        default_factory=list,
+        description="List of A2A-spec fields that differ between local and remote",
+    )
+    has_changes: bool = Field(..., description="Whether any A2A-spec fields differ")
+    applied: bool = Field(
+        False,
+        description="Whether changes were applied (only true when dry_run=false and has_changes=true)",
+    )
+    health_status: str = Field(
+        "healthy",
+        description="Health status updated as side effect of successful fetch",
+    )
+    remote_card: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The full remote agent card as received",
+    )
+
+
 class SkillSecurityScanResponse(BaseModel):
     """Skill security scan results response model."""
 
@@ -2863,6 +2901,51 @@ class RegistryClient:
             f"Safe={result.is_safe}, Critical={result.critical_issues}, "
             f"High={result.high_severity}, Medium={result.medium_severity}, "
             f"Low={result.low_severity}"
+        )
+        return result
+
+    def pull_card_agent(
+        self,
+        path: str,
+        dry_run: bool = True,
+    ) -> PullCardResponse:
+        """
+        Pull the latest A2A agent card from the remote endpoint.
+
+        Fetches /.well-known/agent-card.json from the agent's host and
+        compares it with the local record. In dry-run mode (default), returns
+        the diff without applying changes. With dry_run=false, applies the
+        A2A-spec fields while preserving registry-specific metadata
+        (tags, ratings, visibility, trust_level, sync_metadata, etc.).
+
+        Note: a successful fetch always refreshes the local agent's
+        health_status and last_health_check regardless of dry_run.
+
+        Args:
+            path: Agent path (e.g., /jewel-homes-support-agent)
+            dry_run: If True (default), preview only. If False, apply changes.
+
+        Returns:
+            PullCardResponse with diff, optional apply, and remote card.
+
+        Raises:
+            requests.HTTPError on 400/403/404/502.
+        """
+        normalized = path if path.startswith("/") else f"/{path}"
+        logger.info(
+            f"Pulling agent card for '{normalized}' (dry_run={dry_run})"
+        )
+
+        response = self._make_request(
+            method="POST",
+            endpoint=f"/api/agents{normalized}/pull-card",
+            params={"dry_run": "true" if dry_run else "false"},
+        )
+
+        result = PullCardResponse(**response.json())
+        logger.info(
+            f"Pull-card for '{normalized}': has_changes={result.has_changes}, "
+            f"change_count={len(result.changes)}, applied={result.applied}"
         )
         return result
 

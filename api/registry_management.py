@@ -2585,6 +2585,61 @@ def cmd_agent_toggle(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_agent_pull_card(args: argparse.Namespace) -> int:
+    """
+    Pull the latest A2A agent card from the remote endpoint.
+
+    Default is a dry-run preview (no A2A-spec fields are written, though
+    health_status / last_health_check are always refreshed as a side effect
+    of the fetch succeeding). Use --apply to actually write the A2A-spec
+    fields. Registry-managed fields (tags, ratings, visibility, trust_level,
+    sync_metadata, ...) are never overwritten regardless of mode.
+
+    Args:
+        args: Command arguments with path and optional --apply / --json.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        client = _create_client(args)
+        dry_run = not getattr(args, "apply", False)
+        response = client.pull_card_agent(path=args.path, dry_run=dry_run)
+
+        if getattr(args, "json", False):
+            print(json.dumps(response.model_dump(), indent=2, default=str))
+            return 0
+
+        mode = "DRY-RUN" if dry_run else "APPLY"
+        logger.info(f"\nPull-card {mode} for agent '{response.agent_path}':")
+        logger.info(f"  Remote URL: {response.remote_card_url}")
+        logger.info(f"  Health status (refreshed): {response.health_status}")
+        logger.info(f"  Has changes: {response.has_changes}")
+        logger.info(f"  Change count: {len(response.changes)}")
+        if not response.has_changes:
+            logger.info("  Local record already matches remote (no A2A-spec diff).")
+        else:
+            for change in response.changes:
+                logger.info(f"\n  Field: {change.field}")
+                logger.info(
+                    f"    current: {json.dumps(change.current_value, default=str)[:200]}"
+                )
+                logger.info(
+                    f"    remote:  {json.dumps(change.remote_value, default=str)[:200]}"
+                )
+            if dry_run:
+                logger.info("\n  Dry-run: no A2A-spec writes performed. Re-run with --apply to persist.")
+            elif response.applied:
+                logger.info(f"\n  Applied {len(response.changes)} change(s).")
+            else:
+                logger.warning("\n  Apply was requested but did not land (see server logs).")
+        return 0
+
+    except Exception as e:
+        logger.error(f"Pull-card failed: {e}")
+        return 1
+
+
 def cmd_agent_discover(args: argparse.Namespace) -> int:
     """
     Discover agents by required skills.
@@ -6177,6 +6232,26 @@ Examples:
     )
     agent_rescan_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    # Agent pull-card command
+    agent_pull_card_parser = subparsers.add_parser(
+        "agent-pull-card",
+        help=(
+            "Pull the latest A2A agent card from the remote endpoint. Default "
+            "is a dry-run preview; use --apply to persist A2A-spec changes."
+        ),
+    )
+    agent_pull_card_parser.add_argument(
+        "--path", required=True, help="Agent path (e.g., /jewel-homes-support-agent)"
+    )
+    agent_pull_card_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply A2A-spec changes (default is a dry-run preview).",
+    )
+    agent_pull_card_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of the pretty summary."
+    )
+
     # Agent ANS (Agent Name Service) commands
     agent_ans_link_parser = subparsers.add_parser(
         "agent-ans-link", help="Link an ANS Agent ID to an agent"
@@ -7054,6 +7129,7 @@ Examples:
         "agent-rating": cmd_agent_rating,
         "agent-security-scan": cmd_agent_security_scan,
         "agent-rescan": cmd_agent_rescan,
+        "agent-pull-card": cmd_agent_pull_card,
         "agent-ans-link": cmd_agent_ans_link,
         "agent-ans-status": cmd_agent_ans_status,
         "agent-ans-unlink": cmd_agent_ans_unlink,
