@@ -322,11 +322,14 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     // Build headers object: custom first, then auth_scheme, then gateway auth.
     // When the IDE handles login via OAuth (useOAuthLogin), the static gateway
     // token is omitted - the IDE obtains it through the OAuth/PKCE flow.
-    // includeServerAuth is also dropped in that mode: the gateway injects the
-    // server's stored egress credential upstream, so the client must not send a
-    // server Authorization/API-key header (the [YOUR_SERVER_AUTH_TOKEN]
-    // placeholder would be forwarded as-is and break the connection).
-    const buildHeaders = (includeGatewayToken = true, includeServerAuth = true) => {
+    // The server-auth header is dropped in that mode too (default
+    // includeServerAuth = !useOAuthLogin), for every IDE that emits it: the
+    // gateway injects the server's stored egress credential upstream, so the
+    // client must not send a server Authorization/API-key header (the
+    // [YOUR_SERVER_AUTH_TOKEN] placeholder would be forwarded as-is and break
+    // the connection). IDEs that can't run OAuth login (Roo Code / Kiro / VS
+    // Code default) still keep the static gateway token, just not server auth.
+    const buildHeaders = (includeGatewayToken = true, includeServerAuth = !useOAuthLogin) => {
       const headers: Record<string, string> = {};
 
       // Custom headers go first so auth_scheme and gateway auth overwrite collisions
@@ -528,7 +531,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     for (const h of customHeaders) {
       headerLines.push(`      ${h.name}: ${h.value}`);
     }
-    if (server.auth_scheme && server.auth_scheme !== 'none') {
+    // Server auth header. Skipped in OAuth-login mode: the gateway injects the
+    // server's stored egress credential upstream, so the client must not send a
+    // server Authorization/API-key header (the placeholder would break it).
+    if (!useOAuthLogin && server.auth_scheme && server.auth_scheme !== 'none') {
       if (server.auth_scheme === 'bearer') {
         headerLines.push(`      Authorization: Bearer [YOUR_SERVER_AUTH_TOKEN]`);
       } else if (server.auth_scheme === 'api_key') {
@@ -556,7 +562,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     lines.push('    timeout: 300');
 
     return lines.join('\n');
-  }, [server.name, server.auth_scheme, server.description, server.auth_header_name, isRegistryOnly, jwtToken, customHeaders, buildConnectUrl]);
+  }, [server.name, server.auth_scheme, server.description, server.auth_header_name, isRegistryOnly, useOAuthLogin, jwtToken, customHeaders, buildConnectUrl]);
 
   const generateClaudeCodeCommand = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
