@@ -10,12 +10,12 @@ import pytest
 
 from registry.services import ard_service
 
-# The authoritative ARD schema vendored under the design folder.
+# The authoritative ARD schema (ards-project/ard-spec), vendored into the
+# committed test fixtures so it is available in CI.
 _SCHEMA_PATH = (
-    Path(__file__).resolve().parents[3]
-    / ".scratchpad"
-    / "issue-1294"
-    / "ard-spec-ref"
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "ard"
     / "ai-catalog.schema.json"
 )
 
