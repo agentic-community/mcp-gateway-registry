@@ -42,6 +42,7 @@ from registry.api.m2m_management_routes import router as m2m_management_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
 from registry.api.peer_management_routes import router as peer_management_router
+from registry.api.public_record_routes import router as public_record_router
 from registry.api.registry_management_routes import router as registry_management_router
 from registry.api.registry_routes import router as registry_router
 from registry.api.search_routes import router as search_router
@@ -1155,6 +1156,9 @@ app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card
 # Register well-known discovery router
 app.include_router(wellknown_router, prefix="/.well-known", tags=["Discovery"])
 
+# Register public, anonymous per-record endpoints (ARD catalog url targets, issue #1294)
+app.include_router(public_record_router, prefix="/api", tags=["Public Records"])
+
 
 # Customize OpenAPI schema to add security schemes
 def custom_openapi():
@@ -1182,7 +1186,12 @@ def custom_openapi():
     # Apply Bearer security to all endpoints except auth, health, and public discovery endpoints
     for path, path_item in openapi_schema["paths"].items():
         # Skip authentication, health check, and public discovery endpoints
-        if path.startswith("/api/auth/") or path == "/health" or path.startswith("/.well-known/"):
+        if (
+            path.startswith("/api/auth/")
+            or path == "/health"
+            or path.startswith("/.well-known/")
+            or path.startswith("/api/public/")
+        ):
             continue
 
         # Apply Bearer security to all methods in this path

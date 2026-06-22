@@ -258,6 +258,28 @@ class Settings(BaseSettings):
     enable_wellknown_discovery: bool = True
     wellknown_cache_ttl: int = 300  # 5 minutes
 
+    # ARD Catalog Publisher settings (issue #1294)
+    # Publishes /.well-known/ai-catalog.json per the Agentic Resource Discovery spec.
+    ard_catalog_enabled: bool = Field(
+        default=True,
+        description="Enable the /.well-known/ai-catalog.json ARD publisher endpoint",
+    )
+    ard_publisher_domain: str = Field(
+        default="",
+        description=(
+            "FQDN used as the ARD URN publisher (urn:air:<domain>:...). "
+            "Empty means derive from the host of registry_url; "
+            "falls back to 'example.com' if no resolvable host is available."
+        ),
+    )
+    ard_catalog_default_namespace: str = Field(
+        default="",
+        description=(
+            "Optional override for the URN namespace segment. "
+            "Empty uses the entity type (server/agent/skill)."
+        ),
+    )
+
     # MCP OAuth discovery settings (RFC 9728 / RFC 8414)
     mcp_https_required: bool = Field(
         default=True,

@@ -30,6 +30,7 @@ ALWAYS_ALLOWED_PREFIXES = (
     "/api/tokens/",
     "/api/audit/",
     "/api/management/",
+    "/api/public/",
     "/oauth2/",
     "/docs",
     "/openapi.json",

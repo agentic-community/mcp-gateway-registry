@@ -424,6 +424,12 @@ registry:
     contactEmail: ""  # Optional contact email
     contactUrl: ""  # Optional contact URL/website
 
+  # ARD Catalog Publisher (issue #1294): publishes /.well-known/ai-catalog.json
+  ard:
+    catalogEnabled: true  # Set false to disable the public ARD catalog endpoint
+    publisherDomain: ""  # URN publisher FQDN. Empty derives from registryCard.url host.
+    defaultNamespace: ""  # Optional override for the URN namespace segment
+
   # IdP group filtering (applies to all identity providers)
   # When set, only groups whose name starts with any of these prefixes are shown in IAM > Groups
   # Example: "mcp-,registry-,ai-"

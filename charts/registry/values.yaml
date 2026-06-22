@@ -313,6 +313,12 @@ registryCard:
   contactEmail: ""  # Optional contact email
   contactUrl: ""  # Optional contact URL/website
 
+# ARD Catalog Publisher (issue #1294): publishes /.well-known/ai-catalog.json
+ard:
+  catalogEnabled: true  # Set false to disable the public ARD catalog endpoint
+  publisherDomain: ""  # URN publisher FQDN (urn:air:<domain>:...). Empty derives from registryCard.url host.
+  defaultNamespace: ""  # Optional override for the URN namespace segment (empty uses entity type)
+
 # Entra ID integration (used when authProvider.type = "entra" in standalone deployment)
 entra:
   clientId: ""

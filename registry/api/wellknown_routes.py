@@ -14,6 +14,7 @@ from ..core.config import RegistryMode, settings
 from ..health.service import health_service
 from ..repositories.factory import get_registry_card_repository
 from ..schemas.registry_card import RegistryCard, RegistryContact
+from ..services import ard_service
 from ..services.server_service import server_service
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,28 @@ async def get_wellknown_mcp_servers(
 
     logger.info(f"Returned {len(discoverable_servers)} servers for well-known discovery")
     return JSONResponse(content=response_data, headers=headers)
+
+
+@router.get("/ai-catalog.json")
+async def get_ai_catalog(
+    request: Request,
+) -> JSONResponse:
+    """Public ARD Catalog Publisher manifest (Agentic Resource Discovery v1.0).
+
+    Renders public + enabled MCP servers, A2A agents, and skills as ARD catalog
+    entries. No authentication: a `.well-known` document is crawled anonymously.
+    See issue #1294.
+    """
+    if not settings.enable_wellknown_discovery or not settings.ard_catalog_enabled:
+        raise HTTPException(status_code=404, detail="ARD catalog is disabled")
+
+    manifest = await ard_service.build_catalog(request)
+    payload = manifest.model_dump(by_alias=True, exclude_none=True)
+    headers = {
+        "Cache-Control": f"public, max-age={settings.wellknown_cache_ttl}",
+        "Content-Type": "application/json",
+    }
+    return JSONResponse(content=payload, headers=headers)
 
 
 def _format_server_discovery(server_info: dict, request: Request) -> dict:
