@@ -91,12 +91,20 @@ def _namespace_for(
 def _build_host(
     publisher: str,
 ) -> ArdHost:
-    """Build the catalog host block from registry config."""
+    """Build the catalog host block from registry config.
+
+    We intentionally omit ``host.identifier`` (a ``did:web``) in Phase 1.
+    Advertising ``did:web:<publisher>`` is a promise that
+    ``https://<publisher>/.well-known/did.json`` resolves to our public keys,
+    but Phase 1 defers signing and publishes no key material, so the DID would
+    be unresolvable. Identity is instead asserted via the ``https`` trust
+    manifest (proven by the existing TLS certificate). The ``did:web`` is added
+    back together with the catalog signing follow-up (issue #1294, Q on trust).
+    """
     display_name = settings.registry_name or _DEFAULT_HOST_DISPLAY_NAME
     issuer = settings.registry_url or f"https://{publisher}"
     return ArdHost(
         display_name=display_name,
-        identifier=f"did:web:{publisher}",
         trust_manifest=ArdTrustManifest(identity=issuer, identity_type="https"),
     )
 

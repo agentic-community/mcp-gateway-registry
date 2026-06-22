@@ -128,3 +128,12 @@ class TestBuildCatalog:
             "trustManifest",
         }
         assert set(host).issubset(allowed)
+
+    async def test_host_omits_did_web_identifier_in_phase1(self):
+        # Phase 1 publishes no key material, so an unresolvable did:web would be
+        # a false claim. Identity is asserted via the https trust manifest only.
+        manifest, *_ = await self._build_with({}, {}, [])
+        host = manifest.host.model_dump(by_alias=True, exclude_none=True)
+        assert "identifier" not in host
+        assert host["trustManifest"]["identityType"] == "https"
+        assert host["trustManifest"]["identity"].startswith("https://")
