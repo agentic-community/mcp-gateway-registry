@@ -322,7 +322,11 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     // Build headers object: custom first, then auth_scheme, then gateway auth.
     // When the IDE handles login via OAuth (useOAuthLogin), the static gateway
     // token is omitted - the IDE obtains it through the OAuth/PKCE flow.
-    const buildHeaders = (includeGatewayToken = true) => {
+    // includeServerAuth is also dropped in that mode: the gateway injects the
+    // server's stored egress credential upstream, so the client must not send a
+    // server Authorization/API-key header (the [YOUR_SERVER_AUTH_TOKEN]
+    // placeholder would be forwarded as-is and break the connection).
+    const buildHeaders = (includeGatewayToken = true, includeServerAuth = true) => {
       const headers: Record<string, string> = {};
 
       // Custom headers go first so auth_scheme and gateway auth overwrite collisions
@@ -331,7 +335,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       }
 
       // Add server authentication headers if server requires auth
-      if (server.auth_scheme && server.auth_scheme !== 'none') {
+      if (includeServerAuth && server.auth_scheme && server.auth_scheme !== 'none') {
         if (server.auth_scheme === 'bearer') {
           headers['Authorization'] = 'Bearer [YOUR_SERVER_AUTH_TOKEN]';
         } else if (server.auth_scheme === 'api_key') {
@@ -355,7 +359,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         // key (upper-snake) is Cursor's documented MCP OAuth config shape; it
         // intentionally differs from the lowercase keys elsewhere in this file.
         if (useOAuthLogin) {
-          const oauthHeaders = buildHeaders(false);
+          const oauthHeaders = buildHeaders(false, false);
           return {
             mcpServers: {
               [serverName]: {
@@ -598,8 +602,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       command += ` \\\n  --header "${h.name}: ${h.value}"`;
     }
 
-    // Server auth header
-    if (server.auth_scheme && server.auth_scheme !== 'none') {
+    // Server auth header. Skipped in OAuth-login mode: the gateway injects the
+    // server's stored egress credential upstream, so the client must not send a
+    // server Authorization/API-key header (the placeholder would break it).
+    if (!useOAuthLogin && server.auth_scheme && server.auth_scheme !== 'none') {
       if (server.auth_scheme === 'bearer') {
         command += ` \\\n  --header "Authorization: Bearer [YOUR_SERVER_AUTH_TOKEN]"`;
       } else if (server.auth_scheme === 'api_key') {

@@ -168,6 +168,23 @@ describe('ServerConfigModal IDE OAuth login (oauth_client_id)', () => {
     expect(serverConfig.headers).toBeUndefined();
   });
 
+  test('Cursor: omits the server Authorization header for a bearer server under OAuth login', async () => {
+    // The gateway injects the stored egress credential upstream, so the client
+    // config must not carry the [YOUR_SERVER_AUTH_TOKEN] placeholder.
+    connectConfig = { custom_headers: [], oauth_client_id: 'mcp-gateway' };
+
+    renderModal({ auth_scheme: 'bearer' } as Partial<Server>);
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.auth).toEqual({ CLIENT_ID: 'mcp-gateway' });
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+    // No headers block at all: gateway token omitted (OAuth) and server auth
+    // header suppressed.
+    expect(serverConfig.headers).toBeUndefined();
+  });
+
   test('Cursor: keeps the static gateway token when oauth_client_id is absent', async () => {
     connectConfig = { custom_headers: [] };
 
