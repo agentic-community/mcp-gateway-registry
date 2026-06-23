@@ -3269,10 +3269,11 @@ async def generate_user_token(
                     ),
                 )
 
-        # Record the mint in the audit trail. Distinguish bound tokens
+        # Record the mint *intent* in the audit trail. Distinguish bound tokens
         # (with their resource binding) from user tokens so reviewers can
         # tell which mints were scoped to a single resource vs. issued
-        # with full user scope.
+        # with full user scope. The auth-server outcome is attached after the
+        # HTTP call returns (see the enrichment block below).
         if resource is not None:
             set_audit_action(
                 request,
@@ -3320,6 +3321,7 @@ async def generate_user_token(
             "requested_scopes": requested_scopes,
             "expires_in_hours": expires_in_hours,
             "description": description,
+            "correlation_id": request.headers.get("X-Correlation-ID"),
         }
 
         if resource is not None:
@@ -3350,6 +3352,26 @@ async def generate_user_token(
                 json=auth_request,
                 headers=headers,
                 timeout=10.0,
+            )
+
+            set_audit_action(
+                request,
+                "create",
+                "resource_bound_token" if resource is not None else "user_token",
+                resource_id=(
+                    f"{resource_type}:{resource_id}"
+                    if resource is not None
+                    else user_context["username"]
+                ),
+                description=(
+                    f"Mint resource-bound token for {resource_type}:{resource_id}"
+                    if resource is not None
+                    else "Mint user token (unrestricted within scopes)"
+                ),
+                metadata={
+                    "auth_server_status": response.status_code,
+                    "mint_outcome": "success" if response.status_code == 200 else "failure",
+                },
             )
 
             if response.status_code == 200:

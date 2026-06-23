@@ -16,6 +16,7 @@ import secrets
 import sys
 import time
 import urllib.parse
+import uuid
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -44,6 +45,11 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
 from metrics_middleware import add_auth_metrics_middleware
 
+try:
+    from observability.meters import token_mint_total
+except ImportError:
+    from auth_server.observability.meters import token_mint_total
+
 # Import provider factory
 from providers.factory import get_auth_provider
 from pydantic import (
@@ -56,8 +62,9 @@ from pydantic import (
 sys.path.insert(0, "/app")
 # Import MCP audit logging components
 from registry.audit.mcp_logger import MCPLogger
-from registry.audit.models import Identity, MCPServer
+from registry.audit.models import Identity, MCPServer, TokenMintAuditRecord
 from registry.audit.service import AuditLogger
+from registry.audit.sink import emit_audit_event
 from registry.common.scopes_loader import reload_scopes_config
 from registry.core.config import settings
 from registry.repositories.factory import get_scope_repository
@@ -1370,6 +1377,7 @@ class GenerateTokenRequest(BaseModel):
     expires_in_hours: int = DEFAULT_TOKEN_LIFETIME_HOURS
     description: str | None = None
     resource: ResourceBinding | None = None
+    correlation_id: str | None = None
 
 
 class GenerateTokenResponse(BaseModel):
@@ -2891,6 +2899,66 @@ async def manage_federation_token(request: Request):
         }
 
 
+async def _emit_token_mint_audit(
+    request_id: str,
+    correlation_id: str | None,
+    username: str,
+    auth_method: str,
+    provider: str | None,
+    internal_caller: str,
+    token_kind: str,
+    resource_type: str | None,
+    resource_id: str | None,
+    token_path: str,
+    requested_scopes: list[str],
+    expires_in_seconds: int | None,
+    outcome: str,
+    failure_reason: str | None = None,
+) -> None:
+    """Emit a token-mint audit record and increment the mint metric.
+
+    Best-effort: any failure here is logged and swallowed so token minting is
+    never broken by observability.
+    """
+    try:
+        token_mint_total.add(
+            1,
+            {
+                "token_kind": token_kind,
+                "resource_type": resource_type or "none",
+                "token_path": token_path,
+                "outcome": outcome,
+            },
+        )
+    except Exception:
+        logger.debug("token_mint metric increment failed", exc_info=True)
+
+    try:
+        record = TokenMintAuditRecord(
+            request_id=request_id,
+            correlation_id=correlation_id,
+            username_hash=hash_username(username),
+            auth_method=auth_method,
+            provider=provider,
+            internal_caller=internal_caller,
+            token_kind=token_kind,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            token_path=token_path,
+            requested_scopes=requested_scopes,
+            expires_in_seconds=expires_in_seconds,
+            outcome=outcome,
+            failure_reason=failure_reason,
+        )
+        emit_audit_event(record)
+
+        audit_logger = get_audit_logger()
+        if audit_logger is not None:
+            await audit_logger.log_event(record)
+    except Exception:
+        logger.warning("Failed to emit token-mint audit record", exc_info=True)
+
+
 @internal_router.post("/tokens", response_model=GenerateTokenResponse)
 async def generate_user_token(
     body: GenerateTokenRequest,
@@ -2928,6 +2996,8 @@ async def generate_user_token(
     logger.info(f"/internal/tokens call from '{caller}'")
 
     request = body  # keep the existing variable name used throughout the body
+    mint_request_id = str(uuid.uuid4())
+    correlation_id = request.correlation_id
 
     try:
         # Extract user context
@@ -2944,6 +3014,24 @@ async def generate_user_token(
 
         # Check rate limiting
         if not check_rate_limit(username):
+            await _emit_token_mint_audit(
+                request_id=mint_request_id,
+                correlation_id=correlation_id,
+                username=username,
+                auth_method=user_context.get("auth_method", "unknown"),
+                provider=user_context.get("provider"),
+                internal_caller=caller,
+                token_kind=(
+                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
+                ),
+                resource_type=(request.resource.type.value if request.resource else None),
+                resource_id=(request.resource.id if request.resource else None),
+                token_path="unknown",
+                requested_scopes=request.requested_scopes,
+                expires_in_seconds=None,
+                outcome="failure",
+                failure_reason="rate_limited",
+            )
             raise HTTPException(
                 status_code=429,
                 detail=f"Rate limit exceeded. Maximum {MAX_TOKENS_PER_USER_PER_HOUR} tokens per hour.",
@@ -3039,6 +3127,24 @@ async def generate_user_token(
                 f"expires in {expires_in} seconds"
             )
 
+            await _emit_token_mint_audit(
+                request_id=mint_request_id,
+                correlation_id=correlation_id,
+                username=username,
+                auth_method=auth_method,
+                provider=provider,
+                internal_caller=caller,
+                token_kind=(
+                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
+                ),
+                resource_type=(request.resource.type.value if request.resource else None),
+                resource_id=(request.resource.id if request.resource else None),
+                token_path="self_signed",
+                requested_scopes=requested_scopes,
+                expires_in_seconds=expires_in,
+                outcome="success",
+            )
+
             return GenerateTokenResponse(
                 access_token=access_token,
                 refresh_token=None,
@@ -3088,6 +3194,22 @@ async def generate_user_token(
                 f"with scopes: {requested_scopes}, expires in {expires_in} seconds"
             )
 
+            await _emit_token_mint_audit(
+                request_id=mint_request_id,
+                correlation_id=correlation_id,
+                username=username,
+                auth_method=auth_method or "m2m",
+                provider=provider,
+                internal_caller=caller,
+                token_kind="user",
+                resource_type=None,
+                resource_id=None,
+                token_path="m2m",
+                requested_scopes=requested_scopes,
+                expires_in_seconds=expires_in,
+                outcome="success",
+            )
+
             return GenerateTokenResponse(
                 access_token=access_token,
                 refresh_token=refresh_token_value,
@@ -3100,6 +3222,22 @@ async def generate_user_token(
 
         except ValueError as e:
             logger.error(f"Token generation failed: {e}")
+            await _emit_token_mint_audit(
+                request_id=mint_request_id,
+                correlation_id=correlation_id,
+                username=username,
+                auth_method=auth_method or "m2m",
+                provider=provider,
+                internal_caller=caller,
+                token_kind="user",
+                resource_type=None,
+                resource_id=None,
+                token_path="m2m",
+                requested_scopes=requested_scopes,
+                expires_in_seconds=None,
+                outcome="failure",
+                failure_reason="provider_error",
+            )
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to generate token: {e}",
@@ -3110,6 +3248,23 @@ async def generate_user_token(
         raise
     except Exception as e:
         logger.error(f"Unexpected error generating token: {e}")
+        _locals = locals()
+        await _emit_token_mint_audit(
+            request_id=mint_request_id,
+            correlation_id=correlation_id,
+            username=_locals.get("username", "unknown"),
+            auth_method=_locals.get("auth_method", "unknown"),
+            provider=_locals.get("provider"),
+            internal_caller=caller,
+            token_kind="unknown",
+            resource_type=None,
+            resource_id=None,
+            token_path="unknown",
+            requested_scopes=[],
+            expires_in_seconds=None,
+            outcome="failure",
+            failure_reason="unexpected_error",
+        )
         raise HTTPException(
             status_code=500,
             detail="Internal error generating token",
@@ -3338,6 +3493,16 @@ def get_mcp_logger() -> MCPLogger | None:
             _mcp_logger = None
 
     return _mcp_logger
+
+
+def get_audit_logger() -> AuditLogger | None:
+    """Return the shared AuditLogger, initializing it if needed.
+
+    Reuses the same DocumentDB-backed AuditLogger that MCP access logging uses.
+    Returns None when audit logging is disabled or initialization failed.
+    """
+    get_mcp_logger()
+    return _mcp_audit_logger
 
 
 def get_enabled_providers():

@@ -445,6 +445,7 @@ def _build_query(
     log_type_map = {
         "registry_api": "registry_api_access",
         "mcp_access": "mcp_server_access",
+        "token_mint": "token_mint",
     }
     query: dict[str, Any] = {"log_type": log_type_map.get(stream, stream)}
 
@@ -460,10 +461,20 @@ def _build_query(
     if username:
         # Escape special regex characters in the username
         escaped_username = re.escape(username)
-        query["identity.username"] = {"$regex": escaped_username, "$options": "i"}
+        if stream == "token_mint":
+            query["username_hash"] = {"$regex": escaped_username, "$options": "i"}
+        else:
+            query["identity.username"] = {"$regex": escaped_username, "$options": "i"}
 
     # Action filters - different fields per stream
-    if stream == "mcp_access":
+    if stream == "token_mint":
+        if operation:
+            query["token_kind"] = operation
+        if resource_type:
+            query["resource_type"] = resource_type
+        if resource_id:
+            query["resource_id"] = resource_id
+    elif stream == "mcp_access":
         # MCP records use mcp_request.method and mcp_server.name
         if operation:
             query["mcp_request.method"] = operation
@@ -519,7 +530,7 @@ async def get_filter_options(
     user_context: Annotated[dict[str, Any], Depends(require_admin)],
     stream: str = Query(
         "registry_api",
-        pattern="^(registry_api|mcp_access)$",
+        pattern="^(registry_api|mcp_access|token_mint)$",
         description="Log stream type",
     ),
 ) -> AuditFilterOptions:
@@ -529,13 +540,15 @@ async def get_filter_options(
     log_type_map = {
         "registry_api": "registry_api_access",
         "mcp_access": "mcp_server_access",
+        "token_mint": "token_mint",
     }
     log_type = log_type_map.get(stream, stream)
     query = {"log_type": log_type}
 
     repository = get_audit_repository()
 
-    usernames = await repository.distinct("identity.username", query)
+    username_field = "username_hash" if stream == "token_mint" else "identity.username"
+    usernames = await repository.distinct(username_field, query)
 
     server_names: list[str] = []
     if stream == "mcp_access":
@@ -558,7 +571,7 @@ async def get_statistics(
     user_context: Annotated[dict[str, Any], Depends(require_admin)],
     stream: str = Query(
         "registry_api",
-        pattern="^(registry_api|mcp_access)$",
+        pattern="^(registry_api|mcp_access|token_mint)$",
         description="Log stream type",
     ),
     days: int = Query(
@@ -578,6 +591,7 @@ async def get_statistics(
     log_type_map = {
         "registry_api": "registry_api_access",
         "mcp_access": "mcp_server_access",
+        "token_mint": "token_mint",
     }
     log_type = log_type_map.get(stream, stream)
     now = datetime.now(UTC)
@@ -593,14 +607,24 @@ async def get_statistics(
 
     if username:
         escaped_username = re.escape(username)
-        username_filter = {"$regex": f"^{escaped_username}$", "$options": "i"}
-        base_match["identity.username"] = username_filter
-        prior_match["identity.username"] = username_filter
+        if stream == "token_mint":
+            username_filter = {"$regex": escaped_username, "$options": "i"}
+            base_match["username_hash"] = username_filter
+            prior_match["username_hash"] = username_filter
+        else:
+            username_filter = {"$regex": f"^{escaped_username}$", "$options": "i"}
+            base_match["identity.username"] = username_filter
+            prior_match["identity.username"] = username_filter
 
     repository = get_audit_repository()
 
     # Build all pipelines upfront
-    op_field = "$mcp_request.method" if stream == "mcp_access" else "$action.operation"
+    user_field = "$username_hash" if stream == "token_mint" else "$identity.username"
+    op_field = (
+        "$token_kind" if stream == "token_mint"
+        else "$mcp_request.method" if stream == "mcp_access"
+        else "$action.operation"
+    )
 
     # Status distribution pipeline differs by stream
     if stream == "mcp_access":
@@ -654,7 +678,7 @@ async def get_statistics(
         repository.aggregate(
             [
                 {"$match": base_match},
-                {"$group": {"_id": "$identity.username", "count": {"$sum": 1}}},
+                {"$group": {"_id": user_field, "count": {"$sum": 1}}},
                 {"$sort": {"count": -1}},
                 {"$limit": 10},
             ]
@@ -687,7 +711,7 @@ async def get_statistics(
                 {
                     "$group": {
                         "_id": {
-                            "user": "$identity.username",
+                            "user": user_field,
                             "op": op_field,
                         },
                         "count": {"$sum": 1},
@@ -1113,7 +1137,7 @@ async def get_audit_events(
     user_context: Annotated[dict[str, Any], Depends(require_admin)],
     stream: str = Query(
         "registry_api",
-        pattern="^(registry_api|mcp_access)$",
+        pattern="^(registry_api|mcp_access|token_mint)$",
         description="Log stream type",
     ),
     from_time: datetime | None = Query(
@@ -1372,7 +1396,7 @@ async def export_audit_events(
     ),
     stream: str = Query(
         "registry_api",
-        pattern="^(registry_api|mcp_access)$",
+        pattern="^(registry_api|mcp_access|token_mint)$",
         description="Log stream type",
     ),
     from_time: datetime | None = Query(

@@ -14,13 +14,13 @@ from typing import Any, Union
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.errors import DuplicateKeyError
 
-from ..audit.models import MCPServerAccessRecord, RegistryApiAccessRecord
+from ..audit.models import MCPServerAccessRecord, RegistryApiAccessRecord, TokenMintAuditRecord
 from .documentdb.client import get_collection_name, get_documentdb_client
 
 logger = logging.getLogger(__name__)
 
 # Type alias for audit records
-AuditRecord = Union[RegistryApiAccessRecord, MCPServerAccessRecord]
+AuditRecord = Union[RegistryApiAccessRecord, MCPServerAccessRecord, TokenMintAuditRecord]
 
 
 class AuditRepositoryBase(ABC):

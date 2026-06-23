@@ -8,7 +8,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 export interface AuditFilters {
-  stream: 'registry_api' | 'mcp_access';
+  stream: 'registry_api' | 'mcp_access' | 'token_mint';
   from?: string;
   to?: string;
   username?: string;
@@ -49,6 +49,12 @@ const MCP_OPERATION_OPTIONS = [
   { value: 'notifications/initialized', label: 'Notifications' },
 ];
 
+const TOKEN_MINT_OPERATION_OPTIONS = [
+  { value: '', label: 'All Token Kinds' },
+  { value: 'resource', label: 'Resource-bound' },
+  { value: 'user', label: 'User' },
+];
+
 const REGISTRY_RESOURCE_TYPE_OPTIONS = [
   { value: '', label: 'All Resources' },
   { value: 'server', label: 'Server' },
@@ -83,7 +89,12 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
   loading = false,
 }) => {
   const isMcpStream = filters.stream === 'mcp_access';
-  const operationOptions = isMcpStream ? MCP_OPERATION_OPTIONS : REGISTRY_OPERATION_OPTIONS;
+  const isTokenMintStream = filters.stream === 'token_mint';
+  const operationOptions = isTokenMintStream
+    ? TOKEN_MINT_OPERATION_OPTIONS
+    : isMcpStream
+      ? MCP_OPERATION_OPTIONS
+      : REGISTRY_OPERATION_OPTIONS;
   const resourceTypeOptions = isMcpStream ? MCP_RESOURCE_TYPE_OPTIONS : REGISTRY_RESOURCE_TYPE_OPTIONS;
 
   const [usernameOptions, setUsernameOptions] = useState<SelectOption[]>([]);
@@ -141,7 +152,7 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
     // Clear operation and resource type filters when switching streams
     onFilterChange({
       ...filters,
-      stream: e.target.value as 'registry_api' | 'mcp_access',
+      stream: e.target.value as 'registry_api' | 'mcp_access' | 'token_mint',
       operation: undefined,
       resourceType: undefined,
     });
@@ -296,6 +307,7 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
           >
             <option value="registry_api">Registry API</option>
             <option value="mcp_access">MCP Access</option>
+            <option value="token_mint">Token Mints</option>
           </select>
         </div>
 
@@ -345,7 +357,7 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
         {/* Operation / MCP Method Filter */}
         <div>
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-            {isMcpStream ? 'MCP Method' : 'Operation'}
+            {isTokenMintStream ? 'Token Kind' : isMcpStream ? 'MCP Method' : 'Operation'}
           </label>
           <select
             value={filters.operation || ''}

@@ -108,10 +108,10 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
             User
           </div>
           <div className="text-sm text-gray-900 dark:text-gray-100 flex items-center gap-1 min-w-0">
-            <span className="truncate" title={event.identity.username}>
-              {event.identity.username}
+            <span className="truncate" title={event.identity?.username || event.username_hash || '-'}>
+              {event.identity?.username || event.username_hash || '-'}
             </span>
-            {event.identity.is_admin && (
+            {event.identity?.is_admin && (
               <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded flex-shrink-0">
                 Admin
               </span>

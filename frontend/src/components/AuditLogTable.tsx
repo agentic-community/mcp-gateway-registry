@@ -242,6 +242,7 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
   const handleLastPage = () => handlePageChange((totalPages - 1) * pagination.limit);
 
   const isMcpStream = filters.stream === 'mcp_access';
+  const isTokenMintStream = filters.stream === 'token_mint';
 
   if (error) {
     return (
@@ -279,16 +280,16 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                 User
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                {isMcpStream ? 'MCP Method' : 'Method'}
+                {isTokenMintStream ? 'Token Kind' : isMcpStream ? 'MCP Method' : 'Method'}
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                {isMcpStream ? 'Tool/Resource' : 'Operation'}
+                {isTokenMintStream ? 'Path' : isMcpStream ? 'Tool/Resource' : 'Operation'}
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                {isMcpStream ? 'MCP Server' : 'Resource'}
+                {isTokenMintStream ? 'Resource' : isMcpStream ? 'MCP Server' : 'Resource'}
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                Status
+                {isTokenMintStream ? 'Outcome' : 'Status'}
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Duration
@@ -328,9 +329,9 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                   <td className="px-4 py-3 text-sm">
                     <div className="flex items-center gap-1">
                       <span className="text-gray-900 dark:text-gray-100">
-                        {event.identity.username}
+                        {isTokenMintStream ? event.username_hash : event.identity?.username || '-'}
                       </span>
-                      {event.identity.is_admin && (
+                      {!isTokenMintStream && event.identity?.is_admin && (
                         <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded">
                           Admin
                         </span>
@@ -338,7 +339,11 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm">
-                    {isMcpStream ? (
+                    {isTokenMintStream ? (
+                      <span className={`px-2 py-1 text-xs font-medium rounded ${event.token_kind === 'resource' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}>
+                        {event.token_kind || '-'}
+                      </span>
+                    ) : isMcpStream ? (
                       <span className="font-mono text-gray-700 dark:text-gray-300">
                         {event.mcp_request?.method || '-'}
                       </span>
@@ -349,14 +354,29 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
-                    {isMcpStream ? (
+                    {isTokenMintStream ? (
+                      <span className="font-mono">{event.token_path || '-'}</span>
+                    ) : isMcpStream ? (
                       event.mcp_request?.tool_name || event.mcp_request?.resource_uri || '-'
                     ) : (
                       event.action?.operation || '-'
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
-                    {isMcpStream ? (
+                    {isTokenMintStream ? (
+                      event.resource_type ? (
+                        <span>
+                          {event.resource_type}
+                          {event.resource_id && (
+                            <span className="text-gray-500 dark:text-gray-400">
+                              /{event.resource_id}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400 dark:text-gray-500">-</span>
+                      )
+                    ) : isMcpStream ? (
                       event.mcp_server?.name || '-'
                     ) : event.action ? (
                       <span>
@@ -372,7 +392,11 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm">
-                    {isMcpStream ? (
+                    {isTokenMintStream ? (
+                      <span className={`px-2 py-1 text-xs font-medium rounded ${event.outcome === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+                        {event.outcome || '-'}
+                      </span>
+                    ) : isMcpStream ? (
                       <span className={`px-2 py-1 text-xs font-medium rounded ${getMcpStatusColor(event.mcp_response?.status || '')}`}>
                         {event.mcp_response?.status || '-'}
                       </span>
@@ -383,9 +407,11 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                    {isMcpStream
-                      ? `${(event.mcp_response?.duration_ms || 0).toFixed(1)} ms`
-                      : `${(event.response?.duration_ms || 0).toFixed(1)} ms`
+                    {isTokenMintStream
+                      ? (event.expires_in_seconds ? `${Math.round(event.expires_in_seconds / 3600)}h` : '-')
+                      : isMcpStream
+                        ? `${(event.mcp_response?.duration_ms || 0).toFixed(1)} ms`
+                        : `${(event.response?.duration_ms || 0).toFixed(1)} ms`
                     }
                   </td>
                 </tr>

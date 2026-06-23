@@ -131,6 +131,17 @@ protocol_latency_ms = _meter.create_histogram(
 
 
 # =============================================================================
+# Token-mint metrics
+# =============================================================================
+
+token_mint_total = _meter.create_counter(
+    name="mcpgw_registry_token_mint_total",
+    description="Token mint count, labeled by kind, resource type, path, and outcome",
+    unit="1",
+)
+
+
+# =============================================================================
 # Self-observability of the migration itself
 # =============================================================================
 

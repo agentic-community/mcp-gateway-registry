@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Optional, Union
 
-from .models import RegistryApiAccessRecord
+from .models import RegistryApiAccessRecord, TokenMintAuditRecord
 
 if TYPE_CHECKING:
     from ..repositories.audit_repository import AuditRepositoryBase
@@ -65,7 +65,7 @@ class AuditLogger:
 
     async def log_event(
         self,
-        record: Union[RegistryApiAccessRecord, "MCPServerAccessRecord"],
+        record: Union[RegistryApiAccessRecord, "MCPServerAccessRecord", TokenMintAuditRecord],
     ) -> None:
         """
         Write an audit record to MongoDB.
