@@ -34,8 +34,6 @@ jobs:
           - "auth_server"
           - "metrics-service"
           - "servers/currenttime"
-          - "servers/example-server"
-          - "servers/fininfo"
           - "servers/mcpgw"
           - "servers/realserverfaketools"
           - "agents/a2a"
