@@ -161,7 +161,7 @@ For each group you created:
 
 1. Click on the group name
 2. From the **Overview** page, copy the **Object Id**
-3. Note these IDs - you'll need them for `scopes.yml` configuration
+3. Note these IDs - you'll need them when you configure scope mappings (in the `mcp_scopes` collection)
 
 ### Step 10: Add Users to Groups
 
@@ -264,13 +264,11 @@ SECRET_KEY=your-super-secure-random-64-character-string-here
 
 ## Group Configuration
 
-### Configure scopes.yml
+### Configure Scope Mappings
 
-The `auth_server/scopes.yml` file maps Azure AD groups to MCP Gateway scopes and permissions.
+Scope mappings live in the `mcp_scopes` collection in DocumentDB / MongoDB. They are seeded from the JSON scope files in `scripts/` at init time, and can also be managed through the scope management API or the registry UI's IAM Settings page. There is no `scopes.yml` file to edit on a current install.
 
-1. Open `auth_server/scopes.yml`
-
-2. Update the Entra ID group mappings section with your group Object IDs:
+To map Azure AD groups to MCP Gateway scopes and permissions, add the group Object IDs to the `group_mappings` section of the relevant scope document. The mapping has this shape:
 
 ```yaml
 group_mappings:
@@ -282,7 +280,7 @@ group_mappings:
 
 ```
 
-3. Replace the group Object IDs with your actual group IDs from Azure Portal
+Replace the group Object IDs with your actual group IDs from Azure Portal, then seed the JSON scope files in `scripts/` (or apply the change via the scope management API).
 
 ### Understanding Scope Mappings
 
@@ -464,7 +462,7 @@ User can log in but sees "Access Denied" or "Insufficient Permissions"
 
 **Solution:**
 1. Verify the user is added to at least one security group in Azure AD
-2. Check that group Object IDs in `scopes.yml` match the groups in Azure Portal
+2. Check that group Object IDs in the `mcp_scopes` collection match the groups in Azure Portal
 3. Verify the group mappings include the necessary scopes
 4. Check auth server logs to see what groups are being received:
    ```bash
@@ -608,7 +606,7 @@ For advanced management:
 
 2. **Get the group Object ID** from the group overview page
 
-3. **Add to scopes.yml:**
+3. **Add the group mapping to the `mcp_scopes` collection** (via a JSON scope seed file in `scripts/` or the scope management API):
 ```yaml
 group_mappings:
   # Add new group mapping
@@ -616,11 +614,7 @@ group_mappings:
   - registry-users-lob1  # or whatever permission level needed
 ```
 
-4. **Restart auth server:**
-```bash
-cp auth_server/scopes.yml ~/mcp-gateway/auth_server/scopes.yml
-docker-compose restart auth-server
-```
+4. **Apply the change.** Scopes are seeded into the `mcp_scopes` collection, not copied as a file. The auth server picks up DB-backed edits on its next reload (no compose restart required for scope changes).
 
 ---
 

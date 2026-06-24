@@ -205,7 +205,7 @@ Auth0 uses "Roles" for authorization. The MCP Gateway maps these to "groups".
    - `registry-viewers` - Read-only access
    - `developers` - Developer access
 
-**Important:** Role names must match the groups configured in your `scopes.yml` file.
+**Important:** Role names must match the groups configured in your scope configuration (the `mcp_scopes` collection in DocumentDB, seeded from JSON scope seed files in `scripts/`).
 
 ### Step 5: Create Users
 
@@ -581,7 +581,7 @@ The registry will use these stored groups when validating API requests from M2M 
 2. Click **Create Role**
 3. Enter role name (e.g., `developers`, `viewers`)
 4. Click **Create**
-5. **Map roles to MCP Gateway groups** in your `scopes.yml` file
+5. **Map roles to MCP Gateway groups** in your scope configuration (the `mcp_scopes` collection)
 
 ### Assigning Roles in Bulk
 
@@ -707,11 +707,12 @@ After configuring Management API access:
 
 ## Group-to-Scope Mapping
 
-The MCP Gateway uses a `scopes.yml` file to map Auth0 roles to registry permissions.
+The MCP Gateway maps Auth0 roles to registry permissions using the scope configuration (the `mcp_scopes` collection in DocumentDB, seeded from JSON scope seed files in `scripts/`).
 
-### Example scopes.yml Configuration
+### Example scope configuration
 
 ```yaml
+# group mapping in the mcp_scopes collection
 group_mappings:
   registry-admins:
     - admin:*
@@ -731,7 +732,7 @@ group_mappings:
     - tools:read
 ```
 
-**Location:** This file should be in your registry configuration directory and loaded at startup.
+**Location:** These mappings live in the `mcp_scopes` collection in DocumentDB. They are seeded at init time from the JSON scope seed files in `scripts/`, or managed via the scope management API.
 
 ---
 

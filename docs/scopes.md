@@ -27,7 +27,7 @@ The MCP Gateway Registry implements a sophisticated fine-grained access control 
 - Uses hierarchical scope validation for precise permission control
 - Follows the principle of least privilege by default
 
-The access control system is defined in [`auth_server/scopes.yml`](../auth_server/scopes.yml) and enforced by the validation logic in [`auth_server/server.py`](../auth_server/server.py).
+The access control system is stored in DocumentDB / MongoDB (the `mcp_scopes` collection) and enforced by the validation logic in [`auth_server/server.py`](../auth_server/server.py). Default scopes are seeded at initialization time from the JSON seed files in [`scripts/`](../scripts/) (for example `registry-admins.json` and `federation-service.json`); additional scopes can be created through the scope management API. The legacy `scopes.yml` file was removed in v1.24.8.
 
 ## Scope System Architecture
 
@@ -35,7 +35,7 @@ The access control system is defined in [`auth_server/scopes.yml`](../auth_serve
 
 The access control system consists of three main components:
 
-1. **Scope Configuration** ([`auth_server/scopes.yml`](../auth_server/scopes.yml)): Defines all available scopes and their permissions
+1. **Scope Configuration** (the `mcp_scopes` collection in DocumentDB / MongoDB, seeded from the JSON files in [`scripts/`](../scripts/)): Defines all available scopes and their permissions
 2. **Group Mappings**: Maps Amazon Cognito groups to both UI and server scopes
 3. **Validation Engine** ([`auth_server/server.py`](../auth_server/server.py)): Enforces access control decisions
 
@@ -111,7 +111,7 @@ group_mappings:
     - mcp-servers-restricted/read           # Limited server access
 ```
 
-> **Important**: All group names (such as `mcp-registry-admin`, `mcp-registry-user`) and scope names (such as `mcp-servers-unrestricted/read`, `mcp-servers-restricted/execute`) are completely customizable by the platform administrator deploying this solution. These names are examples and can be changed to match your organization's naming conventions and security requirements. The same group names must be configured consistently in both your Identity Provider (IdP) and the `scopes.yml` configuration file.
+> **Important**: All group names (such as `mcp-registry-admin`, `mcp-registry-user`) and scope names (such as `mcp-servers-unrestricted/read`, `mcp-servers-restricted/execute`) are completely customizable by the platform administrator deploying this solution. These names are examples and can be changed to match your organization's naming conventions and security requirements. The same group names must be configured consistently in both your Identity Provider (IdP) and the scope documents stored in DocumentDB (the `mcp_scopes` collection).
 
 ## Methods vs Tools Access Control
 
@@ -278,10 +278,14 @@ Grant Access   Continue to next scope
 
 ### Example 1: Basic User Setup
 
-Create a basic user with read-only access to specific servers:
+Create a basic user with read-only access to specific servers. The examples
+below use YAML for readability; the equivalent scope documents are stored in
+the DocumentDB `mcp_scopes` collection (one document per scope, keyed by `_id`)
+and can be seeded from a JSON file in [`scripts/`](../scripts/) or created via
+the scope management API:
 
 ```yaml
-# In scopes.yml
+# Scope document (stored in the mcp_scopes collection)
 group_mappings:
   mcp-registry-basic-user:
     - mcp-registry-user
@@ -430,7 +434,7 @@ Virtual servers also support their own `required_scopes` field, which provides a
 ```
 
 This means access control happens at two levels:
-1. **Gateway level**: Defined in `scopes.yml` or scope configuration JSON
+1. **Gateway level**: Defined in the `mcp_scopes` collection (seeded from scope JSON files or created via the scope management API)
 2. **Virtual server level**: Defined in the virtual server's `required_scopes`
 
 Both must be satisfied for access to be granted.
@@ -502,7 +506,7 @@ The system enforces several security boundaries:
 
 **Diagnosis:**
 1. Check user's Cognito group membership
-2. Verify group mapping in `scopes.yml`
+2. Verify group mapping in the `mcp_scopes` collection (DocumentDB)
 3. Confirm server is listed in user's scopes
 
 **Solution:**
@@ -541,17 +545,19 @@ mcp-servers-restricted/execute:
 - Scope validation logs show "No scopes configuration loaded"
 
 **Diagnosis:**
-1. Check `scopes.yml` file exists in `auth_server/` directory
-2. Verify YAML syntax is valid
-3. Check file permissions
+1. Confirm the `mcp_scopes` collection in DocumentDB is populated (the init
+   job seeds it from the scope JSON files in `scripts/`)
+2. Check the auth server logs for scope-loading errors at startup
+3. Verify the auth server can reach DocumentDB
 
 **Solution:**
 ```bash
-# Validate YAML syntax
-python -c "import yaml; yaml.safe_load(open('auth_server/scopes.yml'))"
+# Confirm the scopes collection is seeded (adjust namespace as needed)
+docker exec mcp-mongodb mongosh --quiet --eval \
+  'db.getSiblingDB("mcp_registry").mcp_scopes_default.countDocuments({})'
 
-# Check file permissions
-ls -la auth_server/scopes.yml
+# Re-run the init job to seed default scopes if the collection is empty
+python scripts/init-documentdb-indexes.py
 ```
 
 #### Issue 4: Group Mapping Not Working
@@ -561,7 +567,7 @@ ls -la auth_server/scopes.yml
 - Scope mapping appears incorrect
 
 **Diagnosis:**
-1. Verify group name matches exactly in Cognito and `scopes.yml`
+1. Verify group name matches exactly in Cognito and the scope documents (the `mcp_scopes` collection)
 2. Check for typos in group names
 3. Confirm group mapping syntax
 
@@ -590,25 +596,16 @@ logger.info(f"User scopes: {user_scopes}")
 
 #### Test Scope Configuration
 
-Create a simple test script to validate scope configurations:
+Inspect the scope documents stored in DocumentDB to validate the configuration:
 
-```python
-import yaml
-
-def test_scope_config():
-    with open('auth_server/scopes.yml', 'r') as f:
-        config = yaml.safe_load(f)
-    
-    # Test group mappings
-    for group, scopes in config.get('group_mappings', {}).items():
-        print(f"Group: {group} -> Scopes: {scopes}")
-    
-    # Test scope definitions
-    for scope in ['mcp-servers-restricted/read', 'mcp-servers-restricted/execute']:
-        if scope in config:
-            print(f"Scope {scope} has {len(config[scope])} server configurations")
-
-test_scope_config()
+```bash
+# List all scope documents and their group mappings (adjust namespace as needed)
+docker exec mcp-mongodb mongosh --quiet --eval '
+db = db.getSiblingDB("mcp_registry");
+db.mcp_scopes_default.find({}, {_id: 1, group_mappings: 1}).forEach(function(d) {
+  print("Scope: " + d._id + " -> groups: " + JSON.stringify(d.group_mappings));
+});
+'
 ```
 
 ### Performance Considerations

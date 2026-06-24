@@ -630,7 +630,7 @@ This section implements the official [Anthropic MCP Registry API specification](
 
 **Response:** `201 Created` or `409 Conflict`
 
-**Features:** Auto-enables services, updates scopes.yml
+**Features:** Auto-enables services, updates the scope configuration in the `mcp_scopes` collection
 
 ---
 

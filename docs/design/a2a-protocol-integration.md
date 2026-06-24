@@ -141,10 +141,10 @@ The auth-server validates the JWT and maps the groups in the token to internal s
 
 ### 3. Auth-Server Validates and Maps Groups
 
-The auth-server decodes the JWT, extracts the groups, and looks them up in `auth_server/scopes.yml`:
+The auth-server decodes the JWT, extracts the groups, and looks them up in the `mcp_scopes` collection in DocumentDB (seeded from JSON scope files in `scripts/`):
 
 ```yaml
-# Example from scopes.yml
+# Example group mapping from the mcp_scopes collection
 mcp-registry-admin:
 - mcp-registry-admin
 - mcp-servers-unrestricted/read
@@ -581,7 +581,7 @@ Access control is enforced at three levels: UI scopes, group mappings, and indiv
 
 ### Tier 1: UI-Scopes (High-Level Actions)
 
-The `UI-Scopes` section in `auth_server/scopes.yml` defines what high-level actions each group can perform:
+The `UI-Scopes` section of the scope configuration (the `mcp_scopes` collection in DocumentDB) defines what high-level actions each group can perform:
 
 ```yaml
 UI-Scopes:
@@ -633,7 +633,7 @@ When a user authenticates with Keycloak, their JWT includes groups. The auth-ser
 
 ### Tier 3: Individual Group Scopes (Detailed Permissions)
 
-The bottom of `scopes.yml` defines detailed permissions for each group:
+The individual group scope entries in the `mcp_scopes` collection define detailed permissions for each group:
 
 ```yaml
 registry-users-lob1:
@@ -984,7 +984,7 @@ The M2M service account `mcp-gateway-m2m` has:
 - mcp-servers-unrestricted  # Full MCP server access
 - a2a-agent-admin           # Full agent management
 
-# Mapped scopes (from auth_server/scopes.yml):
+# Mapped scopes (from the mcp_scopes collection in DocumentDB):
 - mcp-servers-unrestricted/read
 - mcp-servers-unrestricted/execute
 - a2a-agent-admin

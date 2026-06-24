@@ -2,7 +2,7 @@
 
 This page is the single source of truth for how callers authenticate against the **Registry API** (`/api/*`, `/v0.1/*`) — the HTTP surface used by the UI, the `registry_management.py` CLI, and any script or service that talks to the registry.
 
-**Scope clarification.** This document covers the **Registry API** only. The **MCP Gateway** surface (`/<server>/tools/list`, `/<server>/messages`, etc.) always requires full IdP authentication and is governed by `scopes.yml` / `mcp_scope_default`. MCP gateway authn/authz is described in [auth.md](auth.md) and [scopes.md](scopes.md).
+**Scope clarification.** This document covers the **Registry API** only. The **MCP Gateway** surface (`/<server>/tools/list`, `/<server>/messages`, etc.) always requires full IdP authentication and is governed by the `mcp_scopes` collection in DocumentDB / `mcp_scope_default`. MCP gateway authn/authz is described in [auth.md](auth.md) and [scopes.md](scopes.md).
 
 ## Table of contents
 
@@ -165,7 +165,7 @@ REGISTRY_API_KEYS='{"monitoring":{"key":"<token-1>","groups":["mcp-readonly"]},"
 Rules:
 - **name**: must match `^[a-z0-9][a-z0-9_-]{0,63}$` (log-safe identifier)
 - **key**: minimum 32 characters (use `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`)
-- **groups**: non-empty list of group names from your `scopes.yml` / `mcp_scope_default` group_mappings
+- **groups**: non-empty list of group names from your `mcp_scopes` collection / `mcp_scope_default` group_mappings
 - Reserved names: `legacy`, `network-user`, `network-trusted` cannot be used
 - Key values must be unique across all entries
 - On any parse or validation error, the feature is disabled entirely (fail-closed)
@@ -197,7 +197,7 @@ The registry no longer hard-codes admin access for `network-trusted` callers. In
 
 ### Example: read-only monitoring key
 
-1. Ensure your `scopes.yml` has a group like `mcp-readonly` mapped to read-only scopes.
+1. Ensure the `mcp_scopes` collection (seeded from JSON scope files in `scripts/`, or managed via the scope management API) has a group like `mcp-readonly` mapped to read-only scopes.
 2. Generate a key: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
 3. Add to your config:
 

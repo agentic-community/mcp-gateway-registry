@@ -332,7 +332,7 @@ JWT_ISSUER=mcp-auth-server
 JWT_AUDIENCE=mcp-registry
 ```
 
-### Scopes Configuration (scopes.yml or MongoDB)
+### Scopes Configuration (the `mcp_scopes` collection in DocumentDB / MongoDB)
 
 ```yaml
 # Group mappings - maps IdP group identifiers to scope names
@@ -381,7 +381,7 @@ To add support for a new identity provider:
    - Add new provider case to factory function
 
 5. **Configure Group Mappings**:
-   - Add group identifiers to `scopes.yml` or MongoDB-CE/Amazon DocumentDB
+   - Add group identifiers to the `mcp_scopes` collection in MongoDB-CE/Amazon DocumentDB (seeded from JSON scope files in `scripts/` or managed via the scope management API)
    - Document group identifier format (names vs IDs)
 
 ## Security Considerations

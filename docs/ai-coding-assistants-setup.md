@@ -360,8 +360,8 @@ aws cognito-idp admin-list-groups-for-user \
   --user-pool-id YOUR_POOL_ID \
   --username YOUR_USERNAME
 
-# Verify scope configuration
-cat auth_server/scopes.yml
+# Verify scope configuration in the mcp_scopes collection (DocumentDB / MongoDB)
+# Scopes are seeded from the JSON scope seed files in scripts/, or managed via the scope management API
 ```
 
 ### Configuration Issues

@@ -193,10 +193,10 @@ KC_HTTP_ENABLED=true
 # Auth server logging
 LOG_LEVEL=INFO
 
-# Scope config (LEGACY: only used when storage_backend is the
-# file backend in registry/common/scopes_loader.py. Production
-# uses DocumentDB and ignores this var. Kept here for
-# completeness; new installs do not need to set it.)
+# Scope config (LEGACY and no longer used. Scopes now live in the
+# mcp_scopes collection in DocumentDB / MongoDB, seeded from the JSON
+# scope files in scripts/ at init time. This var is ignored; new
+# installs do not need to set it.)
 SCOPES_CONFIG_PATH=scopes.yml
 ```
 
@@ -469,9 +469,10 @@ uv run uv run python credentials-provider/token_refresher.py --agent-id <agent-i
 
 #### Updating Scopes Configuration
 
-Scopes/permissions live in DocumentDB (collection: `scopes`), not in
-`auth_server/scopes.yml`. Edit them through the registry UI's "IAM
-Settings" page, or via the registry API directly. Auth server picks up
+Scopes/permissions live in the `mcp_scopes` collection in DocumentDB /
+MongoDB (seeded from JSON scope files in `scripts/` at init time), not
+in a file. Edit them through the registry UI's "IAM
+Settings" page, or via the scope management API directly. Auth server picks up
 changes on its next reload (no compose restart required for DB-backed
 edits). To verify:
 
@@ -850,9 +851,9 @@ mkdir -p "$BACKUP_DIR"
 # Backup database (compose service is 'keycloak-db', not 'postgres')
 docker-compose exec keycloak-db pg_dump -U keycloak keycloak > "$BACKUP_DIR/keycloak.sql"
 
-# Backup configuration. NOTE: scopes/permissions live in DocumentDB now,
-# not in auth_server/scopes.yml. Use the registry export tooling to back
-# those up; do not assume scopes.yml exists on a current install.
+# Backup configuration. NOTE: scopes/permissions live in the mcp_scopes
+# collection in DocumentDB now, not in a file. Use the registry export
+# tooling to back those up; there is no scopes.yml on a current install.
 cp -r keycloak/setup "$BACKUP_DIR/"
 cp docker-compose.yml "$BACKUP_DIR/"
 

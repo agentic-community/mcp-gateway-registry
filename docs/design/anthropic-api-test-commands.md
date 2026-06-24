@@ -350,7 +350,7 @@ curl -X GET "http://localhost/v0.1/servers" \
   -H "Content-Type: application/json" | jq
 ```
 
-**Expected Response**: Only servers the user has access to (based on scopes.yml configuration)
+**Expected Response**: Only servers the user has access to (based on the scope configuration in the `mcp_scopes` collection in DocumentDB)
 
 ### Test 15: Via Nginx Proxy (Production Path)
 

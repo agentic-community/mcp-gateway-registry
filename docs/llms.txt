@@ -32,7 +32,7 @@ Key features include: centralized server management, OAuth 2.0/3.0 authenticatio
 | Directory | Purpose | Key Files |
 |-----------|---------|-----------|
 | `registry/` | **Core Registry Application** - FastAPI backend, repositories, services | `main.py` (FastAPI app), `core/config.py` (settings) |
-| `auth_server/` | **OAuth Authentication Server** - Keycloak/Cognito/Entra ID integration | `app.py` (Flask auth server), `scopes.yml` (group mappings) |
+| `auth_server/` | **OAuth Authentication Server** - Keycloak/Cognito/Entra ID integration | `app.py` (Flask auth server). Group-to-scope mappings live in the `mcp_scopes` collection in DocumentDB, seeded from JSON scope files in `scripts/` |
 | `frontend/` | **Web UI** - React/TypeScript admin dashboard | `src/App.tsx` (main app), `src/pages/` (UI pages) |
 | `servers/` | **Example MCP Servers** - Reference implementations | `currenttime/`, `mcpgw/` (MCP Gateway server) |
 | `terraform/` | **Infrastructure as Code** - AWS deployment automation | `aws-ecs/` (ECS Fargate), `modules/` (reusable modules) |
@@ -106,7 +106,7 @@ Key features include: centralized server management, OAuth 2.0/3.0 authenticatio
 | File/Directory | Purpose | Location |
 |----------------|---------|----------|
 | `oauth2_providers.yml` | OAuth provider configurations (Keycloak, Cognito, Entra ID) | `auth_server/` |
-| `scopes.yml` | Group-to-scope mappings, UI permissions | `auth_server/` |
+| `mcp_scopes` collection | Group-to-scope mappings, UI permissions | DocumentDB / MongoDB (seeded from JSON scope files in `scripts/`) |
 | `nginx.conf.template` | Nginx reverse proxy configuration | `config/` |
 | `global-bundle.pem` | AWS DocumentDB TLS certificate | Root directory |
 | `.env.example` | Environment variables for all services | Root directory |
@@ -458,7 +458,7 @@ group_mappings:
     - mcp-servers-restricted/read           # Limited server access
 ```
 
-**Note**: All group names and scope names are completely customizable by administrators. Names must be configured consistently in both the Identity Provider (IdP) and `scopes.yml` configuration file.
+**Note**: All group names and scope names are completely customizable by administrators. Names must be configured consistently in both the Identity Provider (IdP) and the scope configuration (the `mcp_scopes` collection in DocumentDB, seeded from JSON scope files in `scripts/`).
 
 ## 4.5. Agent-to-Agent (A2A) Protocol Integration
 
@@ -503,7 +503,7 @@ Agent Application (AI Code)
   - Trust level (verified/unverified)
 
 **Step 3: Agent Access Control**
-- Agent permissions defined in `auth_server/scopes.yml`
+- Agent permissions defined in the `mcp_scopes` collection in DocumentDB (seeded from JSON scope files in `scripts/`)
 - Three-tier structure:
   1. **UI-Scopes**: Agent registry permissions (list_agents, get_agent, publish_agent, modify_agent, delete_agent)
   2. **Group Mappings**: Maps Keycloak groups to scope names
@@ -518,7 +518,7 @@ Agent Application (AI Code)
 
 ### 4.5.3. Agent Access Control Example
 
-**Scopes Configuration (auth_server/scopes.yml):**
+**Scopes Configuration (the `mcp_scopes` collection in DocumentDB, seeded from JSON scope files in `scripts/`):**
 ```yaml
 UI-Scopes:
   mcp-registry-admin:
@@ -1150,7 +1150,7 @@ entra_id:
 
 ### 7.4. Scopes Configuration
 
-**File**: `auth_server/scopes.yml`
+**Location**: the `mcp_scopes` collection in DocumentDB / MongoDB, seeded at init time from JSON scope files in `scripts/` and manageable via the scope management API
 
 **Group Mappings:**
 ```yaml
@@ -1513,7 +1513,9 @@ docker-compose down auth-server && docker-compose rm -f auth-server && docker-co
 # 1. Create directories
 mkdir -p ${HOME}/mcp-gateway/{servers,auth_server,secrets,logs}
 cp -r registry/servers ${HOME}/mcp-gateway/
-cp auth_server/scopes.yml ${HOME}/mcp-gateway/auth_server/
+# Authorization scopes are no longer copied as a file. They live in the
+# mcp_scopes collection in DocumentDB, seeded at init time from JSON scope
+# files in scripts/, and are manageable via the scope management API.
 
 # 2. Configure environment
 cp .env.example .env
@@ -2211,7 +2213,7 @@ curl -v http://localhost/health
 
 **Permission denied errors:**
 - Check user's Cognito/Keycloak group memberships
-- Verify scope mappings in `scopes.yml`
+- Verify scope mappings in the `mcp_scopes` collection in DocumentDB
 - Ensure tool names match exactly
 - Regenerate tokens after group changes
 

@@ -255,11 +255,14 @@ mongodb:
    await collection.create_index([("entity_type", ASCENDING)])
    ```
 
-4. **Loads OAuth Scopes** from `auth_server/scopes.yml`
+4. **Loads OAuth Scopes** from JSON scope seed files in `scripts/`
    ```python
-   # Reads scopes.yml and populates mcp_scopes_default collection
-   # Includes server scopes and group mappings
-   await _load_scopes_from_yaml(db, namespace, scopes_file)
+   # Reads JSON scope files in scripts/ (registry-admins.json,
+   # mcp-registry-admin.json, mcp-servers-unrestricted-read.json,
+   # mcp-servers-unrestricted-execute.json, federation-service.json)
+   # and populates the mcp_scopes collection.
+   # Includes server scopes and group mappings.
+   await _seed_scopes_from_json(db, namespace, scope_seed_files)
    ```
 
 5. **Note on Vector Index**
@@ -733,8 +736,9 @@ touch "${HOME}/mcp-gateway/federation.json"
 
 # Copy server definitions from registry/servers/*.json
 # Copy agent cards from cli/examples/*agent*.json
-# Copy scopes.yml
 # (These provide initial data that can be imported via API)
+# Authorization scopes are seeded into the mcp_scopes collection from
+# JSON scope files in scripts/ at init time, not copied as a file.
 ```
 
 ### Starting the Stack

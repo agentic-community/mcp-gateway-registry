@@ -100,20 +100,20 @@ This allows scalable M2M authorization without hardcoding client IDs in authoriz
 
 ## Step 3: Create Groups for Access Control
 
-Okta group names must match the group names in your registry's `scopes.yml`. The default configuration expects groups like `registry-admins` and `public-mcp-users`.
+Okta group names must match the group names in your registry's scope configuration (the `mcp_scopes` collection in DocumentDB, seeded from JSON scope seed files in `scripts/`). The default configuration expects groups like `registry-admins` and `public-mcp-users`.
 
 1. Go to **Directory** → **Groups** → **Add Group**
-2. Create groups that match your `scopes.yml` group mappings:
+2. Create groups that match your scope group mappings:
    - `registry-admins` — full admin access to the registry
    - `public-mcp-users` — read-only access to public MCP servers
 3. Assign users to groups via each group's **Assign people** tab
 
 ### Group-to-Scope Mapping
 
-The registry uses `scopes.yml` to map Okta groups to authorization scopes. Example mapping:
+The registry maps Okta groups to authorization scopes using the scope configuration (the `mcp_scopes` collection in DocumentDB, seeded from JSON scope seed files in `scripts/`). Example mapping:
 
 ```yaml
-# scopes.yml
+# group mapping in the mcp_scopes collection
 groups:
   registry-admins:
     - registry:admin:full
@@ -138,7 +138,7 @@ groups:
 1. M2M client authenticates with Client Credentials flow
 2. If token has empty `groups` (common with custom auth servers)
 3. Registry queries `idp_m2m_clients` collection in DocumentDB for client groups
-4. Groups are enriched and mapped to scopes using same `scopes.yml` logic
+4. Groups are enriched and mapped to scopes using the same scope configuration (the `mcp_scopes` collection)
 
 ## Step 3a: Create and Manage Users
 
@@ -363,7 +363,7 @@ curl -X POST https://dev-123456.okta.com/oauth2/v1/token \
 ## Troubleshooting
 
 **"Permission Required" error after login**
-Your Okta groups don't match the group names in `scopes.yml`. Create groups in Okta that match (e.g., `registry-admins`) and assign your user to them. See Step 3.
+Your Okta groups don't match the group names in the scope configuration (the `mcp_scopes` collection). Create groups in Okta that match (e.g., `registry-admins`) and assign your user to them. See Step 3.
 
 **Groups not appearing in tokens**
 The groups claim must be configured on the app's Sign On tab under "Show legacy configuration", not on the Authorization Server's Claims tab. See Step 2. Also verify your user is assigned to at least one group.
@@ -400,7 +400,7 @@ When using a custom authorization server, M2M tokens have `aud` set to your API 
 
 **M2M token returns 0 servers despite valid groups**
 Check that groups are being mapped to scopes:
-1. Verify `scopes.yml` contains mappings for the M2M client's groups
+1. Verify the `mcp_scopes` collection contains mappings for the M2M client's groups
 2. Check auth server logs for group enrichment messages:
    ```
    Groups enriched from MongoDB for client {client_id}: {groups}

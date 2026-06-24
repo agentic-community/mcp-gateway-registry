@@ -336,7 +336,7 @@ registry/
 │   ├── agent2_agent.json
 │   └── agent_state.json
 ├── config/
-│   ├── scopes.yml                 # Authorization scopes configuration
+│   ├── scopes.yml                 # Authorization scopes (legacy; scopes.yml was removed in v1.24.8, scopes now live in the mcp_scopes collection in DocumentDB)
 │   └── federation/
 │       └── default.json           # Federation configuration
 ├── security_scans/

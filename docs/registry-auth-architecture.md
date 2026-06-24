@@ -388,7 +388,7 @@ graph TB
 
 ### Scope Configuration System
 
-The system uses a YAML-based scope configuration (`auth_server/scopes.yml`):
+The system stores scope configuration in the `mcp_scopes` collection in DocumentDB (seeded from JSON scope files in `scripts/` at init time). The group-to-scope mappings have the following structure:
 
 ```yaml
 # Example scope configuration
@@ -743,7 +743,7 @@ def debug_user_permissions(user_context: dict):
 ```
 
 **Solutions**:
-- Verify group mappings in `auth_server/scopes.yml`
+- Verify group mappings in the `mcp_scopes` collection in DocumentDB
 - Check user group assignments in identity provider
 - Ensure scope configuration matches server names exactly
 

@@ -227,8 +227,9 @@ open http://localhost:8080  # macOS
    ```bash
    mkdir -p ${HOME}/mcp-gateway/{servers,auth_server,secrets,logs}
    cp -r registry/servers ${HOME}/mcp-gateway/
-   cp auth_server/scopes.yml ${HOME}/mcp-gateway/auth_server/
    ```
+
+   Note: authorization scopes are no longer copied as a file. They live in the `mcp_scopes` collection in DocumentDB / MongoDB and are seeded at init time from the JSON scope seed files in `scripts/` (or managed via the scope management API).
 
 2. **Configure Environment Variables**
    ```bash

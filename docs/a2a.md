@@ -350,7 +350,7 @@ Continues with confidence in code quality
 - **[A2A Agent Management](a2a-agent-management.md)** - Complete CLI guide and examples
 - **[Agent CRUD Test](../tests/TEST_QUICK_REFERENCE.md#agent-crud-test)** - Testing CRUD operations
 - **[LOB Bot Access Control Testing](../tests/lob-bot-access-control-testing.md)** - Testing access control
-- **[Scopes Configuration](../auth_server/scopes.yml)** - Permission definitions
+- **[Scopes Configuration](scopes.md)** - Permission definitions (stored in the `mcp_scopes` collection in DocumentDB)
 - **[LLM Navigation Guide](llms.txt#section-45)** - For AI systems understanding implementation
 
 ## Support

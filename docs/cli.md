@@ -262,7 +262,7 @@ uv run cli/mcp_client.py --url http://localhost/currenttime/mcp call \
 
 1. **HTTP 403: Access forbidden**
    - Check if your token has the required permissions
-   - Verify the scopes.yml configuration includes the tool you're trying to access
+   - Verify the scope configuration (the `mcp_scopes` collection in DocumentDB) includes the tool you're trying to access
 
 2. **HTTP 405: Method Not Allowed**
    - Ensure the server path is correct

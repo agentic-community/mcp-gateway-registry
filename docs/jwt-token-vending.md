@@ -419,7 +419,7 @@ SECRET_KEY="your-shared-secret"      # HMAC signing key (must be shared)
 ```
 
 ### Scope Configuration
-Generated tokens inherit scope validation from the existing `scopes.yml` configuration:
+Generated tokens inherit scope validation from the existing scope configuration (the `mcp_scopes` collection in DocumentDB, seeded from JSON scope files in `scripts/`):
 
 ```yaml
 # Example scope allowing read access to time servers

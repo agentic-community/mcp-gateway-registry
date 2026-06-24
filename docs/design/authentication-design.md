@@ -147,7 +147,7 @@ From `cli/examples/public-mcp-users.json`:
 Admins have unrestricted access to all UI features:
 
 ```yaml
-# From scopes.yml
+# From the mcp_scopes collection in DocumentDB (seeded from JSON scope files in scripts/)
 UI-Scopes:
   registry-admins:
     list_agents: [all]

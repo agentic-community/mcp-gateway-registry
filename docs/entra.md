@@ -170,7 +170,7 @@ When users click "Get JWT Token", the auth server generates:
 
 1. **Entra Access Token is for Microsoft Graph API** - When you authenticate with Entra ID, the access token you receive is scoped for Microsoft's APIs (like Graph API for reading user profiles). It's not meant for your custom gateway.
 
-2. **IdP tokens don't contain your scopes** - Entra doesn't know about your `public-mcp-users` scope or your MCP server permissions. Those mappings exist only in your system (scopes.yml, DocumentDB).
+2. **IdP tokens don't contain your scopes** - Entra doesn't know about your `public-mcp-users` scope or your MCP server permissions. Those mappings exist only in your system (the `mcp_scopes` collection in DocumentDB).
 
 3. **Group-to-scope mapping is custom** - The translation from Entra Group Object ID (`5f605d68-06bc-4208-b992-bb378eee12c5`) to gateway scopes (`public-mcp-users`) happens in your auth server, not in Entra.
 
@@ -239,7 +239,7 @@ ENTRA_CLIENT_SECRET=your-client-secret
 ENTRA_TENANT_ID=your-tenant-id
 ```
 
-### Group Mappings (scopes.yml or DocumentDB)
+### Group Mappings (the `mcp_scopes` collection in DocumentDB)
 
 ```yaml
 group_mappings:
@@ -366,7 +366,7 @@ response = requests.get(
 
 3. **"Access denied - no scopes configured"**
    - Cause: User's groups don't map to any scopes
-   - Fix: Add group mapping in scopes.yml or DocumentDB
+   - Fix: Add group mapping in the `mcp_scopes` collection in DocumentDB (via the scope management API)
 
 4. **Groups not appearing in token**
    - Cause: Entra app not configured to emit groups

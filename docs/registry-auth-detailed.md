@@ -682,7 +682,7 @@ graph TB
     end
     
     subgraph "Permission Mapping Layer"
-        ScopeMapping[Group → Scope Mapping<br/>auth_server/scopes.yml]
+        ScopeMapping[Group → Scope Mapping<br/>mcp_scopes collection in DocumentDB]
         Scopes[MCP Scopes]
         ServerAccess[Accessible Server List]
     end
@@ -783,7 +783,7 @@ graph TB
 
 ### Scope Configuration System
 
-The authorization system uses a YAML-based configuration file (`auth_server/scopes.yml`) to map groups to permissions:
+The authorization system stores scope configuration in the `mcp_scopes` collection in DocumentDB (seeded from JSON scope files in `scripts/` at init time) to map groups to permissions:
 
 ```yaml
 # Group to scope mappings
@@ -868,7 +868,7 @@ def enhanced_auth(session: str = Cookie(alias="mcp_gateway_session")) -> Dict[st
 ```python
 # registry/auth/dependencies.py
 def map_cognito_groups_to_scopes(groups: List[str]) -> List[str]:
-    """Map Cognito groups to MCP scopes using scopes.yml configuration"""
+    """Map Cognito groups to MCP scopes using the mcp_scopes collection in DocumentDB"""
     scopes = []
     group_mappings = SCOPES_CONFIG.get('group_mappings', {})
     
@@ -1504,7 +1504,7 @@ else:
 
 2. **Configure Group Mappings**:
    ```yaml
-   # auth_server/scopes.yml
+   # mcp_scopes collection in DocumentDB (group-to-scope mapping structure)
    group_mappings:
      mcp-admin:
        - "mcp-servers-unrestricted/read"
@@ -1686,9 +1686,9 @@ def enhanced_auth(session: str = None) -> Dict[str, Any]:
 ```
 
 **Common Solutions**:
-- **Group Mapping Issues**: Verify `auth_server/scopes.yml` configuration
+- **Group Mapping Issues**: Verify the scope configuration in the `mcp_scopes` collection in DocumentDB
 - **User Group Assignment**: Check user group assignments in identity provider (Cognito)
-- **Server Name Mismatch**: Ensure server names in scopes.yml exactly match server definitions
+- **Server Name Mismatch**: Ensure server names in the `mcp_scopes` collection exactly match server definitions
 - **Scope Configuration**: Verify scope definitions reference correct server names
 
 #### 4. WebSocket Authentication Issues

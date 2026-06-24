@@ -360,7 +360,7 @@ The `mcp-gateway-m2m` service account is automatically configured during Keycloa
 2. **Service Account User Created** - `service-account-mcp-gateway-m2m` user created
 3. **Groups Assigned** - User assigned to `mcp-servers-unrestricted` and `a2a-agent-admin` groups
 4. **Groups Mapper Added** - JWT tokens include groups claim
-5. **Auth Scopes Configured** - Groups mapped to OAuth2 scopes in auth_server/scopes.yml
+5. **Auth Scopes Configured** - Groups mapped to OAuth2 scopes in the scope configuration (the `mcp_scopes` collection in DocumentDB, seeded from JSON scope files in `scripts/`)
 6. **Nginx Protected** - `/api/*` endpoints require JWT authentication
 
 No manual configuration needed - everything is automatic!
@@ -372,7 +372,7 @@ These files are involved in the automatic setup:
 | File | Purpose |
 |------|---------|
 | `keycloak/setup/init-keycloak.sh` | Creates groups, assigns M2M to groups, adds groups mapper |
-| `auth_server/scopes.yml` | Maps groups to scopes |
+| `mcp_scopes` collection (DocumentDB, seeded from JSON scope files in `scripts/`) | Maps groups to scopes |
 | `docker/nginx_rev_proxy_http_only.conf` | Protects `/api/` endpoints with authentication |
 | `credentials-provider/generate_creds.sh` | Generates fresh JWT tokens |
 

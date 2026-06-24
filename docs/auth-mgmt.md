@@ -439,7 +439,7 @@ curl -s -X POST "https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token
 - M2M accounts are Azure App Registrations with client credentials
 - Token lifetime is typically 1 hour
 - Groups must be created manually in Azure Portal before use
-- Group Object IDs are required for scope mappings in `scopes.yml`
+- Group Object IDs are required for scope mappings in the `mcp_scopes` collection in DocumentDB
 
 ### Token Comparison
 
