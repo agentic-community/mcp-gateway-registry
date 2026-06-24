@@ -2,8 +2,13 @@
 """
 Migrate file-based storage to MongoDB.
 
-This script reads server and agent JSON files from the file-based storage
-and imports them into MongoDB.
+This script reads server, agent, federation config, and peer JSON files from
+the file-based storage and imports them into MongoDB. Servers and agents are
+regenerable from their source manifests; federation config and peer state are
+operator-entered and not regenerable, so they are migrated too.
+
+Security scans and skill security scans are intentionally NOT migrated: they
+are regenerable by re-running a scan after migration.
 
 Usage:
     # Run migration from host machine (connects to localhost:27017)
@@ -320,6 +325,146 @@ async def _migrate_agents(
     return imported
 
 
+async def _migrate_federation_config(
+    db,
+    federation_dir: Path,
+    namespace: str,
+    dry_run: bool = False,
+) -> int:
+    """Migrate federation configuration from file storage to MongoDB.
+
+    File layout: one JSON file per config id under federation_dir
+    (e.g. default.json). Each file carries config_id, created_at, and
+    updated_at fields. The DocumentDB collection uses config_id as _id.
+    """
+    collection_name = f"mcp_federation_config_{namespace}"
+    collection = db[collection_name]
+
+    json_files = list(federation_dir.glob("*.json"))
+
+    if not json_files:
+        logger.warning(f"No federation config files found in {federation_dir}")
+        return 0
+
+    logger.info(f"Found {len(json_files)} federation config file(s)")
+
+    imported = 0
+    skipped = 0
+
+    for filepath in json_files:
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in {filepath}: {e}")
+            skipped += 1
+            continue
+
+        # config_id is stored in the file; fall back to the filename stem.
+        config_id = data.get("config_id") or filepath.stem
+
+        if dry_run:
+            logger.info(f"[DRY RUN] Would import federation config: {config_id}")
+            imported += 1
+            continue
+
+        # The DocumentDB document keys on config_id as _id.
+        doc = {**data}
+        doc.pop("config_id", None)
+        doc["_id"] = config_id
+        now = datetime.now(UTC).isoformat()
+        doc.setdefault("created_at", now)
+        doc["updated_at"] = now
+
+        await collection.replace_one({"_id": config_id}, doc, upsert=True)
+        logger.info(f"Migrated federation config: {config_id}")
+        imported += 1
+
+    logger.info(f"Federation config: imported={imported}, skipped={skipped}")
+    return imported
+
+
+async def _migrate_peers(
+    db,
+    peers_dir: Path,
+    sync_state_file: Path,
+    namespace: str,
+    dry_run: bool = False,
+) -> int:
+    """Migrate peer registry configs and sync state to MongoDB.
+
+    File layout:
+    - peers_dir/{peer_id}.json: one file per peer (token already encrypted
+      on disk; migrated verbatim, no re-encryption).
+    - sync_state_file: a single JSON object mapping peer_id to sync status.
+
+    DocumentDB collections (both key on peer_id as _id):
+    - mcp_peers_{namespace}
+    - mcp_peer_sync_state_{namespace}
+    """
+    peers_collection = db[f"mcp_peers_{namespace}"]
+    sync_collection = db[f"mcp_peer_sync_state_{namespace}"]
+
+    imported = 0
+    skipped = 0
+
+    # Peer configs: one file per peer.
+    peer_files = list(peers_dir.glob("*.json")) if peers_dir.exists() else []
+    if not peer_files:
+        logger.warning(f"No peer config files found in {peers_dir}")
+
+    for filepath in peer_files:
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in {filepath}: {e}")
+            skipped += 1
+            continue
+
+        # peer_id is stored in the file; fall back to the filename stem.
+        peer_id = data.get("peer_id") or filepath.stem
+
+        if dry_run:
+            logger.info(f"[DRY RUN] Would import peer: {peer_id}")
+            imported += 1
+            continue
+
+        # The on-disk token is already encrypted; migrate the dict verbatim.
+        doc = {**data}
+        doc["_id"] = peer_id
+        await peers_collection.replace_one({"_id": peer_id}, doc, upsert=True)
+        logger.info(f"Migrated peer: {peer_id}")
+        imported += 1
+
+    # Sync state: a single file mapping peer_id to status.
+    if sync_state_file.exists():
+        try:
+            with open(sync_state_file) as f:
+                state_data = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in {sync_state_file}: {e}")
+            state_data = {}
+
+        if isinstance(state_data, dict):
+            for peer_id, status in state_data.items():
+                if dry_run:
+                    logger.info(f"[DRY RUN] Would import sync state for peer: {peer_id}")
+                    continue
+                doc = {**status} if isinstance(status, dict) else {}
+                doc["_id"] = peer_id
+                doc["updated_at"] = datetime.now(UTC).isoformat()
+                await sync_collection.replace_one({"_id": peer_id}, doc, upsert=True)
+                logger.info(f"Migrated sync state for peer: {peer_id}")
+        else:
+            logger.warning(f"Unexpected sync state format in {sync_state_file}")
+    else:
+        logger.info(f"No peer sync state file found at {sync_state_file}")
+
+    logger.info(f"Peers: imported={imported}, skipped={skipped}")
+    return imported
+
+
 async def main():
     """Main migration function."""
     parser = argparse.ArgumentParser(
@@ -339,6 +484,24 @@ async def main():
         help="Directory containing agent JSON files",
     )
     parser.add_argument(
+        "--federation-dir",
+        type=Path,
+        default=Path("/app/config/federation"),
+        help="Directory containing federation config JSON files",
+    )
+    parser.add_argument(
+        "--peers-dir",
+        type=Path,
+        default=Path.home() / "mcp-gateway" / "peers",
+        help="Directory containing peer registry config JSON files",
+    )
+    parser.add_argument(
+        "--peer-sync-state-file",
+        type=Path,
+        default=Path.home() / "mcp-gateway" / "peer_sync_state.json",
+        help="Path to the peer sync state JSON file",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be migrated without making changes",
@@ -352,6 +515,11 @@ async def main():
         "--agents-only",
         action="store_true",
         help="Only migrate agents",
+    )
+    parser.add_argument(
+        "--federation-only",
+        action="store_true",
+        help="Only migrate federation config and peer state",
     )
     parser.add_argument(
         "--host",
@@ -373,13 +541,23 @@ async def main():
         port_override=args.port,
     )
 
+    # Decide which categories to migrate. When no "*-only" flag is set, run
+    # all of them. When any is set, run only the selected categories.
+    only_flags = [args.servers_only, args.agents_only, args.federation_only]
+    run_all = not any(only_flags)
+    do_servers = run_all or args.servers_only
+    do_agents = run_all or args.agents_only
+    do_federation = run_all or args.federation_only
+
     logger.info("=" * 60)
     logger.info("File to MongoDB Migration")
     logger.info("=" * 60)
     logger.info(f"MongoDB: {config['host']}:{config['port']}/{config['database']}")
     logger.info(f"Namespace: {config['namespace']}")
-    logger.info(f"Servers dir: {args.servers_dir}")
-    logger.info(f"Agents dir: {args.agents_dir}")
+    logger.info(f"Servers dir: {args.servers_dir} (migrate: {do_servers})")
+    logger.info(f"Agents dir: {args.agents_dir} (migrate: {do_agents})")
+    logger.info(f"Federation dir: {args.federation_dir} (migrate: {do_federation})")
+    logger.info(f"Peers dir: {args.peers_dir} (migrate: {do_federation})")
     logger.info(f"Dry run: {args.dry_run}")
     logger.info("")
 
@@ -389,7 +567,7 @@ async def main():
 
         total_imported = 0
 
-        if not args.agents_only:
+        if do_servers:
             if args.servers_dir.exists():
                 count = await _migrate_servers(
                     db, args.servers_dir, config["namespace"], args.dry_run
@@ -398,7 +576,7 @@ async def main():
             else:
                 logger.warning(f"Servers directory not found: {args.servers_dir}")
 
-        if not args.servers_only:
+        if do_agents:
             if args.agents_dir.exists():
                 count = await _migrate_agents(
                     db, args.agents_dir, config["namespace"], args.dry_run
@@ -406,6 +584,24 @@ async def main():
                 total_imported += count
             else:
                 logger.warning(f"Agents directory not found: {args.agents_dir}")
+
+        if do_federation:
+            if args.federation_dir.exists():
+                count = await _migrate_federation_config(
+                    db, args.federation_dir, config["namespace"], args.dry_run
+                )
+                total_imported += count
+            else:
+                logger.warning(f"Federation config directory not found: {args.federation_dir}")
+
+            count = await _migrate_peers(
+                db,
+                args.peers_dir,
+                args.peer_sync_state_file,
+                config["namespace"],
+                args.dry_run,
+            )
+            total_imported += count
 
         logger.info("")
         logger.info("=" * 60)
