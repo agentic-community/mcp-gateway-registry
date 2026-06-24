@@ -103,14 +103,14 @@ def current_time_server_info() -> dict[str, Any]:
 
 
 @pytest.fixture
-def fininfo_server_info() -> dict[str, Any]:
+def finance_server_info() -> dict[str, Any]:
     """Second backend server with two distinct tools."""
     return {
-        "id": "srv-fininfo",
-        "server_name": "fininfo",
-        "path": "/fininfo/",
+        "id": "srv-finance",
+        "server_name": "finance",
+        "path": "/finance/",
         "description": "Financial info",
-        "proxy_pass_url": "http://fininfo:8000/",
+        "proxy_pass_url": "http://finance:8000/",
         "is_enabled": True,
         "tags": ["finance"],
         "num_tools": 2,
@@ -129,12 +129,12 @@ def fininfo_server_info() -> dict[str, Any]:
 
 @pytest.fixture
 def all_servers_map(
-    current_time_server_info, fininfo_server_info
+    current_time_server_info, finance_server_info
 ) -> dict[str, dict[str, Any]]:
     """Map of path -> server_info used by get_all_servers mocks."""
     return {
         "/current_time/": current_time_server_info,
-        "/fininfo/": fininfo_server_info,
+        "/finance/": finance_server_info,
     }
 
 
@@ -179,7 +179,7 @@ class TestGetServiceToolsEndpoint:
 
     @pytest.mark.asyncio
     async def test_get_tools_service_path_unauthorized_server_returns_403(
-        self, fininfo_server_info
+        self, finance_server_info
     ):
         """Restricted user gets 403 for a server they cannot access."""
         from fastapi import HTTPException
@@ -188,13 +188,13 @@ class TestGetServiceToolsEndpoint:
 
         # Arrange
         fake_server_service = AsyncMock()
-        fake_server_service.get_server_info = AsyncMock(return_value=fininfo_server_info)
+        fake_server_service.get_server_info = AsyncMock(return_value=finance_server_info)
         fake_server_service.user_can_access_server_path = AsyncMock(return_value=False)
 
         with patch("registry.api.server_routes.server_service", fake_server_service):
             # Act / Assert
             with pytest.raises(HTTPException) as excinfo:
-                await get_service_tools("fininfo", RESTRICTED_CONTEXT)
+                await get_service_tools("finance", RESTRICTED_CONTEXT)
             assert excinfo.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -261,8 +261,8 @@ class TestGetToolsAllEndpoint:
         # Assert
         names = sorted(t["name"] for t in result["tools"])
         assert names == ["current_time_by_timezone"]
-        # fininfo had zero allowed tools, so it must be skipped entirely.
-        assert "/fininfo/" not in result["servers"]
+        # finance server had zero allowed tools, so it must be skipped entirely.
+        assert "/finance/" not in result["servers"]
         # current_time aggregation retains the single allowed tool.
         ct_names = [t["name"] for t in result["servers"]["/current_time/"]]
         assert ct_names == ["current_time_by_timezone"]

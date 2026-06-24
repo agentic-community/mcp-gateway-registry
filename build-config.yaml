@@ -98,7 +98,7 @@ images:
     build_args: {}
 
   # ========================================
-  # MCP Servers (5)
+  # MCP Servers (4)
   # ========================================
 
   # Generic MCP Server Template
@@ -138,16 +138,6 @@ images:
     dockerfile: "docker/Dockerfile.mcp-server"
     context: "servers/realserverfaketools"
     description: "Real Server Fake Tools MCP server"
-    tags:
-      - latest
-    build_args: {}
-
-  # Financial Info MCP Server
-  fininfo:
-    repo_name: "mcp-gateway-fininfo"
-    dockerfile: "docker/Dockerfile.mcp-server"
-    context: "servers/fininfo"
-    description: "Financial Info MCP server"
     tags:
       - latest
     build_args: {}

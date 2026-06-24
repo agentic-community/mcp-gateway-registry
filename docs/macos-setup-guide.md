@@ -441,7 +441,7 @@ You should see the Keycloak login page. You can log in with:
 ```bash
 # Create necessary directories
 # Using ${HOME}/mcp-gateway to avoid needing sudo permissions
-mkdir -p ${HOME}/mcp-gateway/{servers,models,auth_server,secrets/fininfo,logs,ssl}
+mkdir -p ${HOME}/mcp-gateway/{servers,models,auth_server,logs,ssl}
 
 # Make build script executable
 chmod +x build_and_run.sh
@@ -475,7 +475,6 @@ docker-compose ps
 # - registry
 # - nginx (or similar proxy)
 # - currenttime-server
-# - fininfo-server
 # - mcpgw-server
 # - realserverfaketools-server
 ```

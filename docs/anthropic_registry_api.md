@@ -66,8 +66,8 @@ Lists all MCP servers that the authenticated user has access to.
 {
   "servers": [
     {
-      "name": "io.mcpgateway/fininfo",
-      "description": "Financial information and market data",
+      "name": "io.mcpgateway/currenttime",
+      "description": "Current time and timezone information",
       "version": "1.0.0",
       "vendor": "MCP Gateway"
     }
@@ -83,7 +83,7 @@ Lists all MCP servers that the authenticated user has access to.
 Lists all available versions for a specific server.
 
 **Parameters:**
-- `server_name`: URL-encoded server name (e.g., `io.mcpgateway%2Ffininfo`)
+- `server_name`: URL-encoded server name (e.g., `io.mcpgateway%2Fcurrenttime`)
 
 **Response:**
 ```json
@@ -111,9 +111,9 @@ Gets detailed information about a specific server version.
 **Response:**
 ```json
 {
-  "name": "io.mcpgateway/fininfo",
+  "name": "io.mcpgateway/currenttime",
   "version": "1.0.0",
-  "description": "Financial information and market data",
+  "description": "Current time and timezone information",
   "vendor": "MCP Gateway",
   "sourceUrl": "https://github.com/mcpgateway/mcp-gateway-registry",
   "configuration": {
@@ -140,17 +140,17 @@ curl -X GET "http://localhost/v0.1/servers?limit=10" \
   -H "Content-Type: application/json"
 
 # Get versions for a specific server
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json"
 
 # Get details for a specific server version
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/latest" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions/latest" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json"
 ```
 
-**Note**: Server names with slashes must be URL-encoded (e.g., `io.mcpgateway/fininfo` becomes `io.mcpgateway%2Ffininfo`).
+**Note**: Server names with slashes must be URL-encoded (e.g., `io.mcpgateway/currenttime` becomes `io.mcpgateway%2Fcurrenttime`).
 
 ## Using the Test Script
 
@@ -172,7 +172,7 @@ uv run python cli/test_anthropic_api.py \
 uv run python cli/test_anthropic_api.py \
   --token-file /path/to/your/token-file.json \
   --test get-server \
-  --server-name io.mcpgateway/fininfo
+  --server-name io.mcpgateway/currenttime
 ```
 
 ### Additional Options

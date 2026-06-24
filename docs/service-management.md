@@ -299,7 +299,7 @@ client.add_server_to_groups(
 
 # Add to multiple groups
 client.add_server_to_groups(
-    server_name="fininfo",
+    server_name="currenttime",
     groups=["mcp-servers-finance/read", "mcp-servers-finance/execute"]
 )
 ```
@@ -309,7 +309,7 @@ client.add_server_to_groups(
 ```python
 # Remove server from groups
 client.remove_server_from_groups(
-    server_name="fininfo",
+    server_name="currenttime",
     groups=["mcp-servers-finance/read"]
 )
 ```

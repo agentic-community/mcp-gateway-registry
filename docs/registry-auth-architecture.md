@@ -400,17 +400,17 @@ group_mappings:
   mcp-user:
     - "mcp-servers-restricted/read"
   
-  mcp-server-fininfo:
-    - "mcp-servers-fininfo/read"
-    - "mcp-servers-fininfo/execute"
+  mcp-server-currenttime:
+    - "mcp-servers-currenttime/read"
+    - "mcp-servers-currenttime/execute"
 
 # Scope definitions
-mcp-servers-fininfo/read:
-  - server: "Financial Info Proxy"
+mcp-servers-currenttime/read:
+  - server: "Current Time Proxy"
     permissions: ["read"]
 
-mcp-servers-fininfo/execute:
-  - server: "Financial Info Proxy"
+mcp-servers-currenttime/execute:
+  - server: "Current Time Proxy"
     permissions: ["read", "execute"]
 ```
 
@@ -789,7 +789,7 @@ def log_auth_event(event_type: str, username: str = None, details: dict = None):
 
 # Usage examples
 log_auth_event('LOGIN_SUCCESS', username='admin')
-log_auth_event('PERMISSION_DENIED', username='user', details={'resource': '/toggle/fininfo'})
+log_auth_event('PERMISSION_DENIED', username='user', details={'resource': '/toggle/currenttime'})
 log_auth_event('SESSION_EXPIRED', username='user')
 ```
 

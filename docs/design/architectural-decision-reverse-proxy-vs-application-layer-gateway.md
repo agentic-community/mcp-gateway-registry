@@ -19,21 +19,21 @@ AI Agent/Coding Assistant
            v
     ┌─────────────────┐
     │  Nginx Gateway  │
-    │  /fininfo/      │ ──auth_request──> Auth Server
+    │  /realserverfaketools/ │ ──auth_request──> Auth Server
     │  /mcpgw/        │                        │
     │  /currenttime/  │ <──auth_headers───────┘
     └─────────────────┘
            │ │ │
            │ │ └─── localhost:8003 (currenttime)
            │ └───── localhost:8002 (mcpgw)
-           └─────── localhost:8001 (fininfo)
+           └─────── localhost:8001 (realserverfaketools)
                         │
                         v
                 Individual MCP Servers
 ```
 
 **Key Characteristics:**
-- Path-based routing (`/fininfo/`, `/mcpgw/`, etc.)
+- Path-based routing (`/currenttime/`, `/mcpgw/`, etc.)
 - Nginx handles auth validation and proxying
 - Direct streaming connections to backend servers
 - Protocol-agnostic (HTTP, WebSocket, SSE, etc.)
@@ -56,7 +56,7 @@ AI Agent/Coding Assistant
            v
     ┌─────────────────┐
     │ MCP Client Pool │
-    │  fininfo_*      │ ──> localhost:8001 (fininfo)
+    │  realserverfaketools_* │ ──> localhost:8001 (realserverfaketools)
     │  mcpgw_*        │ ──> localhost:8002 (mcpgw)
     │  currenttime_*  │ ──> localhost:8003 (currenttime)
     └─────────────────┘

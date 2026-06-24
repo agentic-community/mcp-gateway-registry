@@ -73,10 +73,10 @@ curl -X GET "http://localhost/v0.1/servers" \
   "servers": [
     {
       "server": {
-        "name": "io.mcpgateway/fininfo",
+        "name": "io.mcpgateway/currenttime",
         "description": "...",
         "version": "1.0.0",
-        "title": "Financial Info Server",
+        "title": "Current Time Server",
         "packages": [...],
         "_meta": {...}
       },
@@ -134,11 +134,11 @@ curl -X GET "http://localhost/v0.1/servers?limit=1000" \
 
 ### Test 5: List Server Versions
 
-**Description**: Get all versions for the Financial Info server
+**Description**: Get all versions for the Current Time server
 
 ```bash
 # Note: Server name must be URL-encoded
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
@@ -149,7 +149,7 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions" \
   "servers": [
     {
       "server": {
-        "name": "io.mcpgateway/fininfo",
+        "name": "io.mcpgateway/currenttime",
         "description": "...",
         "version": "1.0.0",
         ...
@@ -166,20 +166,20 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions" \
 
 ### Test 6: List Versions for Different Server
 
-**Description**: Try with a different server (e.g., currenttime)
+**Description**: Try with a different server (e.g., realserverfaketools)
 
 ```bash
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Frealserverfaketools/versions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
 
 ### Test 7: Get Specific Version (latest)
 
-**Description**: Get detailed information for the latest version of Financial Info server
+**Description**: Get detailed information for the latest version of Current Time server
 
 ```bash
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/latest" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions/latest" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
@@ -188,31 +188,31 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/late
 ```json
 {
   "server": {
-    "name": "io.mcpgateway/fininfo",
+    "name": "io.mcpgateway/currenttime",
     "description": "...",
     "version": "1.0.0",
-    "title": "Financial Info Server",
+    "title": "Current Time Server",
     "repository": null,
     "websiteUrl": null,
     "packages": [
       {
         "registryType": "mcpb",
-        "identifier": "io.mcpgateway/fininfo",
+        "identifier": "io.mcpgateway/currenttime",
         "version": "1.0.0",
         "transport": {
           "type": "streamable-http",
-          "url": "http://fininfo:8001"
+          "url": "http://currenttime:8000"
         },
         "runtimeHint": "docker"
       }
     ],
     "_meta": {
       "io.mcpgateway/internal": {
-        "path": "/fininfo",
+        "path": "/currenttime",
         "is_enabled": true,
         "health_status": "healthy",
-        "num_tools": 5,
-        "tags": ["fininfo", "jira", "confluence"],
+        "num_tools": 1,
+        "tags": ["currenttime", "time", "clock"],
         "license": "MIT"
       }
     }
@@ -231,7 +231,7 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/late
 **Description**: Get detailed information using explicit version number
 
 ```bash
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/1.0.0" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions/1.0.0" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
@@ -243,7 +243,7 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/1.0.
 **Description**: Try to access a non-existent version
 
 ```bash
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/2.0.0" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions/2.0.0" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
@@ -428,7 +428,7 @@ echo "All concurrent requests completed"
 **Description**: Get nicely formatted output for a specific server
 
 ```bash
-curl -s -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/latest" \
+curl -s -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions/latest" \
   -H "Authorization: Bearer $TOKEN" | jq '{
     name: .server.name,
     title: .server.title,
@@ -499,7 +499,7 @@ echo "Full access sees: $(curl -s "http://localhost/v0.1/servers" -H "Authorizat
 
 **Expected Results**:
 - **Restricted bot** (`mcp-servers-restricted` group): ~3 servers (currenttime, auth_server, mcpgw)
-- **Full access** (`ingress.json` token): ~7+ servers (all servers including fininfo, fininfo, sre-gateway)
+- **Full access** (`ingress.json` token): ~7+ servers (all servers including currenttime, realserverfaketools, sre-gateway)
 
 This demonstrates that the v0.1 API correctly enforces permission-based filtering based on Keycloak groups and MCP scopes!
 

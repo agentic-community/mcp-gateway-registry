@@ -87,7 +87,7 @@ def mock_client_session():
 @pytest.mark.unit
 def test_normalize_sse_endpoint_url_with_mount_path():
     """Test normalizing SSE endpoint URL with mount path."""
-    url = "/fininfo/messages/?session_id=123"
+    url = "/currenttime/messages/?session_id=123"
     result = normalize_sse_endpoint_url(url)
 
     assert result == "/messages/?session_id=123"

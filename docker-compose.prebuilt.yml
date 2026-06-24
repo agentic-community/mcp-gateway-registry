@@ -443,22 +443,6 @@ services:
       - ALL
     restart: unless-stopped
 
-  # Financial Info MCP Server - using pre-built image
-  fininfo-server:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/fininfo-server:${FININFO_VERSION:-latest}
-    environment:
-      - PORT=8001
-      - SECRET_KEY=${SECRET_KEY}
-    volumes:
-      - ${HOME}/mcp-gateway/secrets/fininfo/:/app/fininfo/
-    ports:
-      - "8001:8001"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    restart: unless-stopped
-
   # MCP Gateway Server - using pre-built image
   mcpgw-server:
     image: ${DOCKERHUB_ORG:-mcpgateway}/mcpgw-server:${MCPGW_VERSION:-latest}

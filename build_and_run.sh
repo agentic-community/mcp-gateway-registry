@@ -218,7 +218,6 @@ if [ ! -f .env ]; then
     log "Example .env file:"
     log "SECRET_KEY=your_secret_key_here"
     log "# SECRET_KEY is auto-generated if not set. It is used to sign JWT session tokens."
-    log "# For Financial Info server API keys, see servers/fininfo/README_SECRETS.md"
     exit 1
 fi
 
@@ -621,7 +620,6 @@ if [[ "$COMPOSE_CMD" == "podman compose" ]]; then
     log "  - Registry API: http://localhost:7860"
     log "  - Auth service: http://localhost:8888"
     log "  - Current Time MCP: http://localhost:8000"
-    log "  - Financial Info MCP: http://localhost:8001"
     log "  - Real Server Fake Tools MCP: http://localhost:8002"
     log "  - MCP Gateway MCP: http://localhost:8003"
 else
@@ -630,7 +628,6 @@ else
     log "  - Registry API: http://localhost:7860"
     log "  - Auth service: http://localhost:8888"
     log "  - Current Time MCP: http://localhost:8000"
-    log "  - Financial Info MCP: http://localhost:8001"
     log "  - Real Server Fake Tools MCP: http://localhost:8002"
     log "  - MCP Gateway MCP: http://localhost:8003"
 fi

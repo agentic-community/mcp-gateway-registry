@@ -51,7 +51,7 @@ graph TB
     subgraph MCPFarm["MCP Server Farm"]
         direction TB
         MCP1[MCP Server 1<br/>CurrentTime]
-        MCP2[MCP Server 2<br/>FinInfo]
+        MCP2[MCP Server 2<br/>RealServerFakeTools]
         MCP3[MCP Server 3<br/>Custom]
         MCPn[MCP Server n<br/>...]
     end
@@ -428,11 +428,11 @@ mcp-servers-time/read:
     methods: ["initialize", "tools/list", "tools/call"]
     tools: ["current_time_by_timezone", "current_time_utc"]
 
-# Example scope for financial data access  
-mcp-servers-finance/read:
-  - server: "fininfo"
+# Example scope for example tool access
+mcp-servers-faketools/read:
+  - server: "realserverfaketools"
     methods: ["initialize", "tools/list", "tools/call"]
-    tools: ["get_stock_price", "get_market_data"]
+    tools: ["quantum_flux_analyzer", "neural_pattern_synthesizer"]
 
 # Admin scope with full access
 mcp-registry-admin:

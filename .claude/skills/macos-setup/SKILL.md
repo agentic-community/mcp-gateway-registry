@@ -379,11 +379,11 @@ Log: `{ 6, "Embeddings Model Download", DONE/FAILED, "~/mcp-gateway/models/all-M
 **Announce:** "Creating Docker volume mount directories..."
 
 ```bash
-mkdir -p "${HOME}/mcp-gateway/{servers,models,auth_server,secrets/fininfo,logs,ssl}"
+mkdir -p "${HOME}/mcp-gateway/{servers,models,auth_server,logs,ssl}"
 ls -la "${HOME}/mcp-gateway/"
 ```
 
-Log: `{ 7, "Directory Creation", DONE, "~/mcp-gateway/{servers,models,auth_server,secrets/fininfo,logs,ssl}" }`
+Log: `{ 7, "Directory Creation", DONE, "~/mcp-gateway/{servers,models,auth_server,logs,ssl}" }`
 
 ---
 
@@ -857,7 +857,7 @@ cd "${INSTALL_DIR}" 2>/dev/null || echo "Directory not found, skipping cd"
 
 docker compose down -v 2>/dev/null || docker-compose down -v 2>/dev/null || echo "No services were running"
 
-docker ps | grep -E "keycloak|registry|auth-server|nginx|mcpgw|fininfo|currenttime" \
+docker ps | grep -E "keycloak|registry|auth-server|nginx|mcpgw|currenttime" \
     && echo "WARNING: some containers still running" \
     || echo "All MCP Gateway containers stopped"
 ```

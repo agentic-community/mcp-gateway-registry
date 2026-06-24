@@ -10,7 +10,6 @@ When using the `--prebuilt` option with `build_and_run.sh`, the following pre-bu
 | Auth Server | `mcpgateway/auth-server:latest` | latest | Authentication service supporting Cognito, GitHub, Google, and Keycloak | 8888 |
 | Metrics Service | `mcpgateway/metrics-service:latest` | latest | Metrics collection service with SQLite storage and OTEL support | 8890, 9465 |
 | Current Time Server | `mcpgateway/currenttime-server:latest` | latest | MCP server providing current time functionality | 8000 |
-| Financial Info Server | `mcpgateway/fininfo-server:latest` | latest | MCP server for financial information | 8001 |
 | MCPGW Server | `mcpgateway/mcpgw-server:latest` | latest | MCP Gateway server for service management | 8003 |
 | Real Server Fake Tools | `mcpgateway/realserverfaketools-server:latest` | latest | Example MCP server with mock tools | 8002 |
 
@@ -37,7 +36,6 @@ docker pull mcpgateway/registry:latest
 docker pull mcpgateway/auth-server:latest
 docker pull mcpgateway/metrics-service:latest
 docker pull mcpgateway/currenttime-server:latest
-docker pull mcpgateway/fininfo-server:latest
 docker pull mcpgateway/mcpgw-server:latest
 docker pull mcpgateway/realserverfaketools-server:latest
 

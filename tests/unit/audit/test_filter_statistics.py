@@ -210,7 +210,7 @@ class TestFilterOptionsEndpoint:
             if field == "identity.username":
                 return ["admin", "user1"]
             elif field == "mcp_server.name":
-                return ["fininfo-server", "currenttime-server"]
+                return ["finance-server", "currenttime-server"]
             return []
 
         mock_repo.distinct = AsyncMock(side_effect=mock_distinct)
@@ -227,7 +227,7 @@ class TestFilterOptionsEndpoint:
             )
 
             assert result.usernames == ["admin", "user1"]
-            assert result.server_names == ["fininfo-server", "currenttime-server"]
+            assert result.server_names == ["finance-server", "currenttime-server"]
 
 
 # =============================================================================
@@ -345,7 +345,7 @@ class TestStatisticsEndpoint:
         ]
         timeline_prior = [{"_id": "2026-02-21", "count": 150}]
         top_servers = [
-            {"_id": "fininfo-server", "count": 89},
+            {"_id": "finance-server", "count": 89},
             {"_id": "currenttime-server", "count": 67},
         ]
 
@@ -378,7 +378,7 @@ class TestStatisticsEndpoint:
 
             assert result.total_events == 200
             assert len(result.top_servers) == 2
-            assert result.top_servers[0].name == "fininfo-server"
+            assert result.top_servers[0].name == "finance-server"
             # MCP success -> status_2xx
             assert result.status_distribution.status_2xx == 180
             # MCP error -> status_5xx
@@ -449,7 +449,7 @@ class TestExecutiveSummaryEndpoint:
         async def mock_distinct(field, query):
             # MCP-only metrics
             if field == "mcp_server.name":
-                return ["fininfo-server", "currenttime-server", ""]
+                return ["finance-server", "currenttime-server", ""]
             if field == "mcp_request.tool_name":
                 return ["get_quote", "get_time", None]
             # Username distinct counts: agents have only one identity

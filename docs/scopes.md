@@ -153,7 +153,7 @@ if method == 'tools/call' and tool_name:
 
 ```yaml
 mcp-servers-restricted/execute:
-  - server: fininfo
+  - server: currenttime
     methods:
       - initialize
       - notifications/initialized
@@ -161,9 +161,9 @@ mcp-servers-restricted/execute:
       - tools/list
       - tools/call                    # Can call tools/call method
     tools:
-      - get_stock_aggregates          # Can call this specific tool
-      - print_stock_data              # Can call this specific tool
-      # Note: Cannot call other tools like advanced analytics tools
+      - current_time_by_timezone      # Can call this specific tool
+      - get_config                    # Can call this specific tool
+      # Note: Cannot call other tools not listed here
 ```
 
 ### Access Control Scenarios
@@ -175,8 +175,8 @@ User has permission for `tools/list` but not `tools/call`:
 
 #### Scenario 2: Method + Specific Tool Access
 User has permission for `tools/call` and specific tools:
-- ✅ Can call `get_stock_aggregates`
-- ✅ Can call `print_stock_data`
+- ✅ Can call `current_time_by_timezone`
+- ✅ Can call `get_config`
 - ❌ Cannot call `advanced_analytics_tool` (not in allowed tools list)
 
 #### Scenario 3: Unrestricted Access
@@ -323,12 +323,12 @@ UI-Scopes:
 
 ### Example 3: Agent with Specific Tool Access
 
-Configure an agent with access to specific financial tools:
+Configure an agent with access to specific tools:
 
 ```yaml
 # Agent scope (assigned directly in Cognito resource server)
 mcp-servers-restricted/execute:
-  - server: fininfo
+  - server: currenttime
     methods:
       - initialize
       - notifications/initialized
@@ -336,8 +336,8 @@ mcp-servers-restricted/execute:
       - tools/list
       - tools/call
     tools:
-      - get_stock_aggregates
-      - print_stock_data
+      - current_time_by_timezone
+      - get_config
 ```
 
 **Cognito Setup:**
@@ -407,7 +407,7 @@ See [virtual-server-scoped-users.json](../cli/examples/virtual-server-scoped-use
 
 | Aspect | Regular MCP Server | Virtual MCP Server |
 |--------|-------------------|-------------------|
-| Server identifier | Server name (e.g., `fininfo`) | Virtual path (e.g., `/virtual/scoped-tools`) |
+| Server identifier | Server name (e.g., `currenttime`) | Virtual path (e.g., `/virtual/scoped-tools`) |
 | Methods | Standard MCP methods | Same standard MCP methods |
 | Tools | Backend server tools | Aggregated tools (possibly aliased) |
 | Scope configuration | Identical | Identical |

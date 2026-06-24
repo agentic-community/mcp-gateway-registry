@@ -774,7 +774,6 @@ graph TB
 - May include toggle permissions for specific services
 
 **Example Scopes**:
-- `mcp-servers-fininfo/read` + `mcp-servers-fininfo/execute`
 - `mcp-servers-currenttime/read` + `mcp-servers-currenttime/execute`
 
 **UI Capabilities**:
@@ -799,23 +798,11 @@ group_mappings:
     - "mcp-servers-restricted/read"
   
   # Server-specific access groups
-  mcp-server-fininfo:
-    - "mcp-servers-fininfo/read"
-    - "mcp-servers-fininfo/execute"
-  
   mcp-server-currenttime:
     - "mcp-servers-currenttime/read"
     - "mcp-servers-currenttime/execute"
 
 # Scope definitions with server mappings
-mcp-servers-fininfo/read:
-  - server: "Financial Info Proxy"
-    permissions: ["read"]
-
-mcp-servers-fininfo/execute:
-  - server: "Financial Info Proxy"
-    permissions: ["read", "execute"]
-
 mcp-servers-currenttime/read:
   - server: "Current Time API"
     permissions: ["read"]
@@ -1849,7 +1836,7 @@ def log_auth_event(event_type: str, username: str = None, details: dict = None,
 log_auth_event('LOGIN_SUCCESS', username='admin', request=request)
 log_auth_event('LOGIN_FAILED', details={'reason': 'invalid_credentials'}, request=request)
 log_auth_event('PERMISSION_DENIED', username='user', 
-               details={'resource': '/toggle/fininfo', 'required_permission': 'modify'}, 
+               details={'resource': '/toggle/currenttime', 'required_permission': 'modify'}, 
                request=request)
 log_auth_event('SESSION_EXPIRED', username='user', request=request)
 log_auth_event('OAUTH2_LOGIN_START', details={'provider': 'cognito'}, request=request)

@@ -442,22 +442,6 @@ services:
       - "8000:8000"
     restart: unless-stopped
 
-  # Financial Info MCP Server
-  fininfo-server:
-    build:
-      context: servers/fininfo
-      dockerfile: ../../docker/Dockerfile.mcp-server
-      args:
-        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
-    environment:
-      - PORT=8001
-      - SECRET_KEY=${SECRET_KEY}
-    volumes:
-      - ${HOME}/mcp-gateway/secrets/fininfo/:/app/fininfo/
-    ports:
-      - "8001:8001"
-    restart: unless-stopped
-
   # MCP Gateway Server
   mcpgw-server:
     build:

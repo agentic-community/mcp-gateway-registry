@@ -1334,13 +1334,12 @@ For production environments or to contribute pre-built images, you can publish t
 
 ### Publishing Script Overview
 
-The `scripts/publish_containers.sh` script automates building and publishing all 6 container components:
+The `scripts/publish_containers.sh` script automates building and publishing all 5 container components:
 
 - `registry` - Main registry service with nginx and web UI
 - `auth-server` - Authentication service
 - `currenttime-server` - Current time MCP server
 - `realserverfaketools-server` - Example tools MCP server
-- `fininfo-server` - Financial information MCP server
 - `mcpgw-server` - MCP Gateway proxy server
 
 ### Publishing Commands
@@ -1392,7 +1391,6 @@ GITHUB_ORG=agentic-community
 - `mcpgateway/auth-server:latest`
 - `mcpgateway/currenttime-server:latest`
 - `mcpgateway/realserverfaketools-server:latest`
-- `mcpgateway/fininfo-server:latest`
 - `mcpgateway/mcpgw-server:latest`
 
 **GitHub Container Registry:**
@@ -1400,7 +1398,6 @@ GITHUB_ORG=agentic-community
 - `ghcr.io/agentic-community/mcp-auth-server:latest`
 - `ghcr.io/agentic-community/mcp-currenttime-server:latest`
 - `ghcr.io/agentic-community/mcp-realserverfaketools-server:latest`
-- `ghcr.io/agentic-community/mcp-fininfo-server:latest`
 - `ghcr.io/agentic-community/mcp-mcpgw-server:latest`
 
 ### Using Pre-built Images

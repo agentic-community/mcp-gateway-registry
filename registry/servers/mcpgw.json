@@ -46,7 +46,7 @@
       "schema": {
         "properties": {
           "service_path": {
-            "description": "The unique path identifier for the service (e.g., '/fininfo'). Must start with '/'.",
+            "description": "The unique path identifier for the service (e.g., '/currenttime'). Must start with '/'.",
             "title": "Service Path",
             "type": "string"
           }
@@ -148,7 +148,7 @@
       "schema": {
         "properties": {
           "service_path": {
-            "description": "The unique path identifier for the service to remove (e.g., '/fininfo'). Must start with '/'.",
+            "description": "The unique path identifier for the service to remove (e.g., '/currenttime'). Must start with '/'.",
             "title": "Service Path",
             "type": "string"
           }
@@ -168,7 +168,7 @@
       "schema": {
         "properties": {
           "service_path": {
-            "description": "The unique path identifier for the service (e.g., '/fininfo'). Must start with '/'.",
+            "description": "The unique path identifier for the service (e.g., '/currenttime'). Must start with '/'.",
             "title": "Service Path",
             "type": "string"
           }

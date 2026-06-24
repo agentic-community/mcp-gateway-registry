@@ -163,14 +163,14 @@ AI Agent/Coding Assistant
     ↓ Multiple Endpoints
 ┌─────────────────┐
 │  Nginx Gateway  │
-│  /fininfo/      │ ──auth_request──> Auth Server
+│  /realserverfaketools/ │ ──auth_request──> Auth Server
 │  /mcpgw/        │                        │
 │  /currenttime/  │ <──auth_headers───────┘
 └─────────────────┘
     │ │ │
     │ │ └─── localhost:8003 (currenttime)
     │ └───── localhost:8002 (mcpgw)
-    └─────── localhost:8001 (fininfo)
+    └─────── localhost:8001 (realserverfaketools)
 ```
 
 **Alternative Considered:**
@@ -428,13 +428,13 @@ AI agents carry BOTH ingress and egress tokens:
 ```yaml
 # User can list tools but only execute specific ones
 mcp-servers-restricted/execute:
-  - server: fininfo
+  - server: currenttime
     methods:
       - tools/list        # Can list all tools
       - tools/call        # Can call tools
     tools:
-      - get_stock_aggregates   # But only these specific tools
-      - print_stock_data
+      - current_time_by_timezone   # But only these specific tools
+      - get_config
 ```
 
 **Validation Logic:**
@@ -929,7 +929,7 @@ uv run python cli/mcp_services.py create-group \
 
 # Assign server to group
 uv run python cli/mcp_services.py assign-server-to-group \
-  --server-name fininfo \
+  --server-name currenttime \
   --group-name mcp-servers-finance
 
 # User management
@@ -1179,14 +1179,14 @@ UI-Scopes:
 **Server Scopes:**
 ```yaml
 mcp-servers-restricted/execute:
-  - server: fininfo
+  - server: currenttime
     methods:
       - initialize
       - tools/list
       - tools/call
     tools:
-      - get_stock_aggregates
-      - print_stock_data
+      - current_time_by_timezone
+      - get_config
 ```
 
 ### 7.5. Credential Generation

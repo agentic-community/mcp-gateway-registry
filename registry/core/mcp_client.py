@@ -39,7 +39,7 @@ def normalize_sse_endpoint_url(endpoint_url: str) -> str:
     Normalize SSE endpoint URLs by removing mount path prefixes.
 
     For example:
-    - Input: "/fininfo/messages/?session_id=123"
+    - Input: "/currenttime/messages/?session_id=123"
     - Output: "/messages/?session_id=123"
 
     Args:
@@ -51,13 +51,13 @@ def normalize_sse_endpoint_url(endpoint_url: str) -> str:
     if not endpoint_url:
         return endpoint_url
 
-    # Pattern to match mount paths like /fininfo/, /currenttime/, etc.
+    # Pattern to match mount paths like /currenttime/, /mcpgw/, etc.
     # We look for paths that start with /word/ followed by messages/
     mount_path_pattern = r"^(/[^/]+)(/messages/.*)"
 
     match = re.match(mount_path_pattern, endpoint_url)
     if match:
-        mount_path = match.group(1)  # e.g., "/fininfo"
+        mount_path = match.group(1)  # e.g., "/currenttime"
         rest_of_url = match.group(2)  # e.g., "/messages/?session_id=123"
 
         logger.debug(f"Stripping mount path '{mount_path}' from endpoint URL: {endpoint_url}")
@@ -156,7 +156,7 @@ def normalize_sse_endpoint_url_for_request(url_str: str) -> str:
 
     if match:
         base_url = match.group(1)  # http://host:port
-        mount_path = match.group(2)  # currenttime, fininfo, etc.
+        mount_path = match.group(2)  # currenttime, mcpgw, etc.
         messages_path = match.group(3)  # /messages/...
 
         # Skip common paths that aren't mount paths

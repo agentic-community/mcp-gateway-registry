@@ -15,7 +15,7 @@ class ServerInfo(BaseModel):
     server_name: str | None = Field(
         None, alias="display_name", description="Display name of the server"
     )
-    path: str = Field(..., description="URL path for the server (e.g., '/fininfo')")
+    path: str = Field(..., description="URL path for the server (e.g., '/currenttime')")
     description: str | None = Field(None, description="Server description")
     enabled: bool = Field(..., alias="is_enabled", description="Whether the server is enabled")
     tags: list[str] = Field(default_factory=list, description="Server tags")

@@ -5,9 +5,9 @@
 
 ## Executive Summary
 
-- **Total Servers Scanned:** 5
-- **Passed:** 4 (80%)
-- **Failed:** 1 (20%)
+- **Total Servers Scanned:** 4
+- **Passed:** 3 (75%)
+- **Failed:** 1 (25%)
 
 ### Aggregate Vulnerability Statistics
 
@@ -31,20 +31,6 @@
 | High | 0 |
 | Medium | 0 |
 | Low | 0 |
-
-### io.mcpgateway/fininfo
-
-- **URL:** `https://mcpgateway.ddns.net/fininfo/mcp`
-- **Status:** ✅ SAFE
-
-| Severity | Count |
-|----------|-------|
-| Critical | 0 |
-| High | 0 |
-| Medium | 0 |
-| Low | 0 |
-
-**Error:** Scanner exit code: 1
 
 ### io.mcpgateway/mcpgw
 

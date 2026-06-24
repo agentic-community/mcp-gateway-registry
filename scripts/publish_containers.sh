@@ -41,7 +41,6 @@ declare -a COMPONENTS=(
     "auth-server:.:./docker/Dockerfile.auth"
     "currenttime-server:.:./docker/Dockerfile.mcp-server-light"
     "realserverfaketools-server:.:./docker/Dockerfile.mcp-server-light"
-    "fininfo-server:.:./docker/Dockerfile.mcp-server-light"
     "mcpgw-server:.:./docker/Dockerfile.mcp-server"
     "metrics-service:metrics-service:./metrics-service/Dockerfile"
 )
@@ -60,7 +59,6 @@ declare -a EXTERNAL_IMAGES=(
 declare -A SERVER_PATH_MAP=(
     ["currenttime-server"]="servers/currenttime"
     ["realserverfaketools-server"]="servers/realserverfaketools"
-    ["fininfo-server"]="servers/fininfo"
     ["mcpgw-server"]="servers/mcpgw"
 )
 
