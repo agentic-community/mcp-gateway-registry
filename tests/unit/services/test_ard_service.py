@@ -75,6 +75,7 @@ class TestBuildCatalog:
             patch.object(ard_service, "get_skill_repository", return_value=skill_repo),
             patch.object(ard_service.settings, "ard_publisher_domain", "registry.example.com"),
             patch.object(ard_service.settings, "registry_name", "Test Registry"),
+            patch.object(ard_service.settings, "registry_url", "https://registry.example.com"),
         ):
             manifest = await ard_service.build_catalog(_fake_request())
         return manifest, server_repo, agent_repo, skill_repo
