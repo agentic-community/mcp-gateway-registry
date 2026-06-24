@@ -431,7 +431,7 @@ Only the Helm `mcpgw` subchart and Docker expose these today.
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
-| Storage backend | `STORAGE_BACKEND` | `storage_backend` | `mongodb-configure.mongodb.storage_backend` | `file` (deprecated), `documentdb`, `mongodb-ce`, `mongodb`, `mongodb-atlas`. |
+| Storage backend | `STORAGE_BACKEND` | `storage_backend` | `mongodb-configure.mongodb.storage_backend` | `documentdb`, `mongodb-ce` (default), `mongodb`, `mongodb-atlas`. The `file` backend was removed in v1.24.8. |
 | Host | `DOCUMENTDB_HOST` | — (derived from module) | `mongodb-configure.mongodb.host` | — |
 | Port | `DOCUMENTDB_PORT` | — | `mongodb-configure.mongodb.port` | Default 27017. |
 | Database | `DOCUMENTDB_DATABASE` | — | `mongodb-configure.mongodb.database` | Default `mcp_registry`. |
