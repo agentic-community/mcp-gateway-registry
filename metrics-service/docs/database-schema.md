@@ -204,7 +204,7 @@ CREATE TABLE discovery_metrics (
     top_k_services INTEGER,                  -- Services considered
     top_n_tools INTEGER,                     -- Tools returned
     embedding_time_ms REAL,                  -- Vector generation time
-    faiss_search_time_ms REAL,              -- Search engine time
+    vector_search_time_ms REAL,             -- Search engine time
     created_at TEXT DEFAULT (datetime('now'))
 );
 

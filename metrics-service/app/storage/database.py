@@ -35,6 +35,24 @@ async def wait_for_database(max_retries: int = 10, delay: float = 2.0):
 async def _migrate_schema_if_needed(db):
     """Migrate database schema if needed."""
     try:
+        # Rename the legacy discovery_metrics.faiss_search_time_ms column to
+        # vector_search_time_ms (the registry renamed the metric in v1.24.8).
+        # Existing databases keep their data; the column is renamed in place.
+        cursor = await db.execute("PRAGMA table_info(discovery_metrics)")
+        discovery_columns = [col[1] for col in (await cursor.fetchall()) or []]
+        if (
+            "faiss_search_time_ms" in discovery_columns
+            and "vector_search_time_ms" not in discovery_columns
+        ):
+            logger.info(
+                "Renaming discovery_metrics.faiss_search_time_ms to vector_search_time_ms"
+            )
+            await db.execute(
+                "ALTER TABLE discovery_metrics "
+                "RENAME COLUMN faiss_search_time_ms TO vector_search_time_ms"
+            )
+            await db.commit()
+
         # Check if tool_metrics table exists and has the new columns
         cursor = await db.execute("PRAGMA table_info(tool_metrics)")
         columns = await cursor.fetchall()
@@ -169,7 +187,7 @@ async def init_database():
                 top_k_services INTEGER,
                 top_n_tools INTEGER,
                 embedding_time_ms REAL,
-                faiss_search_time_ms REAL,
+                vector_search_time_ms REAL,
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
@@ -303,7 +321,7 @@ class MetricsStorage:
                 INSERT INTO discovery_metrics (
                     request_id, timestamp, service, duration_ms,
                     query, results_count, top_k_services, top_n_tools,
-                    embedding_time_ms, faiss_search_time_ms
+                    embedding_time_ms, vector_search_time_ms
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
@@ -316,7 +334,10 @@ class MetricsStorage:
                     metric.dimensions.get("top_k_services"),
                     metric.dimensions.get("top_n_tools"),
                     metric.metadata.get("embedding_time_ms"),
-                    metric.metadata.get("faiss_search_time_ms"),
+                    # Accept the new key, fall back to the legacy key for
+                    # in-flight payloads emitted before the rename.
+                    metric.metadata.get("vector_search_time_ms")
+                    or metric.metadata.get("faiss_search_time_ms"),
                 ),
             )
 

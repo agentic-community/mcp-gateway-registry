@@ -3,6 +3,7 @@
 import pytest
 import asyncio
 import json
+import aiosqlite
 from datetime import datetime
 
 from app.storage.database import init_database, MetricsStorage, wait_for_database
@@ -139,7 +140,7 @@ class TestMetricsStorage:
                 "top_k_services": 10,
                 "top_n_tools": 50,
             },
-            metadata={"embedding_time_ms": 15.3, "faiss_search_time_ms": 12.1},
+            metadata={"embedding_time_ms": 15.3, "vector_search_time_ms": 12.1},
         )
 
         request = MetricRequest(
@@ -152,3 +153,14 @@ class TestMetricsStorage:
 
         # Should store discovery metric without exceptions
         await storage.store_metrics_batch(metrics_batch)
+
+        # The discovery metric is persisted under the renamed column.
+        async with aiosqlite.connect(storage.db_path) as db:
+            cursor = await db.execute(
+                "SELECT vector_search_time_ms FROM discovery_metrics "
+                "WHERE request_id = ?",
+                ("test_req_discovery",),
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == 12.1

@@ -117,7 +117,7 @@ class MigrationManager:
                     top_k_services INTEGER,
                     top_n_tools INTEGER,
                     embedding_time_ms REAL,
-                    faiss_search_time_ms REAL,
+                    vector_search_time_ms REAL,
                     created_at TEXT DEFAULT (datetime('now'))
                 );
 

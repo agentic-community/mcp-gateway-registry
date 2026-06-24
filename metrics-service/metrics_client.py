@@ -190,7 +190,7 @@ class MetricsClient:
         top_k_services: int | None = None,
         top_n_tools: int | None = None,
         embedding_time_ms: float | None = None,
-        faiss_search_time_ms: float | None = None,
+        vector_search_time_ms: float | None = None,
     ) -> bool:
         """Emit tool discovery metric."""
         return await self._emit_metric(
@@ -205,7 +205,7 @@ class MetricsClient:
             },
             metadata={
                 "embedding_time_ms": embedding_time_ms,
-                "faiss_search_time_ms": faiss_search_time_ms,
+                "vector_search_time_ms": vector_search_time_ms,
             },
         )
 

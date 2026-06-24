@@ -437,7 +437,7 @@ Tool discovery operation metrics.
 
 **Metadata**:
 - `embedding_time_ms` (number): Time to generate embeddings
-- `faiss_search_time_ms` (number): FAISS search time
+- `vector_search_time_ms` (number): Vector search time
 - `cache_hit` (boolean): Whether results came from cache
 
 #### tool_execution
@@ -663,7 +663,7 @@ curl -X POST http://localhost:8890/metrics \
         },
         "metadata": {
           "embedding_time_ms": 12.3,
-          "faiss_search_time_ms": 8.9,
+          "vector_search_time_ms": 8.9,
           "cache_hit": false
         }
       }
