@@ -238,47 +238,10 @@ log "Stopping existing services (if any)..."
 $COMPOSE_CMD $COMPOSE_FILES down --remove-orphans || log "No existing services to stop"
 log "Existing services stopped"
 
-# Clean up FAISS index files to force registry to recreate them
-log "Checking FAISS index files..."
-MCPGATEWAY_SERVERS_DIR="${HOME}/mcp-gateway/servers"
-FAISS_FILES=("service_index.faiss" "service_index_metadata.json")
-
-# Check if FAISS index files exist
-FAISS_EXISTS=false
-for file in "${FAISS_FILES[@]}"; do
-    file_path="$MCPGATEWAY_SERVERS_DIR/$file"
-    if [ -f "$file_path" ]; then
-        FAISS_EXISTS=true
-        break
-    fi
-done
-
-if [ "$FAISS_EXISTS" = true ]; then
-    echo ""
-    echo "╔════════════════════════════════════════════════════════════════════════════╗"
-    echo "║                         FAISS INDEX FILES EXIST                            ║"
-    echo "╠════════════════════════════════════════════════════════════════════════════╣"
-    echo "║                                                                            ║"
-    echo "║  Existing FAISS index files were found in:                                ║"
-    echo "║  $MCPGATEWAY_SERVERS_DIR/"
-    echo "║                                                                            ║"
-    echo "║  These files contain your server registry and search index.               ║"
-    echo "║  To preserve your registered servers, these files will NOT be deleted.    ║"
-    echo "║                                                                            ║"
-    echo "║  If you need to regenerate the FAISS index (e.g., after corruption):      ║"
-    echo "║  1. Delete the existing files:                                            ║"
-    echo "║     rm $MCPGATEWAY_SERVERS_DIR/service_index*"
-    echo "║  2. The registry will automatically rebuild the index on startup          ║"
-    echo "║                                                                            ║"
-    echo "╚════════════════════════════════════════════════════════════════════════════╝"
-    echo ""
-    log "Keeping existing FAISS index files - NOT deleting"
-else
-    log "No existing FAISS index files found - will be created on first startup"
-fi
-
 # Clean up any root-owned directories from previous Docker runs
 log "Checking for root-owned directories from previous Docker runs..."
+
+MCPGATEWAY_SERVERS_DIR="${HOME}/mcp-gateway/servers"
 
 # Check and remove root-owned directories
 for dir in "$MCPGATEWAY_SERVERS_DIR" "${HOME}/mcp-gateway/agents" "${HOME}/mcp-gateway/auth_server" "${HOME}/mcp-gateway/security_scans" "${HOME}/mcp-gateway/federation.json"; do
@@ -575,23 +538,6 @@ if curl -f http://localhost:80 &>/dev/null || curl -k -f https://localhost:443 &
     log "Nginx is responding"
 else
     log "WARNING: Nginx may still be starting up..."
-fi
-
-# Verify FAISS index creation
-log "Verifying FAISS index creation..."
-sleep 5  # Give registry service time to create the index
-
-if [ -f "$MCPGATEWAY_SERVERS_DIR/service_index.faiss" ]; then
-    log "FAISS index created successfully at $MCPGATEWAY_SERVERS_DIR/service_index.faiss"
-    
-    # Check if metadata file also exists
-    if [ -f "$MCPGATEWAY_SERVERS_DIR/service_index_metadata.json" ]; then
-        log "FAISS index metadata created successfully"
-    else
-        log "WARNING: FAISS index metadata file not found"
-    fi
-else
-    log "WARNING: FAISS index not yet created. The registry service will create it on first access."
 fi
 
 # Verify server list includes Atlassian

@@ -136,31 +136,6 @@ verify_server_in_list() {
     fi
 }
 
-verify_faiss_metadata() {
-    local service_name="$1"
-    local should_exist="$2"  # "true" or "false"
-
-    print_info "Checking FAISS index metadata..."
-
-    local metadata_count
-    metadata_count=$(docker exec mcp-gateway-registry-registry-1 grep -c "$service_name" /app/registry/servers/service_index_metadata.json 2>/dev/null || echo "0")
-    # Ensure we only get the last line if multiple lines are returned
-    metadata_count=$(echo "$metadata_count" | tail -1)
-
-    if [ "$should_exist" = "true" ] && [ "$metadata_count" -gt "0" ]; then
-        print_success "Server found in FAISS metadata ($metadata_count occurrences)"
-    elif [ "$should_exist" = "false" ] && [ "$metadata_count" -eq "0" ]; then
-        print_success "Server not found in FAISS metadata (expected)"
-    else
-        if [ "$should_exist" = "true" ]; then
-            print_error "Server not found in FAISS metadata"
-        else
-            print_error "Server still exists in FAISS metadata ($metadata_count occurrences)"
-        fi
-        return 1
-    fi
-}
-
 parse_health_output() {
     local json_output="$1"
     local service_filter="$2"
@@ -579,13 +554,6 @@ except Exception as e:
         exit 1
     fi
 
-    if ! verify_scopes_yml "$service_name" "true"; then
-        exit 1
-    fi
-
-    if ! verify_faiss_metadata "$service_name" "true"; then
-        exit 1
-    fi
 
     if [ $scan_exit_code -eq 1 ]; then
         #Disabling the server
@@ -668,14 +636,6 @@ delete_service() {
     echo "=== Verifying Deletion ==="
 
     if ! verify_server_in_list "$service_path" "false"; then
-        exit 1
-    fi
-
-    if ! verify_scopes_yml "$service_name" "false"; then
-        exit 1
-    fi
-
-    if ! verify_faiss_metadata "$service_name" "false"; then
         exit 1
     fi
 
