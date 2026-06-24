@@ -11,12 +11,10 @@ Tests all authentication dependencies including:
 """
 
 import logging
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-import yaml
 from fastapi import HTTPException, Request
 from itsdangerous import SignatureExpired, URLSafeTimedSerializer
 
@@ -467,98 +465,11 @@ class TestGetUserSessionData:
 
 
 # =============================================================================
-# TEST: load_scopes_config
+# TEST: map_cognito_groups_to_scopes
 # =============================================================================
 
 
 @pytest.mark.unit
-@pytest.mark.auth
-@pytest.mark.skip(reason="load_scopes_config function does not exist in dependencies.py")
-class TestLoadScopesConfig:
-    """Tests for load_scopes_config function."""
-
-    def test_load_scopes_config_from_default_path(self, tmp_path: Path, monkeypatch):
-        """Test loading scopes config from default path."""
-        # Arrange
-        scopes_file = tmp_path / "auth_server" / "scopes.yml"
-        scopes_file.parent.mkdir(parents=True)
-
-        test_config = {
-            "group_mappings": {
-                "test-group": ["test-scope"],
-            }
-        }
-
-        with open(scopes_file, "w") as f:
-            yaml.safe_dump(test_config, f)
-
-        # Set env var to point to our test file
-        monkeypatch.setenv("SCOPES_CONFIG_PATH", str(scopes_file))
-
-        # Act
-        config = load_scopes_config()
-
-        # Assert
-        assert "group_mappings" in config
-        assert "test-group" in config["group_mappings"]
-
-    def test_load_scopes_config_from_env_var(self, tmp_path: Path, monkeypatch):
-        """Test loading scopes config from SCOPES_CONFIG_PATH env var."""
-        # Arrange
-        scopes_file = tmp_path / "custom_scopes.yml"
-        test_config = {
-            "group_mappings": {
-                "custom-group": ["custom-scope"],
-            }
-        }
-
-        with open(scopes_file, "w") as f:
-            yaml.safe_dump(test_config, f)
-
-        monkeypatch.setenv("SCOPES_CONFIG_PATH", str(scopes_file))
-
-        # Act
-        config = load_scopes_config()
-
-        # Assert
-        assert "group_mappings" in config
-        assert "custom-group" in config["group_mappings"]
-
-    def test_load_scopes_config_file_not_found(self, monkeypatch):
-        """Test that missing scopes file returns empty dict."""
-        # Arrange
-        monkeypatch.delenv("SCOPES_CONFIG_PATH", raising=False)
-
-        # Mock Path to always return non-existent file
-        with patch("registry.auth.dependencies.Path") as mock_path:
-            mock_path.return_value.exists.return_value = False
-            mock_path.return_value.parent.exists.return_value = True
-            mock_path.return_value.parent.iterdir.return_value = []
-
-            # Act
-            config = load_scopes_config()
-
-        # Assert
-        assert config == {}
-
-    def test_load_scopes_config_yaml_error(self, tmp_path: Path, monkeypatch):
-        """Test that YAML parsing error returns empty dict."""
-        # Arrange
-        scopes_file = tmp_path / "invalid_scopes.yml"
-        scopes_file.write_text("invalid: yaml: content: [")
-
-        monkeypatch.setenv("SCOPES_CONFIG_PATH", str(scopes_file))
-
-        # Act
-        config = load_scopes_config()
-
-        # Assert
-        assert config == {}
-
-
-# =============================================================================
-# TEST: map_cognito_groups_to_scopes
-# =============================================================================
 
 
 @pytest.mark.unit

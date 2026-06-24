@@ -194,9 +194,9 @@
       "name": "intelligent_tool_finder",
       "parsed_description": {
         "main": "Finds the most relevant MCP tool(s) across all registered and enabled services based on a natural language query and/or tag filtering. IMPORTANT FOR AI AGENTS: Only use the 'tags' parameter if the user explicitly provides specific tags. DO NOT infer or guess tags from the query - incorrect tags will exclude valid results. When tags are provided with a query, results must match BOTH. If unsure about tags, use natural_language_query alone for best results.",
-        "args": "natural_language_query: Optional - Your query in natural language (recommended for AI agents unless user specifies tags). tags: Optional - List of tags to filter by using AND logic (CAUTION: Only use if explicitly provided by user). top_k_services: Number of top services from FAISS search (default: 3, ignored for tags-only). top_n_tools: Number of best tools to return (default: 1).",
+        "args": "natural_language_query: Optional - Your query in natural language (recommended for AI agents unless user specifies tags). tags: Optional - List of tags to filter by using AND logic (CAUTION: Only use if explicitly provided by user). top_k_services: Number of top services from semantic search (default: 3, ignored for tags-only). top_n_tools: Number of best tools to return (default: 1).",
         "returns": "List[Dict[str, Any]]: A list of dictionaries, each describing a recommended tool, its parent service, and similarity score (if semantic search used).",
-        "raises": "Exception: If neither query nor tags is provided, or if FAISS index/model is unavailable."
+        "raises": "Exception: If neither query nor tags is provided, or if search service is unavailable."
       },
       "schema": {
         "properties": {
@@ -223,7 +223,7 @@
           },
           "top_k_services": {
             "default": 3,
-            "description": "Number of top services to consider from initial FAISS search (ignored if only tags provided).",
+            "description": "Number of top services to consider from initial semantic search (ignored if only tags provided).",
             "title": "Top K Services",
             "type": "integer"
           },

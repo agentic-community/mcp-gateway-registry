@@ -1,11 +1,14 @@
 """
 Repository factory - creates concrete implementations based on configuration.
+
+Since v1.24.8 the only supported storage backend is DocumentDB / MongoDB.
+Every getter unconditionally returns the DocumentDB implementation.
 """
 
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..core.config import MONGODB_BACKENDS, settings
+from ..core.config import settings
 
 if TYPE_CHECKING:
     from ..services.custom_entity_service import CustomEntityService
@@ -57,18 +60,11 @@ def get_server_repository() -> ServerRepositoryBase:
     if _server_repo is not None:
         return _server_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating server repository with backend: {backend}")
+    logger.info(f"Creating server repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.server_repository import DocumentDBServerRepository
+    from .documentdb.server_repository import DocumentDBServerRepository
 
-        _server_repo = DocumentDBServerRepository()
-    else:
-        from .file.server_repository import FileServerRepository
-
-        _server_repo = FileServerRepository()
-
+    _server_repo = DocumentDBServerRepository()
     return _server_repo
 
 
@@ -79,18 +75,11 @@ def get_agent_repository() -> AgentRepositoryBase:
     if _agent_repo is not None:
         return _agent_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating agent repository with backend: {backend}")
+    logger.info(f"Creating agent repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.agent_repository import DocumentDBAgentRepository
+    from .documentdb.agent_repository import DocumentDBAgentRepository
 
-        _agent_repo = DocumentDBAgentRepository()
-    else:
-        from .file.agent_repository import FileAgentRepository
-
-        _agent_repo = FileAgentRepository()
-
+    _agent_repo = DocumentDBAgentRepository()
     return _agent_repo
 
 
@@ -101,18 +90,11 @@ def get_scope_repository() -> ScopeRepositoryBase:
     if _scope_repo is not None:
         return _scope_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating scope repository with backend: {backend}")
+    logger.info(f"Creating scope repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.scope_repository import DocumentDBScopeRepository
+    from .documentdb.scope_repository import DocumentDBScopeRepository
 
-        _scope_repo = DocumentDBScopeRepository()
-    else:
-        from .file.scope_repository import FileScopeRepository
-
-        _scope_repo = FileScopeRepository()
-
+    _scope_repo = DocumentDBScopeRepository()
     return _scope_repo
 
 
@@ -123,18 +105,11 @@ def get_security_scan_repository() -> SecurityScanRepositoryBase:
     if _security_scan_repo is not None:
         return _security_scan_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating security scan repository with backend: {backend}")
+    logger.info(f"Creating security scan repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.security_scan_repository import DocumentDBSecurityScanRepository
+    from .documentdb.security_scan_repository import DocumentDBSecurityScanRepository
 
-        _security_scan_repo = DocumentDBSecurityScanRepository()
-    else:
-        from .file.security_scan_repository import FileSecurityScanRepository
-
-        _security_scan_repo = FileSecurityScanRepository()
-
+    _security_scan_repo = DocumentDBSecurityScanRepository()
     return _security_scan_repo
 
 
@@ -145,18 +120,11 @@ def get_search_repository() -> SearchRepositoryBase:
     if _search_repo is not None:
         return _search_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating search repository with backend: {backend}")
+    logger.info(f"Creating search repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.search_repository import DocumentDBSearchRepository
+    from .documentdb.search_repository import DocumentDBSearchRepository
 
-        _search_repo = DocumentDBSearchRepository()
-    else:
-        from .file.search_repository import FaissSearchRepository
-
-        _search_repo = FaissSearchRepository()
-
+    _search_repo = DocumentDBSearchRepository()
     return _search_repo
 
 
@@ -167,18 +135,11 @@ def get_federation_config_repository() -> FederationConfigRepositoryBase:
     if _federation_config_repo is not None:
         return _federation_config_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating federation config repository with backend: {backend}")
+    logger.info(f"Creating federation config repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.federation_config_repository import DocumentDBFederationConfigRepository
+    from .documentdb.federation_config_repository import DocumentDBFederationConfigRepository
 
-        _federation_config_repo = DocumentDBFederationConfigRepository()
-    else:
-        from .file.federation_config_repository import FileFederationConfigRepository
-
-        _federation_config_repo = FileFederationConfigRepository()
-
+    _federation_config_repo = DocumentDBFederationConfigRepository()
     return _federation_config_repo
 
 
@@ -189,44 +150,26 @@ def get_peer_federation_repository() -> PeerFederationRepositoryBase:
     if _peer_federation_repo is not None:
         return _peer_federation_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating peer federation repository with backend: {backend}")
+    logger.info(f"Creating peer federation repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.peer_federation_repository import DocumentDBPeerFederationRepository
+    from .documentdb.peer_federation_repository import DocumentDBPeerFederationRepository
 
-        _peer_federation_repo = DocumentDBPeerFederationRepository()
-    else:
-        from .file.peer_federation_repository import FilePeerFederationRepository
-
-        _peer_federation_repo = FilePeerFederationRepository()
-
+    _peer_federation_repo = DocumentDBPeerFederationRepository()
     return _peer_federation_repo
 
 
 def get_audit_repository() -> AuditRepositoryBase:
-    """Get audit repository singleton.
-
-    Note: Audit repository only supports DocumentDB/MongoDB backends.
-    Returns None if storage backend is 'file'.
-    """
+    """Get audit repository singleton."""
     global _audit_repo
 
     if _audit_repo is not None:
         return _audit_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating audit repository with backend: {backend}")
+    logger.info(f"Creating audit repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .audit_repository import DocumentDBAuditRepository
+    from .audit_repository import DocumentDBAuditRepository
 
-        _audit_repo = DocumentDBAuditRepository()
-    else:
-        # Audit repository requires MongoDB - return None for file backend
-        logger.warning("Audit repository requires MongoDB backend. File backend not supported.")
-        return None
-
+    _audit_repo = DocumentDBAuditRepository()
     return _audit_repo
 
 
@@ -237,20 +180,11 @@ def get_skill_repository() -> SkillRepositoryBase:
     if _skill_repo is not None:
         return _skill_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating skill repository with backend: {backend}")
+    logger.info(f"Creating skill repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.skill_repository import DocumentDBSkillRepository
+    from .documentdb.skill_repository import DocumentDBSkillRepository
 
-        _skill_repo = DocumentDBSkillRepository()
-    else:
-        # File-based skill repository not implemented yet
-        # Fall back to DocumentDB repository for now
-        from .documentdb.skill_repository import DocumentDBSkillRepository
-
-        _skill_repo = DocumentDBSkillRepository()
-
+    _skill_repo = DocumentDBSkillRepository()
     return _skill_repo
 
 
@@ -261,18 +195,11 @@ def get_skill_security_scan_repository() -> SkillSecurityScanRepositoryBase:
     if _skill_security_scan_repo is not None:
         return _skill_security_scan_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating skill security scan repository with backend: {backend}")
+    logger.info(f"Creating skill security scan repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.skill_security_scan_repository import DocumentDBSkillSecurityScanRepository
+    from .documentdb.skill_security_scan_repository import DocumentDBSkillSecurityScanRepository
 
-        _skill_security_scan_repo = DocumentDBSkillSecurityScanRepository()
-    else:
-        from .file.skill_security_scan_repository import FileSkillSecurityScanRepository
-
-        _skill_security_scan_repo = FileSkillSecurityScanRepository()
-
+    _skill_security_scan_repo = DocumentDBSkillSecurityScanRepository()
     return _skill_security_scan_repo
 
 
@@ -283,47 +210,26 @@ def get_virtual_server_repository() -> VirtualServerRepositoryBase:
     if _virtual_server_repo is not None:
         return _virtual_server_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating virtual server repository with backend: {backend}")
+    logger.info(f"Creating virtual server repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.virtual_server_repository import DocumentDBVirtualServerRepository
+    from .documentdb.virtual_server_repository import DocumentDBVirtualServerRepository
 
-        _virtual_server_repo = DocumentDBVirtualServerRepository()
-    else:
-        # File-based virtual server repository not implemented
-        # Fall back to DocumentDB repository
-        from .documentdb.virtual_server_repository import DocumentDBVirtualServerRepository
-
-        _virtual_server_repo = DocumentDBVirtualServerRepository()
-
+    _virtual_server_repo = DocumentDBVirtualServerRepository()
     return _virtual_server_repo
 
 
-def get_backend_session_repository() -> BackendSessionRepositoryBase | None:
-    """Get backend session repository singleton.
-
-    Note: Backend session repository only supports DocumentDB/MongoDB backends.
-    Returns None if storage backend is 'file'.
-    """
+def get_backend_session_repository() -> BackendSessionRepositoryBase:
+    """Get backend session repository singleton."""
     global _backend_session_repo
 
     if _backend_session_repo is not None:
         return _backend_session_repo
 
-    backend = settings.storage_backend
-    logger.info(f"Creating backend session repository with backend: {backend}")
+    logger.info(f"Creating backend session repository with backend: {settings.storage_backend}")
 
-    if backend in MONGODB_BACKENDS:
-        from .documentdb.backend_session_repository import DocumentDBBackendSessionRepository
+    from .documentdb.backend_session_repository import DocumentDBBackendSessionRepository
 
-        _backend_session_repo = DocumentDBBackendSessionRepository()
-    else:
-        logger.warning(
-            "Backend session repository requires MongoDB backend. File backend not supported."
-        )
-        return None
-
+    _backend_session_repo = DocumentDBBackendSessionRepository()
     return _backend_session_repo
 
 
@@ -344,25 +250,15 @@ def get_registry_card_repository() -> RegistryCardRepositoryBase:
     return _registry_card_repo
 
 
-def get_app_log_repository() -> AppLogRepository | None:
-    """Get application log repository singleton.
-
-    Note: Only available with DocumentDB/MongoDB backends.
-    Returns None for file backend.
-    """
+def get_app_log_repository() -> AppLogRepository:
+    """Get application log repository singleton."""
     global _app_log_repo
 
     if _app_log_repo is not None:
         return _app_log_repo
 
-    backend = settings.storage_backend
-    if backend in MONGODB_BACKENDS:
-        _app_log_repo = AppLogRepository()
-        logger.info("Initialized application log repository (DocumentDB/MongoDB)")
-    else:
-        logger.warning("Application log repository requires MongoDB backend.")
-        return None
-
+    _app_log_repo = AppLogRepository()
+    logger.info("Initialized application log repository (DocumentDB/MongoDB)")
     return _app_log_repo
 
 

@@ -2,7 +2,7 @@
 
 Covers per-item authorization and the register/patch/replace/delete handlers,
 plus the top-level process_item dispatch and its exception capture. All external
-collaborators (agent_service, validator, faiss, gate, webhook) are mocked so a
+collaborators (agent_service, validator, gate, webhook) are mocked so a
 single failing item is exercised in isolation without MongoDB.
 """
 
@@ -141,10 +141,8 @@ class TestDoRegister:
             patch.object(proc, "_run_gate", AsyncMock(return_value=(True, ""))),
             patch.object(proc.agent_service, "register_agent", AsyncMock()),
             patch.object(proc.agent_service, "is_agent_enabled", AsyncMock(return_value=True)),
-            patch("registry.search.service.faiss_service") as faiss,
             patch.object(proc, "_fire_webhook") as fire,
         ):
-            faiss.add_or_update_entity = AsyncMock()
             result = await proc._do_register(0, item, "alice")
         assert result.status == 201
         fire.assert_called_once()
@@ -255,10 +253,8 @@ class TestDoDelete:
         with (
             patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=_existing())),
             patch.object(proc.agent_service, "remove_agent", AsyncMock(return_value=True)),
-            patch("registry.search.service.faiss_service") as faiss,
             patch.object(proc, "_fire_webhook") as fire,
         ):
-            faiss.remove_entity = AsyncMock()
             result = await proc._do_delete(0, item, "alice")
         assert result.status == 204
         assert fire.call_args.args[0] == "deletion"

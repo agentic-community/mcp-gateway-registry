@@ -292,7 +292,7 @@ The MCP Gateway Registry supports three storage backends for servers, agents, an
 - **Status**: **DEPRECATED** - Will be removed in a future release
 - **Migration Path**: Switch to MongoDB CE for local development or DocumentDB for production
 - **Pros**: Simple, no external dependencies, human-readable JSON files
-- **Cons**: Limited concurrent writes, no distributed access, FAISS-based vector search, **deprecated**
+- **Cons**: Limited concurrent writes, no distributed access, no native vector search, **deprecated**
 
 ```bash
 STORAGE_BACKEND=file  # DEPRECATED - Use mongodb-ce instead

@@ -348,9 +348,14 @@ async def get_telemetry_detection_info(
         - cloud: aws/gcp/azure/unknown
         - cloud_detection_method: env/dmi/ecs_meta/k8s_heuristic/imds/unknown
     """
-    from ..core.telemetry import _detect_cloud_provider_with_method
+    from ..core.telemetry import _resolve_cloud
 
-    cloud, method = _detect_cloud_provider_with_method()
+    # Use the resolved value so the displayed cloud honors operator overrides
+    # (MCP_CLOUD_PROVIDER env var and the registry-card cloud-provider hint),
+    # matching what is actually reported in telemetry events. The raw
+    # auto-detection cascade alone would, for example, report "aws" purely
+    # because AWS_REGION is set, even on an on-premises/local install.
+    cloud, method = await _resolve_cloud()
     return {"cloud": cloud, "cloud_detection_method": method}
 
 

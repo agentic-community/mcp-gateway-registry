@@ -4,7 +4,7 @@ The registry storage layer accepts a full MongoDB connection string via the `MON
 
 When the variable is empty or unset, the registry falls back to the `DOCUMENTDB_*` variables, so existing deployments keep working unchanged.
 
-> **Required `STORAGE_BACKEND` value for Atlas:** pick any one of `mongodb-ce`, `mongodb`, or `mongodb-atlas`. All three are aliases routing to the same MongoDB/DocumentDB repository code path. Setting `STORAGE_BACKEND` to any other value (for example the intuitive-but-wrong `mongo`) causes the registry to fail startup with an error listing the accepted values. Releases before issue #954 shipped silently fell back to the local file/FAISS backend with `STORAGE_BACKEND=mongodb`, which produced a half-broken deployment (see `CHANGELOG` / release notes). Upgrade to a release that includes the `MONGODB_BACKENDS` alias support if you are on an older version.
+> **Required `STORAGE_BACKEND` value for Atlas:** pick any one of `mongodb-ce`, `mongodb`, or `mongodb-atlas`. All three are aliases routing to the same MongoDB/DocumentDB repository code path. Setting `STORAGE_BACKEND` to any other value (for example the intuitive-but-wrong `mongo`) causes the registry to fail startup with an error listing the accepted values. Releases before issue #954 shipped silently fell back to the local file-based backend with `STORAGE_BACKEND=mongodb`, which produced a half-broken deployment (see `CHANGELOG` / release notes). Upgrade to a release that includes the `MONGODB_BACKENDS` alias support if you are on an older version.
 
 ## Prerequisites
 

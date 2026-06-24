@@ -51,6 +51,9 @@ spec:
             - mountPath: /app/mcp-servers-unrestricted-read.json
               name: script
               subPath: mcp-servers-unrestricted-read.json
+            - mountPath: /app/federation-service.json
+              name: script
+              subPath: federation-service.json
       restartPolicy: Never
       volumes:
         - name: script

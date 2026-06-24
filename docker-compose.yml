@@ -61,6 +61,7 @@ services:
       - ./scripts/mcp-registry-admin.json:/app/scripts/mcp-registry-admin.json:ro
       - ./scripts/mcp-servers-unrestricted-read.json:/app/scripts/mcp-servers-unrestricted-read.json:ro
       - ./scripts/mcp-servers-unrestricted-execute.json:/app/scripts/mcp-servers-unrestricted-execute.json:ro
+      - ./scripts/federation-service.json:/app/scripts/federation-service.json:ro
     command: >
       sh -c "
       pip install --quiet motor pymongo &&
@@ -225,7 +226,7 @@ services:
       - GITHUB_EXTRA_HOSTS=${GITHUB_EXTRA_HOSTS:-}
       - GITHUB_API_BASE_URL=${GITHUB_API_BASE_URL:-https://api.github.com}
       # Storage Backend Configuration
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-mongodb-ce}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb)
       # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
       # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
@@ -353,7 +354,6 @@ services:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/agents:/app/registry/agents
       - ${HOME}/mcp-gateway/models:/app/registry/models
-      - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       - ${HOME}/.aws:/root/.aws:ro
@@ -505,7 +505,7 @@ services:
       - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
       - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
       # Storage Backend Configuration
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-mongodb-ce}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
       # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
       # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
@@ -562,7 +562,6 @@ services:
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
       # Audit logs (named volume, unchanged)
       - auth-logs:/app/logs
-      # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
     depends_on:
       metrics-service:
         condition: service_healthy
@@ -638,7 +637,6 @@ services:
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models
-      - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:

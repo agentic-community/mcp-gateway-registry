@@ -57,9 +57,6 @@ COPY cli/examples/ /app/cli/examples/
 # deps already installed above by `uv sync --locked`).
 RUN . .venv/bin/activate && uv pip install --no-deps -e .
 
-# Copy scopes.yml to /app/config/ to avoid EFS mount overwriting it
-RUN mkdir -p /app/config && cp /app/auth_server/scopes.yml /app/config/scopes.yml
-
 # ===== FINAL RUNTIME STAGE =====
 FROM python:3.14.6-slim AS runtime
 
@@ -127,7 +124,6 @@ RUN chmod +x /app/registry-entrypoint.sh
 COPY --from=backend-builder --chown=appuser:appuser /app/registry /app/registry
 COPY --from=backend-builder --chown=appuser:appuser /app/auth_server /app/auth_server
 COPY --from=backend-builder --chown=appuser:appuser /app/api /app/api
-COPY --from=backend-builder --chown=appuser:appuser /app/config /app/config
 COPY --from=backend-builder --chown=appuser:appuser /app/scripts /app/scripts
 COPY --from=backend-builder --chown=appuser:appuser /app/cli/examples /app/cli/examples
 
@@ -148,6 +144,7 @@ COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/build /app/fr
 # the reload — which silently drops new servers' location blocks.
 RUN mkdir -p /app/logs && \
     mkdir -p /app/certs && \
+    mkdir -p /app/config && \
     mkdir -p /app/security_scans /app/skill_security_scans /app/agent_security_scans && \
     mkdir -p /etc/nginx/lua/virtual_mappings && \
     rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default && \
@@ -156,7 +153,7 @@ RUN mkdir -p /app/logs && \
     mkdir -p /var/log/containers/ai-registry && \
     mkdir -p /run/nginx && \
     sed -i 's|pid /run/nginx.pid;|pid /run/nginx/nginx.pid;|' /etc/nginx/nginx.conf && \
-    chown -R appuser:appuser /app/logs /app/certs /app/security_scans /app/skill_security_scans /app/agent_security_scans /etc/nginx /var/log/nginx /var/log/containers/ai-registry /var/lib/nginx /run/nginx
+    chown -R appuser:appuser /app/logs /app/certs /app/config /app/security_scans /app/skill_security_scans /app/agent_security_scans /etc/nginx /var/log/nginx /var/log/containers/ai-registry /var/lib/nginx /run/nginx
 
 # Expose ports for nginx (HTTP/HTTPS on high ports for non-root) and registry
 EXPOSE 8080 8443 7860

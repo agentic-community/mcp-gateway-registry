@@ -5,7 +5,8 @@ Covers the _validate_storage_backend @field_validator added by issue #954:
 - Accepts every value in ALLOWED_STORAGE_BACKENDS.
 - Rejects typos with a ValidationError whose message lists the allowlist.
 - Normalizes case and whitespace.
-- Coerces empty/unset values to the historical default ("file").
+- Coerces empty/unset values to "mongodb-ce".
+- Rejects the legacy "file" value with an actionable migration message.
 """
 
 import pytest
@@ -111,7 +112,6 @@ class TestStorageBackendNormalization:
             ("MONGODB", "mongodb"),
             ("MONGODB-CE", "mongodb-ce"),
             ("DocumentDB", "documentdb"),
-            ("FILE", "file"),
             ("  mongodb  ", "mongodb"),
             ("\tmongodb-atlas\n", "mongodb-atlas"),
         ],
@@ -135,33 +135,49 @@ class TestStorageBackendNormalization:
 @pytest.mark.unit
 @pytest.mark.core
 class TestStorageBackendEmptyValues:
-    """Empty/unset STORAGE_BACKEND coerces to the historical default."""
+    """Empty/unset STORAGE_BACKEND coerces to mongodb-ce."""
 
-    def test_empty_string_coerces_to_file(
+    def test_empty_string_coerces_to_mongodb_ce(
         self,
         monkeypatch,
         tmp_path,
     ) -> None:
-        """STORAGE_BACKEND="" must not error; coerces to 'file'."""
+        """STORAGE_BACKEND="" must not error; coerces to 'mongodb-ce'."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("STORAGE_BACKEND", "")
 
         settings = Settings()
 
-        assert settings.storage_backend == "file"
+        assert settings.storage_backend == "mongodb-ce"
 
-    def test_unset_defaults_to_file(
+    def test_unset_defaults_to_mongodb_ce(
         self,
         monkeypatch,
         tmp_path,
     ) -> None:
-        """Unset STORAGE_BACKEND uses the Field default."""
+        """Unset STORAGE_BACKEND uses the Field default ('mongodb-ce')."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("STORAGE_BACKEND", raising=False)
 
         settings = Settings()
 
-        assert settings.storage_backend == "file"
+        assert settings.storage_backend == "mongodb-ce"
+
+    def test_file_backend_rejected_with_migration_message(
+        self,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        """STORAGE_BACKEND='file' must raise ValueError with migration instructions."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("STORAGE_BACKEND", "file")
+
+        with pytest.raises(ValidationError) as excinfo:
+            Settings()
+
+        message = str(excinfo.value)
+        assert "removed" in message.lower() or "file" in message.lower()
+        assert "mongodb-ce" in message or "documentdb" in message
 
 
 @pytest.mark.unit

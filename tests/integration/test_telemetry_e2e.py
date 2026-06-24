@@ -30,7 +30,7 @@ pytestmark = pytest.mark.asyncio
 
 
 def _mock_settings(
-    storage_backend: str = "file",
+    storage_backend: str = "mongodb-ce",
     telemetry_enabled: bool = True,
     telemetry_opt_out: bool = False,
     telemetry_heartbeat_interval_minutes: int = 1440,
@@ -308,12 +308,15 @@ class TestHeartbeat:
         assert isinstance(payload["agents_count"], int)
         assert isinstance(payload["uptime_hours"], int)
 
-    async def test_heartbeat_payload_search_backend_file(self, monkeypatch):
-        """File storage maps to 'faiss' search backend in heartbeat payload."""
+    async def test_heartbeat_payload_search_backend_mongodb_ce(self, monkeypatch):
+        """MongoDB-CE storage maps to 'documentdb' search backend in heartbeat payload."""
         repo = _mock_repo_factory()
 
         with (
-            patch("registry.core.telemetry.settings", _mock_settings(storage_backend="file")),
+            patch(
+                "registry.core.telemetry.settings",
+                _mock_settings(storage_backend="mongodb-ce"),
+            ),
             patch("registry.api.system_routes.get_server_start_time", return_value=None),
             patch("registry.repositories.factory.get_server_repository", return_value=repo),
             patch("registry.repositories.factory.get_agent_repository", return_value=repo),
@@ -332,7 +335,7 @@ class TestHeartbeat:
 
             payload = await _build_heartbeat_payload()
 
-        assert payload["search_backend"] == "faiss"
+        assert payload["search_backend"] == "documentdb"
 
     async def test_heartbeat_payload_search_backend_documentdb(self, monkeypatch):
         """DocumentDB storage maps to 'documentdb' search backend."""

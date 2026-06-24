@@ -13,22 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def mock_faiss_service():
-    """
-    Create a mock FAISS service for testing.
-
-    Returns:
-        Mock FAISS service with common methods
-    """
-    service = MagicMock()
-    service.add_server = MagicMock()
-    service.remove_server = MagicMock()
-    service.search = MagicMock(return_value=[])
-    service.get_index_size = MagicMock(return_value=0)
-    return service
-
-
-@pytest.fixture
 def mock_embeddings_client():
     """
     Create a mock embeddings client for testing.

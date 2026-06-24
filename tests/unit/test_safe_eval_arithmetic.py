@@ -3,7 +3,6 @@
 import importlib.util
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 # agents/ is a standalone script directory, not an installed package.
 # Add it to sys.path so that `from registry_client import ...` inside
@@ -21,20 +20,6 @@ if "registry_client" not in sys.modules:
     _registry_client = importlib.util.module_from_spec(_spec)
     sys.modules["registry_client"] = _registry_client
     _spec.loader.exec_module(_registry_client)
-
-# The root conftest installs a MockFaissModule into sys.modules["faiss"] that
-# lacks a __spec__ attribute. When agents.agent imports langchain_anthropic,
-# which imports transformers, which calls importlib.util.find_spec("faiss"),
-# Python raises ValueError: faiss.__spec__ is not set. Patch __spec__ here so
-# the import chain succeeds.
-if "faiss" in sys.modules:
-    faiss_mod = sys.modules["faiss"]
-    if getattr(faiss_mod, "__spec__", None) is None:
-        faiss_mod.__spec__ = MagicMock(name="faiss.__spec__")
-else:
-    _faiss_mock = MagicMock()
-    _faiss_mock.__spec__ = MagicMock(name="faiss.__spec__")
-    sys.modules["faiss"] = _faiss_mock
 
 import pytest
 

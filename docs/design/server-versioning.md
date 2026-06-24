@@ -426,7 +426,7 @@ Switching the active version (`set_default_version`) is the most complex operati
 5. Delete the old active and target inactive documents
 6. Insert the new active and new inactive documents
 7. Update the `other_version_ids` array (remove target, add old active)
-8. Re-index the FAISS search entry with the new active version's data
+8. Re-index the search entry with the new active version's data
 9. Regenerate nginx configuration and reload
 10. Trigger an immediate background health check for the newly active version
 

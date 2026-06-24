@@ -244,6 +244,7 @@ async def _load_default_scopes(
         "mcp-registry-admin.json",
         "mcp-servers-unrestricted-read.json",
         "mcp-servers-unrestricted-execute.json",
+        "federation-service.json",
     ]
 
     loaded_count = 0

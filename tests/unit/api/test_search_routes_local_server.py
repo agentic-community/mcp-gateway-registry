@@ -48,7 +48,7 @@ class TestSemanticSearchLocalServer:
         mock_repo,
         admin_ctx,
     ):
-        """A FAISS hit for a local server should set endpoint_url=None on the
+        """A search hit for a local server should set endpoint_url=None on the
         result (no gateway URL to GET) and surface deployment + local_runtime
         so the client can build a stdio launch recipe."""
         local_runtime = {

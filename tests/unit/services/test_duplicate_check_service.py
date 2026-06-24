@@ -582,7 +582,7 @@ class TestSimilarityAdvisory:
         assert paths == ["/alpha"]
 
     async def test_search_unavailable_returns_available_false(self, monkeypatch) -> None:
-        service = _build_service(monkeypatch, search_raises=RuntimeError("FAISS down"))
+        service = _build_service(monkeypatch, search_raises=RuntimeError("search unavailable"))
         result = await service.check(**_check_kwargs(name="X", description="Y"))
         assert result.collision_with == []
         assert result.advisory_matches == []

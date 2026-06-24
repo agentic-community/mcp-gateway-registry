@@ -20,7 +20,7 @@
 
 The MCP Gateway Registry supports three storage backends for data persistence:
 
-1. **File-Based Backend** (Legacy) - JSON/YAML files with FAISS
+1. **File-Based Backend** (Legacy) - JSON/YAML files with application-level search
 2. **MongoDB CE** (Local Development) - MongoDB Community Edition 8.2 with application-level vector search
 3. **AWS DocumentDB** (Production) - MongoDB-compatible service with native vector search
 
@@ -50,13 +50,13 @@ This document focuses on the MongoDB and DocumentDB backends, which provide dist
 │ File Backend     │  │ MongoDB CE      │  │ AWS DocumentDB   │
 ├──────────────────┤  ├─────────────────┤  ├──────────────────┤
 │ FileServerRepo   │  │ DocumentDBRepo  │  │ DocumentDBRepo   │
-│ FaissSearch      │  │ + App-level     │  │ + Native         │
+│ App-level search │  │ + App-level     │  │ + Native         │
 │                  │  │   vector search │  │   vector search  │
 └──────────────────┘  └─────────────────┘  └──────────────────┘
          │                      │                     │
          ▼                      ▼                     ▼
     Local Files        Local MongoDB CE     AWS DocumentDB
-   (JSON + FAISS)        (Docker)           (Managed Service)
+   (JSON files)          (Docker)           (Managed Service)
 ```
 
 ---
@@ -69,7 +69,7 @@ This document focuses on the MongoDB and DocumentDB backends, which provide dist
 |--------|------|------------|----------------|
 | **Use Case** | Dev/Testing | Local Development | Production |
 | **Scalability** | ~1000 entities | 10,000s | Millions |
-| **Vector Search** | FAISS (app-level) | App-level (Python) | Native (HNSW) |
+| **Vector Search** | App-level (Python) | App-level (Python) | Native (HNSW) |
 | **Setup Complexity** | None | Docker Compose | Terraform/AWS |
 | **Concurrency** | Limited | Good | Excellent |
 | **HA/Clustering** | No | Manual | Automatic |

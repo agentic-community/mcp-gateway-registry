@@ -6,7 +6,7 @@ When using the `--prebuilt` option with `build_and_run.sh`, the following pre-bu
 
 | Service | Image | Default Tag | Description | Port |
 |---------|-------|-------------|-------------|------|
-| Registry | `mcpgateway/registry:latest` | latest | Main registry service with nginx, SSL, FAISS, and models | 80, 443, 7860 |
+| Registry | `mcpgateway/registry:latest` | latest | Main registry service with nginx, SSL, and search models | 80, 443, 7860 |
 | Auth Server | `mcpgateway/auth-server:latest` | latest | Authentication service supporting Cognito, GitHub, Google, and Keycloak | 8888 |
 | Metrics Service | `mcpgateway/metrics-service:latest` | latest | Metrics collection service with SQLite storage and OTEL support | 8890, 9465 |
 | Current Time Server | `mcpgateway/currenttime-server:latest` | latest | MCP server providing current time functionality | 8000 |

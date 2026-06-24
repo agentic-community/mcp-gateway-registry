@@ -299,7 +299,6 @@ session_cookie_domain = ""
 #   "documentdb"    - Provision AWS DocumentDB (this module manages the cluster).
 #                     NOTE: DocumentDB is not available in every region - verify
 #                     your aws_region supports it before deploying.
-#   "file"          - JSON files only, no DocumentDB provisioned (local/dev).
 #   "mongodb-ce" / "mongodb" / "mongodb-atlas"
 #                   - External MongoDB you already own. No DocumentDB provisioned.
 #                     Requires mongodb_connection_string or *_secret_arn (see below).
@@ -362,7 +361,6 @@ storage_backend = "documentdb"
 #   mongodb_connection_string_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:mongodb-atlas-uri-XXXXXX"
 #
 # Accepted storage_backend values (must match registry/core/config.py):
-#   "file"          - JSON files, no DocumentDB provisioned
 #   "documentdb"    - Provision AWS DocumentDB (this module manages the cluster)
 #   "mongodb-ce"    - External MongoDB CE, URI via mongodb_connection_string*
 #   "mongodb"       - Alias for mongodb-ce
@@ -397,7 +395,7 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 
 # Multi-key static tokens with per-key group assignments (JSON string)
 # Each key maps a label to a key/groups pair. Clients send: Authorization: Bearer <key value>
-# Groups must exist in scopes.yml group_mappings for scope resolution.
+# Groups must exist in the group_mappings configuration for scope resolution.
 # Can also be set via environment variable:
 #   export TF_VAR_registry_api_keys='{"monitoring":{"key":"<token>","groups":["public-mcp-users"]}}'
 #

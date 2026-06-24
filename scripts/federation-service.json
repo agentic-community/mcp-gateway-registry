@@ -1,0 +1,24 @@
+{
+  "_id": "federation-service",
+  "group_mappings": ["federation-service"],
+  "server_access": [
+    {
+      "server": "api",
+      "methods": ["initialize", "GET"]
+    },
+    {
+      "agents": {
+        "actions": [
+          {"action": "list_agents", "resources": ["all"]},
+          {"action": "get_agent", "resources": ["all"]}
+        ]
+      }
+    }
+  ],
+  "ui_permissions": {
+    "list_agents": ["all"],
+    "get_agent": ["all"],
+    "list_service": ["all"],
+    "health_check_service": ["all"]
+  }
+}

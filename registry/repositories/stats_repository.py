@@ -6,8 +6,8 @@ Stores counters at three granularities:
 - daily: resets every 24 hours
 - forever: never resets
 
-MongoDB storage uses the mcp_stats_{namespace} collection.
-File-based storage uses {data_dir}/.stats.json.
+Primary storage is the mcp_stats_{namespace} MongoDB collection.
+Falls back to a local JSON file ({data_dir}/.stats.json) on error.
 """
 
 import fcntl
@@ -16,7 +16,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ..core.config import MONGODB_BACKENDS, settings
+from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +27,7 @@ async def increment_search_counter() -> None:
     Fail-silent: never impacts search operation.
     """
     try:
-        if settings.storage_backend in MONGODB_BACKENDS:
-            await _increment_mongodb()
-        else:
-            _increment_file()
+        await _increment_mongodb()
     except Exception as e:
         logger.debug(f"[stats] Failed to increment search counter: {e}")
 
@@ -42,10 +39,7 @@ async def get_search_count() -> int:
         Cumulative search count, or 0 on failure.
     """
     try:
-        if settings.storage_backend in MONGODB_BACKENDS:
-            return await _get_count_mongodb()
-        else:
-            return _get_count_file()
+        return await _get_count_mongodb()
     except Exception as e:
         logger.debug(f"[stats] Failed to get search count: {e}")
         return 0
@@ -58,10 +52,7 @@ async def get_search_counts() -> dict[str, int]:
         Dict with keys: total, last_24h, last_1h (all default to 0 on failure).
     """
     try:
-        if settings.storage_backend in MONGODB_BACKENDS:
-            return await _get_counts_mongodb()
-        else:
-            return _get_counts_file()
+        return await _get_counts_mongodb()
     except Exception as e:
         logger.debug(f"[stats] Failed to get search counts: {e}")
         return {"total": 0, "last_24h": 0, "last_1h": 0}

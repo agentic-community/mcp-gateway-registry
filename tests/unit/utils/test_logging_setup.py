@@ -101,25 +101,6 @@ class TestSetupLogging:
             mongo_handlers = [h for h in root.handlers if isinstance(h, MongoDBLogHandler)]
             assert len(mongo_handlers) == 0
 
-    def test_mongodb_handler_skipped_for_file_backend(self, tmp_path):
-        with patch("registry.core.config.settings") as mock_settings:
-            mock_settings.app_log_level = "INFO"
-            mock_settings.app_log_max_bytes = 50 * 1024 * 1024
-            mock_settings.app_log_backup_count = 5
-            mock_settings.app_log_centralized_enabled = True
-            mock_settings.storage_backend = "file"
-            mock_settings.log_dir = tmp_path
-
-            from registry.utils.logging_setup import setup_logging
-
-            setup_logging(service_name="test", log_file=tmp_path / "test.log")
-
-            root = logging.getLogger()
-            from registry.utils.mongodb_log_handler import MongoDBLogHandler
-
-            mongo_handlers = [h for h in root.handlers if isinstance(h, MongoDBLogHandler)]
-            assert len(mongo_handlers) == 0
-
     def test_clears_existing_handlers(self, tmp_path):
         root = logging.getLogger()
         dummy_handler = logging.StreamHandler()

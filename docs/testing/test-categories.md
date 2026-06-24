@@ -36,7 +36,7 @@ Tests are organized using pytest markers to enable selective test execution:
   - Should be minimized
 
 - **`@pytest.mark.requires_models`** - Tests requiring real ML models
-  - Will load actual embeddings models and FAISS
+  - Will load actual embeddings models and vector search
   - **WARNING**: These tests can cause OOM on small EC2 instances
   - Should only be used when absolutely necessary
   - Consider if the functionality can be tested with mocks instead
@@ -45,7 +45,7 @@ Tests are organized using pytest markers to enable selective test execution:
 
 By default, **ALL** tests use mocked versions of heavy dependencies to prevent OOM crashes:
 
-- **FAISS service** - Mocked automatically
+- **Search service** - Mocked automatically
 - **Embeddings models** - Mocked automatically
 - **Sentence-transformers** - Mocked automatically
 - **PyTorch model loading** - Blocked
@@ -62,7 +62,7 @@ import pytest
 @pytest.mark.unit
 def test_server_registration(server_service, sample_server):
     """Test server registration with mocked dependencies."""
-    # FAISS and embeddings are automatically mocked
+    # Search service and embeddings are automatically mocked
     server_service.register_server(sample_server)
     assert server_service.is_registered(sample_server["name"])
 ```
@@ -80,14 +80,14 @@ import pytest
 @pytest.mark.requires_models  # Mark as requiring real models
 @pytest.mark.slow  # Will be slow
 @pytest.mark.integration  # Not a unit test
-def test_real_embeddings_search(real_faiss_service):
+def test_real_embeddings_search(real_search_service):
     """Test search with real embeddings model.
 
     WARNING: This test loads real ML models and may cause OOM on small instances.
     """
-    # This test actually loads sentence-transformers and FAISS
-    await real_faiss_service.initialize()
-    results = await real_faiss_service.search_services("test query")
+    # This test actually loads sentence-transformers and search dependencies
+    await real_search_service.initialize()
+    results = await real_search_service.search_services("test query")
     assert len(results) > 0
 ```
 
@@ -107,7 +107,7 @@ pytest -m "not requires_models"
 
 These fixtures are automatically mocked for all tests:
 
-- `mock_faiss_service` - Mocked FAISS vector database
+- `mock_search_service` - Mocked vector search service
 - `mock_embeddings` - Mocked embeddings client
 - `prevent_real_model_loading` - Prevents torch/sentence-transformers loading
 

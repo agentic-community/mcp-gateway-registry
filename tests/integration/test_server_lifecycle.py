@@ -51,23 +51,6 @@ def mock_nginx_service():
 
 
 @pytest.fixture
-def mock_faiss_service():
-    """
-    Mock FAISS service to avoid actual embedding operations.
-
-    Returns:
-        Mock FAISS service instance
-    """
-    with patch("registry.search.service.faiss_service") as mock_faiss:
-        mock_faiss.initialize = AsyncMock()
-        mock_faiss.add_or_update_service = AsyncMock()
-        mock_faiss.add_or_update_agent = AsyncMock()
-        mock_faiss.remove_service = AsyncMock()
-        mock_faiss.save_data = AsyncMock()
-        yield mock_faiss
-
-
-@pytest.fixture
 def mock_health_service():
     """
     Mock health service to avoid actual health checks.
@@ -215,7 +198,6 @@ def test_server_data_2() -> dict[str, Any]:
 def setup_test_environment(
     mock_settings,
     mock_nginx_service,
-    mock_faiss_service,
     mock_health_service,
     mock_agent_service,
     mock_auth_dependencies,

@@ -322,7 +322,7 @@ SELECT
     results_count,
     ROUND(duration_ms, 2) as dur_ms,
     ROUND(embedding_time_ms, 2) as embed_ms,
-    ROUND(faiss_search_time_ms, 2) as search_ms
+    ROUND(vector_search_time_ms, 2) as search_ms
 FROM discovery_metrics
 ORDER BY timestamp DESC
 LIMIT 20;
@@ -336,7 +336,7 @@ SELECT
     ROUND(AVG(results_count), 2) as avg_results,
     ROUND(AVG(duration_ms), 2) as avg_duration_ms,
     ROUND(AVG(embedding_time_ms), 2) as avg_embedding_ms,
-    ROUND(AVG(faiss_search_time_ms), 2) as avg_search_ms
+    ROUND(AVG(vector_search_time_ms), 2) as avg_search_ms
 FROM discovery_metrics;
 ```
 
@@ -854,7 +854,7 @@ The MCP Gateway includes pre-configured Grafana dashboards for:
 3. **Discovery Metrics**
    - Search query volume
    - Result counts
-   - Performance breakdown (embedding vs. FAISS search)
+   - Performance breakdown (embedding vs. vector search)
 
 4. **System Health**
    - Overall request volume
@@ -1002,7 +1002,7 @@ docker compose logs metrics-service | grep -i otel
 | top_k_services | INTEGER | Number of services requested |
 | top_n_tools | INTEGER | Number of tools requested |
 | embedding_time_ms | REAL | Time to generate embeddings |
-| faiss_search_time_ms | REAL | Time for FAISS search |
+| vector_search_time_ms | REAL | Time for vector search |
 | created_at | TEXT | Record creation time |
 
 ## Additional Resources

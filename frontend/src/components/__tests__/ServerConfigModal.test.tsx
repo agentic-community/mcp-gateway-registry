@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import axios from 'axios';
 import ServerConfigModal from '../ServerConfigModal';
 import type { Server } from '../ServerCard';
@@ -166,6 +166,60 @@ describe('ServerConfigModal IDE OAuth login (oauth_client_id)', () => {
     });
     const serverConfig = getDisplayedConfig().mcpServers['test-server'];
     expect(serverConfig.headers).toBeUndefined();
+  });
+
+  test('Cursor: omits the server Authorization header for a bearer server under OAuth login', async () => {
+    // The gateway injects the stored egress credential upstream, so the client
+    // config must not carry the [YOUR_SERVER_AUTH_TOKEN] placeholder.
+    connectConfig = { custom_headers: [], oauth_client_id: 'mcp-gateway' };
+
+    renderModal({ auth_scheme: 'bearer' } as Partial<Server>);
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.auth).toEqual({ CLIENT_ID: 'mcp-gateway' });
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+    // No headers block at all: gateway token omitted (OAuth) and server auth
+    // header suppressed.
+    expect(serverConfig.headers).toBeUndefined();
+  });
+
+  test('Roo Code: drops server Authorization but keeps the static gateway token under OAuth login', async () => {
+    // Roo Code can't run the IDE OAuth-login config, so it keeps the static
+    // X-Authorization gateway token — but the gateway still injects the egress
+    // credential, so the server Authorization header must be omitted.
+    connectConfig = { custom_headers: [], oauth_client_id: 'mcp-gateway' };
+
+    renderModal({ auth_scheme: 'bearer' } as Partial<Server>);
+
+    await waitFor(() => screen.getByRole('button', { name: 'Roo Code' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Roo Code' }));
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.type).toBe('streamable-http');
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+    expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
+    expect(serverConfig.headers.Authorization).toBeUndefined();
+  });
+
+  test('Kiro: drops server Authorization but keeps the static gateway token under OAuth login', async () => {
+    connectConfig = { custom_headers: [], oauth_client_id: 'mcp-gateway' };
+
+    renderModal({ auth_scheme: 'bearer' } as Partial<Server>);
+
+    await waitFor(() => screen.getByRole('button', { name: 'Kiro' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Kiro' }));
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.autoApprove).toBeDefined();
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+    expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
+    expect(serverConfig.headers.Authorization).toBeUndefined();
   });
 
   test('Cursor: keeps the static gateway token when oauth_client_id is absent', async () => {

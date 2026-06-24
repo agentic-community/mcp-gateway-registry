@@ -331,7 +331,7 @@ curl -b "mcp_gateway_session=<session_value>" \
 
 **Endpoint:** `POST /api/agents/discover/semantic`
 
-**Purpose:** Find agents using NLP semantic search (FAISS vector search)
+**Purpose:** Find agents using NLP semantic search (DocumentDB vector search)
 
 **Authentication:** Optional
 

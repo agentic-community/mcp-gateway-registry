@@ -124,7 +124,7 @@ services:
       - GITHUB_EXTRA_HOSTS=${GITHUB_EXTRA_HOSTS:-}
       - GITHUB_API_BASE_URL=${GITHUB_API_BASE_URL:-https://api.github.com}
       # Storage Backend Configuration
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-mongodb-ce}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb)
       # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
       # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
@@ -246,7 +246,6 @@ services:
       # Audit logs kept under ${HOME}/mcp-gateway/logs (legacy path)
       - ${HOME}/mcp-gateway/logs:/app/logs
       - ${HOME}/mcp-gateway/security_scans:/app/security_scans
-      - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
@@ -368,7 +367,7 @@ services:
       # IdP user-to-group fallback (issue #1127)
       - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Storage Backend Configuration
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-mongodb-ce}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
       # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
       # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
@@ -422,7 +421,6 @@ services:
       - ${HOME}/mcp-gateway/logs:/app/logs
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
-      # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
     depends_on:
       metrics-service:
         condition: service_healthy
@@ -490,7 +488,6 @@ services:
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models
-      - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
@@ -711,6 +708,7 @@ services:
     volumes:
       - ./scripts/init-mongodb-ce.py:/app/scripts/init-mongodb-ce.py:ro
       - ./scripts/registry-admins.json:/app/scripts/registry-admins.json:ro
+      - ./scripts/federation-service.json:/app/scripts/federation-service.json:ro
     command: >
       sh -c "
       pip install --quiet motor pymongo &&

@@ -73,8 +73,6 @@ def _run(client, agent, remote_card, *, query="", update_return=None, enabled=Tr
     svc.get_agent_info = AsyncMock(return_value=agent)
     svc.update_agent = AsyncMock(return_value=update_return or agent)
     svc.is_agent_enabled = AsyncMock(return_value=enabled)
-    faiss = MagicMock()
-    faiss.add_or_update_entity = AsyncMock()
 
     with (
         patch("registry.api.agent_routes._check_agent_permission", MagicMock()),
@@ -83,16 +81,15 @@ def _run(client, agent, remote_card, *, query="", update_return=None, enabled=Tr
             "registry.api.agent_routes._fetch_remote_agent_card",
             AsyncMock(return_value=(remote_card, CARD_URL)),
         ),
-        patch("registry.search.service.faiss_service", faiss),
     ):
         resp = client.post(f"/agents{AGENT_PATH}/pull-card{query}")
-    return resp, svc, faiss
+    return resp, svc
 
 
 class TestPullCardDryRun:
     def test_111_dry_run_returns_diff(self, test_client):
         agent = _a2a_agent(version="1.0.0", name="agent")
-        resp, svc, _ = _run(
+        resp, svc = _run(
             test_client,
             agent,
             {"version": "2.0.0", "name": "renamed"},
@@ -113,13 +110,13 @@ class TestPullCardDryRun:
 
     def test_112_default_dry_run_is_true(self, test_client):
         agent = _a2a_agent()
-        resp, _, _ = _run(test_client, agent, {"version": "2.0.0"})  # no query param
+        resp, _ = _run(test_client, agent, {"version": "2.0.0"})  # no query param
         assert resp.status_code == 200
         assert resp.json()["dry_run"] is True
 
     def test_114_no_changes_is_noop(self, test_client):
         agent = _a2a_agent(version="1.0.0", name="agent")
-        resp, svc, _ = _run(
+        resp, svc = _run(
             test_client,
             agent,
             {"version": "1.0.0", "name": "agent"},
@@ -134,7 +131,7 @@ class TestPullCardDryRun:
 class TestPullCardApply:
     def test_113_apply_updates_a2a_and_preserves_registry(self, test_client):
         agent = _a2a_agent(version="1.0.0")
-        resp, svc, faiss = _run(
+        resp, svc = _run(
             test_client,
             agent,
             {"version": "2.0.0", "skills": [{"id": "s2", "name": "New"}]},
@@ -151,12 +148,11 @@ class TestPullCardApply:
         # S5: no registry-managed field is written.
         for forbidden in ("num_stars", "registered_by", "tags", "visibility", "trust_level"):
             assert forbidden not in written
-        faiss.add_or_update_entity.assert_awaited_once()
 
     def test_661_registrant_only_fields_never_written(self, test_client):
         # Remote maliciously echoes registry-managed fields; the diff ignores them.
         agent = _a2a_agent(version="1.0.0")
-        resp, svc, _ = _run(
+        resp, svc = _run(
             test_client,
             agent,
             {
@@ -176,7 +172,7 @@ class TestPullCardApply:
 
     def test_662_single_update_agent_call_on_apply(self, test_client):
         agent = _a2a_agent(version="1.0.0")
-        _, svc, _ = _run(
+        _, svc = _run(
             test_client,
             agent,
             {"version": "2.0.0"},
@@ -188,31 +184,31 @@ class TestPullCardApply:
 class TestPullCardGuards:
     def test_115_non_a2a_rejected(self, test_client):
         agent = _a2a_agent(supported_protocol="mcp")
-        resp, _, _ = _run(test_client, agent, {"version": "2.0.0"})
+        resp, _ = _run(test_client, agent, {"version": "2.0.0"})
         assert resp.status_code == 400
         assert "A2A protocol" in resp.json()["detail"]
 
     def test_116_no_url_rejected(self, test_client):
         # Blank the URL via model_copy (factory requires a valid URL at construction).
         agent = _a2a_agent().model_copy(update={"url": ""})
-        resp, _, _ = _run(test_client, agent, {"version": "2.0.0"})
+        resp, _ = _run(test_client, agent, {"version": "2.0.0"})
         assert resp.status_code == 400
         assert "no registered URL" in resp.json()["detail"]
 
     def test_117_federated_rejected(self, test_client):
         agent = _a2a_agent(sync_metadata={"is_federated": True, "source_peer_id": "peer-1"})
-        resp, _, _ = _run(test_client, agent, {"version": "2.0.0"})
+        resp, _ = _run(test_client, agent, {"version": "2.0.0"})
         assert resp.status_code == 403
         assert "cannot be updated locally" in resp.json()["detail"]
 
     def test_118_non_owner_rejected(self, test_client):
         agent = _a2a_agent(registered_by="someone-else")
-        resp, _, _ = _run(test_client, agent, {"version": "2.0.0"})
+        resp, _ = _run(test_client, agent, {"version": "2.0.0"})
         assert resp.status_code == 403
         assert "agents you registered" in resp.json()["detail"]
 
     def test_119_unknown_path_404(self, test_client):
-        resp, _, _ = _run(test_client, None, {"version": "2.0.0"})
+        resp, _ = _run(test_client, None, {"version": "2.0.0"})
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"].lower()
 

@@ -12,7 +12,6 @@ from tests.fixtures.factories import AgentCardFactory, ServerDetailFactory
 from tests.fixtures.helpers import create_minimal_agent_dict, create_minimal_server_dict
 from tests.fixtures.mocks.mock_auth import MockJWTValidator
 from tests.fixtures.mocks.mock_embeddings import MockEmbeddingsClient
-from tests.fixtures.mocks.mock_faiss import MockFaissIndex
 from tests.fixtures.mocks.mock_http import MockResponse
 
 
@@ -23,27 +22,6 @@ class TestInfrastructure:
         """Test that constants can be imported and accessed."""
         assert TEST_SERVER_NAME_1 == "com.example.test-server-1"
         assert TEST_AGENT_NAME_1 == "test-agent-1"
-
-    def test_mock_faiss_index(self):
-        """Test MockFaissIndex basic functionality."""
-        index = MockFaissIndex(dimension=384)
-
-        assert index.d == 384
-        assert index.ntotal == 0
-
-        # Add some vectors
-        vectors = np.random.randn(5, 384).astype(np.float32)
-        ids = np.array([1, 2, 3, 4, 5], dtype=np.int64)
-        index.add_with_ids(vectors, ids)
-
-        assert index.ntotal == 5
-
-        # Search
-        query = np.random.randn(1, 384).astype(np.float32)
-        distances, indices = index.search(query, k=3)
-
-        assert distances.shape == (1, 3)
-        assert indices.shape == (1, 3)
 
     def test_mock_embeddings_client(self):
         """Test MockEmbeddingsClient."""

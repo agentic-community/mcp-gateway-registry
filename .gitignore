@@ -447,3 +447,6 @@ tests/fixtures/search_dataset/benchmark_results.md
 # Benchmark search results (generated, not committed)
 results*.json
 pingfederate/setup/pingfederate-ca-bundle.pem
+
+# Local Docker Compose override (machine-specific paths, e.g. macOS log-dir redirect)
+docker-compose.override.yml

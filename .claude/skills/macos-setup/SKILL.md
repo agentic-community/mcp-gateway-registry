@@ -278,6 +278,13 @@ updates = {
     'KEYCLOAK_ADMIN_PASSWORD': os.environ.get('KEYCLOAK_ADMIN_PASSWORD', ''),
     'KEYCLOAK_DB_PASSWORD': os.environ.get('KEYCLOAK_DB_PASSWORD', ''),
     'SECRET_KEY': os.environ.get('SECRET_KEY', ''),
+    # Declare this as a local/on-prem install. The telemetry cloud-detection
+    # cascade checks AWS_REGION first and would otherwise classify this Mac as
+    # "aws" purely because .env.example ships AWS_REGION=us-east-1. This explicit
+    # operator override (allowed: aws|azure|gcp|on_premises|other) takes
+    # precedence over auto-detection, so it reports on_premises regardless of
+    # whatever AWS_REGION is set to.
+    'MCP_CLOUD_PROVIDER': 'on_premises',
 }
 
 for key, value in updates.items():
@@ -296,7 +303,7 @@ PYEOF
 Verify (without exposing values):
 ```bash
 cd "${INSTALL_DIR}"
-for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLOAK_DB_PASSWORD SECRET_KEY; do
+for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLOAK_DB_PASSWORD SECRET_KEY MCP_CLOUD_PROVIDER; do
     VALUE=$(grep "^${KEY}=" .env | cut -d'=' -f2)
     if [ -n "$VALUE" ]; then
         echo "${KEY}=[set]"

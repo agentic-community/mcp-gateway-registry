@@ -165,13 +165,9 @@ class TestGetServiceToolsEndpoint:
             return_value=current_time_server_info["tool_list"]
         )
 
-        fake_faiss = AsyncMock()
-        fake_faiss.add_or_update_service = AsyncMock()
-
         with (
             patch("registry.api.server_routes.server_service", fake_server_service),
             patch("registry.core.mcp_client.mcp_client_service", fake_mcp),
-            patch("registry.search.service.faiss_service", fake_faiss),
         ):
             # Act
             result = await get_service_tools("current_time", RESTRICTED_CONTEXT)
@@ -218,12 +214,9 @@ class TestGetServiceToolsEndpoint:
         # Live fetch returns None -> handler falls back to cached tool_list.
         fake_mcp.get_tools_from_server_with_server_info = AsyncMock(return_value=None)
 
-        fake_faiss = AsyncMock()
-
         with (
             patch("registry.api.server_routes.server_service", fake_server_service),
             patch("registry.core.mcp_client.mcp_client_service", fake_mcp),
-            patch("registry.search.service.faiss_service", fake_faiss),
         ):
             # Act
             result = await get_service_tools("current_time", RESTRICTED_CONTEXT)
@@ -257,12 +250,10 @@ class TestGetToolsAllEndpoint:
         fake_server_service.get_all_servers = AsyncMock(return_value=all_servers_map)
 
         fake_mcp = AsyncMock()
-        fake_faiss = AsyncMock()
 
         with (
             patch("registry.api.server_routes.server_service", fake_server_service),
             patch("registry.core.mcp_client.mcp_client_service", fake_mcp),
-            patch("registry.search.service.faiss_service", fake_faiss),
         ):
             # Act
             result = await get_service_tools("all", RESTRICTED_CONTEXT)
@@ -289,12 +280,10 @@ class TestGetToolsAllEndpoint:
         )
 
         fake_mcp = AsyncMock()
-        fake_faiss = AsyncMock()
 
         with (
             patch("registry.api.server_routes.server_service", fake_server_service),
             patch("registry.core.mcp_client.mcp_client_service", fake_mcp),
-            patch("registry.search.service.faiss_service", fake_faiss),
         ):
             # Act
             result = await get_service_tools("all", ADMIN_CONTEXT)
@@ -391,16 +380,16 @@ class TestSemanticSearchFilter:
     """Validates filter application at the three semantic-search sites.
 
     As with /servers above, these tests call the same filter the handler
-    calls rather than booting the FAISS + search repo machinery.
+    calls rather than booting the search repo machinery.
     """
 
     def test_semantic_search_per_server_matching_tools_pruned(
         self, current_time_server_info
     ):
-        """matching_tools from FAISS is pruned to the user's allowlist."""
+        """matching_tools from search is pruned to the user's allowlist."""
         from registry.auth.tool_filter import filter_tools_for_user
 
-        # Arrange: FAISS-shaped entries use `tool_name`.
+        # Arrange: search-shaped entries use `tool_name`.
         raw_matching = [
             {"tool_name": "current_time_by_timezone", "relevance_score": 0.9},
             {"tool_name": "current_time_utc", "relevance_score": 0.8},
@@ -474,7 +463,7 @@ class TestSemanticSearchFilter:
         from registry.auth.tool_filter import filter_tools_for_user
 
         # Arrange: virtual server wraps current_time; matching_tools came
-        # from the FAISS search and point at the underlying server name.
+        # from the search results and point at the underlying server name.
         vs_matching = [
             {"tool_name": "current_time_by_timezone", "relevance_score": 0.95},
             {"tool_name": "current_time_utc", "relevance_score": 0.80},
@@ -502,7 +491,7 @@ class TestSemanticSearchFilter:
     def test_semantic_search_admin_no_filtering_applied(
         self, current_time_server_info
     ):
-        """Admin requests leave all FAISS entries intact."""
+        """Admin requests leave all search entries intact."""
         from registry.auth.tool_filter import filter_tools_for_user, tool_allowed_for_user
 
         # Arrange

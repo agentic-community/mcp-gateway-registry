@@ -82,7 +82,7 @@ def setup_logging(
         The resolved log file path, or None if file logging was skipped
         (typically due to a PermissionError on the target directory).
     """
-    from ..core.config import MONGODB_BACKENDS, settings
+    from ..core.config import settings
 
     level = getattr(logging, settings.app_log_level.upper(), logging.INFO)
 
@@ -145,7 +145,7 @@ def setup_logging(
             resolved_log_file = None
 
     # 3. Centralized log handler (optional, writes to MongoDB/DocumentDB)
-    if settings.app_log_centralized_enabled and settings.storage_backend in MONGODB_BACKENDS:
+    if settings.app_log_centralized_enabled:
         try:
             from .mongodb_log_handler import MongoDBLogHandler
 

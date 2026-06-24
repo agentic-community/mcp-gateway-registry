@@ -376,7 +376,7 @@ variable "documentdb_admin_password" {
   description = "DocumentDB Elastic Cluster admin password (minimum 8 characters). Only required when storage_backend is 'documentdb'."
   type        = string
   sensitive   = true
-  default     = "" # Not required when using file storage backend
+  default     = ""
 }
 
 variable "documentdb_shard_capacity" {
@@ -430,7 +430,6 @@ variable "storage_backend" {
     Storage backend selection. Must match the Python-side allowlist in
     registry/core/config.py ALLOWED_STORAGE_BACKENDS (issue #954). Accepted
     values:
-      "file"          - JSON files only. No AWS DocumentDB provisioned.
       "documentdb"    - Provision AWS DocumentDB cluster in this Terraform
                         state and use SCRAM-SHA-1 auth.
       "mongodb-ce"    - Connect to an externally-provisioned MongoDB CE via
@@ -448,10 +447,10 @@ variable "storage_backend" {
 
   validation {
     condition = contains(
-      ["file", "documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"],
+      ["documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"],
       var.storage_backend,
     )
-    error_message = "Storage backend must be one of: file, documentdb, mongodb-ce, mongodb, mongodb-atlas."
+    error_message = "Storage backend must be one of: documentdb, mongodb-ce, mongodb, mongodb-atlas."
   }
 }
 

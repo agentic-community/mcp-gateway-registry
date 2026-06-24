@@ -193,7 +193,7 @@ uv run python -m api.registry_management set-default-version \
 1. The current active document (`/context7`, version `v1.0.0`) becomes an inactive document at `_id: /context7:v1.0.0`
 2. The target inactive document (`/context7:v2.0.0`) becomes the new active document at `_id: /context7`
 3. The `other_version_ids` array is updated to reference `/context7:v1.0.0` instead of `/context7:v2.0.0`
-4. The FAISS search index is re-indexed with `v2.0.0` metadata
+4. The search index is re-indexed with `v2.0.0` metadata
 5. The nginx configuration is regenerated and reloaded
 6. A background health check is triggered for the newly active version
 7. The dashboard updates to show `v2.0.0` as active
@@ -315,14 +315,14 @@ curl -X DELETE https://gateway.example.com/api/servers/context7 \
 This removes:
 - The active version document at `/context7`
 - All inactive version documents matching `/context7:*`
-- The FAISS search index entry
+- The search index entry
 - The nginx location block and map entries
 
 ---
 
 ## How Versioning Affects Search
 
-Only the **active version** of each server appears in search results. Inactive versions are excluded at index time (they are never added to the FAISS vector index), so they do not consume result slots.
+Only the **active version** of each server appears in search results. Inactive versions are excluded at index time (they are never added to the vector search index), so they do not consume result slots.
 
 When you switch the active version, the search index is automatically re-indexed with the new active version's metadata (name, description, tags, tools). This means search results always reflect the currently active version.
 
