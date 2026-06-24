@@ -75,6 +75,11 @@ class TestBuildCatalog:
             patch.object(ard_service, "get_skill_repository", return_value=skill_repo),
             patch.object(ard_service.settings, "ard_publisher_domain", "registry.example.com"),
             patch.object(ard_service.settings, "registry_name", "Test Registry"),
+            # Pin an HTTPS registry_url so the host trust-manifest identity is
+            # deterministic. Without this the test inherits the ambient default
+            # (http://localhost:8000), which fails the Phase-1 https identity
+            # assertion in environments that do not override REGISTRY_URL.
+            patch.object(ard_service.settings, "registry_url", "https://registry.example.com"),
         ):
             manifest = await ard_service.build_catalog(_fake_request())
         return manifest, server_repo, agent_repo, skill_repo
