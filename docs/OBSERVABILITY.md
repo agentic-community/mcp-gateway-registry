@@ -1,10 +1,5 @@
 # MCP Gateway Observability Guide
 
-> Looking for the pre-1.25.0 architecture (HTTP POSTs to metrics-service +
-> SQLite + port 9465)? See [OBSERVABILITY-LEGACY.md](OBSERVABILITY-LEGACY.md).
-> That document is retained for the 1.25.0 transition window and will be
-> removed in 1.26.0.
-
 This guide describes the **current** observability architecture (1.25.0+),
 the metrics each service emits, and a cookbook of PromQL queries for the
 investigations operators most often need to run.
@@ -563,5 +558,3 @@ in restricted environments.
   diagrams (component view, sequence diagrams)
 - [docs/unified-parameter-reference.md](unified-parameter-reference.md) —
   cross-surface env var mapping
-- [docs/OBSERVABILITY-LEGACY.md](OBSERVABILITY-LEGACY.md) — pre-1.25.0
-  architecture, retained for the transition window

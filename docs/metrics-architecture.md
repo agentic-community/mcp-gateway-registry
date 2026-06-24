@@ -3,10 +3,6 @@
 Technical reference for the MCP Gateway observability system. For the operator-facing
 configuration guide and PromQL cookbook, see [OBSERVABILITY.md](OBSERVABILITY.md).
 
-> For the legacy pre-1.25.0 architecture (HTTP POSTs to metrics-service, SQLite,
-> API keys, port 9465), see [OBSERVABILITY-LEGACY.md](OBSERVABILITY-LEGACY.md).
-> That path is removed in 1.26.0.
-
 ## Overview
 
 Each application service (registry, auth-server, mcpgw) emits metrics in-process
@@ -299,5 +295,4 @@ Dashboard auto-refreshes every 30 seconds with a default 1-hour time range.
 ## Related Documentation
 
 - [OBSERVABILITY.md](OBSERVABILITY.md): Operator guide (configuration, PromQL cookbook, verification)
-- [OBSERVABILITY-LEGACY.md](OBSERVABILITY-LEGACY.md): Pre-1.25.0 architecture (deprecated)
 - [unified-parameter-reference.md](unified-parameter-reference.md): Cross-surface env var mapping
