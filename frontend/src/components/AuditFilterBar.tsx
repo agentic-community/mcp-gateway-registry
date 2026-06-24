@@ -340,13 +340,13 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
         {/* Username Filter */}
         <div>
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-            Username
+            {isTokenMintStream ? 'Username (hash)' : 'Username'}
           </label>
           <SearchableSelect
             options={usernameOptions}
             value={filters.username || ''}
             onChange={handleUsernameSelect}
-            placeholder="Search username..."
+            placeholder={isTokenMintStream ? 'Search username hash...' : 'Search username...'}
             isLoading={optionsLoading}
             allowCustom={true}
             specialOptions={[{ value: '', label: 'All Users' }]}

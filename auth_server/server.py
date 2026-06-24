@@ -2999,6 +2999,13 @@ async def generate_user_token(
     mint_request_id = str(uuid.uuid4())
     correlation_id = request.correlation_id
 
+    # Initialize audit context up front so the unexpected-error handler can
+    # reference these directly instead of introspecting locals(). They are
+    # overwritten with the real values once the user context is parsed below.
+    username = "unknown"
+    auth_method = "unknown"
+    provider = None
+
     try:
         # Extract user context
         user_context = request.user_context
@@ -3248,13 +3255,12 @@ async def generate_user_token(
         raise
     except Exception as e:
         logger.error(f"Unexpected error generating token: {e}")
-        _locals = locals()
         await _emit_token_mint_audit(
             request_id=mint_request_id,
             correlation_id=correlation_id,
-            username=_locals.get("username", "unknown"),
-            auth_method=_locals.get("auth_method", "unknown"),
-            provider=_locals.get("provider"),
+            username=username,
+            auth_method=auth_method,
+            provider=provider,
             internal_caller=caller,
             token_kind="unknown",
             resource_type=None,

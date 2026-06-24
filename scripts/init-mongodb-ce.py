@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo import ASCENDING
+from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 
 # Configure logging with basicConfig
@@ -187,6 +187,20 @@ async def _create_standard_indexes(
             [("request_id", ASCENDING), ("log_type", ASCENDING)],
             name="request_id_log_type_idx",
             unique=True,
+        )
+
+        # Compound index for token_mint flat-field queries (resource_type/
+        # resource_id at the top level, not nested under action.*). Mirrors the
+        # DocumentDB init (scripts/init-documentdb-indexes.py) so MongoDB CE
+        # deployments get the same query performance for the token_mint stream.
+        await collection.create_index(
+            [
+                ("log_type", ASCENDING),
+                ("resource_type", ASCENDING),
+                ("resource_id", ASCENDING),
+                ("timestamp", DESCENDING),
+            ],
+            name="log_type_resource_type_resource_id_timestamp_idx",
         )
 
         # TTL index for automatic expiration (Requirements 6.3)

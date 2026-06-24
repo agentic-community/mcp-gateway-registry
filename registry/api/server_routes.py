@@ -3278,6 +3278,27 @@ async def generate_user_token(
                     f"User '{user_context['username']}' attempted to bind token to "
                     f"inaccessible resource {resource_type}:{resource_id}"
                 )
+                # Audit the denied binding attempt. The dedicated ``token_mint``
+                # stream is emitted at the auth-server signing point and only
+                # covers mints that reach it; a binding the registry refuses
+                # here never reaches that point. Record the denied attempt (with
+                # the target resource and a failure outcome) in the registry_api
+                # stream so "user tried to bind a token to a resource they lack
+                # access to" is not lost from the audit trail.
+                set_audit_action(
+                    request,
+                    "create",
+                    "resource_bound_token",
+                    resource_id=f"{resource_type}:{resource_id}",
+                    description=(
+                        f"Denied resource-bound token mint for "
+                        f"{resource_type}:{resource_id}: user lacks access"
+                    ),
+                    metadata={
+                        "mint_outcome": "failure",
+                        "failure_reason": "forbidden_resource",
+                    },
+                )
                 raise HTTPException(
                     status_code=403,
                     detail=(

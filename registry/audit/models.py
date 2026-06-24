@@ -295,6 +295,12 @@ class TokenMintAuditRecord(BaseModel):
     Captures every mint (self-signed and M2M, success and failure) so reviewers
     can answer "which servers were scoped to a token, for whom, and did it succeed".
     No raw token material is ever stored; the username is pre-hashed by the caller.
+
+    Note on ``username_hash``: the caller hashes with SHA-256 and keeps only the
+    first 8 hex chars (32 bits, ``user_<8hex>``). This is deliberate for privacy,
+    but it is a low-entropy hash: distinct usernames can collide once the audit
+    population grows into the tens of thousands (birthday bound ~2^16). Treat the
+    hash as a privacy-preserving grouping key for analytics, not a unique user id.
     """
 
     timestamp: datetime = Field(

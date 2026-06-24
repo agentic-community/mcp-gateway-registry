@@ -7,7 +7,7 @@ name = "mcp-registry"
 version = "0.1.0"
 description = "A registry for MCP servers"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "aiofiles>=24.1.0",
     "fastapi>=0.115.12",

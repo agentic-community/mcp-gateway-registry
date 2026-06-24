@@ -277,7 +277,7 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                 </button>
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                User
+                {isTokenMintStream ? 'User (hash)' : 'User'}
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 {isTokenMintStream ? 'Token Kind' : isMcpStream ? 'MCP Method' : 'Method'}
