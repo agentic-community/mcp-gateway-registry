@@ -18,7 +18,14 @@ COPY .tmp/pyproject.toml .tmp/uv.lock ./
 
 # Install Python dependencies using uv (as root, before switching users).
 # --locked fails the build if uv.lock is out of sync with pyproject.toml.
-RUN uv sync --locked --no-dev
+# If the lockfile pins an exclude-newer in its [options] block, export it as
+# UV_EXCLUDE_NEWER so `uv sync --locked` re-resolves against the same
+# supply-chain quarantine that produced the lock. Without this, newer uv
+# versions report the lockfile as out of sync because the global exclude-newer
+# is "missing" at sync time. This mirrors .github/workflows/uv-lock-check.yml.
+RUN lock_cutoff=$(awk '/^\[options\]/{o=1;next} /^\[/{o=0} o&&/^exclude-newer[[:space:]]*=/{gsub(/.*=[[:space:]]*"|"[[:space:]]*$/,"");print;exit}' uv.lock) && \
+    if [ -n "$lock_cutoff" ]; then export UV_EXCLUDE_NEWER="$lock_cutoff"; fi && \
+    uv sync --locked --no-dev
 
 # Copy agent code (all files from the context directory)
 COPY . ./
