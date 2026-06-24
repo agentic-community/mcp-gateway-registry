@@ -20,7 +20,6 @@ DOCKERFILES = [
     "docker/Dockerfile.registry",
     "docker/Dockerfile.mcp-server",
     "docker/Dockerfile.mcp-server-light",
-    "docker/Dockerfile.scopes-init",
     "docker/Dockerfile.metrics-db",
     "docker/keycloak/Dockerfile",
     "metrics-service/Dockerfile",
@@ -76,20 +75,9 @@ def test_dockerfile_no_sudo(repo_root: Path, dockerfile_path: str):
     assert "sudo" not in content, f"{dockerfile_path}: Contains 'sudo' package (security risk)"
 
 
-@pytest.mark.parametrize(
-    "dockerfile_path",
-    [
-        f
-        for f in DOCKERFILES
-        if "scopes-init" not in f  # Exclude one-shot init containers
-    ],
-)
+@pytest.mark.parametrize("dockerfile_path", DOCKERFILES)
 def test_dockerfile_has_healthcheck(repo_root: Path, dockerfile_path: str):
-    """Test that Dockerfile has HEALTHCHECK directive.
-
-    Note: One-shot init containers (scopes-init) are excluded as they
-    don't need health checks - they run once and exit.
-    """
+    """Test that Dockerfile has HEALTHCHECK directive."""
     dockerfile = repo_root / dockerfile_path
     assert dockerfile.exists(), f"Dockerfile not found: {dockerfile}"
 
@@ -106,7 +94,6 @@ def test_dockerfile_has_healthcheck(repo_root: Path, dockerfile_path: str):
         f
         for f in DOCKERFILES
         if not f.startswith("terraform/")  # Exclude Grafana (Node.js)
-        and not f.endswith("scopes-init")  # Exclude busybox
         and not f.endswith("metrics-db")  # Exclude alpine-based
     ],
 )

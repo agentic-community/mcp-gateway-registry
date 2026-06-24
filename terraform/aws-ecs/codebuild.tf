@@ -30,7 +30,6 @@ locals {
     "mcp-gateway-realserverfaketools",
     "mcp-gateway-flight-booking-agent",
     "mcp-gateway-travel-assistant-agent",
-    "mcp-gateway-scopes-init",
     "mcp-gateway-metrics-service",
     "mcp-gateway-grafana",
   ])
@@ -216,7 +215,7 @@ phases:
       - docker pull quay.io/keycloak/keycloak:23.0 || true
       - docker pull grafana/grafana:12.3.1 || true
       - echo "Pulling existing images for cache..."
-      - for repo in mcp-gateway-registry mcp-gateway-auth-server keycloak mcp-gateway-currenttime mcp-gateway-mcpgw mcp-gateway-realserverfaketools mcp-gateway-flight-booking-agent mcp-gateway-travel-assistant-agent mcp-gateway-scopes-init mcp-gateway-metrics-service mcp-gateway-grafana; do docker pull $ECR_REGISTRY/$repo:latest 2>/dev/null || true; done
+      - for repo in mcp-gateway-registry mcp-gateway-auth-server keycloak mcp-gateway-currenttime mcp-gateway-mcpgw mcp-gateway-realserverfaketools mcp-gateway-flight-booking-agent mcp-gateway-travel-assistant-agent mcp-gateway-metrics-service mcp-gateway-grafana; do docker pull $ECR_REGISTRY/$repo:latest 2>/dev/null || true; done
       - echo "Setting up A2A agent dependencies..."
       - mkdir -p agents/a2a/src/flight-booking-agent/.tmp agents/a2a/src/travel-assistant-agent/.tmp
       - cp agents/a2a/pyproject.toml agents/a2a/uv.lock agents/a2a/src/flight-booking-agent/.tmp/ 2>/dev/null || true
@@ -265,9 +264,6 @@ phases:
         # A2A agents
         build_and_push mcp-gateway-flight-booking-agent agents/a2a/src/flight-booking-agent/Dockerfile agents/a2a/src/flight-booking-agent &
         build_and_push mcp-gateway-travel-assistant-agent agents/a2a/src/travel-assistant-agent/Dockerfile agents/a2a/src/travel-assistant-agent &
-
-        # Utilities
-        build_and_push mcp-gateway-scopes-init docker/Dockerfile.scopes-init . &
 
         # Observability pipeline
         build_and_push mcp-gateway-metrics-service metrics-service/Dockerfile metrics-service &

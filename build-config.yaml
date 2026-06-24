@@ -53,16 +53,6 @@ images:
     build_args:
       BASE_IMAGE: "quay.io/keycloak/keycloak:latest"
 
-  # Keycloak Scopes and Roles Initialization
-  scopes_init:
-    repo_name: "mcp-gateway-scopes-init"
-    dockerfile: "docker/Dockerfile.scopes-init"
-    context: "."
-    description: "Initialize Keycloak scopes and roles"
-    tags:
-      - latest
-    build_args: {}
-
   # Metrics Collection and Monitoring Service
   metrics_service:
     repo_name: "mcp-gateway-metrics-service"
