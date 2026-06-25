@@ -338,46 +338,93 @@ async def _run_benchmark(
     )
 
 
+def _fmt(
+    value: float | None,
+) -> str:
+    """Format an optional millisecond value for a table cell."""
+    return f"{value:.2f}" if value is not None else "-"
+
+
+def _print_table(
+    title: str,
+    headers: list[str],
+    rows: list[list[str]],
+) -> None:
+    """Print a left-titled, right-aligned ASCII table to stdout."""
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def _line(cells: list[str]) -> str:
+        # First column left-aligned (labels), the rest right-aligned (numbers).
+        out = [cells[0].ljust(widths[0])]
+        out += [cells[i].rjust(widths[i]) for i in range(1, len(cells))]
+        return "  ".join(out)
+
+    total = sum(widths) + 2 * (len(headers) - 1)
+    print(f"\n{title}")
+    print("-" * total)
+    print(_line(headers))
+    print("-" * total)
+    for row in rows:
+        print(_line(row))
+    print("-" * total)
+
+
 def _print_report(
     report: BenchmarkReport,
 ) -> None:
-    """Log a human-readable summary of one benchmark run."""
-    logger.info("=" * 70)
-    logger.info("Benchmark '%s' (concurrency=%d)", report.label, report.concurrency)
-    logger.info("-" * 70)
-    for r in report.client_results:
-        logger.info(
-            "CLIENT %-8s status=%s p50=%.2f p95=%.2f p99=%.2f throughput=%.1f rps",
+    """Print a readable table summary of one benchmark run."""
+    print(f"\n{'=' * 72}")
+    print(f"Benchmark '{report.label}'  (concurrency={report.concurrency})")
+
+    client_rows = [
+        [
             r.path,
-            r.status_counts,
-            r.client_p50_ms,
-            r.client_p95_ms,
-            r.client_p99_ms,
-            r.throughput_rps,
-        )
-    for s in report.server_latency:
-        logger.info(
-            "SERVER status=%s p50=%s p95=%s p99=%s avg=%s ms (count=%s)",
+            str(sum(r.status_counts.values())),
+            ",".join(f"{k}={v}" for k, v in sorted(r.status_counts.items())),
+            f"{r.client_p50_ms:.2f}",
+            f"{r.client_p95_ms:.2f}",
+            f"{r.client_p99_ms:.2f}",
+            f"{r.throughput_rps:.1f}",
+        ]
+        for r in report.client_results
+    ]
+    _print_table(
+        "CLIENT (wall-clock, as observed by the load generator)",
+        ["path", "requests", "status", "p50 ms", "p95 ms", "p99 ms", "rps"],
+        client_rows,
+    )
+
+    server_rows = [
+        [
             s.status_code,
-            s.p50_ms,
-            s.p95_ms,
-            s.p99_ms,
-            s.avg_ms,
-            s.request_count,
-        )
-    logger.info("=" * 70)
+            _fmt(s.p50_ms),
+            _fmt(s.p95_ms),
+            _fmt(s.p99_ms),
+            _fmt(s.avg_ms),
+            f"{int(s.request_count)}" if s.request_count is not None else "-",
+        ]
+        for s in report.server_latency
+    ]
+    _print_table(
+        "SERVER (/validate latency from Prometheus, by status code)",
+        ["status", "p50 ms", "p95 ms", "p99 ms", "avg ms", "count"],
+        server_rows,
+    )
+    print(f"{'=' * 72}\n")
 
 
 def _print_comparison(
     current: BenchmarkReport,
     baseline_path: Path,
 ) -> None:
-    """Compare current server-side latency against a saved baseline JSON."""
+    """Print a table comparing current server-side latency against a baseline."""
     baseline = BenchmarkReport(**json.loads(baseline_path.read_text()))
     base_by_status = {s.status_code: s for s in baseline.server_latency}
 
-    logger.info("COMPARISON vs baseline '%s'", baseline.label)
-    logger.info("-" * 70)
+    rows: list[list[str]] = []
     for s in current.server_latency:
         b = base_by_status.get(s.status_code)
         if not b:
@@ -388,17 +435,24 @@ def _print_comparison(
             if cur is None or old is None or old == 0:
                 continue
             delta_pct = (cur - old) / old * 100.0
-            arrow = "improved" if delta_pct < 0 else "regressed"
-            logger.info(
-                "status=%s %s: %.2f -> %.2f ms (%+.1f%%, %s)",
-                s.status_code,
-                metric,
-                old,
-                cur,
-                delta_pct,
-                arrow,
+            verdict = "improved" if delta_pct < 0 else "regressed"
+            rows.append(
+                [
+                    s.status_code,
+                    metric.replace("_ms", ""),
+                    f"{old:.2f}",
+                    f"{cur:.2f}",
+                    f"{delta_pct:+.1f}%",
+                    verdict,
+                ]
             )
-    logger.info("=" * 70)
+
+    _print_table(
+        f"SERVER COMPARISON: '{baseline.label}' (baseline) -> '{current.label}' (current)",
+        ["status", "pctl", "baseline ms", "current ms", "delta", "verdict"],
+        rows,
+    )
+    print(f"{'=' * 72}\n")
 
 
 def _parse_args() -> argparse.Namespace:
