@@ -914,6 +914,19 @@ variable "registration_webhook_timeout_seconds" {
   default     = 10
 }
 
+variable "registration_webhook_signing_secret" {
+  description = "Shared secret for HMAC-SHA256 signing of outbound webhook payloads (X-Registry-Signature). Leave empty to disable signing."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_enforced_status" {
+  description = "When set (e.g. 'draft'), mandates the initial lifecycle status for new asset registrations; mismatched registrations fail with 4xx. Empty = default 'active'."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # AGENT BATCH API (Issue #956)
 # =============================================================================

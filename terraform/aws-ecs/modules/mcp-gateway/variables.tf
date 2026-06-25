@@ -895,6 +895,19 @@ variable "registration_webhook_timeout_seconds" {
   default     = 10
 }
 
+variable "registration_webhook_signing_secret" {
+  description = "Shared secret for HMAC-SHA256 signing of outbound webhook payloads."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_enforced_status" {
+  description = "Mandated initial lifecycle status for new registrations (e.g. 'draft'). Empty = default 'active'."
+  type        = string
+  default     = ""
+}
+
 # Agent batch API (issue #956)
 variable "batch_worker_enabled" {
   description = "Enable the in-process agent batch worker loop. v1 single-worker constraint."

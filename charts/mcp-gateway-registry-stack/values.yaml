@@ -289,6 +289,9 @@ registry:
     registrationWebhookAuthHeader: "Authorization"
     registrationWebhookAuthToken: ""
     registrationWebhookTimeoutSeconds: "10"
+    # Lifecycle workflow webhooks (issue #1330)
+    registrationWebhookSigningSecret: ""
+    registrationEnforcedStatus: ""
 
     # Agent batch API (issue #956)
     # Lease-based claiming makes multi-worker operation safe: any number of

@@ -1298,6 +1298,15 @@ module "ecs_service_registry" {
           name  = "REGISTRATION_WEBHOOK_TIMEOUT_SECONDS"
           value = tostring(var.registration_webhook_timeout_seconds)
         },
+        # Lifecycle workflow webhooks (issue #1330)
+        {
+          name  = "REGISTRATION_WEBHOOK_SIGNING_SECRET"
+          value = var.registration_webhook_signing_secret
+        },
+        {
+          name  = "REGISTRATION_ENFORCED_STATUS"
+          value = var.registration_enforced_status
+        },
         # Agent batch API (issue #956)
         {
           name  = "BATCH_WORKER_ENABLED"

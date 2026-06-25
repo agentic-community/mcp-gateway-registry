@@ -88,6 +88,9 @@ app:
   registrationWebhookAuthHeader: "Authorization"  # If "Authorization", Bearer is auto-prepended.
   registrationWebhookAuthToken: ""  # Auth token. Leave empty for unauthenticated webhooks.
   registrationWebhookTimeoutSeconds: "10"
+  # Lifecycle workflow webhooks (issue #1330)
+  registrationWebhookSigningSecret: ""  # HMAC-SHA256 signing secret (X-Registry-Signature). Empty = disabled.
+  registrationEnforcedStatus: ""  # Mandate initial status (e.g. "draft"); mismatched registrations 4xx. Empty = default "active".
 
   # Agent batch API (issue #956)
   # Async batch register/patch/replace/delete for agent cards, drained by an
