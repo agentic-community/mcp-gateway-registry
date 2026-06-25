@@ -664,6 +664,76 @@ class TestGetServersJSON:
         assert len(server["tool_list"]) == 2
         assert server["num_tools"] == 2
 
+    def test_status_filter_returns_only_matching(self, test_client_admin, mock_server_service):
+        """?status=beta returns only beta servers (Issue #1330). Forces fallback path."""
+        mock_server_service.get_all_servers = AsyncMock(
+            return_value={
+                "/a": {
+                    "server_name": "A",
+                    "description": "",
+                    "tags": [],
+                    "num_tools": 0,
+                    "license": "MIT",
+                    "proxy_pass_url": "http://x",
+                    "status": "beta",
+                },
+                "/b": {
+                    "server_name": "B",
+                    "description": "",
+                    "tags": [],
+                    "num_tools": 0,
+                    "license": "MIT",
+                    "proxy_pass_url": "http://y",
+                    "status": "draft",
+                },
+            }
+        )
+
+        response = test_client_admin.get("/api/servers?status=beta")
+
+        assert response.status_code == 200
+        servers = response.json()["servers"]
+        assert {s["display_name"] for s in servers} == {"A"}
+
+    def test_status_filter_active_includes_missing_status(
+        self, test_client_admin, mock_server_service
+    ):
+        """?status=active also matches legacy docs with no status field."""
+        mock_server_service.get_all_servers = AsyncMock(
+            return_value={
+                "/legacy": {
+                    "server_name": "Legacy",
+                    "description": "",
+                    "tags": [],
+                    "num_tools": 0,
+                    "license": "MIT",
+                    "proxy_pass_url": "http://x",
+                    # no status field
+                },
+                "/draft": {
+                    "server_name": "Draft",
+                    "description": "",
+                    "tags": [],
+                    "num_tools": 0,
+                    "license": "MIT",
+                    "proxy_pass_url": "http://y",
+                    "status": "draft",
+                },
+            }
+        )
+
+        response = test_client_admin.get("/api/servers?status=active")
+
+        assert response.status_code == 200
+        servers = response.json()["servers"]
+        assert {s["display_name"] for s in servers} == {"Legacy"}
+
+    def test_status_filter_invalid_returns_400(self, test_client_admin):
+        """An invalid status value is rejected with 400."""
+        response = test_client_admin.get("/api/servers?status=bogus")
+        assert response.status_code == 400
+        assert "Invalid status" in response.json()["detail"]
+
 
 # =============================================================================
 # TEST POST /toggle/{service_path:path} - Toggle Service
