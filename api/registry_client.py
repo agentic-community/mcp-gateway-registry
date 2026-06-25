@@ -1699,6 +1699,7 @@ class RegistryClient:
             or endpoint.startswith("/api/management")
             or endpoint.startswith("/api/iam")
             or endpoint.startswith("/api/search")
+            or endpoint.startswith("/api/ard")
             or endpoint.startswith("/api/federation")
             or endpoint.startswith("/api/peers")
             or endpoint.startswith("/api/skills")
