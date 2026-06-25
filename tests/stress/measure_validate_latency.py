@@ -17,31 +17,37 @@ Two request mixes are exercised:
 Both are real ``/validate`` work: the 401 path still parses headers and
 attempts JWT validation, so its latency is meaningful.
 
-Workflow for a before/after comparison
----------------------------------------
-1. Run against the baseline (standard GIL) image, saving the result:
+Workflow for a before/after comparison (GIL on vs off, same image)
+------------------------------------------------------------------
+The free-threaded image runs with the GIL re-enabled via PYTHON_GIL=1, so no
+rebuild is needed. Toggle it through the auth-server extra_env file:
+1. GIL ON (baseline):
+     printf 'PYTHON_GIL=1\n' > extra_env/auth-server.env
+     docker compose up -d --no-deps auth-server   # log: GIL enabled at runtime=True
      uv run python -m tests.stress.measure_validate_latency \
-         --label baseline --out tests/stress/results/validate/baseline.json
-2. Rebuild auth-server on the free-threaded image, then run again:
+         --label gil-on --concurrency 100 --out tests/stress/results/validate/gil-on.json
+2. GIL OFF (free-threaded), then compare:
+     rm -f extra_env/auth-server.env
+     docker compose up -d --no-deps auth-server   # log: GIL enabled at runtime=False
      uv run python -m tests.stress.measure_validate_latency \
-         --label freethreaded --out tests/stress/results/validate/freethreaded.json
-3. Compare the two JSON files (or pass --compare-to):
-     uv run python -m tests.stress.measure_validate_latency \
-         --label freethreaded --compare-to tests/stress/results/validate/baseline.json
+         --label gil-off --free-threaded --concurrency 100 \
+         --out tests/stress/results/validate/gil-off.json \
+         --compare-to tests/stress/results/validate/gil-on.json
 
 Latency source
 --------------
-Percentiles are computed by Prometheus from the
-``http_server_duration_milliseconds`` histogram (FastAPI auto-instrumentation),
-filtered to ``http_target="/validate"`` and split by ``http_status_code``. This
-is end-to-end server-side latency as the auth-server measures it, independent of
-client-side network noise. The script also records the client-observed wall
-time per request for a sanity cross-check.
+Server-side percentiles come from the ``http_server_duration_milliseconds``
+histogram (FastAPI auto-instrumentation), filtered to ``http_target="/validate"``
+and split by ``http_status_code``. To isolate exactly one run's requests, the
+script snapshots the cumulative histogram buckets *before* and *after* the load
+and computes the quantile from the (after - before) delta. This is immune to the
+rate-window bleed that contaminates back-to-back runs, so the server-side
+numbers are accurate even with no gap between runs. The client-observed wall
+time per request is also recorded as a sanity cross-check.
 
-Note on the Prometheus scrape gap: the script waits one scrape interval after
-the load finishes so the final samples are visible to Prometheus before
-querying. Counters are cumulative, so percentiles are taken over a rate window
-that covers the load burst.
+Note on the Prometheus scrape gap: the script waits one scrape interval
+(``--scrape-wait``) after the load finishes so the final samples are visible to
+Prometheus before the "after" snapshot is taken.
 """
 
 from __future__ import annotations
@@ -72,7 +78,6 @@ DEFAULT_ORIGINAL_URL: str = "http://localhost/api/servers"
 DEFAULT_REQUESTS: int = 2000
 DEFAULT_CONCURRENCY: int = 50
 DEFAULT_SCRAPE_WAIT_S: int = 20
-DEFAULT_WINDOW: str = "5m"
 
 
 class PathResult(BaseModel):
@@ -252,41 +257,119 @@ def _prom_query(
         return None
 
 
-def _query_server_latency(
+def _prom_query_buckets(
+    prom_url: str,
+    query: str,
+) -> dict[str, float]:
+    """Run an instant query and return a {le_label: value} map for histogram buckets."""
+    try:
+        resp = httpx.get(
+            f"{prom_url.rstrip('/')}/api/v1/query",
+            params={"query": query},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        out: dict[str, float] = {}
+        for r in resp.json().get("data", {}).get("result", []):
+            le = r.get("metric", {}).get("le")
+            if le is not None:
+                out[le] = float(r["value"][1])
+        return out
+    except (httpx.HTTPError, KeyError, ValueError, IndexError) as exc:
+        logger.warning("Prometheus bucket query failed (%s): %s", query, exc)
+        return {}
+
+
+def _le_value(
+    le: str,
+) -> float:
+    """Parse an ``le`` bucket-boundary label to a float (handles +Inf)."""
+    if le in ("+Inf", "Inf"):
+        return float("inf")
+    return float(le)
+
+
+def _histogram_quantile(
+    buckets: dict[str, float],
+    pct: float,
+) -> float | None:
+    """Compute the pct (0-1) quantile from cumulative {le: count} buckets, in ms.
+
+    Mirrors Prometheus ``histogram_quantile``: linear interpolation within the
+    bucket that contains the target rank. ``buckets`` must be the *delta* over
+    one run so the quantile reflects only that run's requests.
+    """
+    if not buckets:
+        return None
+    items = sorted(buckets.items(), key=lambda kv: _le_value(kv[0]))
+    total = items[-1][1]  # the +Inf bucket holds the full count
+    if total <= 0:
+        return None
+
+    rank = pct * total
+    prev_le = 0.0
+    prev_count = 0.0
+    for le, cum in items:
+        if cum >= rank:
+            upper = _le_value(le)
+            if upper == float("inf"):
+                # Rank falls in the open-ended top bucket: best estimate is its
+                # lower (last finite) boundary.
+                return prev_le
+            if cum == prev_count:
+                return upper
+            frac = (rank - prev_count) / (cum - prev_count)
+            return prev_le + frac * (upper - prev_le)
+        prev_le = _le_value(le) if _le_value(le) != float("inf") else prev_le
+        prev_count = cum
+    return prev_le
+
+
+def _snapshot_histogram(
     prom_url: str,
     status_code: str,
-    window: str,
-) -> PromLatency:
-    """Read /validate server-side latency percentiles for one status code.
+) -> tuple[dict[str, float], float, float]:
+    """Snapshot cumulative /validate histogram buckets, sum, and count for a status.
 
-    The histogram metric exposes ``_bucket`` / ``_sum`` / ``_count`` suffixed
-    series. The label selector must follow the full metric name (suffix
-    included), e.g. ``metric_sum{labels}`` -- not ``metric{labels}_sum`` (the
-    latter is a PromQL parse error).
+    Returns ``(buckets_by_le, sum_ms, count)`` at the latest Prometheus scrape.
+    Two snapshots (before/after a run) are subtracted to isolate that run's
+    latency, which is immune to the rate-window bleed that affects back-to-back
+    runs.
     """
     labels = f'{{http_target="/validate",http_status_code="{status_code}"}}'
     base = "http_server_duration_milliseconds"
+    buckets = _prom_query_buckets(prom_url, f"sum by (le) ({base}_bucket{labels})")
+    total_sum = _prom_query(prom_url, f"sum({base}_sum{labels})") or 0.0
+    total_count = _prom_query(prom_url, f"sum({base}_count{labels})") or 0.0
+    return buckets, total_sum, total_count
 
-    def _pct(p: float) -> float | None:
-        q = f"histogram_quantile({p}, sum by (le) (rate({base}_bucket{labels}[{window}])))"
-        return _prom_query(prom_url, q)
 
-    avg = _prom_query(
-        prom_url,
-        f"sum(rate({base}_sum{labels}[{window}])) / sum(rate({base}_count{labels}[{window}]))",
-    )
-    count = _prom_query(prom_url, f"sum({base}_count{labels})")
+def _delta_latency(
+    status_code: str,
+    before: tuple[dict[str, float], float, float],
+    after: tuple[dict[str, float], float, float],
+) -> PromLatency:
+    """Compute per-run latency percentiles from before/after histogram snapshots."""
+    before_buckets, before_sum, before_count = before
+    after_buckets, after_sum, after_count = after
+
+    delta_buckets = {
+        le: after_buckets.get(le, 0.0) - before_buckets.get(le, 0.0) for le in after_buckets
+    }
+    delta_count = after_count - before_count
+    delta_sum = after_sum - before_sum
+    avg = (delta_sum / delta_count) if delta_count > 0 else None
 
     def _round(v: float | None) -> float | None:
         return round(v, 3) if v is not None else None
 
     return PromLatency(
         status_code=status_code,
-        p50_ms=_round(_pct(0.50)),
-        p95_ms=_round(_pct(0.95)),
-        p99_ms=_round(_pct(0.99)),
+        p50_ms=_round(_histogram_quantile(delta_buckets, 0.50)),
+        p95_ms=_round(_histogram_quantile(delta_buckets, 0.95)),
+        p99_ms=_round(_histogram_quantile(delta_buckets, 0.99)),
         avg_ms=_round(avg),
-        request_count=_round(count),
+        request_count=round(delta_count) if delta_count > 0 else 0,
     )
 
 
@@ -310,6 +393,15 @@ async def _run_benchmark(
         args.concurrency,
         args.label,
     )
+
+    # Snapshot the cumulative histograms before the load, run both paths, wait
+    # one scrape interval so the final samples are visible, then snapshot again.
+    # Per-run latency is the (after - before) delta -- immune to rate-window
+    # bleed between back-to-back runs, so the server-side numbers are accurate
+    # even with no gap between runs.
+    before_200 = _snapshot_histogram(args.prometheus_url, "200")
+    before_401 = _snapshot_histogram(args.prometheus_url, "401")
+
     success = await _run_path(
         "success", 200, args.auth_url, success_headers, args.requests, args.concurrency
     )
@@ -320,9 +412,11 @@ async def _run_benchmark(
     logger.info("Waiting %ds for Prometheus to scrape final samples...", args.scrape_wait)
     await asyncio.sleep(args.scrape_wait)
 
+    after_200 = _snapshot_histogram(args.prometheus_url, "200")
+    after_401 = _snapshot_histogram(args.prometheus_url, "401")
     server_latency = [
-        _query_server_latency(args.prometheus_url, "200", args.window),
-        _query_server_latency(args.prometheus_url, "401", args.window),
+        _delta_latency("200", before_200, after_200),
+        _delta_latency("401", before_401, after_401),
     ]
 
     return BenchmarkReport(
@@ -461,16 +555,21 @@ def _parse_args() -> argparse.Namespace:
         description="Concurrent load test for the auth-server /validate hot path (#1316).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Example usage:
-    # Baseline run (standard GIL image), save result
+Example usage (GIL on vs off A/B, no rebuild -- toggle PYTHON_GIL via extra_env):
+    # GIL ON baseline
+    printf 'PYTHON_GIL=1\\n' > extra_env/auth-server.env
+    docker compose up -d --no-deps auth-server
     uv run python -m tests.stress.measure_validate_latency \\
-        --label baseline --out tests/stress/results/validate/baseline.json
+        --label gil-on --concurrency 100 \\
+        --out tests/stress/results/validate/gil-on.json
 
-    # After rebuilding on the free-threaded image
+    # GIL OFF (free-threaded), then compare
+    rm -f extra_env/auth-server.env
+    docker compose up -d --no-deps auth-server
     uv run python -m tests.stress.measure_validate_latency \\
-        --label freethreaded --free-threaded \\
-        --out tests/stress/results/validate/freethreaded.json \\
-        --compare-to tests/stress/results/validate/baseline.json
+        --label gil-off --free-threaded --concurrency 100 \\
+        --out tests/stress/results/validate/gil-off.json \\
+        --compare-to tests/stress/results/validate/gil-on.json
 """,
     )
     parser.add_argument("--label", default="run", help="Label for this run (e.g. baseline)")
@@ -485,9 +584,6 @@ Example usage:
     )
     parser.add_argument(
         "--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="Max concurrent requests"
-    )
-    parser.add_argument(
-        "--window", default=DEFAULT_WINDOW, help="PromQL rate window for percentiles"
     )
     parser.add_argument(
         "--scrape-wait",

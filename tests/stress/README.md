@@ -180,19 +180,46 @@ uv run python -m tests.stress.measure_validate_latency \
     --compare-to tests/stress/results/validate/baseline.json
 ```
 
-Latency comes from the `http_server_duration_milliseconds` histogram
-(`http_target="/validate"`, split by `http_status_code`), computed by
-Prometheus over a rate window (`--window`, default `5m`). The script waits one
-scrape interval (`--scrape-wait`) after the load so the final samples are
-visible before querying. Client-observed wall time is also recorded as a
-sanity cross-check.
+Server-side latency comes from the `http_server_duration_milliseconds`
+histogram (`http_target="/validate"`, split by `http_status_code`). The script
+snapshots the cumulative histogram buckets *before* and *after* the load and
+computes each percentile from the `(after - before)` delta, so the numbers
+reflect only that run's requests. This is immune to rate-window bleed, so
+back-to-back runs (e.g. GIL-on then GIL-off on the same image) stay accurate
+with no gap required. The `count` column equals the run's request count when
+the delta is clean. The script waits one scrape interval (`--scrape-wait`,
+default 20s) after the load so the final samples are visible before the "after"
+snapshot. Client-observed wall time is also recorded as a sanity cross-check.
+
+### GIL on/off A/B without a rebuild
+
+The free-threaded image can run with the GIL re-enabled at runtime via
+`PYTHON_GIL=1`, so a before/after needs no second build. Toggle it through the
+auth-server `extra_env` file:
+
+```bash
+# GIL ON (baseline)
+mkdir -p extra_env && printf 'PYTHON_GIL=1\n' > extra_env/auth-server.env
+docker compose up -d --no-deps auth-server   # startup log: "GIL enabled at runtime=True"
+uv run python -m tests.stress.measure_validate_latency \
+    --label gil-on --requests 3000 --concurrency 100 \
+    --out tests/stress/results/validate/gil-on.json
+
+# GIL OFF (free-threaded)
+rm -f extra_env/auth-server.env
+docker compose up -d --no-deps auth-server   # startup log: "GIL enabled at runtime=False"
+uv run python -m tests.stress.measure_validate_latency \
+    --label gil-off --free-threaded --requests 3000 --concurrency 100 \
+    --out tests/stress/results/validate/gil-off.json \
+    --compare-to tests/stress/results/validate/gil-on.json
+```
+
+The GIL benefit shows up on the **success path p95/p99 under concurrency**
+(the CPU-bound JWT-verify work); it is roughly neutral at low concurrency and
+on the error path (which is dominated by blocking Keycloak I/O).
 
 Notes:
 
-- Counters are cumulative and the rate window is wide, so run the baseline and
-  the free-threaded comparison against **separate image builds** (the rebuild
-  resets the counters). Back-to-back runs against the same image will bleed
-  into each other's window.
 - `--prometheus-url` and `--auth-url` default to the Compose ports
   (`localhost:9090` and `localhost:8888`); override for other deployments.
 
