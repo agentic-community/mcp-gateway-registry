@@ -56,6 +56,7 @@ import argparse
 import asyncio
 import json
 import logging
+import statistics
 import sys
 import time
 from datetime import UTC, datetime
@@ -117,6 +118,34 @@ class BenchmarkReport(BaseModel):
     free_threaded: bool | None = None
     client_results: list[PathResult] = Field(default_factory=list)
     server_latency: list[PromLatency] = Field(default_factory=list)
+
+
+class SweepCell(BaseModel):
+    """Aggregated (median over repeats) result for one (concurrency) cell."""
+
+    concurrency: int
+    repeats: int
+    # Server-side success-path percentiles (the CPU-bound JWT-verify work).
+    server_200_p50_ms: float | None = None
+    server_200_p95_ms: float | None = None
+    server_200_p99_ms: float | None = None
+    # Client-side success-path throughput and tail.
+    client_200_p95_ms: float | None = None
+    client_200_rps: float | None = None
+    # Per-repeat raw reports kept for auditability.
+    runs: list[BenchmarkReport] = Field(default_factory=list)
+
+
+class SweepReport(BaseModel):
+    """A full concurrency sweep at a fixed GIL state."""
+
+    label: str
+    timestamp: str
+    free_threaded: bool | None = None
+    concurrency_levels: list[int] = Field(default_factory=list)
+    repeats: int = 1
+    requests_per_path: int = 0
+    cells: list[SweepCell] = Field(default_factory=list)
 
 
 def _read_token(
@@ -373,62 +402,172 @@ def _delta_latency(
     )
 
 
-async def _run_benchmark(
-    args: argparse.Namespace,
+async def _run_single(
+    auth_url: str,
+    prometheus_url: str,
+    token: str,
+    original_url: str,
+    concurrency: int,
+    requests_count: int,
+    scrape_wait: int,
+    label: str,
+    free_threaded: bool,
 ) -> BenchmarkReport:
-    """Drive both request mixes, then read server-side latency from Prometheus."""
-    token = _read_token(Path(args.token_file))
+    """Run both request mixes once at a fixed concurrency and read server latency.
+
+    Snapshots the cumulative histograms before the load, runs both paths, waits
+    one scrape interval so the final samples are visible, then snapshots again.
+    Per-run latency is the (after - before) delta -- immune to rate-window bleed
+    between back-to-back runs, so the server-side numbers are accurate even with
+    no gap between runs.
+    """
     success_headers = {
         "Authorization": f"Bearer {token}",
-        "X-Original-URL": args.original_url,
+        "X-Original-URL": original_url,
     }
     error_headers = {
         "Authorization": f"Bearer {_derive_error_token(token)}",
-        "X-Original-URL": args.original_url,
+        "X-Original-URL": original_url,
     }
 
-    logger.info(
-        "Starting /validate load: %d requests/path at concurrency %d (label=%s)",
-        args.requests,
-        args.concurrency,
-        args.label,
-    )
+    logger.info("Run '%s': %d requests/path at concurrency %d", label, requests_count, concurrency)
 
-    # Snapshot the cumulative histograms before the load, run both paths, wait
-    # one scrape interval so the final samples are visible, then snapshot again.
-    # Per-run latency is the (after - before) delta -- immune to rate-window
-    # bleed between back-to-back runs, so the server-side numbers are accurate
-    # even with no gap between runs.
-    before_200 = _snapshot_histogram(args.prometheus_url, "200")
-    before_401 = _snapshot_histogram(args.prometheus_url, "401")
+    before_200 = _snapshot_histogram(prometheus_url, "200")
+    before_401 = _snapshot_histogram(prometheus_url, "401")
 
     success = await _run_path(
-        "success", 200, args.auth_url, success_headers, args.requests, args.concurrency
+        "success", 200, auth_url, success_headers, requests_count, concurrency
     )
-    error = await _run_path(
-        "error", 401, args.auth_url, error_headers, args.requests, args.concurrency
-    )
+    error = await _run_path("error", 401, auth_url, error_headers, requests_count, concurrency)
 
-    logger.info("Waiting %ds for Prometheus to scrape final samples...", args.scrape_wait)
-    await asyncio.sleep(args.scrape_wait)
+    logger.info("Waiting %ds for Prometheus to scrape final samples...", scrape_wait)
+    await asyncio.sleep(scrape_wait)
 
-    after_200 = _snapshot_histogram(args.prometheus_url, "200")
-    after_401 = _snapshot_histogram(args.prometheus_url, "401")
+    after_200 = _snapshot_histogram(prometheus_url, "200")
+    after_401 = _snapshot_histogram(prometheus_url, "401")
     server_latency = [
         _delta_latency("200", before_200, after_200),
         _delta_latency("401", before_401, after_401),
     ]
 
     return BenchmarkReport(
-        label=args.label,
+        label=label,
         timestamp=datetime.now(UTC).isoformat(),
-        auth_url=args.auth_url,
-        prometheus_url=args.prometheus_url,
-        concurrency=args.concurrency,
-        requests_per_path=args.requests,
-        free_threaded=args.free_threaded,
+        auth_url=auth_url,
+        prometheus_url=prometheus_url,
+        concurrency=concurrency,
+        requests_per_path=requests_count,
+        free_threaded=free_threaded,
         client_results=[success, error],
         server_latency=server_latency,
+    )
+
+
+async def _run_benchmark(
+    args: argparse.Namespace,
+) -> BenchmarkReport:
+    """Single-run entry point: drive one concurrency level once."""
+    token = _read_token(Path(args.token_file))
+    return await _run_single(
+        auth_url=args.auth_url,
+        prometheus_url=args.prometheus_url,
+        token=token,
+        original_url=args.original_url,
+        concurrency=args.concurrency,
+        requests_count=args.requests,
+        scrape_wait=args.scrape_wait,
+        label=args.label,
+        free_threaded=args.free_threaded,
+    )
+
+
+def _median(
+    values: list[float],
+) -> float | None:
+    """Median of non-None values, or None if empty."""
+    clean = [v for v in values if v is not None]
+    return round(statistics.median(clean), 3) if clean else None
+
+
+def _server_200(
+    report: BenchmarkReport,
+) -> PromLatency | None:
+    """Return the success-path (HTTP 200) server latency from a report."""
+    for s in report.server_latency:
+        if s.status_code == "200":
+            return s
+    return None
+
+
+def _client_200(
+    report: BenchmarkReport,
+) -> PathResult | None:
+    """Return the success-path client result from a report."""
+    for r in report.client_results:
+        if r.path == "success":
+            return r
+    return None
+
+
+def _aggregate_cell(
+    concurrency: int,
+    runs: list[BenchmarkReport],
+) -> SweepCell:
+    """Aggregate repeats for one concurrency level using the median per metric."""
+    server = [_server_200(r) for r in runs]
+    client = [_client_200(r) for r in runs]
+    return SweepCell(
+        concurrency=concurrency,
+        repeats=len(runs),
+        server_200_p50_ms=_median([s.p50_ms for s in server if s]),
+        server_200_p95_ms=_median([s.p95_ms for s in server if s]),
+        server_200_p99_ms=_median([s.p99_ms for s in server if s]),
+        client_200_p95_ms=_median([c.client_p95_ms for c in client if c]),
+        client_200_rps=_median([c.throughput_rps for c in client if c]),
+        runs=runs,
+    )
+
+
+async def _run_sweep(
+    args: argparse.Namespace,
+    levels: list[int],
+) -> SweepReport:
+    """Run every concurrency level `repeats` times and aggregate by median."""
+    token = _read_token(Path(args.token_file))
+    cells: list[SweepCell] = []
+    for concurrency in levels:
+        runs: list[BenchmarkReport] = []
+        for i in range(args.repeats):
+            report = await _run_single(
+                auth_url=args.auth_url,
+                prometheus_url=args.prometheus_url,
+                token=token,
+                original_url=args.original_url,
+                concurrency=concurrency,
+                requests_count=args.requests,
+                scrape_wait=args.scrape_wait,
+                label=f"{args.label}-c{concurrency}-r{i + 1}",
+                free_threaded=args.free_threaded,
+            )
+            runs.append(report)
+        cell = _aggregate_cell(concurrency, runs)
+        cells.append(cell)
+        logger.info(
+            "Cell c=%d done: server200 p95=%s p99=%s (median of %d)",
+            concurrency,
+            cell.server_200_p95_ms,
+            cell.server_200_p99_ms,
+            cell.repeats,
+        )
+
+    return SweepReport(
+        label=args.label,
+        timestamp=datetime.now(UTC).isoformat(),
+        free_threaded=args.free_threaded,
+        concurrency_levels=levels,
+        repeats=args.repeats,
+        requests_per_path=args.requests,
+        cells=cells,
     )
 
 
@@ -549,6 +688,87 @@ def _print_comparison(
     print(f"{'=' * 72}\n")
 
 
+def _print_sweep(
+    sweep: SweepReport,
+) -> None:
+    """Print a sweep as a concurrency-by-metric table (median over repeats)."""
+    print(f"\n{'=' * 72}")
+    print(
+        f"SWEEP '{sweep.label}'  (repeats={sweep.repeats}, "
+        f"requests/path={sweep.requests_per_path}, free_threaded={sweep.free_threaded})"
+    )
+    rows = [
+        [
+            str(c.concurrency),
+            _fmt(c.server_200_p50_ms),
+            _fmt(c.server_200_p95_ms),
+            _fmt(c.server_200_p99_ms),
+            _fmt(c.client_200_p95_ms),
+            f"{c.client_200_rps:.1f}" if c.client_200_rps is not None else "-",
+        ]
+        for c in sweep.cells
+    ]
+    _print_table(
+        "SUCCESS path, median over repeats (server-side unless noted)",
+        ["concur", "srv p50", "srv p95", "srv p99", "cli p95", "cli rps"],
+        rows,
+    )
+    print(f"{'=' * 72}\n")
+
+
+def _print_sweep_comparison(
+    current: SweepReport,
+    baseline_path: Path,
+) -> None:
+    """Print a per-concurrency baseline-vs-current sweep comparison (server p95/p99)."""
+    baseline = SweepReport(**json.loads(baseline_path.read_text()))
+    base_by_c = {c.concurrency: c for c in baseline.cells}
+
+    rows: list[list[str]] = []
+    for c in current.cells:
+        b = base_by_c.get(c.concurrency)
+        if not b:
+            continue
+        for metric in ("server_200_p95_ms", "server_200_p99_ms"):
+            cur = getattr(c, metric)
+            old = getattr(b, metric)
+            if cur is None or old is None or old == 0:
+                continue
+            delta_pct = (cur - old) / old * 100.0
+            verdict = "improved" if delta_pct < 0 else "regressed"
+            rows.append(
+                [
+                    str(c.concurrency),
+                    metric.replace("server_200_", "").replace("_ms", ""),
+                    f"{old:.2f}",
+                    f"{cur:.2f}",
+                    f"{delta_pct:+.1f}%",
+                    verdict,
+                ]
+            )
+
+    _print_table(
+        f"SWEEP COMPARISON (success p95/p99): '{baseline.label}' -> '{current.label}'",
+        ["concur", "pctl", "baseline ms", "current ms", "delta", "verdict"],
+        rows,
+    )
+    print(f"{'=' * 72}\n")
+
+
+def _parse_concurrency_list(
+    raw: str,
+) -> list[int]:
+    """Parse a comma-separated concurrency list like '50,75,100' into ints."""
+    levels = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part:
+            levels.append(int(part))
+    if not levels:
+        raise ValueError(f"No valid concurrency levels parsed from: {raw!r}")
+    return levels
+
+
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -596,18 +816,54 @@ Example usage (GIL on vs off A/B, no rebuild -- toggle PYTHON_GIL via extra_env)
         action="store_true",
         help="Tag this run as a free-threaded interpreter build (metadata only)",
     )
+    parser.add_argument(
+        "--sweep",
+        help=(
+            "Comma-separated concurrency levels to sweep, e.g. '50,75,100,125,150'. "
+            "Each level runs --repeats times; results are aggregated by median. "
+            "Overrides --concurrency when set."
+        ),
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Repeats per concurrency level in --sweep mode (default: 1)",
+    )
     parser.add_argument("--out", help="Write the JSON report to this path")
-    parser.add_argument("--compare-to", help="Compare server latency against this saved JSON")
+    parser.add_argument(
+        "--compare-to",
+        help="Compare against this saved JSON (single report, or sweep report in --sweep mode)",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
 
-def main() -> int:
-    """Control flow: parse args, run the benchmark, report, optionally compare."""
-    args = _parse_args()
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
+def _run_sweep_mode(
+    args: argparse.Namespace,
+) -> int:
+    """Run a multi-concurrency sweep, print the table, optionally save/compare."""
+    levels = _parse_concurrency_list(args.sweep)
+    logger.info("Sweep over concurrency=%s, repeats=%d", levels, args.repeats)
+    sweep = asyncio.run(_run_sweep(args, levels))
+    _print_sweep(sweep)
 
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(sweep.model_dump(), indent=2))
+        logger.info("Wrote sweep report to %s", out_path)
+
+    if args.compare_to:
+        _print_sweep_comparison(sweep, Path(args.compare_to))
+
+    return 0
+
+
+def _run_single_mode(
+    args: argparse.Namespace,
+) -> int:
+    """Run one concurrency level, print the tables, optionally save/compare."""
     report = asyncio.run(_run_benchmark(args))
     _print_report(report)
 
@@ -621,6 +877,17 @@ def main() -> int:
         _print_comparison(report, Path(args.compare_to))
 
     return 0
+
+
+def main() -> int:
+    """Control flow: parse args, then dispatch to sweep or single-run mode."""
+    args = _parse_args()
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    if args.sweep:
+        return _run_sweep_mode(args)
+    return _run_single_mode(args)
 
 
 if __name__ == "__main__":
