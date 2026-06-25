@@ -570,9 +570,11 @@ def test_create_location_block_streamable_http(nginx_service):
     assert "proxy_buffering off" in block
     assert "auth_request /validate" in block
     # Upstream timeouts present so long-running MCP tool calls aren't severed by
-    # nginx before the inner auth_server hop times out (default 30s + 30s = 60s).
-    assert "proxy_read_timeout 60s" in block
-    assert "proxy_send_timeout 60s" in block
+    # nginx before the inner auth_server hop times out. The exact read/send value
+    # is derived from settings (asserted in TestResolveMcpProxyReadTimeout); here
+    # we only assert the directives are emitted on the block.
+    assert "proxy_read_timeout " in block
+    assert "proxy_send_timeout " in block
     assert "proxy_connect_timeout 10s" in block
 
 
