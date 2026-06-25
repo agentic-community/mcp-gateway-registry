@@ -452,6 +452,29 @@ resource "aws_secretsmanager_secret_version" "metrics_api_key" {
   secret_string = random_password.metrics_api_key[0].result
 }
 
+# Grafana admin password (issue #1325). Previously injected as a plaintext
+# container env value, exposing it via `aws ecs describe-task-definition` and in
+# Terraform state. Now stored in Secrets Manager and referenced via valueFrom so
+# it no longer appears in the rendered task definition. Sourced from the
+# operator-supplied var.grafana_admin_password.
+#checkov:skip=CKV2_AWS_57:Operator-supplied Grafana admin password - rotation requires coordinated service restart
+resource "aws_secretsmanager_secret" "grafana_admin_password" {
+  count = var.enable_observability ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-grafana-admin-"
+  description             = "Grafana admin password (issue #1325)"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "grafana_admin_password" {
+  count = var.enable_observability ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.grafana_admin_password[0].id
+  secret_string = var.grafana_admin_password
+}
+
 
 # OTLP exporter headers (e.g., dd-api-key=xxx for Datadog)
 # Only created when observability is enabled AND an OTLP endpoint is configured

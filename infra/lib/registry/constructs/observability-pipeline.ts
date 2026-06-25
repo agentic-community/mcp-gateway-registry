@@ -50,6 +50,8 @@ export interface ObservabilityPipelineProps {
   readonly metricsApiKeySecret?: secretsmanager.ISecret;
   /** Secrets Manager secret holding the OTLP exporter headers */
   readonly otlpExporterHeadersSecret?: secretsmanager.ISecret;
+  /** Secrets Manager secret holding the Grafana admin password (issue #1325) */
+  readonly grafanaAdminPasswordSecret?: secretsmanager.ISecret;
   /** Additional IAM policy statements for Secrets Manager + KMS access */
   readonly secretsAccessStatements: iam.PolicyStatement[];
   /** Security group of the registry ECS service (for metrics ingress) */
@@ -409,7 +411,9 @@ export class ObservabilityPipeline extends Construct {
       'GrafanaExecRole',
       `${namePrefix}-grafana-task-exec-${region}`,
       grafanaLogGroup,
-      [],
+      // Issue #1325: the execution role must read the Grafana admin password
+      // secret (and KMS-decrypt it) for the container `secrets` valueFrom.
+      props.secretsAccessStatements,
     );
 
     const grafanaTaskRole = _createTaskRole(
@@ -458,11 +462,23 @@ export class ObservabilityPipeline extends Construct {
       GF_AUTH_ANONYMOUS_ENABLED: 'false',
       GF_AUTH_ANONYMOUS_ORG_ROLE: 'Viewer',
       GF_AUTH_DISABLE_LOGIN_FORM: 'false',
-      GF_SECURITY_ADMIN_PASSWORD: config.grafanaAdminPassword,
       GF_LOG_MODE: 'console',
       GF_LOG_LEVEL: 'info',
       GF_DASHBOARDS_MIN_REFRESH_INTERVAL: '10s',
     };
+
+    // Issue #1325: source GF_SECURITY_ADMIN_PASSWORD from Secrets Manager via
+    // the container `secrets` map instead of a plaintext env value, so it does
+    // not appear in the rendered task definition. Falls back to the plaintext
+    // env only if the secret was not provided (observability disabled paths).
+    const grafanaSecrets: Record<string, ecs.Secret> = {};
+    if (props.grafanaAdminPasswordSecret) {
+      grafanaSecrets['GF_SECURITY_ADMIN_PASSWORD'] = ecs.Secret.fromSecretsManager(
+        props.grafanaAdminPasswordSecret,
+      );
+    } else {
+      grafanaEnv['GF_SECURITY_ADMIN_PASSWORD'] = config.grafanaAdminPassword;
+    }
 
     const grafanaContainer = grafanaTaskDef.addContainer('grafana', {
       containerName: 'grafana',
@@ -470,6 +486,7 @@ export class ObservabilityPipeline extends Construct {
       essential: true,
       cpu: 512,
       memoryLimitMiB: 1024,
+      secrets: grafanaSecrets,
       environment: grafanaEnv,
       logging: ecs.LogDrivers.awsLogs({
         logGroup: grafanaLogGroup,

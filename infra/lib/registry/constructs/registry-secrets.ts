@@ -33,6 +33,7 @@ export class RegistrySecrets extends Construct {
   public readonly auth0M2mClientSecret?: secretsmanager.Secret;
   public readonly metricsApiKey?: secretsmanager.Secret;
   public readonly otlpExporterHeaders?: secretsmanager.Secret;
+  public readonly grafanaAdminPassword?: secretsmanager.Secret;
 
   /** IAM statements granting GetSecretValue + KMS decrypt for all secrets above */
   public readonly accessStatements: iam.PolicyStatement[];
@@ -153,6 +154,13 @@ export class RegistrySecrets extends Construct {
         kmsKey: this.kmsKey,
         generateString: { passwordLength: 48, excludePunctuation: true },
       });
+      // Issue #1325: store the Grafana admin password in Secrets Manager instead
+      // of injecting it as a plaintext container env value.
+      this.grafanaAdminPassword = _createSecret(this, 'GrafanaAdminPassword', {
+        description: 'Grafana admin password',
+        kmsKey: this.kmsKey,
+        stringValue: config.grafanaAdminPassword,
+      });
     }
 
     if (config.enableObservability && config.otel.otlpEndpoint !== '') {
@@ -175,7 +183,7 @@ export class RegistrySecrets extends Construct {
     for (const s of [
       this.entraClientSecret, this.oktaClientSecret, this.oktaM2mClientSecret,
       this.oktaApiToken, this.auth0ClientSecret, this.auth0M2mClientSecret,
-      this.metricsApiKey, this.otlpExporterHeaders,
+      this.metricsApiKey, this.otlpExporterHeaders, this.grafanaAdminPassword,
     ]) if (s) arns.push(s.secretArn);
 
     this.accessStatements = [
