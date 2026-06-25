@@ -429,6 +429,7 @@ registry:
   # ARD Catalog Publisher (issue #1294): publishes /.well-known/ai-catalog.json
   ard:
     catalogEnabled: true  # Set false to disable the public ARD catalog endpoint
+    registryEnabled: true  # Set false to disable the ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents)
     publisherDomain: ""  # URN publisher FQDN. Empty derives from registryCard.url host.
     defaultNamespace: ""  # Optional override for the URN namespace segment
 

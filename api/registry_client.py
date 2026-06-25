@@ -2818,6 +2818,74 @@ class RegistryClient:
         )
         return result
 
+    def ard_search(
+        self,
+        text: str,
+        filter: dict[str, Any] | None = None,
+        federation: str = "auto",
+        page_size: int = 10,
+        page_token: str | None = None,
+    ) -> dict[str, Any]:
+        """ARD Registry search (POST /api/ard/search).
+
+        Args:
+            text: Natural-language query (required).
+            filter: ARD query.filter, e.g. {"type": ["mcp_server"], "tags": ["finance"]}.
+            federation: auto | referrals | none (Phase 2 returns own-index results).
+            page_size: Max results in the page (1-100).
+            page_token: Opaque cursor from a previous response.
+
+        Returns:
+            ARD SearchResponse dict: {"results": [...], "referrals": [...], "pageToken": ...}.
+
+        Raises:
+            requests.HTTPError: On a non-2xx ARD response (body is {errorCode, message}).
+        """
+        logger.info(f"ARD search: text={text!r} filter={filter} federation={federation}")
+        query: dict[str, Any] = {"text": text}
+        if filter:
+            query["filter"] = filter
+        request_data: dict[str, Any] = {
+            "query": query,
+            "federation": federation,
+            "pageSize": page_size,
+        }
+        if page_token:
+            request_data["pageToken"] = page_token
+        response = self._make_request(method="POST", endpoint="/api/ard/search", data=request_data)
+        result = response.json()
+        logger.info(f"ARD search returned {len(result.get('results', []))} results")
+        return result
+
+    def ard_browse(
+        self,
+        filters: list[str] | None = None,
+        order_by: str = "identifier",
+        page_size: int = 20,
+        page_token: str | None = None,
+    ) -> dict[str, Any]:
+        """ARD Registry browse (GET /api/ard/agents) over all catalog asset types.
+
+        Args:
+            filters: Repeated key=value filters, e.g. ["type=mcp_server", "tags=finance"].
+            order_by: identifier | displayName | updatedAt.
+            page_size: Max items in the page (1-100).
+            page_token: Opaque cursor from a previous response.
+
+        Returns:
+            ARD ListResponse dict: {"items": [...], "total": N, "pageToken": ...}.
+        """
+        logger.info(f"ARD browse: filters={filters} order_by={order_by}")
+        params: dict[str, Any] = {"orderBy": order_by, "pageSize": page_size}
+        if filters:
+            params["filter"] = filters  # requests encodes a list as repeated params
+        if page_token:
+            params["pageToken"] = page_token
+        response = self._make_request(method="GET", endpoint="/api/ard/agents", params=params)
+        result = response.json()
+        logger.info(f"ARD browse returned {len(result.get('items', []))} of {result.get('total')}")
+        return result
+
     def rate_agent(self, path: str, rating: int) -> RatingResponse:
         """
         Submit a rating for an agent (1-5 stars).

@@ -1805,6 +1805,78 @@ def cmd_server_connect_config(args: argparse.Namespace) -> int:
         return 1
 
 
+def _parse_ard_filter(pairs: list[str] | None) -> dict[str, Any] | None:
+    """Turn repeated ``key=value`` CLI filters into an ARD query.filter dict."""
+    if not pairs:
+        return None
+    out: dict[str, Any] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise ValueError(f"Invalid --filter (expected key=value): {pair!r}")
+        key, _, value = pair.partition("=")
+        key, value = key.strip(), value.strip()
+        if key in out:
+            existing = out[key]
+            out[key] = [*existing, value] if isinstance(existing, list) else [existing, value]
+        else:
+            out[key] = value
+    return out
+
+
+def cmd_ard_search(args: argparse.Namespace) -> int:
+    """ARD Registry search (POST /api/ard/search)."""
+    try:
+        client = _create_client(args)
+        result = client.ard_search(
+            text=args.query,
+            filter=_parse_ard_filter(args.filter),
+            federation=args.federation,
+            page_size=args.page_size,
+            page_token=args.page_token,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+            return 0
+        results = result.get("results", [])
+        logger.info(f"ARD search: {len(results)} result(s)")
+        for r in results:
+            print(
+                f"  [{r.get('score')}] {r.get('displayName')} "
+                f"({r.get('type')}) {r.get('identifier')}"
+            )
+        if result.get("pageToken"):
+            print(f"\nnext pageToken: {result['pageToken']}")
+        return 0
+    except Exception as e:
+        logger.error(f"ARD search failed: {e}")
+        return 1
+
+
+def cmd_ard_agents(args: argparse.Namespace) -> int:
+    """ARD Registry browse (GET /api/ard/agents) over all asset types."""
+    try:
+        client = _create_client(args)
+        result = client.ard_browse(
+            filters=args.filter,
+            order_by=args.order_by,
+            page_size=args.page_size,
+            page_token=args.page_token,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+            return 0
+        items = result.get("items", [])
+        logger.info(f"ARD browse: {len(items)} of {result.get('total')} entries")
+        for it in items:
+            print(f"  {it.get('displayName')} ({it.get('type')}) {it.get('identifier')}")
+        if result.get("pageToken"):
+            print(f"\nnext pageToken: {result['pageToken']}")
+        return 0
+    except Exception as e:
+        logger.error(f"ARD browse failed: {e}")
+        return 1
+
+
 def cmd_server_search(args: argparse.Namespace) -> int:
     """
     Perform semantic search across all entity types.
@@ -6039,6 +6111,38 @@ Examples:
         "--json", action="store_true", help="Output raw JSON with all entity types"
     )
 
+    # ARD Registry adapter commands (issue #1295)
+    ard_search_parser = subparsers.add_parser(
+        "ard-search", help="ARD Registry search (POST /api/ard/search)"
+    )
+    ard_search_parser.add_argument("--query", required=True, help="Natural-language query")
+    ard_search_parser.add_argument(
+        "--filter", action="append", default=None,
+        help="ARD filter key=value (repeatable), e.g. --filter type=mcp_server --filter tags=finance",
+    )
+    ard_search_parser.add_argument(
+        "--federation", default="auto", choices=["auto", "referrals", "none"],
+        help="Federation mode (default: auto)",
+    )
+    ard_search_parser.add_argument("--page-size", type=int, default=10, help="Results per page (1-100)")
+    ard_search_parser.add_argument("--page-token", default=None, help="Opaque pagination cursor")
+    ard_search_parser.add_argument("--json", action="store_true", help="Output raw ARD JSON")
+
+    ard_agents_parser = subparsers.add_parser(
+        "ard-agents", help="ARD Registry browse over all asset types (GET /api/ard/agents)"
+    )
+    ard_agents_parser.add_argument(
+        "--filter", action="append", default=None,
+        help="ARD filter key=value (repeatable), e.g. --filter type=a2a_agent",
+    )
+    ard_agents_parser.add_argument(
+        "--order-by", default="identifier", choices=["identifier", "displayName", "updatedAt"],
+        help="Sort field (default: identifier)",
+    )
+    ard_agents_parser.add_argument("--page-size", type=int, default=20, help="Items per page (1-100)")
+    ard_agents_parser.add_argument("--page-token", default=None, help="Opaque pagination cursor")
+    ard_agents_parser.add_argument("--json", action="store_true", help="Output raw ARD JSON")
+
     # Server Version Management Commands
 
     # List versions command
@@ -7111,6 +7215,8 @@ Examples:
         "server-update-credential": cmd_server_update_credential,
         "server-connect-config": cmd_server_connect_config,
         "server-search": cmd_server_search,
+        "ard-search": cmd_ard_search,
+        "ard-agents": cmd_ard_agents,
         "list-versions": cmd_list_versions,
         "remove-version": cmd_remove_version,
         "set-default-version": cmd_set_default_version,
