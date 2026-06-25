@@ -1,0 +1,49 @@
+{
+  "scope_name": "read-select-register-new",
+  "scope_type": "server_scope",
+  "description": "Non-admin read-write users: can see only a SELECT list of servers (currenttime, mcpgw), register new servers, and run health checks. Cannot toggle server enabled/disabled state, cannot change lifecycle status, and cannot delete servers. A server this group registers is NOT visible to the group until an admin adds it to the group with 'add-to-groups'.",
+  "group_mappings": ["read-select-register-new"],
+  "server_access": [
+    {
+      "server": "api",
+      "methods": ["initialize", "GET", "POST", "servers", "search", "tokens"],
+      "tools": []
+    },
+    {
+      "server": "currenttime",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/currenttime",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/currenttime/",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "mcpgw",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/mcpgw",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/mcpgw/",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    }
+  ],
+  "ui_permissions": {
+    "list_service": ["/currenttime", "/mcpgw"],
+    "register_service": ["*"],
+    "health_check_service": ["all"]
+  },
+  "create_in_idp": true
+}

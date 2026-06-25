@@ -1,0 +1,19 @@
+{
+  "scope_name": "read-all-register-new",
+  "scope_type": "server_scope",
+  "description": "Non-admin read-write users: can see ALL servers, register new servers, and run health checks. Cannot toggle server enabled/disabled state, cannot change lifecycle status, and cannot delete servers. Newly registered servers are visible immediately because list_service is 'all'.",
+  "group_mappings": ["read-all-register-new"],
+  "server_access": [
+    {
+      "server": "api",
+      "methods": ["initialize", "GET", "POST", "servers", "search", "tokens"],
+      "tools": []
+    }
+  ],
+  "ui_permissions": {
+    "list_service": ["all"],
+    "register_service": ["*"],
+    "health_check_service": ["all"]
+  },
+  "create_in_idp": true
+}
