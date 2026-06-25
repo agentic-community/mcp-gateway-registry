@@ -1712,6 +1712,9 @@ class RegistryClient:
             or endpoint == "/api/servers/groups/import"
             or "/auth-credential" in endpoint
             or "/versions" in endpoint
+            # The server rate endpoint (POST /api/servers/{path}/rate) takes a
+            # JSON RatingRequest body, not form data.
+            or endpoint.endswith("/rate")
             or (method in ("PUT", "PATCH") and endpoint.startswith("/api/servers/"))
         ):
             # Send as JSON for agent, management, search, federation, and import endpoints
@@ -1816,6 +1819,10 @@ class RegistryClient:
         """
         Toggle service enabled/disabled status.
 
+        The POST /api/servers/toggle endpoint requires an explicit ``new_state``
+        rather than flipping the current state itself, so this reads the current
+        enabled state first and sends the opposite.
+
         Args:
             service_path: Path of service to toggle
 
@@ -1827,11 +1834,24 @@ class RegistryClient:
         """
         logger.info(f"Toggling service: {service_path}")
 
+        # Read current state so we can send the opposite as new_state.
+        current = self.get_server(service_path)
+        new_state = not current.is_enabled
+
         response = self._make_request(
-            method="POST", endpoint="/api/servers/toggle", data={"service_path": service_path}
+            method="POST",
+            endpoint="/api/servers/toggle",
+            data={"path": service_path, "new_state": str(new_state).lower()},
         )
 
-        result = ToggleResponse(**response.json())
+        # The endpoint returns {service_path, new_enabled_state, message, ...};
+        # map it onto ToggleResponse rather than passing the raw keys.
+        body = response.json()
+        result = ToggleResponse(
+            path=body.get("service_path", service_path),
+            is_enabled=body.get("new_enabled_state", new_state),
+            message=body.get("message", ""),
+        )
         logger.info(f"Service toggled: {service_path} -> enabled={result.is_enabled}")
         return result
 
