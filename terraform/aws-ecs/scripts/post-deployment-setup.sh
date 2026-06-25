@@ -546,25 +546,21 @@ _initialize_scopes() {
             return 1
         fi
     else
-        # EFS mode (default)
-        log_info "Using EFS storage backend"
+        # The legacy EFS/file scopes-init delivery was removed: scopes.yml is no
+        # longer shipped to EFS, and DocumentDB is the only supported scopes
+        # backend. Reaching this branch means no DocumentDB endpoint was found in
+        # the terraform outputs, which is a deployment misconfiguration.
+        log_error "No DocumentDB endpoint found in terraform outputs ($OUTPUTS_FILE)."
+        log_error "Scopes initialization requires the DocumentDB backend; the legacy EFS scopes-init task has been removed."
+        log_error "Set storage_backend = \"documentdb\" and re-run 'terraform apply' before post-deployment setup."
 
         if [[ "$DRY_RUN" == "true" ]]; then
-            log_info "[DRY RUN] Would run: $SCRIPT_DIR/run-scopes-init-task.sh --skip-build"
             STEPS_SKIPPED=$((STEPS_SKIPPED + 1))
             return 0
         fi
 
-        log_info "Running scopes initialization task on EFS..."
-
-        if "$SCRIPT_DIR/run-scopes-init-task.sh" --skip-build; then
-            log_success "MCP scopes initialized on EFS!"
-            STEPS_PASSED=$((STEPS_PASSED + 1))
-        else
-            log_error "Scopes initialization failed."
-            STEPS_FAILED=$((STEPS_FAILED + 1))
-            return 1
-        fi
+        STEPS_FAILED=$((STEPS_FAILED + 1))
+        return 1
     fi
 }
 
