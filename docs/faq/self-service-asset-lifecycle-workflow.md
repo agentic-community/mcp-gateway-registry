@@ -28,54 +28,20 @@ asset, the **Registry**, the **Gate** (admission control "quick checks"), the **
 pipeline, and the **Admin**.
 
 ```mermaid
-flowchart TB
-    subgraph Team
-        Register[Register]
-        ErrorShown[Error shown]
-        TaggedUnsafe[tagged unsafe]
-        DraftErr[draft + error notes]
-        BadgeBeta[badge: beta]
-        VisibleAll[visible to all]
-    end
+sequenceDiagram
+    participant Team
+    participant Registry
+    participant Scanner as Security Scan
+    participant Admin as Admin / CI-CD
 
-    subgraph Registry
-        CallGate[Call Gate]
-        SaveDraft[Save as draft]
-        YaraScan[YARA scan auto]
-        BadgeDraft[badge: draft]
-        StatusBeta[status: beta]
-        StatusActive[status: active]
-    end
-
-    subgraph Gate
-        QuickChecks[Quick checks]
-    end
-
-    subgraph CICD[CI/CD]
-        Pipeline[CI/CD Pipeline]
-        PatchBeta[PATCH beta]
-    end
-
-    subgraph Admin
-        ReviewBeta[Review beta list]
-        ApproveReject[Approve or Reject]
-        Deprecated[deprecated]
-    end
-
-    Register --> CallGate --> QuickChecks
-    QuickChecks -. "403 Denied" .-> ErrorShown
-    QuickChecks -- "200 OK" --> SaveDraft
-    SaveDraft --> YaraScan
-    YaraScan -. "unsafe" .-> TaggedUnsafe
-    YaraScan -- "safe" --> BadgeDraft
-    BadgeDraft -. "async webhook" .-> Pipeline
-    Pipeline -. "FAIL — stays draft" .-> DraftErr
-    Pipeline -- "PASS" --> PatchBeta
-    PatchBeta --> StatusBeta --> BadgeBeta
-    PatchBeta --> ReviewBeta
-    ReviewBeta --> ApproveReject
-    ApproveReject -- "PATCH active" --> StatusActive --> VisibleAll
-    ApproveReject -. "PATCH deprecated" .-> Deprecated
+    Team->>Registry: Register asset
+    Registry-->>Registry: Save as draft
+    Registry->>Scanner: Auto security scan
+    Scanner-->>Registry: safe (or unsafe -> disable asset)
+    Registry-)Admin: Webhook notification (optional)
+    Admin->>Registry: GET /api/servers?status=draft
+    Admin->>Registry: PATCH status = active (or deprecated)
+    Note over Registry: active asset is visible to all
 ```
 
 The rest of this FAQ walks through how to set each piece up.
