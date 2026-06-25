@@ -555,6 +555,10 @@ echo "post-deployment-setup exit code: $?"
 
 This saves terraform outputs, validates resources, waits for DNS, verifies ECS services, initializes Keycloak and DocumentDB, restarts registry/auth, and checks endpoints. Watch for `Passed: 8 / Failed: 0`.
 
+**Two known first-deploy failure modes — see "Error Handling Reference" for the exact fix:**
+- **Keycloak init times out / Keycloak crash-loops with "Access denied for user 'keycloak'"** — the `keycloak/database` rotation Lambda desynced the secret from the Aurora password during the create-time race. Fix: realign Aurora's master password to the secret and restart Keycloak, then re-run with `--skip-dns-wait --skip-restart`.
+- **After this re-run, login fails with `?error=oauth2_callback_failed`** — Keycloak init regenerated the `mcp-gateway-web` client secret, but the running auth-server cached the old one. Fix: force-new-deployment on the auth-server AND registry, then `aws ecs wait services-stable`. (A clean single run restarts services after init and avoids this; you mainly hit it after re-running with `--skip-restart`.)
+
 **Password distinction (state this clearly to the user):**
 - `INITIAL_ADMIN_PASSWORD` (realm admin) → logs into the **Registry UI**.
 - `keycloak_admin_password` (from terraform.tfvars) → logs into the **Keycloak admin console**.
@@ -730,6 +734,37 @@ DNS validation can take 5–30 minutes and requires the Route53 hosted zone to b
 
 ### ECS tasks not starting
 Check `aws ecs describe-services` events and `aws ecs describe-tasks` stopped reasons. Common causes: ECR image pull failure (wrong region), insufficient CPU/memory, invalid env vars, or Secrets Manager access denied.
+
+### Keycloak init times out / Keycloak crash-loops with "Access denied for user 'keycloak'"
+Post-deployment Step 5 ("Initializing Keycloak") fails with *"Keycloak did not become ready within 5 minutes"*, and the Keycloak task is cycling (`runningCount=0`). This is NOT a warm-up timeout — it is a database auth failure. The stack enables a Secrets Manager rotation Lambda (`<name>-rotate-rds`) on the `keycloak/database` secret with rotate-on-create, which fires while Aurora is still provisioning during the first apply: it advances the **secret** but does not apply the new password to **Aurora**, so Keycloak reads the rotated password and Aurora rejects it.
+
+Confirm and fix:
+```bash
+# Confirm the cause in the Keycloak app logs (dedicated "keycloak" ECS cluster):
+aws logs filter-log-events --region "$AWS_REGION" --log-group-name /ecs/keycloak \
+  --start-time $(( ($(date +%s) - 900) ))000 --query 'events[-20:].message' --output text \
+  | tr '\t' '\n' | grep -iE 'Access denied|Failed to obtain JDBC'
+
+# Realign Aurora's master password to the CURRENT secret value, then restart Keycloak:
+SECRET_PW=$(aws secretsmanager get-secret-value --region "$AWS_REGION" --secret-id keycloak/database \
+  --query SecretString --output text | jq -r '.password')
+aws rds modify-db-cluster --region "$AWS_REGION" --db-cluster-identifier keycloak \
+  --master-user-password "$SECRET_PW" --apply-immediately      # status -> resetting-master-credentials (~1 min)
+# wait until PendingModifiedValues.MasterUserPassword clears, then:
+aws ecs update-service --region "$AWS_REGION" --cluster keycloak --service keycloak --force-new-deployment
+```
+Then re-run post-deployment with `./scripts/post-deployment-setup.sh --skip-dns-wait --skip-restart` (with `AWS_REGION` + `INITIAL_ADMIN_PASSWORD` set). The repo now sets `rotate_immediately = false` on these rotation resources (`terraform/aws-ecs/secret-rotation-config.tf`) to prevent the create-time race; a stack deployed before that fix still has a 30-day rotation armed that can re-trigger this — fixing the rotation Lambda or disabling rotation on the secret is the durable remedy.
+
+### Login fails with `?error=oauth2_callback_failed`
+After login the browser lands on `https://<cloudfront>/login?error=oauth2_callback_failed`. The auth-server logs (`/ecs/<name>-auth-server`) show its server-side token exchange returning **401** on `POST .../realms/mcp-gateway/protocol/openid-connect/token`. Cause: `init-keycloak.sh` REGENERATES the `mcp-gateway-web` client secret and writes the new value to Secrets Manager (`<name>-keycloak-client-secret`) AND Keycloak — but the already-running auth-server still holds the OLD secret it loaded at startup. This happens whenever Keycloak init runs (or is re-run) AFTER the auth-server task started.
+
+Fix: restart the services so they reload the current secret, then wait for stability:
+```bash
+aws ecs update-service --region "$AWS_REGION" --cluster <main-cluster> --service <name>-auth --force-new-deployment
+aws ecs update-service --region "$AWS_REGION" --cluster <main-cluster> --service <name>-registry --force-new-deployment
+aws ecs wait services-stable --region "$AWS_REGION" --cluster <main-cluster> --services <name>-auth <name>-registry
+```
+Note: a normal single post-deployment run restarts services AFTER Keycloak init, so it self-corrects. You typically only hit this when a Keycloak re-init was done with `--skip-restart`. Always restart auth-server + registry after any Keycloak (re-)init.
 
 ### DNS not resolving (custom domain modes)
 Allow 5–10 minutes for propagation; test with `dig @8.8.8.8 registry.<region>.<base_domain>`.
