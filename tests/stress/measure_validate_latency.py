@@ -11,7 +11,8 @@ be made across interpreter builds.
 
 Two request mixes are exercised:
   - ``success``: a valid Bearer token -> HTTP 200
-  - ``error``: a malformed Bearer token -> HTTP 401 (fail-closed path)
+  - ``error``: the valid token with its signature corrupted -> HTTP 401
+    (fail-closed path)
 
 Both are real ``/validate`` work: the 401 path still parses headers and
 attempts JWT validation, so its latency is meaningful.
@@ -71,19 +72,7 @@ DEFAULT_ORIGINAL_URL: str = "http://localhost/api/servers"
 DEFAULT_REQUESTS: int = 2000
 DEFAULT_CONCURRENCY: int = 50
 DEFAULT_SCRAPE_WAIT_S: int = 20
-PERCENTILES: tuple[float, ...] = (0.50, 0.95, 0.99)
-
-# A structurally valid JWT (header.payload.signature, all base64url) with a
-# bogus signature and a far-future exp. Using a well-formed token makes the
-# error path exercise the real JWT decode + signature-verification work (the
-# CPU cost #1316 targets), rather than a token that fails an instant base64
-# sanity check. The payload decodes to {"sub":"loadtest","iss":"mcp-auth-server",
-# "exp":9999999999}. It will always 401 (signature cannot verify).
-ERROR_TOKEN: str = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJzdWIiOiJsb2FkdGVzdCIsImlzcyI6Im1jcC1hdXRoLXNlcnZlciIsImV4cCI6OTk5OTk5OTk5OX0."
-    "aW52YWxpZHNpZ25hdHVyZWludmFsaWRzaWduYXR1cmVpbnZhbGlkc2ln"
-)
+DEFAULT_WINDOW: str = "5m"
 
 
 class PathResult(BaseModel):
@@ -129,7 +118,14 @@ def _read_token(
     token_file: Path,
 ) -> str:
     """Read a JWT from a token file (raw token or JSON with tokens.access_token)."""
+    if not token_file.is_file():
+        raise FileNotFoundError(
+            f"Token file not found: {token_file}. Provide a valid JWT file via "
+            f"--token-file (default: {DEFAULT_TOKEN_FILE})."
+        )
     raw = token_file.read_text().strip()
+    if not raw:
+        raise ValueError(f"Token file is empty: {token_file}")
     if raw.startswith("{"):
         data = json.loads(raw)
         token = data.get("tokens", {}).get("access_token") or data.get("access_token")
@@ -137,6 +133,26 @@ def _read_token(
             raise ValueError(f"No access_token found in JSON token file: {token_file}")
         return token
     return raw
+
+
+def _derive_error_token(
+    valid_token: str,
+) -> str:
+    """Derive a guaranteed-invalid JWT from a valid one by corrupting its signature.
+
+    Keeps the real ``header.payload`` so the error path still runs the full JWT
+    decode + signature-verification work (the CPU cost #1316 targets) before
+    failing closed with HTTP 401, rather than rejecting on a malformed-structure
+    shortcut. The signature segment is replaced with a fixed bogus value that
+    cannot verify against any key.
+    """
+    parts = valid_token.split(".")
+    if len(parts) != 3:
+        # Not a standard 3-segment JWT; fall back to appending a bad segment so
+        # the result is still structurally a JWT that fails verification.
+        return f"{valid_token}.aW52YWxpZA"
+    header, payload, _signature = parts
+    return f"{header}.{payload}.aW52YWxpZHNpZ25hdHVyZQ"
 
 
 def _percentile(
@@ -284,7 +300,7 @@ async def _run_benchmark(
         "X-Original-URL": args.original_url,
     }
     error_headers = {
-        "Authorization": f"Bearer {ERROR_TOKEN}",
+        "Authorization": f"Bearer {_derive_error_token(token)}",
         "X-Original-URL": args.original_url,
     }
 
@@ -416,7 +432,9 @@ Example usage:
     parser.add_argument(
         "--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="Max concurrent requests"
     )
-    parser.add_argument("--window", default="5m", help="PromQL rate window for percentiles")
+    parser.add_argument(
+        "--window", default=DEFAULT_WINDOW, help="PromQL rate window for percentiles"
+    )
     parser.add_argument(
         "--scrape-wait",
         type=int,
