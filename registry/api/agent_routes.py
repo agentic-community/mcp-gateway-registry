@@ -56,6 +56,12 @@ from ..services.agent_batch_service import (
 )
 from ..services.agent_service import agent_service
 from ..services.duplicate_check_service import get_duplicate_check_service
+from ..services.lifecycle_events import (
+    EnforcedStatusError,
+    enforce_registration_status,
+    fire_scan_complete_event,
+    user_can_change_lifecycle_status,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import flatten_metadata_to_text
@@ -167,16 +173,37 @@ async def _perform_agent_security_scan_on_registration(
                 # added a few lines above.
                 search_repo = get_search_repository()
                 await search_repo.index_agent(path, agent_card, is_enabled=False)
+                # scan_complete webhook (Issue #1330): agent was disabled.
+                fire_scan_complete_event(
+                    agent_card.model_dump(),
+                    scan_result,
+                    auto_disabled=True,
+                    registration_type="agent",
+                )
                 return False  # Agent disabled
 
         else:
             logger.info(f"Agent {path} passed security scan")
 
+        # scan_complete webhook (Issue #1330): safe, or unsafe-but-not-blocked.
+        fire_scan_complete_event(
+            agent_card.model_dump(),
+            scan_result,
+            auto_disabled=False,
+            registration_type="agent",
+        )
         return True  # Agent remains enabled
 
     except Exception as e:
         logger.error(f"Failed to run security scan for agent {path}: {e}")
-        # Non-fatal error - agent is registered but not scanned
+        # Non-fatal error - agent is registered but not scanned. Still notify
+        # consumers so they are not left polling for a scan that never reports.
+        fire_scan_complete_event(
+            agent_card_dict,
+            None,
+            scan_error=f"{type(e).__name__}: {e}",
+            registration_type="agent",
+        )
         return True  # Agent remains enabled on scan error
 
 
@@ -532,6 +559,41 @@ def _check_agent_permission(
         )
 
 
+def _check_agent_lifecycle_status_permission(
+    existing_agent,
+    merged_agent,
+    user_context: dict[str, Any],
+) -> None:
+    """Gate agent lifecycle status changes on change_lifecycle_status (Issue #1330).
+
+    No-op when the status is unchanged. Admins always pass; other users need the
+    'change_lifecycle_status' permission for the agent.
+
+    Raises:
+        HTTPException: 403 if the user may not change lifecycle status.
+    """
+    old_status = (getattr(existing_agent, "status", None) or "active").lower()
+    new_status = (getattr(merged_agent, "status", None) or "active").lower()
+    if new_status == old_status:
+        return
+
+    if user_can_change_lifecycle_status(existing_agent.name, user_context):
+        return
+
+    logger.warning(
+        f"User {user_context['username']} attempted to change lifecycle status "
+        f"of agent {existing_agent.name} without change_lifecycle_status permission"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"You do not have permission to change the lifecycle status of "
+            f"{existing_agent.name}. This action requires the 'change_lifecycle_status' "
+            f"permission, which is typically granted to admins."
+        ),
+    )
+
+
 def _has_delete_agent_permission(user_context: dict[str, Any], agent_path: str) -> bool:
     """
     Check if user has permission to delete an agent.
@@ -779,6 +841,18 @@ async def register_agent(
         if capabilities:
             optional_card_kwargs["capabilities"] = capabilities
 
+        # Enforced-status policy (Issue #1330). Use model_fields_set to tell an
+        # omitted status (force to enforced) from an explicit one (reject on
+        # mismatch). When the policy is unset, fall back to the request value.
+        requested_status = request.status if "status" in request.model_fields_set else None
+        try:
+            effective_status = enforce_registration_status(requested_status, "agent")
+        except EnforcedStatusError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
         agent_card = AgentCard(
             protocol_version=request.protocol_version,
             name=request.name,
@@ -786,7 +860,7 @@ async def register_agent(
             url=request.url,
             path=path,
             version=request.version,
-            status=request.status,
+            status=effective_status or request.status,
             provider=provider_obj,
             security_schemes=request.security_schemes or {},
             skills=request.skills or [],
@@ -1951,6 +2025,9 @@ async def update_agent(
             **update_optional_kwargs,
         )
 
+        # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+        _check_agent_lifecycle_status_permission(existing_agent, updated_agent, user_context)
+
         from ..utils.agent_validator import agent_validator
 
         validation_result = await agent_validator.validate_agent_card(
@@ -2121,6 +2198,9 @@ async def patch_agent(
     # Defence in depth: re-pin server-managed fields from the existing card.
     for field in REGISTRANT_ONLY_FIELDS:
         setattr(merged_agent, field, getattr(existing_agent, field))
+
+    # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+    _check_agent_lifecycle_status_permission(existing_agent, merged_agent, user_context)
 
     from ..utils.agent_validator import agent_validator
 

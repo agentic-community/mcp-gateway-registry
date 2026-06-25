@@ -279,6 +279,8 @@ async def _create_servers_indexes(
         ("is_enabled", 1, False),
         ("version", 1, False),
         ("tags", 1, False),
+        # Lifecycle status filter (Issue #1330): admin review queue + status= filter.
+        ("status", 1, False),
     ]
 
     for field, order, unique in indexes:
@@ -315,6 +317,8 @@ async def _create_agents_indexes(
         ("is_enabled", 1, False),
         ("version", 1, False),
         ("tags", 1, False),
+        # Lifecycle status filter (Issue #1330): admin review queue + status= filter.
+        ("status", 1, False),
     ]
 
     for field, order, unique in indexes:

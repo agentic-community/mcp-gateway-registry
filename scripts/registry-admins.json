@@ -32,6 +32,7 @@
     "health_check_service": ["all"],
     "toggle_service": ["all"],
     "modify_service": ["all"],
+    "change_lifecycle_status": ["all"],
     "delete_service": ["all"],
     "list_virtual_server": ["all"],
     "create_virtual_server": ["all"],

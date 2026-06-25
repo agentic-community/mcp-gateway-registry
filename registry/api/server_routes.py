@@ -34,12 +34,19 @@ from ..auth.tool_filter import filter_tools_for_user
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
+from ..schemas.registry_card import LifecycleStatus
 from ..schemas.server_update_models import (
     SERVER_REGISTRANT_ONLY_FIELDS,
     ServerCardPatch,
     ServerUpdateRequest,
 )
 from ..services.canonical_export import redact_backend_urls, to_canonical
+from ..services.lifecycle_events import (
+    EnforcedStatusError,
+    enforce_registration_status,
+    fire_scan_complete_event,
+    user_can_change_lifecycle_status,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
@@ -365,6 +372,7 @@ async def _perform_security_scan_on_registration(
         )
 
         # Handle unsafe servers
+        auto_disabled = False
         if not scan_result.is_safe:
             logger.warning(
                 f"Server {path} failed security scan. "
@@ -385,6 +393,7 @@ async def _perform_security_scan_on_registration(
                 from ..repositories.factory import get_search_repository
 
                 await server_service.toggle_service(path, False)
+                auto_disabled = True
                 logger.warning(f"Disabled server {path} due to failed security scan")
 
                 # Update search index with disabled state
@@ -398,9 +407,24 @@ async def _perform_security_scan_on_registration(
         else:
             logger.info(f"Server {path} passed security scan")
 
+        # Emit scan_complete webhook (Issue #1330) on both safe and unsafe paths.
+        fire_scan_complete_event(
+            server_entry,
+            scan_result,
+            auto_disabled=auto_disabled,
+            registration_type="server",
+        )
+
     except Exception as e:
         logger.error(f"Security scan failed for {path}: {e}")
-        # Non-fatal error - server is registered but scan failed
+        # Non-fatal error - server is registered but scan failed. Still notify
+        # consumers so they are not left polling for a scan that never reports.
+        fire_scan_complete_event(
+            server_entry,
+            None,
+            scan_error=f"{type(e).__name__}: {e}",
+            registration_type="server",
+        )
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -555,6 +579,15 @@ async def get_servers_json(
             "compatibility."
         ),
     ),
+    status_filter: str | None = Query(
+        None,
+        alias="status",
+        description=(
+            "Filter by exact lifecycle status: active, beta, draft, deprecated. "
+            "'active' also matches servers with no status field. Omit for default "
+            "behavior (active and beta shown; draft and deprecated excluded)."
+        ),
+    ),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """Get servers data as JSON for React frontend and external API.
@@ -583,6 +616,19 @@ async def get_servers_json(
             f"[GET_SERVERS_DEBUG] Auth method: {user_context.get('auth_method', 'NOT PRESENT')}"
         )
 
+    # Validate the optional lifecycle status filter (Issue #1330).
+    if status_filter is not None:
+        valid_statuses = {s.value for s in LifecycleStatus}
+        status_filter = status_filter.lower().strip()
+        if status_filter not in valid_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Invalid status '{status_filter}'. "
+                    f"Must be one of: {', '.join(sorted(valid_statuses))}"
+                ),
+            )
+
     service_data = []
     search_query = query.lower() if query else ""
 
@@ -591,7 +637,9 @@ async def get_servers_json(
     accessible_servers_list = user_context.get("accessible_servers", []) if user_context else []
     accessible_services = user_context.get("accessible_services", []) if user_context else []
     is_unrestricted = is_admin or "all" in accessible_servers_list or "all" in accessible_services
-    has_field_filters = bool(query)
+    # A status filter is a field filter: force the fallback path so it applies
+    # uniformly for both restricted and unrestricted users (Issue #1330).
+    has_field_filters = bool(query) or status_filter is not None
 
     # Dual-path pagination:
     # - Fast path: DB-level skip/limit for unrestricted users without field filters
@@ -635,6 +683,13 @@ async def get_servers_json(
             and technical_name not in normalized_accessible_services
         ):
             continue
+
+        # Exact lifecycle status filter (Issue #1330). Missing status is treated
+        # as 'active', consistent with _build_status_filter in search.
+        if status_filter is not None:
+            server_status = (server_info.get("status") or "active").lower()
+            if server_status != status_filter:
+                continue
 
         # Include description, tags, and metadata in search
         server_metadata = server_info.get("metadata", {})
@@ -971,6 +1026,41 @@ def _check_server_permission(
         )
 
 
+def _check_lifecycle_status_permission(
+    server_name: str,
+    user_context: dict[str, Any],
+) -> None:
+    """Check whether the user may change a server's lifecycle status (Issue #1330).
+
+    Lifecycle promotion/deprecation is gated separately from modify_service so a
+    scope can allow ordinary metadata edits without allowing status changes.
+    Admins always pass (existing admin scopes predate this permission); other
+    users need the 'change_lifecycle_status' UI permission for the server.
+
+    Args:
+        server_name: Display name of the server, used for the 403 detail.
+        user_context: Authenticated user context.
+
+    Raises:
+        HTTPException: 403 if the user may not change lifecycle status.
+    """
+    if user_can_change_lifecycle_status(server_name, user_context):
+        return
+
+    logger.warning(
+        f"User {user_context.get('username')} attempted to change lifecycle status "
+        f"of server {server_name} without change_lifecycle_status permission"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"You do not have permission to change the lifecycle status of "
+            f"{server_name}. This action requires the 'change_lifecycle_status' "
+            f"permission, which is typically granted to admins."
+        ),
+    )
+
+
 def _merge_server_update(
     existing: dict[str, Any],
     incoming: dict[str, Any],
@@ -1287,9 +1377,18 @@ async def register_service(
                 detail="Failed to encrypt custom headers",
             )
 
-    # Add lifecycle and federation fields
-    if service_status:
-        server_entry["status"] = service_status
+    # Add lifecycle and federation fields. Apply the enforced-status policy
+    # (Issue #1330): when REGISTRATION_ENFORCED_STATUS is set, a missing status
+    # is forced to it and a mismatched status is rejected with 400.
+    try:
+        effective_status = enforce_registration_status(service_status, "server")
+    except EnforcedStatusError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    if effective_status:
+        server_entry["status"] = effective_status
 
     # Add provider information (stored as nested AgentProvider object)
     if provider_organization or provider_url:
@@ -5575,6 +5674,15 @@ async def update_server_endpoint(
 
     merged = _merge_server_update(existing, incoming)
 
+    # Lifecycle status change via PUT is gated like PATCH (Issue #1330).
+    old_status = existing.get("status") or "active"
+    new_status = merged.get("status") or "active"
+    if new_status != old_status:
+        _check_lifecycle_status_permission(
+            existing.get("server_name", path),
+            user_context,
+        )
+
     gate_result = await check_registration_gate(
         asset_type="server",
         operation="update",
@@ -5738,6 +5846,20 @@ async def patch_server_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Empty patch body",
         )
+
+    # Changing the lifecycle status requires a dedicated permission (Issue #1330),
+    # separate from modify_service, so a scope can grant "edit metadata" without
+    # "promote/deprecate". Only enforced when the status actually changes.
+    # Admins always pass (backwards compatible: existing admin scopes predate
+    # this permission); non-admins need change_lifecycle_status explicitly.
+    if "status" in patch_dict:
+        old_status = existing.get("status") or "active"
+        new_status = patch_dict.get("status") or "active"
+        if new_status != old_status:
+            _check_lifecycle_status_permission(
+                existing.get("server_name", path),
+                user_context,
+            )
 
     merged = _merge_server_update(existing, patch_dict)
 

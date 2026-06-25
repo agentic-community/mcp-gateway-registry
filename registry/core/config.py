@@ -134,6 +134,25 @@ class Settings(BaseSettings):
         default=10,
         description="Timeout for webhook HTTP calls in seconds",
     )
+    registration_webhook_signing_secret: str | None = Field(
+        default=None,
+        description=(
+            "Shared secret for HMAC-SHA256 signing of outbound registration "
+            "webhook payloads. When set, an X-Registry-Signature header is added. "
+            "When unset, no signature is sent (current behavior)."
+        ),
+    )
+
+    # Lifecycle workflow settings (Issue #1330)
+    registration_enforced_status: str | None = Field(
+        default=None,
+        description=(
+            "When set (e.g. 'draft'), mandates the initial lifecycle status for all "
+            "new asset registrations. A registration with no status is forced to this "
+            "value; a registration with a different explicit status fails with 4xx. "
+            "Unset = current behavior (new assets default to 'active')."
+        ),
+    )
 
     # Registration Gate Configuration (Admission Control, Issue #809)
     registration_gate_enabled: bool = Field(

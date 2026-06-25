@@ -57,6 +57,12 @@ from ..schemas.skill_models import (
     VisibilityEnum,
 )
 from ..services.duplicate_check_service import get_duplicate_check_service
+from ..services.lifecycle_events import (
+    EnforcedStatusError,
+    enforce_registration_status,
+    fire_scan_complete_event,
+    user_can_change_lifecycle_status,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.skill_service import (
     _build_fetch_headers,
@@ -915,6 +921,20 @@ async def register_skill(
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
+    # Enforced-status policy (Issue #1330). Use model_fields_set to tell an
+    # omitted status (force to enforced) from an explicit one (reject on
+    # mismatch). When the policy is unset, the request value is unchanged.
+    requested_status = request.status if "status" in request.model_fields_set else None
+    try:
+        effective_status = enforce_registration_status(requested_status, "skill")
+    except EnforcedStatusError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    if effective_status:
+        request.status = effective_status
+
     service = get_skill_service()
     owner = user_context.get("username")
 
@@ -1008,6 +1028,22 @@ async def update_skill(
         )
 
     updates = request.model_dump(exclude_unset=True, mode="json")
+
+    # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+    if "status" in updates:
+        old_status = (getattr(existing, "status", None) or "active").lower()
+        new_status = (updates.get("status") or "active").lower()
+        if new_status != old_status and not user_can_change_lifecycle_status(
+            existing.name, user_context
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"You do not have permission to change the lifecycle status of "
+                    f"{existing.name}. This action requires the 'change_lifecycle_status' "
+                    f"permission, which is typically granted to admins."
+                ),
+            )
 
     # Convert raw metadata dict to SkillMetadata structure for consistent storage
     if "metadata" in updates and updates["metadata"] is not None:
@@ -1282,16 +1318,25 @@ async def _perform_skill_security_scan_on_registration(
             headers=fetch_headers or None,
         )
 
+        auto_disabled = False
         if not result.is_safe and config.block_unsafe_skills:
             logger.warning(f"Disabling unsafe skill: {skill.path}")
             await service.toggle_skill(skill.path, enabled=False)
+            auto_disabled = True
 
             if config.add_security_pending_tag:
                 current_tags = skill.tags or []
                 if "security-pending" not in current_tags:
-                    await service.update_skill(
-                        skill.path, {"tags": current_tags + ["security-pending"]}
-                    )
+                    skill.tags = current_tags + ["security-pending"]
+                    await service.update_skill(skill.path, {"tags": skill.tags})
+
+        # scan_complete webhook (Issue #1330): safe or unsafe path.
+        fire_scan_complete_event(
+            skill.model_dump(),
+            result,
+            auto_disabled=auto_disabled,
+            registration_type="skill",
+        )
 
     except Exception as e:
         logger.error(f"Security scan failed for skill {skill.path}: {e}")
@@ -1299,8 +1344,14 @@ async def _perform_skill_security_scan_on_registration(
             try:
                 current_tags = skill.tags or []
                 if "security-pending" not in current_tags:
-                    await service.update_skill(
-                        skill.path, {"tags": current_tags + ["security-pending"]}
-                    )
+                    skill.tags = current_tags + ["security-pending"]
+                    await service.update_skill(skill.path, {"tags": skill.tags})
             except Exception as tag_err:
                 logger.error(f"Failed to add security-pending tag: {tag_err}")
+        # Still notify consumers so they are not left polling.
+        fire_scan_complete_event(
+            skill.model_dump(),
+            None,
+            scan_error=f"{type(e).__name__}: {e}",
+            registration_type="skill",
+        )

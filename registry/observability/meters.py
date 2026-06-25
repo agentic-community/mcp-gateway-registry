@@ -39,7 +39,6 @@ from registry.observability._compat import (
     _HistogramAdapter,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -204,6 +203,26 @@ _config_export_requests_counter = _meter.create_counter(
     unit="1",
 )
 config_export_requests_total = _CounterAdapter(_config_export_requests_counter)
+
+# Outbound registration-webhook delivery health (Issue #1330).
+# Labels: event_type (registration|update|deletion|scan_complete),
+#         outcome (success|timeout|error|skipped_no_url).
+_webhook_send_counter = _meter.create_counter(
+    name="mcpgw_registry_webhook_send_total",
+    description="Outbound registration webhook deliveries by event type and outcome",
+    unit="1",
+)
+webhook_send_total = _CounterAdapter(_webhook_send_counter)
+
+# Registrations rejected because REGISTRATION_ENFORCED_STATUS was set and the
+# request's status did not match (Issue #1330). Labels: registration_type
+# (server|agent|skill).
+_registration_status_rejected_counter = _meter.create_counter(
+    name="mcpgw_registry_registration_status_rejected_total",
+    description="Registrations rejected due to enforced-status mismatch (4xx)",
+    unit="1",
+)
+registration_status_rejected_total = _CounterAdapter(_registration_status_rejected_counter)
 
 
 # Deployment mode info (registry/core/metrics.py:19)
