@@ -263,6 +263,14 @@ class Settings(BaseSettings):
         default=True,
         description="Enable the /.well-known/ai-catalog.json ARD publisher endpoint",
     )
+    ard_registry_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable the ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents) "
+            "and the self application/ai-registry+json catalog entry. Independent of the "
+            "Phase 1 publisher toggle ard_catalog_enabled."
+        ),
+    )
     ard_publisher_domain: str = Field(
         default="",
         description=(

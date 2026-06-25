@@ -1105,6 +1105,22 @@ app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card
 # Register well-known discovery router
 app.include_router(wellknown_router, prefix="/.well-known", tags=["Discovery"])
 
+# Register ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents, issue #1295)
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
+
+from registry.api.ard_routes import (  # noqa: E402
+    ard_http_exception_handler,
+    ard_validation_exception_handler,
+)
+from registry.api.ard_routes import router as ard_router  # noqa: E402
+
+app.include_router(ard_router, prefix="/api/ard", tags=["ARD Registry"])
+# ARD error envelope: reshape HTTPException / validation errors on /api/ard/* only;
+# default behavior is preserved for every other path.
+app.add_exception_handler(StarletteHTTPException, ard_http_exception_handler)
+app.add_exception_handler(RequestValidationError, ard_validation_exception_handler)
+
 # Register public, anonymous per-record endpoints (ARD catalog url targets, issue #1294)
 app.include_router(public_record_router, prefix="/api", tags=["Public Records"])
 

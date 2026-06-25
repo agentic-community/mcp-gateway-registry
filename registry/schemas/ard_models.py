@@ -12,6 +12,8 @@ See issue #1294 and the spec reference under
 ``.scratchpad/issue-1294/ard-spec-ref/``.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -123,3 +125,107 @@ class AICatalogManifest(BaseModel):
     )
     host: ArdHost
     entries: list[ArdCatalogEntry] = Field(default_factory=list)
+
+
+# =============================================================================
+# Phase 2: ARD Registry adapter (POST /search, GET /agents) — issue #1295
+# Request models use extra="forbid" to honor the ARD additionalProperties:false.
+# =============================================================================
+
+
+class ArdQuery(BaseModel):
+    """ARD SearchRequest.query."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Natural-language query (required).",
+    )
+    filter: dict[str, str | list[str]] | None = Field(
+        default=None,
+        description=(
+            "Dot-path field -> string|array filter. Values OR within a key, "
+            "AND across keys. Supported keys: 'type'/'entity_type' and 'tags'."
+        ),
+    )
+
+
+class ArdSearchRequest(BaseModel):
+    """ARD SearchRequest. additionalProperties: false."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    query: ArdQuery
+    federation: Literal["auto", "referrals", "none"] = Field(
+        default="auto",
+        description="Federation mode. Phase 2: own-index results for all modes.",
+    )
+    page_size: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        alias="pageSize",
+        description="Maximum results in the page.",
+    )
+    page_token: str | None = Field(
+        default=None,
+        alias="pageToken",
+        description="Opaque pagination cursor from a previous response.",
+    )
+
+
+class ArdSearchResult(ArdCatalogEntry):
+    """A full catalogEntry plus search annotations (ARD search result item)."""
+
+    score: int = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="Relevance 0-100 (rescaled from the internal 0-1 relevance).",
+    )
+    source: str = Field(
+        ...,
+        description="URI of the search endpoint that produced this result.",
+    )
+
+
+class ArdReferral(BaseModel):
+    """Pointer to another registry (application/ai-registry+json). Empty in Phase 2."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    identifier: str
+    type: str = "application/ai-registry+json"
+    url: str
+
+
+class ArdSearchResponse(BaseModel):
+    """ARD SearchResponse."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    results: list[ArdSearchResult] = Field(default_factory=list)
+    referrals: list[ArdReferral] = Field(default_factory=list)
+    page_token: str | None = Field(default=None, alias="pageToken")
+
+
+class ArdListResponse(BaseModel):
+    """ARD ListResponse for GET /agents (browse)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[ArdCatalogEntry] = Field(default_factory=list)
+    total: int = 0
+    page_token: str | None = Field(default=None, alias="pageToken")
+
+
+class ArdError(BaseModel):
+    """ARD error envelope ({errorCode, message})."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    error_code: str = Field(..., alias="errorCode")
+    message: str

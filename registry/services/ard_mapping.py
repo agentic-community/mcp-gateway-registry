@@ -29,6 +29,7 @@ _TOOL_URN_RE = re.compile(r"^urn:air:([a-zA-Z0-9.-]+)(?::([a-zA-Z0-9._:-]+))?:([
 MEDIA_TYPE_SERVER = "application/mcp-server-card+json"
 MEDIA_TYPE_AGENT = "application/a2a-agent-card+json"
 MEDIA_TYPE_SKILL = "application/ai-skill"
+MEDIA_TYPE_REGISTRY = "application/ai-registry+json"
 
 _MIN_QUERIES = 2
 _MAX_QUERIES = 5

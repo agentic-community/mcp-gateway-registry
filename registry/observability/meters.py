@@ -408,6 +408,43 @@ def record_emission_path(path: str) -> None:
 
 
 # =============================================================================
+# ARD Registry adapter metrics (issue #1295)
+# Every ARD operation (search, browse) emits through this family via the
+# `operation` label, so each operation is independently observable.
+# =============================================================================
+
+ard_requests_total = _meter.create_counter(
+    name="mcpgw_ard_requests_total",
+    description="ARD Registry adapter requests by operation, status, and federation mode",
+    unit="1",
+)
+
+ard_request_duration_ms = _meter.create_histogram(
+    name="mcpgw_ard_request_duration",
+    description="ARD Registry adapter request duration by operation",
+    unit="ms",
+)
+
+ard_results_returned = _meter.create_histogram(
+    name="mcpgw_ard_results_returned",
+    description="Number of results/items returned per ARD request by operation",
+    unit="1",
+)
+
+ard_access_filtered_total = _meter.create_counter(
+    name="mcpgw_ard_access_filtered_total",
+    description="ARD candidate entries removed by access-scoping, by operation",
+    unit="1",
+)
+
+ard_errors_total = _meter.create_counter(
+    name="mcpgw_ard_errors_total",
+    description="ARD Registry adapter errors by operation and error_code",
+    unit="1",
+)
+
+
+# =============================================================================
 # Public helpers
 # =============================================================================
 

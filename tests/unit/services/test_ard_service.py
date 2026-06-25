@@ -80,9 +80,33 @@ class TestBuildCatalog:
             # (http://localhost:8000), which fails the Phase-1 https identity
             # assertion in environments that do not override REGISTRY_URL.
             patch.object(ard_service.settings, "registry_url", "https://registry.example.com"),
+            # Gate off the Phase 2 self ai-registry entry so these publisher-mapping
+            # tests assert only on the server/agent/skill entries. The self-entry is
+            # covered by test_includes_registry_self_entry_when_enabled.
+            patch.object(ard_service.settings, "ard_registry_enabled", False),
         ):
             manifest = await ard_service.build_catalog(_fake_request())
         return manifest, server_repo, agent_repo, skill_repo
+
+    async def test_includes_registry_self_entry_when_enabled(self):
+        server_repo = SimpleNamespace(find_with_filter=AsyncMock(return_value={}))
+        agent_repo = SimpleNamespace(find_with_filter=AsyncMock(return_value={}))
+        skill_repo = SimpleNamespace(list_filtered=AsyncMock(return_value=[]))
+        with (
+            patch.object(ard_service, "get_server_repository", return_value=server_repo),
+            patch.object(ard_service, "get_agent_repository", return_value=agent_repo),
+            patch.object(ard_service, "get_skill_repository", return_value=skill_repo),
+            patch.object(ard_service.settings, "ard_publisher_domain", "registry.example.com"),
+            patch.object(ard_service.settings, "registry_url", "https://registry.example.com"),
+            patch.object(ard_service.settings, "ard_registry_enabled", True),
+        ):
+            manifest = await ard_service.build_catalog(_fake_request())
+        registry_entries = [
+            e for e in manifest.entries if e.type == "application/ai-registry+json"
+        ]
+        assert len(registry_entries) == 1
+        assert registry_entries[0].identifier == "urn:air:registry.example.com:registry:self"
+        assert registry_entries[0].url.endswith("/api/ard")
 
     async def test_three_bulk_reads_only(self):
         manifest, sr, ar, kr = await self._build_with({}, {}, [])

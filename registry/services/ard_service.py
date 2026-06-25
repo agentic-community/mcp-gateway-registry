@@ -109,6 +109,24 @@ def _build_host(
     )
 
 
+def _build_registry_self_entry(
+    publisher: str,
+    base_url: str,
+) -> ArdCatalogEntry | None:
+    """Build the self-referential application/ai-registry+json catalog entry that
+    points crawlers at this registry's ARD search endpoint (issue #1295)."""
+    urn = ard_mapping._build_urn(publisher, "registry", "self")
+    if urn is None:
+        return None
+    return ArdCatalogEntry(
+        identifier=urn,
+        display_name=settings.registry_name or _DEFAULT_HOST_DISPLAY_NAME,
+        type=ard_mapping.MEDIA_TYPE_REGISTRY,
+        url=f"{base_url}/api/ard",
+        description="ARD Registry search API for this registry (POST /search, GET /agents).",
+    )
+
+
 async def _load_server_entries(
     publisher: str,
     base_url: str,
@@ -207,6 +225,15 @@ async def build_catalog(
     skill_entries, skill_skipped = await _load_skill_entries(publisher, base_url)
 
     entries = server_entries + agent_entries + skill_entries
+
+    # Self-reference: advertise the ARD Registry adapter (POST /api/ard/search,
+    # GET /api/ard/agents) as an application/ai-registry+json entry so crawlers
+    # can move from the Publisher half to the Registry half (issue #1295).
+    if settings.ard_registry_enabled:
+        registry_entry = _build_registry_self_entry(publisher, base_url)
+        if registry_entry is not None:
+            entries.append(registry_entry)
+
     elapsed_ms = (time.time() - start) * 1000
     logger.info(
         "Built ARD catalog: publisher=%s servers=%d agents=%d skills=%d skipped=%d elapsed_ms=%.1f",

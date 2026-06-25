@@ -257,6 +257,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("enable_wellknown_discovery", "Enabled", False),
             ("wellknown_cache_ttl", "Cache TTL", False),
             ("ard_catalog_enabled", "ARD Catalog Enabled", False),
+            ("ard_registry_enabled", "ARD Registry Adapter", False),
             ("ard_publisher_domain", "ARD Publisher Domain", False),
             ("ard_catalog_default_namespace", "ARD URN Namespace", False),
         ],
