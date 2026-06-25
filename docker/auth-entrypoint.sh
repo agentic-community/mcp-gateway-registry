@@ -122,6 +122,40 @@ AUTH_LISTEN_PORT="${AUTH_LISTEN_PORT:-8888}"
 echo "Starting Auth Server (host=$BIND_HOST, port=$AUTH_LISTEN_PORT)..."
 cd /app
 source .venv/bin/activate
+
+# Free-threaded Python 3.14t trial (issue #1316). Report whether this is a
+# free-threaded build and whether the GIL is actually disabled at runtime. On a
+# free-threaded build, importing a C extension that did not declare support via
+# Py_mod_gil silently re-enables the GIL for the whole process, which would
+# invalidate the trial. Set AUTH_REQUIRE_FREE_THREADING=true to fail startup if
+# the GIL is unexpectedly re-enabled on a free-threaded build.
+python3 - <<'PYEOF'
+import sys
+import sysconfig
+
+gil_disabled_build = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+# sys._is_gil_enabled exists only on free-threaded builds.
+is_gil_enabled = getattr(sys, "_is_gil_enabled", lambda: True)()
+
+print(
+    f"Python {sys.version.split()[0]} | free-threaded build={gil_disabled_build} | "
+    f"GIL enabled at runtime={is_gil_enabled}"
+)
+
+import os
+
+strict = os.getenv("AUTH_REQUIRE_FREE_THREADING", "false").lower() == "true"
+if gil_disabled_build and is_gil_enabled:
+    msg = (
+        "WARNING: running a free-threaded build but the GIL was re-enabled "
+        "(likely a C extension without Py_mod_gil support was imported). "
+        "The free-threading trial is not active. See issue #1316."
+    )
+    print(msg, file=sys.stderr)
+    if strict:
+        sys.exit(1)
+PYEOF
+
 if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT}" ] && command -v opentelemetry-instrument >/dev/null 2>&1; then
     echo "Using OTEL_EXPORTER_OTLP_ENDPOINT at ${OTEL_EXPORTER_OTLP_ENDPOINT}"
     UVICORN_CMD="opentelemetry-instrument uvicorn server:app --host $BIND_HOST --port $AUTH_LISTEN_PORT --proxy-headers --forwarded-allow-ips=*"

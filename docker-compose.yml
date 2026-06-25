@@ -449,8 +449,13 @@ services:
       - OTEL_METRIC_EXPORT_INTERVAL_MS=${OTEL_METRIC_EXPORT_INTERVAL_MS:-15000}
       - OTEL_EXPORTER_PROMETHEUS_HOST=${OTEL_EXPORTER_PROMETHEUS_HOST:-0.0.0.0}
       - OTEL_EXPORTER_PROMETHEUS_PORT=${OTEL_EXPORTER_PROMETHEUS_PORT:-9464}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      - OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      # The auth-server image ships the HTTP/protobuf OTLP exporter only, not
+      # the gRPC variant: grpcio has no free-threaded (cp314t) wheel and would
+      # re-enable the GIL under python3.14t (issue #1316). Point the endpoint at
+      # the collector's HTTP port (4318), not the gRPC port (4317). Registry and
+      # mcpgw still default to grpc/4317.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT_AUTH:-${OTEL_EXPORTER_OTLP_ENDPOINT:-}}
+      - OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL_AUTH:-http/protobuf}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
       - OTEL_SERVICE_NAME=mcp-auth-server
       # Keycloak configuration

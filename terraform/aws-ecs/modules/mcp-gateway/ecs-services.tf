@@ -452,12 +452,17 @@ module "ecs_service_auth" {
           value = "9464"
         },
         {
+          # The auth-server image ships the HTTP/protobuf OTLP exporter only,
+          # not the gRPC variant: grpcio has no free-threaded (cp314t) wheel and
+          # would re-enable the GIL under python3.14t (issue #1316). Point at the
+          # ADOT sidecar's HTTP receiver (4318), which it already exposes
+          # alongside gRPC (4317). Registry/mcpgw stay on grpc/4317.
           name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
-          value = var.enable_observability ? "http://localhost:4317" : ""
+          value = var.enable_observability ? "http://localhost:4318" : ""
         },
         {
           name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
-          value = "grpc"
+          value = "http/protobuf"
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).

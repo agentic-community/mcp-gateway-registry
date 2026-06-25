@@ -24,7 +24,6 @@ dependencies = [
     "pyyaml>=6.0.0",
     "httpx>=0.25.0",
     "itsdangerous>=2.1.0",
-    "opensearch-py>=2.4.0",
     "aiohttp>=3.14.0",
     "motor>=3.3.0",
     "pymongo>=4.6.0",
@@ -32,8 +31,13 @@ dependencies = [
     "opentelemetry-api>=1.41.1",
     "opentelemetry-sdk>=1.41.1",
     "opentelemetry-exporter-prometheus>=0.62b1",
-    "opentelemetry-exporter-otlp>=1.41.1",
-    "opentelemetry-distro[otlp]>=0.62b1",
+    # HTTP/protobuf OTLP exporter (port 4318), not the gRPC variant. grpcio has
+    # no free-threaded (cp314t) wheel and would silently re-enable the GIL under
+    # python3.14t, invalidating the free-threading trial (issue #1316). The
+    # bare opentelemetry-distro (no [otlp] extra) avoids pulling the gRPC
+    # exporter back in transitively.
+    "opentelemetry-exporter-otlp-proto-http>=1.41.1",
+    "opentelemetry-distro>=0.62b1",
     "opentelemetry-instrumentation>=0.62b1",
     "opentelemetry-instrumentation-fastapi>=0.62b1",
     "opentelemetry-instrumentation-httpx>=0.62b1",

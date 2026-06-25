@@ -1,10 +1,23 @@
 # Auth Dockerfile - multi-stage build for smaller image and better caching
+#
+# Issue #1316: the auth-server runs on free-threaded ("no-GIL") CPython 3.14t
+# so that the CPU-bound /validate hot path (JWT verify + scope/tool authz) runs
+# in parallel across cores instead of serializing on the GIL. There is no
+# official python:3.14t Docker tag, so we keep the standard python:3.14.6-slim
+# base (for glibc/security patching) and have uv install the managed
+# free-threaded interpreter into a fixed path that both stages share. grpcio
+# (the only compiled dep without a cp314t wheel) has been removed from the
+# auth_server dependency tree precisely so no C-extension silently re-enables
+# the GIL at import time.
 
 # ===== BUILD STAGE =====
 FROM python:3.14.6-slim AS builder
 
+# Pin where uv installs managed interpreters so the runtime stage can copy the
+# free-threaded interpreter from the exact same path the venv symlinks point at.
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
 # Install build dependencies (only needed for compiling wheels).
 # apt-get upgrade pulls in security patches against the base image's
@@ -17,9 +30,12 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 
 WORKDIR /app
 
-# Install uv and create venv (rarely changes)
+# Install uv, fetch the managed free-threaded 3.14 interpreter, and create the
+# venv from it. "3.14t" selects the free-threaded build (python3.14t); uv sync
+# then resolves cp314t wheels automatically.
 RUN pip install --no-cache-dir uv==0.11.14 && \
-    uv venv .venv --python 3.14
+    uv python install 3.14t && \
+    uv venv .venv --python 3.14t
 
 # Copy dependency manifests first so the install layer is cached on the
 # (pyproject, lock) pair, not on source changes.
@@ -32,8 +48,12 @@ RUN uv sync --frozen --no-dev
 # ===== RUNTIME STAGE =====
 FROM python:3.14.6-slim
 
+# Keep the same managed-interpreter path as the builder stage so the venv's
+# symlinks (.venv/bin/python -> /opt/uv-python/.../python3.14t) resolve. The
+# free-threaded interpreter is copied from the builder below.
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
 # Issue #1122: prefer IPv4 over IPv6 in glibc getaddrinfo. ECS Service Connect
 # populates /etc/hosts with both A (127.255.0.x) and AAAA (2600:f0f0::x)
@@ -53,7 +73,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 
 WORKDIR /app
 
-# Copy the pre-built virtual environment from builder
+# Copy the managed free-threaded interpreter, then the venv that symlinks into
+# it. Order matters only for readability; both must be present for .venv to run.
+COPY --from=builder /opt/uv-python /opt/uv-python
 COPY --from=builder /app/.venv /app/.venv
 
 # Copy entrypoint script early (rarely changes, avoids cache bust from code changes)

@@ -15,13 +15,48 @@ tests:
           content:
             name: OTEL_EXPORTER_OTLP_ENDPOINT
 
+  - it: omits OTEL_EXPORTER_OTLP_PROTOCOL when metrics.otelExporterOtlpEndpoint is empty
+    asserts:
+      # The protocol var is rendered inside the same endpoint guard, so it must
+      # also be absent when OTLP push is not activated (issue #1316).
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_EXPORTER_OTLP_PROTOCOL
+
   - it: emits OTEL_EXPORTER_OTLP_ENDPOINT when metrics.otelExporterOtlpEndpoint is set
     set:
       metrics:
-        otelExporterOtlpEndpoint: "http://otel-collector:4317"
+        otelExporterOtlpEndpoint: "http://otel-collector:4318"
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: OTEL_EXPORTER_OTLP_ENDPOINT
-            value: "http://otel-collector:4317"
+            value: "http://otel-collector:4318"
+
+  - it: defaults OTEL_EXPORTER_OTLP_PROTOCOL to http/protobuf when endpoint is set
+    set:
+      metrics:
+        otelExporterOtlpEndpoint: "http://otel-collector:4318"
+    asserts:
+      # The auth-server image ships only the HTTP/protobuf OTLP exporter (no
+      # grpcio, for free-threaded Python 3.14t; issue #1316), so the protocol
+      # must default to http/protobuf, not grpc.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_EXPORTER_OTLP_PROTOCOL
+            value: "http/protobuf"
+
+  - it: allows overriding OTEL_EXPORTER_OTLP_PROTOCOL via metrics.otelExporterOtlpProtocol
+    set:
+      metrics:
+        otelExporterOtlpEndpoint: "http://otel-collector:4318"
+        otelExporterOtlpProtocol: "http/json"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_EXPORTER_OTLP_PROTOCOL
+            value: "http/json"
