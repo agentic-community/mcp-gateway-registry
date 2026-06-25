@@ -21,19 +21,19 @@
       "targets": [
         {
           "legendFormat": "Initialize Rate",
-          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"initialize\", success=\"true\"}[1m]))"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"initialize\", success=\"True\"}[1m]))"
         },
         {
           "legendFormat": "Tools List Rate",
-          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"tools/list\", success=\"true\"}[1m]))"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"tools/list\", success=\"True\"}[1m]))"
         },
         {
           "legendFormat": "Tool Call Rate",
-          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"tools/call\", success=\"true\"}[1m]))"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{method=\"tools/call\", success=\"True\"}[1m]))"
         },
         {
           "legendFormat": "Auth Success Rate",
-          "expr": "sum(increase(mcpgw_registry_auth_request_total{success=\"true\"}[1m]))"
+          "expr": "sum(increase(mcpgw_registry_auth_request_total{success=\"True\"}[1m]))"
         }
       ],
       "gridPos": {
@@ -64,11 +64,11 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(mcpgw_registry_auth_request_total{success=\"true\"}[5m]))",
+          "expr": "sum(rate(mcpgw_registry_auth_request_total{success=\"True\"}[5m]))",
           "legendFormat": "Successful Auth"
         },
         {
-          "expr": "sum(rate(mcpgw_registry_auth_request_total{success=\"false\"}[5m]))",
+          "expr": "sum(rate(mcpgw_registry_auth_request_total{success=\"False\"}[5m]))",
           "legendFormat": "Failed Auth"
         }
       ],
@@ -100,7 +100,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(mcpgw_registry_auth_request_total{success=\"true\"}) / sum(mcpgw_registry_auth_request_total) * 100",
+          "expr": "sum(mcpgw_registry_auth_request_total{success=\"True\"}) / sum(mcpgw_registry_auth_request_total) * 100",
           "legendFormat": "Success Rate %"
         }
       ],
@@ -337,11 +337,11 @@
       "targets": [
         {
           "legendFormat": "Auth Error Rate",
-          "expr": "sum(increase(mcpgw_registry_auth_request_total{success=\"false\"}[5m])) / sum(increase(mcpgw_registry_auth_request_total[5m])) * 100"
+          "expr": "sum(increase(mcpgw_registry_auth_request_total{success=\"False\"}[5m])) / sum(increase(mcpgw_registry_auth_request_total[5m])) * 100"
         },
         {
           "legendFormat": "Tool Execution Error Rate",
-          "expr": "sum(increase(mcpgw_registry_tool_execution_total{success=\"false\"}[5m])) / sum(increase(mcpgw_registry_tool_execution_total[5m])) * 100"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{success=\"False\"}[5m])) / sum(increase(mcpgw_registry_tool_execution_total[5m])) * 100"
         }
       ],
       "gridPos": {
@@ -713,7 +713,7 @@
       "targets": [
         {
           "legendFormat": "Success Rate",
-          "expr": "sum(increase(mcpgw_registry_tool_execution_total{success=\"true\"}[5m])) / sum(increase(mcpgw_registry_tool_execution_total[5m])) * 100"
+          "expr": "sum(increase(mcpgw_registry_tool_execution_total{success=\"True\"}[5m])) / sum(increase(mcpgw_registry_tool_execution_total[5m])) * 100"
         }
       ],
       "gridPos": {
