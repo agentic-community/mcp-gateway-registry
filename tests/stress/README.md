@@ -16,6 +16,7 @@ This directory contains the registry stress test harness. The goal is to registe
 | `register_entities.py` | Async bulk-register the generated payloads against a running registry. |
 | `measure_api_performance.py` | Phase 2a: measure steady-state per-request latency for list endpoints + semantic search (serial). |
 | `measure_search_concurrency.py` | Phase 2b: measure semantic search latency under concurrent load (1, 10, 100 parallel). |
+| `measure_validate_latency.py` | Concurrent load test for the auth-server `/validate` hot path (success + error), reads latency from Prometheus for before/after interpreter comparison (issue #1316). |
 | `queries.json` | Curated 20-query set used by the Phase 2a/2b semantic-search measurements. |
 | `run_stress_test.sh` | Orchestrator that runs all three generators then the loader. Optionally chains Phase 2a via `STRESS_MEASURE_API=1`. |
 | `cleanup.py` | Delete all stress-test entities (identified by `stress-test` tag) from the registry. |
@@ -149,6 +150,51 @@ What it measures:
 Each level runs `iterations + 1` batches (first discarded as warmup). Each batch fires `concurrency` simultaneous `POST /api/search/semantic` requests using the 20 curated queries from `queries.json` with `k=5`. The output reports p50/p90/p95/p99 latency and throughput (requests per second) per concurrency level.
 
 The key scaling metric: if p99 at concurrency=100 is less than 2x the p99 at concurrency=1, the search backend scales well under concurrent load.
+
+## /validate hot-path latency (issue #1316)
+
+`measure_validate_latency.py` drives concurrent load directly at the auth-server
+`/validate` endpoint (port 8888, bypassing nginx) and reads server-side latency
+percentiles from Prometheus. It is the benchmark behind the free-threaded
+Python 3.14t decision gate: `/validate` is the CPU-bound `auth_request`
+subrequest that runs on every proxied request, so it is what the no-GIL build
+is meant to speed up under concurrency.
+
+It exercises two request mixes:
+
+- **success**: a valid Bearer token from `--token-file` -> HTTP 200.
+- **error**: a structurally valid JWT with a bogus signature -> HTTP 401. This
+  still runs real JWT decode + signature verification (the CPU work that
+  matters), not an instant base64 reject.
+
+```bash
+# Baseline run (standard GIL image), save the result:
+uv run python -m tests.stress.measure_validate_latency \
+    --label baseline --requests 2000 --concurrency 50 \
+    --out tests/stress/results/validate/baseline.json
+
+# Rebuild auth-server on the free-threaded image, then run again and compare:
+uv run python -m tests.stress.measure_validate_latency \
+    --label freethreaded --free-threaded --requests 2000 --concurrency 50 \
+    --out tests/stress/results/validate/freethreaded.json \
+    --compare-to tests/stress/results/validate/baseline.json
+```
+
+Latency comes from the `http_server_duration_milliseconds` histogram
+(`http_target="/validate"`, split by `http_status_code`), computed by
+Prometheus over a rate window (`--window`, default `5m`). The script waits one
+scrape interval (`--scrape-wait`) after the load so the final samples are
+visible before querying. Client-observed wall time is also recorded as a
+sanity cross-check.
+
+Notes:
+
+- Counters are cumulative and the rate window is wide, so run the baseline and
+  the free-threaded comparison against **separate image builds** (the rebuild
+  resets the counters). Back-to-back runs against the same image will bleed
+  into each other's window.
+- `--prometheus-url` and `--auth-url` default to the Compose ports
+  (`localhost:9090` and `localhost:8888`); override for other deployments.
 
 ## Full Benchmark Sequence
 
