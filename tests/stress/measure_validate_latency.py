@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AUTH_URL: str = "http://localhost:8888"
 DEFAULT_PROM_URL: str = "http://localhost:9090"
-DEFAULT_TOKEN_FILE: str = ".token-non-admin"
+DEFAULT_TOKEN_FILE: str = ".token"
 DEFAULT_ORIGINAL_URL: str = "http://localhost/api/servers"
 DEFAULT_REQUESTS: int = 2000
 DEFAULT_CONCURRENCY: int = 50
