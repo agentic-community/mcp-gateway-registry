@@ -882,6 +882,16 @@ class Settings(BaseSettings):
             "with unusually large tool catalogs."
         ),
     )
+    mcp_proxy_upstream_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Per-request timeout (seconds) the MCP proxy hop applies to the "
+            "upstream MCP server call. Raise for upstreams whose tool calls "
+            "legitimately run long (e.g. multi-cluster A2A coordinators that "
+            "fan out to many backends before responding)."
+        ),
+    )
     tool_filter_audit_log_level: str = Field(
         default="INFO",
         description=(

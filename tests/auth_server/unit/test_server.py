@@ -168,6 +168,83 @@ class TestServerNameNormalization:
         assert _server_names_match("*", "another-server")
 
 
+class TestMcpProxyUpstreamTimeout:
+    """Tests for the MCP proxy upstream timeout resolution helper."""
+
+    def test_settings_value_wins(self):
+        """A value on settings is used directly (clamped to the floor)."""
+        from auth_server import server as server_module
+
+        # Arrange
+        fake_settings = Mock(mcp_proxy_upstream_timeout_seconds=120.0)
+
+        # Act
+        with patch.object(server_module, "settings", fake_settings):
+            result = server_module._read_mcp_proxy_upstream_timeout()
+
+        # Assert
+        assert result == 120.0
+
+    def test_env_fallback_when_settings_missing(self, monkeypatch):
+        """Falls back to the env var when settings has no value."""
+        from auth_server import server as server_module
+
+        # Arrange
+        fake_settings = Mock(mcp_proxy_upstream_timeout_seconds=None)
+        monkeypatch.setenv("MCP_PROXY_UPSTREAM_TIMEOUT_SECONDS", "300")
+
+        # Act
+        with patch.object(server_module, "settings", fake_settings):
+            result = server_module._read_mcp_proxy_upstream_timeout()
+
+        # Assert
+        assert result == 300.0
+
+    def test_default_when_unset(self, monkeypatch):
+        """Returns the 30s default when neither settings nor env provide a value."""
+        from auth_server import server as server_module
+
+        # Arrange
+        fake_settings = Mock(mcp_proxy_upstream_timeout_seconds=None)
+        monkeypatch.delenv("MCP_PROXY_UPSTREAM_TIMEOUT_SECONDS", raising=False)
+
+        # Act
+        with patch.object(server_module, "settings", fake_settings):
+            result = server_module._read_mcp_proxy_upstream_timeout()
+
+        # Assert
+        assert result == 30.0
+
+    def test_invalid_env_falls_back_to_default(self, monkeypatch):
+        """A non-numeric env value is ignored in favor of the default."""
+        from auth_server import server as server_module
+
+        # Arrange
+        fake_settings = Mock(mcp_proxy_upstream_timeout_seconds=None)
+        monkeypatch.setenv("MCP_PROXY_UPSTREAM_TIMEOUT_SECONDS", "not-a-number")
+
+        # Act
+        with patch.object(server_module, "settings", fake_settings):
+            result = server_module._read_mcp_proxy_upstream_timeout()
+
+        # Assert
+        assert result == 30.0
+
+    def test_value_clamped_to_floor(self):
+        """Sub-second values are clamped to the 1s minimum."""
+        from auth_server import server as server_module
+
+        # Arrange
+        fake_settings = Mock(mcp_proxy_upstream_timeout_seconds=0.2)
+
+        # Act
+        with patch.object(server_module, "settings", fake_settings):
+            result = server_module._read_mcp_proxy_upstream_timeout()
+
+        # Assert
+        assert result == 1.0
+
+
 class TestGroupToScopeMapping:
     """Tests for mapping IdP groups to MCP scopes."""
 
