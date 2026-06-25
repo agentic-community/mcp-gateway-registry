@@ -70,6 +70,12 @@ All `/api/ard/*` errors use the ARD envelope:
 client-safe; exception detail goes to the server logs only. An unauthenticated request
 returns a clean `401` ARD envelope, never a login redirect.
 
+> Operator note: an unauthenticated request is rejected by nginx's `auth_request`
+> gate before it reaches the app, so the `401` ARD envelope is produced by a dedicated
+> `^~ /api/ard/` location (`error_page 401 = @ard_auth_error`) in
+> `docker/nginx_rev_proxy_*.conf`. If you change nginx routing for `/api/ard/*`, keep
+> that location (and its error handler) so the 401 stays ARD-shaped.
+
 ## CLI
 
 The management CLI exposes both endpoints:
@@ -108,6 +114,11 @@ generic request middleware):
 | `mcpgw_ard_results_returned` | `operation` |
 | `mcpgw_ard_access_filtered_total` | `operation` (entries removed by access-scoping) |
 | `mcpgw_ard_errors_total` | `operation`, `error_code` |
+
+The two histograms are exposed in Prometheus as `_bucket`/`_count`/`_sum` series, and the
+duration one carries a `_milliseconds` unit suffix (`mcpgw_ard_request_duration_milliseconds_*`).
+`mcpgw_ard_access_filtered_total` stays at zero for admin callers (nothing is filtered) and
+increments for access-scoped users.
 
 ## Notes
 
