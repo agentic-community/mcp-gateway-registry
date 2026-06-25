@@ -60,3 +60,41 @@ tests:
           content:
             name: OTEL_EXPORTER_OTLP_PROTOCOL
             value: "http/json"
+
+  - it: pins auto-instrumentation exporters when endpoint is set (issue #1316)
+    set:
+      metrics:
+        otelExporterOtlpEndpoint: "http://otel-collector:4318"
+    asserts:
+      # opentelemetry-instrument defaults OTEL_*_EXPORTER to otlp_proto_grpc,
+      # which is absent in the free-threaded auth image and crashes startup.
+      # Metrics must use the HTTP exporter; traces/logs disabled (metrics-only
+      # collector pipeline).
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_METRICS_EXPORTER
+            value: "otlp_proto_http"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_TRACES_EXPORTER
+            value: "none"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_LOGS_EXPORTER
+            value: "none"
+
+  - it: omits exporter selectors when otelExporterOtlpEndpoint is empty
+    asserts:
+      # All three are rendered inside the endpoint guard, so they must be absent
+      # by default (no OTLP push -> no opentelemetry-instrument wrap).
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_METRICS_EXPORTER
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_TRACES_EXPORTER

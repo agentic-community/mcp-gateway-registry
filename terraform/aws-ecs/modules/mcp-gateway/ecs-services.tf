@@ -463,6 +463,27 @@ module "ecs_service_auth" {
         {
           name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
           value = "http/protobuf"
+        },
+        {
+          # Pin the auto-instrumentation exporters to what the auth image ships.
+          # opentelemetry-instrument defaults OTEL_*_EXPORTER to otlp_proto_grpc,
+          # but the grpc exporter was removed for free-threaded Python 3.14t
+          # (issue #1316), so the default makes opentelemetry-instrument crash on
+          # startup with "Requested component 'otlp_proto_grpc' not found" and the
+          # auth-server exports zero metrics. Use the HTTP exporter for metrics.
+          name  = "OTEL_METRICS_EXPORTER"
+          value = "otlp_proto_http"
+        },
+        {
+          # Traces are disabled: the ADOT sidecar pipeline only has a metrics
+          # pipeline, so exported traces are rejected with UNIMPLEMENTED. "none"
+          # avoids both the startup crash and the per-export error spam.
+          name  = "OTEL_TRACES_EXPORTER"
+          value = "none"
+        },
+        {
+          name  = "OTEL_LOGS_EXPORTER"
+          value = "none"
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).

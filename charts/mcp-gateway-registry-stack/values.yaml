@@ -539,6 +539,13 @@ auth-server:
     # exporter (no grpcio, for free-threaded Python 3.14t; issue #1316), so this
     # must stay http/protobuf. Only rendered when otelExporterOtlpEndpoint is set.
     otelExporterOtlpProtocol: "http/protobuf"
+    # Auto-instrumentation exporter selectors. The grpc OTLP exporter was removed
+    # for free-threaded Python 3.14t (issue #1316); opentelemetry-instrument
+    # defaults to otlp_proto_grpc and crashes when it is absent. Metrics use the
+    # HTTP exporter; traces/logs disabled (metrics-only collector pipeline).
+    otelMetricsExporter: "otlp_proto_http"
+    otelTracesExporter: "none"
+    otelLogsExporter: "none"
 
   keycloak:
     enabled: true

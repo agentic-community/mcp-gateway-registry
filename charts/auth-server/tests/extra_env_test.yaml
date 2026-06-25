@@ -136,6 +136,15 @@ tests:
       - failedTemplate:
           errorPattern: "\"OTEL_EXPORTER_OTLP_ENDPOINT\" is a reserved variable"
 
+  - it: fails when extraEnv contains the reserved OTEL_METRICS_EXPORTER selector
+    set:
+      extraEnv:
+        - name: OTEL_METRICS_EXPORTER
+          value: "console"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"OTEL_METRICS_EXPORTER\" is a reserved variable"
+
   - it: fails when extraEnv contains the reserved mcp-proxy token TTL
     set:
       extraEnv:

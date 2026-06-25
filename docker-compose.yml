@@ -457,6 +457,15 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT_AUTH:-${OTEL_EXPORTER_OTLP_ENDPOINT:-}}
       - OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL_AUTH:-http/protobuf}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
+      # Pin auto-instrumentation exporters to what the auth image ships. The
+      # grpc OTLP exporter was removed for free-threaded Python 3.14t (issue
+      # #1316), but opentelemetry-instrument defaults OTEL_*_EXPORTER to
+      # otlp_proto_grpc and crashes on startup ("Requested component
+      # 'otlp_proto_grpc' not found"). Use the HTTP exporter for metrics; disable
+      # traces/logs (the collector pipeline is metrics-only).
+      - OTEL_METRICS_EXPORTER=${OTEL_METRICS_EXPORTER_AUTH:-otlp_proto_http}
+      - OTEL_TRACES_EXPORTER=${OTEL_TRACES_EXPORTER_AUTH:-none}
+      - OTEL_LOGS_EXPORTER=${OTEL_LOGS_EXPORTER_AUTH:-none}
       - OTEL_SERVICE_NAME=mcp-auth-server
       # Keycloak configuration
       - AUTH_PROVIDER=${AUTH_PROVIDER:-cognito}  # 'cognito' or 'keycloak'

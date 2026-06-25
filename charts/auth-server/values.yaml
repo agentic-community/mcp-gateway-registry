@@ -254,6 +254,15 @@ metrics:
   # exporter (no grpcio, for free-threaded Python 3.14t; issue #1316), so this
   # must stay http/protobuf. Only rendered when otelExporterOtlpEndpoint is set.
   otelExporterOtlpProtocol: "http/protobuf"
+  # Auto-instrumentation exporter selectors. The grpc OTLP exporter was removed
+  # for free-threaded Python 3.14t (issue #1316), but opentelemetry-instrument
+  # defaults these to otlp_proto_grpc and crashes startup when it is absent.
+  # Metrics use the HTTP exporter; traces/logs are disabled (the ADOT/collector
+  # pipeline here is metrics-only). Only rendered when otelExporterOtlpEndpoint
+  # is set.
+  otelMetricsExporter: "otlp_proto_http"
+  otelTracesExporter: "none"
+  otelLogsExporter: "none"
 
 # Metrics scrape configuration (Issue #1122)
 # Controls the NetworkPolicy that gates the OTel exporter-prometheus port.

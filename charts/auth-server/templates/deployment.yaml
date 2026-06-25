@@ -181,6 +181,18 @@ spec:
             # port (4318), not the gRPC port (4317).
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: {{ .Values.metrics.otelExporterOtlpProtocol | default "http/protobuf" | quote }}
+            # Pin the auto-instrumentation exporters to what the auth image ships.
+            # opentelemetry-instrument defaults OTEL_*_EXPORTER to otlp_proto_grpc,
+            # but the grpc exporter was removed for free-threaded Python 3.14t
+            # (issue #1316), so the default crashes startup ("Requested component
+            # 'otlp_proto_grpc' not found"). Use the HTTP exporter for metrics and
+            # disable traces/logs (collectors here run a metrics-only pipeline).
+            - name: OTEL_METRICS_EXPORTER
+              value: {{ .Values.metrics.otelMetricsExporter | default "otlp_proto_http" | quote }}
+            - name: OTEL_TRACES_EXPORTER
+              value: {{ .Values.metrics.otelTracesExporter | default "none" | quote }}
+            - name: OTEL_LOGS_EXPORTER
+              value: {{ .Values.metrics.otelLogsExporter | default "none" | quote }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
