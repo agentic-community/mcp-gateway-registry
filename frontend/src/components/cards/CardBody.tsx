@@ -10,6 +10,12 @@ interface CardBodyProps {
   clamp?: 2 | 3;
   /** Extra content under the description (ANS bar, tags, target agents, etc.). */
   children?: React.ReactNode;
+  /**
+   * When true, render the description + children directly without the outer
+   * `px-5 pb-4` padding wrapper. Used when the body lives inside CardHeader's
+   * padded block (main keeps description + tags in the header block).
+   */
+  unwrapped?: boolean;
   className?: string;
 }
 
@@ -25,12 +31,13 @@ const CardBody: React.FC<CardBodyProps> = ({
   emptyText = 'No description available',
   clamp = 2,
   children,
+  unwrapped = false,
   className,
 }) => {
   const text = description || emptyText;
 
-  return (
-    <div className={clsx('px-5 pb-4', className)}>
+  const content = (
+    <>
       {text && (
         <p
           className={clsx(
@@ -42,8 +49,14 @@ const CardBody: React.FC<CardBodyProps> = ({
         </p>
       )}
       {children}
-    </div>
+    </>
   );
+
+  if (unwrapped) {
+    return content;
+  }
+
+  return <div className={clsx('px-5 pb-4', className)}>{content}</div>;
 };
 
 export default CardBody;

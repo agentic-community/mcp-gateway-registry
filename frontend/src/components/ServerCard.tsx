@@ -1,16 +1,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import {
-  EyeIcon,
   WrenchScrewdriverIcon,
-  StarIcon,
   ArrowPathIcon,
   PencilIcon,
   ClockIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  QuestionMarkCircleIcon,
-  CogIcon,
   LinkIcon,
   ShieldCheckIcon,
   ShieldExclamationIcon,
@@ -22,17 +16,59 @@ import SecurityScanModal from './SecurityScanModal';
 import StarRatingWidget from './StarRatingWidget';
 import VersionBadge from './VersionBadge';
 import VersionSelectorModal from './VersionSelectorModal';
-import DeleteConfirmation from './DeleteConfirmation';
 import ConfirmModal from './ConfirmModal';
 import StatusBadge from './StatusBadge';
+import Badge from './Badge';
 import { ANSBadge } from './ANSBadge';
 import ServerDetailsModal from './ServerDetailsModal';
 import useEscapeKey from '../hooks/useEscapeKey';
-import { formatRelativeTime } from '../utils/dateUtils';
+import { formatRelativeTime, formatTimeSince } from '../utils/dateUtils';
 import { normalizeHealthStatus } from '../utils/healthStatus';
 import { useAuth } from '../contexts/AuthContext';
 import { toScanSummary } from '../utils/securityScan';
 import type { LocalRuntime } from '../types/server';
+import {
+  CardShell,
+  CardHeader,
+  CardBody,
+  CardStatsRow,
+  CardFooter,
+  StatusDot,
+  StatusDivider,
+  TagList,
+  ToggleSwitch,
+  InlineDeleteConfirm,
+  ACCENTS,
+  ENTITY_ACCENTS,
+  type StatusTone,
+} from './cards';
+
+const ACCENT = ENTITY_ACCENTS.server;
+
+/** Map a server's health/local state to a StatusDot tone + label. */
+function serverHealthDot(
+  status: string | undefined,
+  isLocal: boolean,
+): { tone: StatusTone; label: string; title?: string } {
+  if (isLocal) {
+    return {
+      tone: 'emerald',
+      label: 'Local',
+      title:
+        'Runs on the developer’s machine via stdio launch recipe — registry does not health-check',
+    };
+  }
+  switch (status) {
+    case 'healthy':
+      return { tone: 'emerald', label: 'Healthy' };
+    case 'healthy-auth-expired':
+      return { tone: 'orange', label: 'Healthy (Auth Expired)' };
+    case 'unhealthy':
+      return { tone: 'red', label: 'Unhealthy' };
+    default:
+      return { tone: 'amber', label: 'Unknown' };
+  }
+}
 
 interface ServerVersion {
   version: string;
@@ -136,48 +172,6 @@ interface Tool {
   schema?: any;
 }
 
-// Helper function to format time since last checked
-const formatTimeSince = (timestamp: string | null | undefined): string | null => {
-  if (!timestamp) {
-    return null;
-  }
-
-  try {
-    const now = new Date();
-    const lastChecked = new Date(timestamp);
-
-    // Check if the date is valid
-    if (isNaN(lastChecked.getTime())) {
-      return null;
-    }
-
-    const diffMs = now.getTime() - lastChecked.getTime();
-
-    const diffSeconds = Math.floor(diffMs / 1000);
-    const diffMinutes = Math.floor(diffSeconds / 60);
-    const diffHours = Math.floor(diffMinutes / 60);
-    const diffDays = Math.floor(diffHours / 24);
-
-    let result;
-    if (diffSeconds < 0) {
-      result = 'just now';
-    } else if (diffDays > 0) {
-      result = `${diffDays}d ago`;
-    } else if (diffHours > 0) {
-      result = `${diffHours}h ago`;
-    } else if (diffMinutes > 0) {
-      result = `${diffMinutes}m ago`;
-    } else {
-      result = `${diffSeconds}s ago`;
-    }
-
-    return result;
-  } catch (error) {
-    console.error('formatTimeSince error:', error, 'for timestamp:', timestamp);
-    return null;
-  }
-};
-
 const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, onEdit, canModify, canHealthCheck = true, canToggle = true, canDelete, onRefreshSuccess, onShowToast, onServerUpdate, onDelete, authToken }) => {
   const { user } = useAuth();
   const isAdmin = user?.is_admin === true;
@@ -222,39 +216,6 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
       setSecurityScanResult(server.security_scan ?? null);
     }
   }, [server.security_scan, showSecurityScan]);
-
-  const getStatusIcon = () => {
-    // Local servers: registry doesn't health-check, so show a neutral indicator.
-    if (server.deployment === 'local' || server.status === 'local') {
-      return <span className="text-emerald-500 text-xs font-mono">stdio</span>;
-    }
-    switch (server.status) {
-      case 'healthy':
-        return <CheckCircleIcon className="h-4 w-4 text-green-500" />;
-      case 'healthy-auth-expired':
-        return <CheckCircleIcon className="h-4 w-4 text-orange-500" />;
-      case 'unhealthy':
-        return <XCircleIcon className="h-4 w-4 text-red-500" />;
-      default:
-        return <QuestionMarkCircleIcon className="h-4 w-4 text-gray-400" />;
-    }
-  };
-
-  const getStatusColor = () => {
-    if (server.deployment === 'local' || server.status === 'local') {
-      return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400';
-    }
-    switch (server.status) {
-      case 'healthy':
-        return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
-      case 'healthy-auth-expired':
-        return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400';
-      case 'unhealthy':
-        return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400';
-      default:
-        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200';
-    }
-  };
 
   const handleViewTools = useCallback(async () => {
     if (loadingTools) return;
@@ -449,6 +410,11 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   // Check if this is an Anthropic registry server
   const isAnthropicServer = server.tags?.includes('anthropic-registry');
 
+  // Main renders Anthropic-registry servers with the purple "primary" accent and
+  // all other servers fully neutral (white shell, gray footer, blue tags). Pick
+  // the per-card accent here so every accent-driven surface follows that rule.
+  const cardAccent = isAnthropicServer ? ACCENT : 'neutral';
+
   // Check if this server has security pending
   const isSecurityPending = server.tags?.includes('security-pending');
   const isSecurityPendingLocal = server.tags?.includes('security-pending-local');
@@ -465,34 +431,29 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   // Check if this server is orphaned (no longer exists on peer registry)
   const isOrphanedServer = server.sync_metadata?.is_orphaned === true;
 
+  const health = serverHealthDot(server.status, isLocal);
+
   return (
     <>
-      <div className={`group rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 h-full flex flex-col ${
-        isAnthropicServer
-          ? 'bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 border-2 border-purple-200 dark:border-purple-700 hover:border-purple-300 dark:hover:border-purple-600'
-          : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 hover:border-gray-200 dark:hover:border-gray-600'
-      }`}>
+      <CardShell accent={cardAccent}>
         {/* Render DeleteConfirmation inline when showDeleteConfirm is true */}
         {showDeleteConfirm ? (
-          <div className="p-5 h-full flex flex-col justify-center">
-            <DeleteConfirmation
-              entityType="server"
-              entityName={server.name || server.path.replace(/^\//, '')}
-              entityPath={server.path}
-              onConfirm={onDelete!}
-              onCancel={() => setShowDeleteConfirm(false)}
-            />
-          </div>
+          <InlineDeleteConfirm
+            entityType="server"
+            entityName={server.name || server.path.replace(/^\//, '')}
+            entityPath={server.path}
+            onConfirm={onDelete!}
+            onCancel={() => setShowDeleteConfirm(false)}
+          />
         ) : (
         <>
-        {/* Header */}
-        <div className="p-5 pb-4">
-          <div className="flex items-start justify-between mb-4">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-3 flex-wrap">
-                <h3 className="text-lg font-bold text-gray-900 dark:text-white truncate min-w-[120px]">
-                  {server.name}
-                </h3>
+        <CardHeader
+          title={server.name}
+          path={server.path}
+          wrapBadges
+          minTitleWidth
+          badges={
+            <>
                 {server.lifecycle_status && server.lifecycle_status !== 'active' && (
                   <StatusBadge status={server.lifecycle_status} />
                 )}
@@ -505,9 +466,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   </span>
                 )}
                 {server.official && (
-                  <span className="px-2 py-0.5 text-xs font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded-full flex-shrink-0">
-                    OFFICIAL
-                  </span>
+                  <Badge tone="purple">OFFICIAL</Badge>
                 )}
                 {isAnthropicServer && (
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-purple-100 to-indigo-100 text-purple-700 dark:from-purple-900/30 dark:to-indigo-900/30 dark:text-purple-300 rounded-full flex-shrink-0 border border-purple-200 dark:border-purple-600">
@@ -568,13 +527,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                     API KEY AUTH
                   </span>
                 )}
-              </div>
-
-              <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
-                {server.path}
-              </code>
-            </div>
-
+            </>
+          }
+          actions={
+            <>
             {canModify && (
               <button
                 className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
@@ -643,46 +599,25 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 <TrashIcon className="h-4 w-4" />
               </button>
             )}
-          </div>
-
-          {/* Description */}
-          <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed line-clamp-2 mb-4">
-            {server.description || 'No description available'}
-          </p>
-
-          {/* ANS Trust Bar */}
-          {server.ans_metadata && (
-            <div className="mb-4 p-2.5 rounded-lg bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200/60 dark:border-gray-700/60 flex items-center gap-3">
-              <ANSBadge ansMetadata={server.ans_metadata} compact />
-              <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                {server.ans_metadata.domain || server.ans_metadata.ans_agent_id}
-              </span>
-            </div>
-          )}
-
-          {/* Tags */}
-          {server.tags && server.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-4">
-              {server.tags.slice(0, 3).map((tag) => (
-                <span
-                  key={tag}
-                  className="px-2 py-1 text-xs font-medium bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded"
-                >
-                  #{tag}
+            </>
+          }
+        >
+          <CardBody description={server.description} unwrapped>
+            {/* ANS Trust Bar */}
+            {server.ans_metadata && (
+              <div className="mb-4 p-2.5 rounded-lg bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200/60 dark:border-gray-700/60 flex items-center gap-3">
+                <ANSBadge ansMetadata={server.ans_metadata} compact />
+                <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                  {server.ans_metadata.domain || server.ans_metadata.ans_agent_id}
                 </span>
-              ))}
-              {server.tags.length > 3 && (
-                <span className="px-2 py-1 text-xs font-medium bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded">
-                  +{server.tags.length - 3}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
+              </div>
+            )}
 
-        {/* Stats */}
-        <div className="px-5 pb-4">
-          <div className="grid grid-cols-3 gap-4">
+            <TagList tags={server.tags || []} accent={cardAccent} prefix="#" className="mb-4" />
+          </CardBody>
+        </CardHeader>
+
+        <CardStatsRow columns={3}>
             <StarRatingWidget
               resourceType="servers"
               path={server.path}
@@ -697,10 +632,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 <button
                   onClick={handleViewTools}
                   disabled={loadingTools}
-                  className="flex items-center gap-2 text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 disabled:opacity-50 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-2 py-1 -mx-2 -my-1 rounded transition-all"
+                  className={`flex items-center gap-2 disabled:opacity-50 px-2 py-1 -mx-2 -my-1 rounded transition-all ${ACCENTS[cardAccent].interactive}`}
                   title="View tools"
                 >
-                  <div className="p-1.5 bg-blue-50 dark:bg-blue-900/30 rounded">
+                  <div className={`p-1.5 rounded ${ACCENTS[cardAccent].iconChip}`}>
                     <WrenchScrewdriverIcon className="h-4 w-4" />
                   </div>
                   <div>
@@ -747,57 +682,22 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 </span>
               )}
             </div>
-          </div>
-        </div>
+        </CardStatsRow>
 
-        {/* Footer */}
-        <div className="mt-auto px-5 py-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/30 rounded-b-2xl">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              {/* Status Indicators */}
-              <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${
-                  server.enabled
-                    ? 'bg-green-400 shadow-lg shadow-green-400/30'
-                    : 'bg-gray-300 dark:bg-gray-600'
-                }`} />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {server.enabled ? 'Enabled' : 'Disabled'}
-                </span>
-              </div>
-
-              <div className="w-px h-4 bg-gray-200 dark:bg-gray-600" />
-
-              <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${
-                  isLocal
-                    ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
-                    : server.status === 'healthy'
-                    ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
-                    : server.status === 'healthy-auth-expired'
-                    ? 'bg-orange-400 shadow-lg shadow-orange-400/30'
-                    : server.status === 'unhealthy'
-                    ? 'bg-red-400 shadow-lg shadow-red-400/30'
-                    : 'bg-amber-400 shadow-lg shadow-amber-400/30'
-                }`} />
-                <span
-                  className="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  title={
-                    isLocal
-                      ? 'Runs on the developer’s machine via stdio launch recipe — registry does not health-check'
-                      : undefined
-                  }
-                >
-                  {isLocal ? 'Local' :
-                   server.status === 'healthy' ? 'Healthy' :
-                   server.status === 'healthy-auth-expired' ? 'Healthy (Auth Expired)' :
-                   server.status === 'unhealthy' ? 'Unhealthy' : 'Unknown'}
-                </span>
-              </div>
-            </div>
-
-            {/* Controls */}
-            <div className="flex items-center gap-3">
+        <CardFooter
+          accent={cardAccent}
+          status={
+            <>
+              <StatusDot
+                tone={server.enabled ? 'green' : 'off'}
+                label={server.enabled ? 'Enabled' : 'Disabled'}
+              />
+              <StatusDivider accent={cardAccent} />
+              <StatusDot tone={health.tone} label={health.label} title={health.title} />
+            </>
+          }
+          controls={
+            <>
               {/* Last Updated (source timestamp) */}
               {server.source_updated_at && (
                 <div className="text-xs text-gray-500 dark:text-gray-300 flex items-center gap-1.5">
@@ -837,31 +737,19 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
 
               {/* Toggle Switch - only show if user has toggle_service permission */}
               {canToggle && (
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={server.enabled}
-                    onChange={(e) => onToggle(server.path, e.target.checked)}
-                    className="sr-only peer"
-                    aria-label={`Enable ${server.name}`}
-                  />
-                  <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
-                    server.enabled
-                      ? 'bg-blue-600'
-                      : 'bg-gray-300 dark:bg-gray-600'
-                  }`}>
-                    <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ease-in-out ${
-                      server.enabled ? 'translate-x-6' : 'translate-x-0'
-                    }`} />
-                  </div>
-                </label>
+                <ToggleSwitch
+                  checked={server.enabled}
+                  onChange={(checked) => onToggle(server.path, checked)}
+                  ariaLabel={`Enable ${server.name}`}
+                  accent={cardAccent}
+                />
               )}
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        />
         </>
         )}
-      </div>
+      </CardShell>
 
       {/* Tools Modal */}
       {showTools && (
