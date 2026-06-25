@@ -230,6 +230,21 @@ class TestMcpProxyUpstreamTimeout:
         # Assert
         assert result == 30.0
 
+    def test_invalid_settings_value_falls_back_to_default(self, monkeypatch):
+        """A non-numeric settings value is caught and the helper falls through."""
+        from auth_server import server as server_module
+
+        # Arrange — settings carries an unparseable value; float() raises ValueError
+        fake_settings = Mock(mcp_proxy_upstream_timeout_seconds="not-a-float")
+        monkeypatch.delenv("MCP_PROXY_UPSTREAM_TIMEOUT_SECONDS", raising=False)
+
+        # Act
+        with patch.object(server_module, "settings", fake_settings):
+            result = server_module._read_mcp_proxy_upstream_timeout()
+
+        # Assert
+        assert result == 30.0
+
     def test_value_clamped_to_floor(self):
         """Sub-second values are clamped to the 1s minimum."""
         from auth_server import server as server_module

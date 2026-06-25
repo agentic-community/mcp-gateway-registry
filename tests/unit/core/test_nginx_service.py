@@ -569,6 +569,50 @@ def test_create_location_block_streamable_http(nginx_service):
     assert "proxy_set_header X-Internal-Token $auth_internal_token" in block
     assert "proxy_buffering off" in block
     assert "auth_request /validate" in block
+    # Upstream timeouts present so long-running MCP tool calls aren't severed by
+    # nginx before the inner auth_server hop times out (default 30s + 30s = 60s).
+    assert "proxy_read_timeout 60s" in block
+    assert "proxy_send_timeout 60s" in block
+    assert "proxy_connect_timeout 10s" in block
+
+
+@pytest.mark.unit
+class TestResolveMcpProxyReadTimeout:
+    """Tests for the nginx MCP proxy_read_timeout derivation helper."""
+
+    def test_default_is_upstream_plus_buffer(self):
+        """Default 30s upstream timeout yields 60s (30s + 30s buffer)."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_upstream_timeout_seconds=30.0)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
+
+    def test_raised_upstream_scales(self):
+        """A raised upstream timeout scales the nginx read timeout with headroom."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_upstream_timeout_seconds=300.0)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 330
+
+    def test_env_fallback_when_settings_unset(self, monkeypatch):
+        """Falls back to the env var when settings has no value."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_upstream_timeout_seconds=None)
+        monkeypatch.setenv("MCP_PROXY_UPSTREAM_TIMEOUT_SECONDS", "120")
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 150
+
+    def test_invalid_value_falls_back_to_default(self, monkeypatch):
+        """A non-numeric value falls back to the 30s default (-> 60s)."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_upstream_timeout_seconds="not-a-float")
+        monkeypatch.delenv("MCP_PROXY_UPSTREAM_TIMEOUT_SECONDS", raising=False)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
 
 
 @pytest.mark.unit
