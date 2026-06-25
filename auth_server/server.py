@@ -1927,8 +1927,11 @@ async def validate_request(request: Request):
                         server_name_from_url = "/".join(path_parts)
                         endpoint_from_url = None
 
-                logger.info(
-                    f"Extracted server_name '{server_name_from_url}' and endpoint '{endpoint_from_url}' from original_url: {original_url}"
+                logger.debug(
+                    "Extracted server_name '%s' and endpoint '%s' from original_url: %s",
+                    server_name_from_url,
+                    endpoint_from_url,
+                    original_url,
                 )
             except Exception as e:
                 logger.warning(
@@ -1940,13 +1943,16 @@ async def validate_request(request: Request):
         try:
             if body:
                 payload_text = body  # .decode('utf-8')
-                logger.info(
-                    f"Raw Request Payload ({len(payload_text)} chars): {payload_text[:1000]}..."
+                logger.debug(
+                    "Raw Request Payload (%d chars): %s...",
+                    len(payload_text),
+                    payload_text[:1000],
                 )
                 request_payload = json.loads(payload_text)
-                logger.info(f"JSON RPC Request Payload: {json.dumps(request_payload, indent=2)}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("JSON RPC Request Payload: %s", json.dumps(request_payload))
             else:
-                logger.info("No request body provided, skipping payload parsing")
+                logger.debug("No request body provided, skipping payload parsing")
         except UnicodeDecodeError as e:
             logger.warning(f"Could not decode body as UTF-8: {e}")
         except json.JSONDecodeError as e:
@@ -1956,23 +1962,29 @@ async def validate_request(request: Request):
 
         # Log request for debugging with anonymized IP
         client_ip = get_client_ip(request)
-        logger.info(f"Validation request from {anonymize_ip(client_ip)}")
-        logger.info(f"Request Method: {request.method}")
+        logger.debug("Validation request from %s", anonymize_ip(client_ip))
+        logger.debug("Request Method: %s", request.method)
 
         # Log masked HTTP headers for GDPR/SOX compliance
         all_headers = dict(request.headers)
         masked_headers = mask_headers(all_headers)
-        logger.debug(f"HTTP Headers (masked): {json.dumps(masked_headers, indent=2)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("HTTP Headers (masked): %s", json.dumps(masked_headers))
 
         # Log specific headers for debugging with masked sensitive data
-        logger.info(
-            f"Key Headers: Authorization={bool(authorization)}, Cookie={bool(cookie_header)}, "
-            f"User-Pool-Id={mask_sensitive_id(user_pool_id) if user_pool_id else 'None'}, "
-            f"Client-Id={mask_sensitive_id(client_id) if client_id else 'None'}, "
-            f"Region={region}, Original-URL={original_url}"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Key Headers: Authorization=%s, Cookie=%s, "
+                "User-Pool-Id=%s, Client-Id=%s, Region=%s, Original-URL=%s",
+                bool(authorization),
+                bool(cookie_header),
+                mask_sensitive_id(user_pool_id) if user_pool_id else "None",
+                mask_sensitive_id(client_id) if client_id else "None",
+                region,
+                original_url,
+            )
 
-        logger.info(f"Server Name from URL: {server_name_from_url}")
+        logger.debug("Server Name from URL: %s", server_name_from_url)
 
         # Only activate static token auth when there is no session cookie
         # (UI uses cookies, CLI uses Bearer)
@@ -2278,7 +2290,7 @@ async def validate_request(request: Request):
                     headers={"Connection": "close"},
                 )
 
-        logger.info(f"Token validation successful using method: {validation_result['method']}")
+        logger.debug("Token validation successful using method: %s", validation_result["method"])
 
         # Enrich groups from MongoDB if empty (for M2M clients)
         try:
@@ -2399,7 +2411,7 @@ async def validate_request(request: Request):
         if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0"]:
             # Map IdP groups to scopes using the group mappings (query DocumentDB)
             user_scopes = await map_groups_to_scopes(user_groups)
-            logger.info(f"Mapped {auth_method} groups {user_groups} to scopes: {user_scopes}")
+            logger.debug("Mapped %s groups %s to scopes: %s", auth_method, user_groups, user_scopes)
         elif (
             user_groups
             and not existing_scopes
@@ -2414,9 +2426,12 @@ async def validate_request(request: Request):
             # "pingfederate" — keeps Keycloak/Okta/etc. completely
             # unchanged.
             user_scopes = await map_groups_to_scopes(user_groups)
-            logger.info(
-                f"Re-mapped pingfederate groups {user_groups} to scopes: {user_scopes} "
-                f"after fallback enrichment (transport={auth_method})"
+            logger.debug(
+                "Re-mapped pingfederate groups %s to scopes: %s "
+                "after fallback enrichment (transport=%s)",
+                user_groups,
+                user_scopes,
+                auth_method,
             )
         else:
             user_scopes = validation_result.get("scopes", [])
@@ -2433,8 +2448,11 @@ async def validate_request(request: Request):
                 if tool_name
                 else (endpoint_from_url if endpoint_from_url else "initialize")
             )
-            logger.info(
-                f"Method determined for validation: '{method}' (tool_name={tool_name}, endpoint_from_url={endpoint_from_url})"
+            logger.debug(
+                "Method determined for validation: '%s' (tool_name=%s, endpoint_from_url=%s)",
+                method,
+                tool_name,
+                endpoint_from_url,
             )
             actual_tool_name = None
 
@@ -2443,7 +2461,9 @@ async def validate_request(request: Request):
                 params = request_payload.get("params", {})
                 if isinstance(params, dict):
                     actual_tool_name = params.get("name")
-                    logger.info(f"Extracted actual tool name for tools/call: '{actual_tool_name}'")
+                    logger.debug(
+                        "Extracted actual tool name for tools/call: '%s'", actual_tool_name
+                    )
 
             # Check if user has any scopes - if not, deny access (fail closed)
             if not user_scopes:
@@ -2467,8 +2487,11 @@ async def validate_request(request: Request):
                     detail=f"Access denied to {server_name}.{method}",
                     headers={"Connection": "close"},
                 )
-            logger.info(
-                f"Scope validation passed for {server_name}.{method} (tool: {actual_tool_name})"
+            logger.debug(
+                "Scope validation passed for %s.%s (tool: %s)",
+                server_name,
+                method,
+                actual_tool_name,
             )
         else:
             logger.debug("No server information available, skipping scope validation")
@@ -2649,10 +2672,12 @@ async def validate_request(request: Request):
             "server_name": server_name,
             "tool_name": tool_name,
         }
-        logger.info(
-            f"Full validation result: {json.dumps(_mask_sensitive_dict(validation_result), indent=2)}"
-        )
-        logger.info(f"Response data being sent: {json.dumps(response_data, indent=2)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Full validation result: %s",
+                json.dumps(_mask_sensitive_dict(validation_result)),
+            )
+            logger.debug("Response data being sent: %s", json.dumps(response_data))
 
         # Log MCP server access event if this is an MCP request (has server_name)
         if server_name:
