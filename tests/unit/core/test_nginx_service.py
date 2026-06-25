@@ -607,6 +607,15 @@ class TestResolveMcpProxyReadTimeout:
         with patch.object(ns, "settings", fake_settings):
             assert ns._resolve_mcp_proxy_read_timeout_seconds() == 150
 
+    def test_default_when_settings_and_env_unset(self, monkeypatch):
+        """With neither settings nor env set, falls through to the 30s default."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_upstream_timeout_seconds=None)
+        monkeypatch.delenv("MCP_PROXY_UPSTREAM_TIMEOUT_SECONDS", raising=False)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
+
     def test_invalid_value_falls_back_to_default(self, monkeypatch):
         """A non-numeric value falls back to the 30s default (-> 60s)."""
         from registry.core import nginx_service as ns
