@@ -938,7 +938,6 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -974,7 +973,6 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1011,7 +1009,6 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1048,7 +1045,6 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1088,7 +1084,6 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1125,7 +1120,6 @@ class TestRegisterService:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
         mock_nginx_reload_scheduler,
         mock_health_service,
@@ -1174,7 +1168,6 @@ class TestInternalRegister:
         self,
         test_client_no_auth,
         mock_server_service,
-
         mock_nginx_service,
         mock_health_service,
     ):
@@ -1525,7 +1518,6 @@ class TestRegisterLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
         mock_security_scanner_service,
     ):
@@ -1614,7 +1606,6 @@ class TestRegisterLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         """Unpinned npx package gets the 'unpinned-version' soft warning tag."""
@@ -1660,7 +1651,6 @@ class TestRegisterLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         """Remote registration without explicit deployment still works (default)."""
@@ -1720,7 +1710,6 @@ class TestEditLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         """Admin can edit a local server's launch recipe."""
@@ -1826,7 +1815,6 @@ class TestEditLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         """Remote edit still works when deployment field is omitted (preserves existing)."""
@@ -1856,7 +1844,6 @@ class TestEditLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         """Per-server oauth_client_id + append_mcp_path are persisted on edit."""
@@ -2035,7 +2022,6 @@ class TestEditLocalSecurityReviewReset:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         """Identical recipe → tag stays cleared (review preserved)."""
@@ -2070,7 +2056,6 @@ class TestEditLocalSecurityReviewReset:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         """Different recipe (version bump) → tag re-added even though it had
@@ -2105,7 +2090,6 @@ class TestEditLocalSecurityReviewReset:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         """args list change (e.g. swapping a flag) is also a material change."""
@@ -2153,7 +2137,6 @@ class TestRefreshLocalServer:
         self,
         test_client_admin,
         mock_server_service,
-
         mock_nginx_service,
     ):
         mock_server_service.get_server_info.return_value = {
@@ -2202,7 +2185,6 @@ class TestClearSecurityPendingLocal:
         self,
         test_client_admin,
         mock_server_service,
-
     ):
         mock_server_service.get_server_info.return_value = self.LOCAL_PENDING
         mock_server_service.is_service_enabled.return_value = True
@@ -2279,9 +2261,7 @@ class TestServerRegisterVisibility:
         "proxy_pass_url": "http://localhost:9000",
     }
 
-    def test_register_persists_visibility_public(
-        self, test_client_admin, mock_server_service
-    ):
+    def test_register_persists_visibility_public(self, test_client_admin, mock_server_service):
         response = test_client_admin.post(
             "/api/servers/register",
             data={**self._BASE_FORM, "visibility": "public"},
@@ -2311,9 +2291,7 @@ class TestServerRegisterVisibility:
         assert server_entry["oauth_client_id"] == "mcp-gateway"
         assert server_entry["append_mcp_path"] is False
 
-    def test_register_rejects_invalid_visibility(
-        self, test_client_admin, mock_server_service
-    ):
+    def test_register_rejects_invalid_visibility(self, test_client_admin, mock_server_service):
         response = test_client_admin.post(
             "/api/servers/register",
             data={**self._BASE_FORM, "visibility": "garbage"},
@@ -2695,3 +2673,255 @@ class TestGetGroupApi:
 
         assert response.status_code == 200
         assert response.json()["scope_name"] == "file-group"
+
+
+# =============================================================================
+# TESTS — Authorization on /api/servers/* (privilege-escalation fix)
+#
+# Verifies the guards added in fix/servers-api-authz:
+#   - All five /api/servers/groups/* routes require admin.
+#   - POST /api/servers/toggle requires toggle_service permission + access.
+#   - POST /api/servers/register (remote) requires register_service permission.
+#   - PATCH /servers/{path}/auth-credential + version routes require
+#     modify_service permission.
+# See .scratchpad/cve/design-privesc-fix-servers-api.md.
+# =============================================================================
+
+
+class TestServersGroupsAdminGate:
+    """All /api/servers/groups/* routes must reject non-admin callers."""
+
+    def test_import_group_rejects_non_admin(
+        self,
+        test_client_regular,
+    ):
+        """Non-admin import is blocked BEFORE import_group is called."""
+        with patch(
+            "registry.services.scope_service.import_group", new_callable=AsyncMock
+        ) as mock_import:
+            response = test_client_regular.post(
+                "/api/servers/groups/import",
+                json={
+                    "scope_name": "attacker-group",
+                    "ui_permissions": {"register_service": ["all"]},
+                },
+            )
+
+        assert response.status_code == 403
+        mock_import.assert_not_called()
+
+    def test_create_group_rejects_non_admin(
+        self,
+        test_client_regular,
+    ):
+        """Non-admin group create is blocked before the service is called."""
+        with patch(
+            "registry.services.scope_service.create_group", new_callable=AsyncMock
+        ) as mock_create:
+            response = test_client_regular.post(
+                "/api/servers/groups/create",
+                data={"group_name": "attacker-group"},
+            )
+
+        assert response.status_code == 403
+        mock_create.assert_not_called()
+
+    def test_add_to_groups_rejects_non_admin(
+        self,
+        test_client_regular,
+    ):
+        """Non-admin add-to-groups is blocked."""
+        response = test_client_regular.post(
+            "/api/servers/groups/add",
+            data={"server_name": "test-server", "group_names": "mcp-registry-admin"},
+        )
+        assert response.status_code == 403
+
+    def test_remove_from_groups_rejects_non_admin(
+        self,
+        test_client_regular,
+    ):
+        """Non-admin remove-from-groups is blocked."""
+        response = test_client_regular.post(
+            "/api/servers/groups/remove",
+            data={"server_name": "test-server", "group_names": "some-group"},
+        )
+        assert response.status_code == 403
+
+    def test_delete_group_rejects_non_admin(
+        self,
+        test_client_regular,
+    ):
+        """Non-admin group delete is blocked."""
+        response = test_client_regular.post(
+            "/api/servers/groups/delete",
+            data={"group_name": "some-group"},
+        )
+        assert response.status_code == 403
+
+    def test_import_group_allows_admin(
+        self,
+        test_client_admin,
+    ):
+        """Admin import reaches the service layer (no 403)."""
+        with patch(
+            "registry.services.scope_service.import_group",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_import:
+            response = test_client_admin.post(
+                "/api/servers/groups/import",
+                json={"scope_name": "legit-group", "create_in_idp": False},
+            )
+
+        assert response.status_code != 403
+        mock_import.assert_called_once()
+
+
+class TestToggleApiAuthorization:
+    """POST /api/servers/toggle must enforce permission + per-server access."""
+
+    def test_toggle_api_rejects_without_permission(
+        self,
+        test_client_regular,
+        mock_server_service,
+        sample_server_info,
+    ):
+        """Caller lacking toggle_service permission gets 403, no toggle."""
+        mock_server_service.get_server_info.return_value = sample_server_info
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=False,
+        ):
+            response = test_client_regular.post(
+                "/api/servers/toggle",
+                data={"path": "/test-server", "new_state": "true"},
+            )
+
+        assert response.status_code == 403
+        mock_server_service.toggle_service.assert_not_called()
+
+    def test_toggle_api_rejects_without_server_access(
+        self,
+        test_client_regular,
+        mock_server_service,
+        sample_server_info,
+    ):
+        """Non-admin with permission but no access to the server gets 403."""
+        mock_server_service.get_server_info.return_value = sample_server_info
+        mock_server_service.user_can_access_server_path = AsyncMock(return_value=False)
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_regular.post(
+                "/api/servers/toggle",
+                data={"path": "/test-server", "new_state": "true"},
+            )
+
+        assert response.status_code == 403
+        mock_server_service.toggle_service.assert_not_called()
+
+    def test_toggle_api_allows_with_permission_and_access(
+        self,
+        test_client_regular,
+        mock_server_service,
+        sample_server_info,
+    ):
+        """Permission + access lets the toggle through."""
+        mock_server_service.get_server_info.return_value = sample_server_info
+        mock_server_service.user_can_access_server_path = AsyncMock(return_value=True)
+        mock_server_service.toggle_service.return_value = True
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_regular.post(
+                "/api/servers/toggle",
+                data={"path": "/test-server", "new_state": "true"},
+            )
+
+        assert response.status_code != 403
+        mock_server_service.toggle_service.assert_called_once()
+
+
+class TestRegisterApiAuthorization:
+    """POST /api/servers/register (remote) must require register_service."""
+
+    _FORM = {
+        "name": "My Service",
+        "description": "desc",
+        "path": "/my-service",
+        "proxy_pass_url": "http://localhost:8080",
+    }
+
+    def test_register_api_rejects_without_permission(
+        self,
+        test_client_regular,
+    ):
+        """Regular user without register_service permission gets 403.
+
+        The regular_user_context fixture has no register_service permission.
+        """
+        response = test_client_regular.post("/api/servers/register", data=self._FORM)
+        assert response.status_code == 403
+
+
+class TestServerModifyApiAuthorization:
+    """auth-credential + version routes must require modify_service."""
+
+    def test_auth_credential_rejects_without_permission(
+        self,
+        test_client_regular,
+        mock_server_service,
+        sample_server_info,
+    ):
+        """Non-admin without modify_service cannot rewrite a credential."""
+        mock_server_service.get_server_info.return_value = sample_server_info
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=False,
+        ):
+            response = test_client_regular.patch(
+                "/api/servers/test-server/auth-credential",
+                json={"auth_scheme": "bearer", "auth_credential": "stolen"},
+            )
+
+        assert response.status_code == 403
+
+    def test_set_default_version_rejects_without_permission(
+        self,
+        test_client_regular,
+        mock_server_service,
+        sample_server_info,
+    ):
+        """Non-admin without modify_service cannot change default version."""
+        mock_server_service.get_server_info.return_value = sample_server_info
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=False,
+        ):
+            response = test_client_regular.put(
+                "/api/servers/test-server/versions/default",
+                json={"version": "v2.0.0"},
+            )
+
+        assert response.status_code == 403
+
+    def test_remove_version_rejects_without_permission(
+        self,
+        test_client_regular,
+        mock_server_service,
+        sample_server_info,
+    ):
+        """Non-admin without modify_service cannot remove a version."""
+        mock_server_service.get_server_info.return_value = sample_server_info
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=False,
+        ):
+            response = test_client_regular.delete(
+                "/api/servers/test-server/versions/v1.0.0",
+            )
+
+        assert response.status_code == 403

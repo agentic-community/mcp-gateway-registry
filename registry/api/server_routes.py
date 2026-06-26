@@ -64,6 +64,29 @@ class RatingRequest(BaseModel):
 templates = Jinja2Templates(directory=settings.templates_dir)
 
 
+def _require_admin(
+    user_context: dict | None,
+) -> None:
+    """Verify the caller has admin permissions.
+
+    Mirrors the gate used across the IAM management routes (see
+    registry/api/management_routes.py:_require_admin). Used by the External API
+    group-management endpoints, which are JWT mirrors of the admin-only
+    /api/internal/* routes and must enforce the same admin requirement.
+
+    Args:
+        user_context: User context from authentication.
+
+    Raises:
+        HTTPException: 403 if the caller is not an admin.
+    """
+    if not (user_context and user_context.get("is_admin")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator permissions are required for this operation",
+        )
+
+
 def _build_scan_headers_from_credentials(
     server_info: dict,
 ) -> str | None:
@@ -1678,9 +1701,7 @@ async def internal_register_service(
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
 
-    logger.warning(
-        "INTERNAL REGISTER: Updating scopes for new server"
-    )  # TODO: replace with debug
+    logger.warning("INTERNAL REGISTER: Updating scopes for new server")  # TODO: replace with debug
 
     # Update scopes with the new server's tools
     from ..services.scope_service import update_server_scopes
@@ -2721,9 +2742,7 @@ async def get_service_tools(
                     from ..repositories.factory import get_search_repository
 
                     search_repo = get_search_repository()
-                    await search_repo.index_server(
-                        service_path, updated_server_info, is_enabled
-                    )
+                    await search_repo.index_server(service_path, updated_server_info, is_enabled)
                 except Exception as e:
                     logger.warning(f"Failed to update search index for {service_path}: {e}")
                 logger.info(f"Updated search index for {service_path}")
@@ -3668,12 +3687,25 @@ async def register_service_api(
 
     is_local = deployment == DeploymentType.LOCAL
 
-    # Admin check for local registration
+    # Authorization: local registration requires admin (distributes executable
+    # launch recipes); remote registration requires the register_service UI
+    # permission, matching the legacy session/UI route POST /register.
     if is_local:
         if not user_context.get("is_admin"):
             raise HTTPException(
                 status_code=fastapi_status.HTTP_403_FORBIDDEN,
                 detail="Local server registration requires admin privileges",
+            )
+    else:
+        ui_permissions = user_context.get("ui_permissions", {})
+        if not ui_permissions.get("register_service"):
+            logger.warning(
+                f"User '{user_context.get('username')}' attempted API register "
+                f"without register_service permission"
+            )
+            raise HTTPException(
+                status_code=fastapi_status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to register new services",
             )
 
     logger.info(
@@ -4058,6 +4090,15 @@ async def update_server_auth_credential(
             },
         )
 
+    # Authorization: updating a server's stored backend credential is a server
+    # modification. Require modify_service permission, matching PUT/PATCH
+    # /servers/{path}.
+    _check_server_permission(
+        "modify_service",
+        existing_server.get("server_name", server_path),
+        user_context,
+    )
+
     # Build update dict
     existing_server["auth_scheme"] = body.auth_scheme
 
@@ -4162,6 +4203,37 @@ async def toggle_service_api(
     server_info = await server_service.get_server_info(path)
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not registered")
+
+    # Authorization: mirror the legacy UI toggle route (toggle_service_route).
+    # Require the toggle_service UI permission for this service, then a
+    # per-server access check for non-admin callers.
+    from ..auth.dependencies import user_has_ui_permission_for_service
+
+    service_name = server_info["server_name"]
+
+    if not user_has_ui_permission_for_service(
+        "toggle_service", service_name, user_context.get("ui_permissions", {})
+    ):
+        logger.warning(
+            f"User '{user_context.get('username')}' attempted to toggle "
+            f"'{service_name}' without toggle_service permission"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You do not have permission to toggle {service_name}",
+        )
+
+    if not user_context.get("is_admin"):
+        if not await server_service.user_can_access_server_path(
+            path, user_context.get("accessible_servers", [])
+        ):
+            logger.warning(
+                f"User '{user_context.get('username')}' attempted to toggle '{path}' without access"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
 
     # Toggle the service
     success = await server_service.toggle_service(path, new_state)
@@ -4444,6 +4516,8 @@ async def add_server_to_groups_api(
       -F "group_names=admin,developers"
     ```
     """
+    _require_admin(user_context)
+
     logger.info(
         f"API add to groups request from user '{user_context.get('username')}' for server '{server_name}'"
     )
@@ -4483,6 +4557,8 @@ async def remove_server_from_groups_api(
       -F "group_names=developers"
     ```
     """
+    _require_admin(user_context)
+
     logger.info(
         f"API remove from groups request from user '{user_context.get('username')}' for server '{server_name}'"
     )
@@ -4598,6 +4674,8 @@ async def create_group_api(
       -F "create_in_idp=true"
     ```
     """
+    _require_admin(user_context)
+
     logger.info(
         f"API create group request from user '{user_context.get('username')}' for group '{group_name}'"
     )
@@ -4726,6 +4804,8 @@ async def delete_group_api(
       -F "force=false"
     ```
     """
+    _require_admin(user_context)
+
     logger.info(
         f"API delete group request from user '{user_context.get('username')}' for group '{group_name}'"
     )
@@ -4888,6 +4968,8 @@ async def import_group_definition(
       -d @group-definition.json
     ```
     """
+    _require_admin(user_context)
+
     from ..services.scope_service import import_group
     from ..utils.iam_manager import get_iam_manager
 
@@ -5325,6 +5407,17 @@ async def remove_server_version(
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
+    # Authorization: removing a version mutates the server. Require
+    # modify_service permission, matching PUT/PATCH /servers/{path}.
+    existing_server = await server_service.get_server_info(decoded_path)
+    if not existing_server:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+    _check_server_permission(
+        "modify_service",
+        existing_server.get("server_name", decoded_path),
+        user_context,
+    )
+
     try:
         result = await server_service.remove_server_version(path=decoded_path, version=version)
 
@@ -5359,6 +5452,17 @@ async def set_default_version(
         Success message
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
+
+    # Authorization: changing the default version mutates the server. Require
+    # modify_service permission, matching PUT/PATCH /servers/{path}.
+    existing_server = await server_service.get_server_info(decoded_path)
+    if not existing_server:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+    _check_server_permission(
+        "modify_service",
+        existing_server.get("server_name", decoded_path),
+        user_context,
+    )
 
     try:
         result = await server_service.set_default_version(
