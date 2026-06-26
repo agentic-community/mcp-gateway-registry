@@ -42,6 +42,10 @@ USER_CONTEXT = {
     "scopes": ["mcp-servers-unrestricted/read"],
     "is_admin": False,
     "can_modify_servers": False,
+    # Scope the user to the sample virtual server so the access guard in
+    # rate/rating reads (which 404s on servers outside the user's
+    # list_virtual_server scope) permits the dev-essentials fixture path.
+    "ui_permissions": {"list_virtual_server": ["/virtual/dev-essentials"]},
 }
 
 
