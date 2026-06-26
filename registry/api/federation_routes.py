@@ -30,6 +30,56 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _require_admin(user_context: dict | None) -> None:
+    """Reject the request unless the caller is an authenticated admin.
+
+    All federation config mutations and the sync trigger are admin-only:
+    they rewrite federation state, deregister entities, regenerate nginx
+    config, and drive server-side outbound requests. ``nginx_proxied_auth``
+    only authenticates; it does not authorize.
+
+    Args:
+        user_context: Authenticated user context (may be None if auth failed).
+
+    Raises:
+        HTTPException: 403 if the user is missing or not an admin.
+    """
+    if not user_context or not user_context.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator permissions are required for this operation",
+        )
+
+
+def _validate_federation_endpoints(config: FederationConfig) -> None:
+    """Reject federation configs whose endpoints fail SSRF safety checks.
+
+    The anthropic/asor endpoints are fetched server-side during sync, so an
+    attacker-controlled value (e.g. http://169.254.169.254/) would be an SSRF
+    vector. Validate any non-empty endpoint at write time, reusing the shared
+    ``_is_safe_url`` allowlist (http/https scheme, no private/loopback/link-local
+    or cloud-metadata IPs). Defense-in-depth: sync re-validates before egress.
+
+    Args:
+        config: The federation config being saved.
+
+    Raises:
+        HTTPException: 400 if any configured endpoint is unsafe to fetch.
+    """
+    from ..services.skill_service import _is_safe_url
+
+    for label, section in (("anthropic", config.anthropic), ("asor", config.asor)):
+        endpoint = getattr(section, "endpoint", "") or ""
+        if endpoint and not _is_safe_url(endpoint):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"The {label} endpoint failed SSRF safety validation; "
+                    "private, loopback, link-local, and metadata addresses are not allowed"
+                ),
+            )
+
+
 def _get_federation_repo() -> FederationConfigRepositoryBase:
     """Get federation config repository dependency."""
     return get_federation_config_repository()
@@ -56,6 +106,11 @@ async def get_federation_config(
     Raises:
         404: Configuration not found
     """
+    # Federation config (endpoints, server/agent/registry lists, auth_env_var
+    # references) is operator-level configuration; keep reads admin-only to match
+    # the mutating siblings rather than exposing the topology to any authed user.
+    _require_admin(user_context)
+
     # Set audit action for federation config read
     set_audit_action(
         request,
@@ -125,6 +180,9 @@ async def save_federation_config(
         }
         ```
     """
+    _require_admin(user_context)
+    _validate_federation_endpoints(config)
+
     # Set audit action for federation config create/update
     set_audit_action(
         request,
@@ -209,6 +267,9 @@ async def update_federation_config(
     Returns:
         Updated configuration
     """
+    _require_admin(user_context)
+    _validate_federation_endpoints(config)
+
     # Set audit action for federation config update
     set_audit_action(
         request,
@@ -288,6 +349,8 @@ async def delete_federation_config(
     Raises:
         404: Configuration not found
     """
+    _require_admin(user_context)
+
     logger.info(f"User {user_context['username']} deleting federation config: {config_id}")
 
     deleted = await repo.delete_config(config_id)
@@ -322,6 +385,9 @@ async def list_federation_configs(
     Returns:
         List of configuration summaries with id, created_at, updated_at
     """
+    # Admin-only, consistent with get_federation_config and the mutating siblings.
+    _require_admin(user_context)
+
     logger.info(f"User {user_context['username']} listing federation configs")
 
     configs = await repo.list_configs()
@@ -352,6 +418,8 @@ async def add_anthropic_server(
     Returns:
         Updated configuration
     """
+    _require_admin(user_context)
+
     logger.info(f"User {user_context['username']} adding Anthropic server: {server_name}")
 
     config = await repo.get_config(config_id)
@@ -409,6 +477,8 @@ async def remove_anthropic_server(
     Returns:
         Updated configuration with removal details
     """
+    _require_admin(user_context)
+
     logger.info(f"User {user_context['username']} removing Anthropic server: {server_name}")
 
     config = await repo.get_config(config_id)
@@ -446,8 +516,6 @@ async def remove_anthropic_server(
                 )
 
                 # Regenerate nginx config
-                from ..core.nginx_service import nginx_service
-
                 from ..core.nginx_service import nginx_reload_scheduler
 
                 nginx_reload_scheduler.mark_dirty()
@@ -484,6 +552,8 @@ async def add_asor_agent(
     Returns:
         Updated configuration
     """
+    _require_admin(user_context)
+
     logger.info(f"User {user_context['username']} adding ASOR agent: {agent_id}")
 
     config = await repo.get_config(config_id)
@@ -538,6 +608,8 @@ async def remove_asor_agent(
     Returns:
         Updated configuration
     """
+    _require_admin(user_context)
+
     logger.info(f"User {user_context['username']} removing ASOR agent: {agent_id}")
 
     config = await repo.get_config(config_id)
@@ -590,6 +662,8 @@ async def add_aws_registry(
     Returns:
         Updated configuration
     """
+    _require_admin(user_context)
+
     set_audit_action(
         request,
         "create",
@@ -653,6 +727,8 @@ async def remove_aws_registry(
     Returns:
         Updated configuration
     """
+    _require_admin(user_context)
+
     set_audit_action(
         request,
         "delete",
@@ -902,6 +978,8 @@ async def sync_federation(
         POST /api/federation/sync?source=anthropic
         ```
     """
+    _require_admin(user_context)
+
     # Set audit action for federation sync
     set_audit_action(
         request,
@@ -920,6 +998,10 @@ async def sync_federation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Federation config '{config_id}' not found",
         )
+
+    # Defense-in-depth SSRF check: re-validate endpoints before any outbound
+    # request, in case a config was persisted before write-time validation.
+    _validate_federation_endpoints(config)
 
     try:
         # Import federation clients

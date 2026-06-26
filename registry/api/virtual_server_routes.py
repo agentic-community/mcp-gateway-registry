@@ -76,6 +76,61 @@ def _require_admin(
         )
 
 
+def _user_can_access_virtual_server(
+    user_context: dict,
+    normalized_path: str,
+) -> bool:
+    """Check whether the user may view a specific virtual server.
+
+    Mirrors the filter in ``list_virtual_servers`` so the detail / tools /
+    rating reads (and the rate write) respect the same scope as the list:
+    admins and ``list_virtual_server: ["all"]`` holders see everything;
+    otherwise the path must be in the user's ``list_virtual_server`` perms.
+    Without this, a user filtered out of the list could still read or rate a
+    virtual server by guessing its path.
+
+    Args:
+        user_context: Authenticated user context.
+        normalized_path: Virtual server path (``/virtual/<slug>``).
+
+    Returns:
+        True if the user may access the virtual server.
+    """
+    ui_permissions = user_context.get("ui_permissions", {})
+    list_virtual_perms = ui_permissions.get("list_virtual_server", [])
+    if user_context.get("is_admin") or "all" in list_virtual_perms:
+        return True
+    normalized_perms = {p.strip("/") for p in list_virtual_perms}
+    return normalized_path.strip("/") in normalized_perms
+
+
+def _require_virtual_server_access(
+    user_context: dict,
+    normalized_path: str,
+) -> None:
+    """Raise 404 if the user may not access the virtual server.
+
+    Uses 404 (not 403) to avoid disclosing the existence of virtual servers
+    the caller is not permitted to see, matching the list-filter contract.
+
+    Args:
+        user_context: Authenticated user context.
+        normalized_path: Virtual server path (``/virtual/<slug>``).
+
+    Raises:
+        HTTPException: 404 if access is denied.
+    """
+    if not _user_can_access_virtual_server(user_context, normalized_path):
+        logger.warning(
+            f"User {user_context.get('username', 'unknown')} denied access to "
+            f"virtual server {normalized_path}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Virtual server not found: {normalized_path}",
+        )
+
+
 _VALID_VIRTUAL_PATH_RE = re.compile(r"^/virtual/[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -176,6 +231,7 @@ async def get_virtual_server_tools(
     Returns all tools with their final names, sources, and metadata.
     """
     normalized = _normalize_virtual_path(vs_path)
+    _require_virtual_server_access(user_context, normalized)
     service = get_virtual_server_service()
 
     try:
@@ -217,6 +273,7 @@ async def rate_virtual_server(
     Requires authentication. Each user can have one rating per server.
     """
     normalized = _normalize_virtual_path(vs_path)
+    _require_virtual_server_access(user_context, normalized)
     username = user_context.get("username", "anonymous")
 
     set_audit_action(
@@ -259,6 +316,7 @@ async def get_virtual_server_rating(
 ) -> dict:
     """Get rating information for a virtual server."""
     normalized = _normalize_virtual_path(vs_path)
+    _require_virtual_server_access(user_context, normalized)
     service = get_virtual_server_service()
 
     try:
@@ -281,6 +339,7 @@ async def get_virtual_server(
 ) -> VirtualServerConfig:
     """Get detailed configuration for a virtual server."""
     normalized = _normalize_virtual_path(vs_path)
+    _require_virtual_server_access(user_context, normalized)
     service = get_virtual_server_service()
     config = await service.get_virtual_server(normalized)
 

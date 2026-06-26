@@ -936,6 +936,26 @@ def _to_dt(value: Any) -> datetime | None:
     return None
 
 
+def _require_admin(user_context: dict | None) -> None:
+    """Reject the request unless the caller is an authenticated admin.
+
+    Mirrors the sibling ``_require_admin`` helpers in management_routes.py,
+    log_routes.py, etc. Used to gate scope/group mutation endpoints, which
+    have no finer-grained permission model and must be admin-only.
+
+    Args:
+        user_context: Authenticated user context (may be None if auth failed).
+
+    Raises:
+        HTTPException: 403 if the user is missing or not an admin.
+    """
+    if not user_context or not user_context.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator permissions are required for this operation",
+        )
+
+
 def _check_server_permission(
     permission: str,
     server_name: str,
@@ -1678,9 +1698,7 @@ async def internal_register_service(
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
 
-    logger.warning(
-        "INTERNAL REGISTER: Updating scopes for new server"
-    )  # TODO: replace with debug
+    logger.warning("INTERNAL REGISTER: Updating scopes for new server")  # TODO: replace with debug
 
     # Update scopes with the new server's tools
     from ..services.scope_service import update_server_scopes
@@ -2721,9 +2739,7 @@ async def get_service_tools(
                     from ..repositories.factory import get_search_repository
 
                     search_repo = get_search_repository()
-                    await search_repo.index_server(
-                        service_path, updated_server_info, is_enabled
-                    )
+                    await search_repo.index_server(service_path, updated_server_info, is_enabled)
                 except Exception as e:
                     logger.warning(f"Failed to update search index for {service_path}: {e}")
                 logger.info(f"Updated search index for {service_path}")
@@ -4027,6 +4043,26 @@ async def update_server_auth_credential(
     if not server_path.startswith("/"):
         server_path = "/" + server_path
 
+    # Look up the server first so the permission check can use its display name.
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not existing_server:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "Server not found",
+                "reason": f"No server registered at path '{server_path}'",
+            },
+        )
+
+    # Authorization: rewriting a backend credential is a server modification, so
+    # require the same modify_service permission as PUT/PATCH /servers/{path}.
+    # nginx_proxied_auth only authenticates; it does not authorize.
+    _check_server_permission(
+        "modify_service",
+        existing_server.get("server_name", server_path),
+        user_context,
+    )
+
     # Validate auth_scheme
     if body.auth_scheme not in VALID_AUTH_SCHEMES:
         return JSONResponse(
@@ -4044,17 +4080,6 @@ async def update_server_auth_credential(
             content={
                 "error": "Missing credential",
                 "reason": "auth_credential is required when auth_scheme is not 'none'",
-            },
-        )
-
-    # Look up existing server (with credentials so we can update properly)
-    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
-    if not existing_server:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": "Server not found",
-                "reason": f"No server registered at path '{server_path}'",
             },
         )
 
@@ -4162,6 +4187,36 @@ async def toggle_service_api(
     server_info = await server_service.get_server_info(path)
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not registered")
+
+    # Authorization: mirror the legacy /toggle route (toggle_service UI permission
+    # plus a per-server access check for non-admins). nginx_proxied_auth only
+    # authenticates; it does not authorize.
+    server_name = server_info["server_name"]
+    from ..auth.dependencies import user_has_ui_permission_for_service
+
+    if not user_has_ui_permission_for_service(
+        "toggle_service", server_name, user_context.get("ui_permissions", {})
+    ):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to toggle service "
+            f"{server_name} without toggle_service permission"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You do not have permission to toggle {server_name}",
+        )
+    if not user_context.get("is_admin"):
+        if not await server_service.user_can_access_server_path(
+            path, user_context.get("accessible_servers", [])
+        ):
+            logger.warning(
+                f"User {user_context.get('username')} attempted to toggle service "
+                f"{path} without access"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
 
     # Toggle the service
     success = await server_service.toggle_service(path, new_state)
@@ -4444,6 +4499,9 @@ async def add_server_to_groups_api(
       -F "group_names=admin,developers"
     ```
     """
+    # Mapping servers into scope groups changes access control, so it is admin-only.
+    _require_admin(user_context)
+
     logger.info(
         f"API add to groups request from user '{user_context.get('username')}' for server '{server_name}'"
     )
@@ -4483,6 +4541,9 @@ async def remove_server_from_groups_api(
       -F "group_names=developers"
     ```
     """
+    # Removing servers from scope groups changes access control, so it is admin-only.
+    _require_admin(user_context)
+
     logger.info(
         f"API remove from groups request from user '{user_context.get('username')}' for server '{server_name}'"
     )
@@ -4598,6 +4659,9 @@ async def create_group_api(
       -F "create_in_idp=true"
     ```
     """
+    # Creating scope groups is an access-control change, so it is admin-only.
+    _require_admin(user_context)
+
     logger.info(
         f"API create group request from user '{user_context.get('username')}' for group '{group_name}'"
     )
@@ -4726,6 +4790,9 @@ async def delete_group_api(
       -F "force=false"
     ```
     """
+    # Deleting scope groups is an access-control change, so it is admin-only.
+    _require_admin(user_context)
+
     logger.info(
         f"API delete group request from user '{user_context.get('username')}' for group '{group_name}'"
     )
@@ -4891,6 +4958,10 @@ async def import_group_definition(
     from ..services.scope_service import import_group
     from ..utils.iam_manager import get_iam_manager
 
+    # Importing a group definition writes group_mappings and ui_permissions
+    # (including privileged scopes like mcp-registry-admin), so it is admin-only.
+    _require_admin(user_context)
+
     try:
         # Parse request body
         body = await request.json()
@@ -4917,7 +4988,9 @@ async def import_group_definition(
             f"for group '{scope_name}'"
         )
 
-        # Import group definition
+        # Import group definition. This route is admin-only (see _require_admin
+        # above); actor_is_admin satisfies the repository-layer privileged-scope
+        # guard for legitimate admin imports.
         success = await import_group(
             scope_name=scope_name,
             scope_type=scope_type,
@@ -4925,6 +4998,7 @@ async def import_group_definition(
             server_access=server_access,
             group_mappings=group_mappings,
             ui_permissions=ui_permissions,
+            actor_is_admin=bool(user_context and user_context.get("is_admin")),
         )
 
         if not success:
@@ -5325,6 +5399,21 @@ async def remove_server_version(
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
+    # Authorization: deleting a version mutates the server, so require the same
+    # modify_service permission as PUT/PATCH /servers/{path}. nginx_proxied_auth
+    # only authenticates; it does not authorize.
+    server_info = await server_service.get_server_info(decoded_path)
+    if not server_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{decoded_path}'",
+        )
+    _check_server_permission(
+        "modify_service",
+        server_info.get("server_name", decoded_path),
+        user_context,
+    )
+
     try:
         result = await server_service.remove_server_version(path=decoded_path, version=version)
 
@@ -5359,6 +5448,21 @@ async def set_default_version(
         Success message
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
+
+    # Authorization: changing the default version mutates the server, so require
+    # the same modify_service permission as PUT/PATCH /servers/{path}.
+    # nginx_proxied_auth only authenticates; it does not authorize.
+    server_info = await server_service.get_server_info(decoded_path)
+    if not server_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{decoded_path}'",
+        )
+    _check_server_permission(
+        "modify_service",
+        server_info.get("server_name", decoded_path),
+        user_context,
+    )
 
     try:
         result = await server_service.set_default_version(

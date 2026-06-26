@@ -377,9 +377,7 @@ def _compute_card_diff(
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
                 )
             if isinstance(remote_value, list):
-                remote_value = [
-                    _drop_nulls(s) if isinstance(s, dict) else s for s in remote_value
-                ]
+                remote_value = [_drop_nulls(s) if isinstance(s, dict) else s for s in remote_value]
                 remote_value = sorted(
                     remote_value,
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
@@ -387,13 +385,11 @@ def _compute_card_diff(
 
         if field_name == "security_schemes" and isinstance(current_value, dict):
             current_value = {
-                k: _drop_nulls(v) if isinstance(v, dict) else v
-                for k, v in current_value.items()
+                k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in current_value.items()
             }
             if isinstance(remote_value, dict):
                 remote_value = {
-                    k: _drop_nulls(v) if isinstance(v, dict) else v
-                    for k, v in remote_value.items()
+                    k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in remote_value.items()
                 }
 
         if current_value != remote_value:
@@ -1438,10 +1434,17 @@ async def get_agent_security_scan(
             detail=f"Agent not found at path '{path}'",
         )
 
-    # Check user permissions
-    if not user_context["is_admin"]:
-        # Allow all authenticated users to view agent scan results
-        pass
+    # Authorization: scan results expose security findings for the agent, so
+    # restrict to users who can see the agent (admins always can). Without this
+    # a non-admin could read scan results for a private/group agent.
+    if not user_context.get("is_admin"):
+        from ..services.visibility import user_can_access_agent
+
+        if not await user_can_access_agent(path, user_context):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this agent",
+            )
 
     # Get scan results
     from ..services.agent_scanner import agent_scanner_service

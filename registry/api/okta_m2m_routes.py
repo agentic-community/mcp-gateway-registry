@@ -41,8 +41,15 @@ def _require_admin(user_context: dict | None) -> None:
     if not user_context:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    # Use the canonical is_admin flag (derived from the mcp-registry-admin
+    # group/scope) as the primary check; keep the group-name fallbacks so the
+    # gate stays closed even if is_admin is somehow unset.
     groups = user_context.get("groups", [])
-    if "registry-admins" not in groups:
+    if not (
+        user_context.get("is_admin")
+        or "mcp-registry-admin" in groups
+        or "registry-admins" in groups
+    ):
         raise HTTPException(
             status_code=403,
             detail="Admin access required",
@@ -111,8 +118,9 @@ async def list_okta_m2m_clients(
     Raises:
         HTTPException: If user is not authenticated
     """
-    if not user_context:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    # Listing M2M service accounts (client IDs + group mappings) is sensitive
+    # IAM data; restrict to admins like the sibling write endpoints.
+    _require_admin(user_context)
 
     db = await get_documentdb_client()
     okta_sync = get_okta_m2m_sync(db)
@@ -148,10 +156,10 @@ async def get_client_groups(
         List of group names
 
     Raises:
-        HTTPException: If user is not authenticated or client not found
+        HTTPException: If user is not admin or client not found
     """
-    if not user_context:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    # Group mappings for a client are sensitive IAM data; admin-only.
+    _require_admin(user_context)
 
     db = await get_documentdb_client()
     okta_sync = get_okta_m2m_sync(db)

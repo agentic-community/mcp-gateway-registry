@@ -211,7 +211,9 @@ async def management_list_users(
             )
             added += 1
 
-        logger.debug(f"[LIST_USERS] Added {added} M2M clients from MongoDB (skipped {len(m2m_docs) - added} duplicates)")
+        logger.debug(
+            f"[LIST_USERS] Added {added} M2M clients from MongoDB (skipped {len(m2m_docs) - added} duplicates)"
+        )
     except Exception as e:
         logger.warning(f"Failed to retrieve M2M clients from MongoDB: {e}")
         # Don't fail the entire operation if MongoDB query fails
@@ -651,6 +653,7 @@ async def management_create_group(
             ui_permissions=ui_permissions,
             agent_access=agent_access,
             is_idp_managed=create_in_idp,
+            actor_is_admin=bool(user_context and user_context.get("is_admin")),
         )
 
         if not import_success:
@@ -747,10 +750,7 @@ async def management_delete_group(
                 operation="delete",
                 resource_type="group",
                 resource_id=group_name,
-                description=(
-                    f"Delete group '{group_name}' - IdP call skipped "
-                    f"({skip_reason})"
-                ),
+                description=(f"Delete group '{group_name}' - IdP call skipped " f"({skip_reason})"),
                 idp_skip_reason=skip_reason,
             )
 
@@ -905,10 +905,7 @@ async def management_update_group(
                 operation="update",
                 resource_type="group",
                 resource_id=group_name,
-                description=(
-                    f"Update group '{group_name}' - IdP call skipped "
-                    f"({skip_reason})"
-                ),
+                description=(f"Update group '{group_name}' - IdP call skipped " f"({skip_reason})"),
                 idp_skip_reason=skip_reason,
             )
 
@@ -951,6 +948,7 @@ async def management_update_group(
             ui_permissions=ui_permissions,
             agent_access=agent_access,
             is_idp_managed=is_idp_managed,
+            actor_is_admin=bool(user_context and user_context.get("is_admin")),
         )
 
         if not import_success:
