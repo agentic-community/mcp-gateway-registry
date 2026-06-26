@@ -1527,10 +1527,17 @@ async def get_agent_security_scan(
             detail=f"Agent not found at path '{path}'",
         )
 
-    # Check user permissions
-    if not user_context["is_admin"]:
-        # Allow all authenticated users to view agent scan results
-        pass
+    # Authorization: scan results expose security findings for the agent, so
+    # restrict to users who can see the agent (admins always can). Without this
+    # a non-admin could read scan results for a private/group agent.
+    if not user_context.get("is_admin"):
+        from ..services.visibility import user_can_access_agent
+
+        if not await user_can_access_agent(path, user_context):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this agent",
+            )
 
     # Get scan results
     from ..services.agent_scanner import agent_scanner_service

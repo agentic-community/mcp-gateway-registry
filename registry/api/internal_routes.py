@@ -1,16 +1,26 @@
 """
 Internal API routes for virtual MCP server session management.
 
-These endpoints are called by the Lua router via ngx.location.capture
-and are protected by nginx 'internal' directive -- they are NOT accessible
-from external clients.
+These endpoints are called by the nginx Lua router via ngx.location.capture
+against the ``internal;``-protected ``/_internal/sessions/`` location, which
+injects the shared SECRET_KEY as the ``X-Internal-Secret`` header.
+
+IMPORTANT: the ``internal;`` nginx directive alone does NOT protect these
+routes. FastAPI serves them at ``/api/internal/sessions/*``, which is matched
+by the public ``/api/`` proxy location (authenticated, but reachable by any
+logged-in user) and is also directly reachable on the app port. The
+``validate_internal_session_secret`` dependency below is therefore the real
+gate: it requires the X-Internal-Secret header that only the trusted
+``/_internal/sessions/`` subrequest supplies, so requests arriving by any
+other path are rejected with 403.
 """
 
 import logging
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from registry.auth.internal import validate_internal_session_secret
 from registry.repositories.factory import get_backend_session_repository
 from registry.schemas.backend_session_models import (
     CreateClientSessionRequest,
@@ -26,7 +36,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# All session routes require the internal shared-secret header injected by the
+# nginx /_internal/sessions/ location -- enforced at the router level so a newly
+# added handler cannot accidentally ship without the gate.
+router = APIRouter(dependencies=[Depends(validate_internal_session_secret)])
 
 
 def _get_repo():

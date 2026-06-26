@@ -42,6 +42,22 @@ _PRIVILEGED_ACTION_PREFIXES = (
 )
 _PRIVILEGED_GRANTS = {"all"}
 
+# Privileged scope/group names that confer administrative access by membership.
+# Mapping a group to any of these (or naming a scope one of these) elevates
+# whoever holds it -- this is the original /api/servers/groups/import privesc
+# vector. Kept in sync with PRIVILEGED_SCOPE_NAMES in
+# registry/services/scope_service.py (duplicated rather than imported to avoid a
+# repository -> service layering dependency; both must move together).
+_PRIVILEGED_SCOPE_NAMES = frozenset(
+    {
+        "mcp-registry-admin",
+        "mcp-registry-operator",
+        "registry-admins",
+        "mcp-servers-unrestricted/execute",
+        "mcp-servers-unrestricted/read",
+    }
+)
+
 
 def _grants_admin(
     ui_permissions: dict | None,
@@ -67,6 +83,38 @@ def _grants_admin(
         ):
             return True
     return False
+
+
+def _is_privileged_write(
+    group_name: str,
+    group_mappings: list | None,
+    ui_permissions: dict | None,
+) -> bool:
+    """Return True if a group write would confer administrative access.
+
+    Defense-in-depth that mirrors the service layer's
+    ``_import_touches_privileged_scope`` so the deepest (repository) layer is
+    also the most complete -- it catches all three admin-conferring vectors:
+
+    1. The scope/group itself is a privileged name.
+    2. It maps to a privileged group. ``_grants_admin``
+       alone does NOT cover this.
+    3. Its ui_permissions grant a mutating action to "all" (``_grants_admin``).
+
+    Args:
+        group_name: The scope/group being written.
+        group_mappings: IdP group names this scope maps to.
+        ui_permissions: UI permission grants for this scope.
+
+    Returns:
+        True if the write requires admin authorization.
+    """
+    if group_name in _PRIVILEGED_SCOPE_NAMES:
+        return True
+    for mapped in group_mappings or []:
+        if mapped in _PRIVILEGED_SCOPE_NAMES:
+            return True
+    return _grants_admin(ui_permissions)
 
 
 def _flatten_server_access(
@@ -842,13 +890,18 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             True if successful, False otherwise
         """
         try:
-            # Defense in depth: refuse to write admin-conferring permissions
-            # unless the caller has explicitly enforced an admin check. The
-            # public External API import path never passes allow_privileged=True.
-            if _grants_admin(ui_permissions) and not allow_privileged:
+            # Defense in depth: refuse to write admin-conferring group definitions
+            # unless the caller has explicitly enforced an admin check. The public
+            # External API import path never passes allow_privileged=True. This
+            # covers all three vectors (privileged name, privileged group_mapping,
+            # admin-conferring ui_permissions) -- broader than ui_permissions
+            # alone, so the deepest layer is also the most complete.
+            if not allow_privileged and _is_privileged_write(
+                group_name, group_mappings, ui_permissions
+            ):
                 logger.error(
-                    f"Refusing to import group '{group_name}' with "
-                    f"admin-conferring ui_permissions without allow_privileged=True"
+                    f"Refusing to import privileged group '{group_name}' "
+                    f"without allow_privileged=True (mappings={group_mappings})"
                 )
                 return False
 

@@ -86,9 +86,7 @@ def _check_pingfederate_enabled() -> None:
             detail="PingFederate user creation is only available when AUTH_PROVIDER=pingfederate",
         )
 
-    fallback_providers = [
-        p.lower() for p in settings.idp_user_group_fallback_enabled_providers
-    ]
+    fallback_providers = [p.lower() for p in settings.idp_user_group_fallback_enabled_providers]
     if "pingfederate" not in fallback_providers:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -291,9 +289,13 @@ async def list_user_groups(
     skip: int = Query(default=0, ge=0),
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
 ) -> UserGroupListResponse:
-    """List user-group fallback records (any authenticated user)."""
-    if not user_context:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    """List user-group fallback records (admin only).
+
+    Exposes username->group membership mappings (with a username/email search
+    filter) -- sensitive IAM data, so restricted to admins like the mutating
+    siblings.
+    """
+    _require_admin(user_context)
     service = await _get_service()
     items, total = await service.list_user_groups(
         skip=skip,
@@ -309,9 +311,12 @@ async def get_user_group(
     username: str,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
 ) -> IdPUserGroup:
-    """Get a specific user-group record (any authenticated user)."""
-    if not user_context:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    """Get a specific user-group record (admin only).
+
+    Exposes a user's group membership (and acts as an existence oracle via
+    404), so restricted to admins like the mutating siblings.
+    """
+    _require_admin(user_context)
     service = await _get_service()
     try:
         result = await service.get_user_group(username)

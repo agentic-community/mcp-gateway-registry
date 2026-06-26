@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from registry.utils.iam_errors import IdPForbiddenError, IdPNotFoundError
+from registry.utils.iam_errors import IdPNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -459,10 +459,7 @@ class TestManagementDeleteUser:
         args, _kwargs = mock_collection.delete_one.call_args
         filter_doc = args[0]
         or_clauses = filter_doc["$or"]
-        patterns = [
-            clause.get("client_id") or clause.get("name")
-            for clause in or_clauses
-        ]
+        patterns = [clause.get("client_id") or clause.get("name") for clause in or_clauses]
         # Ensure each side of the $or is a compiled case-insensitive regex
         assert all(isinstance(p, _re.Pattern) for p in patterns)
         assert all(p.flags & _re.IGNORECASE for p in patterns)
@@ -982,9 +979,7 @@ class TestManagementDeleteGroupLocalOnly:
         client, mock_iam = test_client_admin
         # Provider managers translate a 404 error to IdPNotFoundError; the
         # route catches that typed exception and falls through.
-        mock_iam.delete_group.side_effect = IdPNotFoundError(
-            "Group 'local-group' not found"
-        )
+        mock_iam.delete_group.side_effect = IdPNotFoundError("Group 'local-group' not found")
 
         with (
             patch(
@@ -1066,9 +1061,7 @@ class TestManagementDeleteGroup:
         """Test that IdP 'not found' is handled gracefully (legacy record delete)."""
         # Arrange
         client, mock_iam = test_client_admin
-        mock_iam.delete_group.side_effect = IdPNotFoundError(
-            "Group 'nonexistent' not found"
-        )
+        mock_iam.delete_group.side_effect = IdPNotFoundError("Group 'nonexistent' not found")
 
         with (
             patch(
@@ -1208,27 +1201,33 @@ class TestAgentWildcardNormalization:
 
     def test_coerce_wildcard_recognizes_all(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("all") == "all"
 
     def test_coerce_wildcard_recognizes_star(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("*") == "all"
 
     def test_coerce_wildcard_recognizes_slash_star(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("/*") == "all"
 
     def test_coerce_wildcard_strips_whitespace(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("  *  ") == "all"
 
     def test_coerce_wildcard_rejects_literal_paths(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("/flight-booking") is None
         assert _coerce_agent_wildcard("agents/foo") is None
 
     def test_coerce_wildcard_rejects_non_strings(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard(None) is None
         assert _coerce_agent_wildcard(42) is None
         assert _coerce_agent_wildcard([]) is None
@@ -1265,9 +1264,7 @@ class TestAgentWildcardNormalization:
     def test_normalize_agent_access_mixed_wildcard_and_paths(self):
         from registry.api.management_routes import _normalize_agent_paths_in_scope_config
 
-        agent_access, _ = _normalize_agent_paths_in_scope_config(
-            ["*", "flight-booking"], None
-        )
+        agent_access, _ = _normalize_agent_paths_in_scope_config(["*", "flight-booking"], None)
         assert agent_access == ["all", "/flight-booking"]
 
     def test_normalize_ui_permissions_collapses_wildcards(self):

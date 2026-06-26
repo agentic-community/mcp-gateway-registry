@@ -283,6 +283,18 @@ async def parse_skill_md(
     Useful for auto-populating the skill registration form.
     Accepts optional auth parameters for parsing private repo SKILL.md files.
     """
+    # Authorization: this registration helper drives a server-side fetch of a
+    # caller-supplied URL (SSRF is mitigated by the service's _is_safe_url
+    # allowlist, but the fetch should still be limited to users who may
+    # register skills), so require the publish_skill permission like
+    # check_skill_duplicates / register_skill.
+    publish_permissions = (user_context.get("ui_permissions") or {}).get("publish_skill", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register skills",
+        )
+
     service = get_skill_service()
     try:
         result = await service.parse_skill_md(
@@ -464,6 +476,21 @@ async def check_skill_health(
     """
     normalized_path = normalize_skill_path(skill_path)
     service = get_skill_service()
+
+    # Authorization: a health probe both confirms existence and triggers an
+    # outbound request to the skill's URL, so gate it behind view access like
+    # the sibling read endpoints. Otherwise a private/group skill could be
+    # probed by any authenticated user.
+    skill = await service.get_skill(normalized_path)
+    if not skill:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+    if not _user_can_access_skill(skill, user_context):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this skill"
+        )
+
     result = await service.check_skill_health(normalized_path)
     return {
         "path": normalized_path,
@@ -621,6 +648,11 @@ async def get_skill_tools(
     if not skill:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+
+    if not _user_can_access_skill(skill, user_context):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this skill"
         )
 
     tool_service = get_tool_validation_service()
@@ -894,6 +926,17 @@ async def register_skill(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
 ) -> SkillCard:
     """Register a new skill in the registry."""
+    # Authorization: require the publish_skill UI permission, mirroring
+    # check_skill_duplicates and register_agent. Without this any authenticated
+    # user could register a skill (and drive an outbound fetch/scan of an
+    # attacker-supplied URL). nginx_proxied_auth only authenticates.
+    publish_permissions = (user_context.get("ui_permissions") or {}).get("publish_skill", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register skills",
+        )
+
     # Set audit action for skill registration
     # Note: path is derived from name, so use name as resource_id
     set_audit_action(

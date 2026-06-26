@@ -70,6 +70,35 @@ def _check_federation_management_scope(
 router = APIRouter()
 
 
+def _validate_federation_endpoints(config: FederationConfig) -> None:
+    """Reject federation configs whose endpoints fail SSRF safety checks.
+
+    The anthropic/asor endpoints are fetched server-side during sync, so an
+    attacker-controlled value (e.g. http://169.254.169.254/) would be an SSRF
+    vector. Validate any non-empty endpoint at write time, reusing the shared
+    ``_is_safe_url`` allowlist (http/https scheme, no private/loopback/link-local
+    or cloud-metadata IPs). Defense-in-depth: sync re-validates before egress.
+
+    Args:
+        config: The federation config being saved.
+
+    Raises:
+        HTTPException: 400 if any configured endpoint is unsafe to fetch.
+    """
+    from ..services.skill_service import _is_safe_url
+
+    for label, section in (("anthropic", config.anthropic), ("asor", config.asor)):
+        endpoint = getattr(section, "endpoint", "") or ""
+        if endpoint and not _is_safe_url(endpoint):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"The {label} endpoint failed SSRF safety validation; "
+                    "private, loopback, link-local, and metadata addresses are not allowed"
+                ),
+            )
+
+
 def _get_federation_repo() -> FederationConfigRepositoryBase:
     """Get federation config repository dependency."""
     return get_federation_config_repository()
@@ -96,6 +125,12 @@ async def get_federation_config(
     Raises:
         404: Configuration not found
     """
+    # Federation config (endpoints, server/agent/registry lists, auth_env_var
+    # references) is operator-level configuration; gate reads with the same
+    # federation-management check as the mutating siblings rather than exposing
+    # the topology to any authed user.
+    _check_federation_management_scope(user_context)
+
     # Set audit action for federation config read
     set_audit_action(
         request,
@@ -166,6 +201,7 @@ async def save_federation_config(
         ```
     """
     _check_federation_management_scope(user_context)
+    _validate_federation_endpoints(config)
 
     # Set audit action for federation config create/update
     set_audit_action(
@@ -252,6 +288,7 @@ async def update_federation_config(
         Updated configuration
     """
     _check_federation_management_scope(user_context)
+    _validate_federation_endpoints(config)
 
     # Set audit action for federation config update
     set_audit_action(
@@ -368,6 +405,9 @@ async def list_federation_configs(
     Returns:
         List of configuration summaries with id, created_at, updated_at
     """
+    # Gated consistently with get_federation_config and the mutating siblings.
+    _check_federation_management_scope(user_context)
+
     logger.info(f"User {user_context['username']} listing federation configs")
 
     configs = await repo.list_configs()
@@ -496,7 +536,6 @@ async def remove_anthropic_server(
                 )
 
                 # Regenerate nginx config
-
                 from ..core.nginx_service import nginx_reload_scheduler
 
                 nginx_reload_scheduler.mark_dirty()
@@ -979,6 +1018,10 @@ async def sync_federation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Federation config '{config_id}' not found",
         )
+
+    # Defense-in-depth SSRF check: re-validate endpoints before any outbound
+    # request, in case a config was persisted before write-time validation.
+    _validate_federation_endpoints(config)
 
     try:
         # Import federation clients

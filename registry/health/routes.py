@@ -1,9 +1,10 @@
 import asyncio
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 
-from ..auth.dependencies import resolve_session_from_cookie
+from ..auth.dependencies import nginx_proxied_auth, resolve_session_from_cookie
 from ..core.config import settings
 from .service import health_service
 
@@ -92,15 +93,26 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 @router.get("/ws/health_status")
-async def health_status_http():
+async def health_status_http(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
     """HTTP endpoint that returns the same health status data as the WebSocket endpoint.
 
     This handles cases where health checks are done via HTTP GET instead of WebSocket.
+    Requires authentication, matching the WebSocket sibling (which validates the
+    session cookie) so the full server inventory/health is not exposed anonymously.
     """
     return await health_service.get_all_health_status()
 
 
 @router.get("/ws/stats")
-async def websocket_stats():
-    """Get WebSocket performance statistics for monitoring."""
+async def websocket_stats(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Get WebSocket performance statistics for monitoring (admin only)."""
+    if not user_context.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator permissions are required for this operation",
+        )
     return health_service.get_websocket_stats()

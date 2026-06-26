@@ -190,8 +190,11 @@ echo "Lua scripts copied from $LUA_SOURCE_DIR to $LUA_SCRIPTS_DIR."
 # --- Nginx Configuration ---
 echo "Preparing Nginx configuration..."
 
-# Pass environment variables through to Lua workers (nginx strips them by default)
-for envvar in METRICS_API_KEY METRICS_SERVICE_URL; do
+# Pass environment variables through to Lua workers (nginx strips them by default).
+# SECRET_KEY is needed by the /_internal/sessions/ location's set_by_lua_block,
+# which injects it as the X-Internal-Secret header so the FastAPI session
+# endpoints can verify the request came through the trusted internal subrequest.
+for envvar in METRICS_API_KEY METRICS_SERVICE_URL SECRET_KEY; do
     grep -q "^env ${envvar};" /etc/nginx/nginx.conf 2>/dev/null || \
         sed -i "1i env ${envvar};" /etc/nginx/nginx.conf
 done

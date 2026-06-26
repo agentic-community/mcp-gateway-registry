@@ -6,12 +6,13 @@ between services (e.g., mcpgw -> registry, registry -> auth-server)
 using JWTs signed with the shared SECRET_KEY.
 """
 
+import hmac
 import logging
 import os
 import time
 
 import jwt as pyjwt
-from fastapi import HTTPException, Request, status
+from fastapi import Header, HTTPException, Request, status
 
 # Configure logging
 logging.basicConfig(
@@ -61,6 +62,46 @@ def generate_internal_token(
         "exp": now + _INTERNAL_JWT_TTL_SECONDS,
     }
     return pyjwt.encode(claims, secret_key, algorithm="HS256")
+
+
+async def validate_internal_session_secret(
+    x_internal_secret: str | None = Header(default=None, alias="X-Internal-Secret"),
+) -> None:
+    """Gate the internal virtual-server session endpoints.
+
+    These routes (``/api/internal/sessions/*``) are called only by the nginx
+    Lua router through the ``internal;``-protected ``/_internal/sessions/``
+    location, which injects the shared ``SECRET_KEY`` as the ``X-Internal-Secret``
+    header. Any request arriving by another path (a direct hit on the app port,
+    or the externally-reachable ``/api/`` proxy location) will not carry the
+    header and is rejected.
+
+    A static shared secret is used here rather than the 60-second internal JWT
+    (``validate_internal_auth``) because the nginx/Lua layer cannot mint a
+    signed JWT (no SECRET_KEY-backed signing library at that layer); the secret
+    is compared in constant time to avoid leaking it via timing.
+
+    Args:
+        x_internal_secret: Value of the ``X-Internal-Secret`` request header.
+
+    Raises:
+        HTTPException: 500 if SECRET_KEY is unset; 403 if the header is missing
+            or does not match.
+    """
+    secret_key = os.environ.get("SECRET_KEY")
+    if not secret_key:
+        logger.error("SECRET_KEY not set, cannot validate internal session request")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server configuration error",
+        )
+
+    if not x_internal_secret or not hmac.compare_digest(x_internal_secret, secret_key):
+        logger.warning("Rejected internal session request with missing/invalid X-Internal-Secret")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden",
+        )
 
 
 async def validate_internal_auth(request: Request) -> str:
