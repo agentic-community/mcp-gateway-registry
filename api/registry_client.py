@@ -2907,6 +2907,94 @@ class RegistryClient:
         logger.info(f"ARD browse returned {len(result.get('items', []))} of {result.get('total')}")
         return result
 
+    def ard_ingestion_sync(
+        self,
+        source_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Trigger ARD ai-catalog ingestion (POST /api/federation/ai_catalog/sync).
+
+        Args:
+            source_id: Sync only this source; None syncs all enabled sources.
+
+        Returns:
+            Dict: {"message": ..., "results": [SyncResult, ...]}.
+        """
+        logger.info(f"ARD ingestion sync: source_id={source_id}")
+        params = {"source_id": source_id} if source_id else None
+        response = self._make_request(
+            method="POST", endpoint="/api/federation/ai_catalog/sync", params=params
+        )
+        return response.json()
+
+    def ard_ingestion_status(self) -> dict[str, Any]:
+        """Return ARD ingestion per-source state (GET /api/federation/ai_catalog/status)."""
+        logger.info("ARD ingestion status")
+        response = self._make_request(method="GET", endpoint="/api/federation/ai_catalog/status")
+        return response.json()
+
+    def ard_ingestion_set_enabled(
+        self,
+        enabled: bool,
+    ) -> dict[str, Any]:
+        """Enable/disable ARD ai-catalog ingestion in the federation config.
+
+        Reads the current federation config, flips ``ai_catalog.enabled``, and
+        saves it back (POST /api/federation/config). Requires that a config
+        already exists (add a source first, which creates it).
+        """
+        logger.info(f"ARD ingestion set enabled={enabled}")
+        config = self._make_request(method="GET", endpoint="/api/federation/config").json()
+        config.setdefault("ai_catalog", {})["enabled"] = enabled
+        response = self._make_request(method="POST", endpoint="/api/federation/config", data=config)
+        return response.json()
+
+    def ard_ingestion_add_source(
+        self,
+        source_id: str,
+        uri: str | None = None,
+        domain: str | None = None,
+        expected_identity: str | None = None,
+        enable: bool = False,
+    ) -> dict[str, Any]:
+        """Add an ARD ai-catalog ingestion source.
+
+        POSTs to /api/federation/config/default/ai_catalog/sources. Provide
+        either ``uri`` or ``domain``. When ``enable`` is True, also turns on
+        ai_catalog ingestion after the source is created.
+        """
+        logger.info(f"ARD ingestion add source: {source_id} (uri={uri} domain={domain})")
+        body: dict[str, Any] = {"source_id": source_id}
+        if uri:
+            body["uri"] = uri
+        if domain:
+            body["domain"] = domain
+        if expected_identity:
+            body["expected_identity"] = expected_identity
+        response = self._make_request(
+            method="POST",
+            endpoint="/api/federation/config/default/ai_catalog/sources",
+            data=body,
+        )
+        result = response.json()
+        if enable:
+            self.ard_ingestion_set_enabled(True)
+        return result
+
+    def ard_ingestion_remove_source(
+        self,
+        source_id: str,
+    ) -> dict[str, Any]:
+        """Remove an ARD ai-catalog ingestion source.
+
+        DELETEs /api/federation/config/default/ai_catalog/sources/{source_id}.
+        """
+        logger.info(f"ARD ingestion remove source: {source_id}")
+        response = self._make_request(
+            method="DELETE",
+            endpoint=f"/api/federation/config/default/ai_catalog/sources/{source_id}",
+        )
+        return response.json()
+
     def rate_agent(self, path: str, rating: int) -> RatingResponse:
         """
         Submit a rating for an agent (1-5 stars).

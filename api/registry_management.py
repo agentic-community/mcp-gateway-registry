@@ -1877,6 +1877,89 @@ def cmd_ard_agents(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_ard_ingestion_sync(args: argparse.Namespace) -> int:
+    """Trigger ARD ai-catalog ingestion (POST /api/federation/ai_catalog/sync)."""
+    try:
+        client = _create_client(args)
+        result = client.ard_ingestion_sync(source_id=args.source_id)
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+            return 0
+        print(result.get("message", "triggered"))
+        for r in result.get("results", []):
+            status = "ok" if r.get("success") else "FAIL"
+            print(
+                f"  [{status}] {r.get('peer_id')}: servers={r.get('servers_synced')} "
+                f"agents={r.get('agents_synced')} gen={r.get('new_generation')} "
+                f"{r.get('error_message') or ''}".rstrip()
+            )
+        return 0
+    except Exception as e:
+        logger.error(f"ARD ingestion sync failed: {e}")
+        return 1
+
+
+def cmd_ard_ingestion_status(args: argparse.Namespace) -> int:
+    """Show ARD ingestion per-source state (GET /api/federation/ai_catalog/status)."""
+    try:
+        client = _create_client(args)
+        result = client.ard_ingestion_status()
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+            return 0
+        sources = result.get("sources", [])
+        logger.info(f"ARD ingestion: {len(sources)} source(s)")
+        for s in sources:
+            print(
+                f"  {s.get('source_id')}: gen={s.get('generation')} "
+                f"servers={s.get('servers_synced')} agents={s.get('agents_synced')} "
+                f"skills={s.get('skills_synced')} rejected={s.get('rejected')} "
+                f"failures={s.get('consecutive_failures')} last={s.get('last_synced_at')}"
+            )
+        return 0
+    except Exception as e:
+        logger.error(f"ARD ingestion status failed: {e}")
+        return 1
+
+
+def cmd_ard_ingestion_add_source(args: argparse.Namespace) -> int:
+    """Add an ARD ai-catalog ingestion source (federation config)."""
+    try:
+        client = _create_client(args)
+        result = client.ard_ingestion_add_source(
+            source_id=args.source_id,
+            uri=args.uri,
+            domain=args.domain,
+            expected_identity=args.expected_identity,
+            enable=args.enable,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+            return 0
+        print(result.get("message", "added"))
+        if args.enable:
+            print("ai_catalog ingestion enabled")
+        return 0
+    except Exception as e:
+        logger.error(f"ARD ingestion add-source failed: {e}")
+        return 1
+
+
+def cmd_ard_ingestion_remove_source(args: argparse.Namespace) -> int:
+    """Remove an ARD ai-catalog ingestion source (federation config)."""
+    try:
+        client = _create_client(args)
+        result = client.ard_ingestion_remove_source(source_id=args.source_id)
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+            return 0
+        print(result.get("message", "removed"))
+        return 0
+    except Exception as e:
+        logger.error(f"ARD ingestion remove-source failed: {e}")
+        return 1
+
+
 def cmd_server_search(args: argparse.Namespace) -> int:
     """
     Perform semantic search across all entity types.
@@ -6143,6 +6226,41 @@ Examples:
     ard_agents_parser.add_argument("--page-token", default=None, help="Opaque pagination cursor")
     ard_agents_parser.add_argument("--json", action="store_true", help="Output raw ARD JSON")
 
+    ard_ingestion_sync_parser = subparsers.add_parser(
+        "ard-ingestion-sync", help="Trigger ARD ai-catalog ingestion (federation)"
+    )
+    ard_ingestion_sync_parser.add_argument(
+        "--source-id", default=None, help="Sync only this source (default: all enabled)"
+    )
+    ard_ingestion_sync_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    ard_ingestion_status_parser = subparsers.add_parser(
+        "ard-ingestion-status", help="Show ARD ai-catalog ingestion per-source state"
+    )
+    ard_ingestion_status_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    ard_add_source_parser = subparsers.add_parser(
+        "ard-ingestion-add-source", help="Add an ARD ai-catalog ingestion source"
+    )
+    ard_add_source_parser.add_argument("--source-id", required=True, help="Stable source id")
+    ard_add_source_parser.add_argument("--uri", default=None, help="Direct ai-catalog.json URL")
+    ard_add_source_parser.add_argument(
+        "--domain", default=None, help="Domain (resolved via /.well-known/ai-catalog.json)"
+    )
+    ard_add_source_parser.add_argument(
+        "--expected-identity", default=None, help="Optional trustManifest.identity pin"
+    )
+    ard_add_source_parser.add_argument(
+        "--enable", action="store_true", help="Also enable ai_catalog ingestion"
+    )
+    ard_add_source_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    ard_remove_source_parser = subparsers.add_parser(
+        "ard-ingestion-remove-source", help="Remove an ARD ai-catalog ingestion source"
+    )
+    ard_remove_source_parser.add_argument("--source-id", required=True, help="Source id to remove")
+    ard_remove_source_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
     # Server Version Management Commands
 
     # List versions command
@@ -7217,6 +7335,10 @@ Examples:
         "server-search": cmd_server_search,
         "ard-search": cmd_ard_search,
         "ard-agents": cmd_ard_agents,
+        "ard-ingestion-sync": cmd_ard_ingestion_sync,
+        "ard-ingestion-status": cmd_ard_ingestion_status,
+        "ard-ingestion-add-source": cmd_ard_ingestion_add_source,
+        "ard-ingestion-remove-source": cmd_ard_ingestion_remove_source,
         "list-versions": cmd_list_versions,
         "remove-version": cmd_remove_version,
         "set-default-version": cmd_set_default_version,
