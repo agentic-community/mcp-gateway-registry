@@ -789,6 +789,11 @@ async def get_servers_json(
                         "mcp_server_version_updated_at"
                     ),
                     "sync_metadata": server_info.get("sync_metadata"),
+                    # ARD discovery imports (issue #1296): link to the source's
+                    # original descriptor (server.json) so a client can resolve +
+                    # connect at the source. None for local/non-ARD servers.
+                    "record_kind": server_info.get("record_kind"),
+                    "ard_source_url": server_info.get("ard_source_url"),
                     "auth_scheme": server_info.get("auth_scheme", "none"),
                     "auth_header_name": server_info.get("auth_header_name"),
                     "tool_list": _filtered_tools,

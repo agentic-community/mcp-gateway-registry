@@ -1131,6 +1131,8 @@ async def list_agents(
                 streaming=streaming,
                 trust_level=agent.trust_level,
                 sync_metadata=agent.sync_metadata,
+                record_kind=getattr(agent, "record_kind", None),
+                ard_source_url=getattr(agent, "ard_source_url", None),
                 ans_metadata=agent.ans_metadata,
                 registered_by=agent.registered_by,
                 status=agent.status if hasattr(agent, "status") and agent.status else "active",

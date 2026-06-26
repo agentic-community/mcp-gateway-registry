@@ -569,6 +569,19 @@ class AgentCard(BaseModel):
         alias="supportedProtocol",
         description="Agent protocol: 'a2a' for A2A protocol agents, 'other' for non-A2A agents",
     )
+    registry_name: str = Field(
+        default="local",
+        description="Registry this agent belongs to (federation origin).",
+    )
+    record_kind: str | None = Field(
+        default=None,
+        description="Origin marker, e.g. 'ard_ingested' for ARD discovery imports.",
+    )
+    ard_source_url: str | None = Field(
+        default=None,
+        alias="ardSourceUrl",
+        description="URL to the source registry's descriptor (ARD discovery imports).",
+    )
 
     model_config = ConfigDict(
         populate_by_name=True  # Allow both snake_case and camelCase on input
@@ -771,6 +784,15 @@ class AgentInfo(BaseModel):
         default=None,
         alias="syncMetadata",
         description="Federation sync metadata for items from peer registries",
+    )
+    record_kind: str | None = Field(
+        default=None,
+        description="Origin marker, e.g. 'ard_ingested' for ARD discovery imports.",
+    )
+    ard_source_url: str | None = Field(
+        default=None,
+        alias="ardSourceUrl",
+        description="URL to the source registry's descriptor (ARD discovery imports).",
     )
     ans_metadata: dict[str, Any] | None = Field(
         default=None,
