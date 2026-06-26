@@ -377,9 +377,7 @@ def _compute_card_diff(
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
                 )
             if isinstance(remote_value, list):
-                remote_value = [
-                    _drop_nulls(s) if isinstance(s, dict) else s for s in remote_value
-                ]
+                remote_value = [_drop_nulls(s) if isinstance(s, dict) else s for s in remote_value]
                 remote_value = sorted(
                     remote_value,
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
@@ -387,13 +385,11 @@ def _compute_card_diff(
 
         if field_name == "security_schemes" and isinstance(current_value, dict):
             current_value = {
-                k: _drop_nulls(v) if isinstance(v, dict) else v
-                for k, v in current_value.items()
+                k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in current_value.items()
             }
             if isinstance(remote_value, dict):
                 remote_value = {
-                    k: _drop_nulls(v) if isinstance(v, dict) else v
-                    for k, v in remote_value.items()
+                    k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in remote_value.items()
                 }
 
         if current_value != remote_value:
@@ -1373,6 +1369,23 @@ async def toggle_agent(
         )
 
     _check_agent_permission("toggle_service", agent_card.name, user_context)
+
+    # Per-resource access check for non-admins, mirroring the server toggle
+    # (POST /api/servers/toggle). Having toggle_service permission is not
+    # enough; the caller must also have access to this specific agent (in
+    # accessible_agents, or be its owner).
+    if not user_context.get("is_admin", False):
+        accessible_agents = user_context.get("accessible_agents", [])
+        owns_agent = agent_card.registered_by == user_context.get("username")
+        if "all" not in accessible_agents and path not in accessible_agents and not owns_agent:
+            logger.warning(
+                f"User {user_context.get('username')} attempted to toggle agent "
+                f"{path} without access"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this agent",
+            )
 
     success = await agent_service.toggle_agent(path, enabled)
 
