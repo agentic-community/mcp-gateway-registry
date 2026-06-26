@@ -368,6 +368,7 @@ async def import_group(
     ui_permissions: dict = None,
     agent_access: list = None,
     is_idp_managed: bool = True,
+    allow_privileged: bool = False,
 ) -> bool:
     """
     Import a complete group definition with all document types.
@@ -385,6 +386,9 @@ async def import_group(
         agent_access: Optional list of agent paths this group can access
         is_idp_managed: Whether PATCH/DELETE should call the upstream IdP.
             See issue #946. Defaults to True to preserve pre-#946 behavior.
+        allow_privileged: Whether to permit writing admin-conferring
+            ui_permissions. Defaults to False; only admin-gated callers pass
+            True. See ScopeRepository.import_group for details.
 
     Returns:
         True if successful, False otherwise
@@ -404,6 +408,7 @@ async def import_group(
             ui_permissions=ui_permissions,
             agent_access=agent_access,
             is_idp_managed=is_idp_managed,
+            allow_privileged=allow_privileged,
         )
 
         if success:

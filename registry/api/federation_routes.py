@@ -27,6 +27,45 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+def _check_federation_management_scope(
+    user_context: dict[str, Any] | None,
+) -> None:
+    """Check if the caller may manage federation configuration.
+
+    Federation config controls which external sources / peer registries this
+    registry pulls from and syncs with, so it is a privileged operation.
+    Mirrors _check_peer_management_scope in peer_management_routes.py. Allows:
+    - Admin users (is_admin or mcp-registry-admin group)
+    - Federation-static-token users (federation/peers scope)
+
+    Args:
+        user_context: User context from the auth dependency.
+
+    Raises:
+        HTTPException: 403 if the caller lacks federation management permission.
+    """
+    if user_context and user_context.get("is_admin", False):
+        return
+
+    scopes = (user_context or {}).get("scopes", [])
+    if "federation/peers" in scopes:
+        return
+
+    groups = (user_context or {}).get("groups", [])
+    if "mcp-registry-admin" in groups:
+        return
+
+    logger.warning(
+        f"User {(user_context or {}).get('username')} attempted federation "
+        f"management without required scope. Scopes: {scopes}, Groups: {groups}"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Federation management requires admin privileges or federation/peers scope",
+    )
+
+
 router = APIRouter()
 
 
@@ -125,6 +164,8 @@ async def save_federation_config(
         }
         ```
     """
+    _check_federation_management_scope(user_context)
+
     # Set audit action for federation config create/update
     set_audit_action(
         request,
@@ -209,6 +250,8 @@ async def update_federation_config(
     Returns:
         Updated configuration
     """
+    _check_federation_management_scope(user_context)
+
     # Set audit action for federation config update
     set_audit_action(
         request,
@@ -288,6 +331,8 @@ async def delete_federation_config(
     Raises:
         404: Configuration not found
     """
+    _check_federation_management_scope(user_context)
+
     logger.info(f"User {user_context['username']} deleting federation config: {config_id}")
 
     deleted = await repo.delete_config(config_id)
@@ -352,6 +397,8 @@ async def add_anthropic_server(
     Returns:
         Updated configuration
     """
+    _check_federation_management_scope(user_context)
+
     logger.info(f"User {user_context['username']} adding Anthropic server: {server_name}")
 
     config = await repo.get_config(config_id)
@@ -409,6 +456,8 @@ async def remove_anthropic_server(
     Returns:
         Updated configuration with removal details
     """
+    _check_federation_management_scope(user_context)
+
     logger.info(f"User {user_context['username']} removing Anthropic server: {server_name}")
 
     config = await repo.get_config(config_id)
@@ -484,6 +533,8 @@ async def add_asor_agent(
     Returns:
         Updated configuration
     """
+    _check_federation_management_scope(user_context)
+
     logger.info(f"User {user_context['username']} adding ASOR agent: {agent_id}")
 
     config = await repo.get_config(config_id)
@@ -538,6 +589,8 @@ async def remove_asor_agent(
     Returns:
         Updated configuration
     """
+    _check_federation_management_scope(user_context)
+
     logger.info(f"User {user_context['username']} removing ASOR agent: {agent_id}")
 
     config = await repo.get_config(config_id)
@@ -590,6 +643,8 @@ async def add_aws_registry(
     Returns:
         Updated configuration
     """
+    _check_federation_management_scope(user_context)
+
     set_audit_action(
         request,
         "create",
@@ -653,6 +708,8 @@ async def remove_aws_registry(
     Returns:
         Updated configuration
     """
+    _check_federation_management_scope(user_context)
+
     set_audit_action(
         request,
         "delete",
@@ -902,6 +959,8 @@ async def sync_federation(
         POST /api/federation/sync?source=anthropic
         ```
     """
+    _check_federation_management_scope(user_context)
+
     # Set audit action for federation sync
     set_audit_action(
         request,

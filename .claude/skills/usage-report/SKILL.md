@@ -172,6 +172,25 @@ This produces a PNG with three panels:
 
 **Note**: Run this after Step 6 (telemetry analysis) since it reads the metrics JSON.
 
+### Step 5c-box: Generate Lifetime-by-Compute Boxplot
+
+Generate a standalone boxplot of instance age, one box per compute platform (docker, kubernetes, ecs, ec2, podman, unknown), so lifetime spread is directly comparable across platforms. Y-axis ticks are labelled every 5 days, individual instances are overlaid as jittered points, and the legend calls out each platform's **median and mean age** alongside its instance count. This answers "do managed-compute deployments (ECS, Kubernetes) outlive single-shot Docker installs?" directly from the lifetime distribution. Reads the metrics JSON, so it must run after Step 6.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_lifetime_by_compute_chart.py \
+  --metrics $DATE_DIR/metrics-YYYY-MM-DD.json \
+  --output $DATE_DIR/instance-lifetime-by-compute-YYYY-MM-DD.png \
+  --box-output $DATE_DIR/instance-lifetime-box-by-compute-YYYY-MM-DD.png
+```
+
+- `--output` (required) writes a three-panel reference chart (stacked histogram, per-platform boxplot, stacked age buckets), all color-coded by compute platform.
+- `--box-output` (optional) writes the standalone boxplot that the report embeds in the "Lifetime by Compute Platform" subsection of the Registry Instance Lifetime section.
+- `--density-output` (optional) writes an overlaid KDE density chart (one normalized curve per platform). Not embedded in the report by default; useful for ad-hoc shape comparison.
+
+The per-platform colours are stable across runs (docker=blue, kubernetes=green, ecs=orange, ec2=purple, podman=brown, unknown=grey). Embed the `--box-output` PNG in the report (the template references `instance-lifetime-box-by-compute-{date}.png`) and add a short narrative comparing the per-platform median and mean ages in the legend.
+
+**Note**: Run this after Step 6 (telemetry analysis) since it reads the metrics JSON.
+
 ### Step 5c-ts: Generate Lifetime-Bucket Retention Chart
 
 Plot per-snapshot **lifetime retention percentages** (one-day wonders vs >=3 / >=7 / >=14 / >=30 day cohorts) over time. Reads every `metrics-*.json` file under the base output directory and recomputes the buckets retroactively, so it works on snapshots that predate the `lifetime_bucket_pct` field. Produces a PNG plus a per-snapshot CSV sidecar that future reports can diff against.
@@ -539,21 +558,22 @@ The renderer is composed of three pieces, all under `.claude/skills/usage-report
 
 #### Mandatory Charts Checklist
 
-The report MUST embed all 13 charts (the template's `![...]` references). If any chart file is missing the renderer will substitute the path verbatim and pandoc will render a broken-image placeholder, so generate all charts (Steps 5 through 5h) before invoking `render_report.py`.
+The report MUST embed all 14 charts (the template's `![...]` references). If any chart file is missing the renderer will substitute the path verbatim and pandoc will render a broken-image placeholder, so generate all charts (Steps 5 through 5h) before invoking `render_report.py`.
 
 1. `registry-installs-timeseries-YYYY-MM-DD.png` (cloud provider: cumulative + daily-active + daily-new)
 2. `instance-distribution-YYYY-MM-DD.png` (6-panel faceted, all customers)
 3. `instance-distribution-active-PREVIOUS-YYYY-MM-DD.png` (6-panel faceted, active yesterday)
 4. `instance-lifetime-YYYY-MM-DD.png` (age histogram + boxplot + buckets)
-5. `lifetime-buckets-YYYY-MM-DD.png` (retention % over time)
-6. `active-instances-YYYY-MM-DD.png` (DAI + MA7 + streak)
-7. `compute-installs-timeseries-YYYY-MM-DD.png` (compute platform cumulative + daily)
-8. `install-forecast-YYYY-MM-DD.png` (OLS + recent-pace to 1,000)
-9. `daily-reporters-YYYY-MM-DD.png` (daily AWS reporters: all + persisted >=2 events + persisted >=2 days)
-10. `ltv-spend-YYYY-MM-DD.png` (daily compute + bedrock + cumulative)
-11. `adoption-funnel-YYYY-MM-DD.png` (funnel from total to confirmed-alive)
-12. `detection-by-version-YYYY-MM-DD.png` (cloud_detection_method outcomes per version)
-13. `prod-internal-timeseries-YYYY-MM-DD.png` (community vs internal: cumulative + daily-active)
+5. `instance-lifetime-box-by-compute-YYYY-MM-DD.png` (age boxplot per compute platform, median + mean age in legend)
+6. `lifetime-buckets-YYYY-MM-DD.png` (retention % over time)
+7. `active-instances-YYYY-MM-DD.png` (DAI + MA7 + streak)
+8. `compute-installs-timeseries-YYYY-MM-DD.png` (compute platform cumulative + daily)
+9. `install-forecast-YYYY-MM-DD.png` (OLS + recent-pace to 1,000)
+10. `daily-reporters-YYYY-MM-DD.png` (daily AWS reporters: all + persisted >=2 events + persisted >=2 days)
+11. `ltv-spend-YYYY-MM-DD.png` (daily compute + bedrock + cumulative)
+12. `adoption-funnel-YYYY-MM-DD.png` (funnel from total to confirmed-alive)
+13. `detection-by-version-YYYY-MM-DD.png` (cloud_detection_method outcomes per version)
+14. `prod-internal-timeseries-YYYY-MM-DD.png` (community vs internal: cumulative + daily-active)
 
 #### Editing the report
 
@@ -603,7 +623,7 @@ The pipeline is split so the LLM has a narrowly-scoped, hard-to-screw-up job:
 
 #### Required commentary anchors (in template)
 
-The current template has 21 commentary anchors covering: executive_summary, cloud_installs, deployment_distribution, lifetime_retention, liveness, engagement, compute_platform, version_adoption, prod_internal, upgrade_trajectories, feature_adoption, sticky_breakdown, most_active, install_forecast, daily_reporters, ltv_arr, adoption_funnel, cloud_detection, github, architecture, recommendations.
+The current template has 22 commentary anchors covering: executive_summary, cloud_installs, deployment_distribution, lifetime_by_compute, lifetime_retention, liveness, engagement, compute_platform, version_adoption, prod_internal, upgrade_trajectories, feature_adoption, sticky_breakdown, most_active, install_forecast, daily_reporters, ltv_arr, adoption_funnel, cloud_detection, github, architecture, recommendations.
 
 Adding/removing anchors: edit `report_template.md` to insert or delete `<!-- COMMENTARY:name -->` markers; the augmenter's extract phase will pick up the new set automatically.
 
