@@ -15,8 +15,10 @@ import pytest
 
 from registry.auth.dependencies import _user_is_admin
 from registry.repositories.documentdb.scope_repository import (
+    _PRIVILEGED_SCOPE_NAMES,
     DocumentDBScopeRepository,
     _grants_admin,
+    _is_privileged_write,
 )
 
 
@@ -119,3 +121,65 @@ class TestImportGroupPrivilegedGuard:
 
         assert result is True
         collection.replace_one.assert_called_once()
+
+
+class TestIsPrivilegedWrite:
+    """The repo guard catches all three admin-conferring vectors, not just
+    ui_permissions -- so the deepest layer is also the most complete."""
+
+    def test_privileged_group_name(self):
+        assert _is_privileged_write("mcp-registry-admin", None, None) is True
+
+    def test_privileged_group_mapping_is_the_original_privesc_vector(self):
+        # Mapping a benign group to mcp-registry-admin -- _grants_admin alone
+        # (ui_permissions only) would MISS this; _is_privileged_write catches it.
+        assert _is_privileged_write("eng", ["mcp-registry-admin"], None) is True
+        assert _grants_admin(None) is False  # the gap _is_privileged_write closes
+
+    def test_admin_conferring_ui_permissions(self):
+        assert _is_privileged_write("eng", ["eng"], {"register_service": ["all"]}) is True
+
+    def test_benign_write_not_flagged(self):
+        assert (
+            _is_privileged_write("eng", ["eng"], {"list_service": ["currenttime"]}) is False
+        )
+
+
+class TestImportGroupMappingGuard:
+    """The allow_privileged gate also covers group_mappings, not just ui_perms."""
+
+    @pytest.mark.asyncio
+    async def test_blocks_privileged_group_mapping_by_default(self):
+        repo, collection = _make_repo()
+
+        result = await repo.import_group(
+            group_name="attacker-group",
+            group_mappings=["attacker-group", "mcp-registry-admin"],
+        )
+
+        assert result is False
+        collection.replace_one.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_allows_privileged_group_mapping_when_flagged(self):
+        repo, collection = _make_repo()
+
+        result = await repo.import_group(
+            group_name="legit",
+            group_mappings=["legit", "mcp-registry-admin"],
+            allow_privileged=True,
+        )
+
+        assert result is True
+        collection.replace_one.assert_called_once()
+
+
+def test_repo_privileged_names_match_service_layer():
+    """The repo's privileged-name set must stay in sync with the service's.
+
+    They are duplicated (repo must not import service -- layering), so a test
+    pins them together; drift would open a hole at one layer.
+    """
+    from registry.services.scope_service import PRIVILEGED_SCOPE_NAMES
+
+    assert _PRIVILEGED_SCOPE_NAMES == PRIVILEGED_SCOPE_NAMES
