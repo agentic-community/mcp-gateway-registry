@@ -47,8 +47,21 @@ _BLOCKED_NETS: list[ipaddress._BaseNetwork] = [
 
 
 def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
-    """Return True if an IP is private/loopback/link-local/reserved/blocked."""
-    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+    """Return True if an IP is private/loopback/link-local/reserved/blocked.
+
+    IPv4-mapped IPv6 addresses (``::ffff:10.0.0.1``) are unwrapped to their
+    embedded IPv4 first so a private target cannot be smuggled past the checks.
+    """
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    ):
         return True
     return any(ip in net for net in _BLOCKED_NETS)
 

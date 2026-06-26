@@ -67,3 +67,14 @@ class TestVerifyEntryTrust:
             _entry("urn:air:pinned.com:server:x"), "acme.com", src, "reject"
         )
         assert ok is True
+
+    def test_anchors_to_source_not_self_declared_identity(self):
+        # A source configured as acme.com serves a catalog whose manifest declares
+        # identity=victim.com with victim.com URNs (impersonation). Anchoring to the
+        # OPERATOR source domain (acme.com) must reject it, even though the entry is
+        # internally self-consistent with the served manifest identity.
+        ok, reason = t.verify_entry_trust(
+            _entry("urn:air:victim.com:server:x"), "victim.com", _SRC, "reject"
+        )
+        assert ok is False
+        assert "victim.com" in reason

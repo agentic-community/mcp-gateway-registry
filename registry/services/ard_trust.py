@@ -43,6 +43,26 @@ def host_identity_domain(
     return (parsed.hostname or "").lower() or None
 
 
+def _source_anchor_domain(
+    source: AiCatalogSourceConfig,
+) -> str | None:
+    """Return the operator-anchored identity domain for a source.
+
+    Priority: pinned ``expected_identity`` -> configured ``domain`` -> host of
+    the configured ``uri``. This is the domain the operator chose to trust when
+    they added the source, and is what entry URNs are anchored against — NOT the
+    catalog's self-declared ``trustManifest.identity`` (which the served document
+    controls and could use to impersonate another publisher).
+    """
+    if source.expected_identity:
+        return host_identity_domain(source.expected_identity)
+    if source.domain:
+        return host_identity_domain(source.domain)
+    if source.uri:
+        return host_identity_domain(source.uri)
+    return None
+
+
 def verify_entry_trust(
     entry: ArdCatalogEntry,
     host_domain: str | None,
@@ -71,10 +91,15 @@ def verify_entry_trust(
         reason = "unparseable-urn"
         return (policy != "reject"), reason
 
-    pin = host_identity_domain(source.expected_identity) if source.expected_identity else None
-    expected = pin or host_domain
-    if expected and publisher.lower() == expected.lower():
+    # Anchor to the OPERATOR-configured source identity (where we chose to fetch
+    # from), not the manifest's self-declared identity. Otherwise a configured
+    # source served from acme.com could declare identity=victim.com with
+    # victim.com URNs and pass, impersonating another publisher in our index.
+    # Fall back to the served identity only if the source carries no
+    # domain/uri/pin (which cannot happen for a configured source).
+    anchor = _source_anchor_domain(source) or host_domain
+    if anchor and publisher.lower() == anchor.lower():
         return True, None
 
-    reason = f"urn-publisher={publisher} != identity={expected}"
+    reason = f"urn-publisher={publisher} != source={anchor}"
     return (policy != "reject"), reason

@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AnthropicServerConfig(BaseModel):
@@ -81,6 +81,22 @@ class AiCatalogSourceConfig(BaseModel):
     uri: str | None = None
     domain: str | None = None
     expected_identity: str | None = None
+
+    @field_validator("domain")
+    @classmethod
+    def _validate_domain(cls, v: str | None) -> str | None:
+        """Reject anything that isn't a bare hostname.
+
+        ``domain`` is interpolated into ``https://{domain}/.well-known/...``, so a
+        value containing a scheme, path, userinfo, port, or whitespace could shape
+        an unexpected URL. Restrict it to a plain hostname.
+        """
+        if v is None:
+            return v
+        v = v.strip()
+        if not v or any(c in v for c in ("/", "@", ":", " ", "\\", "?", "#")) or "://" in v:
+            raise ValueError("domain must be a bare hostname (no scheme/path/port/userinfo)")
+        return v
 
     def resolve_uri(self) -> str:
         """Return the effective catalog URL (uri wins; else domain .well-known)."""

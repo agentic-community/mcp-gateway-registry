@@ -1,5 +1,6 @@
 """Unit tests for the ARD ai-catalog crawler client (issue #1296)."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 from registry.services.federation import ai_catalog_client as c
@@ -27,12 +28,18 @@ def _catalog_entry(url):
     }
 
 
-def _fake_response(payload):
+def _fake_stream(payload=None, *, oversize=False, content_length=None):
+    """Build a mock for ``client.stream(...)`` (a context manager yielding a
+    streaming response with iter_bytes()/headers/raise_for_status)."""
+    body = b"x" * (c._MAX_BYTES + 1) if oversize else json.dumps(payload).encode()
     resp = MagicMock()
     resp.raise_for_status = MagicMock()
-    resp.content = b"x" * 100
-    resp.json = MagicMock(return_value=payload)
-    return resp
+    resp.headers = {"content-length": content_length} if content_length else {}
+    resp.iter_bytes = MagicMock(return_value=[body])
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=resp)
+    cm.__exit__ = MagicMock(return_value=False)
+    return cm
 
 
 class TestFetchCatalog:
@@ -40,12 +47,12 @@ class TestFetchCatalog:
         client = c.AiCatalogFederationClient(polite_interval_ms=0)
         with (
             patch.object(c, "assert_fetchable", side_effect=lambda u, d=None: u),
-            patch.object(client.client, "get",
-                         return_value=_fake_response(_manifest_payload([_server_entry("github")]))),
+            patch.object(client.client, "stream",
+                         return_value=_fake_stream(_manifest_payload([_server_entry("github")]))),
         ):
             docs = client.fetch_catalog("https://acme.com/.well-known/ai-catalog.json")
         assert len(docs) == 1
-        manifest, uri = docs[0]
+        manifest, _uri = docs[0]
         assert manifest.entries[0].identifier == "urn:air:acme.com:server:github"
 
     def test_recurses_nested_catalog_within_depth(self):
@@ -53,34 +60,41 @@ class TestFetchCatalog:
         root = _manifest_payload([_catalog_entry("https://acme.com/child.json"), _server_entry("a")])
         child = _manifest_payload([_server_entry("b")])
         responses = {
-            "https://acme.com/.well-known/ai-catalog.json": _fake_response(root),
-            "https://acme.com/child.json": _fake_response(child),
+            "https://acme.com/.well-known/ai-catalog.json": lambda: _fake_stream(root),
+            "https://acme.com/child.json": lambda: _fake_stream(child),
         }
         with (
             patch.object(c, "assert_fetchable", side_effect=lambda u, d=None: u),
-            patch.object(client.client, "get", side_effect=lambda url, **kw: responses[url]),
+            patch.object(client.client, "stream", side_effect=lambda method, url, **kw: responses[url]()),
         ):
             docs = client.fetch_catalog("https://acme.com/.well-known/ai-catalog.json")
         assert len(docs) == 2  # root + child
 
     def test_loop_guard_dedupes_visited(self):
         client = c.AiCatalogFederationClient(polite_interval_ms=0, max_depth=5)
-        # Root points to itself -> must not loop forever.
         root = _manifest_payload([_catalog_entry("https://acme.com/.well-known/ai-catalog.json")])
         with (
             patch.object(c, "assert_fetchable", side_effect=lambda u, d=None: u),
-            patch.object(client.client, "get", return_value=_fake_response(root)),
+            patch.object(client.client, "stream", side_effect=lambda method, url, **kw: _fake_stream(root)),
         ):
             docs = client.fetch_catalog("https://acme.com/.well-known/ai-catalog.json")
         assert len(docs) == 1  # visited set prevents re-fetch
 
-    def test_oversized_document_skipped(self):
+    def test_oversized_body_aborted(self):
         client = c.AiCatalogFederationClient(polite_interval_ms=0)
-        big = _fake_response(_manifest_payload([_server_entry("a")]))
-        big.content = b"x" * (c._MAX_BYTES + 1)
         with (
             patch.object(c, "assert_fetchable", side_effect=lambda u, d=None: u),
-            patch.object(client.client, "get", return_value=big),
+            patch.object(client.client, "stream", return_value=_fake_stream(oversize=True)),
+        ):
+            docs = client.fetch_catalog("https://acme.com/x.json")
+        assert docs == []
+
+    def test_oversized_content_length_rejected_early(self):
+        client = c.AiCatalogFederationClient(polite_interval_ms=0)
+        cm = _fake_stream(_manifest_payload([_server_entry("a")]), content_length=str(c._MAX_BYTES + 1))
+        with (
+            patch.object(c, "assert_fetchable", side_effect=lambda u, d=None: u),
+            patch.object(client.client, "stream", return_value=cm),
         ):
             docs = client.fetch_catalog("https://acme.com/x.json")
         assert docs == []

@@ -19,6 +19,7 @@ fatal.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from urllib.parse import urljoin, urlparse
@@ -116,26 +117,39 @@ class AiCatalogFederationClient:
         if self.polite_interval_ms:
             time.sleep(self.polite_interval_ms / 1000.0)
 
+        # Stream and abort early so a hostile host cannot exhaust memory by
+        # sending a huge body within the timeout window — the size cap is
+        # enforced as bytes arrive, not after the whole body is buffered.
+        content = b""
         try:
-            response = self.client.get(url, headers={"Accept": "application/json"})
-            response.raise_for_status()
+            with self.client.stream("GET", url, headers={"Accept": "application/json"}) as response:
+                response.raise_for_status()
+                declared = response.headers.get("content-length")
+                if declared and declared.isdigit() and int(declared) > _MAX_BYTES:
+                    logger.warning(
+                        "ARD ingestion: catalog %s Content-Length %s exceeds %d cap, skipping",
+                        url, declared, _MAX_BYTES,
+                    )
+                    return None
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_BYTES:
+                        logger.warning(
+                            "ARD ingestion: catalog %s exceeds %d byte cap, aborting",
+                            url, _MAX_BYTES,
+                        )
+                        return None
+                    chunks.append(chunk)
+                content = b"".join(chunks)
         except httpx.HTTPError as e:
             logger.warning("ARD ingestion: fetch failed for %s: %s", url, e)
             return None
 
-        content = response.content or b""
-        if len(content) > _MAX_BYTES:
-            logger.warning(
-                "ARD ingestion: catalog %s exceeds %d byte cap (%d), skipping",
-                url,
-                _MAX_BYTES,
-                len(content),
-            )
-            return None
-
         try:
-            payload = response.json()
-        except ValueError as e:
+            payload = json.loads(content)
+        except (ValueError, UnicodeDecodeError) as e:
             logger.warning("ARD ingestion: catalog %s is not valid JSON: %s", url, e)
             return None
 
