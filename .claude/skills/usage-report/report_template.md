@@ -75,6 +75,14 @@ Across {customer_instances} customer instances, the average lifetime is {avg_lif
 
 ![Instance Lifetime](instance-lifetime-{date}.png)
 
+### Lifetime by Compute Platform
+
+Instance age spread broken out by compute platform, with each platform's mean age called out in the legend. Managed-compute platforms (ECS, Kubernetes) are expected to outlive single-shot Docker installs.
+
+![Instance Lifetime by Compute Platform](instance-lifetime-box-by-compute-{date}.png)
+
+<!-- COMMENTARY:lifetime_by_compute -->
+
 ### Customer Lifetime Retention Over Time
 
 ![Lifetime Bucket Retention](lifetime-buckets-{date}.png)
