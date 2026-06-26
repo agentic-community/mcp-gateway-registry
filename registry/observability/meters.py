@@ -462,6 +462,32 @@ ard_errors_total = _meter.create_counter(
     unit="1",
 )
 
+# --- ARD Phase 3: ingestion + federation trust (issue #1296) ---
+
+ard_ingestion_runs_total = _meter.create_counter(
+    name="mcpgw_ard_ingestion_runs_total",
+    description="ARD ai-catalog ingestion runs by source_id and status",
+    unit="1",
+)
+
+ard_ingestion_entries_total = _meter.create_counter(
+    name="mcpgw_ard_ingestion_entries_total",
+    description="ARD ingestion entries by source_id and outcome (indexed/rejected/orphaned)",
+    unit="1",
+)
+
+ard_ingestion_duration_ms = _meter.create_histogram(
+    name="mcpgw_ard_ingestion_duration",
+    description="ARD ingestion run wall time in milliseconds, by source_id",
+    unit="ms",
+)
+
+ard_trust_mismatch_total = _meter.create_counter(
+    name="mcpgw_ard_trust_mismatch_total",
+    description="ARD domain-anchored trust mismatches by source_id and policy",
+    unit="1",
+)
+
 
 # =============================================================================
 # Public helpers

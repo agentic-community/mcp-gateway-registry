@@ -734,6 +734,21 @@ async def lifespan(app: FastAPI):
         await peer_sync_scheduler.start()
         logger.info("Peer sync scheduler started")
 
+        # Start ARD ai-catalog ingestion scheduler (issue #1296). Runs only when
+        # the ai_catalog federation config is enabled; safe no-op otherwise.
+        from registry.services.ard_ingestion_scheduler import get_ard_ingestion_scheduler
+        from registry.services.ard_ingestion_service import get_ard_ingestion_service
+
+        ard_ingestion_scheduler = get_ard_ingestion_scheduler()
+        await ard_ingestion_scheduler.start()
+        try:
+            ard_cfg = await get_ard_ingestion_service().get_config()
+            if ard_cfg.enabled and ard_cfg.sync_on_startup and ard_cfg.sources:
+                logger.info("Running ARD ingestion startup pass for %d source(s)", len(ard_cfg.sources))
+                await get_ard_ingestion_service().ingest_all()
+        except Exception as e:  # noqa: BLE001
+            logger.error("ARD ingestion startup pass failed: %s", e, exc_info=True)
+
         # Start ANS sync scheduler
         if settings.ans_integration_enabled:
             from registry.services.ans_sync_scheduler import get_ans_sync_scheduler
@@ -863,6 +878,10 @@ async def lifespan(app: FastAPI):
         # Stop peer sync scheduler
         peer_sync_scheduler = get_peer_sync_scheduler()
         await peer_sync_scheduler.stop()
+
+        # Stop ARD ingestion scheduler
+        from registry.services.ard_ingestion_scheduler import get_ard_ingestion_scheduler
+        await get_ard_ingestion_scheduler().stop()
 
         # Stop update-check poller
         from registry.core.update_check import stop_update_checker

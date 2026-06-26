@@ -306,6 +306,11 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ARD Phase 3 ingestion (issue #1296): all behavior config lives in the DB
+    # (FederationConfig.ai_catalog) and is managed via the federation API / External
+    # Registries UI, mirroring the Anthropic/ASOR/AWS upstream registries. No
+    # per-knob env vars here by design.
+
     # MCP OAuth discovery settings (RFC 9728 / RFC 8414)
     mcp_https_required: bool = Field(
         default=True,
