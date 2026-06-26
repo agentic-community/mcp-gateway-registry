@@ -65,6 +65,8 @@ export interface Agent {
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   // Federation sync metadata
   sync_metadata?: SyncMetadata;
+  // ARD discovery-only import: URL to the original server.json on the source registry
+  ard_source_url?: string;
   // ANS verification metadata
   ans_metadata?: {
     ans_agent_id: string;
@@ -201,6 +203,14 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
 
   // Check if this agent is orphaned (no longer exists on peer registry)
   const isOrphanedAgent = agent.sync_metadata?.is_orphaned === true;
+
+  // Check if this is an ARD discovery-only import. The public ai-catalog.json
+  // gives metadata only, so these are read-only and non-connectable. Detected
+  // via the 'ard' tag or the read-only sync flag.
+  const isArdDiscovery =
+    (agent.tags || []).includes('ard') || agent.sync_metadata?.is_read_only === true;
+  // Link back to the original server.json on the source registry, if published.
+  const ardSourceUrl = agent.ard_source_url || agent.sync_metadata?.upstream_path;
 
   // Keep the icon in sync with the list payload's scan summary. No fetch: the
   // summary (scan_failed + severity counts) arrives inline on /api/agents, so a
@@ -504,12 +514,24 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     {isFederatedAgent && (
                       <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700 dark:from-violet-900/30 dark:to-purple-900/30 dark:text-violet-300 rounded-full flex-shrink-0 border border-violet-200 dark:border-violet-600" title={`Synced from ${peerRegistryId}`}>
                         {peerRegistryId?.toUpperCase().replace('PEER-REGISTRY-', '').replace('PEER-', '')}
+                        {/* ARD marker — this peer is an ai-catalog (ARD) registry. */}
+                        {isArdDiscovery && (
+                          <span className="ml-1 text-[10px] font-bold text-violet-500 dark:text-violet-400" title="ARD (ai-catalog.json) registry">
+                            ARD
+                          </span>
+                        )}
                       </span>
                     )}
                     {/* Orphaned badge - agent no longer exists on peer registry */}
                     {isOrphanedAgent && (
                       <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-red-100 to-rose-100 text-red-700 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-300 rounded-full flex-shrink-0 border border-red-200 dark:border-red-600" title="No longer exists on peer registry">
                         ORPHANED
+                      </span>
+                    )}
+                    {/* Discovery badge - ARD discovery-only import (metadata only) */}
+                    {isArdDiscovery && (
+                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 dark:from-slate-900/30 dark:to-gray-900/30 dark:text-slate-300 rounded-full flex-shrink-0 border border-slate-200 dark:border-slate-600" title="Discovery-only import — resolve and connect at the source registry">
+                        Discovery
                       </span>
                     )}
                   </div>
@@ -540,7 +562,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                   )}
                 </div>
 
-                {canModify && (
+                {canModify && !isArdDiscovery && (
                   <button
                     className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
                     onClick={() => onEdit?.(agent)}
@@ -550,41 +572,47 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                   </button>
                 )}
 
-                {/* Security Scan Button */}
-                <button
-                  onClick={handleViewSecurityScan}
-                  className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
-                  title={getSecurityIconState().title}
-                  aria-label="View security scan results"
-                >
-                  {React.createElement(getSecurityIconState().Icon, { className: "h-4 w-4" })}
-                </button>
+                {/* Security Scan + Full Details — interactive actions, hidden for
+                    ARD discovery-only imports so the card is fully read-only. */}
+                {!isArdDiscovery && (
+                  <>
+                  {/* Security Scan Button */}
+                  <button
+                    onClick={handleViewSecurityScan}
+                    className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
+                    title={getSecurityIconState().title}
+                    aria-label="View security scan results"
+                  >
+                    {React.createElement(getSecurityIconState().Icon, { className: "h-4 w-4" })}
+                  </button>
 
-                {/* Full Details Button */}
-                <button
-                  onClick={async () => {
-                    setShowDetails(true);
-                    setLoadingDetails(true);
-                    try {
-                      const response = await axios.get(`/api/agents${agent.path}`);
-                      setFullAgentDetails(response.data);
-                    } catch (error) {
-                      console.error('Failed to fetch agent details:', error);
-                      if (onShowToast) {
-                        onShowToast('Failed to load full agent details', 'error');
+                  {/* Full Details Button */}
+                  <button
+                    onClick={async () => {
+                      setShowDetails(true);
+                      setLoadingDetails(true);
+                      try {
+                        const response = await axios.get(`/api/agents${agent.path}`);
+                        setFullAgentDetails(response.data);
+                      } catch (error) {
+                        console.error('Failed to fetch agent details:', error);
+                        if (onShowToast) {
+                          onShowToast('Failed to load full agent details', 'error');
+                        }
+                      } finally {
+                        setLoadingDetails(false);
                       }
-                    } finally {
-                      setLoadingDetails(false);
-                    }
-                  }}
-                  className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
-                  title="View full agent details (JSON)"
-                >
-                  <InformationCircleIcon className="h-4 w-4" />
-                </button>
+                    }}
+                    className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                    title="View full agent details (JSON)"
+                  >
+                    <InformationCircleIcon className="h-4 w-4" />
+                  </button>
+                  </>
+                )}
 
                 {/* Delete Button */}
-                {canDelete && (
+                {canDelete && !isArdDiscovery && (
                   <button
                     onClick={() => setShowDeleteConfirm(true)}
                     className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
@@ -600,6 +628,19 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
               <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed line-clamp-2 mb-4">
                 {agent.description || 'No description available'}
               </p>
+
+              {/* ARD discovery-only: link back to the source registry's server.json,
+                  if the source published it (ard_source_url / upstream_path). */}
+              {isArdDiscovery && ardSourceUrl && (
+                <a
+                  href={ardSourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mb-4 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  View at source ↗
+                </a>
+              )}
 
               {/* Tags */}
               {agent.tags && agent.tags.length > 0 && (
@@ -621,59 +662,67 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
               )}
             </div>
 
-            {/* Stats */}
-            <div className="px-5 pb-4">
-              <StarRatingWidget
-                resourceType="agents"
-                path={agent.path}
-                initialRating={agent.rating || 0}
-                initialCount={agent.rating_details?.length || 0}
-                ratingDetails={agent.rating_details}
-                authToken={authToken}
-                onShowToast={onShowToast}
-                onRatingUpdate={(newRating) => {
-                  // Update local agent rating when user submits rating
-                  if (onAgentUpdate) {
-                    onAgentUpdate(agent.path, { rating: newRating });
-                  }
-                }}
-              />
-            </div>
+            {/* Stats — rating block hidden for ARD discovery-only imports (read-only). */}
+            {!isArdDiscovery && (
+              <div className="px-5 pb-4">
+                <StarRatingWidget
+                  resourceType="agents"
+                  path={agent.path}
+                  initialRating={agent.rating || 0}
+                  initialCount={agent.rating_details?.length || 0}
+                  ratingDetails={agent.rating_details}
+                  authToken={authToken}
+                  onShowToast={onShowToast}
+                  onRatingUpdate={(newRating) => {
+                    // Update local agent rating when user submits rating
+                    if (onAgentUpdate) {
+                      onAgentUpdate(agent.path, { rating: newRating });
+                    }
+                  }}
+                />
+              </div>
+            )}
 
             {/* Footer */}
             <div className="mt-auto px-5 py-4 border-t border-cyan-100 dark:border-cyan-700 bg-cyan-50/50 dark:bg-cyan-900/30 rounded-b-2xl">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  {/* Status Indicators */}
-                  <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${
-                      agent.enabled
-                        ? 'bg-green-400 shadow-lg shadow-green-400/30'
-                        : 'bg-gray-300 dark:bg-gray-600'
-                    }`} />
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {agent.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </div>
+                  {/* Status Indicators — entirely hidden for ARD discovery-only
+                      imports: they are always enabled and read-only (so the green
+                      "Enabled" dot is pointless), and have no health check. */}
+                  {!isArdDiscovery && (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <div className={`w-3 h-3 rounded-full ${
+                          agent.enabled
+                            ? 'bg-green-400 shadow-lg shadow-green-400/30'
+                            : 'bg-gray-300 dark:bg-gray-600'
+                        }`} />
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                          {agent.enabled ? 'Enabled' : 'Disabled'}
+                        </span>
+                      </div>
 
-                  <div className="w-px h-4 bg-cyan-200 dark:bg-cyan-600" />
+                      <div className="w-px h-4 bg-cyan-200 dark:bg-cyan-600" />
 
-                  <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${
-                      agent.status === 'healthy'
-                        ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
-                        : agent.status === 'healthy-auth-expired'
-                        ? 'bg-orange-400 shadow-lg shadow-orange-400/30'
-                        : agent.status === 'unhealthy'
-                        ? 'bg-red-400 shadow-lg shadow-red-400/30'
-                        : 'bg-amber-400 shadow-lg shadow-amber-400/30'
-                    }`} />
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {agent.status === 'healthy' ? 'Healthy' :
-                       agent.status === 'healthy-auth-expired' ? 'Healthy (Auth Expired)' :
-                       agent.status === 'unhealthy' ? 'Unhealthy' : 'Unknown'}
-                    </span>
-                  </div>
+                      <div className="flex items-center gap-2">
+                        <div className={`w-3 h-3 rounded-full ${
+                          agent.status === 'healthy'
+                            ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
+                            : agent.status === 'healthy-auth-expired'
+                            ? 'bg-orange-400 shadow-lg shadow-orange-400/30'
+                            : agent.status === 'unhealthy'
+                            ? 'bg-red-400 shadow-lg shadow-red-400/30'
+                            : 'bg-amber-400 shadow-lg shadow-amber-400/30'
+                        }`} />
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                          {agent.status === 'healthy' ? 'Healthy' :
+                           agent.status === 'healthy-auth-expired' ? 'Healthy (Auth Expired)' :
+                           agent.status === 'unhealthy' ? 'Unhealthy' : 'Unknown'}
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Controls */}
@@ -699,8 +748,9 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     ) : null;
                   })()}
 
-                  {/* Refresh Button - only show if user has health_check_agent permission */}
-                  {canHealthCheck && (
+                  {/* Refresh Button - only show if user has health_check_agent permission.
+                      Hidden for ARD discovery-only imports (no health check). */}
+                  {canHealthCheck && !isArdDiscovery && (
                     <button
                       onClick={handleRefreshHealth}
                       disabled={loadingRefresh}
@@ -712,7 +762,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                   )}
 
                   {/* Pull Card - only for A2A agents the user can modify and that aren't federated */}
-                  {canModify && agent.supported_protocol === 'a2a' && !isFederatedAgent && (
+                  {canModify && agent.supported_protocol === 'a2a' && !isFederatedAgent && !isArdDiscovery && (
                     <button
                       onClick={handlePullCard}
                       disabled={loadingPullCard}
@@ -724,8 +774,9 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     </button>
                   )}
 
-                  {/* Toggle Switch - only show if user has toggle_agent permission */}
-                  {canToggle && (
+                  {/* Toggle Switch - only show if user has toggle_agent permission.
+                      Hidden for ARD discovery-only imports (read-only record). */}
+                  {canToggle && !isArdDiscovery && (
                     <label className="relative inline-flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"

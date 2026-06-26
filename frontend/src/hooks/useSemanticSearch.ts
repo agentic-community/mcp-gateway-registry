@@ -32,6 +32,10 @@ export interface SemanticServerHit {
   match_context?: string;
   matching_tools: MatchingToolHit[];
   sync_metadata?: SyncMetadata;
+  // ARD discovery imports (#1296): URL to the source registry's server.json
+  // descriptor, and the record-kind marker for ingested entries.
+  ard_source_url?: string | null;
+  record_kind?: string | null;
   // Endpoint URL for agent connectivity (computed based on deployment mode)
   endpoint_url?: string;
   // Raw endpoint fields (for advanced use cases)

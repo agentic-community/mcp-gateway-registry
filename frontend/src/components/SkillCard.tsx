@@ -176,6 +176,18 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
   };
   const skillApiPath = getSkillApiPath(skill.path);
 
+  // Check if this is an ARD discovery-only import. The public ai-catalog.json
+  // gives metadata only, so these are read-only. Skills have no sync_metadata in
+  // their type, so detection uses the 'ard' tag, the read-only marker, or a
+  // non-local registry_name (an externally-sourced skill).
+  const isArdDiscovery =
+    (skill.tags || []).includes('ard') ||
+    skill.is_read_only === true ||
+    (!!skill.registry_name && skill.registry_name !== 'local');
+  // Link back to the source registry's descriptor, if present. Skills already
+  // carry the original source URL in skill_md_url.
+  const ardSourceUrl = skill.ard_source_url || skill.skill_md_url;
+
   // Keep the icon in sync with the list payload's scan summary. No fetch: the
   // summary (scan_failed + severity counts) arrives inline on /api/skills, so a
   // page of cards costs zero extra requests instead of one /security-scan each.
@@ -389,6 +401,12 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 {skill.status && skill.status !== 'active' && (
                   <StatusBadge status={skill.status} />
                 )}
+                {/* Discovery badge - ARD discovery-only import (metadata only) */}
+                {isArdDiscovery && (
+                  <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 dark:from-slate-900/30 dark:to-gray-900/30 dark:text-slate-300 rounded-full flex-shrink-0 border border-slate-200 dark:border-slate-600" title="Discovery-only import — resolve and connect at the source registry">
+                    Discovery
+                  </span>
+                )}
               </div>
 
               <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
@@ -406,63 +424,67 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
               )}
             </div>
 
-            <div className="flex items-center gap-1">
-              {canModify && (
-                <>
-                  <button
-                    className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
-                    onClick={() => onEdit?.(skill)}
-                    title="Edit skill"
-                  >
-                    <PencilIcon className="h-4 w-4" />
-                  </button>
-                  <button
-                    className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-all duration-200 flex-shrink-0"
-                    onClick={() => onDelete?.(skillApiPath)}
-                    title="Delete skill"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                  </button>
-                </>
-              )}
+            {/* Interactive actions — hidden entirely for ARD discovery-only
+                imports so the card is fully read-only. */}
+            {!isArdDiscovery && (
+              <div className="flex items-center gap-1">
+                {canModify && (
+                  <>
+                    <button
+                      className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                      onClick={() => onEdit?.(skill)}
+                      title="Edit skill"
+                    >
+                      <PencilIcon className="h-4 w-4" />
+                    </button>
+                    <button
+                      className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-all duration-200 flex-shrink-0"
+                      onClick={() => onDelete?.(skillApiPath)}
+                      title="Delete skill"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
 
-              {/* Tool Check Button */}
-              {skill.allowed_tools && skill.allowed_tools.length > 0 && (
+                {/* Tool Check Button */}
+                {skill.allowed_tools && skill.allowed_tools.length > 0 && (
+                  <button
+                    onClick={handleCheckTools}
+                    disabled={loadingToolCheck}
+                    className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${
+                      toolCheckResult?.all_available === true
+                        ? 'text-green-500 dark:text-green-400'
+                        : toolCheckResult?.all_available === false
+                        ? 'text-red-500 dark:text-red-400'
+                        : 'text-gray-400 dark:text-gray-500'
+                    }`}
+                    title="Check tool availability"
+                  >
+                    <WrenchScrewdriverIcon className={`h-4 w-4 ${loadingToolCheck ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
+
+                {/* Security Scan Button */}
                 <button
-                  onClick={handleCheckTools}
-                  disabled={loadingToolCheck}
-                  className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${
-                    toolCheckResult?.all_available === true
-                      ? 'text-green-500 dark:text-green-400'
-                      : toolCheckResult?.all_available === false
-                      ? 'text-red-500 dark:text-red-400'
-                      : 'text-gray-400 dark:text-gray-500'
-                  }`}
-                  title="Check tool availability"
+                  onClick={handleViewSecurityScan}
+                  className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
+                  title={getSecurityIconState().title}
+                  aria-label={getSecurityIconState().title}
                 >
-                  <WrenchScrewdriverIcon className={`h-4 w-4 ${loadingToolCheck ? 'animate-spin' : ''}`} />
+                  {React.createElement(getSecurityIconState().Icon, { className: `h-4 w-4 ${loadingSecurityScan ? 'animate-pulse' : ''}` })}
                 </button>
-              )}
 
-              {/* Security Scan Button */}
-              <button
-                onClick={handleViewSecurityScan}
-                className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
-                title={getSecurityIconState().title}
-                aria-label={getSecurityIconState().title}
-              >
-                {React.createElement(getSecurityIconState().Icon, { className: `h-4 w-4 ${loadingSecurityScan ? 'animate-pulse' : ''}` })}
-              </button>
-
-              {/* Details Button */}
-              <button
-                onClick={handleViewDetails}
-                className="p-2 text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
-                title="View SKILL.md content"
-              >
-                <InformationCircleIcon className="h-4 w-4" />
-              </button>
-            </div>
+                {/* Details Button */}
+                <button
+                  onClick={handleViewDetails}
+                  className="p-2 text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                  title="View SKILL.md content"
+                >
+                  <InformationCircleIcon className="h-4 w-4" />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Description */}
@@ -503,8 +525,9 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
             </div>
           )}
 
-          {/* Tools Count */}
-          {skill.allowed_tools && skill.allowed_tools.length > 0 && (
+          {/* Tools Count — hidden entirely for ARD discovery-only imports
+              (no tools published by source). */}
+          {!isArdDiscovery && skill.allowed_tools && skill.allowed_tools.length > 0 && (
             <div className="flex items-center gap-2 mb-4">
               <WrenchScrewdriverIcon className="h-4 w-4 text-amber-600 dark:text-amber-400" />
               <span className="text-xs text-gray-600 dark:text-gray-300">
@@ -536,19 +559,35 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
               </div>
             </div>
 
-            {/* Rating Widget */}
-            <StarRatingWidget
-              resourceType="skills"
-              path={skillApiPath}
-              initialRating={skill.num_stars || 0}
-              initialCount={skill.rating_details?.length || 0}
-              ratingDetails={skill.rating_details}
-              authToken={authToken}
-              onShowToast={onShowToast}
-            />
+            {/* Rating Widget — hidden for ARD discovery-only imports (read-only). */}
+            {!isArdDiscovery && (
+              <StarRatingWidget
+                resourceType="skills"
+                path={skillApiPath}
+                initialRating={skill.num_stars || 0}
+                initialCount={skill.rating_details?.length || 0}
+                ratingDetails={skill.rating_details}
+                authToken={authToken}
+                onShowToast={onShowToast}
+              />
+            )}
 
-            {/* SKILL.md Link */}
-            {skill.skill_md_url && (
+            {/* ARD discovery-only: link back to the source registry's descriptor,
+                if present (ard_source_url / skill_md_url). */}
+            {isArdDiscovery && ardSourceUrl && (
+              <a
+                href={ardSourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300 hover:underline"
+              >
+                <ArrowTopRightOnSquareIcon className="h-3 w-3" />
+                View at source ↗
+              </a>
+            )}
+
+            {/* SKILL.md Link — non-discovery only (discovery shows "View at source"). */}
+            {!isArdDiscovery && skill.skill_md_url && (
               <a
                 href={skill.skill_md_url}
                 target="_blank"
@@ -566,44 +605,51 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
         <div className="mt-auto px-5 py-4 border-t border-amber-100 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/30 rounded-b-2xl">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              {/* Status Indicator */}
-              <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${
-                  skill.is_enabled
-                    ? 'bg-green-400 shadow-lg shadow-green-400/30'
-                    : 'bg-gray-300 dark:bg-gray-600'
-                }`} />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {skill.is_enabled ? 'Enabled' : 'Disabled'}
-                </span>
-                {!skill.is_enabled && skill.tags?.includes('content-drifted') && (
-                  <span className="text-xs text-red-600 dark:text-red-400 font-medium" title="Skill content changed since registration. Re-register to update the baseline.">
-                    — content drifted
-                  </span>
-                )}
-                {!skill.is_enabled && skill.tags?.includes('security-pending') && !skill.tags?.includes('content-drifted') && (
-                  <span className="text-xs text-red-600 dark:text-red-400 font-medium">
-                    — security review pending
-                  </span>
-                )}
-              </div>
+              {/* Status indicators — entirely hidden for ARD discovery-only imports:
+                  they are always enabled and read-only (so the "Enabled" dot is
+                  pointless), and have no health check. */}
+              {!isArdDiscovery && (
+                <>
+                  {/* Status Indicator */}
+                  <div className="flex items-center gap-2">
+                    <div className={`w-3 h-3 rounded-full ${
+                      skill.is_enabled
+                        ? 'bg-green-400 shadow-lg shadow-green-400/30'
+                        : 'bg-gray-300 dark:bg-gray-600'
+                    }`} />
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {skill.is_enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                    {!skill.is_enabled && skill.tags?.includes('content-drifted') && (
+                      <span className="text-xs text-red-600 dark:text-red-400 font-medium" title="Skill content changed since registration. Re-register to update the baseline.">
+                        — content drifted
+                      </span>
+                    )}
+                    {!skill.is_enabled && skill.tags?.includes('security-pending') && !skill.tags?.includes('content-drifted') && (
+                      <span className="text-xs text-red-600 dark:text-red-400 font-medium">
+                        — security review pending
+                      </span>
+                    )}
+                  </div>
 
-              <div className="w-px h-4 bg-amber-200 dark:bg-amber-600" />
+                  <div className="w-px h-4 bg-amber-200 dark:bg-amber-600" />
 
-              {/* Health Status */}
-              <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${
-                  healthStatus === 'healthy'
-                    ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
-                    : healthStatus === 'unhealthy'
-                    ? 'bg-red-400 shadow-lg shadow-red-400/30'
-                    : 'bg-amber-400 shadow-lg shadow-amber-400/30'
-                }`} />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {healthStatus === 'healthy' ? 'Healthy' :
-                   healthStatus === 'unhealthy' ? 'Unhealthy' : 'Unknown'}
-                </span>
-              </div>
+                  {/* Health Status */}
+                  <div className="flex items-center gap-2">
+                    <div className={`w-3 h-3 rounded-full ${
+                      healthStatus === 'healthy'
+                        ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
+                        : healthStatus === 'unhealthy'
+                        ? 'bg-red-400 shadow-lg shadow-red-400/30'
+                        : 'bg-amber-400 shadow-lg shadow-amber-400/30'
+                    }`} />
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {healthStatus === 'healthy' ? 'Healthy' :
+                       healthStatus === 'unhealthy' ? 'Unhealthy' : 'Unknown'}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Controls */}
@@ -619,8 +665,9 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 ) : null;
               })()}
 
-              {/* Refresh Health Button */}
-              {canHealthCheck && (
+              {/* Refresh Health Button — hidden for ARD discovery-only imports
+                  (no health check). */}
+              {canHealthCheck && !isArdDiscovery && (
                 <button
                   onClick={handleRefreshHealth}
                   disabled={loadingHealthCheck}
@@ -632,8 +679,8 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 </button>
               )}
 
-              {/* Toggle Switch */}
-              {canToggle && (
+              {/* Toggle Switch — hidden for ARD discovery-only imports (read-only). */}
+              {canToggle && !isArdDiscovery && (
                 <label className="relative inline-flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
                   <input
                     type="checkbox"

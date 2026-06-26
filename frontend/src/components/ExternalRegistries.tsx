@@ -90,12 +90,40 @@ interface AgentCoreConfig {
 
 
 /**
+ * ARD ai-catalog.json source config shape.
+ */
+interface AiCatalogSourceConfig {
+  source_id: string;
+  uri?: string | null;
+  domain?: string | null;
+  expected_identity?: string | null;
+}
+
+
+/**
+ * ARD ai-catalog.json federation config shape.
+ */
+interface AiCatalogConfig {
+  enabled: boolean;
+  sync_on_startup: boolean;
+  sync_interval_minutes: number;
+  max_depth: number;
+  fetch_timeout_seconds: number;
+  polite_interval_ms: number;
+  same_domain_only: boolean;
+  trust_enforcement: string;
+  sources: AiCatalogSourceConfig[];
+}
+
+
+/**
  * Root federation config shape.
  */
 interface FederationConfig {
   anthropic: AnthropicConfig;
   asor: AsorConfig;
   aws_registry: AgentCoreConfig;
+  ai_catalog: AiCatalogConfig;
 }
 
 
@@ -156,7 +184,7 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
   const [addModalSource, setAddModalSource] = useState<RegistrySourceType | null>(null);
   const [deletingItem, setDeletingItem] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{
-    source: 'aws_registry' | 'anthropic' | 'asor';
+    source: 'aws_registry' | 'anthropic' | 'asor' | 'ai_catalog';
     identifier: string;
   } | null>(null);
 
@@ -187,16 +215,33 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
 
   /**
    * Trigger a federation sync for a specific source.
+   *
+   * ai_catalog uses a dedicated endpoint (/api/federation/ai_catalog/sync)
+   * whose response shape differs from the generic sync, so it is special-cased.
    */
-  const handleSync = async (source: string) => {
+  const handleSync = async (source: string, sourceId?: string) => {
     setSyncing(source);
     try {
-      const response = await axios.post(`/api/federation/sync?source=${source}`);
-      const data = response.data;
-      const totalSynced = data.total_synced || 0;
-      setLastSyncTime(new Date().toISOString());
-      setLastSyncResults(data.results || null);
-      onShowToast(`Sync completed: ${totalSynced} items synced from ${source}`, 'success');
+      if (source === 'ai_catalog') {
+        const url = sourceId
+          ? `/api/federation/ai_catalog/sync?source_id=${encodeURIComponent(sourceId)}`
+          : '/api/federation/ai_catalog/sync';
+        const response = await axios.post(url);
+        const data = response.data;
+        const results = Array.isArray(data?.results) ? data.results : [];
+        setLastSyncTime(new Date().toISOString());
+        onShowToast(
+          data?.message || `Sync completed: ${results.length} source(s) synced from ai_catalog`,
+          'success',
+        );
+      } else {
+        const response = await axios.post(`/api/federation/sync?source=${source}`);
+        const data = response.data;
+        const totalSynced = data.total_synced || 0;
+        setLastSyncTime(new Date().toISOString());
+        setLastSyncResults(data.results || null);
+        onShowToast(`Sync completed: ${totalSynced} items synced from ${source}`, 'success');
+      }
     } catch (err: any) {
       const detail = err?.response?.data?.detail || 'Sync failed';
       onShowToast(`Sync failed for ${source}: ${detail}`, 'error');
@@ -229,7 +274,7 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
    * Show the confirm modal before deleting an entry.
    */
   const handleDeleteEntry = (
-    source: 'aws_registry' | 'anthropic' | 'asor',
+    source: 'aws_registry' | 'anthropic' | 'asor' | 'ai_catalog',
     identifier: string,
   ) => {
     setConfirmDelete({ source, identifier });
@@ -255,6 +300,10 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
       } else if (source === 'aws_registry') {
         await axios.delete(
           `/api/federation/config/default/aws_registry/registries/${encodeURIComponent(identifier)}`
+        );
+      } else if (source === 'ai_catalog') {
+        await axios.delete(
+          `/api/federation/config/default/ai_catalog/sources/${encodeURIComponent(identifier)}`
         );
       }
       onShowToast(`Removed "${identifier}"`, 'success');
@@ -321,6 +370,7 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
   if (config.anthropic.enabled) enabledSources.push('anthropic');
   if (config.aws_registry.enabled) enabledSources.push('aws_registry');
   if (config.asor.enabled) enabledSources.push('asor');
+  if (config.ai_catalog.enabled) enabledSources.push('ai_catalog');
 
   return (
     <div>
@@ -375,6 +425,14 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
           config.asor, syncing, lastSyncResults, handleSync,
           () => setAddModalSource('asor'),
           (id) => handleDeleteEntry('asor', id),
+          deletingItem,
+        )}
+
+        {/* ARD Catalog (ai-catalog.json) */}
+        {_renderAiCatalogCard(
+          config.ai_catalog, syncing, handleSync,
+          () => setAddModalSource('ai_catalog'),
+          (id) => handleDeleteEntry('ai_catalog', id),
           deletingItem,
         )}
       </div>
@@ -860,6 +918,164 @@ function _renderAsorCard(
                 <span className="text-sm font-medium text-green-800 dark:text-green-300">
                   Last sync: {lastSyncResults.asor.count} agents
                 </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/**
+ * Render the ARD Catalog (ai-catalog.json) card.
+ */
+function _renderAiCatalogCard(
+  aiCatalog: AiCatalogConfig,
+  syncing: string | null,
+  onSync: (source: string, sourceId?: string) => void,
+  onAdd: () => void,
+  onRemove: (sourceId: string) => void,
+  deletingItem: string | null,
+): React.ReactNode {
+  return (
+    <div className={`border rounded-lg p-5 ${
+      aiCatalog.enabled
+        ? 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'
+        : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 opacity-60'
+    }`}>
+      {/* Card header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-3">
+          <div className="flex-shrink-0 p-2 bg-teal-100 dark:bg-teal-900/30 rounded-lg">
+            <GlobeIcon className="h-5 w-5 text-teal-600 dark:text-teal-400" />
+          </div>
+          <div>
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+              ARD Catalog (ai-catalog.json)
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              Crawl external ai-catalog.json documents and index their entries (ARD federation).
+            </p>
+            <div className="flex items-center space-x-2 mt-1">
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                aiCatalog.enabled
+                  ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+              }`}>
+                {aiCatalog.enabled ? 'Enabled' : 'Disabled'}
+              </span>
+              {aiCatalog.sync_on_startup && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+                                 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
+                  Sync on startup
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        {aiCatalog.enabled && (
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={onAdd}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
+                         border border-gray-300 dark:border-gray-600 text-gray-700
+                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                         transition-colors"
+            >
+              <PlusIcon className="h-4 w-4 mr-1.5" />
+              Add
+            </button>
+            <button
+              onClick={() => onSync('ai_catalog')}
+              disabled={syncing !== null}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
+                         border border-gray-300 dark:border-gray-600 text-gray-700
+                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'ai_catalog' ? 'animate-spin' : ''}`} />
+              {syncing === 'ai_catalog' ? 'Syncing...' : 'Sync'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Config details */}
+      {aiCatalog.enabled && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Max depth:</span>
+              <span className="ml-2 text-gray-900 dark:text-white">
+                {aiCatalog.max_depth}
+              </span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Sync interval:</span>
+              <span className="ml-2 text-gray-900 dark:text-white">
+                {aiCatalog.sync_interval_minutes} min
+              </span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Fetch timeout:</span>
+              <span className="ml-2 text-gray-900 dark:text-white">
+                {aiCatalog.fetch_timeout_seconds}s
+              </span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Trust enforcement:</span>
+              <span className="ml-2 text-gray-900 dark:text-white">
+                {aiCatalog.trust_enforcement}
+              </span>
+            </div>
+          </div>
+
+          {/* Source list */}
+          {aiCatalog.sources.length > 0 && (
+            <div className="mt-3">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Sources ({aiCatalog.sources.length})
+              </h4>
+              <div className="space-y-2">
+                {aiCatalog.sources.map((source, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 border border-gray-100
+                               dark:border-gray-700"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all">
+                        {source.source_id}
+                      </div>
+                      <button
+                        onClick={() => onRemove(source.source_id)}
+                        disabled={deletingItem === source.source_id}
+                        className="ml-2 flex-shrink-0 p-0.5 text-gray-400 hover:text-red-500
+                                   dark:hover:text-red-400 disabled:opacity-50 transition-colors"
+                        title="Remove source"
+                      >
+                        <XMarkIcon className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {(source.uri || source.domain) && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs
+                                         bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                          {source.uri || source.domain}
+                        </span>
+                      )}
+                      {source.expected_identity && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs
+                                         bg-purple-100 dark:bg-purple-900/30 text-purple-700
+                                         dark:text-purple-300">
+                          Identity: {source.expected_identity}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

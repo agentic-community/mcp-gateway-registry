@@ -134,6 +134,8 @@ interface Agent {
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
   lifecycle_status?: 'active' | 'draft' | 'deprecated' | 'beta';
   sync_metadata?: SyncMetadata;
+  // ARD discovery imports: URL to the source registry's descriptor.
+  ard_source_url?: string;
   ans_metadata?: {
     ans_agent_id: string;
     status: 'verified' | 'expired' | 'revoked' | 'not_found' | 'pending';
@@ -404,6 +406,37 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     fetchPeerEndpoints();
   }, []);
 
+  // Built-in federation sources (anthropic / asor / aws_registry) that are
+  // actually added/configured. A source counts as "added" when it is enabled OR
+  // has any entries. This gates the built-in source sub-tabs so stale tagged
+  // data alone no longer surfaces a tab for a source that is no longer set up.
+  const [configuredBuiltinSources, setConfiguredBuiltinSources] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const fetchFederationConfig = async () => {
+      try {
+        const response = await axios.get('/api/federation/config');
+        const config = response.data || {};
+        const configured = new Set<string>();
+        if (config.anthropic?.enabled || (config.anthropic?.servers?.length || 0) > 0) {
+          configured.add('anthropic');
+        }
+        if (config.asor?.enabled || (config.asor?.agents?.length || 0) > 0) {
+          configured.add('asor');
+        }
+        if (config.aws_registry?.enabled || (config.aws_registry?.registries?.length || 0) > 0) {
+          configured.add('aws_registry');
+        }
+        setConfiguredBuiltinSources(configured);
+      } catch (error) {
+        // Silently fail - the tabs simply fall back to showing none of the
+        // built-in sources until the config is available.
+        console.debug('Could not fetch federation config:', error);
+      }
+    };
+    fetchFederationConfig();
+  }, []);
+
   // Get the local registry URL. Includes the ROOT_PATH prefix
   // (e.g. "/registry" in path routing mode) so the displayed URL
   // matches what clients actually hit.
@@ -561,6 +594,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       trust_level: (a.trust_level || 'community') as 'community' | 'verified' | 'trusted' | 'unverified',
       supported_protocol: a.supported_protocol || null,
       sync_metadata: a.sync_metadata,
+      // ARD discovery imports: carry the source descriptor URL through to the
+      // AgentCard so the "View at source" link can render.
+      ard_source_url: a.ard_source_url,
       ans_metadata: a.ans_metadata,
       registered_by: a.registered_by,
       lifecycle_status: a.lifecycle_status,
@@ -604,7 +640,26 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     'asor': 'ASOR',
   };
 
-  // Detect which external sources exist based on tags in the data
+  // Detect which dynamic (federated/ARD) sources exist from sync_metadata.
+  // ARD discovery-only imports carry the `federated` tag (so they're external)
+  // and a sync_metadata.source_peer_id (e.g. 'mcpgateway-ddns'). Each distinct
+  // peer id becomes its own source tab alongside the hardcoded ones. Servers and
+  // agents carry sync_metadata; skills do not (their source id rides as a tag).
+  const dynamicExternalSources = useMemo(() => {
+    const ids = new Set<string>();
+    for (const server of externalServers) {
+      const peerId = server.sync_metadata?.source_peer_id;
+      if (peerId) ids.add(peerId);
+    }
+    for (const agent of externalAgents) {
+      const peerId = agent.sync_metadata?.source_peer_id;
+      if (peerId) ids.add(peerId);
+    }
+    return Array.from(ids).sort();
+  }, [externalServers, externalAgents]);
+
+  // Detect which external sources exist based on tags in the data, then append
+  // the dynamic (federated/ARD) source ids after the hardcoded ones.
   const availableExternalSources = useMemo(() => {
     const sources = new Set<string>();
     const allExternalItems = [
@@ -624,14 +679,49 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     const order = sources.has('aws_registry')
       ? ['aws_registry', 'anthropic', 'asor']
       : ['anthropic', 'asor'];
-    return order.filter(s => sources.has(s));
-  }, [externalServers, externalAgents, externalSkills]);
+    // A built-in source tab renders only when the source has tagged content AND
+    // it is actually added/configured in the federation config. This prevents a
+    // tab from appearing for a built-in source whose data is stale but which is
+    // no longer configured.
+    const hardcoded = order.filter(s => sources.has(s) && configuredBuiltinSources.has(s));
+    // Append dynamic (ARD) sources, which stay purely content-driven (shown when
+    // they have items). Filter out any already covered by the hardcoded list.
+    const dynamic = dynamicExternalSources.filter(id => !hardcoded.includes(id));
+    return [...hardcoded, ...dynamic];
+  }, [externalServers, externalAgents, externalSkills, dynamicExternalSources, configuredBuiltinSources]);
 
-  // Helper: check if an item belongs to a given source based on its tags
-  const _itemMatchesSource = useCallback((tags: string[] | undefined, source: string): boolean => {
-    if (!tags) return false;
-    return tags.some(tag => SOURCE_TAG_MAP[tag] === source);
-  }, []);
+  // Build a labels map covering the hardcoded sources (from SOURCE_LABELS) plus
+  // each dynamic source id, which falls back to its upper-cased peer id.
+  const externalSourceLabels = useMemo(() => {
+    const labels: Record<string, string> = { ...SOURCE_LABELS };
+    for (const id of dynamicExternalSources) {
+      if (!labels[id]) {
+        labels[id] = id.toUpperCase();
+      }
+    }
+    return labels;
+  }, [dynamicExternalSources]);
+
+  // Helper: check if an item belongs to a given source.
+  // - For the hardcoded sources (anthropic/asor/aws_registry), match on tags via
+  //   SOURCE_TAG_MAP.
+  // - For dynamic source ids, match iff the item's source_peer_id equals the tab.
+  //   ARD/federated items also carry the source id as a literal tag, so a tag
+  //   match is used as a fallback for items without sync_metadata (e.g. skills).
+  const dynamicSourceSet = useMemo(
+    () => new Set(dynamicExternalSources),
+    [dynamicExternalSources]
+  );
+  const _itemMatchesSource = useCallback(
+    (tags: string[] | undefined, source: string): boolean => {
+      if (dynamicSourceSet.has(source)) {
+        return (tags || []).includes(source);
+      }
+      if (!tags) return false;
+      return tags.some(tag => SOURCE_TAG_MAP[tag] === source);
+    },
+    [dynamicSourceSet]
+  );
 
   // Auto-select the first available tab when switching to external view
   // or when available sources change
@@ -2267,7 +2357,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       {registryConfig?.features.federation !== false && viewFilter === 'external' && (
         <ExternalRegistriesSection
           availableSources={availableExternalSources}
-          sourceLabels={SOURCE_LABELS}
+          sourceLabels={externalSourceLabels}
+          ardSources={dynamicExternalSources}
           activeSource={externalSourceTab}
           onSelectSource={setExternalSourceTab}
           servers={filteredExternalServers}

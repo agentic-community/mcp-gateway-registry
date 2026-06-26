@@ -7,7 +7,7 @@ import { LABEL } from './formFields';
 /**
  * Source types supported by this modal.
  */
-export type RegistrySourceType = 'aws_registry' | 'anthropic' | 'asor';
+export type RegistrySourceType = 'aws_registry' | 'anthropic' | 'asor' | 'ai_catalog';
 
 
 /**
@@ -36,6 +36,17 @@ interface AwsRegistryFormData {
 
 
 /**
+ * Form data for ARD ai-catalog.json source.
+ */
+interface AiCatalogFormData {
+  source_id: string;
+  uri: string;
+  domain: string;
+  expected_identity: string;
+}
+
+
+/**
  * All available descriptor types for AWS Registry.
  */
 const ALL_DESCRIPTOR_TYPES = ['MCP', 'A2A', 'CUSTOM', 'AGENT_SKILLS'];
@@ -48,6 +59,7 @@ const SOURCE_TITLES: Record<RegistrySourceType, string> = {
   aws_registry: 'Add AWS Agent Registry',
   anthropic: 'Add Anthropic Server',
   asor: 'Add ASOR Agent',
+  ai_catalog: 'Add ARD Catalog Source',
 };
 
 
@@ -81,6 +93,19 @@ function _defaultAwsFormData(): AwsRegistryFormData {
 
 
 /**
+ * Default form data for ARD ai-catalog.json source.
+ */
+function _defaultAiCatalogFormData(): AiCatalogFormData {
+  return {
+    source_id: '',
+    uri: '',
+    domain: '',
+    expected_identity: '',
+  };
+}
+
+
+/**
  * Modal for adding a new entry to any federation source.
  *
  * Renders different form fields based on sourceType:
@@ -101,6 +126,11 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
   // Multi-field form for AWS Registry
   const [awsForm, setAwsForm] = useState<AwsRegistryFormData>(_defaultAwsFormData());
 
+  // Multi-field form for ARD ai-catalog.json source
+  const [aiCatalogForm, setAiCatalogForm] = useState<AiCatalogFormData>(
+    _defaultAiCatalogFormData(),
+  );
+
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -111,6 +141,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
   const handleClose = () => {
     setSimpleValue('');
     setAwsForm(_defaultAwsFormData());
+    setAiCatalogForm(_defaultAiCatalogFormData());
     setErrors({});
     setIsSubmitting(false);
     onClose();
@@ -179,6 +210,24 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
 
 
   /**
+   * Handle changes to ARD ai-catalog.json form fields.
+   */
+  const handleAiCatalogChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setAiCatalogForm((prev) => ({ ...prev, [name]: value }));
+
+    if (errors[name]) {
+      setErrors((prev) => ({ ...prev, [name]: '' }));
+    }
+    if (name === 'uri' || name === 'domain') {
+      if (errors.uri_or_domain) {
+        setErrors((prev) => ({ ...prev, uri_or_domain: '' }));
+      }
+    }
+  };
+
+
+  /**
    * Validate the form before submission.
    */
   const validateForm = (): boolean => {
@@ -198,6 +247,13 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
       }
       if (awsForm.descriptor_types.length === 0) {
         newErrors.descriptor_types = 'At least one descriptor type is required';
+      }
+    } else if (sourceType === 'ai_catalog') {
+      if (!aiCatalogForm.source_id.trim()) {
+        newErrors.source_id = 'Source ID is required';
+      }
+      if (!aiCatalogForm.uri.trim() && !aiCatalogForm.domain.trim()) {
+        newErrors.uri_or_domain = 'Either a URI or a domain is required';
       }
     }
 
@@ -244,6 +300,22 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
         }
         await axios.post('/api/federation/config/default/aws_registry/registries', payload);
         onShowToast(`Registry '${awsForm.registry_id.trim()}' added`, 'success');
+      } else if (sourceType === 'ai_catalog') {
+        const payload: Record<string, any> = {
+          source_id: aiCatalogForm.source_id.trim(),
+        };
+        // Send either uri or domain (or both), plus optional expected_identity
+        if (aiCatalogForm.uri.trim()) {
+          payload.uri = aiCatalogForm.uri.trim();
+        }
+        if (aiCatalogForm.domain.trim()) {
+          payload.domain = aiCatalogForm.domain.trim();
+        }
+        if (aiCatalogForm.expected_identity.trim()) {
+          payload.expected_identity = aiCatalogForm.expected_identity.trim();
+        }
+        await axios.post('/api/federation/config/default/ai_catalog/sources', payload);
+        onShowToast(`Source '${aiCatalogForm.source_id.trim()}' added`, 'success');
       }
       handleClose();
       onSuccess();
@@ -430,6 +502,86 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                 <option value="PENDING">PENDING</option>
                 <option value="REJECTED">REJECTED</option>
               </select>
+            </div>
+          </>
+        )}
+
+        {/* ARD Catalog: source_id + uri/domain + expected_identity */}
+        {sourceType === 'ai_catalog' && (
+          <>
+            {/* Source ID (required) */}
+            <div>
+              <label className={LABEL_CLASS}>
+                Source ID <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="source_id"
+                value={aiCatalogForm.source_id}
+                onChange={handleAiCatalogChange}
+                disabled={isSubmitting}
+                className={INPUT_CLASS}
+                placeholder="acme-catalog"
+                autoFocus
+              />
+              {errors.source_id && (
+                <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.source_id}</p>
+              )}
+            </div>
+
+            {/* Catalog URI */}
+            <div>
+              <label className={LABEL_CLASS}>Catalog URI</label>
+              <input
+                type="text"
+                name="uri"
+                value={aiCatalogForm.uri}
+                onChange={handleAiCatalogChange}
+                disabled={isSubmitting}
+                className={INPUT_CLASS}
+                placeholder="https://acme.com/.well-known/ai-catalog.json"
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Provide either a catalog URI or a domain (at least one is required)
+              </p>
+            </div>
+
+            {/* Domain */}
+            <div>
+              <label className={LABEL_CLASS}>Domain</label>
+              <input
+                type="text"
+                name="domain"
+                value={aiCatalogForm.domain}
+                onChange={handleAiCatalogChange}
+                disabled={isSubmitting}
+                className={INPUT_CLASS}
+                placeholder="acme.com"
+              />
+              {errors.uri_or_domain && (
+                <p className="text-sm text-red-600 dark:text-red-400 mt-1">
+                  {errors.uri_or_domain}
+                </p>
+              )}
+            </div>
+
+            {/* Expected Identity */}
+            <div>
+              <label className={LABEL_CLASS}>
+                Expected Identity <span className="text-gray-400 font-normal">(optional)</span>
+              </label>
+              <input
+                type="text"
+                name="expected_identity"
+                value={aiCatalogForm.expected_identity}
+                onChange={handleAiCatalogChange}
+                disabled={isSubmitting}
+                className={INPUT_CLASS}
+                placeholder="https://acme.com"
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Verify the catalog's declared identity matches this value
+              </p>
             </div>
           </>
         )}

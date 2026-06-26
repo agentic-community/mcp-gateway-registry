@@ -59,6 +59,10 @@ export const useSkills = (): UseSkillsReturn => {
         last_checked_time: skillInfo.last_checked_time,
         created_at: skillInfo.created_at,
         updated_at: skillInfo.updated_at,
+        // ARD discovery imports: preserve the read-only marker and source
+        // descriptor URL so the SkillCard can render the discovery treatment.
+        is_read_only: skillInfo.is_read_only ?? false,
+        ard_source_url: skillInfo.ard_source_url,
       }));
 
       setSkills(transformedSkills);

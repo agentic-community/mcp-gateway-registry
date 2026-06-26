@@ -128,6 +128,8 @@ export interface Server {
   mcp_server_version_updated_at?: string;
   // Federation sync metadata
   sync_metadata?: SyncMetadata;
+  // ARD discovery-only import: URL to the original server.json on the source registry
+  ard_source_url?: string;
   // Backend authentication
   auth_scheme?: string;
   auth_header_name?: string;
@@ -431,6 +433,14 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   // Check if this server is orphaned (no longer exists on peer registry)
   const isOrphanedServer = server.sync_metadata?.is_orphaned === true;
 
+  // Check if this is an ARD discovery-only import. The public ai-catalog.json
+  // gives metadata only (no tools, no proxy URL), so these are read-only and
+  // non-connectable. Detected via the 'ard' tag or the read-only sync flag.
+  const isArdDiscovery =
+    (server.tags || []).includes('ard') || server.sync_metadata?.is_read_only === true;
+  // Link back to the original server.json on the source registry, if published.
+  const ardSourceUrl = server.ard_source_url || server.sync_metadata?.upstream_path;
+
   const health = serverHealthDot(server.status, isLocal);
 
   return (
@@ -508,12 +518,24 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 {isFederatedServer && (
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-cyan-100 to-blue-100 text-cyan-700 dark:from-cyan-900/30 dark:to-blue-900/30 dark:text-cyan-300 rounded-full flex-shrink-0 border border-cyan-200 dark:border-cyan-600" title={`Synced from ${peerRegistryId}`}>
                     {peerRegistryId?.toUpperCase().replace('PEER-REGISTRY-', '').replace('PEER-', '')}
+                    {/* ARD marker — this peer is an ai-catalog (ARD) registry. */}
+                    {isArdDiscovery && (
+                      <span className="ml-1 text-[10px] font-bold text-cyan-500 dark:text-cyan-400" title="ARD (ai-catalog.json) registry">
+                        ARD
+                      </span>
+                    )}
                   </span>
                 )}
                 {/* Orphaned badge - server no longer exists on peer registry */}
                 {isOrphanedServer && (
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-red-100 to-rose-100 text-red-700 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-300 rounded-full flex-shrink-0 border border-red-200 dark:border-red-600" title="No longer exists on peer registry">
                     ORPHANED
+                  </span>
+                )}
+                {/* Discovery badge - ARD discovery-only import (metadata only) */}
+                {isArdDiscovery && (
+                  <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 dark:from-slate-900/30 dark:to-gray-900/30 dark:text-slate-300 rounded-full flex-shrink-0 border border-slate-200 dark:border-slate-600" title="Discovery-only import — resolve and connect at the source registry">
+                    Discovery
                   </span>
                 )}
                 {/* Backend auth scheme badge */}
@@ -531,7 +553,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
           }
           actions={
             <>
-            {canModify && (
+            {canModify && !isArdDiscovery && (
               <button
                 className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
                 onClick={() => onEdit?.(server)}
@@ -542,54 +564,63 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
               </button>
             )}
 
-            {/* Connect Button */}
-            <button
-              onClick={() => setShowConfig(true)}
-              className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-700/50 rounded-lg transition-all duration-200 flex-shrink-0 border border-green-200 dark:border-green-700"
-              title="Get connection details and mcp.json configuration"
-              aria-label={`Connect to ${server.name}`}
-            >
-              <LinkIcon className="h-3.5 w-3.5" />
-              Connect
-            </button>
+            {/* Connect Button — hidden for ARD discovery-only imports, which have
+                no endpoint to connect to (resolve and connect at the source). */}
+            {!isArdDiscovery && (
+              <button
+                onClick={() => setShowConfig(true)}
+                className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-700/50 rounded-lg transition-all duration-200 flex-shrink-0 border border-green-200 dark:border-green-700"
+                title="Get connection details and mcp.json configuration"
+                aria-label={`Connect to ${server.name}`}
+              >
+                <LinkIcon className="h-3.5 w-3.5" />
+                Connect
+              </button>
+            )}
 
-            {/* Full JSON Details Button */}
-            <button
-              onClick={async () => {
-                setShowDetails(true);
-                setDetailsLoading(true);
-                try {
-                  const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-                  const response = await axios.get(
-                    `/api/server_details${server.path}`,
-                    headers ? { headers } : undefined
-                  );
-                  setFullServerDetails(response.data);
-                } catch (err) {
-                  console.error('Failed to fetch full server details:', err);
-                } finally {
-                  setDetailsLoading(false);
-                }
-              }}
-              className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
-              title="View full server JSON from database"
-              aria-label={`View full details for ${server.name}`}
-            >
-              <InformationCircleIcon className="h-4 w-4" />
-            </button>
+            {/* Full JSON Details + Security Scan — interactive actions, hidden for
+                ARD discovery-only imports so the card is fully read-only. */}
+            {!isArdDiscovery && (
+              <>
+              {/* Full JSON Details Button */}
+              <button
+                onClick={async () => {
+                  setShowDetails(true);
+                  setDetailsLoading(true);
+                  try {
+                    const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
+                    const response = await axios.get(
+                      `/api/server_details${server.path}`,
+                      headers ? { headers } : undefined
+                    );
+                    setFullServerDetails(response.data);
+                  } catch (err) {
+                    console.error('Failed to fetch full server details:', err);
+                  } finally {
+                    setDetailsLoading(false);
+                  }
+                }}
+                className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                title="View full server JSON from database"
+                aria-label={`View full details for ${server.name}`}
+              >
+                <InformationCircleIcon className="h-4 w-4" />
+              </button>
 
-            {/* Security Scan Button */}
-            <button
-              onClick={handleViewSecurityScan}
-              className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
-              title={getSecurityIconState().title}
-              aria-label="View security scan results"
-            >
-              {React.createElement(getSecurityIconState().Icon, { className: "h-4 w-4" })}
-            </button>
+              {/* Security Scan Button */}
+              <button
+                onClick={handleViewSecurityScan}
+                className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
+                title={getSecurityIconState().title}
+                aria-label="View security scan results"
+              >
+                {React.createElement(getSecurityIconState().Icon, { className: "h-4 w-4" })}
+              </button>
+              </>
+            )}
 
             {/* Delete Button */}
-            {canDelete && (
+            {canDelete && !isArdDiscovery && (
               <button
                 onClick={() => setShowDeleteConfirm(true)}
                 className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
@@ -614,19 +645,45 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             )}
 
             <TagList tags={server.tags || []} accent={cardAccent} prefix="#" className="mb-4" />
+
+            {/* ARD discovery-only: link back to the source registry's server.json,
+                if the source published it (ard_source_url / upstream_path). */}
+            {isArdDiscovery && ardSourceUrl && (
+              <a
+                href={ardSourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mb-4 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                <LinkIcon className="h-3.5 w-3.5" />
+                View at source ↗
+              </a>
+            )}
           </CardBody>
         </CardHeader>
 
         <CardStatsRow columns={3}>
-            <StarRatingWidget
-              resourceType="servers"
-              path={server.path}
-              initialRating={server.rating || 0}
-              initialCount={server.rating_details?.length || 0}
-              ratingDetails={server.rating_details}
-              authToken={authToken}
-              onShowToast={onShowToast}
-            />
+            {/* Rating block — hidden for ARD discovery-only imports (read-only).
+                An empty cell keeps the 3-column grid aligned. */}
+            {isArdDiscovery ? (
+              <div />
+            ) : (
+              <StarRatingWidget
+                resourceType="servers"
+                path={server.path}
+                initialRating={server.rating || 0}
+                initialCount={server.rating_details?.length || 0}
+                ratingDetails={server.rating_details}
+                authToken={authToken}
+                onShowToast={onShowToast}
+              />
+            )}
+            {/* Tools stat — hidden entirely for ARD discovery-only imports
+                (no tools published by source). An empty cell keeps the grid
+                aligned. */}
+            {isArdDiscovery ? (
+              <div />
+            ) : (
             <div className="flex items-center gap-2">
               {(server.num_tools || 0) > 0 ? (
                 <button
@@ -655,6 +712,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 </div>
               )}
             </div>
+            )}
             {/* Version display - user routing version and/or MCP server version */}
             <div className="flex flex-col items-end gap-1">
               {server.versions && server.versions.length > 1 && (
@@ -687,6 +745,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
         <CardFooter
           accent={cardAccent}
           status={
+            // ARD discovery-only imports are always enabled and read-only, so the
+            // "Enabled" dot serves no purpose; the health dot is also hidden (no
+            // health check). Show no status indicators at all for them.
+            isArdDiscovery ? null : (
             <>
               <StatusDot
                 tone={server.enabled ? 'green' : 'off'}
@@ -695,6 +757,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
               <StatusDivider accent={cardAccent} />
               <StatusDot tone={health.tone} label={health.label} title={health.title} />
             </>
+            )
           }
           controls={
             <>
@@ -723,7 +786,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   permission AND the server has something to refresh. Local
                   (stdio) servers have no HTTP endpoint to probe, so refresh
                   is a no-op for them — hide the button entirely. */}
-              {canHealthCheck && !isLocal && (
+              {canHealthCheck && !isLocal && !isArdDiscovery && (
                 <button
                   onClick={handleRefreshHealth}
                   disabled={loadingRefresh}
@@ -735,8 +798,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 </button>
               )}
 
-              {/* Toggle Switch - only show if user has toggle_service permission */}
-              {canToggle && (
+              {/* Toggle Switch - only show if user has toggle_service permission.
+                  Hidden for ARD discovery-only imports — a read-only record
+                  shouldn't be toggleable. */}
+              {canToggle && !isArdDiscovery && (
                 <ToggleSwitch
                   checked={server.enabled}
                   onChange={(checked) => onToggle(server.path, checked)}

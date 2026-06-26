@@ -6,6 +6,12 @@ interface ExternalRegistriesSectionProps {
   availableSources: string[];
   /** Human labels for source keys. */
   sourceLabels: Record<string, string>;
+  /**
+   * Source keys that are ARD (ai-catalog) registries — i.e. dynamic sources
+   * derived from a federated peer id rather than the built-in
+   * anthropic/asor/aws_registry sources. These get an "ARD" pill in their tab.
+   */
+  ardSources?: string[];
   activeSource: string | null;
   onSelectSource: (source: string) => void;
   /** Filtered lists actually rendered. */
@@ -29,6 +35,7 @@ interface ExternalRegistriesSectionProps {
 const ExternalRegistriesSection: React.FC<ExternalRegistriesSectionProps> = ({
   availableSources,
   sourceLabels,
+  ardSources = [],
   activeSource,
   onSelectSource,
   servers,
@@ -41,6 +48,7 @@ const ExternalRegistriesSection: React.FC<ExternalRegistriesSectionProps> = ({
 }) => {
   const nothingToShow =
     servers.length === 0 && agents.length === 0 && skills.length === 0;
+  const ardSourceSet = new Set(ardSources);
 
   return (
     <div className="mb-8">
@@ -55,13 +63,23 @@ const ExternalRegistriesSection: React.FC<ExternalRegistriesSectionProps> = ({
             <button
               key={source}
               onClick={() => onSelectSource(source)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
                 activeSource === source
                   ? 'border-green-500 text-green-600 dark:text-green-400'
                   : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
               }`}
             >
               {sourceLabels[source] || source}
+              {/* ARD pill — distinguishes ai-catalog (ARD) registries from the
+                  built-in Anthropic/ASOR/AWS sources. */}
+              {ardSourceSet.has(source) && (
+                <span
+                  className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-600"
+                  title="ARD (ai-catalog.json) registry"
+                >
+                  ARD
+                </span>
+              )}
             </button>
           ))}
         </div>
