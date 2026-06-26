@@ -27,28 +27,46 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
 
+def _check_federation_management_scope(
+    user_context: dict[str, Any] | None,
+) -> None:
+    """Check if the caller may manage federation configuration.
 
-def _require_admin(user_context: dict | None) -> None:
-    """Reject the request unless the caller is an authenticated admin.
-
-    All federation config mutations and the sync trigger are admin-only:
-    they rewrite federation state, deregister entities, regenerate nginx
-    config, and drive server-side outbound requests. ``nginx_proxied_auth``
-    only authenticates; it does not authorize.
+    Federation config controls which external sources / peer registries this
+    registry pulls from and syncs with, so it is a privileged operation.
+    Mirrors _check_peer_management_scope in peer_management_routes.py. Allows:
+    - Admin users (is_admin or mcp-registry-admin group)
+    - Federation-static-token users (federation/peers scope)
 
     Args:
-        user_context: Authenticated user context (may be None if auth failed).
+        user_context: User context from the auth dependency.
 
     Raises:
-        HTTPException: 403 if the user is missing or not an admin.
+        HTTPException: 403 if the caller lacks federation management permission.
     """
-    if not user_context or not user_context.get("is_admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrator permissions are required for this operation",
-        )
+    if user_context and user_context.get("is_admin", False):
+        return
+
+    scopes = (user_context or {}).get("scopes", [])
+    if "federation/peers" in scopes:
+        return
+
+    groups = (user_context or {}).get("groups", [])
+    if "mcp-registry-admin" in groups:
+        return
+
+    logger.warning(
+        f"User {(user_context or {}).get('username')} attempted federation "
+        f"management without required scope. Scopes: {scopes}, Groups: {groups}"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Federation management requires admin privileges or federation/peers scope",
+    )
+
+
+router = APIRouter()
 
 
 def _validate_federation_endpoints(config: FederationConfig) -> None:
@@ -107,9 +125,10 @@ async def get_federation_config(
         404: Configuration not found
     """
     # Federation config (endpoints, server/agent/registry lists, auth_env_var
-    # references) is operator-level configuration; keep reads admin-only to match
-    # the mutating siblings rather than exposing the topology to any authed user.
-    _require_admin(user_context)
+    # references) is operator-level configuration; gate reads with the same
+    # federation-management check as the mutating siblings rather than exposing
+    # the topology to any authed user.
+    _check_federation_management_scope(user_context)
 
     # Set audit action for federation config read
     set_audit_action(
@@ -180,7 +199,7 @@ async def save_federation_config(
         }
         ```
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
     _validate_federation_endpoints(config)
 
     # Set audit action for federation config create/update
@@ -267,7 +286,7 @@ async def update_federation_config(
     Returns:
         Updated configuration
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
     _validate_federation_endpoints(config)
 
     # Set audit action for federation config update
@@ -349,7 +368,7 @@ async def delete_federation_config(
     Raises:
         404: Configuration not found
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
 
     logger.info(f"User {user_context['username']} deleting federation config: {config_id}")
 
@@ -385,8 +404,8 @@ async def list_federation_configs(
     Returns:
         List of configuration summaries with id, created_at, updated_at
     """
-    # Admin-only, consistent with get_federation_config and the mutating siblings.
-    _require_admin(user_context)
+    # Gated consistently with get_federation_config and the mutating siblings.
+    _check_federation_management_scope(user_context)
 
     logger.info(f"User {user_context['username']} listing federation configs")
 
@@ -418,7 +437,7 @@ async def add_anthropic_server(
     Returns:
         Updated configuration
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
 
     logger.info(f"User {user_context['username']} adding Anthropic server: {server_name}")
 
@@ -477,7 +496,7 @@ async def remove_anthropic_server(
     Returns:
         Updated configuration with removal details
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
 
     logger.info(f"User {user_context['username']} removing Anthropic server: {server_name}")
 
@@ -552,7 +571,7 @@ async def add_asor_agent(
     Returns:
         Updated configuration
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
 
     logger.info(f"User {user_context['username']} adding ASOR agent: {agent_id}")
 
@@ -608,7 +627,7 @@ async def remove_asor_agent(
     Returns:
         Updated configuration
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
 
     logger.info(f"User {user_context['username']} removing ASOR agent: {agent_id}")
 
@@ -662,7 +681,7 @@ async def add_aws_registry(
     Returns:
         Updated configuration
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
 
     set_audit_action(
         request,
@@ -727,7 +746,7 @@ async def remove_aws_registry(
     Returns:
         Updated configuration
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
 
     set_audit_action(
         request,
@@ -978,7 +997,7 @@ async def sync_federation(
         POST /api/federation/sync?source=anthropic
         ```
     """
-    _require_admin(user_context)
+    _check_federation_management_scope(user_context)
 
     # Set audit action for federation sync
     set_audit_action(

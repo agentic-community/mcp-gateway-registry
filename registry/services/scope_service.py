@@ -446,7 +446,7 @@ async def import_group(
     ui_permissions: dict = None,
     agent_access: list = None,
     is_idp_managed: bool = True,
-    actor_is_admin: bool = False,
+    allow_privileged: bool = False,
 ) -> bool:
     """
     Import a complete group definition with all document types.
@@ -464,10 +464,13 @@ async def import_group(
         agent_access: Optional list of agent paths this group can access
         is_idp_managed: Whether PATCH/DELETE should call the upstream IdP.
             See issue #946. Defaults to True to preserve pre-#946 behavior.
-        actor_is_admin: Whether the caller is an authenticated admin. Defaults to
-            False (fail-closed). Writes that create or map a privileged scope are
-            rejected unless this is True, as a defense-in-depth guard against a
-            caller that reaches this layer without a route-level admin check.
+        allow_privileged: Whether the caller is admin-authorized to write a
+            privileged (admin-conferring) scope. Defaults to False (fail-closed);
+            only admin-gated callers pass True. Enforced as defense-in-depth at
+            BOTH this service layer (privileged scope_name / group_mappings /
+            ui_permissions) and the repository layer (admin-conferring
+            ui_permissions), so a caller reaching either layer without a
+            route-level admin check cannot self-assign admin.
 
     Returns:
         True if successful, False otherwise
@@ -476,10 +479,12 @@ async def import_group(
         PrivilegedScopeWriteError: If a non-admin actor attempts to write a
             privileged scope/group.
     """
-    # Defense-in-depth: a privileged scope write must come from an admin actor,
-    # regardless of any route-level check. This is the last line of defense
-    # against self-assignment of admin via group import.
-    if not actor_is_admin and _import_touches_privileged_scope(
+    # Defense-in-depth: a privileged scope write must come from an admin-authorized
+    # caller, regardless of any route-level check. This service-layer guard is
+    # broader than the repository's _grants_admin (it also catches a privileged
+    # scope_name and privileged group_mappings, e.g. mapping a group to
+    # mcp-registry-admin -- the original privesc vector).
+    if not allow_privileged and _import_touches_privileged_scope(
         scope_name, group_mappings, ui_permissions
     ):
         logger.warning(
@@ -506,6 +511,7 @@ async def import_group(
             ui_permissions=ui_permissions,
             agent_access=agent_access,
             is_idp_managed=is_idp_managed,
+            allow_privileged=allow_privileged,
         )
 
         if success:

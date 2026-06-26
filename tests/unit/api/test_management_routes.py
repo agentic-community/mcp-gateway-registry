@@ -620,7 +620,7 @@ class TestManagementCreateGroup:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=True,
-                actor_is_admin=True,
+                allow_privileged=True,
             )
 
     def test_create_group_success_entra(self, test_client_admin):
@@ -672,7 +672,7 @@ class TestManagementCreateGroup:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=True,
-                actor_is_admin=True,
+                allow_privileged=True,
             )
 
     def test_create_group_requires_admin(self, test_client_regular):
@@ -802,7 +802,7 @@ class TestManagementCreateGroup:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=True,
-                actor_is_admin=True,
+                allow_privileged=True,
             )
 
 
@@ -858,7 +858,7 @@ class TestManagementCreateGroupCreateInIdp:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=False,
-                actor_is_admin=True,
+                allow_privileged=True,
             )
 
     def test_create_group_with_create_in_idp_true(self, test_client_admin):
@@ -911,7 +911,7 @@ class TestManagementCreateGroupCreateInIdp:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=True,
-                actor_is_admin=True,
+                allow_privileged=True,
             )
 
     def test_create_group_default_does_not_create_in_idp(self, test_client_admin):
@@ -951,7 +951,7 @@ class TestManagementCreateGroupCreateInIdp:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=False,
-                actor_is_admin=True,
+                allow_privileged=True,
             )
 
 

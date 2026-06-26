@@ -653,7 +653,9 @@ async def management_create_group(
             ui_permissions=ui_permissions,
             agent_access=agent_access,
             is_idp_managed=create_in_idp,
-            actor_is_admin=bool(user_context and user_context.get("is_admin")),
+            # Admin-gated route (_require_admin above): allowed to write
+            # admin-conferring ui_permissions.
+            allow_privileged=True,
         )
 
         if not import_success:
@@ -750,7 +752,7 @@ async def management_delete_group(
                 operation="delete",
                 resource_type="group",
                 resource_id=group_name,
-                description=(f"Delete group '{group_name}' - IdP call skipped " f"({skip_reason})"),
+                description=(f"Delete group '{group_name}' - IdP call skipped ({skip_reason})"),
                 idp_skip_reason=skip_reason,
             )
 
@@ -905,7 +907,7 @@ async def management_update_group(
                 operation="update",
                 resource_type="group",
                 resource_id=group_name,
-                description=(f"Update group '{group_name}' - IdP call skipped " f"({skip_reason})"),
+                description=(f"Update group '{group_name}' - IdP call skipped ({skip_reason})"),
                 idp_skip_reason=skip_reason,
             )
 
@@ -948,7 +950,9 @@ async def management_update_group(
             ui_permissions=ui_permissions,
             agent_access=agent_access,
             is_idp_managed=is_idp_managed,
-            actor_is_admin=bool(user_context and user_context.get("is_admin")),
+            # Admin-gated route (_require_admin above): allowed to write
+            # admin-conferring ui_permissions.
+            allow_privileged=True,
         )
 
         if not import_success:

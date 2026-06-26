@@ -301,6 +301,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("registration_webhook_auth_header", "Auth Header Name", False),
             ("registration_webhook_auth_token", "Auth Token", True),
             ("registration_webhook_timeout_seconds", "Timeout (s)", False),
+            ("registration_webhook_signing_secret", "Signing Secret", True),
+            ("registration_enforced_status", "Enforced Initial Status", False),
         ],
     },
     "registration_gate": {

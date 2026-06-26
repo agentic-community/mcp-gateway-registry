@@ -67,7 +67,7 @@ class TestImportGroupPrivilegedGuard:
             await import_group(
                 scope_name="engineering",
                 group_mappings=["engineering", "mcp-registry-admin"],
-                actor_is_admin=False,
+                allow_privileged=False,
             )
 
     @pytest.mark.asyncio
@@ -83,7 +83,7 @@ class TestImportGroupPrivilegedGuard:
                 scope_name="engineering",
                 group_mappings=["engineering"],
                 ui_permissions={"register_service": "all"},
-                actor_is_admin=False,
+                allow_privileged=False,
             )
 
     @pytest.mark.asyncio
@@ -95,7 +95,7 @@ class TestImportGroupPrivilegedGuard:
             result = await import_group(
                 scope_name="engineering",
                 group_mappings=["engineering", "mcp-registry-admin"],
-                actor_is_admin=True,
+                allow_privileged=True,
             )
         assert result is True
         mock_repo.import_group.assert_awaited_once()
@@ -110,14 +110,14 @@ class TestImportGroupPrivilegedGuard:
                 scope_name="engineering",
                 group_mappings=["engineering"],
                 ui_permissions={"list_service": ["currenttime"]},
-                actor_is_admin=False,
+                allow_privileged=False,
             )
         assert result is True
         mock_repo.import_group.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_default_actor_is_not_admin(self) -> None:
-        """actor_is_admin defaults to False (fail-closed) for privileged writes."""
+        """allow_privileged defaults to False (fail-closed) for privileged writes."""
         with pytest.raises(PrivilegedScopeWriteError):
             await import_group(
                 scope_name="mcp-registry-admin",

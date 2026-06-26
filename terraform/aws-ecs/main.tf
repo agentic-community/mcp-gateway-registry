@@ -213,6 +213,8 @@ module "mcp_gateway" {
   registration_webhook_auth_header     = var.registration_webhook_auth_header
   registration_webhook_auth_token      = var.registration_webhook_auth_token
   registration_webhook_timeout_seconds = var.registration_webhook_timeout_seconds
+  registration_webhook_signing_secret  = var.registration_webhook_signing_secret
+  registration_enforced_status         = var.registration_enforced_status
 
   # Agent batch API (issue #956)
   batch_worker_enabled                 = var.batch_worker_enabled

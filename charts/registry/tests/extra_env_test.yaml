@@ -246,6 +246,24 @@ tests:
       - failedTemplate:
           errorPattern: "\"SECRET_KEY\" is a reserved variable"
 
+  - it: fails when extraEnv contains REGISTRATION_WEBHOOK_SIGNING_SECRET (issue #1330)
+    set:
+      extraEnv:
+        - name: REGISTRATION_WEBHOOK_SIGNING_SECRET
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"REGISTRATION_WEBHOOK_SIGNING_SECRET\" is a reserved variable"
+
+  - it: fails when extraEnv contains REGISTRATION_ENFORCED_STATUS (issue #1330)
+    set:
+      extraEnv:
+        - name: REGISTRATION_ENFORCED_STATUS
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"REGISTRATION_ENFORCED_STATUS\" is a reserved variable"
+
   - it: fails when extraEnv contains DOCUMENTDB_PASSWORD
     set:
       extraEnv:

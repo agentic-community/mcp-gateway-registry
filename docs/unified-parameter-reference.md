@@ -163,6 +163,8 @@ Fire-and-forget POST on register/delete.
 | Auth header name | `REGISTRATION_WEBHOOK_AUTH_HEADER` | `registration_webhook_auth_header` | `registry.app.registrationWebhookAuthHeader` | `Authorization` auto-prefixes `Bearer `. |
 | Auth token **(secret)** | `REGISTRATION_WEBHOOK_AUTH_TOKEN` | `registration_webhook_auth_token` | `registry.app.registrationWebhookAuthToken` | Token value. |
 | HTTP timeout | `REGISTRATION_WEBHOOK_TIMEOUT_SECONDS` | `registration_webhook_timeout_seconds` | `registry.app.registrationWebhookTimeoutSeconds` | Seconds. Default 10. |
+| Signing secret **(secret)** | `REGISTRATION_WEBHOOK_SIGNING_SECRET` | `registration_webhook_signing_secret` | `registry.app.registrationWebhookSigningSecret` | HMAC-SHA256 signing of payloads (`X-Registry-Signature`). Empty disables. (Issue #1330) |
+| Enforced initial status | `REGISTRATION_ENFORCED_STATUS` | `registration_enforced_status` | `registry.app.registrationEnforcedStatus` | Mandate initial lifecycle status (e.g. `draft`); mismatch 4xx. Empty = default `active`. (Issue #1330) |
 
 ---
 

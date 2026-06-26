@@ -425,6 +425,14 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Timeout for webhook HTTP calls in seconds. Default: 10
 # registration_webhook_timeout_seconds = 10
 
+# Lifecycle workflow webhooks (Issue #1330)
+# Shared secret for HMAC-SHA256 signing of outbound webhook payloads
+# (adds X-Registry-Signature). Leave empty to disable signing.
+# registration_webhook_signing_secret = ""
+# Mandate the initial lifecycle status for new registrations (e.g. "draft");
+# mismatched registrations fail with 4xx. Empty = default "active".
+# registration_enforced_status = ""
+
 # ============================================================================
 # AGENT BATCH API (Issue #956)
 # ============================================================================

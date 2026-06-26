@@ -643,7 +643,9 @@ class TestListAgents:
             mock_agent_service.get_all_agents = AsyncMock(
                 return_value=[enabled_agent, disabled_agent]
             )
-            mock_agent_service.is_agent_enabled = AsyncMock(side_effect=lambda path: path == "/agents/enabled")
+            mock_agent_service.is_agent_enabled = AsyncMock(
+                side_effect=lambda path: path == "/agents/enabled"
+            )
 
             # Act
             response = test_app.get("/agents?enabled_only=true")
@@ -855,7 +857,9 @@ class TestListAgents:
     # --- Pagination: Fast path tests (unrestricted user, no field filters) ---
 
     @pytest.mark.asyncio
-    async def test_list_agents_fast_path_with_limit_offset(self, test_app_admin, mock_admin_context):
+    async def test_list_agents_fast_path_with_limit_offset(
+        self, test_app_admin, mock_admin_context
+    ):
         """Admin user with limit/offset uses DB-level pagination."""
         agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(5)]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
@@ -890,7 +894,9 @@ class TestListAgents:
             assert data["has_next"] is False
 
     @pytest.mark.asyncio
-    async def test_list_agents_fast_path_offset_beyond_total(self, test_app_admin, mock_admin_context):
+    async def test_list_agents_fast_path_offset_beyond_total(
+        self, test_app_admin, mock_admin_context
+    ):
         """Fast path: offset beyond total returns empty list."""
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(return_value=([], 3))
@@ -1268,6 +1274,102 @@ class TestToggleAgent:
 
             # Assert
             assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_toggle_agent_rejects_without_access(self, mock_search_repo, sample_agent_card):
+        """Permission alone is not enough: non-admin needs per-agent access.
+
+        Mirrors the per-server access check on POST /api/servers/toggle. The
+        caller has toggle_service for "all" (so the permission check passes)
+        but the target agent is not in accessible_agents and they are not the
+        owner, so the toggle must be rejected.
+        """
+        from fastapi import FastAPI
+
+        from registry.api.agent_routes import nginx_proxied_auth, router
+        from registry.auth.csrf import verify_csrf_token_flexible
+
+        ctx = {
+            "username": "outsider",
+            "groups": ["other-group"],
+            "scopes": ["read:agents"],
+            "accessible_agents": ["/agents/some-other-agent"],
+            "ui_permissions": {"toggle_service": ["all"]},
+            "is_admin": False,
+        }
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[nginx_proxied_auth] = lambda: ctx
+        app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
+
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.agent_routes.get_search_repository",
+                return_value=mock_search_repo,
+            ),
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
+            mock_agent_service.toggle_agent = AsyncMock(return_value=True)
+
+            client = TestClient(app)
+            response = client.post("/agents/test-agent/toggle?enabled=true")
+
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+            mock_agent_service.toggle_agent.assert_not_called()
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_toggle_agent_allows_owner_without_accessible_list(
+        self, mock_search_repo, sample_agent_card
+    ):
+        """Owner with permission can toggle even if not in accessible_agents."""
+        from fastapi import FastAPI
+
+        from registry.api.agent_routes import nginx_proxied_auth, router
+        from registry.auth.csrf import verify_csrf_token_flexible
+
+        # sample_agent_card.registered_by == "testuser"
+        ctx = {
+            "username": "testuser",
+            "groups": ["test-group"],
+            "scopes": ["write:agents"],
+            "accessible_agents": ["/agents/some-other-agent"],
+            "ui_permissions": {"toggle_service": ["all"]},
+            "is_admin": False,
+        }
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[nginx_proxied_auth] = lambda: ctx
+        app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
+
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.agent_routes.get_search_repository",
+                return_value=mock_search_repo,
+            ),
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
+            mock_agent_service.toggle_agent = AsyncMock(return_value=True)
+
+            client = TestClient(app)
+            response = client.post("/agents/test-agent/toggle?enabled=true")
+
+            assert response.status_code == status.HTTP_200_OK
+
+        app.dependency_overrides.clear()
 
 
 @pytest.mark.unit
@@ -1739,9 +1841,12 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
             toggle_agent=AsyncMock(),
         )
 
-        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
-            "registry.services.agent_scanner.agent_scanner_service",
-            new=scanner_mock,
+        with (
+            patch("registry.api.agent_routes.agent_service", new=service_mock),
+            patch(
+                "registry.services.agent_scanner.agent_scanner_service",
+                new=scanner_mock,
+            ),
         ):
             # Act
             still_enabled = await _perform_agent_security_scan_on_registration(
@@ -1815,12 +1920,16 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
         search_repo_mock = MagicMock()
         search_repo_mock.index_agent = AsyncMock()
 
-        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
-            "registry.services.agent_scanner.agent_scanner_service",
-            new=scanner_mock,
-        ), patch(
-            "registry.api.agent_routes.get_search_repository",
-            return_value=search_repo_mock,
+        with (
+            patch("registry.api.agent_routes.agent_service", new=service_mock),
+            patch(
+                "registry.services.agent_scanner.agent_scanner_service",
+                new=scanner_mock,
+            ),
+            patch(
+                "registry.api.agent_routes.get_search_repository",
+                return_value=search_repo_mock,
+            ),
         ):
             # Act
             still_enabled = await _perform_agent_security_scan_on_registration(
@@ -1881,9 +1990,12 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
             toggle_agent=AsyncMock(),
         )
 
-        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
-            "registry.services.agent_scanner.agent_scanner_service",
-            new=scanner_mock,
+        with (
+            patch("registry.api.agent_routes.agent_service", new=service_mock),
+            patch(
+                "registry.services.agent_scanner.agent_scanner_service",
+                new=scanner_mock,
+            ),
         ):
             # Act
             still_enabled = await _perform_agent_security_scan_on_registration(
