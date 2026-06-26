@@ -120,13 +120,15 @@ class TestSearchAndScopeAccessScoping:
             patch.object(s, "get_search_repository", return_value=mock_repo),
             patch.object(s, "user_can_access_server", side_effect=fake_access),
             patch.object(s, "_resolve_publisher_domain", return_value="reg.example.com"),
+            patch.object(s, "_build_origin_map", AsyncMock(return_value=({}, []))),
         ):
-            results, scoped_out = await s.search_and_scope(
+            results, scoped_out, referrals = await s.search_and_scope(
                 "q", None, None, 10, {"username": "u"}, "http://h/api/ard/search"
             )
 
         assert [r.display_name for r in results] == ["Allowed"]
         assert scoped_out == 1
+        assert referrals == []
         assert results[0].score == 90
         assert results[0].source == "http://h/api/ard/search"
         assert results[0].type == "application/mcp-server-card+json"
@@ -146,8 +148,9 @@ class TestSearchAndScopeAccessScoping:
             patch.object(s, "get_search_repository", return_value=mock_repo),
             patch.object(s, "user_can_access_server", AsyncMock(return_value=True)),
             patch.object(s, "_resolve_publisher_domain", return_value="reg.example.com"),
+            patch.object(s, "_build_origin_map", AsyncMock(return_value=({}, []))),
         ):
-            results, _ = await s.search_and_scope(
+            results, _, _ = await s.search_and_scope(
                 "q", None, None, 10, {}, "http://h/api/ard/search"
             )
         assert [r.display_name for r in results] == ["High", "Low"]
