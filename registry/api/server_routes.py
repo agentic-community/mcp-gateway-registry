@@ -3935,8 +3935,20 @@ async def register_service_api(
 
     if version:
         server_entry["version"] = version
-    if status:
-        server_entry["status"] = status
+
+    # Apply the enforced-status policy (Issue #1330): when
+    # REGISTRATION_ENFORCED_STATUS is set, a missing status is forced to it and
+    # a mismatched status is rejected with 400. The Form param is named `status`
+    # so the FastAPI status module is aliased as fastapi_status in this handler.
+    try:
+        effective_status = enforce_registration_status(status, "server")
+    except EnforcedStatusError as e:
+        raise HTTPException(
+            status_code=fastapi_status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    if effective_status:
+        server_entry["status"] = effective_status
 
     # Add provider information
     if provider_organization or provider_url:
