@@ -69,6 +69,33 @@ services:
       "
     restart: "no"
 
+  # OpenBao - per-user egress credential vault (third-party OBO support).
+  # Runs in DEV mode: in-memory storage, auto-unsealed, with a fixed root
+  # token. This is the local-dev equivalent of the Helm standalone OpenBao
+  # (charts/mcp-gateway-registry-stack); the Helm path is sealed + file-backed
+  # and bootstraps via an init Job, none of which is needed for local compose.
+  # Data is NOT persisted across restarts (dev mode is in-memory by design).
+  # The registry reaches it via token auth using OPENBAO_TOKEN.
+  openbao:
+    image: openbao/openbao:2.5.5
+    container_name: mcp-openbao
+    command: ["server", "-dev"]
+    environment:
+      # Dev mode auto-mounts KV v2 at secret/ and auto-unseals with this token.
+      - BAO_DEV_ROOT_TOKEN_ID=${OPENBAO_TOKEN:-dev-root-token}
+      - BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    healthcheck:
+      # Health endpoint reports 200 once the API is listening (dev mode is
+      # always unsealed + initialized, so the default codes are fine).
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
   # Registry service (includes nginx, SSL, FAISS, models)
   registry:
     build:
