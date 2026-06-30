@@ -547,8 +547,7 @@ cp .env.example .env
 # Edit .env with your passwords (KEYCLOAK_ADMIN_PASSWORD, etc.)
 nano .env
 
-# Deploy with pre-built images
-export DOCKERHUB_ORG=mcpgateway
+# Deploy with pre-built images (pulled from Amazon ECR Public by default)
 ./build_and_run.sh --prebuilt
 
 # Access the Registry UI (served by nginx on port 80)
