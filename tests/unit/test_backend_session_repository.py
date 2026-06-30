@@ -276,7 +276,7 @@ class TestBackendSessionInternalAPI:
         ):
             from registry.api.internal_routes import validate_client_session
 
-            result = await validate_client_session("vs-abc123")
+            result = await validate_client_session("vs-abc123", user_id="admin")
             assert result == {"status": "valid"}
 
     @pytest.mark.asyncio
@@ -293,7 +293,7 @@ class TestBackendSessionInternalAPI:
             from registry.api.internal_routes import validate_client_session
 
             with pytest.raises(HTTPException) as exc_info:
-                await validate_client_session("vs-nonexistent")
+                await validate_client_session("vs-nonexistent", user_id="admin")
             assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -356,7 +356,7 @@ class TestBackendSessionInternalAPI:
         ):
             from registry.api.internal_routes import get_backend_session
 
-            result = await get_backend_session("vs-abc123:/_vs_backend_weather_")
+            result = await get_backend_session("vs-abc123:/_vs_backend_weather_", user_id="admin")
             assert result.backend_session_id == "backend-sess-xyz"
 
     @pytest.mark.asyncio
@@ -397,7 +397,7 @@ class TestBackendSessionInternalAPI:
             from registry.api.internal_routes import get_backend_session
 
             with pytest.raises(HTTPException) as exc_info:
-                await get_backend_session("vs-abc123:/_vs_backend_weather_")
+                await get_backend_session("vs-abc123:/_vs_backend_weather_", user_id="admin")
             assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -412,7 +412,7 @@ class TestBackendSessionInternalAPI:
             from registry.api.internal_routes import get_backend_session
 
             with pytest.raises(HTTPException) as exc_info:
-                await get_backend_session("no-colon-in-key")
+                await get_backend_session("no-colon-in-key", user_id="admin")
             assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio

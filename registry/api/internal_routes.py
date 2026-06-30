@@ -91,7 +91,7 @@ async def create_client_session(
 )
 async def validate_client_session(
     client_session_id: str,
-    user_id: str | None = None,
+    user_id: str,
     virtual_server_path: str | None = None,
 ):
     """Validate that a client session exists and belongs to the caller.
@@ -106,8 +106,12 @@ async def validate_client_session(
     that presents another user's Mcp-Session-Id receives a 404 instead of
     operating on the victim's session context. Binding to the virtual server
     path stops a session minted for one virtual server being replayed against
-    another. When either is omitted, that check is not enforced (preserves
-    legacy callers).
+    another.
+
+    ``user_id`` is REQUIRED: ownership binding is the session-hijacking control,
+    so a request without it must fail loudly (422) rather than silently fall
+    back to existence-only validation. ``virtual_server_path`` stays optional
+    (a missing path widens the match but does not drop the owner check).
     """
     repo = _get_repo()
 
@@ -128,7 +132,7 @@ async def validate_client_session(
 )
 async def get_backend_session(
     session_key: str,
-    user_id: str | None = None,
+    user_id: str,
 ):
     """Look up a backend session by compound key, bound to the caller.
 
@@ -139,8 +143,9 @@ async def get_backend_session(
     The Lua router passes the authenticated user via the ``user_id`` query
     param. Binding the lookup to the owner is defense in depth (the
     client-session gate already enforces ownership upstream): a backend session
-    belonging to a different user is treated as not found. When ``user_id`` is
-    omitted, ownership is not enforced (preserves legacy callers).
+    belonging to a different user is treated as not found. ``user_id`` is
+    REQUIRED so the owner check cannot be silently skipped; a request without it
+    fails with 422.
     """
     repo = _get_repo()
 
@@ -208,7 +213,7 @@ async def store_backend_session(
 )
 async def delete_backend_session(
     session_key: str,
-    user_id: str | None = None,
+    user_id: str,
 ):
     """Delete a stale backend session.
 
@@ -217,7 +222,8 @@ async def delete_backend_session(
 
     The router passes the authenticated user via the ``user_id`` query param so
     the delete is scoped to the owner (defense in depth, symmetric with the GET
-    lookup). When omitted, ownership is not enforced (preserves legacy callers).
+    lookup). ``user_id`` is REQUIRED so the scope cannot be silently dropped; a
+    request without it fails with 422.
     """
     repo = _get_repo()
 
