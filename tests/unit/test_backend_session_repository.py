@@ -150,19 +150,25 @@ class TestStoreSessionRequest:
         assert req.backend_session_id == "backend-sess-xyz"
         assert req.client_session_id == "vs-abc123"
 
-    def test_default_user_id(self):
-        """Test that user_id defaults to anonymous."""
-        req = StoreSessionRequest(
-            backend_session_id="backend-sess-xyz",
-            client_session_id="vs-abc123",
-        )
-        assert req.user_id == "anonymous"
+    def test_requires_user_id(self):
+        """user_id is required: a session must have a concrete owner.
+
+        Defaulting it (previously "anonymous") would silently store a
+        wrong-owner document if a caller forgot to set it -- the same
+        silent-fallback footgun removed from the ownership-bound endpoints.
+        """
+        with pytest.raises(ValidationError):
+            StoreSessionRequest(
+                backend_session_id="backend-sess-xyz",
+                client_session_id="vs-abc123",
+            )
 
     def test_default_virtual_server_path(self):
         """Test that virtual_server_path defaults to empty string."""
         req = StoreSessionRequest(
             backend_session_id="backend-sess-xyz",
             client_session_id="vs-abc123",
+            user_id="admin",
         )
         assert req.virtual_server_path == ""
 
@@ -171,6 +177,7 @@ class TestStoreSessionRequest:
         with pytest.raises(ValidationError):
             StoreSessionRequest(
                 client_session_id="vs-abc123",
+                user_id="admin",
             )
 
     def test_requires_client_session_id(self):
@@ -178,6 +185,7 @@ class TestStoreSessionRequest:
         with pytest.raises(ValidationError):
             StoreSessionRequest(
                 backend_session_id="backend-sess-xyz",
+                user_id="admin",
             )
 
 
@@ -193,10 +201,14 @@ class TestCreateClientSessionRequest:
         assert req.user_id == "admin"
         assert req.virtual_server_path == "/virtual/my-server"
 
-    def test_defaults(self):
-        """Test default values."""
-        req = CreateClientSessionRequest()
-        assert req.user_id == "anonymous"
+    def test_requires_user_id(self):
+        """user_id is required: refuse to mint a session with no concrete owner."""
+        with pytest.raises(ValidationError):
+            CreateClientSessionRequest()
+
+    def test_default_virtual_server_path(self):
+        """virtual_server_path still defaults to empty string."""
+        req = CreateClientSessionRequest(user_id="admin")
         assert req.virtual_server_path == ""
 
 

@@ -125,6 +125,10 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
         doc_id = _make_backend_session_id(client_session_id, backend_key)
 
         query: dict[str, str] = {"_id": doc_id}
+        # `is not None` is load-bearing: only None means "no owner filter". An
+        # empty-string user_id must add an (always-non-matching) filter, NOT skip
+        # it -- do not "simplify" this to `if user_id:` or an empty owner would
+        # reopen the existence-only hijack gap.
         if user_id is not None:
             query["user_id"] = user_id
 
@@ -211,6 +215,8 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
         doc_id = _make_backend_session_id(client_session_id, backend_key)
 
         query: dict[str, str] = {"_id": doc_id}
+        # `is not None` is load-bearing -- see get_backend_session: only None
+        # means "no owner filter"; an empty string must filter, not skip.
         if user_id is not None:
             query["user_id"] = user_id
 
@@ -286,6 +292,8 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
         doc_id = _make_client_session_id(client_session_id)
 
         query: dict[str, str] = {"_id": doc_id}
+        # `is not None` is load-bearing -- see get_backend_session: only None
+        # means "no owner filter"; an empty string must filter, not skip.
         if user_id is not None:
             query["user_id"] = user_id
         if virtual_server_path is not None:
