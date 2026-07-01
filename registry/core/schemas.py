@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from registry.constants import DeploymentType, LocalRuntimeType, TransportType
 from registry.schemas.agent_models import AgentProvider
+from registry.schemas.proxy_mixin import (
+    ProxyableMixin,
+    assert_proxy_target_resolvable,
+    egress_guard_validator,
+)
 from registry.schemas.registry_card import LifecycleStatus
 
 _IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -527,8 +532,13 @@ class LocalRuntime(BaseModel):
         return self
 
 
-class ServerInfo(BaseModel):
-    """Server information model."""
+class ServerInfo(ProxyableMixin):
+    """Server information model.
+
+    Inherits ``is_proxied`` / ``proxy_target_url`` from ``ProxyableMixin``. For an
+    MCP server the effective proxy target falls back to ``proxy_pass_url`` when
+    ``proxy_target_url`` is unset; a ``local`` (stdio) deployment is never proxied.
+    """
 
     id: str = Field(
         default_factory=lambda: str(uuid4()),
@@ -788,6 +798,27 @@ class ServerInfo(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_proxy_target(self) -> "ServerInfo":
+        """If proxied, require a resolvable backend (proxy_target_url or proxy_pass_url).
+
+        Passes only the scalars the check reads (not a full model_dump) — this
+        validator runs on every construction, including every read that rebuilds
+        the model from a stored doc.
+        """
+        assert_proxy_target_resolvable(
+            "mcp_server",
+            {
+                "is_proxied": self.is_proxied,
+                "proxy_target_url": self.proxy_target_url,
+                "proxy_disabled_reason": self.proxy_disabled_reason,
+                "proxy_pass_url": self.proxy_pass_url,
+                "deployment": self.deployment,
+            },
+            read_safe=True,  # storage model: reconstructed on read, log-not-raise
+        )
+        return self
+
+    @model_validator(mode="after")
     def _validate_egress_auth(self) -> "ServerInfo":
         """Enforce per-mode egress config invariants.
 
@@ -913,8 +944,13 @@ class SessionData(BaseModel):
     provider: str = "local"
 
 
-class ServiceRegistrationRequest(BaseModel):
-    """Service registration request model."""
+class ServiceRegistrationRequest(ProxyableMixin):
+    """Service registration request model.
+
+    Inherits the ``is_proxied`` / ``proxy_target_url`` opt-in from
+    ``ProxyableMixin`` so the registration API accepts them; the SSRF egress
+    guard runs on ``proxy_target_url`` via the mixin's field validator.
+    """
 
     name: str = Field(..., min_length=1)
     description: str = ""
@@ -962,6 +998,12 @@ class ServiceRegistrationRequest(BaseModel):
         default=LifecycleStatus.ACTIVE,
         description="Lifecycle status: active, deprecated, draft, or beta",
     )
+
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _guard_proxy_target_url(cls, v: str | None) -> str | None:
+        """API-edge SSRF fast-fail (the mixin no longer raises; storage is read-safe)."""
+        return egress_guard_validator(v)
 
 
 class AuthCredentialUpdateRequest(BaseModel):

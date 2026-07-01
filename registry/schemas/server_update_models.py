@@ -6,6 +6,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .agent_models import AgentProvider
 
+
+def _guard_egress(v: str | None) -> str | None:
+    """Run the SSRF egress guard on a supplied proxy_target_url (None passes)."""
+    if v is None:
+        return v
+    from .proxy_mixin import _assert_egress_allowed
+
+    _assert_egress_allowed(v)
+    return v
+
+
 # Fields that callers must not mutate via PUT or PATCH.
 # Server-managed (timestamps, health) or identity anchors.
 SERVER_REGISTRANT_ONLY_FIELDS: frozenset[str] = frozenset(
@@ -128,6 +139,12 @@ class ServerUpdateRequest(BaseModel):
     oauth_client_id: str | None = None
     append_mcp_path: bool | None = None
 
+    # Gateway-proxy opt-in. For an MCP server the target is proxy_pass_url;
+    # proxy_target_url is accepted for override symmetry with other entity types
+    # (SSRF-guarded below). extra="forbid" would 422 these without declaration.
+    is_proxied: bool | None = None
+    proxy_target_url: str | None = None
+
     # NOTE: Credential-shaped fields (auth_scheme, auth_credential,
     # auth_header_name, custom_headers) are intentionally absent.
     # They are owned by PATCH /api/servers/{path}/auth-credential.
@@ -175,6 +192,11 @@ class ServerUpdateRequest(BaseModel):
     ) -> dict[str, Any] | None:
         return _validate_metadata_size(v)
 
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _guard_proxy_target_url(cls, v: str | None) -> str | None:
+        return _guard_egress(v)
+
 
 class ServerCardPatch(BaseModel):
     """RFC 7396 JSON Merge Patch body for PATCH /api/servers/{path}.
@@ -218,6 +240,10 @@ class ServerCardPatch(BaseModel):
     # Per-server Connect-config overrides (token-less IDE OAuth login + /mcp path).
     oauth_client_id: str | None = None
     append_mcp_path: bool | None = None
+    # Gateway-proxy opt-in (patchable; None = leave unchanged). extra="forbid"
+    # would 422 these without declaration.
+    is_proxied: bool | None = None
+    proxy_target_url: str | None = None
     # NOTE: Credential-shaped fields (auth_scheme, auth_credential,
     # auth_header_name, custom_headers, custom_header_names) are
     # intentionally absent and rejected by extra="forbid" with 422.
@@ -267,3 +293,8 @@ class ServerCardPatch(BaseModel):
         v: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
         return _validate_metadata_size(v)
+
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _guard_proxy_target_url(cls, v: str | None) -> str | None:
+        return _guard_egress(v)

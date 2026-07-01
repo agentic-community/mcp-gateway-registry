@@ -177,13 +177,29 @@ class TestProxyableMixinValidator:
         m = ProxyableMixin(is_proxied=True, proxy_target_url="https://api.github.com/")
         assert m.is_proxied is True
 
-    def test_metadata_target_rejected(self, monkeypatch):
-        """Model edge surfaces the egress denial as a Pydantic ValidationError."""
-        from pydantic import ValidationError
+    def test_mixin_itself_is_read_safe(self, monkeypatch):
+        """The mixin does NOT raise on a denied target at construction.
+
+        Storage models inherit the mixin and are reconstructed from the DB on
+        every read; raising here would vanish a bypass-written record on load.
+        The egress raise lives on the request/patch models (API edge) via
+        egress_guard_validator, and the authoritative net is the persist/render
+        guard. See the ProxyableMixin note and egress_guard_validator.
+        """
+        _set_allow_private(monkeypatch, False)
+        # Must NOT raise — read-safe.
+        m = ProxyableMixin(is_proxied=True, proxy_target_url="http://169.254.169.254/")
+        assert m.proxy_target_url == "http://169.254.169.254/"
+
+    def test_egress_guard_validator_raises_at_edge(self, monkeypatch):
+        """The reusable edge validator (attached to request models) DOES raise."""
+        from registry.schemas.proxy_mixin import EgressPolicyError, egress_guard_validator
 
         _set_allow_private(monkeypatch, False)
-        with pytest.raises(ValidationError):
-            ProxyableMixin(is_proxied=True, proxy_target_url="http://169.254.169.254/")
+        with pytest.raises(EgressPolicyError):
+            egress_guard_validator("http://169.254.169.254/")
+        assert egress_guard_validator(None) is None
+        assert egress_guard_validator("https://ok.example/") == "https://ok.example/"
 
     def test_defaults_are_safe(self):
         m = ProxyableMixin()

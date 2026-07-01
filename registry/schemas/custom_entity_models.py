@@ -30,6 +30,8 @@ from pydantic import (
     model_validator,
 )
 
+from registry.schemas.proxy_mixin import ProxyableMixin, assert_proxy_target_resolvable
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -231,13 +233,17 @@ class CustomTypeUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
 
 
-class CustomEntityRecord(BaseModel):
+class CustomEntityRecord(ProxyableMixin):
     """A record of a custom type. Stored in mcp_custom_entities (envelope + attributes).
 
     ``extra="ignore"`` so a raw Mongo doc (which carries an ``_id`` key) can be
     splatted directly via ``CustomEntityRecord(**doc)`` without raising. The
     repository ALSO pops ``_id`` before construction; both are kept for defense
     in depth.
+
+    Inherits the ``is_proxied`` / ``proxy_target_url`` opt-in from ProxyableMixin.
+    A custom entity has no native backend URL, so proxying requires an explicit
+    ``proxy_target_url`` (its descriptor name is the entity_type token).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -272,6 +278,24 @@ class CustomEntityRecord(BaseModel):
         if not self.path:
             self.path = f"/{self.entity_type}/{uuid4()}"
 
+    @model_validator(mode="after")
+    def _validate_proxy_target(self) -> "CustomEntityRecord":
+        """If proxied, require an explicit proxy_target_url (no native backend).
+
+        Passes only the scalars the check reads (runs on every construction,
+        including reads that rebuild the model from a stored doc).
+        """
+        assert_proxy_target_resolvable(
+            self.entity_type,
+            {
+                "is_proxied": self.is_proxied,
+                "proxy_target_url": self.proxy_target_url,
+                "proxy_disabled_reason": self.proxy_disabled_reason,
+            },
+            read_safe=True,  # storage model: reconstructed on read, log-not-raise
+        )
+        return self
+
 
 class CustomEntityCreate(BaseModel):
     """Client payload for POST /api/custom/{type}. No owner/path/entity_type."""
@@ -282,6 +306,21 @@ class CustomEntityCreate(BaseModel):
     allowed_groups: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list, max_length=MAX_ARRAY_ITEMS)
     attributes: dict[str, Any] = Field(default_factory=dict)
+    # Gateway-proxy opt-in (a custom entity has no native backend URL, so
+    # proxy_target_url is required when is_proxied).
+    is_proxied: bool = Field(default=False)
+    proxy_target_url: str | None = Field(default=None)
+
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _validate_proxy_target_url(cls, v: str | None) -> str | None:
+        """Run the SSRF egress guard on the target."""
+        if v is None:
+            return v
+        from registry.schemas.proxy_mixin import _assert_egress_allowed
+
+        _assert_egress_allowed(v)
+        return v
 
     @field_validator("visibility")
     @classmethod
@@ -301,6 +340,13 @@ class CustomEntityCreate(BaseModel):
             raise ValueError("group-restricted visibility requires at least one allowed_group")
         return self
 
+    @model_validator(mode="after")
+    def _require_proxy_target(self) -> "CustomEntityCreate":
+        """API edge: reject is_proxied=true without a target (no native fallback)."""
+        if self.is_proxied and not self.proxy_target_url:
+            raise ValueError("is_proxied=true requires a proxy_target_url for a custom entity")
+        return self
+
 
 class CustomEntityUpdate(BaseModel):
     """Client payload for PUT /api/custom/{type}/{uuid}.
@@ -317,6 +363,9 @@ class CustomEntityUpdate(BaseModel):
     allowed_groups: list[str] | None = None
     tags: list[str] | None = Field(default=None, max_length=MAX_ARRAY_ITEMS)
     attributes: dict[str, Any] | None = None
+    # Gateway-proxy opt-in (patchable; None = leave unchanged).
+    is_proxied: bool | None = None
+    proxy_target_url: str | None = None
 
     @field_validator("visibility")
     @classmethod
@@ -330,3 +379,14 @@ class CustomEntityUpdate(BaseModel):
         from registry.utils.visibility import validate_visibility
 
         return validate_visibility(v)
+
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _validate_proxy_target_url(cls, v: str | None) -> str | None:
+        """Run the SSRF egress guard on a patched target."""
+        if v is None:
+            return v
+        from registry.schemas.proxy_mixin import _assert_egress_allowed
+
+        _assert_egress_allowed(v)
+        return v
