@@ -268,6 +268,7 @@ async def _sync_agentcore_on_startup(
         get_skill_repository,
     )
     from registry.schemas.agent_models import AgentCard
+    from registry.schemas.proxy_mixin import strip_proxy_fields
     from registry.schemas.skill_models import SkillCard
     from registry.services.agent_service import agent_service
     from registry.services.federation.agentcore_client import (
@@ -299,6 +300,8 @@ async def _sync_agentcore_on_startup(
     server_count = 0
     for server_data in records["servers"]:
         try:
+            # Peer content: strip proxy fields (no proxying federated entities).
+            server_data = strip_proxy_fields(server_data)
             server_path = server_data.get("path")
             if not server_path:
                 continue
@@ -325,6 +328,7 @@ async def _sync_agentcore_on_startup(
     agent_count = 0
     for agent_data in records["agents"]:
         try:
+            agent_data = strip_proxy_fields(agent_data)  # peer content: no proxying
             agent_path = agent_data.get("path")
             if not agent_path:
                 continue
@@ -348,6 +352,7 @@ async def _sync_agentcore_on_startup(
     skill_repo = get_skill_repository()
     for skill_data in records["skills"]:
         try:
+            skill_data = strip_proxy_fields(skill_data)  # peer content: no proxying
             skill_path = skill_data.get("path")
             if not skill_path:
                 continue
@@ -643,9 +648,13 @@ async def lifespan(app: FastAPI):
                             )
 
                             # Register servers
+                            from registry.schemas.proxy_mixin import strip_proxy_fields
+
                             synced_count = 0
                             for server_data in servers:
                                 try:
+                                    # Peer content: strip proxy fields (no proxying federated entities).
+                                    server_data = strip_proxy_fields(server_data)
                                     server_path = server_data.get("path")
                                     if not server_path:
                                         continue

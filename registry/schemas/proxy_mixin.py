@@ -49,6 +49,37 @@ CANONICAL_ENTITY_TYPES: frozenset[str] = frozenset(
     {"mcp_server", "a2a_agent", "skill", "virtual_server"}
 )
 
+# Proxy fields that must NEVER cross the federation boundary (owner decision:
+# no proxying federated entities, either direction). Stripped from a payload
+# both on INGEST (a synced entity can never become a local gateway route, and a
+# peer cannot plant an SSRF target) and on EXPORT (we do not advertise our proxy
+# config, incl. the internal proxy_target_url, to peers). is_proxied and
+# proxy_target_url are the opt-in; the three proxy_* bookkeeping fields are
+# internal refresh state that likewise should not travel. See strip_proxy_fields.
+PROXY_FIELD_NAMES: frozenset[str] = frozenset(
+    {
+        "is_proxied",
+        "proxy_target_url",
+        "proxy_resolved_ips",
+        "proxy_target_host",
+        "proxy_disabled_reason",
+    }
+)
+
+
+def strip_proxy_fields(doc: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``doc`` with all proxy fields removed.
+
+    Used at the federation boundary in both directions. Removing the keys (vs.
+    forcing is_proxied=False) is deliberate: on ingest it leaves any existing
+    stored value untouched on an update re-sync (a peer sync must not clobber a
+    local admin's opt-in), while a create defaults is_proxied to False; on export
+    it simply omits our proxy config from the outbound payload.
+    """
+    if not any(k in doc for k in PROXY_FIELD_NAMES):
+        return doc
+    return {k: v for k, v in doc.items() if k not in PROXY_FIELD_NAMES}
+
 
 class EgressPolicyError(ValueError):
     """Raised when a proxy_target_url resolves to a denied network range.
@@ -166,6 +197,16 @@ def egress_guard_validator(v: str | None) -> str | None:
     return v
 
 
+def _is_federated(doc: dict[str, Any]) -> bool:
+    """True if the entity was synced from a peer (sync_metadata.is_federated).
+
+    Federated entities are never local gateway routes (owner decision), so this
+    gates resolve_proxy_target regardless of a locally-flipped is_proxied.
+    """
+    meta = doc.get("sync_metadata")
+    return bool(isinstance(meta, dict) and meta.get("is_federated"))
+
+
 def resolve_proxy_target(
     entity_type: str,
     doc: dict[str, Any],
@@ -193,6 +234,15 @@ def resolve_proxy_target(
         The effective backend URL to forward to, or None if not proxyable.
     """
     if not doc.get("is_proxied"):
+        return None
+    if _is_federated(doc):
+        # ABSOLUTE isolation (owner decision): a federated entity is never a
+        # local gateway route, even if a local admin flips is_proxied=True on the
+        # synced record after ingest. Enforced here at the resolve chokepoint (in
+        # addition to the strip-on-ingest boundary) so there is no path from
+        # peer-supplied data to a live route. The proxy_target_url was already
+        # stripped on ingest, so without this a proxied synced record would fall
+        # back to the PEER-SUPPLIED proxy_pass_url/url below.
         return None
     if doc.get("proxy_disabled_reason"):
         return None  # refresh auto-disabled this route

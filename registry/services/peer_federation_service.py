@@ -37,6 +37,7 @@ from ..schemas.peer_federation_schema import (
     SyncHistoryEntry,
     SyncResult,
 )
+from ..schemas.proxy_mixin import strip_proxy_fields
 from .agent_service import agent_service
 from .federation.peer_registry_client import PeerRegistryClient
 from .server_service import server_service
@@ -1464,8 +1465,13 @@ class PeerFederationService:
                     "original_path": original_path,
                 }
 
-                # Create a copy to avoid modifying original
-                server_data = server.copy()
+                # Create a copy to avoid modifying original, and STRIP any
+                # proxy fields the peer sent: a federated entity is never a local
+                # gateway route (owner decision), and this prevents a peer from
+                # planting an SSRF proxy_target_url. Stripping (not force-false)
+                # leaves a local admin's opt-in on the existing record untouched
+                # on re-sync. See strip_proxy_fields.
+                server_data = strip_proxy_fields(server.copy())
                 server_data["path"] = prefixed_path
                 server_data["sync_metadata"] = sync_metadata
 
@@ -1569,8 +1575,11 @@ class PeerFederationService:
                     "original_path": original_path,
                 }
 
-                # Create a copy to avoid modifying original
-                agent_data = agent.copy()
+                # Create a copy to avoid modifying original, and STRIP any proxy
+                # fields the peer sent (see _store_synced_servers for rationale:
+                # federated entities are never local gateway routes; strip, not
+                # force-false, to preserve a local admin's opt-in on re-sync).
+                agent_data = strip_proxy_fields(agent.copy())
                 agent_data["path"] = prefixed_path
                 agent_data["sync_metadata"] = sync_metadata
 
