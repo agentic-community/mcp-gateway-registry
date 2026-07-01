@@ -8,7 +8,12 @@ uniform envelope (name/description/visibility/owner/tags/...) plus a
 per-type ``attributes`` bag whose shape is validated against the
 descriptor at write time.
 
-These types are catalog-only — never proxied, executed, or health-checked.
+These types are catalog metadata: never executed or health-checked. A custom
+entity MAY be served through the gateway as an authenticated reverse-proxy route
+when its record sets ``is_proxied=true`` with a ``proxy_target_url`` (the natural
+home for an arbitrary fronted resource — a dashboard, static file, or HTTP
+endpoint); the gateway forwards authenticated HTTP to that target and returns the
+response without interpreting the resource.
 """
 
 import logging

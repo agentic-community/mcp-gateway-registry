@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import UTC
 from enum import Enum
 from pathlib import Path
@@ -1257,6 +1258,73 @@ class Settings(BaseSettings):
             "Clock-skew leeway (seconds) on the /mcp-proxy internal token exp/iat checks."
         ),
     )
+
+    # --- Gateway generic-proxy feature (registry-consumed subset) ---------------
+    # These four are read by the registry (nginx config generation + egress
+    # validation at registration). The seven runtime knobs consumed by the
+    # auth-server live in the auth_server config. All security-relevant toggles
+    # default to the SAFE value: the feature ships disabled and fails closed.
+    gateway_generic_proxy_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master switch for generating generic-proxy nginx location blocks "
+            "for proxied non-MCP entities. Defaults false: the feature ships "
+            "dark. When false, only MCP/virtual blocks are generated (pre-feature "
+            "behavior) and NO extra per-tick DB queries are issued. Do not enable "
+            "until the network egress policy (SSRF layer 1) is deployed and the "
+            "registration-time resolve-and-validate + CSRF defenses are in place."
+        ),
+    )
+    gateway_canonical_namespace_enabled: bool = Field(
+        default=False,
+        description=(
+            "Emit canonical /entity_type/path nginx blocks alongside the legacy "
+            "flat /path aliases. Defaults false until the /validate "
+            "entity-derivation and canonical-alias minting changes land "
+            "(otherwise canonical MCP aliases 401 and existing scopes 403 on "
+            "canonical URLs)."
+        ),
+    )
+    gateway_proxy_allow_private_targets: bool = Field(
+        default=False,
+        description=(
+            "SSRF egress policy. When false (default), proxy_target_url hosts in "
+            "loopback/private/reserved ranges are rejected at registration and "
+            "render. Link-local/metadata (169.254.0.0/16, fe80::/10) and the "
+            "unspecified address (0.0.0.0, ::) are denied regardless of this "
+            "flag. Set true only for trusted on-cluster service URLs."
+        ),
+    )
+    gateway_generic_client_max_body_size: str = Field(
+        default="1m",
+        description=(
+            "nginx client_max_body_size for generic-proxy location blocks — "
+            "bounds the inbound REQUEST body. Distinct from the auth-server's "
+            "GENERIC_PROXY_MAX_BODY_BYTES response cap. nginx defaults to 1m; "
+            "raise for upload-heavy proxied backends. Must be an nginx size "
+            "token: digits with an optional k/m/g suffix (e.g. 1m, 512k, 2G)."
+        ),
+    )
+
+    @field_validator("gateway_generic_client_max_body_size")
+    @classmethod
+    def _validate_client_max_body_size(
+        cls,
+        v: str,
+    ) -> str:
+        """Reject anything that is not a valid nginx size token.
+
+        This value is rendered verbatim into an nginx ``client_max_body_size``
+        directive, so an invalid token would break the config reload for every
+        route on the replica, and an unsanitized value would be a config-injection
+        surface. Enforce the strict nginx size grammar at config-load time.
+        """
+        if not re.fullmatch(r"\d+[kKmMgG]?", v):
+            raise ValueError(
+                f"gateway_generic_client_max_body_size={v!r} is not a valid nginx "
+                "size token (expected digits with an optional k/m/g suffix, e.g. 1m)"
+            )
+        return v
 
     @property
     def nginx_updates_enabled(self) -> bool:

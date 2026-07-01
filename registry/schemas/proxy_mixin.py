@@ -1,0 +1,191 @@
+"""Shared gateway-proxy opt-in for registry entities + the SSRF egress guard.
+
+Any entity type (MCP server, A2A agent, skill, virtual server, custom entity)
+can opt into being served through the gateway by setting ``is_proxied=True``.
+The registry then generates an nginx location block that routes authenticated
+traffic to the entity's effective backend URL.
+
+Security posture (this module is the application-layer SSRF control):
+- ``_assert_egress_allowed`` rejects loopback / private / reserved / multicast
+  targets unless ``gateway_proxy_allow_private_targets`` is set, and ALWAYS
+  rejects link-local (which includes the cloud metadata endpoint) and the
+  unspecified address regardless of that flag.
+- The guard is a best-effort STATIC check on literal-IP targets. Hostnames pass
+  here (DNS is resolved downstream by nginx/httpx); the authoritative defense
+  against DNS-rebind is the network egress policy (deny metadata/link-local at
+  the socket layer) documented in the LLD, not this function.
+- The same guard is DESIGNED to run at three points (model validator, repository
+  persist, nginx render) so a row written before the policy existed, or by a
+  federation sync that bypasses the Pydantic validator, still cannot emit a live
+  route to a denied host. This module lands the model validator; the persist-path
+  and render-path hooks are added in the federation-enforcement and nginx-render
+  changes respectively. The feature ships disabled (gateway_generic_proxy_enabled
+  defaults false) until all three are in place.
+
+Note vs. registry/services/ard_net_guard.py: that guard resolves DNS and checks
+every resolved IP, defeating rebind at check time. This guard deliberately does
+NOT resolve (proxy targets are long-lived and re-validated by a refresh + the
+network egress policy), so a hostname target is only network-layer-protected.
+It is therefore a WEAKER static check than ard_net_guard by design; do not enable
+the feature until the network egress policy (SSRF layer 1) is deployed.
+"""
+
+from typing import Any
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field, field_validator
+
+from registry.utils.ip_guard import coerce_ip_literal, ip_denial_reason
+
+# Canonical built-in entity-type tokens that resolve_proxy_target knows how to
+# derive a fallback backend URL for. Custom entities pass their own descriptor
+# name as the type token and must always carry an explicit proxy_target_url.
+# Kept as the single source of truth so a typo in a caller cannot silently
+# resolve to "not proxyable" without notice (see resolve_proxy_target).
+CANONICAL_ENTITY_TYPES: frozenset[str] = frozenset(
+    {"mcp_server", "a2a_agent", "skill", "virtual_server"}
+)
+
+
+class EgressPolicyError(ValueError):
+    """Raised when a proxy_target_url resolves to a denied network range.
+
+    Subclasses ValueError so the Pydantic field_validator surfaces it as a 422
+    at the API edge, while callers that persist raw dicts (federation) can catch
+    it explicitly on the persist path.
+    """
+
+
+def _assert_egress_allowed(url: str) -> None:
+    """Reject loopback / link-local / metadata / private / unspecified targets.
+
+    Delegates the IP category logic to ``registry.utils.ip_guard`` (the single
+    source of truth for encoding/NAT64/mapped bypasses). When
+    ``settings.gateway_proxy_allow_private_targets`` is true the
+    private/loopback/reserved/multicast checks are skipped (for trusted
+    on-cluster service URLs), but link-local (the cloud metadata endpoint) and
+    the unspecified address are ALWAYS denied.
+
+    Literal-IP hosts (including obfuscated spellings) are category-checked here.
+    Genuine hostnames are allowed through (DNS is resolved downstream); see the
+    module docstring for why the real rebind defense is the network egress
+    policy, not this static check.
+
+    Args:
+        url: The candidate proxy target URL.
+
+    Raises:
+        ValueError: If the scheme is not http(s).
+        EgressPolicyError: If the target host is in a denied network range.
+    """
+    # Imported here (not at module import) so tests/callers that monkeypatch
+    # settings see the live value, and to avoid an import cycle with config.
+    from registry.core.config import settings
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"proxy_target_url must be an http(s) URL, got scheme {parsed.scheme!r}")
+
+    host = (parsed.hostname or "").strip("[]")
+    ip = coerce_ip_literal(host)
+    if ip is None:
+        # Genuine hostname -> resolved downstream; static guard passes. The
+        # authoritative rebind defense is the network egress policy, not this.
+        return
+
+    reason = ip_denial_reason(ip, allow_private=settings.gateway_proxy_allow_private_targets)
+    if reason is not None:
+        raise EgressPolicyError(
+            f"proxy_target_url host {host} is denied ({reason}); "
+            "if this is a trusted on-cluster target set GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=true"
+        )
+
+
+class ProxyableMixin(BaseModel):
+    """Shared opt-in fields for serving an entity through the gateway.
+
+    Set ``is_proxied=True`` to have the registry generate an nginx location
+    block routing authenticated traffic to ``proxy_target_url``. For MCP servers
+    and A2A agents, ``proxy_target_url`` falls back to their native backend URL
+    (``proxy_pass_url`` / ``url``) when unset; skills and custom entities must
+    set it explicitly (see ``resolve_proxy_target``).
+    """
+
+    is_proxied: bool = Field(
+        default=False,
+        description="When true, the registry generates a gateway route for this entity.",
+    )
+    proxy_target_url: str | None = Field(
+        default=None,
+        description=(
+            "Backend HTTP(S) URL the gateway forwards to. Required when is_proxied "
+            "is true and the entity has no native backend URL (skills, custom entities)."
+        ),
+    )
+    # Operational bookkeeping written by the resolve-and-validate refresh; not user-set.
+    proxy_resolved_ips: list[str] = Field(
+        default_factory=list,
+        description="IPs the hostname target last resolved to (egress re-validation bookkeeping).",
+    )
+    proxy_target_host: str | None = Field(
+        default=None,
+        description="Original hostname of proxy_target_url (preserved for Host/SNI; informational).",
+    )
+    proxy_disabled_reason: str | None = Field(
+        default=None,
+        description=(
+            "Set when the refresh auto-disables proxying (e.g. target now resolves "
+            "to a denied IP). When non-null the entity is treated as NOT proxied."
+        ),
+    )
+
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _validate_target_url(cls, v: str | None) -> str | None:
+        """Fast-fail SSRF check at the API edge (repeated at persist + render)."""
+        if v is None:
+            return v
+        _assert_egress_allowed(v)
+        return v
+
+
+def resolve_proxy_target(
+    entity_type: str,
+    doc: dict[str, Any],
+) -> str | None:
+    """Return the effective backend URL for a proxied entity, or None.
+
+    Returns None (entity is not gateway-served) when: it is not flagged
+    ``is_proxied``; the refresh auto-disabled it (``proxy_disabled_reason`` set);
+    or its type has no resolvable target (a local-deployment MCP server has no
+    HTTP backend; a skill/custom entity without an explicit ``proxy_target_url``).
+
+    SECURITY: this function does NOT re-run the egress guard — it returns the
+    stored target verbatim. A document written straight to the DB (federation
+    sync, a pre-feature migration) can carry a denied target that the model
+    validator never saw. Any caller that turns this URL into a live route (nginx
+    render, the proxy hop) MUST pass it through ``_assert_egress_allowed`` first.
+    The render-path hook is the enforcement point; do not wire this into a route
+    generator without it.
+
+    Args:
+        entity_type: Canonical entity-type token (mcp_server, a2a_agent, skill, ...).
+        doc: The stored entity document (or projection) as a dict.
+
+    Returns:
+        The effective backend URL to forward to, or None if not proxyable.
+    """
+    if not doc.get("is_proxied"):
+        return None
+    if doc.get("proxy_disabled_reason"):
+        return None  # refresh auto-disabled this route
+    explicit = doc.get("proxy_target_url")
+    if explicit:
+        return explicit
+    if entity_type == "mcp_server":
+        if doc.get("deployment") == "local":
+            return None  # stdio servers have no HTTP backend
+        return doc.get("proxy_pass_url")
+    if entity_type == "a2a_agent":
+        return doc.get("url")
+    return None  # skills / custom entities must set proxy_target_url explicitly
