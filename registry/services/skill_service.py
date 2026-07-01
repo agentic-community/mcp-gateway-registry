@@ -1200,6 +1200,9 @@ def _build_skill_card(
         content_integrity=content_integrity,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
+        # Gateway-proxy opt-in (validated on the request model; carried through).
+        is_proxied=request.is_proxied,
+        proxy_target_url=request.proxy_target_url,
     )
 
 

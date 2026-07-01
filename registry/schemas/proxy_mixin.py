@@ -30,12 +30,15 @@ It is therefore a WEAKER static check than ard_net_guard by design; do not enabl
 the feature until the network egress policy (SSRF layer 1) is deployed.
 """
 
+import logging
 from typing import Any
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from registry.utils.ip_guard import coerce_ip_literal, ip_denial_reason
+
+logger = logging.getLogger(__name__)
 
 # Canonical built-in entity-type tokens that resolve_proxy_target knows how to
 # derive a fallback backend URL for. Custom entities pass their own descriptor
@@ -139,14 +142,28 @@ class ProxyableMixin(BaseModel):
         ),
     )
 
-    @field_validator("proxy_target_url")
-    @classmethod
-    def _validate_target_url(cls, v: str | None) -> str | None:
-        """Fast-fail SSRF check at the API edge (repeated at persist + render)."""
-        if v is None:
-            return v
-        _assert_egress_allowed(v)
+    # NOTE: no raising field_validator on proxy_target_url here. Storage models
+    # inherit this mixin and are RECONSTRUCTED from the DB on every read; a
+    # raising egress check would make a bypass-written denied literal (federation
+    # raw-doc write, migration, manual edit) throw on read and silently vanish the
+    # entity from every listing. The egress raise is instead an API-EDGE fast-fail
+    # on the request/patch models (which never reconstruct from the DB) via
+    # ``egress_guard_validator``, and the authoritative net is the persist/render
+    # guard. See assert_proxy_target_resolvable, which
+    # is likewise read-safe.
+
+
+def egress_guard_validator(v: str | None) -> str | None:
+    """Reusable field-validator body: raise on a denied proxy_target_url.
+
+    Attach to a request/patch model's ``proxy_target_url`` field (an API edge that
+    never reconstructs from stored data) so a bad target fails fast with 422.
+    Do NOT attach to a storage model — see the ProxyableMixin note above.
+    """
+    if v is None:
         return v
+    _assert_egress_allowed(v)
+    return v
 
 
 def resolve_proxy_target(
@@ -189,3 +206,70 @@ def resolve_proxy_target(
     if entity_type == "a2a_agent":
         return doc.get("url")
     return None  # skills / custom entities must set proxy_target_url explicitly
+
+
+def proxy_target_missing(
+    entity_type: str,
+    doc: dict[str, Any],
+) -> bool:
+    """Return True if ``is_proxied`` is set but no backend target can be resolved.
+
+    Pure predicate (no raise/log). Exempt states (``is_proxied`` is a dormant
+    no-op, NOT missing): not proxied at all; ``proxy_disabled_reason`` set (the
+    documented auto-disabled state); a local-deployment MCP server (no HTTP
+    backend). All other proxied entities must resolve to a target.
+    """
+    if not doc.get("is_proxied"):
+        return False
+    if doc.get("proxy_disabled_reason"):
+        return False  # auto-disabled route: dormant opt-in
+    if entity_type == "mcp_server" and doc.get("deployment") == "local":
+        return False  # stdio server: is_proxied is a documented no-op
+    return resolve_proxy_target(entity_type, doc) is None
+
+
+def assert_proxy_target_resolvable(
+    entity_type: str,
+    doc: dict[str, Any],
+    *,
+    read_safe: bool = False,
+) -> None:
+    """Enforce "if proxied, a target must resolve", turning the silent
+    "I set is_proxied=True and nothing happened" failure into an error.
+
+    Called from a model's ``model_validator(mode="after")`` so the check sees the
+    model's native fallback fields (proxy_pass_url / url).
+
+    ``read_safe`` picks the behavior by context:
+    - STORAGE models pass ``read_safe=True``: a missing target is LOGGED, not
+      raised. Storage models are reconstructed from the stored document on every
+      READ, and a bypass write (federation sync copying is_proxied without a
+      target, a migration, a manual edit) could produce the missing-target state.
+      Raising would make the entity throw on load and silently vanish from every
+      listing. The route simply won't render (resolve_proxy_target returns None).
+    - REQUEST/PATCH models pass ``read_safe=False`` (default): a missing target is
+      a 422 at the API edge, where there is no vanish risk (the model is built
+      from a client payload, never from stored data).
+
+    Args:
+        entity_type: Canonical entity-type token.
+        doc: The model's proxy-relevant scalars as a dict.
+        read_safe: When True, log instead of raise (storage/read context).
+
+    Raises:
+        ValueError: If proxied but no target resolves and ``read_safe`` is False.
+    """
+    if not proxy_target_missing(entity_type, doc):
+        return
+    msg = (
+        f"is_proxied=true on {entity_type} requires a resolvable backend URL: set "
+        "proxy_target_url (or the entity's native backend URL) to a valid http(s) target"
+    )
+    if read_safe:
+        logger.warning(
+            "Loaded proxied %s with no resolvable target (route will not render): %s",
+            entity_type,
+            msg,
+        )
+        return
+    raise ValueError(msg)

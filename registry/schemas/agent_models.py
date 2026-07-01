@@ -22,6 +22,12 @@ from pydantic import (
     model_validator,
 )
 
+from registry.schemas.proxy_mixin import (
+    ProxyableMixin,
+    assert_proxy_target_resolvable,
+    egress_guard_validator,
+)
+
 # Configure logging with basicConfig
 logging.basicConfig(
     level=logging.INFO,
@@ -347,7 +353,7 @@ class Skill(BaseModel):
         return v.strip()
 
 
-class AgentCard(BaseModel):
+class AgentCard(ProxyableMixin):
     """
     A2A Agent Card - machine-readable agent profile.
 
@@ -705,6 +711,29 @@ class AgentCard(BaseModel):
             raise ValueError("Group-restricted visibility requires at least one allowed group")
         return self
 
+    @model_validator(mode="after")
+    def _validate_proxy_target(
+        self,
+    ) -> "AgentCard":
+        """If proxied, require a resolvable backend (proxy_target_url or the agent url).
+
+        The mixin's is_proxied/proxy_target_url are registry extensions and
+        serialize as snake_case (not A2A-spec fields; populate_by_name accepts
+        both on input). Passes only the scalars the check reads (this runs on
+        every construction, including reads that rebuild the model from a doc).
+        """
+        assert_proxy_target_resolvable(
+            "a2a_agent",
+            {
+                "is_proxied": self.is_proxied,
+                "proxy_target_url": self.proxy_target_url,
+                "proxy_disabled_reason": self.proxy_disabled_reason,
+                "url": self.url,
+            },
+            read_safe=True,  # storage model: reconstructed on read, log-not-raise
+        )
+        return self
+
 
 class AgentInfo(BaseModel):
     """
@@ -875,13 +904,14 @@ class AgentInfo(BaseModel):
     )
 
 
-class AgentRegistrationRequest(BaseModel):
+class AgentRegistrationRequest(ProxyableMixin):
     """
     API request model for agent registration.
 
     This model is used for the agent registration API endpoint and converts
     form-style inputs (e.g., comma-separated tags) into the proper types.
     Accepts both snake_case (Python) and camelCase (A2A spec JSON) field names.
+    Inherits the ``is_proxied`` / ``proxy_target_url`` opt-in from ProxyableMixin.
     """
 
     name: str = Field(
@@ -1103,6 +1133,12 @@ class AgentRegistrationRequest(BaseModel):
             raise ValueError(f"trust_level must be one of: {', '.join(valid_values)}")
         return v
 
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _guard_proxy_target_url_request(cls, v: str | None) -> str | None:
+        """API-edge SSRF fast-fail (the mixin no longer raises; storage is read-safe)."""
+        return egress_guard_validator(v)
+
     @field_validator("allowed_groups", mode="before")
     @classmethod
     def _normalize_allowed_groups(
@@ -1196,6 +1232,23 @@ class AgentCardPatch(BaseModel):
     license: str | None = None
     status: str | None = None
     external_tags: list[str] | str | None = None
+    # Gateway-proxy opt-in (patchable subset of ProxyableMixin; the bookkeeping
+    # fields proxy_resolved_ips/proxy_target_host/proxy_disabled_reason are
+    # server-managed and intentionally NOT patchable). extra="forbid" would 422
+    # these without an explicit declaration.
+    is_proxied: bool | None = Field(default=None, alias="isProxied")
+    proxy_target_url: str | None = Field(default=None, alias="proxyTargetUrl")
+
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _validate_proxy_target_url_patch(cls, v: str | None) -> str | None:
+        """Run the SSRF egress guard on a patched target (same as the mixin)."""
+        if v is None:
+            return v
+        from registry.schemas.proxy_mixin import _assert_egress_allowed
+
+        _assert_egress_allowed(v)
+        return v
 
     @model_validator(mode="after")
     def _reject_registrant_only(self) -> "AgentCardPatch":

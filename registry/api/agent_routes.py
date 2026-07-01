@@ -1087,6 +1087,9 @@ async def register_agent(
             source_created_at=source_created_dt,
             source_updated_at=source_updated_dt,
             external_tags=external_tag_list,
+            # Gateway-proxy opt-in (validated on the request model; carried through).
+            is_proxied=request.is_proxied,
+            proxy_target_url=request.proxy_target_url,
             **optional_card_kwargs,
         )
 
@@ -2293,6 +2296,10 @@ async def update_agent(
             allowed_groups=request.allowed_groups,
             trust_level=request.trust_level,
             supported_protocol=request.supported_protocol,
+            # Gateway-proxy opt-in: carry from the request (PUT is full-replacement),
+            # else an unrelated edit would silently reset the opt-in to defaults.
+            is_proxied=request.is_proxied,
+            proxy_target_url=request.proxy_target_url,
             registered_by=existing_agent.registered_by,
             registered_at=existing_agent.registered_at,
             is_enabled=existing_agent.is_enabled,
