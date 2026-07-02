@@ -103,7 +103,9 @@ class TestParseSkillMdContentAuth:
     @patch("registry.services.skill_service.translate_skill_url")
     async def test_none_scheme_sends_no_headers(self, mock_translate, mock_safe_url, mock_auth):
         """auth_scheme=none sends no auth headers when parsing SKILL.md."""
-        mock_auth.get_auth_headers = AsyncMock(return_value={"Authorization": "Bearer ghp_should_not_appear"})
+        mock_auth.get_auth_headers = AsyncMock(
+            return_value={"Authorization": "Bearer ghp_should_not_appear"}
+        )
         mock_translate.return_value = (
             "https://github.com/o/r/blob/main/SKILL.md",
             "https://raw.githubusercontent.com/o/r/refs/heads/main/SKILL.md",

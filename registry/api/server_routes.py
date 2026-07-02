@@ -4071,6 +4071,29 @@ async def register_service_api(
     # Check if server exists and handle overwrite/version logic
     existing_server = await server_service.get_server_info(path)
 
+    # Ownership guard: overwriting (or auto-versioning) an existing server
+    # replaces another user's registration and can redirect its traffic. Only
+    # the original owner (registered_by) or an admin may do so. Without this,
+    # any user with registration permission could hijack any server by
+    # re-registering at the same path. Mirrors the guard on the dedicated
+    # update endpoint. Fails closed when ownership can't be established.
+    if existing_server and (
+        not user_context.get("is_admin")
+        and existing_server.get("registered_by") != user_context.get("username")
+    ):
+        logger.warning(
+            f"SERVERS REGISTER: User {user_context.get('username')} attempted to "
+            f"overwrite server {path} owned by {existing_server.get('registered_by')}"
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Service registration failed",
+                "reason": "You can only overwrite servers you registered",
+                "detail": f"Server at path '{path}' is owned by another user",
+            },
+        )
+
     # If server exists with a different version, register_server will auto-create new version
     # Only reject if overwrite=False AND it's the same version (or no version specified)
     if existing_server and not overwrite:
@@ -4214,6 +4237,26 @@ async def update_server_auth_credential(
         existing_server.get("server_name", server_path),
         user_context,
     )
+
+    # Ownership guard: overwriting a backend credential can hijack the server's
+    # upstream connection, so only the original owner (registered_by) or an
+    # admin may do it -- matching PUT /servers/{path}. modify_service alone is
+    # granted to any user with an /execute scope and is not sufficient. Fails
+    # closed when ownership cannot be established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {username} attempted to update auth credential for server "
+            f"{server_path} owned by {existing_server.get('registered_by')}"
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Not authorized",
+                "reason": "You can only modify servers you registered",
+            },
+        )
 
     # Validate auth_scheme
     if body.auth_scheme not in VALID_AUTH_SCHEMES:
@@ -5566,6 +5609,24 @@ async def remove_server_version(
         user_context,
     )
 
+    # Ownership guard: removing a version mutates another user's server and can
+    # break its routing, so only the owner (registered_by) or an admin may do
+    # it -- matching PUT /servers/{path}. modify_service alone (any /execute
+    # scope) is not sufficient. Fails closed when ownership cannot be
+    # established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to remove version "
+            f"{version} from server {decoded_path} owned by "
+            f"{existing_server.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only modify servers you registered",
+        )
+
     try:
         result = await server_service.remove_server_version(path=decoded_path, version=version)
 
@@ -5612,6 +5673,23 @@ async def set_default_version(
         existing_server.get("server_name", decoded_path),
         user_context,
     )
+
+    # Ownership guard: changing the default version reroutes another user's
+    # server, so only the owner (registered_by) or an admin may do it --
+    # matching PUT /servers/{path}. modify_service alone (any /execute scope) is
+    # not sufficient. Fails closed when ownership cannot be established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to set default "
+            f"version for server {decoded_path} owned by "
+            f"{existing_server.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only modify servers you registered",
+        )
 
     try:
         result = await server_service.set_default_version(
