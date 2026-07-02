@@ -1006,8 +1006,7 @@ class Settings(BaseSettings):
     secret_store_backend: str = Field(
         default="openbao",
         description=(
-            "Secret store for per-user egress tokens. Accepted values: "
-            "secrets-manager, openbao."
+            "Secret store for per-user egress tokens. Accepted values: secrets-manager, openbao."
         ),
     )
     egress_oauth_callback_base_url: str = Field(
@@ -1323,6 +1322,14 @@ class Settings(BaseSettings):
                 "Set it to a value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml: global.secretKey)."
             )
+        if len(self.secret_key.encode()) < 32:
+            raise RuntimeError(
+                "SECRET_KEY must be at least 32 bytes long. The current value is too short "
+                "to safely sign HS256 tokens and derive the internal service-token signing "
+                "key (a short key can be brute-forced offline from any captured token). "
+                "Set it to a strong random value at least 32 bytes long, identical across "
+                "all auth_server and registry replicas (see chart values.yaml: global.secretKey)."
+            )
         if not self.auth_server_nginx_marker_secret:
             raise RuntimeError(
                 "AUTH_SERVER_NGINX_MARKER_SECRET environment variable is required. "
@@ -1330,6 +1337,12 @@ class Settings(BaseSettings):
                 "auth_server and registry replicas (see chart values.yaml). Without it, the "
                 "auth_server mints mcp-proxy tokens unconditionally, letting a direct :8888 "
                 "/validate call with a forged X-Resolved-Upstream bypass nginx and obtain one."
+            )
+        if len(self.auth_server_nginx_marker_secret.encode()) < 32:
+            raise RuntimeError(
+                "AUTH_SERVER_NGINX_MARKER_SECRET must be at least 32 bytes long. Set it to a "
+                "strong random value at least 32 bytes long, identical across all auth_server "
+                "and registry replicas (see chart values.yaml)."
             )
         self._validate_egress_auth_config()
 

@@ -748,9 +748,7 @@ class TestValidateEndpoint:
         from unittest.mock import MagicMock
 
         provider = MagicMock()
-        provider.validate_token.side_effect = ValueError(
-            "Token missing 'kid' in header"
-        )
+        provider.validate_token.side_effect = ValueError("Token missing 'kid' in header")
         mock_get_provider.return_value = provider
 
         import auth_server.server as server_module
@@ -1168,13 +1166,20 @@ class TestReloadScopesEndpoint:
     def test_reload_scopes_success_with_jwt(
         self, mock_get_provider, mock_reload_scopes, auth_env_vars
     ):
-        """Test successful scopes reload using self-signed JWT."""
+        """Test successful scopes reload using an internal service JWT.
+
+        The token is minted via ``generate_internal_token`` (not hand-rolled)
+        so it carries the internal-service contract enforced by
+        ``validate_internal_auth``: audience ``mcp-internal``, a
+        ``token_kind=internal-service`` claim, and a signature made with the
+        derived internal key rather than the raw SECRET_KEY (Security Finding 1).
+        A user-shape token (aud=mcp-registry, raw-key signed) is now rejected.
+        """
         # Arrange
         mock_reload_scopes.return_value = {"group_mappings": {}}
 
-        import jwt
-
         import auth_server.server as server_module
+        from registry.auth.internal import generate_internal_token
 
         # Patch module-level SECRET_KEY to match the test env var
         # (it may already be set to a different value from earlier test imports)
@@ -1185,19 +1190,11 @@ class TestReloadScopesEndpoint:
         try:
             client = TestClient(server_module.app)
 
-            now = int(time.time())
-            token = jwt.encode(
-                {
-                    "iss": "mcp-auth-server",
-                    "aud": "mcp-registry",
-                    "sub": "registry-service",
-                    "purpose": "reload-scopes",
-                    "token_use": "access",
-                    "iat": now,
-                    "exp": now + 30,
-                },
-                secret_key,
-                algorithm="HS256",
+            # The auth_env_vars fixture sets SECRET_KEY in os.environ (monkeypatch),
+            # which is what generate_internal_token reads to derive the signing key.
+            token = generate_internal_token(
+                subject="registry-service",
+                purpose="reload-scopes",
             )
 
             # Act
@@ -3111,9 +3108,7 @@ class TestLogScopesLoaded:
         from auth_server import server as server_module
 
         with patch.object(server_module, "logger") as mock_logger:
-            server_module._log_scopes_loaded(
-                {"group_mappings": {"mcp-registry-admin": ["admin"]}}
-            )
+            server_module._log_scopes_loaded({"group_mappings": {"mcp-registry-admin": ["admin"]}})
 
         mock_logger.warning.assert_not_called()
         mock_logger.info.assert_called_once()

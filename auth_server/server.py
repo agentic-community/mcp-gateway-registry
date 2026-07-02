@@ -80,14 +80,23 @@ _auth_log_file = _setup_logging(service_name="auth-server")
 logger = logging.getLogger(__name__)
 logger.info(f"Auth-server logging configured. Writing to file: {_auth_log_file}")
 
-# Import JWT constants from shared internal auth module
-from registry.auth.internal import (
-    _INTERNAL_JWT_AUDIENCE as JWT_AUDIENCE,
-)
+# Import JWT constants from shared internal auth module.
+#
+# The issuer is shared (the same auth server issues both user and internal
+# tokens). The AUDIENCE is deliberately NOT shared: user tokens use
+# ``_USER_JWT_AUDIENCE`` ("mcp-registry") below, while internal service tokens
+# use ``_INTERNAL_JWT_AUDIENCE`` ("mcp-internal"). Historically this file
+# borrowed ``_INTERNAL_JWT_AUDIENCE`` for user tokens too, which collapsed the
+# trust boundary between user and internal tokens (Security Finding 1). Keep
+# these two audiences distinct.
 from registry.auth.internal import (
     _INTERNAL_JWT_ISSUER as JWT_ISSUER,
 )
 from registry.auth.internal import validate_internal_auth
+
+# Audience for end-user access tokens. MUST stay distinct from
+# registry.auth.internal._INTERNAL_JWT_AUDIENCE ("mcp-internal").
+_USER_JWT_AUDIENCE: str = "mcp-registry"
 
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
@@ -1736,7 +1745,7 @@ class SimplifiedCognitoValidator:
                 SECRET_KEY,
                 algorithms=["HS256"],
                 issuer=JWT_ISSUER,
-                audience=JWT_AUDIENCE,
+                audience=_USER_JWT_AUDIENCE,
                 options={
                     "verify_exp": True,
                     "verify_iat": True,
@@ -3247,7 +3256,7 @@ async def generate_user_token(
             # Build JWT claims
             jwt_claims = {
                 "iss": JWT_ISSUER,
-                "aud": JWT_AUDIENCE,
+                "aud": _USER_JWT_AUDIENCE,
                 "sub": username,
                 "preferred_username": username,
                 "email": user_email,
