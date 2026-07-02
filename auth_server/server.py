@@ -4,6 +4,7 @@ Configuration is passed via headers instead of environment variables.
 """
 
 import argparse
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -12,6 +13,7 @@ import logging
 import os
 import re
 import secrets
+import socket
 
 # Import shared scopes loader and repository factory from registry common module
 import sys
@@ -42,6 +44,7 @@ from internal_request_token import (
     mint_generic_proxy_token,
     mint_mcp_proxy_token,
     mint_registry_ui_token,
+    verify_generic_proxy_token,
     verify_mcp_proxy_token,
 )
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -7703,6 +7706,403 @@ def _safe_parse_body(
 
 
 # ---------------------------------------------------------------------------
+# Generic reverse-proxy hop (/proxy/{entity_type}/{entity_path:path})
+# ---------------------------------------------------------------------------
+#
+# Forwards an arbitrary HTTP verb to a proxied non-MCP entity's PINNED upstream.
+# nginx routes here after /validate succeeds; verify_generic_proxy_token (route
+# dependency) has already verified the /validate-minted X-Internal-Token-Generic
+# and stashed its claims (identity/scopes/upstream) on
+# request.state.generic_proxy_claims. The destination host is cryptographically
+# pinned in the token; the inbound X-Upstream-Url header is IGNORED. There is NO
+# JSON-RPC parsing and NO tools/list filtering — the hop is a uniform,
+# response-buffering (unary) proxy in v1 (no streaming / no WebSocket upgrade).
+
+# The verbs the generic hop accepts. HEAD/OPTIONS included for discovery/preflight.
+_GENERIC_PROXY_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+
+# WIDER response-header allowlist than the MCP hop's _FORWARDED_RESPONSE_HEADERS:
+# the generic hop fronts dashboards / static files / redirects, so it must forward
+# Location (redirects), caching validators, and download/range headers. STILL
+# excluded (security): Set-Cookie, Strict-Transport-Security, Content-Security-
+# Policy, X-Frame-Options and other framing/policy headers — an arbitrary proxied
+# backend must NOT dictate cookie or security policy on the gateway origin. Stored
+# lowercase; matched case-insensitively. Adding an entry is security-relevant.
+_FORWARDED_GENERIC_RESPONSE_HEADERS: frozenset[str] = frozenset(
+    {
+        "location",
+        "content-type",
+        "content-length",
+        "content-encoding",
+        "content-language",
+        "content-disposition",
+        "content-range",
+        "accept-ranges",
+        "cache-control",
+        "etag",
+        "last-modified",
+        "vary",
+        "age",
+        "expires",
+        # www-authenticate: forwarded so an API backend can negotiate auth with the
+        # client. Trade-off (accepted for API-fronting): a backend can emit
+        # WWW-Authenticate: Basic/Negotiate that triggers a browser credential
+        # prompt on the GATEWAY origin. Revisit if generic targets become untrusted
+        # HTML-only.
+        "www-authenticate",
+        "retry-after",
+        "mcp-session-id",
+        "x-mcp-session-id",
+    }
+)
+
+# The gateway SETS these on every generic-proxy response (NOT forwarded from the
+# backend). Because the hop can serve a backend's text/html from the gateway's OWN
+# origin while dropping the backend's CSP, these keep backend HTML/JS from running
+# with gateway-origin privileges (reading same-origin endpoints, riding the cookie).
+_GATEWAY_SET_SECURITY_HEADERS: dict[str, str] = {
+    "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+}
+
+# Metadata IPs the egress self-check probes. If EITHER is reachable, the network
+# egress policy (the real DNS-rebind defense) is NOT in place.
+_METADATA_PROBE_TARGETS: tuple[tuple[str, int], ...] = (
+    ("169.254.169.254", 80),
+    ("fd00:ec2::254", 80),
+)
+
+# Process-local feature latch. Starts None (unknown); set True/False by the
+# startup egress self-check. When False, the generic hop fails closed (503)
+# regardless of the config flag — an enabled flag without a verified egress
+# policy is an open DNS-rebind hole, so we refuse to proxy.
+_generic_proxy_feature_active: bool | None = None
+
+# Concurrency guard (OOM): bounds in-flight generic requests so worst-case heap =
+# generic_proxy_max_body_bytes * cap. Lazily created so the cap reads live config.
+_generic_proxy_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_generic_proxy_semaphore() -> asyncio.Semaphore:
+    """Return the process-wide generic-hop concurrency semaphore (lazy init)."""
+    global _generic_proxy_semaphore
+    if _generic_proxy_semaphore is None:
+        cap = getattr(settings, "gateway_generic_max_concurrency", 32)
+        _generic_proxy_semaphore = asyncio.Semaphore(max(1, int(cap)))
+    return _generic_proxy_semaphore
+
+
+def _read_generic_max_body_bytes() -> int:
+    """Response-buffer cap for the generic hop (generic_proxy_max_body_bytes)."""
+    minimum = 1024
+    try:
+        value = getattr(settings, "generic_proxy_max_body_bytes", None)
+        if value is not None:
+            return max(int(value), minimum)
+    except (TypeError, ValueError):
+        pass
+    return 10 * 1024 * 1024
+
+
+def _generic_tls_verify() -> bool | str:
+    """Resolve the generic hop's httpx verify= from gateway_generic_tls_verify.
+
+    Returns True (verify against system store), False (disabled — logged loud at
+    startup), or a filesystem path to a custom CA bundle.
+    """
+    raw = str(getattr(settings, "gateway_generic_tls_verify", "true")).strip()
+    if raw.lower() == "true":
+        return True
+    if raw.lower() == "false":
+        return False
+    return raw  # CA bundle path
+
+
+def _select_forwarded_generic_response_headers(
+    upstream_headers: Mapping[str, str],
+) -> dict[str, str]:
+    """Apply the wider generic-hop response-header allowlist (case-insensitive).
+
+    Anything outside _FORWARDED_GENERIC_RESPONSE_HEADERS (Set-Cookie, HSTS, CSP,
+    framing headers, and Starlette-managed framing) is dropped. Original casing is
+    preserved on the returned dict.
+    """
+    selected: dict[str, str] = {}
+    for key, value in upstream_headers.items():
+        if key.lower() in _FORWARDED_GENERIC_RESPONSE_HEADERS:
+            selected[key] = value
+    return selected
+
+
+def _assert_outbound_host_pinned(
+    outbound_url: str,
+    pinned_upstream: str,
+) -> None:
+    """Assert the constructed outbound URL stays on the pinned upstream.
+
+    Rejecting a literal '..' in the sub-path is NOT sufficient: httpx/urljoin can
+    still resolve dot segments or other tricks after the string join. After
+    building the outbound URL, its scheme/host/port MUST equal the pinned base's —
+    this enforces that the sub-path append did not escape the cryptographically
+    pinned host (SSRF confinement). Raises 400 on mismatch.
+    """
+    out = urlparse(outbound_url)
+    base = urlparse(pinned_upstream)
+    if (out.scheme, out.hostname, out.port) != (base.scheme, base.hostname, base.port):
+        logger.warning(
+            "generic_proxy: outbound host escaped pin (outbound=%s://%s:%s base=%s://%s:%s)",
+            out.scheme,
+            out.hostname,
+            out.port,
+            base.scheme,
+            base.hostname,
+            base.port,
+        )
+        raise HTTPException(status_code=400, detail="Proxy target host mismatch")
+
+
+def _build_generic_outbound_url(
+    upstream_url: str,
+    entity_path: str,
+    bound_registered_path: str,
+) -> str:
+    """Append the confined sub-path (route path beyond the registered entity path)
+    to the PINNED upstream base, or return the base unchanged when there is none.
+
+    Confinement (SSRF): the sub-path is the route's entity_path with the bound
+    registered prefix removed. Reject any sub-path segment that is '..' or that
+    contains a scheme ('://') or userinfo ('@') before appending — then the caller
+    asserts post-join host equality. The pinned base host is never overridden.
+
+    NOTE: entity_path arrives from Starlette's ``{entity_path:path}`` route param,
+    which is already query/fragment-split — so it cannot contain a raw '?' or '#'
+    (those become request.query_params, forwarded separately). A protocol-relative
+    '//host' remainder cannot reassign the host either, because it is always
+    appended after ``base + '/'`` (never at the authority position) and the
+    post-join host-equality assertion is the backstop. Encoded dots ('%2e%2e') are
+    not decoded before the socket, so at worst they hit an odd path on the *pinned*
+    backend, not a different host.
+    """
+    norm_route = entity_path.strip("/")
+    norm_bound = bound_registered_path.strip("/")
+    if norm_route == norm_bound:
+        sub = ""
+    elif norm_bound and norm_route.startswith(norm_bound + "/"):
+        sub = norm_route[len(norm_bound) + 1 :]
+    else:
+        # Should not happen (verify_generic_proxy_token already enforced the
+        # prefix), but fail closed rather than append an unconfined remainder.
+        raise HTTPException(status_code=400, detail="Entity path outside bound prefix")
+
+    if not sub:
+        return upstream_url
+    if ".." in sub.split("/") or "://" in sub or "@" in sub:
+        logger.warning("generic_proxy: illegal sub-path %r", sub)
+        raise HTTPException(status_code=400, detail="Illegal sub-path")
+    return upstream_url.rstrip("/") + "/" + sub
+
+
+async def _run_egress_selfcheck() -> bool:
+    """Probe the metadata IPs; return True if egress looks restricted (safe).
+
+    A short, non-credentialed TCP connect to each metadata target. If EITHER
+    connects, the network egress policy is NOT in place (open DNS-rebind) and this
+    returns False. Connection refused/timeout/unreachable => that target is
+    blocked (good). Never raises.
+    """
+
+    async def _one(host: str, port: int) -> bool:
+        """True if the target is REACHABLE (bad)."""
+        try:
+            fut = asyncio.open_connection(host, port)
+            reader_writer = await asyncio.wait_for(fut, timeout=2.0)
+            _, writer = reader_writer
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:  # noqa: BLE001 - close best-effort  # nosec B110
+                pass
+            return True
+        except (TimeoutError, OSError, socket.gaierror):
+            return False
+        except Exception as exc:  # noqa: BLE001 - never let the probe raise
+            logger.debug("egress self-check probe error for %s:%s: %s", host, port, exc)
+            return False
+
+    reachable = await asyncio.gather(*(_one(h, p) for h, p in _METADATA_PROBE_TARGETS))
+    return not any(reachable)
+
+
+async def initialize_generic_proxy_feature() -> None:
+    """Set the process-local generic-proxy feature latch at startup.
+
+    Feature stays OFF unless BOTH (a) gateway_generic_proxy_enabled is true AND
+    (b) the egress self-check passes (or is opted out). A failed self-check logs
+    CRITICAL and disables the feature for this process — it does NOT fail pod
+    readiness (that would take down all of /validate/OAuth for one optional
+    feature). Emits gateway_egress_policy_unverified 0/1.
+    """
+    global _generic_proxy_feature_active
+
+    if not getattr(settings, "gateway_generic_proxy_enabled", False):
+        _generic_proxy_feature_active = False
+        logger.info("Generic proxy feature disabled (gateway_generic_proxy_enabled=false)")
+        return
+
+    if not getattr(settings, "gateway_egress_selfcheck_enabled", True):
+        _generic_proxy_feature_active = True
+        logger.warning(
+            "Generic proxy ENABLED with egress self-check OPTED OUT "
+            "(GATEWAY_EGRESS_SELFCHECK_ENABLED=false) — ensure the network egress "
+            "policy is enforced another way; DNS-rebind to the metadata IP is "
+            "otherwise unmitigated."
+        )
+        _set_egress_unverified_metric(0)
+        return
+
+    egress_ok = await _run_egress_selfcheck()
+    _generic_proxy_feature_active = egress_ok
+    if egress_ok:
+        logger.info("Generic proxy egress self-check PASSED; feature active")
+        _set_egress_unverified_metric(0)
+    else:
+        logger.critical(
+            "Generic proxy egress self-check FAILED: a cloud metadata IP "
+            "(169.254.169.254 / fd00:ec2::254) is REACHABLE from the auth-server. "
+            "The required network egress policy is NOT enforced — DISABLING the "
+            "generic-proxy feature for this process (fail-closed). Deploy the "
+            "egress NetworkPolicy/security-group before enabling this feature."
+        )
+        _set_egress_unverified_metric(1)
+
+    tls_verify = str(getattr(settings, "gateway_generic_tls_verify", "true")).strip()
+    if tls_verify.lower() == "false":
+        logger.warning(
+            "GATEWAY_GENERIC_TLS_VERIFY=false — the generic hop will NOT verify "
+            "upstream TLS certificates. NOT recommended outside local testing."
+        )
+    elif tls_verify.lower() != "true":
+        # Any non-true/false value is treated as a CA-bundle path. Log it so a typo
+        # (e.g. "tru") surfaces at startup instead of silently 502-ing every request
+        # (httpx would fail to load the "bundle" at connect time).
+        logger.info(
+            "GATEWAY_GENERIC_TLS_VERIFY=%r — generic hop will verify against this "
+            "custom CA bundle path (must exist and be readable).",
+            tls_verify,
+        )
+
+
+def _set_egress_unverified_metric(value: int) -> None:
+    """Best-effort emit of the gateway_egress_policy_unverified gauge."""
+    try:
+        from registry.core.metrics import GATEWAY_EGRESS_POLICY_UNVERIFIED
+
+        GATEWAY_EGRESS_POLICY_UNVERIFIED.set(value)
+    except Exception as exc:  # noqa: BLE001 - metric emission must never break startup
+        logger.debug("could not set gateway_egress_policy_unverified: %s", exc)
+
+
+@app.api_route(
+    "/proxy/{entity_type}/{entity_path:path}",
+    methods=_GENERIC_PROXY_METHODS,
+    dependencies=[Depends(verify_generic_proxy_token)],
+)
+async def generic_proxy(
+    entity_type: str,
+    entity_path: str,
+    request: Request,
+):
+    """Forward an arbitrary HTTP verb to a proxied non-MCP entity's pinned upstream.
+
+    verify_generic_proxy_token (route dependency) has already verified the token
+    and stashed claims; identity/scopes/destination come from those verified
+    claims, NOT the forgeable inbound headers. The hop is uniform (no JSON-RPC
+    parsing, no tools/list filtering) and unary (buffers the bounded response).
+    """
+    # Fail closed if the feature latch is off (flag disabled OR egress self-check
+    # failed). None (pre-startup) is treated as off.
+    if not _generic_proxy_feature_active:
+        raise HTTPException(
+            status_code=503,
+            detail="Generic proxy feature is not active on this server",
+        )
+
+    claims = request.state.generic_proxy_claims
+    upstream_url = claims["upstream_url"]  # cryptographically pinned base
+    bound_registered_path = claims.get("server", "")
+
+    # Build the confined outbound URL (sub-path appended to the pinned base) and
+    # assert it stayed on the pinned host — belt (segment reject) and suspenders
+    # (post-join host-equality).
+    outbound_url = _build_generic_outbound_url(upstream_url, entity_path, bound_registered_path)
+    _assert_outbound_host_pinned(outbound_url, upstream_url)
+
+    try:
+        request_body = await request.body()
+    except Exception as exc:
+        logger.error(f"generic_proxy: failed to read request body: {exc}")
+        raise HTTPException(status_code=400, detail="Invalid request body") from exc
+
+    max_body_bytes = _read_generic_max_body_bytes()
+    forward_headers = _forward_headers(dict(request.headers))
+    verify = _generic_tls_verify()
+
+    logger.info(
+        "generic_proxy: type=%s path=/%s method=%s",
+        entity_type,
+        entity_path,
+        request.method,
+    )
+
+    semaphore = _get_generic_proxy_semaphore()
+    async with semaphore:
+        try:
+            # follow_redirects=False (second-SSRF guard): a 30x is returned to the
+            # client verbatim (Location forwarded via the allowlist); the next hop
+            # re-enters the gateway and is re-authorized. Auto-following would
+            # bypass egress validation and could hit an attacker Location.
+            async with httpx.AsyncClient(
+                timeout=30.0,
+                follow_redirects=False,
+                verify=verify,
+            ) as client:
+                async with client.stream(
+                    request.method,
+                    outbound_url,
+                    content=request_body,
+                    headers=forward_headers,
+                    params=dict(request.query_params),
+                ) as upstream_response:
+                    body_bytes = await _read_bounded(upstream_response, max_body_bytes)
+                    status_code = upstream_response.status_code
+                    content_type = upstream_response.headers.get(
+                        "content-type", "application/octet-stream"
+                    )
+                    upstream_headers = dict(upstream_response.headers)
+        except HTTPException:
+            raise
+        except httpx.TimeoutException as exc:
+            logger.error(f"generic_proxy: upstream timeout for {outbound_url}: {exc}")
+            raise HTTPException(status_code=504, detail="Upstream timed out") from exc
+        except httpx.HTTPError as exc:
+            logger.error(f"generic_proxy: upstream error for {outbound_url}: {exc}")
+            raise HTTPException(status_code=502, detail="Upstream error") from exc
+
+    response_headers = _select_forwarded_generic_response_headers(upstream_headers)
+    # Gateway-set security headers win over anything the backend tried to set
+    # (the allowlist already dropped backend CSP/framing, but set ours explicitly).
+    response_headers.update(_GATEWAY_SET_SECURITY_HEADERS)
+
+    return Response(
+        content=body_bytes,
+        status_code=status_code,
+        media_type=content_type,
+        headers=response_headers,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Startup: legacy-scope audit (Issue #1026, LLD Step 9)
 # ---------------------------------------------------------------------------
 
@@ -7788,3 +8188,19 @@ async def _audit_legacy_scopes_on_startup() -> int:
     else:
         logger.info("Legacy scope audit: no issues found.")
     return warnings_emitted
+
+
+@app.on_event("startup")
+async def _init_generic_proxy_feature_on_startup() -> None:
+    """Set the generic-proxy feature latch (egress self-check) during boot.
+
+    Never raises into startup — on any error the latch stays its default (None
+    => feature inactive), which is the fail-closed posture.
+    """
+    try:
+        await initialize_generic_proxy_feature()
+    except Exception as exc:
+        logger.error(
+            f"Generic-proxy feature init errored during startup: {exc}",
+            exc_info=True,
+        )

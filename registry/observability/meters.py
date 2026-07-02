@@ -394,6 +394,41 @@ _gateway_generic_blocks_dropped_counter = _meter.create_counter(
 gateway_generic_blocks_dropped_total = _CounterAdapter(_gateway_generic_blocks_dropped_counter)
 
 
+# Egress-policy verification gauge. 1 = the startup egress self-check found a
+# cloud metadata IP reachable (network egress policy NOT enforced; the generic
+# proxy feature has been disabled for this process). 0 = verified/clean or the
+# check was opted out. A permanent 1 is the operator's signal that an enabled
+# generic-proxy feature is running without its required DNS-rebind defense.
+# Backed by an ObservableGauge over a module-local value that the auth-server
+# self-check sets via the _EgressUnverifiedGauge adapter's .set().
+
+
+class _EgressUnverifiedGauge:
+    """Minimal settable-gauge shim: .set(v) stores; an ObservableGauge emits it."""
+
+    def __init__(self) -> None:
+        self._value: int = 0
+
+    def set(self, value: int) -> None:  # noqa: A003 - mirroring prometheus_client API
+        self._value = int(value)
+
+    def _observe(self, _options: Any) -> Any:
+        yield metrics.Observation(self._value, {})
+
+
+gateway_egress_policy_unverified = _EgressUnverifiedGauge()
+
+_meter.create_observable_gauge(
+    name="mcpgw_registry_gateway_egress_policy_unverified",
+    callbacks=[gateway_egress_policy_unverified._observe],
+    description=(
+        "1 if the generic-proxy egress self-check found a metadata IP reachable "
+        "(policy unverified; feature disabled for this process), else 0"
+    ),
+    unit="1",
+)
+
+
 # Mode-blocked requests (registry/core/metrics.py:43)
 _mode_blocked_requests_counter = _meter.create_counter(
     name="mcpgw_registry_mode_blocked_requests_total",

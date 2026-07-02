@@ -1339,6 +1339,51 @@ class Settings(BaseSettings):
             "deployment. Consumed by the auth-server."
         ),
     )
+    generic_proxy_max_body_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+        description=(
+            "Upper bound (bytes) on the buffered UPSTREAM RESPONSE body the "
+            "generic hop reads before returning (mirrors MCP_PROXY_MAX_BODY_BYTES). "
+            "The hop is unary/response-buffering in v1, so worst-case transient "
+            "heap is roughly this times gateway_generic_max_concurrency — size "
+            "both against the auth-server memory limit. Distinct from the nginx "
+            "gateway_generic_client_max_body_size (inbound request body). "
+            "Consumed by the auth-server."
+        ),
+    )
+    gateway_generic_max_concurrency: int = Field(
+        default=32,
+        ge=1,
+        description=(
+            "Semaphore cap on in-flight generic-hop requests (OOM guard). "
+            "Worst-case auth-server heap from buffering approx = "
+            "generic_proxy_max_body_bytes * this. Tune down for memory-"
+            "constrained single-replica deployments. Consumed by the auth-server."
+        ),
+    )
+    gateway_generic_tls_verify: str = Field(
+        default="true",
+        description=(
+            "TLS verification for the generic hop's httpx client to HTTPS "
+            "targets. 'true' = verify against the system trust store (default); a "
+            "filesystem path = custom CA bundle (private-CA dashboards); 'false' = "
+            "disable verification (NOT recommended; emits a startup WARNING). "
+            "Passed to httpx.AsyncClient(verify=...). Consumed by the auth-server."
+        ),
+    )
+    gateway_egress_selfcheck_enabled: bool = Field(
+        default=True,
+        description=(
+            "Startup egress self-check. When the generic proxy is enabled, the "
+            "auth-server probe-connects to the cloud metadata IPs; if EITHER is "
+            "reachable (egress not actually restricted), it logs CRITICAL, emits "
+            "gateway_egress_policy_unverified=1, and DISABLES the generic-proxy "
+            "feature for this process (NOT pod readiness). Opt out only where the "
+            "metadata IP is legitimately reachable but proxying is constrained "
+            "another way. Consumed by the auth-server."
+        ),
+    )
 
     @property
     def nginx_updates_enabled(self) -> bool:
