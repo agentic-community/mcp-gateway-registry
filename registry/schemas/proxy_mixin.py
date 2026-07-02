@@ -244,6 +244,12 @@ def resolve_proxy_target(
         # stripped on ingest, so without this a proxied synced record would fall
         # back to the PEER-SUPPLIED proxy_pass_url/url below.
         return None
+    if "is_enabled" in doc and not doc["is_enabled"]:
+        # A disabled entity is not reachable, so it gets no gateway route. Gated
+        # only when the caller supplied is_enabled (list_proxied projects it);
+        # absent means "not my decision" (a partial projection), so we don't
+        # assume disabled.
+        return None
     if doc.get("proxy_disabled_reason"):
         return None  # refresh auto-disabled this route
     explicit = doc.get("proxy_target_url")

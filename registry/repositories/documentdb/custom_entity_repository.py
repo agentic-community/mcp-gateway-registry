@@ -20,6 +20,7 @@ from pymongo.errors import DuplicateKeyError
 
 from ...schemas.custom_entity_models import CustomEntityRecord
 from ..interfaces import CustomEntityRepositoryBase
+from ._identity_url_sidecar import ensure_is_proxied_index
 from .client import get_collection_name, get_documentdb_client
 
 # Configure logging
@@ -77,6 +78,39 @@ class DocumentDBCustomEntityRepository(CustomEntityRepositoryBase):
             logger.info(f"Created indexes for {self._collection_name} collection")
         except Exception as e:
             logger.warning(f"Could not create indexes: {e}")
+
+        # Optional is_proxied index (partial w/ plain fallback, never raises) —
+        # AFTER _indexes_created so a DocumentDB rejection can't defeat the guard.
+        await ensure_is_proxied_index(collection, self._collection_name)
+
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Projected list of proxied custom records across all types.
+
+        Each record carries its own ``entity_type`` (the type token). Custom
+        entities have no native backend URL, so proxy_target_url is required.
+        Returns raw dicts so a bypass-written invalid row can't crash the reload.
+        """
+        projection = {
+            "entity_type": 1,
+            "is_proxied": 1,
+            "is_enabled": 1,
+            "proxy_target_url": 1,
+            "proxy_resolved_ips": 1,
+            "proxy_target_host": 1,
+            "proxy_disabled_reason": 1,
+            "sync_metadata": 1,
+        }
+        try:
+            collection = await self._get_collection()
+            cursor = collection.find({"is_proxied": True}, projection)
+            rows = []
+            async for doc in cursor:
+                doc["path"] = doc.pop("_id")
+                rows.append(doc)
+            return rows
+        except Exception as e:
+            logger.error(f"Error listing proxied custom records: {e}", exc_info=True)
+            return []
 
     async def create(
         self,

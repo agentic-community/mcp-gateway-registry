@@ -32,6 +32,7 @@ from ...utils.url_normalize import (
 from ..interfaces import SkillRepositoryBase
 from ._identity_url_sidecar import (
     backfill_normalized_identity_url,
+    ensure_is_proxied_index,
     find_by_normalized_identity_url,
 )
 from ._unique_id_index import (
@@ -187,6 +188,13 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         except Exception as e:
             logger.warning(f"Could not create indexes: {e}")
 
+        # Optional is_proxied index for the list_proxied() hot path. Runs AFTER
+        # _indexes_created is set and never raises (see ensure_is_proxied_index):
+        # DocumentDB may reject partialFilterExpression, and an exception here
+        # must NOT leave _indexes_created False (that would re-run every index on
+        # every skill op). Falls back to a plain index so the hot path stays fast.
+        await ensure_is_proxied_index(collection, self._collection_name)
+
     async def get(
         self,
         path: str,
@@ -198,6 +206,35 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         if doc:
             return _document_to_skill(doc)
         return None
+
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Projected list of proxied skills for the nginx render hot path.
+
+        Skills have no native backend URL, so proxy_target_url is required (no
+        fallback field). Returns raw dicts (not SkillCard) so a bypass-written
+        invalid row can't crash the reload via model reconstruction.
+        """
+        projection = {
+            "is_proxied": 1,
+            "is_enabled": 1,
+            "proxy_target_url": 1,
+            "proxy_resolved_ips": 1,
+            "proxy_target_host": 1,
+            "proxy_disabled_reason": 1,
+            "sync_metadata": 1,
+        }
+        try:
+            await self.ensure_indexes()
+            collection = await self._get_collection()
+            cursor = collection.find({"is_proxied": True}, projection)
+            rows = []
+            async for doc in cursor:
+                doc["path"] = doc.pop("_id")
+                rows.append(doc)
+            return rows
+        except Exception as e:
+            logger.error(f"Error listing proxied skills from DocumentDB: {e}", exc_info=True)
+            return []
 
     async def list_all(
         self,

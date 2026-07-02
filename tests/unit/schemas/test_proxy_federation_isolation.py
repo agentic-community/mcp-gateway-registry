@@ -174,6 +174,30 @@ class TestFederatedEntityNeverResolvesToRoute:
         }
         assert resolve_proxy_target("skill", doc) == "https://local.example/"
 
+
+class TestDisabledEntityDoesNotResolve:
+    """A proxied-but-disabled entity gets no route; is_enabled gates only when
+    the caller supplies it (list_proxied projects it), else it's not assumed."""
+
+    def test_disabled_returns_none(self):
+        from registry.schemas.proxy_mixin import resolve_proxy_target
+
+        doc = {"is_proxied": True, "proxy_target_url": "https://t/", "is_enabled": False}
+        assert resolve_proxy_target("skill", doc) is None
+
+    def test_enabled_resolves(self):
+        from registry.schemas.proxy_mixin import resolve_proxy_target
+
+        doc = {"is_proxied": True, "proxy_target_url": "https://t/", "is_enabled": True}
+        assert resolve_proxy_target("skill", doc) == "https://t/"
+
+    def test_absent_is_enabled_is_not_assumed_disabled(self):
+        """A partial projection without is_enabled must not be treated as disabled."""
+        from registry.schemas.proxy_mixin import resolve_proxy_target
+
+        doc = {"is_proxied": True, "proxy_target_url": "https://t/"}
+        assert resolve_proxy_target("skill", doc) == "https://t/"
+
     def test_local_repersist_does_not_strip(self):
         """_mark_orphaned / _set_local_override read a LOCAL record and re-persist
         it; stripping there would wipe a local admin's proxy opt-in. They must NOT
