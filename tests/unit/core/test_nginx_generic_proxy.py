@@ -191,6 +191,18 @@ class TestCreateBlock:
         assert 'set $entity_path "agents/code-reviewer";' in block
         assert "client_max_body_size 8m;" in block
 
+    def test_forwards_token_under_generic_header_name(self):
+        # The hop's verify_generic_proxy_token reads X-Internal-Token-Generic, NOT
+        # the MCP hop's X-Internal-Token. Forwarding under the wrong name 401s the
+        # hop ("Missing internal proxy token"). Lock in the exact header name.
+        with patch("registry.core.nginx_service.settings") as s:
+            s.auth_server_url = "http://auth-server:8888"
+            s.gateway_generic_client_max_body_size = "1m"
+            block = _service()._create_generic_proxy_block("skill", "/skills/x", "https://x/")
+        assert "proxy_set_header X-Internal-Token-Generic $auth_internal_token_generic;" in block
+        # must NOT forward the generic token under the MCP header name
+        assert "proxy_set_header X-Internal-Token $auth_internal_token_generic;" not in block
+
     def test_auth_server_url_trailing_slash_not_doubled(self):
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888/"
