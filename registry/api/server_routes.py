@@ -568,9 +568,9 @@ async def read_root(
             )
 
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "services": service_data,
             "username": user_context["username"],
             "user_context": user_context,  # Pass full user context to template
@@ -2223,9 +2223,9 @@ async def edit_server_form(
             )
 
     return templates.TemplateResponse(
+        request,
         "edit_server.html",
         {
-            "request": request,
             "server": server_info,
             "username": user_context["username"],
             "user_context": user_context,
@@ -2595,9 +2595,9 @@ async def token_generation_page(
 ):
     """Show token generation page for authenticated users."""
     return templates.TemplateResponse(
+        request,
         "token_generation.html",
         {
-            "request": request,
             "username": user_context["username"],
             "user_context": user_context,
             "user_scopes": user_context["scopes"],
