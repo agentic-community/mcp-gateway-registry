@@ -14,6 +14,7 @@ from ...utils.url_normalize import ENTITY_TYPE_AGENT, NORMALIZED_IDENTITY_URL_FI
 from ..interfaces import AgentRepositoryBase
 from ._identity_url_sidecar import (
     backfill_normalized_identity_url,
+    ensure_is_proxied_index,
     ensure_normalized_identity_url_index,
     find_by_normalized_identity_url,
     populate_normalized_identity_url,
@@ -59,6 +60,9 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
                 collection,
                 self._collection_name,
             )
+            # Index backing list_proxied() (partial, with plain fallback for
+            # DocumentDB; never raises). See ensure_is_proxied_index.
+            await ensure_is_proxied_index(collection, self._collection_name)
             await backfill_normalized_identity_url(
                 collection,
                 self._collection_name,
@@ -99,6 +103,36 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         except Exception as e:
             logger.error(f"Error getting agent '{path}' from DocumentDB: {e}", exc_info=True)
             return None
+
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Projected list of proxied agents for the nginx render hot path.
+
+        Indexed ``is_proxied=True`` query projecting only the render/resolve
+        fields (native fallback: url). Returns raw dicts (not AgentCard) — the
+        render only needs the scalars, and a bypass-written invalid row must not
+        crash the reload via model reconstruction.
+        """
+        projection = {
+            "is_proxied": 1,
+            "is_enabled": 1,
+            "proxy_target_url": 1,
+            "proxy_resolved_ips": 1,
+            "proxy_target_host": 1,
+            "proxy_disabled_reason": 1,
+            "url": 1,
+            "sync_metadata": 1,
+        }
+        try:
+            collection = await self._get_collection()
+            cursor = collection.find({"is_proxied": True}, projection)
+            rows = []
+            async for doc in cursor:
+                doc["path"] = doc.pop("_id")
+                rows.append(doc)
+            return rows
+        except Exception as e:
+            logger.error(f"Error listing proxied agents from DocumentDB: {e}", exc_info=True)
+            return []
 
     async def list_all(self) -> list[AgentCard]:
         """List all agents."""

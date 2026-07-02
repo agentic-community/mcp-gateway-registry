@@ -15,6 +15,7 @@ from ...utils.url_normalize import ENTITY_TYPE_SERVER, NORMALIZED_IDENTITY_URL_F
 from ..interfaces import ServerRepositoryBase
 from ._identity_url_sidecar import (
     backfill_normalized_identity_url,
+    ensure_is_proxied_index,
     ensure_normalized_identity_url_index,
     find_by_normalized_identity_url,
     populate_normalized_identity_url,
@@ -69,6 +70,9 @@ class DocumentDBServerRepository(ServerRepositoryBase):
                 collection,
                 self._collection_name,
             )
+            # Index backing list_proxied() (partial, with plain fallback for
+            # DocumentDB; never raises). See ensure_is_proxied_index.
+            await ensure_is_proxied_index(collection, self._collection_name)
             await backfill_normalized_identity_url(
                 collection,
                 self._collection_name,
@@ -164,6 +168,39 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         except Exception as e:
             logger.error(f"Error listing servers from DocumentDB: {e}", exc_info=True)
             return {}
+
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Projected list of proxied servers for the nginx render hot path.
+
+        Indexed ``is_proxied=True`` query projecting only the fields the render +
+        resolve_proxy_target need: is_enabled (disabled -> no route), the
+        federation guard (sync_metadata), and the native fallback (proxy_pass_url
+        + deployment). Fail-closed: any error (incl. collection acquisition)
+        returns [] so a transient DB blip drops routes for one reload tick rather
+        than raising into the render.
+        """
+        projection = {
+            "is_proxied": 1,
+            "is_enabled": 1,
+            "proxy_target_url": 1,
+            "proxy_resolved_ips": 1,
+            "proxy_target_host": 1,
+            "proxy_disabled_reason": 1,
+            "proxy_pass_url": 1,
+            "deployment": 1,
+            "sync_metadata": 1,
+        }
+        try:
+            collection = await self._get_collection()
+            cursor = collection.find({"is_proxied": True}, projection)
+            rows = []
+            async for doc in cursor:
+                doc["path"] = doc.pop("_id")
+                rows.append(doc)
+            return rows
+        except Exception as e:
+            logger.error(f"Error listing proxied servers from DocumentDB: {e}", exc_info=True)
+            return []
 
     async def list_paginated(
         self,
