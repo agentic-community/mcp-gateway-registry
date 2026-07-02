@@ -121,10 +121,11 @@ app:
     quarantineFailClosed: false
     definitionsCacheTtlSeconds: 30
     backendTimeoutMs: 250
-  # Gateway generic-proxy feature (auth-server-consumed). Only takes effect when the
-  # registry chart's gatewayGenericProxyEnabled is true; even then the auth-server
-  # runs a startup egress self-check and disables the hop if a metadata IP is
-  # reachable. The four registry-consumed knobs live in the registry chart.
+  # Gateway generic-proxy feature (auth-server-consumed). The auth-server runs a
+  # startup egress self-check and disables the hop if a metadata IP is reachable.
+  # Keep this shared master switch equal to the registry chart value; otherwise
+  # the auth-server /proxy hop remains inactive and fails closed with 503.
+  gatewayGenericProxyEnabled: false
   genericProxyTokenTtlSeconds: 30 # TTL (s) for the generic-proxy internal token
   genericProxyMaxBodyBytes: "10485760" # Max upstream RESPONSE body the generic hop buffers (string to avoid Helm float sci-notation)
   gatewayGenericRequireBearerForWrites: true # CSRF: refuse cookie auth for write verbs
