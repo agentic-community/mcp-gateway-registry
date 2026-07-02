@@ -349,6 +349,12 @@ variable "session_cookie_secure" {
   default     = true
 }
 
+variable "cors_allowed_origins" {
+  description = "Comma-separated exact browser origins allowed to make credentialed cross-origin requests to the registry API (e.g. 'https://app.example.com,https://admin.example.com'). The registry's own origin is always trusted. Empty means same-origin only; there is no wildcard fallback."
+  type        = string
+  default     = ""
+}
+
 variable "session_cookie_domain" {
   description = "Domain for session cookies (e.g., '.example.com' for cross-subdomain sharing). Leave empty for single-domain deployments (cookie scoped to exact host only)."
   type        = string

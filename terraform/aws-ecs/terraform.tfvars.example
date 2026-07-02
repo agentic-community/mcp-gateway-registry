@@ -224,6 +224,14 @@ keycloak_database_password = "CHANGE-ME-DB-PASSWORD"
 # Default: true
 session_cookie_secure = true
 
+# CORS allowlist for the registry API (credentialed cross-origin requests).
+# Comma-separated EXACT origins (scheme + host + optional port). The registry's
+# own origin is always trusted, so this is only needed when a separate frontend
+# origin must call the API from the browser. There is no wildcard fallback:
+# leaving this empty means same-origin only.
+# Example: cors_allowed_origins = "https://app.example.com,https://admin.example.com"
+# cors_allowed_origins = ""
+
 # Session cookie domain (for cross-subdomain authentication)
 # Leave unset or empty for single-domain deployments (RECOMMENDED for most cases)
 # Set to domain with leading dot for cross-subdomain sharing
