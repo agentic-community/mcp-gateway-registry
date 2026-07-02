@@ -421,3 +421,153 @@ class TestAnsServerLinkOwnership:
             assert response.status_code != status.HTTP_403_FORBIDDEN
         finally:
             _clear()
+
+
+@pytest.mark.unit
+class TestRemoveServiceDeletePermissionKey:
+    """POST /servers/remove must key delete_service on the stored server_name.
+
+    The fine-grained delete_service permission check must use the stored
+    ``server_info["server_name"]`` as the trust key, matching every other
+    mutation handler, not the raw URL path token. A grant for the path token
+    that differs from the server_name must NOT authorize deletion, and a grant
+    for the actual server_name must.
+    """
+
+    def _server_info(self):
+        """Server whose stored name intentionally differs from the URL path token."""
+        return {
+            "path": "/victim",
+            "server_name": "victim-server",
+            "sync_metadata": {},
+        }
+
+    def _mock_service(self):
+        service = AsyncMock()
+        service.get_server_info = AsyncMock(return_value=self._server_info())
+        service.remove_server = AsyncMock(return_value=True)
+        return service
+
+    def _non_admin_with_delete(self, allowed: list[str]):
+        def factory():
+            return {
+                "username": "deleter",
+                "groups": ["engineering"],
+                "scopes": [],
+                "is_admin": False,
+                "ui_permissions": {"delete_service": allowed},
+                "accessible_servers": [],
+                "accessible_agents": [],
+                "accessible_services": [],
+            }
+
+        return factory
+
+    def test_delete_forbidden_when_grant_matches_path_token_not_server_name(self) -> None:
+        """A delete_service grant for the path token must NOT authorize deletion."""
+        # Grant keyed on the URL path token "victim" (the old, broken trust key).
+        _override_auth(self._non_admin_with_delete(["victim"]))
+        try:
+            with patch(
+                "registry.api.server_routes.server_service",
+                self._mock_service(),
+            ):
+                client = TestClient(app)
+                response = client.post("/api/servers/remove", data={"path": "/victim"})
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+        finally:
+            _clear()
+
+    def test_delete_allowed_when_grant_matches_server_name(self) -> None:
+        """A delete_service grant for the stored server_name authorizes deletion."""
+        _override_auth(self._non_admin_with_delete(["victim-server"]))
+        service = self._mock_service()
+        try:
+            with (
+                patch("registry.api.server_routes.server_service", service),
+                patch(
+                    "registry.core.nginx_service.nginx_reload_scheduler.flush_now",
+                    AsyncMock(),
+                ),
+                patch(
+                    "registry.health.service.health_service.broadcast_health_update",
+                    AsyncMock(),
+                ),
+                patch(
+                    "registry.services.scope_service.remove_server_scopes",
+                    AsyncMock(),
+                ),
+            ):
+                client = TestClient(app)
+                response = client.post("/api/servers/remove", data={"path": "/victim"})
+            assert response.status_code != status.HTTP_403_FORBIDDEN
+            service.remove_server.assert_awaited_once_with("/victim")
+        finally:
+            _clear()
+
+    def test_delete_forbidden_without_any_grant(self) -> None:
+        """A non-admin with no delete_service grant is denied (fail closed)."""
+        _override_auth(self._non_admin_with_delete([]))
+        try:
+            with patch(
+                "registry.api.server_routes.server_service",
+                self._mock_service(),
+            ):
+                client = TestClient(app)
+                response = client.post("/api/servers/remove", data={"path": "/victim"})
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+        finally:
+            _clear()
+
+    def test_delete_federated_server_blocked_before_permission_check(self) -> None:
+        """A federated (read-only) server cannot be deleted even with a valid grant.
+
+        The federated-server guard runs before the delete_service check and
+        applies to every caller, so it must reject the deletion regardless of a
+        matching server_name grant.
+        """
+        _override_auth(self._non_admin_with_delete(["victim-server"]))
+        service = AsyncMock()
+        service.get_server_info = AsyncMock(
+            return_value={
+                "path": "/victim",
+                "server_name": "victim-server",
+                "sync_metadata": {"is_federated": True, "source_peer_id": "peer-a"},
+            }
+        )
+        service.remove_server = AsyncMock(return_value=True)
+        try:
+            with patch("registry.api.server_routes.server_service", service):
+                client = TestClient(app)
+                response = client.post("/api/servers/remove", data={"path": "/victim"})
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+            service.remove_server.assert_not_awaited()
+        finally:
+            _clear()
+
+    def test_delete_allowed_for_admin(self) -> None:
+        """An administrator may delete regardless of delete_service grants."""
+        _override_auth(_admin)
+        service = self._mock_service()
+        try:
+            with (
+                patch("registry.api.server_routes.server_service", service),
+                patch(
+                    "registry.core.nginx_service.nginx_reload_scheduler.flush_now",
+                    AsyncMock(),
+                ),
+                patch(
+                    "registry.health.service.health_service.broadcast_health_update",
+                    AsyncMock(),
+                ),
+                patch(
+                    "registry.services.scope_service.remove_server_scopes",
+                    AsyncMock(),
+                ),
+            ):
+                client = TestClient(app)
+                response = client.post("/api/servers/remove", data={"path": "/victim"})
+            assert response.status_code != status.HTTP_403_FORBIDDEN
+            service.remove_server.assert_awaited_once_with("/victim")
+        finally:
+            _clear()

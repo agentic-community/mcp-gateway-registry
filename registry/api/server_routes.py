@@ -4547,18 +4547,26 @@ async def remove_service_api(
             },
         )
 
-    # Fine-grained delete permission check (gateway already validated api.servers access)
+    # Fine-grained delete permission check (gateway already validated api.servers access).
+    # Key the check on the stored server_name (matching every other mutation handler),
+    # not the URL path token, so the trust key is consistent and cannot be satisfied by
+    # a delete_service grant for a raw path string that differs from the server_name.
     if not user_context.get("is_admin", False):
-        ui_permissions = user_context.get("ui_permissions", {})
-        delete_service_perms = ui_permissions.get("delete_service", [])
-        server_name = path.strip("/")
-        if "all" not in delete_service_perms and server_name not in delete_service_perms:
-            logger.warning(f"User {user_context.get('username')} denied delete for server {path}")
+        from ..auth.dependencies import user_has_ui_permission_for_service
+
+        service_name = server_info["server_name"]
+        if not user_has_ui_permission_for_service(
+            "delete_service", service_name, user_context.get("ui_permissions", {})
+        ):
+            logger.warning(
+                f"User {user_context.get('username')} denied delete for server "
+                f"'{service_name}' ({path})"
+            )
             return JSONResponse(
                 status_code=403,
                 content={
                     "error": "Permission denied",
-                    "reason": f"User does not have delete_service permission for '{path}'",
+                    "reason": f"User does not have delete_service permission for '{service_name}'",
                 },
             )
 
