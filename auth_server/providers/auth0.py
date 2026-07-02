@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider
+from .base import AuthProvider, IdTokenVerificationError
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -507,6 +507,25 @@ class Auth0Provider(AuthProvider):
             logger.error(f"Failed to get M2M token: {e}")
             raise ValueError(f"M2M token generation failed: {e}")
 
+    def validate_id_token(self, id_token: str) -> dict[str, Any]:
+        """Verify an Auth0 OIDC id_token and return its verified claims.
+
+        Verifies the RS256 signature against the Auth0 JWKS and enforces issuer
+        (the Auth0 tenant issuer), audience (the gateway's client_id — the
+        id_token ``aud`` for Auth0), and expiry before any claim is trusted.
+        Fails closed.
+
+        Args:
+            id_token: The raw id_token string from the token endpoint.
+
+        Returns:
+            The verified id_token claim set.
+
+        Raises:
+            IdTokenVerificationError: If verification fails.
+        """
+        return self._verify_id_token_with_jwks(id_token, [self.issuer], [self.client_id])
+
     def extract_user_from_tokens(self, token_data: dict[str, Any]) -> dict[str, Any]:
         """Extract user information from Auth0 token response.
 
@@ -531,26 +550,19 @@ class Auth0Provider(AuthProvider):
                 - groups: List of group memberships
 
         Raises:
-            ValueError: If ID token is missing or cannot be parsed
+            ValueError: If the ID token is missing from the response.
+            IdTokenVerificationError: If the ID token is present but fails
+                cryptographic verification (signature/issuer/audience/expiry).
+                Callers MUST fail closed on this error.
         """
         if "id_token" not in token_data:
             raise ValueError("Missing ID token in Auth0 response")
 
         try:
-            # Validate issuer and audience claims on the ID token.
-            # Signature verification is skipped because this token was received
-            # directly from Auth0's token endpoint over TLS (OIDC Core 3.1.3.7).
-            id_token_claims = jwt.decode(
-                token_data["id_token"],
-                options={
-                    "verify_signature": False,
-                    "verify_iss": True,
-                    "verify_aud": True,
-                    "verify_exp": True,
-                },
-                issuer=self.issuer,
-                audience=self.client_id,
-            )
+            # Cryptographically verify the ID token against Auth0's JWKS
+            # (signature + issuer + audience + expiry) before trusting any
+            # claim. The gateway's client_id is the id_token 'aud' for Auth0.
+            id_token_claims = self.validate_id_token(token_data["id_token"])
             logger.info(f"Auth0 ID token claims decoded for sub: {id_token_claims.get('sub')}")
 
             # Extract groups from custom namespaced claim.
@@ -570,9 +582,11 @@ class Auth0Provider(AuthProvider):
                 "groups": groups,
             }
 
-        except jwt.InvalidTokenError as e:
-            logger.warning(f"Auth0 ID token parsing failed: {e}")
-            raise ValueError(f"Failed to parse Auth0 ID token: {e}") from e
+        except IdTokenVerificationError:
+            # Propagate the verification failure unchanged so the caller can
+            # fail closed (deny the login) rather than fall back to an
+            # unverified identity source.
+            raise
 
     def authorization_server_metadata(self) -> dict[str, Any]:
         """Return Auth0's RFC 8414 metadata.

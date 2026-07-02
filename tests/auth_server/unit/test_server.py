@@ -748,9 +748,7 @@ class TestValidateEndpoint:
         from unittest.mock import MagicMock
 
         provider = MagicMock()
-        provider.validate_token.side_effect = ValueError(
-            "Token missing 'kid' in header"
-        )
+        provider.validate_token.side_effect = ValueError("Token missing 'kid' in header")
         mock_get_provider.return_value = provider
 
         import auth_server.server as server_module
@@ -1993,6 +1991,116 @@ class TestOAuth2CallbackTokenStorage:
         )
 
 
+class TestOAuth2CallbackIdTokenVerification:
+    """The OAuth2 callback must verify a present id_token before trusting its
+    claims. A forged/tampered id_token (verification failure) denies the login
+    and never persists attacker-controlled identity or group claims.
+    """
+
+    def _drive_callback(self, provider: str, validate_side_effect):
+        """Drive the callback for a JWKS provider with a mocked provider whose
+        validate_id_token exhibits the given behaviour. Returns
+        (response, create_session_called, captured_kwargs).
+        """
+        from auth_server import server as srv
+        from auth_server.server import app, signer
+
+        mock_token_data = {
+            "access_token": "mock-access-token-value",
+            "id_token": "attacker-supplied-id-token",
+        }
+        temp_session_data = {
+            "state": "test-state",
+            "provider": provider,
+            "callback_uri": f"http://localhost:8888/oauth2/callback/{provider}",
+        }
+        temp_cookie = signer.dumps(temp_session_data)
+
+        captured: dict = {}
+        create_called = {"value": False}
+
+        async def _fake_create_session(**kwargs):
+            create_called["value"] = True
+            captured.update(kwargs)
+            return "fake-session-id"
+
+        fake_provider = MagicMock()
+        fake_provider.validate_id_token.side_effect = validate_side_effect
+
+        patched_config = dict(srv.OAUTH2_CONFIG)
+        patched_config["providers"] = dict(patched_config.get("providers", {}))
+        patched_config["providers"][provider] = {
+            "client_id": "gateway-web",
+            "user_info_url": "https://idp.example.com/userinfo",
+            "username_claim": "sub",
+            "email_claim": "email",
+            "name_claim": "name",
+        }
+
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with (
+            patch.object(srv, "OAUTH2_CONFIG", patched_config),
+            patch(
+                "auth_server.server.exchange_code_for_token",
+                new_callable=AsyncMock,
+                return_value=mock_token_data,
+            ),
+            patch("auth_server.server.get_auth_provider", return_value=fake_provider),
+            patch("session_store.create_session", _fake_create_session),
+        ):
+            response = client.get(
+                f"/oauth2/callback/{provider}",
+                params={"code": "test-code", "state": "test-state"},
+                cookies={"oauth2_temp_session": temp_cookie},
+                follow_redirects=False,
+            )
+
+        return response, create_called["value"], captured
+
+    @pytest.mark.parametrize("provider", ["keycloak", "entra", "okta", "pingfederate"])
+    def test_forged_id_token_denies_login_and_never_persists_groups(self, provider):
+        """A present id_token that fails verification must fail closed: the
+        session is never created, so forged group/identity claims cannot reach
+        the session store.
+        """
+        # Import the error via the SAME module path the server uses at runtime
+        # (auth_server/ is on sys.path, so the server imports `providers.base`).
+        # Using a different path (`auth_server.providers.base`) would create a
+        # distinct class object that the server's `except` would not catch.
+        from providers.base import IdTokenVerificationError
+
+        forged_claims_groups = ["mcp-registry-admin"]
+
+        def _raise(_token):
+            # Simulate a forged token whose (unverified) claims assert admin;
+            # verification rejects it before any claim is used.
+            raise IdTokenVerificationError(f"forged token asserting {forged_claims_groups}")
+
+        response, create_called, captured = self._drive_callback(provider, _raise)
+
+        # Login denied (not a 302 success redirect to the registry).
+        assert response.status_code == 401
+        # Fail closed: no session persisted at all.
+        assert create_called is False
+        assert captured == {}
+
+    def test_verified_id_token_allows_login(self):
+        """A verified id_token proceeds to session creation with its claims."""
+        verified = {
+            "sub": "alice",
+            "preferred_username": "alice",
+            "email": "alice@example.com",
+            "name": "Alice",
+            "groups": ["mcp-registry-user"],
+        }
+        response, create_called, captured = self._drive_callback("keycloak", lambda _t: verified)
+
+        assert response.status_code == 302
+        assert create_called is True
+        assert captured["username"] == "alice"
+
+
 # =============================================================================
 # MULTI-KEY STATIC TOKEN PARSER TESTS (issue #779)
 # =============================================================================
@@ -2915,9 +3023,7 @@ class TestLogScopesLoaded:
         from auth_server import server as server_module
 
         with patch.object(server_module, "logger") as mock_logger:
-            server_module._log_scopes_loaded(
-                {"group_mappings": {"mcp-registry-admin": ["admin"]}}
-            )
+            server_module._log_scopes_loaded({"group_mappings": {"mcp-registry-admin": ["admin"]}})
 
         mock_logger.warning.assert_not_called()
         mock_logger.info.assert_called_once()
