@@ -1485,6 +1485,13 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         resolver {os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")} valid=10s;
         resolver_timeout {os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")}s;
 
+        # NOTE: this block sets no proxy_read_timeout, so it inherits nginx's
+        # 60s default for the browser -> nginx -> auth-server mcp_proxy hop. The
+        # auth-server -> upstream MCP hop is bounded separately by
+        # MCP_PROXY_TIMEOUT (default 30s). Raising MCP_PROXY_TIMEOUT above 60s
+        # has no end-to-end effect unless a proxy_read_timeout is also added
+        # here to match, since nginx would cut the request first.
+
         # Authenticate request - pass entire request to auth server
         auth_request /validate;
 

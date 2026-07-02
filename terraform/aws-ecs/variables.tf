@@ -1257,6 +1257,17 @@ variable "mcp_proxy_max_body_bytes" {
   }
 }
 
+variable "mcp_proxy_timeout" {
+  description = "Timeout (seconds) for the auth-server proxy hop's upstream MCP request. Raise for servers with long-running tools. Default 30. Values above 60 also require raising proxy_read_timeout on the generated /mcp-proxy/ nginx blocks (they inherit nginx's 60s default)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.mcp_proxy_timeout >= 1
+    error_message = "mcp_proxy_timeout must be at least 1"
+  }
+}
+
 variable "tool_filter_audit_log_level" {
   description = "Log level for tool-pruning audit lines during the launch window. Valid values: DEBUG, INFO, WARNING. Default INFO during launch; flip to DEBUG after two quiet weeks in production."
   type        = string

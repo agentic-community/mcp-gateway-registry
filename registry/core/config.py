@@ -892,6 +892,16 @@ class Settings(BaseSettings):
             "with unusually large tool catalogs."
         ),
     )
+    mcp_proxy_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        description=(
+            "Timeout (seconds) for the auth-server proxy hop's upstream MCP "
+            "request. Raise for servers with long-running tools. Values above "
+            "60s also require raising proxy_read_timeout on the generated "
+            "/mcp-proxy/ nginx blocks (they inherit nginx's 60s default)."
+        ),
+    )
     tool_filter_audit_log_level: str = Field(
         default="INFO",
         description=(

@@ -334,7 +334,7 @@ def _read_mcp_proxy_max_body_bytes() -> int:
     try:
         candidate = int(raw)
     except ValueError:
-        logging.warning(f"Invalid MCP_PROXY_MAX_BODY_BYTES={raw!r}; using default {default_bytes}")
+        logger.warning(f"Invalid MCP_PROXY_MAX_BODY_BYTES={raw!r}; using default {default_bytes}")
         return default_bytes
     return max(candidate, minimum_bytes)
 
@@ -343,8 +343,8 @@ def _read_mcp_proxy_timeout() -> float:
     """Read the upstream MCP proxy timeout in seconds.
 
     Resolution order:
-    1. ``settings.mcp_proxy_timeout`` (if the attribute exists)
-    2. ``MCP_PROXY_TIMEOUT`` environment variable
+    1. ``settings.mcp_proxy_timeout`` (registry Settings field / MCP_PROXY_TIMEOUT)
+    2. ``MCP_PROXY_TIMEOUT`` environment variable (fallback when settings unset)
     3. Default: 30.0 seconds
 
     The minimum is 1 second to prevent accidental zero/negative values.
@@ -364,7 +364,7 @@ def _read_mcp_proxy_timeout() -> float:
     try:
         candidate = float(raw)
     except ValueError:
-        logging.warning(f"Invalid MCP_PROXY_TIMEOUT={raw!r}; using default {default_timeout}")
+        logger.warning(f"Invalid MCP_PROXY_TIMEOUT={raw!r}; using default {default_timeout}")
         return default_timeout
     return max(candidate, minimum_timeout)
 

@@ -66,6 +66,7 @@ app:
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
   mcpProxyMaxBodyBytes: "2097152" # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
+  mcpProxyTimeout: "30" # Timeout (seconds) for the proxy hop's upstream MCP request; min 1. Values >60s also need nginx proxy_read_timeout raised
   toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
   internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
   internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat

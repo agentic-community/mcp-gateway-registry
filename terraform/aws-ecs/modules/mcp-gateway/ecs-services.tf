@@ -424,6 +424,10 @@ module "ecs_service_auth" {
           value = tostring(var.mcp_proxy_max_body_bytes)
         },
         {
+          name  = "MCP_PROXY_TIMEOUT"
+          value = tostring(var.mcp_proxy_timeout)
+        },
+        {
           name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
           value = var.tool_filter_audit_log_level
         },

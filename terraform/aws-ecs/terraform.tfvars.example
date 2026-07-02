@@ -673,6 +673,12 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # unusually large tool catalogs.
 # mcp_proxy_max_body_bytes = 2097152
 
+# Timeout (seconds) for the auth-server proxy hop's upstream MCP request.
+# Raise for servers with long-running tools. Default 30. Values above 60 also
+# require raising proxy_read_timeout on the generated /mcp-proxy/ nginx blocks
+# (they inherit nginx's 60s default).
+# mcp_proxy_timeout = 30
+
 # Log level for tool-pruning audit lines during the launch window.
 # Valid values: "DEBUG", "INFO", "WARNING". Default "INFO" during launch;
 # flip to "DEBUG" after two quiet weeks in production.

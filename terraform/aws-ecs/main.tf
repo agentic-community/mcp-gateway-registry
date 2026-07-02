@@ -283,6 +283,7 @@ module "mcp_gateway" {
   # Tool-level access control (issue #1026)
   mcp_tools_list_filter_enabled = var.mcp_tools_list_filter_enabled
   mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
+  mcp_proxy_timeout             = var.mcp_proxy_timeout
   tool_filter_audit_log_level   = var.tool_filter_audit_log_level
 
   internal_token_ttl_seconds    = var.internal_token_ttl_seconds
