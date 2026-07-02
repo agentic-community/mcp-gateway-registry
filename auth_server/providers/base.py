@@ -33,6 +33,7 @@ class AuthProvider(ABC):
         valid_issuers: list[str],
         accepted_audiences: list[str],
         leeway_seconds: int = 0,
+        expected_nonce: str | None = None,
     ) -> dict[str, Any]:
         """Cryptographically verify an OIDC id_token against the provider JWKS.
 
@@ -43,6 +44,12 @@ class AuthProvider(ABC):
         unknown issuer, bad audience, expired token, or malformed input raises
         ``IdTokenVerificationError`` and no claims are returned.
 
+        When ``expected_nonce`` is supplied, the token's ``nonce`` claim is
+        enforced AFTER signature verification: the claim must be present and
+        equal the value bound to this login. This binds a (validly signed)
+        id_token to the specific authorization request it was issued for,
+        defeating replay/injection of a token minted for a different login.
+
         Args:
             id_token: The raw compact-serialized JWT id_token string.
             valid_issuers: Issuers the token's ``iss`` claim may match. The
@@ -51,6 +58,11 @@ class AuthProvider(ABC):
             accepted_audiences: Audiences the token's ``aud`` claim may match.
                 For id_tokens this is normally the OAuth2 client_id only.
             leeway_seconds: Optional clock-skew leeway for expiry checks.
+            expected_nonce: The nonce bound to this login (persisted in the
+                OAuth2 flow cookie). When not ``None`` the verified token's
+                ``nonce`` claim MUST match it exactly; a missing or mismatched
+                nonce fails closed. ``None`` skips the nonce check (used only
+                where no nonce was issued, e.g. a legacy in-flight login).
 
         Returns:
             The verified claim set as a dict. Safe to trust for identity and
@@ -59,7 +71,7 @@ class AuthProvider(ABC):
         Raises:
             IdTokenVerificationError: If the token is absent, malformed, signed
                 by an unknown key, from an unexpected issuer/audience, expired,
-                or otherwise fails verification.
+                nonce-mismatched, or otherwise fails verification.
         """
         if not id_token or not isinstance(id_token, str):
             raise IdTokenVerificationError("id_token is missing or not a string")
@@ -139,9 +151,24 @@ class AuthProvider(ABC):
         except jwt.InvalidTokenError as e:
             raise IdTokenVerificationError(f"id_token verification failed: {e}") from e
 
+        # Bind the (now cryptographically verified) token to THIS login. Done
+        # after signature verification so a forged nonce on an unsigned token
+        # can never reach this check. A signed token whose nonce does not match
+        # the one bound to this authorization request is a replay/injection.
+        if expected_nonce is not None:
+            token_nonce = claims.get("nonce")
+            if not token_nonce or token_nonce != expected_nonce:
+                raise IdTokenVerificationError(
+                    "id_token nonce does not match the value bound to this login"
+                )
+
         return claims
 
-    def validate_id_token(self, id_token: str) -> dict[str, Any]:
+    def validate_id_token(
+        self,
+        id_token: str,
+        expected_nonce: str | None = None,
+    ) -> dict[str, Any]:
         """Verify an OIDC id_token and return its verified claims.
 
         Providers that issue an id_token during the authorization-code flow MUST
@@ -152,6 +179,10 @@ class AuthProvider(ABC):
 
         Args:
             id_token: The raw id_token string from the token endpoint.
+            expected_nonce: The nonce bound to this login. When not ``None`` the
+                verified token's ``nonce`` claim must match it exactly (replay
+                protection). Overriding implementations MUST forward this to
+                ``_verify_id_token_with_jwks``.
 
         Returns:
             The verified claim set.

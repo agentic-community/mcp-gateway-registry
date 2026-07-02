@@ -507,16 +507,22 @@ class Auth0Provider(AuthProvider):
             logger.error(f"Failed to get M2M token: {e}")
             raise ValueError(f"M2M token generation failed: {e}")
 
-    def validate_id_token(self, id_token: str) -> dict[str, Any]:
+    def validate_id_token(
+        self,
+        id_token: str,
+        expected_nonce: str | None = None,
+    ) -> dict[str, Any]:
         """Verify an Auth0 OIDC id_token and return its verified claims.
 
         Verifies the RS256 signature against the Auth0 JWKS and enforces issuer
         (the Auth0 tenant issuer), audience (the gateway's client_id — the
         id_token ``aud`` for Auth0), and expiry before any claim is trusted.
-        Fails closed.
+        When ``expected_nonce`` is supplied, the token's ``nonce`` claim must
+        match it. Fails closed.
 
         Args:
             id_token: The raw id_token string from the token endpoint.
+            expected_nonce: The nonce bound to this login (replay protection).
 
         Returns:
             The verified id_token claim set.
@@ -524,9 +530,15 @@ class Auth0Provider(AuthProvider):
         Raises:
             IdTokenVerificationError: If verification fails.
         """
-        return self._verify_id_token_with_jwks(id_token, [self.issuer], [self.client_id])
+        return self._verify_id_token_with_jwks(
+            id_token, [self.issuer], [self.client_id], expected_nonce=expected_nonce
+        )
 
-    def extract_user_from_tokens(self, token_data: dict[str, Any]) -> dict[str, Any]:
+    def extract_user_from_tokens(
+        self,
+        token_data: dict[str, Any],
+        expected_nonce: str | None = None,
+    ) -> dict[str, Any]:
         """Extract user information from Auth0 token response.
 
         Parses the ID token from the OAuth2 token exchange response to extract
@@ -541,6 +553,9 @@ class Auth0Provider(AuthProvider):
         Args:
             token_data: Token response from Auth0 containing 'id_token'
                 and 'access_token' keys
+            expected_nonce: The nonce bound to this login. When not ``None`` the
+                verified id_token's ``nonce`` claim must match it (replay
+                protection).
 
         Returns:
             Dictionary containing:
@@ -562,7 +577,9 @@ class Auth0Provider(AuthProvider):
             # Cryptographically verify the ID token against Auth0's JWKS
             # (signature + issuer + audience + expiry) before trusting any
             # claim. The gateway's client_id is the id_token 'aud' for Auth0.
-            id_token_claims = self.validate_id_token(token_data["id_token"])
+            id_token_claims = self.validate_id_token(
+                token_data["id_token"], expected_nonce=expected_nonce
+            )
             logger.info(f"Auth0 ID token claims decoded for sub: {id_token_claims.get('sub')}")
 
             # Extract groups from custom namespaced claim.

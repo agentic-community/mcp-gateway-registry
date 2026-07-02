@@ -346,6 +346,67 @@ class TestPerProviderWiring:
 
 
 # =============================================================================
+# Nonce binding (OIDC replay protection)
+# =============================================================================
+
+
+class TestIdTokenNonce:
+    """When an expected_nonce is supplied, the verified token's nonce claim must
+    match it. This binds the id_token to the specific login (replay/injection
+    protection) and is enforced AFTER signature verification.
+    """
+
+    def test_matching_nonce_accepted(self):
+        provider = _make_keycloak_provider()
+        private_key, jwks = _build_keypair()
+        claims = _base_claims(provider.realm_url, provider.client_id)
+        claims["nonce"] = "login-nonce-abc"
+        token = _sign_id_token(private_key, claims)
+
+        with patch.object(provider, "get_jwks", return_value=jwks):
+            verified = provider.validate_id_token(token, expected_nonce="login-nonce-abc")
+
+        assert verified["nonce"] == "login-nonce-abc"
+
+    def test_mismatched_nonce_rejected(self):
+        from providers.base import IdTokenVerificationError
+
+        provider = _make_keycloak_provider()
+        private_key, jwks = _build_keypair()
+        claims = _base_claims(provider.realm_url, provider.client_id)
+        claims["nonce"] = "attacker-nonce"
+        token = _sign_id_token(private_key, claims)
+
+        with patch.object(provider, "get_jwks", return_value=jwks):
+            with pytest.raises(IdTokenVerificationError):
+                provider.validate_id_token(token, expected_nonce="expected-nonce")
+
+    def test_absent_nonce_claim_rejected_when_expected(self):
+        from providers.base import IdTokenVerificationError
+
+        provider = _make_keycloak_provider()
+        private_key, jwks = _build_keypair()
+        # No nonce claim in the token, but a nonce is expected for this login.
+        token = _sign_id_token(private_key, _base_claims(provider.realm_url, provider.client_id))
+
+        with patch.object(provider, "get_jwks", return_value=jwks):
+            with pytest.raises(IdTokenVerificationError):
+                provider.validate_id_token(token, expected_nonce="expected-nonce")
+
+    def test_no_expected_nonce_skips_check(self):
+        """When no nonce is bound to the login, verification does not require one
+        (a signature-only valid token still passes)."""
+        provider = _make_keycloak_provider()
+        private_key, jwks = _build_keypair()
+        token = _sign_id_token(private_key, _base_claims(provider.realm_url, provider.client_id))
+
+        with patch.object(provider, "get_jwks", return_value=jwks):
+            verified = provider.validate_id_token(token, expected_nonce=None)
+
+        assert verified["sub"] == "user-123"
+
+
+# =============================================================================
 # Default base implementation fails closed
 # =============================================================================
 
