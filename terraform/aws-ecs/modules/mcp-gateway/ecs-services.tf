@@ -522,6 +522,34 @@ module "ecs_service_auth" {
         {
           name  = "AWS_EC2_METADATA_DISABLED"
           value = "true"
+        # Gateway generic-proxy feature (ships disabled by default)
+        {
+          name  = "GENERIC_PROXY_TOKEN_TTL_SECONDS"
+          value = tostring(var.generic_proxy_token_ttl_seconds)
+        },
+        {
+          name  = "GENERIC_PROXY_MAX_BODY_BYTES"
+          value = tostring(var.generic_proxy_max_body_bytes)
+        },
+        {
+          name  = "GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES"
+          value = tostring(var.gateway_generic_require_bearer_for_writes)
+        },
+        {
+          name  = "GATEWAY_EGRESS_SELFCHECK_ENABLED"
+          value = tostring(var.gateway_egress_selfcheck_enabled)
+        },
+        {
+          name  = "GATEWAY_GENERIC_TLS_VERIFY"
+          value = tostring(var.gateway_generic_tls_verify)
+        },
+        {
+          name  = "GATEWAY_PROXY_PIN_REFRESH_SECONDS"
+          value = tostring(var.gateway_proxy_pin_refresh_seconds)
+        },
+        {
+          name  = "GATEWAY_GENERIC_MAX_CONCURRENCY"
+          value = tostring(var.gateway_generic_max_concurrency)
         },
         {
           name  = "METRICS_LEGACY_HTTP_POST"
@@ -1491,6 +1519,22 @@ module "ecs_service_registry" {
         {
           name  = "SSRF_ALLOWED_CIDRS"
           value = var.ssrf_allowed_cidrs
+        # Gateway generic-proxy feature (ships disabled by default)
+        {
+          name  = "GATEWAY_GENERIC_PROXY_ENABLED"
+          value = tostring(var.gateway_generic_proxy_enabled)
+        },
+        {
+          name  = "GATEWAY_CANONICAL_NAMESPACE_ENABLED"
+          value = tostring(var.gateway_canonical_namespace_enabled)
+        },
+        {
+          name  = "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS"
+          value = tostring(var.gateway_proxy_allow_private_targets)
+        },
+        {
+          name  = "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE"
+          value = tostring(var.gateway_generic_client_max_body_size)
         },
         # Internal/workshop deployment classification (telemetry labels; issue #1216)
         {

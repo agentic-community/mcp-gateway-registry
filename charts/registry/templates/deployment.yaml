@@ -334,6 +334,16 @@ spec:
               value: {{ .Values.app.mcpTokenDefaultTtlHours | default "8" | toString | quote }}
             - name: MCP_TOKEN_MAX_TTL_HOURS
               value: {{ .Values.app.mcpTokenMaxTtlHours | default "24" | toString | quote }}
+            # Gateway generic-proxy feature (registry-consumed): ships disabled by default.
+            # The four auth-server-consumed knobs live in the auth-server chart.
+            - name: GATEWAY_GENERIC_PROXY_ENABLED
+              value: {{ .Values.app.gatewayGenericProxyEnabled | default false | toString | quote }}
+            - name: GATEWAY_CANONICAL_NAMESPACE_ENABLED
+              value: {{ .Values.app.gatewayCanonicalNamespaceEnabled | default false | toString | quote }}
+            - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+              value: {{ .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
+            - name: GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE
+              value: {{ .Values.app.gatewayGenericClientMaxBodySize | default "1m" | quote }}
             {{- if .Values.app.registryApiKeysExistingSecret }}
             - name: REGISTRY_API_KEYS
               valueFrom:

@@ -1,0 +1,64 @@
+suite: egress network policy (generic-proxy SSRF layer 1)
+templates:
+  - networkpolicy-egress.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: renders nothing when disabled (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an egress NetworkPolicy when enabled
+    set:
+      egress.networkPolicy.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: NetworkPolicy
+      - equal:
+          path: spec.policyTypes[0]
+          value: Egress
+
+  - it: always allows DNS egress on 53/udp and 53/tcp
+    set:
+      egress.networkPolicy.enabled: true
+    asserts:
+      - contains:
+          path: spec.egress[0].ports
+          content:
+            protocol: UDP
+            port: 53
+      - contains:
+          path: spec.egress[0].ports
+          content:
+            protocol: TCP
+            port: 53
+
+  - it: carves out the cloud metadata / link-local range in the allowed CIDR except-list
+    set:
+      egress.networkPolicy.enabled: true
+    asserts:
+      # The default example allowedCidrs entry must except link-local (which
+      # contains the metadata IP 169.254.169.254) — the whole point of layer 1.
+      - contains:
+          path: spec.egress[1].to[0].ipBlock.except
+          content: "169.254.0.0/16"
+
+  - it: honors a custom allowedCidrs list (tightened to a cluster CIDR)
+    set:
+      egress.networkPolicy.enabled: true
+      egress.networkPolicy.allowedCidrs:
+        - cidr: "10.100.0.0/16"
+          except:
+            - "10.100.5.5/32"
+    asserts:
+      - equal:
+          path: spec.egress[1].to[0].ipBlock.cidr
+          value: "10.100.0.0/16"
+      - contains:
+          path: spec.egress[1].to[0].ipBlock.except
+          content: "10.100.5.5/32"
