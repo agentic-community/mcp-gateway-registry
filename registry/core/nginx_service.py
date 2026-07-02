@@ -1888,7 +1888,10 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Internal-Token $auth_internal_token_generic;
+        # The generic hop's verify_generic_proxy_token reads X-Internal-Token-Generic
+        # (distinct from the MCP hop's X-Internal-Token so they never collide). Must
+        # match that header name exactly, or the hop 401s "Missing internal proxy token".
+        proxy_set_header X-Internal-Token-Generic $auth_internal_token_generic;
         proxy_set_header Authorization $http_authorization;
         proxy_set_header X-User $auth_user;
         proxy_set_header X-Scopes $auth_scopes;
