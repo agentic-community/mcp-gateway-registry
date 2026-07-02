@@ -382,6 +382,17 @@ _nginx_config_writes_counter = _meter.create_counter(
 )
 nginx_config_writes_total = _CounterAdapter(_nginx_config_writes_counter)
 
+# Generic-proxy blocks dropped at render (invalid target / SSRF-denied / location
+# collision). A non-zero value means one or more proxied entities did NOT get a
+# route this render — surfaced as a metric because the drop is a WARNING log
+# otherwise easy to miss on a busy replica. Label `reason`: invalid | collision.
+_gateway_generic_blocks_dropped_counter = _meter.create_counter(
+    name="mcpgw_registry_gateway_generic_blocks_dropped_total",
+    description="Generic-proxy nginx blocks dropped at render (invalid target or location collision)",
+    unit="1",
+)
+gateway_generic_blocks_dropped_total = _CounterAdapter(_gateway_generic_blocks_dropped_counter)
+
 
 # Mode-blocked requests (registry/core/metrics.py:43)
 _mode_blocked_requests_counter = _meter.create_counter(
