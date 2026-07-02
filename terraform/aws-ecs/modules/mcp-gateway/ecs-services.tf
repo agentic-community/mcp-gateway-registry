@@ -1516,6 +1516,13 @@ module "ecs_service_registry" {
           value = var.egress_secret_store_backend
         },
         {
+          # Region for the Secrets Manager secret store. Required by the
+          # secrets-manager backend (registry/secrets/factory.py raises without
+          # it). Defaults to the deployment region.
+          name  = "AWS_SECRETS_REGION"
+          value = data.aws_region.current.id
+        },
+        {
           name  = "EGRESS_OAUTH_CALLBACK_BASE_URL"
           value = var.egress_oauth_callback_base_url
         },
@@ -1744,6 +1751,19 @@ module "ecs_service_registry" {
       to_port                      = 8080
       ip_protocol                  = "tcp"
       referenced_security_group_id = module.ecs_service_mcpgw.security_group_id
+    }
+    # Egress credential vault: the auth-server mcp_proxy calls the registry's
+    # internal egress-token vend endpoint (auth -> registry:8080 ->
+    # /_egress_internal/egress-token) to fetch a user's vaulted upstream token
+    # before proxying an MCP call. Without this the vend hop times out
+    # ("egress vend: registry unreachable"), no token is injected, and the
+    # upstream 3rd-party server 401s.
+    auth_internal = {
+      description                  = "HTTP from auth-server for the egress-token vend hop (non-root nginx)"
+      from_port                    = 8080
+      to_port                      = 8080
+      ip_protocol                  = "tcp"
+      referenced_security_group_id = module.ecs_service_auth.security_group_id
     }
   }
   security_group_egress_rules = {

@@ -78,6 +78,22 @@ const ConnectedAccountsPage: React.FC = () => {
     void refresh();
   }, [refresh]);
 
+  // The OAuth consent runs in a separate browser tab, so this page never gets a
+  // direct completion callback. Re-fetch connections whenever the user returns
+  // to this tab (after approving in the other tab) so a freshly connected
+  // account shows up without a manual reload.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [refresh]);
+
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     const path = serverPath.trim();

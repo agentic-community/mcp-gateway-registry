@@ -31,11 +31,32 @@ uv run python api/registry_management.py --registry-url http://localhost --token
   register --config cli/examples/github-mcp-server.json
 ```
 
+**On the registration screen, set the Authorization scheme to `Bearer`.** This
+is the credential the **registry itself** uses to reach the server for **health
+checks** — it is NOT the per-user egress credential (that is configured
+separately, see step 2). Provide a Bearer auth token that belongs to an account
+the registry admin controls:
+
+- **Slack:** a user token starting with `xoxp-`, found on your Slack App's
+  **OAuth & Permissions** screen.
+- **GitHub:** a Personal Access Token (PAT) for the user account created for the
+  registry admin.
+- **Atlassian:** a token/API key for the registry-admin account.
+
+> **Important:** the registration-time **Authorization scheme (`Bearer`)** and
+> the **Per-User Egress Auth** are two different things with two different
+> actors. The registration-time Bearer token is used by the gateway *as itself*
+> for health checks. The egress auth (step 2) is the *per-user* credential the
+> gateway injects on tool calls. They are set in two different places and both
+> apply.
+
 ### 2. Configure egress auth through the UI
 
-After the server is registered, open it and click **Edit**. Scroll to the
-**Per-User Egress Auth (OAuth)** section and configure the provider. You can
-either:
+**Egress auth can only be set via the Edit function, after the server has been
+registered** — there is no egress-auth section on the initial registration
+screen. Register the server first (step 1), then open it and click **Edit**.
+Scroll to the **Per-User Egress Auth (OAuth)** section and configure the
+provider. You can either:
 
 - **Select a built-in provider** from the dropdown (e.g. GitHub, Slack,
   Atlassian, Google, Microsoft), which pre-fills the provider's authorize/token
