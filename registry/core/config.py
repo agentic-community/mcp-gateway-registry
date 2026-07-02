@@ -462,6 +462,20 @@ class Settings(BaseSettings):
             "The cloud metadata address 169.254.169.254 is never permitted."
         ),
     )
+    nginx_config_validation_required: bool = Field(
+        default=False,
+        description=(
+            "Fail closed when a generated nginx config cannot be validated with "
+            "'nginx -t' because the nginx binary is absent from this process. "
+            "Leave False for single-container and local-dev deployments where the "
+            "registry and nginx share a process/image (a missing binary means "
+            "there is no nginx to cold-start). Set True for split topologies where "
+            "nginx runs in a separate container/sidecar sharing the config volume: "
+            "the registry cannot run 'nginx -t' itself, so an unvalidated config "
+            "must NOT be promoted (it would poison the sidecar's next cold start). "
+            "When True and the binary is absent, the last-known-good config is kept."
+        ),
+    )
 
     # Update check (GitHub Releases API for newer registry versions)
     update_check_enabled: bool = Field(

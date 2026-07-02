@@ -156,6 +156,182 @@ def _cleanup_stale_temp_files(config_path: Path) -> None:
             logger.warning(f"Failed to remove stale temp file {stale}: {e}")
 
 
+# Suffix for the last-known-good copy kept beside the live config while a
+# candidate is being validated. On a failed validation the live config is
+# restored from this copy so the broken candidate never survives on disk.
+_LAST_GOOD_SUFFIX: str = ".last-good"
+
+
+# Sentinel returned by the config test when the nginx binary is absent. There
+# is no nginx to protect from a bad cold start on such a host (e.g. registry-
+# only mode or local dev), so the caller promotes the candidate without a test
+# rather than rejecting a legitimate render it cannot validate.
+_NGINX_TEST_NO_BINARY: str = "__nginx_binary_missing__"
+
+
+def _run_nginx_config_test() -> tuple[bool, str]:
+    """Run ``nginx -t`` against the live config tree.
+
+    ``nginx -t`` parses the full configuration tree exactly as a cold start
+    (container restart) would - main ``nginx.conf`` plus every ``include``d
+    fragment and the Lua modules they reference. Validating the candidate in
+    place (see :func:`_write_and_validate_config`) is therefore the only
+    faithful predictor of whether a subsequent cold start will boot.
+
+    Returns:
+        A ``(passed, message)`` tuple. ``passed`` is False on a non-zero exit,
+        a timeout, or any other error (fail closed); ``message`` carries
+        nginx's stderr or the failure reason. When the nginx binary is not
+        installed, ``message`` is the ``_NGINX_TEST_NO_BINARY`` sentinel so the
+        caller can distinguish "no nginx to protect" from "config is invalid".
+    """
+    import subprocess  # nosec B404
+
+    try:
+        result = subprocess.run(
+            ["nginx", "-t"],  # nosec B603 B607 - hardcoded command
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        return False, _NGINX_TEST_NO_BINARY
+    except subprocess.TimeoutExpired:
+        return False, "nginx -t timed out"
+    except Exception as e:  # pragma: no cover - defensive
+        return False, f"nginx -t raised: {e}"
+
+    if result.returncode != 0:
+        return False, result.stderr or "nginx -t returned non-zero"
+    return True, result.stderr or ""
+
+
+def _write_and_validate_config(
+    path: Path,
+    content: str,
+) -> None:
+    """Promote a rendered nginx config only if ``nginx -t`` accepts it.
+
+    A malformed config (whether from a config-injection attempt that still
+    parses partially, an unhealthy-backend edge case, or a template bug) must
+    never persist on disk: even when the running nginx keeps serving its
+    in-memory config, the broken file on disk takes down the *next* cold start
+    (routine on ECS/K8s) and with it the whole gateway.
+
+    This renders the candidate to a temporary file, atomically promotes it into
+    ``path`` after backing up the current live config, then runs ``nginx -t``
+    against the real config tree. If the test passes, the backup is discarded.
+    If it fails, the previous last-known-good config is restored (or, when
+    there was no prior config, the rejected file is removed) so the gateway can
+    still cold-start on the last-good config. Fails closed: any error leaves the
+    last-good config in place and raises.
+
+    Args:
+        path: The live nginx config path.
+        content: The rendered candidate config content.
+
+    Raises:
+        RuntimeError: If ``nginx -t`` rejects the candidate (the live config is
+            restored to the last-known-good state before raising).
+        OSError: If the temp write / rename cannot be performed.
+    """
+    import shutil
+
+    path = Path(path)
+
+    # Pre-flight: decide the missing-binary policy BEFORE the candidate ever
+    # touches the live path, so a split/sidecar deployment cannot pick up an
+    # unvalidated config in the window between write and restore.
+    #
+    # When the nginx binary is absent we cannot run ``nginx -t``. In a
+    # single-container / local-dev deployment that means there is no nginx to
+    # cold-start, so promoting the candidate matches the pre-existing behavior.
+    # In a split topology (nginx in a separate container/sidecar sharing this
+    # config volume) an unvalidated config WOULD poison the sidecar's next cold
+    # start, so operators set ``nginx_config_validation_required=True`` to fail
+    # closed — and here we refuse before writing, leaving the live config
+    # untouched entirely.
+    nginx_available = shutil.which("nginx") is not None
+    if not nginx_available:
+        if settings.nginx_config_validation_required:
+            NGINX_CONFIG_WRITES.labels(status="rejected").inc()
+            raise RuntimeError(
+                "nginx config rejected: nginx binary not found and "
+                "nginx_config_validation_required=True (refusing to promote an "
+                "unvalidated config to the shared config path)"
+            )
+        # No nginx on this host to protect: promote as before. In with-gateway
+        # mode this is surfaced at WARNING so a misconfigured split deployment
+        # is visible without enabling debug logging.
+        if settings.nginx_updates_enabled:
+            logger.warning(
+                "nginx binary not found; promoting config without nginx -t validation. "
+                "If nginx runs in a separate container sharing this path, set "
+                "NGINX_CONFIG_VALIDATION_REQUIRED=true to fail closed."
+            )
+        else:
+            logger.debug("nginx binary not found; promoting config without nginx -t validation")
+        _atomic_write_text(path, content)
+        return
+
+    had_previous = path.exists()
+    backup_path = path.with_name(path.name + _LAST_GOOD_SUFFIX)
+
+    # Back up the current live config so we can restore it on rejection.
+    if had_previous:
+        try:
+            # copy2 preserves mode/timestamps; a plain copy keeps the live file
+            # intact (unlike a rename, which would briefly leave no live file).
+            shutil.copy2(path, backup_path)
+        except OSError as e:
+            logger.error("Could not back up live nginx config before validation: %s", e)
+            raise
+
+    # Promote the candidate into the live path (atomic, preserves mode).
+    _atomic_write_text(path, content)
+
+    passed, message = _run_nginx_config_test()
+
+    if passed:
+        # Candidate accepted: drop the backup.
+        if had_previous:
+            try:
+                backup_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.warning("Could not remove nginx config backup %s: %s", backup_path, e)
+        return
+
+    # Candidate rejected: restore the last-known-good config so a cold start
+    # still boots, then fail closed.
+    logger.error(
+        "Rejected nginx config candidate (nginx -t failed); restoring last-good config: %s",
+        message.strip(),
+    )
+    NGINX_CONFIG_WRITES.labels(status="rejected").inc()
+    if had_previous:
+        try:
+            os.replace(backup_path, path)
+        except OSError as e:
+            logger.error("Failed to restore last-good nginx config from %s: %s", backup_path, e)
+            raise RuntimeError(
+                f"nginx config validation failed and last-good restore failed: {message.strip()}"
+            ) from e
+    else:
+        # No prior config existed: remove the rejected file so nothing invalid
+        # is left for a cold start to load.
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.error("Failed to remove rejected nginx config %s: %s", path, e)
+            raise
+
+    raise RuntimeError(f"nginx config rejected by nginx -t: {message.strip()}")
+
+
 def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]:
     """Ensure inputSchema conforms to MCP spec by adding 'type': 'object' if missing.
 
@@ -419,7 +595,13 @@ class NginxConfigService:
             # Write virtual server Lua mapping files (side effect, not part of render)
             await self._commit_virtual_server_mappings()
 
-            _atomic_write_text(settings.nginx_config_path, config_content)
+            # Validate the candidate against the real config tree BEFORE it is
+            # allowed to persist as the live config. A rejected candidate is
+            # never left on disk (the last-known-good config is restored), so a
+            # subsequent nginx cold start cannot be poisoned by a bad render.
+            await asyncio.to_thread(
+                _write_and_validate_config, settings.nginx_config_path, config_content
+            )
 
             logger.info(
                 "Generated Nginx configuration with location blocks and additional server names"
@@ -1773,7 +1955,12 @@ class NginxReloadScheduler:
                 await nginx_service._commit_virtual_server_mappings()
 
                 async with nginx_service.reload_lock:
-                    _atomic_write_text(settings.nginx_config_path, config_text)
+                    # Validate the candidate in-tree before it can persist as
+                    # the live config; a rejected render restores last-good and
+                    # raises, so the cold-start path can never load a bad file.
+                    await asyncio.to_thread(
+                        _write_and_validate_config, settings.nginx_config_path, config_text
+                    )
                     reloaded = await asyncio.to_thread(nginx_service.reload_nginx)
                 if reloaded:
                     self._last_config_hash = new_hash
