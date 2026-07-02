@@ -252,6 +252,36 @@ def _read_mcp_proxy_max_body_bytes() -> int:
     return max(candidate, minimum_bytes)
 
 
+def _read_mcp_proxy_timeout() -> float:
+    """Read the upstream MCP proxy timeout in seconds.
+
+    Resolution order:
+    1. ``settings.mcp_proxy_timeout`` (if the attribute exists)
+    2. ``MCP_PROXY_TIMEOUT`` environment variable
+    3. Default: 30.0 seconds
+
+    The minimum is 1 second to prevent accidental zero/negative values.
+    """
+    default_timeout = 30.0
+    minimum_timeout = 1.0
+    try:
+        value = getattr(settings, "mcp_proxy_timeout", None)
+        if value is not None:
+            candidate = float(value)
+            return max(candidate, minimum_timeout)
+    except (TypeError, ValueError) as e:
+        logger.debug(f"settings.mcp_proxy_timeout parse failed, falling back to env: {e}")
+    raw = os.getenv("MCP_PROXY_TIMEOUT")
+    if not raw:
+        return default_timeout
+    try:
+        candidate = float(raw)
+    except ValueError:
+        logging.warning(f"Invalid MCP_PROXY_TIMEOUT={raw!r}; using default {default_timeout}")
+        return default_timeout
+    return max(candidate, minimum_timeout)
+
+
 # Global scopes configuration (will be loaded during FastAPI startup)
 SCOPES_CONFIG = {}
 
@@ -4575,14 +4605,15 @@ async def mcp_proxy(
 
     filter_enabled = _read_mcp_filter_enabled()
     max_body_bytes = _read_mcp_proxy_max_body_bytes()
+    proxy_timeout = _read_mcp_proxy_timeout()
     forward_headers = _forward_headers(dict(request.headers))
 
     logger.info(
-        f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled}"
+        f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"
     )
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=proxy_timeout) as client:
             async with client.stream(
                 "POST",
                 upstream_url,
