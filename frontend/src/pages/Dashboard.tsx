@@ -151,6 +151,9 @@ interface Agent {
     last_verified?: string;
   };
   registered_by?: string | null;
+  // Gateway-proxy opt-in (registry extension): served through the generic hop.
+  is_proxied?: boolean;
+  proxy_target_url?: string;
 }
 
 // Toast notification component
@@ -522,6 +525,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     skillsJson: '[]',
     metadata: '',
     status: 'active' as 'active' | 'draft' | 'deprecated' | 'beta',
+    is_proxied: false,
+    proxy_target_url: '',
   });
   const [editAgentLoading, setEditAgentLoading] = useState(false);
   const [skillsJsonError, setSkillsJsonError] = useState<string | null>(null);
@@ -543,6 +548,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     auth_scheme: 'none' as 'none' | 'global_credentials' | 'bearer' | 'api_key',
     auth_credential: '',
     auth_header_name: '',
+    is_proxied: false,
+    proxy_target_url: '',
   });
   const [skillFormLoading, setSkillFormLoading] = useState(false);
   const [showDeleteSkillConfirm, setShowDeleteSkillConfirm] = useState<string | null>(null);
@@ -1373,6 +1380,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           ? JSON.stringify(fullAgent.metadata, null, 2)
           : '',
         status: (fullAgent.status || agent.lifecycle_status || 'active') as 'active' | 'draft' | 'deprecated' | 'beta',
+        // The proxy mixin fields have no camelCase alias, so the API serializes
+        // them snake_case even where sibling fields are camelCased.
+        is_proxied: (fullAgent.is_proxied ?? agent.is_proxied) ?? false,
+        proxy_target_url: fullAgent.proxy_target_url || agent.proxy_target_url || '',
       });
     } catch (error) {
       console.error('Failed to fetch agent details for editing:', error);
@@ -1391,6 +1402,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         skillsJson: '[]',
         metadata: '',
         status: agent.lifecycle_status || 'active',
+        is_proxied: agent.is_proxied ?? false,
+        proxy_target_url: agent.proxy_target_url || '',
       });
     }
   }, [agentApiToken]);
@@ -1636,6 +1649,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         skills: parsedSkills,
         status: editAgentForm.status,
         ...(editAgentForm.metadata.trim() ? { metadata: JSON.parse(editAgentForm.metadata) } : {}),
+        // Gateway-proxy opt-in. snake_case (the mixin fields have no camelCase
+        // alias; populate_by_name accepts them). Always send is_proxied so
+        // toggling off persists; target optional (agent url is the fallback).
+        is_proxied: editAgentForm.is_proxied,
+        ...(editAgentForm.is_proxied && editAgentForm.proxy_target_url.trim()
+          ? { proxy_target_url: editAgentForm.proxy_target_url.trim() }
+          : {}),
       };
 
       await axios.put(
@@ -1769,6 +1789,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_scheme: (skill.auth_scheme || 'none') as 'none' | 'global_credentials' | 'bearer' | 'api_key',
         auth_credential: '',
         auth_header_name: skill.auth_header_name || '',
+        is_proxied: skill.is_proxied ?? false,
+        proxy_target_url: skill.proxy_target_url || '',
       });
     } else {
       // Create mode - reset form
@@ -1788,6 +1810,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_scheme: 'none',
         auth_credential: '',
         auth_header_name: '',
+        is_proxied: false,
+        proxy_target_url: '',
       });
     }
     setShowSkillModal(true);
@@ -1842,6 +1866,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   }, [skillForm.skill_md_url, skillForm.auth_scheme, skillForm.auth_credential, skillForm.auth_header_name, skillParseLoading, showToast]);
 
   const performSkillSave = useCallback(async (): Promise<void> => {
+    // A skill has no native backend URL, so a proxied skill must carry an
+    // explicit target. Block here with an inline toast rather than letting the
+    // backend reject it with a 422 the user can't easily map to a field.
+    if (skillForm.is_proxied && !skillForm.proxy_target_url.trim()) {
+      showToast('A proxy target URL is required when proxying is enabled', 'error');
+      return;
+    }
+
     try {
       setSkillFormLoading(true);
 
@@ -1882,6 +1914,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         if (skillForm.auth_scheme === 'api_key' && skillForm.auth_header_name) {
           payload.auth_header_name = skillForm.auth_header_name;
         }
+      }
+
+      // Gateway-proxy opt-in. Always send is_proxied so toggling OFF persists;
+      // include the target only when proxied (backend requires it for skills).
+      payload.is_proxied = skillForm.is_proxied;
+      if (skillForm.is_proxied) {
+        payload.proxy_target_url = skillForm.proxy_target_url.trim() || undefined;
       }
 
       if (editingSkill) {

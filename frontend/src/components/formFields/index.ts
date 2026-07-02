@@ -12,6 +12,7 @@ export { default as StatusField } from './StatusField';
 export type { LifecycleStatus } from './StatusField';
 export { default as VisibilityField } from './VisibilityField';
 export type { Visibility } from './VisibilityField';
+export { default as ProxyField } from './ProxyField';
 export { default as MetadataField } from './MetadataField';
 export { default as AuthSchemeFields } from './AuthSchemeFields';
 export type { AuthScheme } from './AuthSchemeFields';
