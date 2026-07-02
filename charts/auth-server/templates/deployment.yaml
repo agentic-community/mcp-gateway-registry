@@ -228,6 +228,22 @@ spec:
             - name: AWS_EC2_METADATA_DISABLED
               value: "true"
             {{- end }}
+            # Gateway generic-proxy feature (auth-server-consumed): ships disabled by
+            # default. The four registry-consumed knobs live in the registry chart.
+            - name: GENERIC_PROXY_TOKEN_TTL_SECONDS
+              value: {{ .Values.app.genericProxyTokenTtlSeconds | default 30 | toString | quote }}
+            - name: GENERIC_PROXY_MAX_BODY_BYTES
+              value: {{ .Values.app.genericProxyMaxBodyBytes | default 10485760 | toString | quote }}
+            - name: GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
+              value: {{ .Values.app.gatewayGenericRequireBearerForWrites | default true | toString | quote }}
+            - name: GATEWAY_EGRESS_SELFCHECK_ENABLED
+              value: {{ .Values.app.gatewayEgressSelfcheckEnabled | default true | toString | quote }}
+            - name: GATEWAY_GENERIC_TLS_VERIFY
+              value: {{ .Values.app.gatewayGenericTlsVerify | default "true" | quote }}
+            - name: GATEWAY_PROXY_PIN_REFRESH_SECONDS
+              value: {{ .Values.app.gatewayProxyPinRefreshSeconds | default 300 | toString | quote }}
+            - name: GATEWAY_GENERIC_MAX_CONCURRENCY
+              value: {{ .Values.app.gatewayGenericMaxConcurrency | default 32 | toString | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -1,0 +1,75 @@
+{{- /*
+Egress NetworkPolicy for the generic-proxy SSRF defense (LLD Step 7a layer 1).
+
+This is the PRIMARY control against DNS-rebind for the generic proxy hop: the
+auth-server's httpx client connects to arbitrary proxied-backend hostnames, so
+even if a hostname re-resolves to the cloud metadata IP at request time, the
+socket must be denied by the network. The startup egress self-check
+(GATEWAY_EGRESS_SELFCHECK_ENABLED) verifies this policy is actually in force and
+disables the feature if a metadata IP is reachable.
+
+IMPORTANT — this is NOT a blanket "deny all private ranges". The auth-server
+legitimately needs egress to its OWN in-cluster dependencies (Keycloak/IdP,
+MongoDB/DocumentDB, the registry) which sit on RFC-1918 IPs. A naive private-range
+deny would break the auth-server itself. This policy is therefore CIDR-aware and
+environment-specific: you MUST populate egress.allowedCidrs with the cluster
+service CIDRs the auth-server needs, plus the public Internet range(s) for the
+proxied backends, while the `except` list carves out the metadata/link-local/
+unspecified ranges that must never be reachable.
+
+Kubernetes NetworkPolicy egress is ALLOW-list based: with an egress rule present,
+only the listed destinations are permitted. Because CNIs differ (kind / EKS
+VPC-CNI / GKE / ECS-awsvpc), the shipped values are EXAMPLES — review against your
+environment and confirm enforcement (many default EKS setups do NOT enforce
+NetworkPolicy without a policy agent like Calico/Cilium).
+
+Opt-in via egress.networkPolicy.enabled (default false).
+*/ -}}
+{{- if .Values.egress.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.app.name }}-egress
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.app.name }}
+  policyTypes:
+    - Egress
+  egress:
+    # Always allow DNS (kube-dns / CoreDNS) so hostname targets can resolve.
+    - to:
+        {{- with .Values.egress.networkPolicy.dnsSelector }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .fromNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .fromPodSelector | nindent 14 }}
+        {{- else }}
+        []
+        {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allowed destination CIDRs (cluster service CIDRs + public Internet), with the
+    # metadata/link-local/unspecified ranges carved out via `except`. Populate
+    # egress.allowedCidrs for your environment. An empty list means NO IP egress is
+    # permitted (fail-closed) — the auth-server would then only reach DNS, which is
+    # almost certainly wrong, so this must be configured before enabling.
+    {{- range .Values.egress.networkPolicy.allowedCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+            {{- with .except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+    {{- end }}
+{{- end }}

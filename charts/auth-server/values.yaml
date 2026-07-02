@@ -121,6 +121,17 @@ app:
     quarantineFailClosed: false
     definitionsCacheTtlSeconds: 30
     backendTimeoutMs: 250
+  # Gateway generic-proxy feature (auth-server-consumed). Only takes effect when the
+  # registry chart's gatewayGenericProxyEnabled is true; even then the auth-server
+  # runs a startup egress self-check and disables the hop if a metadata IP is
+  # reachable. The four registry-consumed knobs live in the registry chart.
+  genericProxyTokenTtlSeconds: 30 # TTL (s) for the generic-proxy internal token
+  genericProxyMaxBodyBytes: 10485760 # Max upstream RESPONSE body the generic hop buffers
+  gatewayGenericRequireBearerForWrites: true # CSRF: refuse cookie auth for write verbs
+  gatewayEgressSelfcheckEnabled: true # Probe metadata IPs at startup; disable feature if reachable
+  gatewayGenericTlsVerify: "true" # true | false | /path/to/ca-bundle.pem
+  gatewayProxyPinRefreshSeconds: 300 # Interval (s) to re-resolve+revalidate pinned hostname targets
+  gatewayGenericMaxConcurrency: 32 # Semaphore cap on in-flight generic-hop requests (OOM guard)
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:
@@ -332,4 +343,33 @@ metricsScrape:
       kubernetes.io/metadata.name: monitoring
     fromPodSelector:
       app.kubernetes.io/name: prometheus
+
+# Egress NetworkPolicy for the generic-proxy SSRF defense (LLD Step 7a layer 1).
+# This is the PRIMARY DNS-rebind control and a REQUIRED prerequisite before
+# enabling the generic proxy (registry chart's gatewayGenericProxyEnabled). It is
+# environment-specific and CIDR-aware — the values below are EXAMPLES; review and
+# populate allowedCidrs for your cluster (see networkpolicy-egress.yaml header).
+# Disabled by default: enabling it without correct CIDRs would break the
+# auth-server's own egress to Keycloak/Mongo/registry.
+egress:
+  networkPolicy:
+    enabled: false
+    # kube-dns / CoreDNS selector so hostname targets can resolve. Adjust to your
+    # cluster (common: namespace kube-system, pod k8s-app=kube-dns).
+    dnsSelector:
+      fromNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      fromPodSelector:
+        k8s-app: kube-dns
+    # Allowed destination CIDRs. Each entry is an ipBlock with an optional `except`
+    # list. The example below allows all IPv4 while carving out the metadata IP,
+    # link-local, and the unspecified address — you SHOULD tighten `cidr` to your
+    # cluster service CIDR(s) + the specific egress range for proxied backends
+    # rather than 0.0.0.0/0. Add an IPv6 entry (with fd00:ec2::254/128 excepted)
+    # if the pod has IPv6 egress.
+    allowedCidrs:
+      - cidr: "0.0.0.0/0"
+        except:
+          - "169.254.0.0/16" # link-local incl. cloud metadata 169.254.169.254
+          - "0.0.0.0/32" # unspecified
 nodeSelector: {}

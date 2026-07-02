@@ -56,8 +56,10 @@ tests:
       #   env[10] = RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS
       #   env[11] = RATE_LIMIT_BACKEND_TIMEOUT_MS
       #   env[12] = AWS_EC2_METADATA_DISABLED (chart-managed security constant)
-      #   env[13] = MY_FLAG       (extraEnv[0])
-      #   env[14] = MY_SECRET_VAR (extraEnv[1])
+      #   env[13..19] = the seven unconditional GATEWAY_/GENERIC_PROXY_
+      #                 generic-proxy vars (auth-server-consumed)
+      #   env[20] = MY_FLAG       (extraEnv[0])
+      #   env[21] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
@@ -78,9 +80,15 @@ tests:
           value: AWS_EC2_METADATA_DISABLED
       - equal:
           path: spec.template.spec.containers[0].env[13].name
+          value: GENERIC_PROXY_TOKEN_TTL_SECONDS
+      - equal:
+          path: spec.template.spec.containers[0].env[19].name
+          value: GATEWAY_GENERIC_MAX_CONCURRENCY
+      - equal:
+          path: spec.template.spec.containers[0].env[20].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[14].name
+          path: spec.template.spec.containers[0].env[21].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
