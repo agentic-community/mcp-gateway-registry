@@ -126,7 +126,7 @@ app:
   # runs a startup egress self-check and disables the hop if a metadata IP is
   # reachable. The four registry-consumed knobs live in the registry chart.
   genericProxyTokenTtlSeconds: 30 # TTL (s) for the generic-proxy internal token
-  genericProxyMaxBodyBytes: 10485760 # Max upstream RESPONSE body the generic hop buffers
+  genericProxyMaxBodyBytes: "10485760" # Max upstream RESPONSE body the generic hop buffers (string to avoid Helm float sci-notation)
   gatewayGenericRequireBearerForWrites: true # CSRF: refuse cookie auth for write verbs
   gatewayEgressSelfcheckEnabled: true # Probe metadata IPs at startup; disable feature if reachable
   gatewayGenericTlsVerify: "true" # true | false | /path/to/ca-bundle.pem

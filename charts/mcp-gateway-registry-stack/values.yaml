@@ -580,7 +580,7 @@ auth-server:
     # registry.app.gatewayGenericProxyEnabled is true AND the startup egress
     # self-check passes. Deploy auth-server.egress.networkPolicy first.
     genericProxyTokenTtlSeconds: 30
-    genericProxyMaxBodyBytes: 10485760
+    genericProxyMaxBodyBytes: "10485760" # string to avoid Helm float sci-notation
     gatewayGenericRequireBearerForWrites: true
     gatewayEgressSelfcheckEnabled: true
     gatewayGenericTlsVerify: "true"
