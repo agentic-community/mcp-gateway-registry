@@ -8,7 +8,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -2989,6 +2989,12 @@ async def _fetch_all_enabled_servers() -> dict[str, Any]:
 _GENERIC_PROXY_ENTITY_TYPES: tuple[str, ...] = ("a2a_agent", "skill", "custom")
 
 
+class _ProxiedRepository(Protocol):
+    """Structural type shared by repositories queried for proxied records."""
+
+    async def list_proxied(self) -> list[dict[str, Any]]: ...
+
+
 async def _fetch_generic_proxied_resources() -> list[dict[str, Any]]:
     """Collect non-MCP entities that opt into the generic gateway proxy.
 
@@ -3015,7 +3021,7 @@ async def _fetch_generic_proxied_resources() -> list[dict[str, Any]]:
     )
     from registry.schemas.proxy_mixin import resolve_proxy_target
 
-    repos = {
+    repos: dict[str, _ProxiedRepository] = {
         "a2a_agent": get_agent_repository(),
         "skill": get_skill_repository(),
         "custom": get_custom_entity_repository(),
