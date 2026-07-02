@@ -23,6 +23,13 @@ import {
   UpdateGroupPayload,
 } from '../hooks/useIAM';
 import { useServerList, useServerTools } from '../hooks/useToolCatalog';
+import type { ServerInfo } from '../hooks/useToolCatalog';
+import {
+  buildScopeJson,
+  normalizeServerKey as normalizeScopeServerKey,
+  applyUiPermSync as applyScopeUiPermSync,
+  type ServerAccessEntry,
+} from './iam/scopeJson';
 import { useAgentList } from '../hooks/useAgentList';
 import { useSkills } from '../hooks/useSkills';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
@@ -38,12 +45,7 @@ interface IAMGroupsProps {
 
 type View = 'list' | 'create' | 'edit';
 
-// ─── Server access entry shape ──────────────────────────────────
-interface ServerAccessEntry {
-  server: string;
-  methods: string[];
-  tools: string[];  // array of selected tool names
-}
+// ServerAccessEntry is imported from ./iam/scopeJson (shared with the build logic).
 
 // ─── Per-type custom-entity ui_permissions ────────
 // Each admin-defined custom type mints list/create/modify/delete_<type>_entity
@@ -80,7 +82,11 @@ function buildEntityScopeGroups(
   }));
 }
 
-const COMMON_METHODS = [
+// Method value spaces are SEPARATE by entity kind (mirrors the auth-server's
+// wildcard split): MCP method tokens for mcp/virtual servers, HTTP verbs for
+// proxied non-MCP entities. The legacy MCP "*"/"all" wildcard does NOT authorize
+// an HTTP verb server-side, so proxied entities use explicit verbs or "http:*".
+const MCP_METHODS = [
   'initialize',
   'notifications/initialized',
   'ping',
@@ -88,11 +94,17 @@ const COMMON_METHODS = [
   'tools/call',
   'resources/list',
   'resources/templates/list',
-  'GET',
-  'POST',
-  'PUT',
-  'DELETE',
 ];
+
+const HTTP_VERBS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'http:*'];
+
+// State-changing HTTP verbs — selecting these (or http:*) grants destructive
+// access to the proxied backend; the editor warns when any is chosen.
+const DESTRUCTIVE_HTTP_VERBS = new Set(['POST', 'PUT', 'PATCH', 'DELETE', 'http:*']);
+
+// Back-compat alias: the create form's default entry still seeds MCP methods
+// (an MCP server is the default new entry).
+const COMMON_METHODS = MCP_METHODS;
 
 // Example scope JSON matching the format from scripts/registry-admins.json
 const EXAMPLE_SCOPE_JSON = {
@@ -115,6 +127,22 @@ const EXAMPLE_SCOPE_JSON = {
 
 // Default entry has all methods selected
 const EMPTY_SERVER_ENTRY: ServerAccessEntry = { server: '', methods: [...COMMON_METHODS], tools: [] };
+
+// Human label for a server/entity option in the scope-editor picker, tagged by
+// kind so an admin can tell an MCP server from a proxied skill/agent/custom.
+function _serverOptionLabel(s: ServerInfo): string {
+  const tag =
+    s.type === 'virtual'
+      ? '[Virtual] '
+      : s.type === 'skill'
+        ? '[Skill] '
+        : s.type === 'a2a_agent'
+          ? '[Agent] '
+          : s.type === 'custom'
+            ? `[${s.entityType || 'Custom'}] `
+            : '';
+  return `${tag}${s.name} (${s.path})`;
+}
 
 
 /**
@@ -253,107 +281,12 @@ const ServerToolsSelector: React.FC<ServerToolsSelectorProps> = ({
 };
 
 
-/**
- * Build the full scope JSON from form state for preview and API payload.
- */
-function _buildScopeJson(
-  name: string,
-  description: string,
-  serverAccess: ServerAccessEntry[],
-  groupMappings: string,
-  selectedAgents: string[],
-  uiPermissions: Record<string, string>,
-  createInIdp: boolean,
-): Record<string, unknown> {
-  const result: Record<string, unknown> = { scope_name: name };
-  if (description) result.description = description;
-
-  // Convert server access entries
-  const access = serverAccess
-    .filter((e) => e.server.trim())
-    .map((e) => {
-      const entry: Record<string, unknown> = {
-        server: e.server.trim().replace(/^\/+|\/+$/g, ''),
-        methods: e.methods.length > 0 ? e.methods : ['all'],
-      };
-      // Tools is now an array; check for wildcard or list
-      if (e.tools.includes('*')) {
-        entry.tools = '*';
-      } else if (e.tools.length > 0) {
-        entry.tools = e.tools;
-      }
-      return entry;
-    });
-  if (access.length > 0) result.server_access = access;
-
-  // Group mappings (optional)
-  const mappings = groupMappings
-    .split(',')
-    .map((m) => m.trim())
-    .filter(Boolean);
-  if (mappings.length > 0) result.group_mappings = mappings;
-
-  // Agent access (optional)
-  if (selectedAgents.length > 0) result.agent_access = selectedAgents;
-
-  // UI permissions -- only include keys that have a non-empty value
-  const perms: Record<string, string[]> = {};
-  for (const [key, val] of Object.entries(uiPermissions)) {
-    const items = val.split(',').map((v) => v.trim()).filter(Boolean);
-    if (items.length > 0) perms[key] = items;
-  }
-
-  // Auto-sync UI permissions with server_access entries.
-  // Normalize server paths (strip slashes) for consistent matching.
-  const serverPaths = serverAccess
-    .filter((e) => e.server.trim())
-    .map((e) => e.server.trim());
-
-  // Separate virtual servers from regular MCP servers
-  const virtualServerPaths = serverPaths.filter((p) => p.startsWith('/virtual/'));
-  const mcpServerPaths = serverPaths
-    .filter((p) => !p.startsWith('/virtual/'))
-    .map((p) => p.replace(/^\/+|\/+$/g, ''));
-
-  // The Server Access picker emits '*' for "All servers", but the backend
-  // list_service / read ui_permissions use 'all' as the wildcard token ('*' is
-  // treated as a literal server name and matches nothing). Translate here so the
-  // "* (All servers)" option actually grants list access. The server_access rule
-  // itself keeps '*' (its invocation-wildcard semantics are unchanged).
-  const mcpServiceResources = mcpServerPaths.includes('*') ? ['all'] : mcpServerPaths;
-
-  // Always sync MCP server UI permissions with current server_access
-  if (mcpServerPaths.length > 0) {
-    perms['list_service'] = mcpServiceResources;
-    perms['health_check_service'] = mcpServiceResources;
-    perms['get_service'] = mcpServiceResources;
-    perms['list_tools'] = mcpServiceResources;
-    perms['call_tool'] = mcpServiceResources;
-  } else {
-    delete perms['list_service'];
-    delete perms['health_check_service'];
-    delete perms['get_service'];
-    delete perms['list_tools'];
-    delete perms['call_tool'];
-  }
-
-  // Always sync list_virtual_server with selected virtual servers
-  if (virtualServerPaths.length > 0) {
-    perms['list_virtual_server'] = virtualServerPaths;
-  }
-
-  // Always sync list_agents and get_agent with selected agents
-  // This ensures UI permissions match the agent_access selection
-  if (selectedAgents.length > 0) {
-    perms['list_agents'] = selectedAgents;
-    perms['get_agent'] = selectedAgents;
-  }
-
-  if (Object.keys(perms).length > 0) result.ui_permissions = perms;
-
-  result.create_in_idp = createInIdp;
-  return result;
-}
+// Scope-JSON build logic (canonical-key normalization + perm-sync) lives in
+// ./iam/scopeJson so the create and edit paths share one implementation and the
+// authz-sensitive rules are unit-tested. Aliased to the historical local names.
+const _normalizeServerKey = normalizeScopeServerKey;
+const _applyUiPermSync = applyScopeUiPermSync;
+const _buildScopeJson = buildScopeJson;
 
 
 const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
@@ -387,6 +320,19 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [view, setView] = useState<View>('list');
 
+  // Canonical authz keys the picker offered for PROXIED non-MCP entities. Used to
+  // classify server_access entries so their scope key is written verbatim (not
+  // slash-stripped) and they are NOT synced into MCP UI permissions.
+  const proxiedKeys = useMemo(
+    () =>
+      new Set(
+        availableServers
+          .filter((s) => s.type === 'skill' || s.type === 'a2a_agent' || s.type === 'custom')
+          .map((s) => s.path),
+      ),
+    [availableServers],
+  );
+
   // ─── Create form state ──────────────────────────────────────
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
@@ -411,11 +357,11 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
   const jsonPreview = useMemo(() => {
     if (!formName.trim()) return null;
     return JSON.stringify(
-      _buildScopeJson(formName.trim(), formDescription.trim(), serverAccess, groupMappings, selectedAgents, uiPermissions, createInIdp),
+      _buildScopeJson(formName.trim(), formDescription.trim(), serverAccess, groupMappings, selectedAgents, uiPermissions, createInIdp, proxiedKeys),
       null,
       2,
     );
-  }, [formName, formDescription, serverAccess, groupMappings, selectedAgents, uiPermissions, createInIdp]);
+  }, [formName, formDescription, serverAccess, groupMappings, selectedAgents, uiPermissions, createInIdp, proxiedKeys]);
 
   const filteredGroups = useMemo(() => {
     if (!searchQuery) return groups;
@@ -451,6 +397,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
       const scopeJson = _buildScopeJson(
         formName.trim(), formDescription.trim(),
         serverAccess, groupMappings, selectedAgents, uiPermissions, createInIdp,
+        proxiedKeys,
       );
       const { scope_name, description, ...scopeConfig } = scopeJson;
 
@@ -550,14 +497,15 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     if (!editingGroup) return;
     setIsSaving(true);
     try {
-      // Build scope_config from form state
+      // Build scope_config from form state. Proxied non-MCP entities keep their
+      // canonical authz key (entity_type/registered_path); MCP/virtual are
+      // slash-normalized. Uses the SAME shared normalizer + perm-sync as the
+      // create path (_buildScopeJson) so both actions write identical output.
       const serverAccessPayload = serverAccess
         .filter((e) => e.server.trim())
         .map((e) => {
-          // Normalize server path: strip leading/trailing slashes for consistency
-          const normalizedServer = e.server.trim().replace(/^\/+|\/+$/g, '');
           const entry: {server: string; methods: string[]; tools?: string[]} = {
-            server: normalizedServer,
+            server: _normalizeServerKey(e.server, proxiedKeys),
             methods: e.methods.length > 0 ? e.methods : ['all'],
           };
           if (e.tools.length > 0) {
@@ -566,64 +514,13 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
           return entry;
         });
 
-      // Build UI permissions
+      // Build UI permissions, then auto-sync (shared helper; proxied excluded).
       const perms: Record<string, string[]> = {};
       for (const [key, val] of Object.entries(uiPermissions)) {
         const items = val.split(',').map((v) => v.trim()).filter(Boolean);
         if (items.length > 0) perms[key] = items;
       }
-
-      // Auto-sync UI permissions with server_access entries.
-      // Normalize server paths (strip slashes) for consistent matching.
-      const serverPaths = serverAccess
-        .filter((e) => e.server.trim())
-        .map((e) => e.server.trim());
-
-      // Separate virtual servers from regular MCP servers
-      const virtualServerPaths = serverPaths.filter((p) => p.startsWith('/virtual/'));
-      const mcpServerPaths = serverPaths
-        .filter((p) => !p.startsWith('/virtual/'))
-        .map((p) => p.replace(/^\/+|\/+$/g, ''));
-
-      // '*' (All servers) from the picker -> 'all' wildcard token the backend
-      // list_service/read ui_permissions expect ('*' would be a literal name and
-      // match no server). server_access keeps '*' for invocation semantics.
-      const mcpServiceResources = mcpServerPaths.includes('*') ? ['all'] : mcpServerPaths;
-
-      // Always sync MCP server UI permissions with current server_access
-      // (matches the virtual server sync pattern below)
-      if (mcpServerPaths.length > 0) {
-        perms['list_service'] = mcpServiceResources;
-        perms['health_check_service'] = mcpServiceResources;
-        perms['get_service'] = mcpServiceResources;
-        perms['list_tools'] = mcpServiceResources;
-        perms['call_tool'] = mcpServiceResources;
-      } else {
-        delete perms['list_service'];
-        delete perms['health_check_service'];
-        delete perms['get_service'];
-        delete perms['list_tools'];
-        delete perms['call_tool'];
-      }
-
-      // Always sync list_virtual_server with selected virtual servers
-      if (virtualServerPaths.length > 0) {
-        perms['list_virtual_server'] = virtualServerPaths;
-      } else {
-        // Remove virtual server permission if none selected
-        delete perms['list_virtual_server'];
-      }
-
-      // Always sync list_agents and get_agent with selected agents
-      // This ensures UI permissions match the agent_access selection
-      if (selectedAgents.length > 0) {
-        perms['list_agents'] = selectedAgents;
-        perms['get_agent'] = selectedAgents;
-      } else {
-        // Remove agent permissions if no agents selected
-        delete perms['list_agents'];
-        delete perms['get_agent'];
-      }
+      _applyUiPermSync(perms, serverAccess, selectedAgents, proxiedKeys);
 
       const payload: UpdateGroupPayload = {
         description: formDescription.trim() || undefined,
@@ -733,6 +630,23 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     setServerAccess((prev) => prev.map((e, i) => (i === idx ? { ...e, [field]: value } : e)));
   };
 
+  // Changing the selected server can flip its value space (MCP methods <-> HTTP
+  // verbs). Reset methods AND tools so stale tokens from the previous kind aren't
+  // silently written into the new scope (e.g. MCP "tools/call" persisting into a
+  // proxied-skill scope, which the auth-server would never match). New proxied
+  // entries start with no methods (admin picks explicit verbs); MCP/virtual keep
+  // the historical all-MCP-methods default.
+  const handleServerChange = (idx: number, val: string) => {
+    const nowProxied = proxiedKeys.has(val.trim());
+    setServerAccess((prev) =>
+      prev.map((e, i) =>
+        i === idx
+          ? { ...e, server: val, tools: [], methods: nowProxied ? [] : [...MCP_METHODS] }
+          : e,
+      ),
+    );
+  };
+
   const toggleMethod = (idx: number, method: string) => {
     setServerAccess((prev) =>
       prev.map((e, i) => {
@@ -838,12 +752,14 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     availableServers={availableServers}
     serversLoading={serversLoading}
     commonMethods={COMMON_METHODS}
+    isProxiedServer={(s) => proxiedKeys.has(s.trim())}
+    httpVerbs={HTTP_VERBS}
+    destructiveHttpVerbs={DESTRUCTIVE_HTTP_VERBS}
     onAddServerEntry={addServerEntry}
     onRemoveServerEntry={removeServerEntry}
     onUpdateServerEntry={updateServerEntry}
     onToggleMethod={toggleMethod}
     renderToolsSelector={(entry, idx) => (
-
     <ServerToolsSelector
       serverPath={entry.server}
       selectedTools={entry.tools}
@@ -1021,6 +937,9 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     availableServers={availableServers}
     serversLoading={serversLoading}
     commonMethods={COMMON_METHODS}
+    isProxiedServer={(s) => proxiedKeys.has(s.trim())}
+    httpVerbs={HTTP_VERBS}
+    destructiveHttpVerbs={DESTRUCTIVE_HTTP_VERBS}
     onAddServerEntry={addServerEntry}
     onRemoveServerEntry={removeServerEntry}
     onUpdateServerEntry={updateServerEntry}
