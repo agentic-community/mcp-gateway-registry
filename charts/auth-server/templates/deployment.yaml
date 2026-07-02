@@ -229,7 +229,13 @@ spec:
               value: "true"
             {{- end }}
             # Gateway generic-proxy feature (auth-server-consumed): ships disabled by
-            # default. The four registry-consumed knobs live in the registry chart.
+            # default. The remaining registry-consumed knobs live in the registry chart.
+            # GATEWAY_GENERIC_PROXY_ENABLED is a SHARED master switch: the registry
+            # reads it to render blocks, and the auth-server reads it to activate the
+            # /proxy hop + run the startup egress self-check (LLD Step 7a). Both
+            # containers must see it, so it is set here too (mirrors the registry value).
+            - name: GATEWAY_GENERIC_PROXY_ENABLED
+              value: {{ .Values.app.gatewayGenericProxyEnabled | default false | toString | quote }}
             - name: GENERIC_PROXY_TOKEN_TTL_SECONDS
               value: {{ .Values.app.genericProxyTokenTtlSeconds | default 30 | toString | quote }}
             # int64 (not toString): Helm parses a large YAML integer as float64 and

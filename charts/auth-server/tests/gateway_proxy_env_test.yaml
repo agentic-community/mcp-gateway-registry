@@ -7,6 +7,13 @@ release:
 tests:
   - it: defaults the auth-server gateway flags to their safe values
     asserts:
+      # Shared master switch: the auth-server reads it too (activates the /proxy
+      # hop + egress self-check). Defaults false (feature ships dark).
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_PROXY_ENABLED
+            value: "false"
       - contains:
           path: spec.template.spec.containers[0].env
           content:

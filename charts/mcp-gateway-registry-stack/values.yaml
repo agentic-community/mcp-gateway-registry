@@ -576,9 +576,11 @@ auth-server:
     toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
     internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
-    # Gateway generic-proxy feature (auth-server-consumed). Only active when
-    # registry.app.gatewayGenericProxyEnabled is true AND the startup egress
-    # self-check passes. Deploy auth-server.egress.networkPolicy first.
+    # Gateway generic-proxy feature (auth-server-consumed). Only active when this
+    # SHARED master switch is true AND the startup egress self-check passes. Keep
+    # it in sync with registry.app.gatewayGenericProxyEnabled above. Deploy
+    # auth-server.egress.networkPolicy first.
+    gatewayGenericProxyEnabled: false # Master switch; match registry.app.gatewayGenericProxyEnabled
     genericProxyTokenTtlSeconds: 30
     genericProxyMaxBodyBytes: "10485760" # string to avoid Helm float sci-notation
     gatewayGenericRequireBearerForWrites: true

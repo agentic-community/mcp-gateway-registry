@@ -123,6 +123,7 @@ RATE_LIMIT_BACKEND_TIMEOUT_MS
 # Chart-managed security constant: prevents AWS SDK IMDS fallback (rendered as a
 # static env: entry in deployment.yaml, not operator-tunable).
 AWS_EC2_METADATA_DISABLED
+GATEWAY_GENERIC_PROXY_ENABLED
 GENERIC_PROXY_TOKEN_TTL_SECONDS
 GENERIC_PROXY_MAX_BODY_BYTES
 GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
