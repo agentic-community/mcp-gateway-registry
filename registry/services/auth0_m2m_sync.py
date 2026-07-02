@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # TODO: Make this configurable via database or config file
 DEFAULT_CLIENT_GROUPS = {
     # Add Auth0 M2M client IDs and their default groups here
-    # Example: "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd": ["registry-admins"],
+    # Example: "EXAMPLE_AUTH0_CLIENT_ID": ["registry-admins"],
 }
 
 

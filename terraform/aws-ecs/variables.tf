@@ -849,10 +849,15 @@ variable "pf_admin_user" {
 }
 
 variable "pf_admin_pass" {
-  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production."
+  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production. No default: supply a strong value when pingfederate_enabled is true."
   type        = string
-  default     = "2FederateM0re"
+  default     = ""
   sensitive   = true
+
+  validation {
+    condition     = var.pf_admin_pass != "2FederateM0re"
+    error_message = "pf_admin_pass must not be the well-known development default. Set a strong, unique PingFederate admin password."
+  }
 }
 
 # =============================================================================

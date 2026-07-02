@@ -40,13 +40,13 @@ class IdPM2MClient(BaseModel):
 
         json_schema_extra = {
             "example": {
-                "client_id": "0oa1100req1AzfKaY698",
+                "client_id": "EXAMPLE_OKTA_CLIENT_ID",
                 "name": "ai-agent",
                 "description": "AI agent with admin access",
                 "groups": ["registry-admins"],
                 "enabled": True,
                 "provider": "okta",
-                "idp_app_id": "0oa1100req1AzfKaY698",
+                "idp_app_id": "EXAMPLE_OKTA_CLIENT_ID",
             }
         }
 
