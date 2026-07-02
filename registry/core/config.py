@@ -436,6 +436,33 @@ class Settings(BaseSettings):
         description="GitHub API base URL for App token exchange (for GHES: https://github.mycompany.com/api/v3)",
     )
 
+    # SSRF guard allowlist for server/agent targets that legitimately live on
+    # private networks (e.g. self-hosted MCP servers behind Docker service DNS
+    # or an internal VPC). The URL guard fails closed by default: any host that
+    # resolves to a private/loopback/link-local/metadata address is rejected at
+    # registration and refused at fetch time. Operators who proxy to internal
+    # backends must explicitly opt those targets in here. The cloud metadata
+    # endpoint (169.254.169.254) can never be allowlisted.
+    ssrf_allowed_hosts: str = Field(
+        default="",
+        description=(
+            "Comma-separated hostnames (or literal IPs) that may resolve to "
+            "private addresses and still be accepted by the SSRF guard for "
+            "proxy_pass_url / agent URLs (e.g. 'mcpgw,host.docker.internal,"
+            "localhost'). Keep this list tight. The cloud metadata endpoint is "
+            "never permitted."
+        ),
+    )
+    ssrf_allowed_cidrs: str = Field(
+        default="",
+        description=(
+            "Comma-separated CIDR ranges whose addresses the SSRF guard accepts "
+            "for proxy_pass_url / agent URLs even though they are private (e.g. "
+            "'10.0.0.0/8,192.168.0.0/16'). Use for internal MCP-server subnets. "
+            "The cloud metadata address 169.254.169.254 is never permitted."
+        ),
+    )
+
     # Update check (GitHub Releases API for newer registry versions)
     update_check_enabled: bool = Field(
         default=True,

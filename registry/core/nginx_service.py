@@ -577,12 +577,19 @@ class NginxConfigService:
                             location_blocks.extend(transport_blocks)
                             logger.debug(f"Added location blocks for healthy service: {path}")
                         else:
-                            # Add commented out block for unhealthy services
+                            # Add commented out block for unhealthy services.
+                            # Sanitize both the path and the backend URL: a
+                            # newline in a stored value would otherwise break out
+                            # of the leading '#' and emit a live directive.
+                            # Registration validation now rejects such values;
+                            # this protects legacy data persisted beforehand.
+                            safe_commented_path = self._sanitize_for_nginx_set(path)
+                            safe_commented_url = self._sanitize_for_nginx_set(proxy_pass_url)
                             commented_block = f"""
-#    location {{{{ROOT_PATH}}}}{path}/ {{
+#    location {{{{ROOT_PATH}}}}{safe_commented_path}/ {{
 #        # Service currently unhealthy (status: {health_status})
 #        # Proxy to MCP server
-#        proxy_pass {proxy_pass_url};
+#        proxy_pass {safe_commented_url};
 #        proxy_http_version 1.1;
 #        proxy_set_header Host $host;
 #        proxy_set_header X-Real-IP $remote_addr;
@@ -739,8 +746,7 @@ class NginxConfigService:
                 )
             except Exception as e:
                 logger.warning(
-                    f"Failed to parse AUTH_SERVER_URL '{auth_server_url}': {e}. "
-                    "Using defaults."
+                    f"Failed to parse AUTH_SERVER_URL '{auth_server_url}': {e}. Using defaults."
                 )
                 auth_host = "auth-server"
                 auth_port = "8888"
@@ -1004,19 +1010,29 @@ class NginxConfigService:
             # Handle paths like /context7, /currenttime/, /ai.smithery-xxx
             escaped_path = re.escape(path.rstrip("/"))
 
+            # Defense-in-depth: escape backend URLs before interpolating them
+            # into the quoted nginx map values (belt-and-suspenders with the
+            # registration-time metacharacter rejection).
+            safe_default_backend = self._sanitize_for_nginx_set(default_backend)
+
             # Add map entries for this server
             # Entry for no header (empty string after colon)
-            map_entries.append(f'    "~^{escaped_path}(/.*)?:$"            "{default_backend}";')
+            map_entries.append(
+                f'    "~^{escaped_path}(/.*)?:$"            "{safe_default_backend}";'
+            )
             # Entry for explicit "latest"
-            map_entries.append(f'    "~^{escaped_path}(/.*)?:latest$"      "{default_backend}";')
+            map_entries.append(
+                f'    "~^{escaped_path}(/.*)?:latest$"      "{safe_default_backend}";'
+            )
 
             # Entry for each version
             for v in versions:
                 version_str = v.get("version", "")
                 backend_url = v.get("proxy_pass_url", "")
                 if version_str and backend_url:
+                    safe_backend_url = self._sanitize_for_nginx_set(backend_url)
                     map_entries.append(
-                        f'    "~^{escaped_path}(/.*)?:{re.escape(version_str)}$"  "{backend_url}";'
+                        f'    "~^{escaped_path}(/.*)?:{re.escape(version_str)}$"  "{safe_backend_url}";'
                     )
 
             logger.info(f"Generated version map entries for {path} with {len(versions)} versions")
@@ -1138,10 +1154,14 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 # Sanitize values for safe interpolation into nginx config
                 safe_name = self._sanitize_for_nginx_comment(vs.server_name)
                 safe_id = self._sanitize_for_nginx_set(server_id)
+                # The path is interpolated into a location directive; escape any
+                # nginx-special characters (defense-in-depth over Pydantic path
+                # validation) so it cannot break out of the directive.
+                safe_vs_path = self._sanitize_for_nginx_set(vs.path)
 
                 block = f"""
     # Virtual MCP Server: {safe_name}
-    location {{{{ROOT_PATH}}}}{vs.path} {{
+    location {{{{ROOT_PATH}}}}{safe_vs_path} {{
         set $virtual_server_id "{safe_id}";
         auth_request /validate;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -1252,8 +1272,18 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                     backend_hostname
                 )
 
+                # Defense-in-depth: escape the backend URL and Host header before
+                # interpolating them into proxy_pass / set / proxy_set_header
+                # directives, matching the escaping applied to the versioned
+                # backend map. Registration-time validation already rejects URLs
+                # with nginx metacharacters; escaping here means legacy data
+                # persisted before validation still cannot break out of the
+                # directive context.
+                safe_mcp_proxy_url = self._sanitize_for_nginx_set(mcp_proxy_url)
+                safe_upstream_host = self._sanitize_for_nginx_set(upstream_host)
+
                 if host_is_resolvable_at_startup:
-                    proxy_directive = f"proxy_pass {mcp_proxy_url};"
+                    proxy_directive = f"proxy_pass {safe_mcp_proxy_url};"
                 else:
                     # sanitized is already underscore-safe (valid nginx var name).
                     backend_var = f"$vs_backend{sanitized}"
@@ -1262,7 +1292,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                     proxy_directive = (
                         f"resolver {dns_resolver} valid=10s;\n"
                         f"        resolver_timeout {dns_resolver_timeout}s;\n"
-                        f'        set {backend_var} "{mcp_proxy_url}";\n'
+                        f'        set {backend_var} "{safe_mcp_proxy_url}";\n'
                         f"        proxy_pass {backend_var};"
                     )
 
@@ -1272,7 +1302,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         {proxy_directive}
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
-        proxy_set_header Host {upstream_host};
+        proxy_set_header Host {safe_upstream_host};
         proxy_set_header Authorization $http_authorization;
         proxy_buffering off;
         proxy_set_header Accept "application/json, text/event-stream";
@@ -1453,6 +1483,14 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             other_version_ids = server_info.get("other_version_ids", [])
             has_versions = len(other_version_ids) > 0
 
+        # Defense-in-depth: escape the backend URL before it is interpolated
+        # into any nginx directive/string. Registration-time validation already
+        # rejects URLs containing nginx metacharacters, but escaping here means a
+        # value that somehow reaches this point (e.g. legacy data persisted
+        # before validation existed) still cannot break out of the quoted
+        # `set $backend_url "..."` context.
+        safe_proxy_pass_url = self._sanitize_for_nginx_set(proxy_pass_url)
+
         # Extract hostname from proxy_pass_url for external services
         parsed_url = urlparse(proxy_pass_url)
         upstream_host = parsed_url.netloc
@@ -1461,8 +1499,11 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # For external services (https), use the upstream hostname
         # For internal services (http without dots in hostname), preserve original host
         if parsed_url.scheme == "https" or "." in upstream_host:
-            # External service - use upstream hostname
-            host_header = upstream_host
+            # External service - use upstream hostname. Sanitize before it is
+            # interpolated into `proxy_set_header Host ...` (defense-in-depth: the
+            # netloc comes from a proxy_pass_url whose metacharacters are rejected
+            # at registration, but legacy data must not break out of the directive).
+            host_header = self._sanitize_for_nginx_set(upstream_host)
             logger.info(f"Using upstream hostname for Host header: {host_header}")
         else:
             # Internal service - preserve original host
@@ -1481,11 +1522,11 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         if has_versions:
             # Multi-version server: use map variable with fallback, then proxy the selected
             # upstream URL to auth_server via X-Upstream-Url so it knows where to forward.
-            proxy_directive = f'''
+            proxy_directive = f"""
         # Version routing - use header-based backend selection
         # If X-MCP-Server-Version header matches a version, use that backend
         # Otherwise, use the default backend
-        set $backend_url "{proxy_pass_url}";
+        set $backend_url "{safe_proxy_pass_url}";
         if ($versioned_backend != "") {{
             set $backend_url $versioned_backend;
         }}
@@ -1494,7 +1535,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_set_header X-Upstream-Url $backend_url;
 
         # Proxy to auth_server mcp-proxy hop (Issue #1026)
-        proxy_pass {mcp_proxy_target};'''
+        proxy_pass {mcp_proxy_target};"""
             version_headers = """
 
         # Add version info to response
@@ -1505,7 +1546,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             # bind it into the internal token via X-Resolved-Upstream, matching what
             # is forwarded here. Quote the URL so nginx does not interpret braces.
             proxy_directive = f"""
-        set $backend_url "{proxy_pass_url}";
+        set $backend_url "{safe_proxy_pass_url}";
 
         # Tell auth_server which upstream to forward to after filtering
         proxy_set_header X-Upstream-Url $backend_url;

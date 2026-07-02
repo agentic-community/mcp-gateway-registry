@@ -12,6 +12,25 @@ class RegistryError(Exception):
     pass
 
 
+class UrlValidationError(RegistryError):
+    """A URL failed the hardened SSRF/scheme validation guard.
+
+    Raised by :mod:`registry.utils.url_guard` for any URL that uses a
+    disallowed scheme, has no host, resolves to a private/metadata IP, or
+    contains disallowed nginx metacharacters. The guard fails closed, so this
+    is raised on any resolution error or ambiguity as well.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        reason: str,
+    ):
+        self.url = url
+        self.reason = reason
+        super().__init__(f"URL failed validation '{url}': {reason}")
+
+
 # Skill-specific exceptions
 
 
@@ -199,9 +218,7 @@ class SkillContentSSRFError(SkillRegistryError):
         url: str,
     ):
         self.url = url
-        super().__init__(
-            f"URL failed SSRF validation: {url}"
-        )
+        super().__init__(f"URL failed SSRF validation: {url}")
 
 
 class SkillContentTooLargeError(SkillRegistryError):
@@ -212,9 +229,7 @@ class SkillContentTooLargeError(SkillRegistryError):
         max_size: int,
     ):
         self.max_size = max_size
-        super().__init__(
-            f"Content exceeds {max_size // 1024} KB limit"
-        )
+        super().__init__(f"Content exceeds {max_size // 1024} KB limit")
 
 
 # Registration Gate exceptions

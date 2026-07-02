@@ -1,182 +1,96 @@
 """
-Unit tests for SKILL.md SSRF allowlist derivation.
+Unit tests for SKILL.md SSRF handling via the hardened URL guard.
 
-These tests verify that the SSRF allowlist used by skill_service._is_safe_url
-honours settings.github_extra_hosts so GitHub Enterprise (GHES) hosts -- which
-typically resolve to private IPs -- can be reached for SKILL.md fetching once
-the operator has explicitly trusted them via configuration.
-
-Issue #938: Support SKILLS from Github Enterprise.
+skill_service._is_safe_url now delegates to registry.utils.url_guard. The only
+hosts that bypass the private-IP block are those explicitly configured in
+settings.github_extra_hosts (e.g. GitHub Enterprise Server on a private
+network, issue #938). Built-in public forge domains (github.com, gitlab.com,
+...) are NOT blindly trusted -- they are IP-validated like any other host, which
+closes the trusted-domain SSRF bypass.
 """
 
 import logging
 from unittest.mock import patch
 
-import pytest
-
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
-
-
-def _clear_trusted_domains_cache() -> None:
+def _clear_bypass_cache() -> None:
     """Reset the lru_cache so each test sees the patched settings value."""
-    from registry.services.skill_service import _trusted_domains
+    from registry.utils.url_guard import _skill_allowlist
 
-    _trusted_domains.cache_clear()
-
-
-# =============================================================================
-# Default allowlist (no GHES configured)
-# =============================================================================
+    _skill_allowlist.cache_clear()
 
 
-class TestDefaultTrustedDomains:
-    """Built-in allowlist behaviour when github_extra_hosts is empty."""
+def _bypass_hosts() -> frozenset[str]:
+    """Return the skill-fetch bypass host set derived from current settings."""
+    from registry.utils.url_guard import _skill_allowlist
 
-    @patch("registry.services.skill_service.settings")
-    def test_default_hosts_are_trusted(
+    return _skill_allowlist().hosts
+
+
+class TestBypassAllowlistDerivation:
+    """The operator bypass allowlist is derived solely from github_extra_hosts."""
+
+    @patch("registry.utils.url_guard.settings")
+    def test_empty_when_unconfigured(
         self,
         mock_settings,
     ) -> None:
-        """github.com, gitlab.com, raw.githubusercontent.com, bitbucket.org always trusted."""
+        """No configured hosts means an empty bypass set (public domains not in it)."""
         mock_settings.github_extra_hosts = ""
-        _clear_trusted_domains_cache()
+        _clear_bypass_cache()
 
-        from registry.services.skill_service import (
-            _DEFAULT_TRUSTED_DOMAINS,
-            _trusted_domains,
-        )
+        assert _bypass_hosts() == frozenset()
 
-        # With no extras configured the merged set must equal the defaults.
-        # Using equality (rather than per-host membership) catches accidental
-        # additions or omissions and keeps the assertion off CodeQL's
-        # py/incomplete-url-substring-sanitization radar.
-        assert _trusted_domains() == _DEFAULT_TRUSTED_DOMAINS
-
-    @patch("registry.services.skill_service.settings")
-    def test_unconfigured_ghes_host_not_trusted(
+    @patch("registry.utils.url_guard.settings")
+    def test_public_forge_domains_not_in_bypass(
         self,
         mock_settings,
     ) -> None:
-        """A GHES hostname not in github_extra_hosts is not in the allowlist."""
+        """Built-in public forge domains are never auto-bypassed."""
         mock_settings.github_extra_hosts = ""
-        _clear_trusted_domains_cache()
+        _clear_bypass_cache()
 
-        from registry.services.skill_service import (
-            _DEFAULT_TRUSTED_DOMAINS,
-            _trusted_domains,
-        )
+        assert "github.com" not in _bypass_hosts()
+        assert "gitlab.com" not in _bypass_hosts()
 
-        assert _trusted_domains() == _DEFAULT_TRUSTED_DOMAINS
-
-
-# =============================================================================
-# GHES hosts via github_extra_hosts
-# =============================================================================
-
-
-class TestGHESHostMerge:
-    """Configured GHES hosts are merged into the allowlist."""
-
-    @patch("registry.services.skill_service.settings")
+    @patch("registry.utils.url_guard.settings")
     def test_single_ghes_host_added(
         self,
         mock_settings,
     ) -> None:
-        """One configured GHES host extends the default trusted set by exactly that host."""
+        """One configured GHES host is the only member of the bypass set."""
         mock_settings.github_extra_hosts = "github.mycompany.com"
-        _clear_trusted_domains_cache()
+        _clear_bypass_cache()
 
-        from registry.services.skill_service import (
-            _DEFAULT_TRUSTED_DOMAINS,
-            _trusted_domains,
-        )
+        assert _bypass_hosts() == frozenset({"github.mycompany.com"})
 
-        assert _trusted_domains() == _DEFAULT_TRUSTED_DOMAINS | {"github.mycompany.com"}
-
-    @patch("registry.services.skill_service.settings")
-    def test_multiple_ghes_hosts_added(
-        self,
-        mock_settings,
-    ) -> None:
-        """Comma-separated GHES hosts all extend the default set."""
-        mock_settings.github_extra_hosts = (
-            "github.mycompany.com,raw.github.mycompany.com"
-        )
-        _clear_trusted_domains_cache()
-
-        from registry.services.skill_service import (
-            _DEFAULT_TRUSTED_DOMAINS,
-            _trusted_domains,
-        )
-
-        expected = _DEFAULT_TRUSTED_DOMAINS | {
-            "github.mycompany.com",
-            "raw.github.mycompany.com",
-        }
-        assert _trusted_domains() == expected
-
-    @patch("registry.services.skill_service.settings")
+    @patch("registry.utils.url_guard.settings")
     def test_whitespace_and_case_normalised(
         self,
         mock_settings,
     ) -> None:
         """Whitespace is stripped and hostnames are lowercased."""
         mock_settings.github_extra_hosts = "  GitHub.MyCompany.com  ,  RAW.github.mycompany.com  "
-        _clear_trusted_domains_cache()
+        _clear_bypass_cache()
 
-        from registry.services.skill_service import (
-            _DEFAULT_TRUSTED_DOMAINS,
-            _trusted_domains,
-        )
-
-        expected = _DEFAULT_TRUSTED_DOMAINS | {
-            "github.mycompany.com",
-            "raw.github.mycompany.com",
-        }
-        assert _trusted_domains() == expected
-
-    @patch("registry.services.skill_service.settings")
-    def test_defaults_preserved_when_extras_present(
-        self,
-        mock_settings,
-    ) -> None:
-        """Adding GHES hosts does not drop the built-in defaults."""
-        mock_settings.github_extra_hosts = "github.mycompany.com"
-        _clear_trusted_domains_cache()
-
-        from registry.services.skill_service import (
-            _DEFAULT_TRUSTED_DOMAINS,
-            _trusted_domains,
-        )
-
-        # Subset assertion: every default must still be in the merged set.
-        assert _DEFAULT_TRUSTED_DOMAINS <= _trusted_domains()
-
-
-# =============================================================================
-# _is_safe_url integration with the merged allowlist
-# =============================================================================
+        assert _bypass_hosts() == frozenset({"github.mycompany.com", "raw.github.mycompany.com"})
 
 
 class TestSafeUrlForGHES:
-    """End-to-end: GHES URLs bypass the private-IP check once configured."""
+    """GHES URLs bypass the private-IP check only once explicitly configured."""
 
-    @patch("registry.services.skill_service.settings")
+    @patch("registry.utils.url_guard.settings")
     def test_ghes_url_blocked_when_not_configured(
         self,
         mock_settings,
     ) -> None:
         """Without github_extra_hosts, GHES on a private IP fails SSRF."""
         mock_settings.github_extra_hosts = ""
-        _clear_trusted_domains_cache()
+        _clear_bypass_cache()
 
-        # Simulate DNS resolving the GHES host to an internal IP (10.0.0.5).
-        with patch("registry.services.skill_service.socket.getaddrinfo") as mock_resolve:
+        with patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve:
             mock_resolve.return_value = [
                 (None, None, None, None, ("10.0.0.5", 443)),
             ]
@@ -186,20 +100,22 @@ class TestSafeUrlForGHES:
             url = "https://github.mycompany.com/org/repo/blob/main/SKILL.md"
             assert _is_safe_url(url) is False
 
-    @patch("registry.services.skill_service.settings")
+    @patch("registry.utils.url_guard.settings")
     def test_ghes_url_allowed_when_configured(
         self,
         mock_settings,
     ) -> None:
-        """With github_extra_hosts set, GHES on a private IP passes SSRF."""
-        mock_settings.github_extra_hosts = "github.mycompany.com"
-        _clear_trusted_domains_cache()
+        """With github_extra_hosts set, GHES on a private IP passes SSRF.
 
-        # DNS resolution should be skipped entirely for trusted hosts -- we
-        # patch getaddrinfo to ensure the test fails loudly if it gets called.
-        with patch("registry.services.skill_service.socket.getaddrinfo") as mock_resolve:
+        DNS resolution should be skipped entirely for bypass hosts -- patch
+        getaddrinfo to fail loudly if it gets called.
+        """
+        mock_settings.github_extra_hosts = "github.mycompany.com"
+        _clear_bypass_cache()
+
+        with patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve:
             mock_resolve.side_effect = AssertionError(
-                "getaddrinfo should not be called for trusted hosts"
+                "getaddrinfo should not be called for bypass hosts"
             )
 
             from registry.services.skill_service import _is_safe_url
@@ -207,34 +123,57 @@ class TestSafeUrlForGHES:
             url = "https://github.mycompany.com/org/repo/blob/main/SKILL.md"
             assert _is_safe_url(url) is True
 
-    @patch("registry.services.skill_service.settings")
-    def test_raw_ghes_url_allowed_when_configured(
+    @patch("registry.utils.url_guard.settings")
+    def test_public_github_on_private_ip_is_blocked(
         self,
         mock_settings,
     ) -> None:
-        """raw.* GHES host trusted when listed in github_extra_hosts."""
-        mock_settings.github_extra_hosts = "raw.github.mycompany.com"
-        _clear_trusted_domains_cache()
+        """A public forge domain resolving to a private IP is now BLOCKED.
 
-        from registry.services.skill_service import _is_safe_url
+        This is the core hardening: github.com is no longer a blind-trust
+        bypass, so an internal host masquerading as github.com (or DNS
+        poisoning) cannot reach private ranges.
+        """
+        mock_settings.github_extra_hosts = ""
+        _clear_bypass_cache()
 
-        url = "https://raw.github.mycompany.com/org/repo/refs/heads/main/SKILL.md"
-        assert _is_safe_url(url) is True
+        with patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve:
+            mock_resolve.return_value = [
+                (None, None, None, None, ("10.0.0.5", 443)),
+            ]
 
-    @patch("registry.services.skill_service.settings")
+            from registry.services.skill_service import _is_safe_url
+
+            assert _is_safe_url("https://github.com/org/repo/blob/main/SKILL.md") is False
+
+    @patch("registry.utils.url_guard.settings")
+    def test_public_github_on_public_ip_is_allowed(
+        self,
+        mock_settings,
+    ) -> None:
+        """A public forge domain resolving to a public IP is allowed."""
+        mock_settings.github_extra_hosts = ""
+        _clear_bypass_cache()
+
+        with patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve:
+            mock_resolve.return_value = [
+                (None, None, None, None, ("140.82.112.3", 443)),
+            ]
+
+            from registry.services.skill_service import _is_safe_url
+
+            assert _is_safe_url("https://github.com/org/repo/blob/main/SKILL.md") is True
+
+    @patch("registry.utils.url_guard.settings")
     def test_unconfigured_internal_host_still_blocked(
         self,
         mock_settings,
     ) -> None:
-        """A non-GitHub internal host on a private IP is still blocked.
-
-        Confirms the allowlist is narrow: only configured GHES hosts skip the
-        IP check, not arbitrary internal hostnames.
-        """
+        """A non-GitHub internal host on a private IP is still blocked."""
         mock_settings.github_extra_hosts = "github.mycompany.com"
-        _clear_trusted_domains_cache()
+        _clear_bypass_cache()
 
-        with patch("registry.services.skill_service.socket.getaddrinfo") as mock_resolve:
+        with patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve:
             mock_resolve.return_value = [
                 (None, None, None, None, ("10.0.0.5", 443)),
             ]
@@ -242,33 +181,3 @@ class TestSafeUrlForGHES:
             from registry.services.skill_service import _is_safe_url
 
             assert _is_safe_url("https://internal.example.com/foo") is False
-
-
-# =============================================================================
-# Cache invalidation
-# =============================================================================
-
-
-class TestCacheBehavior:
-    """The lru_cache on _trusted_domains is one-shot per process by design."""
-
-    @pytest.fixture(autouse=True)
-    def _reset_cache(self):
-        _clear_trusted_domains_cache()
-        yield
-        _clear_trusted_domains_cache()
-
-    @patch("registry.services.skill_service.settings")
-    def test_cache_returns_same_frozenset(
-        self,
-        mock_settings,
-    ) -> None:
-        """Repeated calls return the cached frozenset without re-reading settings."""
-        mock_settings.github_extra_hosts = "github.mycompany.com"
-
-        from registry.services.skill_service import _trusted_domains
-
-        first = _trusted_domains()
-        second = _trusted_domains()
-
-        assert first is second

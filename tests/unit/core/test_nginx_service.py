@@ -1148,9 +1148,7 @@ server {
                                 "registry.core.nginx_service.urlparse",
                                 side_effect=_selective_urlparse,
                             ):
-                                result = await nginx_service.generate_config_async(
-                                    sample_servers
-                                )
+                                result = await nginx_service.generate_config_async(sample_servers)
 
                                 assert result is True
                                 written_content = mock_atomic_write.call_args_list[0][0][1]
@@ -1376,3 +1374,44 @@ class TestResolveMcpProxyReadTimeout:
         fake_settings = MagicMock(mcp_proxy_timeout=None)
         with patch.object(ns, "settings", fake_settings):
             assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
+
+
+# =============================================================================
+# CONFIG-INJECTION DEFENSE: proxy_pass_url is escaped at interpolation
+# =============================================================================
+
+
+@pytest.mark.unit
+def test_location_block_escapes_backend_url_metacharacters(nginx_service):
+    """A crafted proxy_pass_url cannot break out of the quoted set directive.
+
+    Registration validation already rejects nginx metacharacters, but the
+    location-block builder escapes defensively so legacy/persisted values still
+    cannot inject nginx directives.
+    """
+    malicious = 'http://evil.com/";}\nlocation /x { proxy_pass http://attacker;'
+
+    block = nginx_service._create_location_block(
+        path="/evil",
+        proxy_pass_url=malicious,
+        transport_type="streamable-http",
+        server_info={"server_name": "evil"},
+    )
+
+    # The raw injection payload must not appear verbatim: quotes/backslashes are
+    # escaped and newlines collapsed, so the "; }" directive terminator cannot
+    # close the `set $backend_url "..."` string context.
+    assert 'set $backend_url "http://evil.com/";}' not in block
+    # A real newline must not survive inside the generated directive value.
+    assert "\nlocation /x { proxy_pass http://attacker;" not in block
+    # The escaped form (backslash-quote) is what lands in the config.
+    assert '\\"' in block
+
+
+@pytest.mark.unit
+def test_sanitize_for_nginx_set_escapes_quotes_and_newlines():
+    """The nginx sanitizer escapes quotes/backslashes and collapses newlines."""
+    out = NginxConfigService._sanitize_for_nginx_set('a"b\\c\nd')
+    assert '"' not in out.replace('\\"', "")  # only escaped quotes remain
+    assert "\n" not in out
+>>>>>>> 62e9ac63 (fix: validate and pin outbound URLs against SSRF and nginx config injection)
