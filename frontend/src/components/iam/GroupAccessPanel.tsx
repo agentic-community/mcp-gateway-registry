@@ -27,9 +27,10 @@ interface MethodsPopoverProps {
   methods: string[];
   allMethods: string[];
   onToggle: (method: string) => void;
+  proxied?: boolean;
 }
 
-const MethodsPopover: React.FC<MethodsPopoverProps> = ({ methods, allMethods, onToggle }) => {
+const MethodsPopover: React.FC<MethodsPopoverProps> = ({ methods, allMethods, onToggle, proxied }) => {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -67,7 +68,7 @@ const MethodsPopover: React.FC<MethodsPopoverProps> = ({ methods, allMethods, on
       {open && (
         <div className="absolute z-20 mt-1 left-0 w-56 max-h-64 overflow-y-auto rounded-lg border border-gray-200
                         dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg p-3 space-y-1">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Methods</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Methods{proxied ? ' (HTTP verbs)' : ''}</p>
           {allMethods.map((method) => (
             <label key={method} className="flex items-center space-x-2 cursor-pointer py-0.5">
               <input
@@ -94,6 +95,11 @@ interface GroupAccessPanelProps {
   availableServers: { path: string; name: string; type?: string; description?: string }[];
   serversLoading: boolean;
   commonMethods: string[];
+  // Proxied non-MCP entities (skills/agents/custom) select HTTP verbs instead of
+  // MCP method tokens; the caller decides membership via the proxied-authz-key set.
+  isProxiedServer: (server: string) => boolean;
+  httpVerbs: string[];
+  destructiveHttpVerbs: Set<string>;
   onAddServerEntry: () => void;
   onRemoveServerEntry: (idx: number) => void;
   onUpdateServerEntry: (idx: number, field: keyof ServerAccessEntry, value: string | string[]) => void;
@@ -214,11 +220,28 @@ const grantedPermCount = Object.entries(props.uiPermissions)
                       />
                     </td>
                     <td className="px-2 py-2">
-                      <MethodsPopover
-                        methods={entry.methods}
-                        allMethods={props.commonMethods}
-                        onToggle={(m) => props.onToggleMethod(idx, m)}
-                      />
+                      {(() => {
+                        const proxied = props.isProxiedServer(entry.server);
+                        const methodOptions = proxied ? props.httpVerbs : props.commonMethods;
+                        const hasDestructive =
+                          proxied && entry.methods.some((m) => props.destructiveHttpVerbs.has(m));
+                        return (
+                          <>
+                            <MethodsPopover
+                              methods={entry.methods}
+                              allMethods={methodOptions}
+                              onToggle={(m) => props.onToggleMethod(idx, m)}
+                              proxied={proxied}
+                            />
+                            {hasDestructive && (
+                              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                                Grants state-changing access (POST/PUT/PATCH/DELETE) to the
+                                proxied backend. "http:*" grants ALL HTTP verbs.
+                              </p>
+                            )}
+                          </>
+                        );
+                      })()}
                     </td>
                     <td className="px-2 py-2">{props.renderToolsSelector(entry, idx)}</td>
                     <td className="px-2 py-2 text-right">

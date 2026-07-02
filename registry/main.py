@@ -1207,6 +1207,12 @@ app.include_router(rate_limit_router, prefix="/api", tags=["Rate Limiting"])
 # it without an additional prefix override.
 app.include_router(iam_user_groups_router)
 
+# Proxied-entity listing for the IAM scope editor (gateway-proxy feature). Router
+# declares its own /api/iam/proxied-entities prefix.
+from registry.api.proxied_entities_routes import router as proxied_entities_router
+
+app.include_router(proxied_entities_router)
+
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])
 
