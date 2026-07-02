@@ -1,0 +1,42 @@
+suite: gateway generic-proxy env flags
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: defaults the auth-server gateway flags to their safe values
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_EGRESS_SELFCHECK_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
+            value: "true"
+
+  # Regression: `| default true` would swallow an explicit false (sprig treats
+  # false as empty), leaving the egress self-check un-disable-able and blocking a
+  # dev deploy. hasKey/ternary preserves the override.
+  - it: allows disabling the egress self-check via an explicit false
+    set:
+      app.gatewayEgressSelfcheckEnabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_EGRESS_SELFCHECK_ENABLED
+            value: "false"
+
+  - it: allows disabling the CSRF bearer requirement via an explicit false
+    set:
+      app.gatewayGenericRequireBearerForWrites: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
+            value: "false"

@@ -234,10 +234,15 @@ spec:
               value: {{ .Values.app.genericProxyTokenTtlSeconds | default 30 | toString | quote }}
             - name: GENERIC_PROXY_MAX_BODY_BYTES
               value: {{ .Values.app.genericProxyMaxBodyBytes | default 10485760 | toString | quote }}
+            # hasKey/ternary (NOT `| default true`): these default TRUE but must be
+            # overridable to false. `false | default true` would wrongly re-enable
+            # them (sprig `default` treats false as empty). values.yaml always sets
+            # the key, so the ternary reads the real value; the `true` fallback only
+            # applies if an operator omits the key entirely.
             - name: GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
-              value: {{ .Values.app.gatewayGenericRequireBearerForWrites | default true | toString | quote }}
+              value: {{ (hasKey .Values.app "gatewayGenericRequireBearerForWrites" | ternary .Values.app.gatewayGenericRequireBearerForWrites true) | toString | quote }}
             - name: GATEWAY_EGRESS_SELFCHECK_ENABLED
-              value: {{ .Values.app.gatewayEgressSelfcheckEnabled | default true | toString | quote }}
+              value: {{ (hasKey .Values.app "gatewayEgressSelfcheckEnabled" | ternary .Values.app.gatewayEgressSelfcheckEnabled true) | toString | quote }}
             - name: GATEWAY_GENERIC_TLS_VERIFY
               value: {{ .Values.app.gatewayGenericTlsVerify | default "true" | quote }}
             - name: GATEWAY_PROXY_PIN_REFRESH_SECONDS
