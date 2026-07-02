@@ -15,7 +15,11 @@ from .base import AuthProvider
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
 JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-registry")
-SECRET_KEY = os.environ.get("SECRET_KEY", "development-secret-key")
+# SECRET_KEY is enforced at process startup by auth_server/server.py and
+# registry/core/config.py; we read it at import time but do not provide a
+# fallback. Self-signed token validation (which consumes this constant)
+# raises if it is missing rather than silently using a known-bad value.
+SECRET_KEY = os.environ.get("SECRET_KEY")
 
 
 logging.basicConfig(
@@ -201,6 +205,8 @@ class KeycloakProvider(AuthProvider):
             ValueError: If token validation fails
         """
         try:
+            if not SECRET_KEY:
+                raise ValueError("SECRET_KEY is required for self-signed token validation")
             claims = jwt.decode(
                 token,
                 SECRET_KEY,
@@ -438,9 +444,7 @@ class KeycloakProvider(AuthProvider):
         ):
             value = rewritten.get(field)
             if isinstance(value, str) and value.startswith(self.keycloak_url):
-                rewritten[field] = value.replace(
-                    self.keycloak_url, self.keycloak_external_url, 1
-                )
+                rewritten[field] = value.replace(self.keycloak_url, self.keycloak_external_url, 1)
         return rewritten
 
     @lru_cache(maxsize=1)

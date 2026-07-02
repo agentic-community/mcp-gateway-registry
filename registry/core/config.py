@@ -7,6 +7,8 @@ from typing import Annotated
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from registry.common.secret_key import validate_secret_key
+
 # Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist
 # at terraform/aws-ecs/variables.tf (issue #955) so both layers reject the same
 # typos with the same messages.
@@ -902,7 +904,7 @@ class Settings(BaseSettings):
         default=5,
         ge=0,
         description=(
-            "Clock-skew leeway (seconds) on the /mcp-proxy internal token " "exp/iat checks."
+            "Clock-skew leeway (seconds) on the /mcp-proxy internal token exp/iat checks."
         ),
     )
 
@@ -1185,12 +1187,11 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if not self.secret_key:
-            raise RuntimeError(
-                "SECRET_KEY environment variable is required. "
-                "Set it to a value at least 32 bytes long, identical across all auth_server "
-                "and registry replicas (see chart values.yaml: global.secretKey)."
-            )
+        # Reject a missing, too-short, or well-known SECRET_KEY at startup so the
+        # registry can never run with a forgeable signing key. Store the
+        # validated (whitespace-stripped) value so the registry and auth_server
+        # derive an identical signing key from the same environment variable.
+        self.secret_key = validate_secret_key(self.secret_key)
 
     @property
     def embeddings_model_dir(self) -> Path:

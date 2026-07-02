@@ -30,7 +30,7 @@ class TestSettingsInstantiation:
         can assert the rest of the defaults.
         """
         monkeypatch.delenv("AUTH_SERVER_URL", raising=False)
-        monkeypatch.setenv("SECRET_KEY", "test-key-for-defaults")
+        monkeypatch.setenv("SECRET_KEY", "test-key-for-defaults-long-enough-32b")
         monkeypatch.chdir(tmp_path)
 
         settings = Settings()
@@ -111,7 +111,7 @@ class TestSettingsInstantiation:
     def test_settings_secret_key_not_overridden(self) -> None:
         """Test that provided secret_key is not overridden."""
         # Arrange
-        custom_key = "my-custom-secret-key-12345"
+        custom_key = "my-custom-secret-key-12345-long-enough"
 
         # Act
         settings = Settings(secret_key=custom_key)
@@ -123,7 +123,7 @@ class TestSettingsInstantiation:
         """Test Settings instantiation with custom values."""
         # Arrange
         custom_values = {
-            "secret_key": "test-secret",
+            "secret_key": "test-secret-key-that-is-long-enough-32b",
             "session_cookie_name": "test_cookie",
             "session_max_age_seconds": 3600,
             "embeddings_provider": "litellm",
@@ -160,14 +160,14 @@ class TestSettingsEnvironmentVariables:
     def test_settings_load_from_env_auth(self, monkeypatch) -> None:
         """Test loading auth settings from environment variables."""
         # Arrange
-        monkeypatch.setenv("SECRET_KEY", "env-secret-key")
+        monkeypatch.setenv("SECRET_KEY", "env-secret-key-that-is-long-enough-32b")
         monkeypatch.setenv("SESSION_COOKIE_NAME", "env_session")
 
         # Act
         settings = Settings()
 
         # Assert
-        assert settings.secret_key == "env-secret-key"
+        assert settings.secret_key == "env-secret-key-that-is-long-enough-32b"
         assert settings.session_cookie_name == "env_session"
 
     def test_settings_load_from_env_embeddings(self, monkeypatch) -> None:
@@ -717,6 +717,26 @@ class TestSettingsSecretKey:
     def test_provided_secret_key_used_verbatim(self, monkeypatch) -> None:
         """A provided non-empty secret_key is used verbatim, not regenerated."""
         custom = "my-explicit-32-byte-secret-key-aaaa"
+        settings = Settings(secret_key=custom)
+        assert settings.secret_key == custom
+
+    def test_short_secret_key_rejected(self, monkeypatch, tmp_path) -> None:
+        """A secret_key shorter than 32 characters is rejected at startup."""
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="at least 32"):
+            Settings(secret_key="too-short-key")
+
+    def test_weak_default_secret_key_rejected(self, monkeypatch, tmp_path) -> None:
+        """The historical 'development-secret-key' literal is rejected."""
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="well-known placeholder"):
+            Settings(secret_key="development-secret-key")
+
+    def test_valid_long_secret_key_accepted(self, monkeypatch) -> None:
+        """A random 32+ character key is accepted."""
+        custom = "a-sufficiently-long-random-secret-key-value"
         settings = Settings(secret_key=custom)
         assert settings.secret_key == custom
 
