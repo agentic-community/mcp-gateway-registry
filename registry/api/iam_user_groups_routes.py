@@ -35,7 +35,7 @@ from registry.services.user_group_management_service import (
     UserGroupNotFound,
     get_user_group_management_service,
 )
-from registry.utils.pingfederate_manager import _get_pf_admin_pass
+from registry.utils.pingfederate_manager import _get_pf_admin_pass, _get_pf_verify
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,9 @@ async def _pingfederate_upsert_user(
 
     Raises:
         HTTPException(500): If the PingFederate admin password is not
-            configured (fails closed rather than using a default credential).
+            configured, or the configured TLS CA bundle is missing (fails
+            closed rather than using a default credential or an unverified
+            TLS channel).
         HTTPException(502): On any failure to talk to PingFederate. Errors are
             logged with type+status server-side; the response body is never
             echoed to the client (it could leak admin credentials).
@@ -199,8 +201,9 @@ async def _pingfederate_upsert_user(
     }
     try:
         pf_admin_pass = _get_pf_admin_pass()
+        verify = _get_pf_verify()
     except ValueError as exc:
-        logger.error("PingFederate admin password is not configured: %s", exc)
+        logger.error("PingFederate integration is not configured: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="PingFederate integration is not configured",
@@ -209,7 +212,7 @@ async def _pingfederate_upsert_user(
     url = f"{_PF_ADMIN_URL}{_PF_USERS_PATH}"
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=_PF_HTTP_TIMEOUT_SECONDS) as client:  # nosec B501 - PF admin API uses self-signed cert in default deployment
+        async with httpx.AsyncClient(verify=verify, timeout=_PF_HTTP_TIMEOUT_SECONDS) as client:
             get_resp = await client.get(url, auth=auth, headers=headers)
             if get_resp.status_code >= 300:
                 logger.error(

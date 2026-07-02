@@ -7,6 +7,7 @@ not configured.
 """
 
 import inspect
+import ssl
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ import pytest
 import registry.utils.pingfederate_manager as pf
 from registry.utils.pingfederate_manager import (
     _get_pf_admin_pass,
+    _get_pf_verify,
     _pf_auth,
     create_pingfederate_service_account_client,
 )
@@ -132,3 +134,88 @@ class TestNoHardcodedDefaultInSource:
         module_path = Path(pf.__file__).resolve().parents[1] / "api" / "iam_user_groups_routes.py"
         source = module_path.read_text(encoding="utf-8")
         assert _RETIRED_DEFAULT_PASSWORD not in source
+
+
+class TestGetPfVerify:
+    """Tests for _get_pf_verify fail-closed TLS verification resolution."""
+
+    def test_defaults_to_verification_enabled(self):
+        """With no TLS env vars set, verification defaults to True (fail closed)."""
+        with patch.dict("os.environ", {}, clear=True):
+            assert _get_pf_verify() is True
+
+    def test_ca_bundle_env_returns_pinned_context(self, tmp_path):
+        """A configured PF_ADMIN_CA_BUNDLE yields an SSLContext, not True/False."""
+        # certifi ships a real, loadable CA PEM and is a project dependency, so
+        # this exercises the CA-bundle branch deterministically across envs.
+        import certifi
+
+        bundle = tmp_path / "pf-ca.pem"
+        bundle.write_text(Path(certifi.where()).read_text(encoding="utf-8"), encoding="utf-8")
+
+        with patch.dict("os.environ", {"PF_ADMIN_CA_BUNDLE": str(bundle)}, clear=True):
+            result = _get_pf_verify()
+        assert isinstance(result, ssl.SSLContext)
+
+    def test_missing_ca_bundle_fails_closed(self):
+        """A configured-but-missing CA bundle raises rather than silently verifying."""
+        with patch.dict(
+            "os.environ",
+            {"PF_ADMIN_CA_BUNDLE": "/nonexistent/path/to/ca.pem"},
+            clear=True,
+        ):
+            with pytest.raises(ValueError, match="PF_ADMIN_CA_BUNDLE"):
+                _get_pf_verify()
+
+    def test_unreadable_ca_bundle_fails_closed(self, tmp_path):
+        """A CA bundle file that is not valid PEM fails closed with ValueError."""
+        bundle = tmp_path / "not-a-cert.pem"
+        bundle.write_text("this is not a certificate", encoding="utf-8")
+        with patch.dict("os.environ", {"PF_ADMIN_CA_BUNDLE": str(bundle)}, clear=True):
+            with pytest.raises(ValueError, match="PF_ADMIN_CA_BUNDLE"):
+                _get_pf_verify()
+
+    def test_insecure_flag_defaults_off(self):
+        """Without the opt-out flag, the insecure escape hatch is not taken."""
+        with patch.dict("os.environ", {}, clear=True):
+            assert _get_pf_verify() is not False
+
+    @pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "yes", "on"])
+    def test_insecure_flag_opt_in_disables_verification(self, truthy):
+        """An explicit truthy PF_ADMIN_TLS_INSECURE disables verification."""
+        with patch.dict("os.environ", {"PF_ADMIN_TLS_INSECURE": truthy}, clear=True):
+            assert _get_pf_verify() is False
+
+    @pytest.mark.parametrize("falsy", ["", "0", "false", "no", "off", "  "])
+    def test_insecure_flag_non_truthy_keeps_verification(self, falsy):
+        """A falsy/blank PF_ADMIN_TLS_INSECURE leaves verification enabled."""
+        with patch.dict("os.environ", {"PF_ADMIN_TLS_INSECURE": falsy}, clear=True):
+            assert _get_pf_verify() is True
+
+    def test_insecure_flag_takes_precedence_over_ca_bundle(self, tmp_path):
+        """If insecure is explicitly on, it wins over a configured CA bundle."""
+        bundle = tmp_path / "pf-ca.pem"
+        bundle.write_text("ignored", encoding="utf-8")
+        with patch.dict(
+            "os.environ",
+            {"PF_ADMIN_TLS_INSECURE": "1", "PF_ADMIN_CA_BUNDLE": str(bundle)},
+            clear=True,
+        ):
+            assert _get_pf_verify() is False
+
+
+class TestNoUnconditionalVerifyDisabled:
+    """Regression guard: PF admin clients must not disable TLS verification."""
+
+    def test_manager_source_has_no_verify_false(self):
+        """pingfederate_manager builds its httpx client via _get_pf_verify()."""
+        source = inspect.getsource(pf)
+        assert "verify=False" not in source
+        assert "_get_pf_verify()" in source
+
+    def test_iam_user_groups_routes_has_no_verify_false(self):
+        """The sibling PingFederate sink also routes through _get_pf_verify()."""
+        module_path = Path(pf.__file__).resolve().parents[1] / "api" / "iam_user_groups_routes.py"
+        source = module_path.read_text(encoding="utf-8")
+        assert "verify=False" not in source
+        assert "_get_pf_verify" in source
