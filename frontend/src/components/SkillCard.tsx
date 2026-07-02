@@ -408,6 +408,19 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                     Discovery
                   </span>
                 )}
+                {/* Proxied badge - served through the gateway generic hop */}
+                {skill.is_proxied && (
+                  <span
+                    className="px-2 py-0.5 text-xs font-semibold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 rounded-full flex-shrink-0 border border-cyan-200 dark:border-cyan-600"
+                    title={
+                      skill.proxy_target_url
+                        ? `Proxied through the gateway to ${skill.proxy_target_url}`
+                        : 'Served through the gateway proxy'
+                    }
+                  >
+                    Proxied
+                  </span>
+                )}
               </div>
 
               <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">

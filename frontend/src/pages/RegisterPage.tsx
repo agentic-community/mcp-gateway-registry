@@ -23,7 +23,7 @@ import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 import DuplicateCheckModal from '../components/DuplicateCheckModal';
 import { useDuplicateCheck } from '../hooks/useDuplicateCheck';
 import type { ExistingEntity } from '../types/duplicateCheck';
-import { FIELD, LABEL } from '../components/formFields';
+import { FIELD, LABEL, ProxyField } from '../components/formFields';
 import { pathFromName } from '../utils/slug';
 import Button from '../components/Button';
 
@@ -124,6 +124,10 @@ interface AgentFormData {
   supported_protocol: string;
   trust_level: string;
   metadata: string;
+  // Gateway-proxy opt-in. An agent has a native url, so proxy_target_url is
+  // optional (falls back to the agent's url when blank).
+  is_proxied: boolean;
+  proxy_target_url: string;
 }
 
 
@@ -184,6 +188,8 @@ const initialAgentForm: AgentFormData = {
   supported_protocol: 'other',
   trust_level: 'community',
   metadata: '',
+  is_proxied: false,
+  proxy_target_url: '',
 };
 
 
@@ -667,6 +673,13 @@ const RegisterPage: React.FC = () => {
         supportedProtocol: agentForm.supported_protocol,
         trustLevel: agentForm.trust_level,
         ...(agentForm.metadata.trim() ? { metadata: JSON.parse(agentForm.metadata) } : {}),
+        // Gateway-proxy opt-in. snake_case (the mixin fields have no camelCase
+        // alias; populate_by_name accepts them). Always send is_proxied so the
+        // registered state is explicit; target optional (agent url is fallback).
+        is_proxied: agentForm.is_proxied,
+        ...(agentForm.is_proxied && agentForm.proxy_target_url.trim()
+          ? { proxy_target_url: agentForm.proxy_target_url.trim() }
+          : {}),
       };
 
       await axios.post('/api/agents/register', payload, {
@@ -1312,6 +1325,16 @@ const RegisterPage: React.FC = () => {
             <span className="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-1 rounded text-xs mr-2">Optional</span>
             Additional Settings
           </h3>
+        </div>
+
+        <div className="md:col-span-2">
+          <ProxyField
+            isProxied={agentForm.is_proxied}
+            onIsProxiedChange={(v) => setAgentForm(prev => ({ ...prev, is_proxied: v }))}
+            proxyTargetUrl={agentForm.proxy_target_url}
+            onProxyTargetUrlChange={(v) => setAgentForm(prev => ({ ...prev, proxy_target_url: v }))}
+            accent="cyan"
+          />
         </div>
 
         <div>

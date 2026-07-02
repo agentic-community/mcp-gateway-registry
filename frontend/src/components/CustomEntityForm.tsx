@@ -12,7 +12,7 @@ import {
   MAX_TEXT_LEN,
 } from '../types/customEntity';
 import { labelFor } from '../utils/humanize';
-import { FormField, fieldClass } from './formFields';
+import { FormField, fieldClass, ProxyField } from './formFields';
 
 interface CustomEntityFormProps {
   descriptor: CustomTypeDescriptor;
@@ -23,6 +23,12 @@ interface CustomEntityFormProps {
 }
 
 const VISIBILITIES = ['public', 'private', 'group-restricted'] as const;
+
+// Gateway-proxy keys live in the attributes bag on the wire but are edited via
+// the dedicated ProxyField widget. If an admin's custom-type descriptor happens
+// to define a field with one of these names, skip its descriptor-driven widget
+// so it can't collide with (and clobber) the ProxyField-owned value.
+const PROXY_RESERVED_ATTR_KEYS = new Set(['is_proxied', 'proxy_target_url']);
 
 // Custom-entity forms use a teal focus accent.
 const INPUT_CLASS = fieldClass('teal');
@@ -101,6 +107,12 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
   const [allowedGroups, setAllowedGroups] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
 
+  // --- gateway-proxy opt-in (lives in the attributes bag on the wire) ---
+  // A custom entity has no native backend URL, so proxy_target_url is required
+  // when is_proxied is true.
+  const [isProxied, setIsProxied] = useState(false);
+  const [proxyTargetUrl, setProxyTargetUrl] = useState('');
+
   // --- attributes state (per-type) ---
   const [attributes, setAttributes] = useState<Record<string, unknown>>({});
 
@@ -116,7 +128,15 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       setVisibility(record.visibility);
       setAllowedGroups(record.allowed_groups ?? []);
       setTags(record.tags ?? []);
-      setAttributes({ ...(record.attributes ?? {}) });
+      // The proxy fields ride in the attributes bag on the wire but are edited
+      // through the dedicated ProxyField widget, so lift them out of the
+      // descriptor-driven attribute state to avoid a duplicate raw widget.
+      const attrs = { ...(record.attributes ?? {}) };
+      setIsProxied(!!attrs.is_proxied);
+      setProxyTargetUrl(typeof attrs.proxy_target_url === 'string' ? attrs.proxy_target_url : '');
+      delete attrs.is_proxied;
+      delete attrs.proxy_target_url;
+      setAttributes(attrs);
     }
   }, [record]);
 
@@ -250,6 +270,12 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       setFieldErrors({ allowed_groups: 'At least one group is required' });
       return;
     }
+    // A custom entity has no native URL to fall back on, so a proxied entity
+    // must carry an explicit target.
+    if (isProxied && !proxyTargetUrl.trim()) {
+      setFieldErrors({ proxy_target_url: 'Proxy target URL is required when proxying is enabled' });
+      return;
+    }
 
     // Materialize bool field defaults. The checkbox widget renders an untouched
     // bool as unchecked but never writes into `attributes` until toggled, so a
@@ -258,6 +284,11 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
     // Default any absent bool field to false before submitting.
     const attributesWithDefaults = { ...attributes };
     descriptor.fields.forEach((field) => {
+      if (PROXY_RESERVED_ATTR_KEYS.has(field.name)) {
+        // Owned by the ProxyField and folded in below; never materialize a
+        // descriptor default for these.
+        return;
+      }
       if (
         field.datatype === 'bool' &&
         attributesWithDefaults[field.name] === undefined
@@ -265,6 +296,15 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
         attributesWithDefaults[field.name] = false;
       }
     });
+
+    // Fold the gateway-proxy opt-in back into the attributes bag. Always send
+    // is_proxied so toggling off persists; only send the target when proxying.
+    attributesWithDefaults.is_proxied = isProxied;
+    if (isProxied) {
+      attributesWithDefaults.proxy_target_url = proxyTargetUrl.trim();
+    } else {
+      delete attributesWithDefaults.proxy_target_url;
+    }
 
     const payload = {
       name: name.trim(),
@@ -306,6 +346,12 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
   }, [onCancel, saving]);
 
   const typeLabel = descriptor.display_name || labelFor({ name: descriptor.name });
+
+  // Descriptor fields to render as raw widgets, minus any that collide with the
+  // ProxyField-owned reserved keys (see PROXY_RESERVED_ATTR_KEYS).
+  const renderableFields = descriptor.fields.filter(
+    (field) => !PROXY_RESERVED_ATTR_KEYS.has(field.name),
+  );
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
@@ -383,10 +429,20 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             <ChipInput value={tags} onChange={setTags} placeholder="Type a tag, press Enter" />
           </FormField>
 
+          <ProxyField
+            isProxied={isProxied}
+            onIsProxiedChange={setIsProxied}
+            proxyTargetUrl={proxyTargetUrl}
+            onProxyTargetUrlChange={setProxyTargetUrl}
+            targetRequired
+            accent="teal"
+            error={fieldErrors.proxy_target_url}
+          />
+
           {/* --- Per-type attributes (descriptor-driven) --- */}
-          {descriptor.fields.length > 0 && (
+          {renderableFields.length > 0 && (
             <div className="space-y-6 pt-2 border-t border-gray-200 dark:border-gray-700">
-              {descriptor.fields.map(renderField)}
+              {renderableFields.map(renderField)}
             </div>
           )}
         </div>
