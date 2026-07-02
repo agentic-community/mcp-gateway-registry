@@ -2264,6 +2264,15 @@ async def lifespan(app: FastAPI):
     # (NonDurableAuditError) when audit logging is enabled but no durable sink is
     # available, matching the registry process's fail-closed startup behavior.
     get_mcp_logger()
+    # Set the generic-proxy feature latch (egress self-check). MUST run in the
+    # lifespan, NOT via @app.on_event("startup"): Starlette ignores on_event
+    # handlers when a lifespan handler is provided, so an on_event hook would
+    # never run and the latch would stay None -> the /proxy/ hop fail-closes to
+    # 503 even with the feature flag on. Never raises (fail-closed on error).
+    try:
+        await initialize_generic_proxy_feature()
+    except Exception as e:
+        logger.error(f"Generic-proxy feature init failed during startup: {e}", exc_info=True)
 
     yield
 
@@ -8212,17 +8221,6 @@ async def _audit_legacy_scopes_on_startup() -> int:
     return warnings_emitted
 
 
-@app.on_event("startup")
-async def _init_generic_proxy_feature_on_startup() -> None:
-    """Set the generic-proxy feature latch (egress self-check) during boot.
-
-    Never raises into startup — on any error the latch stays its default (None
-    => feature inactive), which is the fail-closed posture.
-    """
-    try:
-        await initialize_generic_proxy_feature()
-    except Exception as exc:
-        logger.error(
-            f"Generic-proxy feature init errored during startup: {exc}",
-            exc_info=True,
-        )
+# Startup work is owned by ``lifespan`` above. Do not add
+# ``@app.on_event("startup")`` handlers: Starlette ignores them when a custom
+# lifespan handler is configured.
