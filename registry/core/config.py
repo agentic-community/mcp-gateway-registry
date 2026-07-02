@@ -1326,6 +1326,20 @@ class Settings(BaseSettings):
             )
         return v
 
+    gateway_generic_require_bearer_for_writes: bool = Field(
+        default=True,
+        description=(
+            "CSRF defense for the generic-proxy hop. When true (default), a "
+            "state-changing verb (anything but GET/HEAD/OPTIONS) on a generic "
+            "route is refused (403 at /validate, before any token mint) if the "
+            "caller authenticated with a session cookie rather than a Bearer "
+            "token. A browser carrying only an ambient mcp_gateway_session cookie "
+            "therefore cannot perform cross-site DELETE/PUT/PATCH; programmatic "
+            "Bearer callers are unaffected. Relax only for a trusted same-site "
+            "deployment. Consumed by the auth-server."
+        ),
+    )
+
     @property
     def nginx_updates_enabled(self) -> bool:
         """Check if nginx updates should be performed."""

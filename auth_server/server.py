@@ -39,6 +39,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 # Import metrics middleware
 from internal_request_token import (
+    mint_generic_proxy_token,
     mint_mcp_proxy_token,
     mint_registry_ui_token,
     verify_mcp_proxy_token,
@@ -436,6 +437,55 @@ def _attach_mcp_proxy_token(
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
 
 
+def _attach_generic_proxy_token(
+    request: "Request",
+    response: "JSONResponse",
+    subject: str,
+    scopes: list[str],
+    entity_type: str,
+    registered_path: str,
+) -> None:
+    """Mint and attach the X-Internal-Token-Generic for the generic-proxy hop.
+
+    Only mints when nginx forwarded a resolved generic upstream
+    (``X-Resolved-Generic-Upstream``) into this /validate subrequest -- i.e. the
+    request is for a proxied non-MCP entity, not an MCP-proxy or /api/ location.
+
+    Keyed on ``X-Resolved-Generic-Upstream`` (a SEPARATE marker from the MCP
+    hop's ``X-Resolved-Upstream``) so the two mints are mutually exclusive by
+    disjoint trigger: a generic block never sets ``$backend_url``, so
+    ``X-Resolved-Upstream`` is empty on generic requests and
+    ``_attach_mcp_proxy_token`` short-circuits -- exactly one token per request,
+    no stray MCP-audience token. Carries its own response header
+    (``X-Internal-Token-Generic``) distinct from ``X-Internal-Token`` /
+    ``X-Internal-Token-Registry`` so the three never collide.
+
+    The token binds BOTH the entity_type and the FULL registered path (two
+    claims) so it cannot be replayed cross-type or against a sibling entity. The
+    upstream is pinned from the server-set marker (never a forgeable inbound
+    header). If minting fails (e.g. empty subject), no token is attached: the
+    generic hop then rejects (fail-closed).
+
+    SECURITY: the caller MUST ensure this is wired ONLY into the main 200-path,
+    never the static-credential short-circuits (federation-static / network-
+    trusted), which compute no cookie/Bearer discriminator and thus cannot run
+    the CSRF gate. See validate_request.
+    """
+    resolved_upstream = request.headers.get("X-Resolved-Generic-Upstream", "")
+    if not resolved_upstream:
+        return
+    try:
+        response.headers["X-Internal-Token-Generic"] = mint_generic_proxy_token(
+            subject=subject,
+            scopes=scopes,
+            entity_type=entity_type,
+            registered_path=registered_path,
+            upstream_url=resolved_upstream,
+        )
+    except ValueError as exc:
+        logger.error(f"/validate: could not mint generic-proxy token: {exc}")
+
+
 def _attach_registry_ui_token(
     request: "Request",
     response: "JSONResponse",
@@ -471,6 +521,57 @@ def _attach_registry_ui_token(
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint registry-ui token: {exc}")
+
+
+# HTTP verbs that do not change server state. Used by the generic-hop CSRF gate
+# (a state-changing verb under ambient cookie auth is refused) and by the
+# verb->method mapping. OPTIONS is safe (preflight/discovery).
+_SAFE_HTTP_VERBS: frozenset = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Distinct wildcard token that grants HTTP verbs on a proxied entity. The legacy
+# MCP wildcard ("*"/"all") deliberately does NOT satisfy an HTTP-verb request:
+# an existing scope authored as methods:["*"] (meaning "all MCP methods") must
+# NOT silently start authorizing DELETE/PUT/PATCH the instant an entity it covers
+# is flipped is_proxied=true. HTTP verbs require explicit enumeration
+# (["GET","HEAD"]) or this distinct token. See _method_is_http_verb / the
+# verb-authz check in validate_server_tool_access.
+_HTTP_VERB_WILDCARD: str = "http:*"
+
+
+def _is_cookie_auth_method(auth_method: str) -> bool:
+    """True if the validated auth method is browser/session-cookie based.
+
+    Cookie/session auth is ambient (the browser attaches it automatically on
+    cross-site requests), which is exactly the CSRF risk. Bearer-token callers
+    are programmatic and set the header explicitly, so they are exempt.
+    """
+    return (auth_method or "").lower() in ("session_cookie", "cookie", "session")
+
+
+def _generic_write_csrf_refused(
+    is_generic_request: bool,
+    http_verb: str,
+    auth_method: str,
+    require_bearer: bool,
+) -> bool:
+    """Decide whether a generic-hop request must be refused as a CSRF risk.
+
+    Returns True (refuse with 403, before any token mint) when ALL hold:
+      - the request is for the generic hop (is_generic_request);
+      - the CSRF control is enabled (require_bearer, from
+        GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES, default true);
+      - the HTTP verb is state-changing (not GET/HEAD/OPTIONS); AND
+      - the caller authenticated with an ambient session cookie (not a Bearer
+        token a programmatic client sets explicitly).
+
+    A browser carrying only an mcp_gateway_session cookie therefore cannot make a
+    cross-site DELETE/PUT/PATCH to a proxied resource; Bearer callers are exempt.
+    """
+    if not (is_generic_request and require_bearer):
+        return False
+    if (http_verb or "").upper() in _SAFE_HTTP_VERBS:
+        return False
+    return _is_cookie_auth_method(auth_method)
 
 
 def _read_mcp_proxy_max_body_bytes() -> int:
@@ -1743,7 +1844,11 @@ def _registered_server_from_proxy_path(
 
 
 async def validate_server_tool_access(
-    server_name: str, method: str, tool_name: str, user_scopes: list[str]
+    server_name: str,
+    method: str,
+    tool_name: str,
+    user_scopes: list[str],
+    is_http_verb: bool = False,
 ) -> bool:
     """
     Validate if the user has access to the specified server method/tool based on scopes.
@@ -1753,6 +1858,13 @@ async def validate_server_tool_access(
         method: Name of the method being accessed (e.g., 'initialize', 'notifications/initialized', 'tools/list')
         tool_name: Name of the specific tool being accessed (optional, for tools/call)
         user_scopes: List of user scopes from token
+        is_http_verb: True when ``method`` is an HTTP verb from the generic-proxy
+            hop (GET/POST/...), False for MCP method tokens. When True, the legacy
+            ``"*"``/``"all"`` methods wildcard does NOT grant (that wildcard means
+            "all MCP methods" only); an HTTP verb requires explicit enumeration
+            (``["GET","HEAD"]``) or the distinct ``"http:*"`` token. This blocks a
+            silent privilege escalation where an existing ``methods:["*"]`` scope
+            would start authorizing DELETE/PUT the instant its entity is proxied.
 
     Returns:
         True if access is allowed, False otherwise
@@ -1802,14 +1914,33 @@ async def validate_server_tool_access(
                     logger.debug(f"  Allowed methods for server '{server_name}': {allowed_methods}")
                     logger.debug(f"  Checking if method '{method}' is in allowed methods...")
 
-                    # Check if all methods are allowed (wildcard support)
-                    has_wildcard_methods = "all" in allowed_methods or "*" in allowed_methods
+                    # Wildcard support — SPLIT value spaces (privilege-escalation guard).
+                    # For an HTTP verb (generic-proxy hop), the legacy "*"/"all"
+                    # wildcard does NOT grant: it means "all MCP methods" only. An
+                    # HTTP verb needs explicit enumeration or the distinct "http:*"
+                    # token, so an existing methods:["*"] scope cannot silently start
+                    # authorizing DELETE/PUT when its entity is flipped is_proxied.
+                    if is_http_verb:
+                        has_wildcard_methods = _HTTP_VERB_WILDCARD in allowed_methods
+                    else:
+                        has_wildcard_methods = "all" in allowed_methods or "*" in allowed_methods
+
+                    # HTTP verbs are canonically upper-case (nginx $request_method is
+                    # upper, and /validate upper-cases defensively). Match them
+                    # case-INSENSITIVELY against the stored methods so a scope authored
+                    # as lower-case "get" still authorizes a GET — a read-side backstop
+                    # that covers every write path and pre-existing data, not just the
+                    # editor. MCP method tokens (tools/list, ...) stay case-sensitive.
+                    if is_http_verb:
+                        method_in_allowed = method.upper() in {m.upper() for m in allowed_methods}
+                    else:
+                        method_in_allowed = method in allowed_methods
 
                     # for all methods except tools/call we are good if the method is allowed
                     # for tools/call we need to do an extra validation to check if the tool
                     # itself is allowed or not
                     if (
-                        method in allowed_methods or has_wildcard_methods
+                        method_in_allowed or has_wildcard_methods
                     ) and method != "tools/call":
                         logger.debug(f"  Method '{method}' found in allowed methods")
                         logger.debug(f"scope '{scope}' allows access to {server_name}.{method}")
@@ -1818,6 +1949,19 @@ async def validate_server_tool_access(
                             f"tool='{tool_name}'"
                         )
                         return True
+
+                    # An HTTP verb (generic hop) matches ONLY the methods list —
+                    # never the tools list. Falling through to the tools check
+                    # would let a `tools:["*"]` or backward-compat tools entry
+                    # authorize an HTTP verb, reopening the same escalation the
+                    # methods-wildcard split above closes. Move to the next config.
+                    if is_http_verb:
+                        logger.info(
+                            "  HTTP verb '%s' not in methods; skipping tools fallback "
+                            "(verbs match methods only)",
+                            method,
+                        )
+                        continue
 
                     # Check tools if method not found in methods
                     allowed_tools = server_config.get("tools", [])
@@ -3064,6 +3208,23 @@ async def validate_request(request: Request):
         # any server-scoped request in this state must fail closed (see below).
         body_uninspectable = request.headers.get("X-Body-Uninspectable") == "1"
 
+        # Generic-proxy markers (server-set in the generic nginx location block,
+        # forwarded verbatim by the shared /validate block; empty for MCP / api /
+        # UI requests). These are the discriminator for the generic hop:
+        #   X-Generic-Proxy-Kind        -> entity_type (e.g. "skill"); non-empty
+        #                                  marks a generic request.
+        #   X-Entity-Path               -> the FULL registered path (e.g.
+        #                                  "skills/proxy-demo"); the stable authz id.
+        #   X-Resolved-Generic-Upstream -> the pinned upstream (mint trigger for
+        #                                  _attach_generic_proxy_token).
+        # SECURITY: these are safe to trust ONLY because the shared /validate block
+        # redefines them via proxy_set_header from nginx variables the location set
+        # (not from client headers). See the marker-spoof invariant in the LLD.
+        generic_proxy_kind = (request.headers.get("X-Generic-Proxy-Kind") or "").strip()
+        generic_entity_path = (request.headers.get("X-Entity-Path") or "").strip()
+        original_method = (request.headers.get("X-Original-Method") or "").strip().upper()
+        is_generic_request = bool(generic_proxy_kind)
+
         # Extract server_name and endpoint from original_url early for logging
         server_name_from_url = None
         endpoint_from_url = None
@@ -3684,6 +3845,53 @@ async def validate_request(request: Request):
             # This is an agent proxy request, not an MCP server; skip the MCP
             # server/tool scope validation below.
             server_name = None
+        # --- Generic-proxy request: derive authz identity from the server-set
+        # markers (NOT URL parsing), run the CSRF gate, and use the HTTP verb as
+        # the method token. Registered paths are multi-segment (e.g.
+        # skills/proxy-demo), so the stable authz key is
+        # "{entity_type}/{registered_path}" and the sub-path beyond the registered
+        # path is deliberately NOT part of the key. ---
+        #
+        # KNOWN LIMITATION (fail-closed, by design for this iteration):
+        # resource-bound tokens (token_kind="resource") are NOT usable on the
+        # generic hop. The resource-binding guard below classifies the generic
+        # original_url (e.g. /skill/skills/proxy-demo) as a SERVER, which won't
+        # match a token bound to (SKILL, ...), so it 403s. This is safe (no
+        # escalation, no bypass) and generic routes simply require a full-scope
+        # user token. Adding a /proxy/* rule to resource_binding.classify_request_url
+        # is a deliberate follow-up, not a gap in this slice.
+        if is_generic_request:
+            # CSRF: refuse a state-changing verb under ambient
+            # cookie auth BEFORE any scope check or token mint. Bearer callers are
+            # exempt. Gated by GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES (default
+            # true) so an operator can consciously relax it for a same-site deploy.
+            require_bearer = getattr(settings, "gateway_generic_require_bearer_for_writes", True)
+            if _generic_write_csrf_refused(
+                is_generic_request=True,
+                http_verb=original_method,
+                auth_method=auth_method,
+                require_bearer=require_bearer,
+            ):
+                logger.warning(
+                    "CSRF: refusing %s on generic route %s/%s under cookie auth "
+                    "(session=%s); Bearer required for state-changing verbs",
+                    original_method,
+                    generic_proxy_kind,
+                    generic_entity_path,
+                    auth_method,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "State-changing requests to proxied resources require a "
+                        "Bearer token (cookie auth refused as a CSRF defense)"
+                    ),
+                    headers={"Connection": "close"},
+                )
+            # The authz key spans the type + the full registered path. Override the
+            # URL-derived server_name so per-entity scoping works (the URL form
+            # "skill/skills/proxy-demo" would otherwise collapse containers).
+            server_name = f"{generic_proxy_kind}/{generic_entity_path}".strip("/")
 
         if server_name:
             # For ANY server access, enforce scope validation (fail closed principle)
@@ -3732,19 +3940,27 @@ async def validate_request(request: Request):
                 )
 
             # Determine the method to validate:
-            # 1. If we have a tool_name from JSON-RPC payload, use that
-            # 2. If we have an endpoint from the REST API URL, use that
-            # 3. Otherwise default to "initialize"
-            method = (
-                tool_name
-                if tool_name
-                else (endpoint_from_url if endpoint_from_url else "initialize")
-            )
+            # - Generic (non-MCP) request: the upper-cased HTTP verb.
+            # - MCP: tool_name from the JSON-RPC payload, else the REST endpoint,
+            #   else "initialize".
+            if is_generic_request:
+                # nginx only forwards a real request method; default defensively to
+                # the verb so an (impossible) empty value fails closed at scope check.
+                method = original_method or "GET"
+            else:
+                method = (
+                    tool_name
+                    if tool_name
+                    else (endpoint_from_url if endpoint_from_url else "initialize")
+                )
             logger.debug(
-                "Method determined for validation: '%s' (tool_name=%s, endpoint_from_url=%s)",
+                "Method determined for validation: '%s' (generic=%s, tool_name=%s, "
+                "endpoint_from_url=%s, verb=%s)",
                 method,
+                is_generic_request,
                 tool_name,
                 endpoint_from_url,
+                original_method,
             )
             actual_tool_name = None
 
@@ -3769,7 +3985,11 @@ async def validate_request(request: Request):
                 )
 
             if not await validate_server_tool_access(
-                server_name, method, actual_tool_name, user_scopes
+                server_name,
+                method,
+                actual_tool_name,
+                user_scopes,
+                is_http_verb=is_generic_request,
             ):
                 logger.warning(
                     f"Access denied for user {hash_username(validation_result.get('username', ''))} to {server_name}.{method} (tool: {actual_tool_name})"
@@ -4072,6 +4292,21 @@ async def validate_request(request: Request):
             server_name=server_name or "",
             auth_method=_canon_auth_method,
             egress_user=_egress_user,
+        )
+
+        # Generic-proxy hop token (proxied non-MCP entities). Keyed on the
+        # SEPARATE X-Resolved-Generic-Upstream marker, so it fires only for
+        # generic requests and never alongside the MCP mint (disjoint triggers ->
+        # exactly one token). Wired ONLY here on the main 200-path: the static-
+        # credential short-circuits above (federation-static / network-trusted)
+        # never mint a generic token, since they run before the CSRF gate.
+        _attach_generic_proxy_token(
+            request,
+            response,
+            subject=validation_result.get("username") or "",
+            scopes=user_scopes,
+            entity_type=generic_proxy_kind,
+            registered_path=generic_entity_path,
         )
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
