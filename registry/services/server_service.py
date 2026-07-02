@@ -186,6 +186,17 @@ class ServerService:
             server_info["version"] = "v1.0.0"
         server_info["is_active"] = True
 
+        # Gateway-proxy SSRF layer 2 (no-op unless is_proxied): resolve the target
+        # hostname and validate every resolved IP against the egress policy, then
+        # pin the resolved IPs. Rejects a metadata/private target at registration.
+        if server_info.get("is_proxied"):
+            from ..schemas.proxy_mixin import validate_and_pin_proxy_target
+
+            pin = await validate_and_pin_proxy_target("mcp_server", server_info)
+            if pin:
+                server_info["proxy_resolved_ips"] = pin["proxy_resolved_ips"]
+                server_info["proxy_target_host"] = pin["proxy_target_host"]
+
         try:
             result = await self._repo.create(server_info)
         except AssetIdConflictError as e:
@@ -245,6 +256,31 @@ class ServerService:
                 server_path=path,
                 registered_target_url=registered_target,
             )
+        # Gateway-proxy SSRF layer 2 on the MERGED state. This is the single choke
+        # point for every server-update call site (PATCH, version swap, etc.), so
+        # a hostname proxy target that resolves to a metadata/private IP is rejected
+        # here rather than persisted unchecked. Only touches the DB when a proxy
+        # field is present in the update payload. Mirrors the skill/agent pattern.
+        # proxy_pass_url is included: for an MCP server resolve_proxy_target falls
+        # back to it when proxy_target_url is unset, so changing it on an already
+        # is_proxied server changes the effective target and must re-validate.
+        _proxy_fields = ("is_proxied", "proxy_target_url", "proxy_pass_url")
+        if any(f in server_info for f in _proxy_fields):
+            from ..schemas.proxy_mixin import validate_and_pin_proxy_target
+
+            existing = await self._repo.get(path)
+            merged = dict(existing or {})
+            merged.update(server_info)
+            # An update touching the proxy config re-validates from scratch, so a
+            # prior refresh auto-disable must not suppress resolution here.
+            merged["proxy_disabled_reason"] = None
+            if merged.get("is_proxied"):
+                pin = await validate_and_pin_proxy_target("mcp_server", merged)
+                if pin:
+                    server_info["proxy_resolved_ips"] = pin["proxy_resolved_ips"]
+                    server_info["proxy_target_host"] = pin["proxy_target_host"]
+                # Re-enabling clears any prior refresh auto-disable.
+                server_info["proxy_disabled_reason"] = None
 
         result = await self._repo.update(path, server_info)
 
@@ -917,6 +953,19 @@ class ServerService:
         new_inactive["is_active"] = False
         new_inactive["active_version_id"] = path
         new_inactive.pop("other_version_ids", None)
+
+        # Gateway-proxy SSRF layer 2: the promoted version's proxy_pass_url becomes
+        # the live effective target. If the promoted doc is proxied, resolve+validate
+        # it (a version added earlier bypassed the register/update check) and pin the
+        # IPs before it goes active. Rejects promoting a version whose target now
+        # resolves to a metadata/private IP.
+        if new_active.get("is_proxied"):
+            from ..schemas.proxy_mixin import validate_and_pin_proxy_target
+
+            pin = await validate_and_pin_proxy_target("mcp_server", new_active)
+            if pin:
+                new_active["proxy_resolved_ips"] = pin["proxy_resolved_ips"]
+                new_active["proxy_target_host"] = pin["proxy_target_host"]
 
         # Execute swap: delete old docs, insert new docs
         await self._repo.delete(path)

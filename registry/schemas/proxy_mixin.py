@@ -22,12 +22,18 @@ Security posture (this module is the application-layer SSRF control):
   changes respectively. The feature ships disabled (gateway_generic_proxy_enabled
   defaults false) until all three are in place.
 
-Note vs. registry/services/ard_net_guard.py: that guard resolves DNS and checks
-every resolved IP, defeating rebind at check time. This guard deliberately does
-NOT resolve (proxy targets are long-lived and re-validated by a refresh + the
-network egress policy), so a hostname target is only network-layer-protected.
-It is therefore a WEAKER static check than ard_net_guard by design; do not enable
-the feature until the network egress policy (SSRF layer 1) is deployed.
+Two application-layer checks, by context:
+- ``_assert_egress_allowed`` / ``egress_guard_validator`` — the STATIC (literal-IP)
+  check at the Pydantic API edge (422). A genuine hostname passes it (no DNS in a
+  validator).
+- ``resolve_and_validate_proxy_target`` / ``validate_and_pin_proxy_target`` — the
+  DNS-aware check (layer 2), run at the service register/update layer and
+  by the scheduled pin-refresh. It resolves the hostname and validates every
+  resolved IP (like registry/services/ard_net_guard.py), catching a target that
+  resolves to a metadata/private IP *now* and pinning the resolved IPs. It is
+  best-effort against DNS-rebind (the set can change before the real request) —
+  which is why the authoritative control remains the network egress policy (layer
+  1). Do not enable the feature until that policy is deployed.
 """
 
 import logging
@@ -190,11 +196,137 @@ def egress_guard_validator(v: str | None) -> str | None:
     Attach to a request/patch model's ``proxy_target_url`` field (an API edge that
     never reconstructs from stored data) so a bad target fails fast with 422.
     Do NOT attach to a storage model — see the ProxyableMixin note above.
+
+    NOTE: this is the STATIC (literal-IP) check only. A genuine hostname passes
+    here and is resolved-and-validated separately by
+    ``resolve_and_validate_proxy_target`` at the service/registration layer (DNS
+    is I/O and cannot run in a Pydantic validator).
     """
     if v is None:
         return v
     _assert_egress_allowed(v)
     return v
+
+
+async def resolve_and_validate_proxy_target(
+    url: str,
+) -> tuple[str | None, list[str]]:
+    """Resolve a proxy_target_url's hostname and validate every resolved IP.
+
+    This is **layer 2** — the registration-time (and refresh-time)
+    DNS-aware SSRF check that ``_assert_egress_allowed`` deliberately skips for
+    hostnames. Resolving here catches a target that resolves to a
+    metadata/loopback/private IP *now*, giving a clear error at register/update
+    instead of a silent render-time drop. It is best-effort against DNS-rebind
+    (the resolved set can change before the real request) — which is exactly why
+    the authoritative control is the network egress policy (layer 1), not this.
+
+    Behavior mirrors ``_assert_egress_allowed``'s policy:
+    - scheme must be http(s);
+    - literal-IP targets are category-checked directly (no DNS);
+    - hostnames are resolved via ``getaddrinfo`` and EVERY resolved IP is checked;
+    - ``gateway_proxy_allow_private_targets`` relaxes private/loopback/reserved,
+      but link-local (metadata) and the unspecified address are ALWAYS denied.
+
+    Args:
+        url: The candidate proxy target URL.
+
+    Returns:
+        ``(hostname, resolved_ips)`` — the original hostname (or None for a
+        literal-IP target) and the list of resolved IP strings (the literal
+        itself for an IP target). Callers persist these for pin bookkeeping.
+
+    Raises:
+        ValueError: If the scheme is not http(s), or the host cannot be resolved.
+        EgressPolicyError: If any resolved IP is in a denied network range.
+    """
+    import asyncio
+    import socket
+
+    from registry.core.config import settings
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"proxy_target_url must be an http(s) URL, got scheme {parsed.scheme!r}")
+    host = (parsed.hostname or "").strip("[]")
+    if not host:
+        raise ValueError(f"proxy_target_url has no host: {url!r}")
+
+    allow_private = settings.gateway_proxy_allow_private_targets
+
+    # Literal-IP target: no DNS, category-check directly (same as the static guard).
+    literal = coerce_ip_literal(host)
+    if literal is not None:
+        reason = ip_denial_reason(literal, allow_private=allow_private)
+        if reason is not None:
+            raise EgressPolicyError(
+                f"proxy_target_url host {host} is denied ({reason}); if this is a "
+                "trusted on-cluster target set GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=true"
+            )
+        return None, [str(literal)]
+
+    # Hostname: resolve and check EVERY resolved IP (defeats rebind at check time).
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise ValueError(f"Cannot resolve proxy_target_url host {host!r}: {e}") from e
+
+    resolved_ips: list[str] = []
+    for _family, _type, _proto, _canon, sockaddr in infos:
+        ip_str = str(sockaddr[0])
+        ip = coerce_ip_literal(ip_str)
+        if ip is None:
+            continue
+        reason = ip_denial_reason(ip, allow_private=allow_private)
+        if reason is not None:
+            raise EgressPolicyError(
+                f"proxy_target_url host {host} resolves to denied IP {ip_str} ({reason}); "
+                "if this is a trusted on-cluster target set "
+                "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=true"
+            )
+        if ip_str not in resolved_ips:
+            resolved_ips.append(ip_str)
+
+    if not resolved_ips:
+        raise ValueError(f"proxy_target_url host {host!r} resolved to no usable IPs")
+    return host, resolved_ips
+
+
+async def validate_and_pin_proxy_target(
+    entity_type: str,
+    doc: dict[str, Any],
+) -> dict[str, Any]:
+    """Registration/refresh helper: resolve+validate the effective proxy target
+    and return the pin-bookkeeping fields to persist.
+
+    Computes the effective target via ``resolve_proxy_target`` (so it inherits the
+    federated / disabled / auto-disabled / target-required gating and the native
+    fallback), and — only when a real target exists — resolves its hostname and
+    validates every IP against the egress policy (layer 2). Returns the
+    fields the caller should merge into the persisted document; an empty dict when
+    the entity is not proxied / has no resolvable target (nothing to pin).
+
+    Call this at the service create/update layer BEFORE persisting, so a target
+    that resolves to a metadata/private IP is rejected with a clear error at
+    register/update instead of silently dropped at render.
+
+    Args:
+        entity_type: Canonical entity-type token.
+        doc: The proxy-relevant scalars (same shape as assert_proxy_target_resolvable).
+
+    Returns:
+        ``{"proxy_resolved_ips": [...], "proxy_target_host": "..."}`` when a target
+        was validated, else ``{}``.
+
+    Raises:
+        ValueError / EgressPolicyError: If the target is denied or unresolvable.
+    """
+    target = resolve_proxy_target(entity_type, doc)
+    if not target:
+        return {}
+    host, ips = await resolve_and_validate_proxy_target(target)
+    return {"proxy_resolved_ips": ips, "proxy_target_host": host or ""}
 
 
 def _is_federated(doc: dict[str, Any]) -> bool:

@@ -208,6 +208,11 @@ def _build_card_from_request(request, path: str, existing: AgentCard | None) -> 
         trust_level=request.trust_level,
         supported_protocol=request.supported_protocol,
         external_tags=external_tag_list,
+        # Gateway-proxy opt-in — forward from the request so batch register/replace
+        # match the single-agent path (validated + pinned in agent_service). Without
+        # these, the mixin defaults silently drop the opt-in (feature loss).
+        is_proxied=request.is_proxied,
+        proxy_target_url=request.proxy_target_url,
         **optional_kwargs,
     )
 
