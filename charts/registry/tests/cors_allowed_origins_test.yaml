@@ -10,6 +10,8 @@ tests:
       app:
         secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
         corsAllowedOrigins: ""
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
     asserts:
       - notExists:
           path: data.CORS_ALLOWED_ORIGINS
@@ -19,6 +21,8 @@ tests:
       app:
         secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
         corsAllowedOrigins: "https://app.example.com,https://admin.example.com"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
     asserts:
       - equal:
           path: data.CORS_ALLOWED_ORIGINS
