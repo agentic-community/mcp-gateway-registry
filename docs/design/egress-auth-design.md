@@ -213,6 +213,19 @@ What this shows:
 - **mcpgw calls the registry API as itself** (M2M) in the standard deployment, so the user's token is not chained through a second time; `REGISTRY_API_TOKEN` overrides that if an operator sets it. The caller-bearer fallback only applies when neither is configured.
 - **`X-Authorization` and `Cookie` are stripped even on this relay path** — only `Authorization` is relayed, and only for this one hardcoded internal server.
 
+### Operational note: SSRF guard and internal MCP hosts
+
+The registry's outbound SSRF guard (`registry/utils/url_guard.py`, `PROXY_PROFILE`) fails closed on any `proxy_pass_url` that resolves to a **private/internal IP** — which every in-cluster MCP server does (Docker Compose service names, ECS Service Connect aliases, Kubernetes service names all resolve to private addresses). Without an allowlist entry the server's **health check** returns `UNHEALTHY_URL_BLOCKED`, even though the server itself is fine.
+
+`mcpgw-server` (the backend for the built-in `airegistry-tools`) is trusted by default via a small hardcoded set (`_BUILTIN_PROXY_ALLOWED_HOSTS` in `url_guard.py`), so the bundled registry-tools server stays healthy with no configuration.
+
+**If you add more internal, same-cluster MCP servers** (another first-party server reached over a private hostname, e.g. an additional `*-server` service on ECS/EKS/Compose), you must opt each one into the SSRF guard or it will show Unhealthy. Do this with the operator allowlist settings (these are UNIONED with the built-in set, never replace it):
+
+- `SSRF_ALLOWED_HOSTS` — comma-separated internal hostnames, e.g. `SSRF_ALLOWED_HOSTS=my-other-server,another-mcp-server`.
+- `SSRF_ALLOWED_CIDRS` — comma-separated private CIDR ranges when you prefer to trust a whole internal subnet, e.g. `SSRF_ALLOWED_CIDRS=10.0.0.0/8`. Useful on ECS/EKS where the task/pod subnet is stable.
+
+Wire the chosen value on the **registry** container across your deployment surface (`.env` / `docker-compose*.yml`, the registry Helm values, or the Terraform/ECS registry env block). Public-internet MCP upstreams (e.g. `https://mcp.slack.com`) need no allowlisting — they resolve to public IPs and pass the guard. The cloud metadata endpoint (`169.254.169.254`) is never allowlistable, regardless of these settings.
+
 ---
 
 ## The egress modes
