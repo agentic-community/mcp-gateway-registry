@@ -120,6 +120,7 @@ module "mcp_gateway" {
   # Session cookie security configuration
   session_cookie_secure = var.session_cookie_secure
   session_cookie_domain = var.session_cookie_domain
+  cors_allowed_origins  = var.cors_allowed_origins
   bind_host             = var.bind_host
 
   # DocumentDB configuration

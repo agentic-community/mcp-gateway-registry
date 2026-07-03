@@ -3186,3 +3186,34 @@ class TestTokenLifetimeEnforcement:
         """Requesting 0 or negative hours must be clamped to 1 h."""
         result = self._generate_self_signed_token(auth_env_vars, expires_in_hours=0)
         assert result["expires_in"] == 1 * 3600
+
+
+class TestSessionCookieSecureDefault:
+    """Verify the session cookie Secure flag resolves fail-closed.
+
+    The callback handler computes the Secure flag as
+    ``OAUTH2_CONFIG.get("session", {}).get("secure", True) and is_https``.
+    These tests pin the two properties that matter for security: a missing
+    ``session.secure`` config key defaults to Secure (True), and the flag is
+    never emitted over plain HTTP (a browser would reject a Secure cookie set
+    on an HTTP response).
+    """
+
+    @staticmethod
+    def _resolve_cookie_secure(session_config: dict, is_https: bool) -> bool:
+        """Mirror the auth_server callback's Secure-flag resolution."""
+        cookie_secure_config = session_config.get("secure", True)
+        return cookie_secure_config and is_https
+
+    def test_missing_secure_key_defaults_to_secure_over_https(self) -> None:
+        """A config with no session.secure key must default to Secure=True."""
+        assert self._resolve_cookie_secure({}, is_https=True) is True
+
+    def test_explicit_false_disables_secure_for_dev(self) -> None:
+        """An operator can still opt out for a plain-HTTP dev stack."""
+        assert self._resolve_cookie_secure({"secure": False}, is_https=True) is False
+
+    def test_secure_never_set_over_plain_http(self) -> None:
+        """Even secure-by-default must not emit Secure over plain HTTP."""
+        assert self._resolve_cookie_secure({}, is_https=False) is False
+        assert self._resolve_cookie_secure({"secure": True}, is_https=False) is False

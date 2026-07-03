@@ -60,6 +60,12 @@ app:
   # ".<global.domain>". See charts/auth-server/values.yaml for a longer
   # note on when to override.
   sessionCookieDomain: ""
+  # Comma-separated exact browser origins allowed to make credentialed
+  # cross-origin requests to the registry API (e.g.
+  # "https://app.example.com,https://admin.example.com"). The registry's own
+  # ingress origin is always trusted. Leave empty for same-origin-only access;
+  # there is deliberately no wildcard fallback.
+  corsAllowedOrigins: ""
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
   federationStaticToken: # If not provided, a random token is auto-generated

@@ -401,6 +401,12 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "cors_allowed_origins" {
+  description = "Comma-separated exact browser origins allowed to make credentialed cross-origin requests to the registry API (e.g. 'https://app.example.com,https://admin.example.com'). The registry's own origin is always trusted. Empty means same-origin only; there is no wildcard fallback."
+  type        = string
+  default     = ""
+}
+
 variable "bind_host" {
   description = "Network bind address for registry and gateway services. Default '0.0.0.0' (IPv4) works on all hosts. Set to '::' only for IPv6-only deployments (requires net.ipv6.bindv6only=0 on the host)."
   type        = string

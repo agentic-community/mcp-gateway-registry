@@ -100,6 +100,7 @@ async def link_ans_to_agent(
     agent_path: str,
     ans_agent_id: str,
     username: str | None = None,
+    is_admin: bool = False,
 ) -> dict:
     """Link an ANS Agent ID to an AI Registry agent.
 
@@ -107,6 +108,7 @@ async def link_ans_to_agent(
         agent_path: Agent path in the registry
         ans_agent_id: ANS Agent ID to link
         username: Authenticated user's username (for ownership check)
+        is_admin: Whether the caller is an administrator (bypasses ownership)
 
     Returns:
         Dict with success, message, and ans_metadata
@@ -117,8 +119,10 @@ async def link_ans_to_agent(
     if not agent:
         return {"success": False, "message": f"Agent not found: {agent_path}"}
 
+    # Fail closed: only an admin, or the positively-established owner, may link.
+    # A missing username or a record with no owner must not pass for non-admins.
     registered_by = getattr(agent, "registered_by", None)
-    if username and registered_by and username != registered_by:
+    if not is_admin and (not username or not registered_by or username != registered_by):
         return {"success": False, "message": "Not authorized: you are not the owner of this agent"}
 
     try:
@@ -150,6 +154,7 @@ async def link_ans_to_server(
     server_path: str,
     ans_agent_id: str,
     username: str | None = None,
+    is_admin: bool = False,
 ) -> dict:
     """Link an ANS Agent ID to an MCP server.
 
@@ -157,6 +162,7 @@ async def link_ans_to_server(
         server_path: Server path in the registry
         ans_agent_id: ANS Agent ID to link
         username: Authenticated user's username (for ownership check)
+        is_admin: Whether the caller is an administrator (bypasses ownership)
 
     Returns:
         Dict with success, message, and ans_metadata
@@ -167,8 +173,12 @@ async def link_ans_to_server(
     if not server:
         return {"success": False, "message": f"Server not found: {server_path}"}
 
-    registered_by = getattr(server, "registered_by", None)
-    if username and registered_by and username != registered_by:
+    # repo.get() returns a dict, so read the owner with dict access; getattr on a
+    # dict looks for object attributes and would always yield None, silently
+    # disabling this ownership check. Fail closed: only an admin, or the
+    # positively-established owner, may link.
+    registered_by = server.get("registered_by")
+    if not is_admin and (not username or not registered_by or username != registered_by):
         return {"success": False, "message": "Not authorized: you are not the owner of this server"}
 
     try:
@@ -199,12 +209,14 @@ async def link_ans_to_server(
 async def unlink_ans_from_agent(
     agent_path: str,
     username: str | None = None,
+    is_admin: bool = False,
 ) -> dict:
     """Remove ANS link from an agent.
 
     Args:
         agent_path: Agent path in the registry
         username: Authenticated user's username (for ownership check)
+        is_admin: Whether the caller is an administrator (bypasses ownership)
 
     Returns:
         Dict with success and message
@@ -214,8 +226,9 @@ async def unlink_ans_from_agent(
     if not agent:
         return {"success": False, "message": f"Agent not found: {agent_path}"}
 
+    # Fail closed: only an admin, or the positively-established owner, may unlink.
     registered_by = getattr(agent, "registered_by", None)
-    if username and registered_by and username != registered_by:
+    if not is_admin and (not username or not registered_by or username != registered_by):
         return {"success": False, "message": "Not authorized: you are not the owner of this agent"}
 
     await repo.update_field(agent_path, "ans_metadata", None)
@@ -226,12 +239,14 @@ async def unlink_ans_from_agent(
 async def unlink_ans_from_server(
     server_path: str,
     username: str | None = None,
+    is_admin: bool = False,
 ) -> dict:
     """Remove ANS link from a server.
 
     Args:
         server_path: Server path in the registry
         username: Authenticated user's username (for ownership check)
+        is_admin: Whether the caller is an administrator (bypasses ownership)
 
     Returns:
         Dict with success and message
@@ -241,8 +256,10 @@ async def unlink_ans_from_server(
     if not server:
         return {"success": False, "message": f"Server not found: {server_path}"}
 
-    registered_by = getattr(server, "registered_by", None)
-    if username and registered_by and username != registered_by:
+    # repo.get() returns a dict; use dict access (see link_ans_to_server).
+    # Fail closed: only an admin, or the positively-established owner, may unlink.
+    registered_by = server.get("registered_by")
+    if not is_admin and (not username or not registered_by or username != registered_by):
         return {"success": False, "message": "Not authorized: you are not the owner of this server"}
 
     await repo.update_field(server_path, "ans_metadata", None)

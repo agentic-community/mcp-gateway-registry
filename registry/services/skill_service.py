@@ -367,8 +367,12 @@ async def _discover_skill_resources(
     try:
         async with guarded_async_client(timeout=15.0) as client:
             # Merge global GitHub auth headers (PAT / GitHub App) so private
-            # repos and rate-limited public repos work.
-            github_headers = await _github_auth.get_auth_headers(tree_url)
+            # repos and rate-limited public repos work -- but only when the
+            # caller is authorized to use the shared identity (global_credentials).
+            github_headers = await _github_auth.get_auth_headers(
+                tree_url,
+                allow_global_credentials=(auth_scheme == "global_credentials"),
+            )
             merged_headers = {**github_headers, **headers}
             resp = await client.get(tree_url, headers=merged_headers)
             if resp.status_code >= 400:
@@ -514,8 +518,15 @@ async def _validate_skill_md_url(
 
     try:
         async with guarded_async_client() as client:
-            github_headers = await _github_auth.get_auth_headers(str(url))
-            merged_headers = {**fetch_headers, **github_headers}
+            # The server's shared GitHub credentials are only attached when the
+            # caller explicitly requested the (admin-gated) global_credentials
+            # scheme. For every other scheme the caller's own credential (if
+            # any) is used, so the shared identity never leaks.
+            github_headers = await _github_auth.get_auth_headers(
+                str(url),
+                allow_global_credentials=(auth_scheme == "global_credentials"),
+            )
+            merged_headers = {**github_headers, **fetch_headers}
             response = await client.get(
                 fetch_url,
                 headers=merged_headers,
@@ -609,10 +620,13 @@ async def _parse_skill_md_content(
             if auth_scheme == "none":
                 headers = fetch_headers
             elif auth_scheme == "global_credentials":
-                headers = await _github_auth.get_auth_headers(fetch_url)
+                headers = await _github_auth.get_auth_headers(
+                    fetch_url, allow_global_credentials=True
+                )
             else:
-                github_headers = await _github_auth.get_auth_headers(fetch_url)
-                headers = {**github_headers, **fetch_headers}
+                # bearer / api_key: use only the caller-supplied credential.
+                # The shared server identity is not attached for these schemes.
+                headers = fetch_headers
             response = await client.get(
                 fetch_url, headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
             )
@@ -801,7 +815,10 @@ async def _check_skill_health(
 
     try:
         async with guarded_async_client() as client:
-            github_headers = await _github_auth.get_auth_headers(str(url))
+            github_headers = await _github_auth.get_auth_headers(
+                str(url),
+                allow_global_credentials=(auth_scheme == "global_credentials"),
+            )
             merged_headers = {**github_headers, **fetch_headers}
             response = await client.head(
                 fetch_url,
@@ -984,10 +1001,12 @@ async def _fetch_authenticated_content(
     if auth_scheme == "none":
         merged_headers = fetch_headers
     elif auth_scheme == "global_credentials":
-        merged_headers = await _github_auth.get_auth_headers(fetch_url)
+        merged_headers = await _github_auth.get_auth_headers(
+            fetch_url, allow_global_credentials=True
+        )
     else:
-        github_headers = await _github_auth.get_auth_headers(fetch_url)
-        merged_headers = {**github_headers, **fetch_headers}
+        # bearer / api_key: use only the caller-supplied credential.
+        merged_headers = fetch_headers
 
     try:
         async with guarded_async_client() as client:

@@ -1018,6 +1018,10 @@ module "ecs_service_registry" {
           value = var.session_cookie_domain
         },
         {
+          name  = "CORS_ALLOWED_ORIGINS"
+          value = var.cors_allowed_origins
+        },
+        {
           name  = "SECURITY_SCAN_ENABLED"
           value = tostring(var.security_scan_enabled)
         },
