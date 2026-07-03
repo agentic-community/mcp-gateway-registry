@@ -83,7 +83,7 @@ curl -b "mcp_gateway_session=<session_value>" \
 **Used by:** Discovery endpoints, login page, OAuth2 providers list
 
 **Endpoints:**
-- `GET /.well-known/mcp-servers`
+- `GET /.well-known/ai-catalog.json`
 - `GET /api/auth/login`
 - `GET /api/auth/providers`
 - `GET /health`
@@ -1192,38 +1192,19 @@ curl -X GET https://registry.example.com/api/servers/my-server \
 **Route Prefix:** `/.well-known`
 **Authentication:** None (public)
 
-### MCP Servers Discovery
+### ARD Catalog (Agentic Resource Discovery)
 
-**Endpoint:** `GET /.well-known/mcp-servers`
+**Endpoint:** `GET /.well-known/ai-catalog.json`
 
-**Purpose:** Public MCP server discovery for client tools
+**Purpose:** Public discovery manifest listing **public + enabled** MCP servers, A2A agents, and skills as ARD catalog entries (Agentic Resource Discovery v1.0). This replaces the former `/.well-known/mcp-servers` endpoint and only exposes resources whose `visibility` is `public`.
 
-**Response:** `200 OK`
-```json
-{
-  "servers": [
-    {
-      "id": "io.mcpgateway/example",
-      "name": "Example Server",
-      "description": "string",
-      "mcp": {
-        "transport": "streamable-http",
-        "url": "https://gateway.example.com/example/"
-      }
-    }
-  ],
-  "_meta": {
-    "registry": "MCP Gateway Registry",
-    "updated_at": "2025-11-01T04:53:56Z"
-  }
-}
-```
+**Response:** `200 OK` — an ARD catalog manifest. Returns `404` when discovery (`enable_wellknown_discovery`) or the ARD catalog (`ard_catalog_enabled`) is disabled.
 
-**Features:**
-- Server filtering by enabled status
-- Authentication info included
-- Tools preview
-- Public cache headers with configurable TTL
+**Other well-known endpoints served here:**
+
+- `GET /.well-known/oauth-protected-resource` — RFC 9728 Protected Resource Metadata
+- `GET /.well-known/oauth-authorization-server` — RFC 8414 Authorization Server Metadata
+- `GET /.well-known/registry-card` — registry federation card
 
 ---
 
