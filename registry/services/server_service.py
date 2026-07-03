@@ -8,6 +8,7 @@ from ..utils.credential_encryption import (
     _migrate_auth_type_to_auth_scheme,
     strip_credentials_from_dict,
 )
+from ..utils.url_guard import validate_proxy_pass_url, validate_server_path
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,20 @@ class ServerService:
         """
         path = server_info.get("path")
         new_version = server_info.get("version")
+
+        # Fail-closed URL validation on every registration path (dashboard/API,
+        # internal register, CLI, federation import) before anything is
+        # persisted. Rejects non-http(s) schemes, nginx metacharacters, and
+        # private/metadata targets (unless the operator allowlisted the internal
+        # target). Raises UrlValidationError -> HTTP 400.
+        proxy_pass_url = server_info.get("proxy_pass_url")
+        if proxy_pass_url:
+            validate_proxy_pass_url(proxy_pass_url)
+
+        # The path is interpolated into nginx location directives; reject any
+        # nginx metacharacters so a crafted path cannot inject config.
+        if path:
+            validate_server_path(path)
 
         # Check if server with this path already exists
         existing_server = await self._repo.get(path)
@@ -140,7 +155,18 @@ class ServerService:
         }
 
     async def update_server(self, path: str, server_info: dict[str, Any]) -> bool:
-        """Update an existing server."""
+        """Update an existing server.
+
+        Raises:
+            UrlValidationError: If the update sets a proxy_pass_url that fails
+                SSRF/scheme validation. Validation only runs when the update
+                payload actually carries a proxy_pass_url, so health-status and
+                tool-list updates are unaffected.
+        """
+        # Fail-closed URL validation on edit paths that change the backend URL.
+        if server_info.get("proxy_pass_url"):
+            validate_proxy_pass_url(server_info["proxy_pass_url"])
+
         result = await self._repo.update(path, server_info)
 
         if result:
@@ -608,7 +634,12 @@ class ServerService:
 
         Raises:
             ValueError: If server not found or version already exists
+            UrlValidationError: If proxy_pass_url fails SSRF/scheme validation
         """
+        # Fail-closed URL validation before persisting a new version's backend.
+        if proxy_pass_url:
+            validate_proxy_pass_url(proxy_pass_url)
+
         # Get active server document
         active_server = await self._repo.get(path)
         if not active_server:

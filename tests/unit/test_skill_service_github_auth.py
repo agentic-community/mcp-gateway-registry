@@ -17,7 +17,7 @@ class TestValidateSkillMdUrlAuth:
         mock_response.content = b"# Test Skill"
         mock_response.url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
 
-        with patch("registry.services.skill_service.httpx.AsyncClient") as mock_client_cls:
+        with patch("registry.services.skill_service.guarded_async_client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -45,7 +45,7 @@ class TestValidateSkillMdUrlAuth:
         mock_response.content = b"# Test Skill"
         mock_response.url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
 
-        with patch("registry.services.skill_service.httpx.AsyncClient") as mock_client_cls:
+        with patch("registry.services.skill_service.guarded_async_client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -80,7 +80,7 @@ class TestParseSkillMdContentAuth:
         mock_response.text = "---\nname: test\n---\n# Test Skill"
         mock_response.url = "https://raw.githubusercontent.com/o/r/refs/heads/main/SKILL.md"
 
-        with patch("registry.services.skill_service.httpx.AsyncClient") as mock_client_cls:
+        with patch("registry.services.skill_service.guarded_async_client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -117,7 +117,7 @@ class TestParseSkillMdContentAuth:
         mock_response.text = "---\nname: test\n---\n# Test Skill"
         mock_response.url = "https://raw.githubusercontent.com/o/r/refs/heads/main/SKILL.md"
 
-        with patch("registry.services.skill_service.httpx.AsyncClient") as mock_client_cls:
+        with patch("registry.services.skill_service.guarded_async_client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -149,7 +149,7 @@ class TestCheckSkillHealthAuth:
         mock_response.status_code = 200
         mock_response.url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
 
-        with patch("registry.services.skill_service.httpx.AsyncClient") as mock_client_cls:
+        with patch("registry.services.skill_service.guarded_async_client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.head.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)

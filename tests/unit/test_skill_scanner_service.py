@@ -272,3 +272,34 @@ class TestSkillScannerServiceUnit:
         parsed = service._parse_scanner_output(ansi_json)
         assert parsed["scan_results"] == {"findings": []}
         assert parsed["analysis_results"] == {}
+
+
+class TestSkillScannerDownloadSSRF:
+    """The scanner's download step must apply the SSRF guard before fetching."""
+
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/SKILL.md",
+            "ftp://acme.com/SKILL.md",
+        ],
+    )
+    def test_download_rejects_unsafe_url(self, bad_url):
+        """A private/metadata/bad-scheme URL is rejected before any HTTP call."""
+        from registry.exceptions import UrlValidationError
+        from registry.utils import url_guard
+
+        url_guard._skill_allowlist.cache_clear()
+        service = _create_service()
+
+        settings_stub = MagicMock()
+        settings_stub.github_extra_hosts = ""
+
+        with patch.object(url_guard, "settings", settings_stub):
+            # If the guard failed open, httpx.get would be reached; assert it is
+            # never called by patching the module-level guarded client factory.
+            with patch.object(url_guard, "guarded_client") as mock_client_factory:
+                with pytest.raises(UrlValidationError):
+                    service._download_skill_content(bad_url)
+                mock_client_factory.assert_not_called()
