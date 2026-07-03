@@ -897,9 +897,10 @@ class Settings(BaseSettings):
         ge=1.0,
         description=(
             "Timeout (seconds) for the auth-server proxy hop's upstream MCP "
-            "request. Raise for servers with long-running tools. Values above "
-            "60s also require raising proxy_read_timeout on the generated "
-            "/mcp-proxy/ nginx blocks (they inherit nginx's 60s default)."
+            "request. Raise for servers with long-running tools. The generated "
+            "/mcp-proxy/ nginx blocks derive their proxy_read_timeout from this "
+            "value (plus a 30s buffer), so raising it lifts the whole proxy "
+            "chain; no separate nginx change is needed."
         ),
     )
     tool_filter_audit_log_level: str = Field(

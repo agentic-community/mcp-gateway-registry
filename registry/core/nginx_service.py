@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -23,6 +24,44 @@ logger = logging.getLogger(__name__)
 # exists yet. Subsequent writes preserve whatever mode the destination
 # currently has so an operator's chmod isn't silently reverted.
 DEFAULT_NGINX_CONFIG_MODE: int = 0o644
+
+
+# Headroom added on top of the auth-server mcp-proxy hop's own upstream timeout
+# (MCP_PROXY_TIMEOUT) when deriving nginx's proxy_read_timeout for the
+# /mcp-proxy/ location blocks. nginx must outlive the inner hop so a
+# slow-but-progressing upstream is severed by auth-server (clean 504 "Upstream
+# MCP server timed out") rather than by nginx. The default upstream timeout
+# (30s) yields 60s here, matching nginx's historical implicit default for these
+# blocks, so behavior is unchanged unless MCP_PROXY_TIMEOUT is raised.
+# Credit: derivation approach contributed by @go-faustino (PR #1321).
+MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS: int = 30
+
+
+def _resolve_mcp_proxy_read_timeout_seconds() -> int:
+    """Resolve nginx's proxy_read_timeout (seconds) for MCP location blocks.
+
+    Derived from the auth-server upstream timeout (``settings.mcp_proxy_timeout``
+    / ``MCP_PROXY_TIMEOUT``) plus a fixed headroom buffer, so a single knob
+    raises the whole proxy chain and the inner hop always times out first.
+    Invalid values fall back to the 30s default (which becomes 60s with the
+    buffer added).
+
+    Returns:
+        nginx proxy_read_timeout in whole seconds.
+    """
+    default_upstream = 30.0
+    minimum_upstream = 1.0
+    upstream = default_upstream
+    try:
+        value = getattr(settings, "mcp_proxy_timeout", None)
+        if value is not None:
+            upstream = max(float(value), minimum_upstream)
+    except (TypeError, ValueError) as e:
+        logger.debug(
+            f"Invalid mcp_proxy_timeout, using default for nginx read timeout: {e}"
+        )
+        upstream = default_upstream
+    return int(math.ceil(upstream)) + MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS
 
 
 def _atomic_write_text(
@@ -1475,6 +1514,10 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_pass {mcp_proxy_target};"""
             version_headers = ""
 
+        # Resolve nginx read/send timeout from MCP_PROXY_TIMEOUT (+ buffer) so
+        # the inner auth-server hop always times out first.
+        mcp_proxy_read_timeout = _resolve_mcp_proxy_read_timeout_seconds()
+
         # Common proxy settings
         common_settings = f"""
         # DNS resolver for dynamic proxy_pass upstreams.
@@ -1485,12 +1528,17 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         resolver {os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")} valid=10s;
         resolver_timeout {os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")}s;
 
-        # NOTE: this block sets no proxy_read_timeout, so it inherits nginx's
-        # 60s default for the browser -> nginx -> auth-server mcp_proxy hop. The
-        # auth-server -> upstream MCP hop is bounded separately by
-        # MCP_PROXY_TIMEOUT (default 30s). Raising MCP_PROXY_TIMEOUT above 60s
-        # has no end-to-end effect unless a proxy_read_timeout is also added
-        # here to match, since nginx would cut the request first.
+        # Upstream timeouts for the browser -> nginx -> auth-server mcp_proxy
+        # hop. read/send are derived from MCP_PROXY_TIMEOUT (+ a fixed buffer)
+        # so nginx outlives the inner auth-server -> upstream hop: a
+        # slow-but-progressing upstream is severed by auth-server (clean 504)
+        # rather than cut short by nginx. Default (30s) yields 60s here,
+        # matching nginx's historical implicit default, so behavior is
+        # unchanged unless MCP_PROXY_TIMEOUT is raised. connect stays short
+        # (the hop is in-cluster).
+        proxy_connect_timeout 10s;
+        proxy_send_timeout {mcp_proxy_read_timeout}s;
+        proxy_read_timeout {mcp_proxy_read_timeout}s;
 
         # Authenticate request - pass entire request to auth server
         auth_request /validate;
