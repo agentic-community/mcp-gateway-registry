@@ -3745,12 +3745,24 @@ def cmd_user_create_m2m(args: argparse.Namespace) -> int:
 
         logger.info("M2M account created successfully\n")
         print(f"Client ID: {result.client_id}")
-        print(f"Client Secret: {result.client_secret[:8]}...{result.client_secret[-4:]}")
         print(f"Groups: {', '.join(result.groups)}")
         if result.service_principal_id:
             print(f"Service Principal ID: {result.service_principal_id}")
+
+        # The client secret is shown only once and cannot be retrieved later.
+        # Write it to an owner-only (0600) file created atomically so it is not
+        # emitted to stdout/logs (which land in CI, shell history, CloudWatch).
+        secret_file = Path(f".m2m_client_secret_{result.client_id}.txt")
+        fd = os.open(str(secret_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(f"CLIENT_ID={result.client_id}\n")
+            f.write(f"CLIENT_SECRET={result.client_secret}\n")
+        os.chmod(secret_file, 0o600)  # enforce 0600 even if the file pre-existed
+
         print()
-        print("IMPORTANT: Save the client secret securely - it cannot be retrieved later.")
+        print(f"Client secret written to: {secret_file}")
+        print("IMPORTANT: Save the client secret securely and delete this file after use.")
+        print("It cannot be retrieved later.")
 
         return 0
 

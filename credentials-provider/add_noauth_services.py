@@ -61,9 +61,13 @@ def _load_json_file(file_path: Path) -> dict[str, Any] | None:
 def _save_json_file(file_path: Path, data: dict[str, Any], description: str) -> None:
     """Save data to JSON file safely."""
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
+        # Create atomically with owner-only (0600) permissions; the config may
+        # embed ingress auth headers (bearer tokens), so it must not be briefly
+        # world/group-readable between create and chmod.
+        fd = os.open(str(file_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        os.chmod(file_path, 0o600)
+        os.chmod(file_path, 0o600)  # enforce 0600 even if the file pre-existed
         logger.info(f"Updated {description}: {file_path}")
     except Exception as e:
         logger.error(f"Failed to save {description} to {file_path}: {type(e).__name__}")
