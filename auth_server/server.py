@@ -4,6 +4,7 @@ Configuration is passed via headers instead of environment variables.
 """
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -3762,6 +3763,16 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
         # Generate state parameter for security
         state = secrets.token_urlsafe(32)
 
+        # Generate a per-login nonce (OIDC replay protection) and a PKCE
+        # code_verifier / code_challenge pair (RFC 7636). The nonce binds the
+        # returned id_token to THIS authorization request; PKCE binds the
+        # authorization code to the client that started the flow. Both the
+        # nonce and the code_verifier are persisted in the signed OAuth2 flow
+        # cookie (server-issued, integrity-protected) and checked on callback.
+        nonce = secrets.token_urlsafe(32)
+        code_verifier = secrets.token_urlsafe(64)
+        code_challenge = _pkce_code_challenge(code_verifier)
+
         # Determine the OAuth2 callback URI based on the request origin
         # This is critical for dual-mode (CloudFront + custom domain) deployments
         # The callback_uri MUST match exactly between authorization and token exchange
@@ -3804,6 +3815,8 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
             "redirect_uri": redirect_uri
             or OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/"),
             "callback_uri": callback_uri,  # Store for token exchange
+            "nonce": nonce,  # Bind the returned id_token to this login
+            "code_verifier": code_verifier,  # PKCE: sent on token exchange
         }
 
         # Create temporary session for OAuth2 flow
@@ -3815,6 +3828,9 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
             "scope": " ".join(provider_config["scopes"]),
             "state": state,
             "redirect_uri": callback_uri,
+            "nonce": nonce,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
         }
 
         auth_url = f"{provider_config['auth_url']}?{urllib.parse.urlencode(auth_params)}"
@@ -3853,6 +3869,64 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
         if not _is_safe_redirect_url(error_url):
             error_url = "/login"
         return RedirectResponse(url=f"{error_url}?error=oauth2_init_failed", status_code=302)
+
+
+def _pkce_code_challenge(code_verifier: str) -> str:
+    """Derive a PKCE ``S256`` code_challenge from a code_verifier (RFC 7636).
+
+    Computes ``BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))`` with the base64
+    padding stripped, as required by RFC 7636 §4.2.
+
+    Args:
+        code_verifier: The high-entropy PKCE verifier generated at login.
+
+    Returns:
+        The S256 code_challenge string to send on the authorization request.
+    """
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _verify_id_token_or_deny(
+    provider: str,
+    id_token: str,
+    expected_nonce: str | None = None,
+) -> dict:
+    """Verify a provider id_token against its JWKS, or deny the login.
+
+    Resolves the provider and calls its ``validate_id_token`` (which verifies
+    signature, issuer, audience, and expiry against the IdP JWKS, and — when
+    ``expected_nonce`` is supplied — the ``nonce`` claim). This is a
+    fail-closed chokepoint: ANY failure — a verification error, a nonce
+    mismatch, a misconfiguration, or an unexpected exception — results in an
+    ``HTTPException(401)`` so that unverified claims can never reach the
+    session. Callers must not wrap this in a fallback-to-userInfo path.
+
+    Args:
+        provider: The OAuth2 provider key (e.g. "keycloak", "entra").
+        id_token: The raw id_token from the token endpoint.
+        expected_nonce: The nonce bound to this login (from the signed OAuth2
+            flow cookie). When not ``None`` the verified token's ``nonce`` claim
+            must match it exactly; otherwise the login is denied.
+
+    Returns:
+        The verified id_token claim set.
+
+    Raises:
+        HTTPException: 401 if the id_token cannot be cryptographically verified
+            or its nonce does not match this login.
+    """
+    try:
+        auth_provider = get_auth_provider(provider)
+        return auth_provider.validate_id_token(id_token, expected_nonce=expected_nonce)
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Fail closed on any verification/config/unexpected error. We do not
+        # distinguish exception classes here so that a present-but-unverifiable
+        # id_token can never silently fall through to an unverified source.
+        logger.warning(f"ID token verification failed for {provider}: {e}")
+        raise HTTPException(status_code=401, detail="ID token verification failed") from e
 
 
 @app.get("/oauth2/callback/{provider}")
@@ -3894,6 +3968,18 @@ async def oauth2_callback(
         if provider != temp_session_data.get("provider"):
             raise HTTPException(status_code=400, detail="Provider mismatch")
 
+        # Recover the nonce and PKCE verifier bound to this login. The PKCE
+        # code_verifier is REQUIRED: every login is initiated with one, so its
+        # absence here means the flow did not originate from this server's
+        # /oauth2/login (or the signed cookie was stripped). Fail closed — do
+        # not complete a token exchange without proving possession of the
+        # verifier. The nonce is enforced after id_token signature verification.
+        expected_nonce = temp_session_data.get("nonce")
+        code_verifier = temp_session_data.get("code_verifier")
+        if not code_verifier:
+            logger.warning(f"OAuth2 callback for {provider} missing PKCE code_verifier; denying")
+            raise HTTPException(status_code=400, detail="Missing PKCE verifier for this login")
+
         provider_config = OAUTH2_CONFIG["providers"][provider]
 
         # Exchange authorization code for access token
@@ -3926,7 +4012,9 @@ async def oauth2_callback(
                     auth_server_url = f"{scheme}://{host}{ROOT_PATH}"
                 logger.warning(f"Fallback: Using dynamic URL for token exchange: {auth_server_url}")
 
-        token_data = await exchange_code_for_token(provider, code, provider_config, auth_server_url)
+        token_data = await exchange_code_for_token(
+            provider, code, provider_config, auth_server_url, code_verifier=code_verifier
+        )
         logger.info(f"Token data keys: {list(token_data.keys())}")
 
         # For Cognito and Keycloak, try to extract user info from JWT tokens
@@ -3963,13 +4051,14 @@ async def oauth2_callback(
                         )
                         raise ValueError("Missing Cognito config")
                 elif provider == "keycloak":
-                    # For Keycloak, decode the ID token to get user information
+                    # For Keycloak, verify the ID token and extract user info.
                     if "id_token" in token_data:
-                        import jwt
-
-                        # Decode without verification for now (we trust the token since we just got it)
-                        id_token_claims = jwt.decode(
-                            token_data["id_token"], options={"verify_signature": False}
+                        # Verify signature/issuer/audience/expiry against the
+                        # realm JWKS before trusting any claim. A present but
+                        # unverifiable id_token denies the login (fail closed);
+                        # we never fall back to unverified claims.
+                        id_token_claims = _verify_id_token_or_deny(
+                            "keycloak", token_data["id_token"], expected_nonce=expected_nonce
                         )
                         logger.info(f"ID token claims: {id_token_claims}")
 
@@ -3989,11 +4078,16 @@ async def oauth2_callback(
                         )
                         raise ValueError("Missing ID token")
 
+            except HTTPException:
+                # A denied login (e.g. id_token verification failure) must not
+                # be swallowed by the userInfo fallback below. Fail closed.
+                raise
             except Exception as e:
                 logger.warning(
                     f"JWT token validation failed: {e}, falling back to userInfo endpoint"
                 )
-                # Fallback to userInfo endpoint
+                # Fallback to userInfo endpoint (only reached when there is no
+                # id_token to verify, or for non-verification config errors).
                 user_info = await get_user_info(token_data["access_token"], provider_config)
                 logger.info(f"Raw user info from {provider}: {user_info}")
                 mapped_user = map_user_info(user_info, provider_config)
@@ -4002,11 +4096,13 @@ async def oauth2_callback(
             # For Entra ID, prioritize ID token claims over userinfo endpoint
             try:
                 if "id_token" in token_data:
-                    import jwt
+                    from providers.entra import EntraIdProvider
 
-                    # Decode without verification (we trust the token since we just got it from Microsoft)
-                    id_token_claims = jwt.decode(
-                        token_data["id_token"], options={"verify_signature": False}
+                    # Verify signature/issuer/audience/expiry against the tenant
+                    # JWKS before trusting any claim. A present but unverifiable
+                    # id_token denies the login (fail closed).
+                    id_token_claims = _verify_id_token_or_deny(
+                        "entra", token_data["id_token"], expected_nonce=expected_nonce
                     )
                     logger.info(f"Entra ID token claims: {id_token_claims}")
 
@@ -4022,8 +4118,6 @@ async def oauth2_callback(
                     # `hasgroups` or `_claim_names.groups`. Fall back to
                     # Microsoft Graph /me/memberOf so the user gets their
                     # real group set instead of an empty session (#929).
-                    from providers.entra import EntraIdProvider
-
                     if EntraIdProvider.has_group_overage(id_token_claims):
                         logger.info("Entra ID token signals group overage; resolving via Graph")
                         graph_groups = await EntraIdProvider.fetch_groups_via_graph(
@@ -4047,23 +4141,26 @@ async def oauth2_callback(
                     logger.warning("No ID token found in Entra response, falling back to userInfo")
                     raise ValueError("Missing ID token")
 
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Entra ID token parsing failed: {e}, falling back to userInfo endpoint"
                 )
-                # Fallback to userInfo endpoint
+                # Fallback to userInfo endpoint (only when no id_token present).
                 user_info = await get_user_info(token_data["access_token"], provider_config)
                 logger.info(f"Raw user info from {provider}: {user_info}")
                 mapped_user = map_user_info(user_info, provider_config)
                 logger.info(f"Mapped user info from userInfo: {mapped_user}")
         elif provider == "okta":
-            # For Okta, decode the ID token to get groups (userinfo doesn't include groups)
+            # For Okta, verify the ID token to get groups (userinfo doesn't include groups)
             try:
                 if "id_token" in token_data:
-                    import jwt
-
-                    id_token_claims = jwt.decode(
-                        token_data["id_token"], options={"verify_signature": False}
+                    # Verify signature/issuer/audience/expiry against the Okta
+                    # JWKS before trusting any claim. A present but unverifiable
+                    # id_token denies the login (fail closed).
+                    id_token_claims = _verify_id_token_or_deny(
+                        "okta", token_data["id_token"], expected_nonce=expected_nonce
                     )
                     logger.info(f"Okta ID token claims: {id_token_claims}")
 
@@ -4080,6 +4177,8 @@ async def oauth2_callback(
                     logger.warning("No ID token found in Okta response, falling back to userInfo")
                     raise ValueError("Missing ID token")
 
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Okta ID token parsing failed: {e}, falling back to userInfo endpoint"
@@ -4090,30 +4189,52 @@ async def oauth2_callback(
                 logger.info(f"Mapped user info from userInfo: {mapped_user}")
         elif provider == "auth0":
             # For Auth0, delegate ID token parsing to the Auth0Provider
-            # which validates issuer/audience claims and extracts groups
-            # from a custom namespaced claim configured via Auth0 Actions/Rules
+            # which verifies signature/issuer/audience against the Auth0 JWKS
+            # and extracts groups from a custom namespaced claim configured via
+            # Auth0 Actions/Rules.
             try:
-                auth0_provider = get_auth_provider("auth0")
-                mapped_user = auth0_provider.extract_user_from_tokens(token_data)
-                logger.info(f"User extracted from Auth0 ID token: {mapped_user}")
+                if "id_token" in token_data:
+                    # A present id_token must verify; extraction internally calls
+                    # the JWKS-backed verifier and denies on failure (fail closed).
+                    auth0_provider = get_auth_provider("auth0")
+                    try:
+                        mapped_user = auth0_provider.extract_user_from_tokens(
+                            token_data, expected_nonce=expected_nonce
+                        )
+                    except HTTPException:
+                        raise
+                    except Exception as e:
+                        # Any failure extracting/verifying a present id_token is a
+                        # tampering/config signal: deny, never fall back.
+                        logger.warning(f"ID token verification failed for {provider}: {e}")
+                        raise HTTPException(
+                            status_code=401, detail="ID token verification failed"
+                        ) from e
+                    logger.info(f"User extracted from Auth0 ID token: {mapped_user}")
+                else:
+                    logger.warning("No ID token found in Auth0 response, falling back to userInfo")
+                    raise ValueError("Missing ID token")
 
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Auth0 ID token parsing failed: {e}, falling back to userInfo endpoint"
                 )
-                # Fallback to userInfo endpoint
+                # Fallback to userInfo endpoint (only when no id_token present).
                 user_info = await get_user_info(token_data["access_token"], provider_config)
                 logger.info(f"Raw user info from {provider}: {user_info}")
                 mapped_user = map_user_info(user_info, provider_config)
                 logger.info(f"Mapped user info from userInfo: {mapped_user}")
         elif provider == "pingfederate":
-            # For PingFederate, decode the ID token to get groups
+            # For PingFederate, verify the ID token to get groups
             try:
                 if "id_token" in token_data:
-                    import jwt
-
-                    id_token_claims = jwt.decode(
-                        token_data["id_token"], options={"verify_signature": False}
+                    # Verify signature/issuer/audience/expiry against the
+                    # discovered JWKS before trusting any claim. A present but
+                    # unverifiable id_token denies the login (fail closed).
+                    id_token_claims = _verify_id_token_or_deny(
+                        "pingfederate", token_data["id_token"], expected_nonce=expected_nonce
                     )
                     logger.info(f"PingFederate ID token claims: {id_token_claims}")
 
@@ -4133,6 +4254,8 @@ async def oauth2_callback(
                     )
                     raise ValueError("Missing ID token")
 
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.warning(
                     f"PingFederate ID token parsing failed: {e}, falling back to userInfo endpoint"
@@ -4142,7 +4265,17 @@ async def oauth2_callback(
                 mapped_user = map_user_info(user_info, provider_config)
                 logger.info(f"Mapped user info from userInfo: {mapped_user}")
         else:
-            # For other providers, use userInfo endpoint
+            # For other providers (e.g. GitHub, which is OAuth2, not OIDC, and
+            # never returns an id_token), use the userInfo endpoint: the
+            # access_token is authenticated by the IdP at its userInfo endpoint
+            # over TLS, and identity comes from that authenticated response.
+            #
+            # NOTE: any NEW OpenID Connect provider that returns an id_token
+            # MUST be given its own explicit branch above that routes through
+            # `_verify_id_token_or_deny(..., expected_nonce=expected_nonce)`.
+            # This userInfo path performs neither id_token signature
+            # verification nor nonce binding and must not be used to trust
+            # claims lifted from an unverified id_token.
             user_info = await get_user_info(token_data["access_token"], provider_config)
             logger.info(f"Raw user info from {provider}: {user_info}")
             mapped_user = map_user_info(user_info, provider_config)
@@ -4305,9 +4438,23 @@ async def oauth2_callback(
 
 
 async def exchange_code_for_token(
-    provider: str, code: str, provider_config: dict, auth_server_url: str = None
+    provider: str,
+    code: str,
+    provider_config: dict,
+    auth_server_url: str = None,
+    code_verifier: str | None = None,
 ) -> dict:
-    """Exchange authorization code for access token"""
+    """Exchange authorization code for access token.
+
+    Args:
+        provider: The OAuth2 provider key.
+        code: The authorization code returned to the callback.
+        provider_config: The provider's OAuth2 configuration.
+        auth_server_url: Base URL used to reconstruct the redirect_uri.
+        code_verifier: The PKCE code_verifier bound to this login (RFC 7636).
+            Sent so the authorization server can confirm the code was issued to
+            the client that started the flow.
+    """
     if auth_server_url is None:
         auth_server_url = (
             os.environ.get("AUTH_SERVER_URL", "http://localhost:8888").rstrip("/") + ROOT_PATH
@@ -4321,6 +4468,8 @@ async def exchange_code_for_token(
             "code": code,
             "redirect_uri": f"{auth_server_url}/oauth2/callback/{provider}",
         }
+        if code_verifier:
+            token_data["code_verifier"] = code_verifier
 
         headers = {"Accept": "application/json"}
         if provider == "github":

@@ -1915,6 +1915,8 @@ class TestOAuth2CallbackTokenStorage:
             "state": "test-state",
             "provider": "github",
             "callback_uri": "http://localhost:8888/oauth2/callback/github",
+            "nonce": "test-nonce",
+            "code_verifier": "test-code-verifier",
         }
         temp_cookie = signer.dumps(temp_session_data)
 
@@ -1988,6 +1990,327 @@ class TestOAuth2CallbackTokenStorage:
             f"{self.COOKIE_SIZE_CEILING_BYTES}. The server-side session store "
             "should keep this small."
         )
+
+
+class TestOAuth2CallbackIdTokenVerification:
+    """The OAuth2 callback must verify a present id_token before trusting its
+    claims. A forged/tampered id_token (verification failure) denies the login
+    and never persists attacker-controlled identity or group claims.
+    """
+
+    def _drive_callback(self, provider: str, validate_side_effect):
+        """Drive the callback for a JWKS provider with a mocked provider whose
+        validate_id_token exhibits the given behaviour. Returns
+        (response, create_session_called, captured_kwargs).
+        """
+        from auth_server import server as srv
+        from auth_server.server import app, signer
+
+        mock_token_data = {
+            "access_token": "mock-access-token-value",
+            "id_token": "attacker-supplied-id-token",
+        }
+        temp_session_data = {
+            "state": "test-state",
+            "provider": provider,
+            "callback_uri": f"http://localhost:8888/oauth2/callback/{provider}",
+            "nonce": "test-nonce",
+            "code_verifier": "test-code-verifier",
+        }
+        temp_cookie = signer.dumps(temp_session_data)
+
+        captured: dict = {}
+        create_called = {"value": False}
+
+        async def _fake_create_session(**kwargs):
+            create_called["value"] = True
+            captured.update(kwargs)
+            return "fake-session-id"
+
+        fake_provider = MagicMock()
+        fake_provider.validate_id_token.side_effect = validate_side_effect
+
+        patched_config = dict(srv.OAUTH2_CONFIG)
+        patched_config["providers"] = dict(patched_config.get("providers", {}))
+        patched_config["providers"][provider] = {
+            "client_id": "gateway-web",
+            "user_info_url": "https://idp.example.com/userinfo",
+            "username_claim": "sub",
+            "email_claim": "email",
+            "name_claim": "name",
+        }
+
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with (
+            patch.object(srv, "OAUTH2_CONFIG", patched_config),
+            patch(
+                "auth_server.server.exchange_code_for_token",
+                new_callable=AsyncMock,
+                return_value=mock_token_data,
+            ),
+            patch("auth_server.server.get_auth_provider", return_value=fake_provider),
+            patch("session_store.create_session", _fake_create_session),
+        ):
+            response = client.get(
+                f"/oauth2/callback/{provider}",
+                params={"code": "test-code", "state": "test-state"},
+                cookies={"oauth2_temp_session": temp_cookie},
+                follow_redirects=False,
+            )
+
+        return response, create_called["value"], captured
+
+    @pytest.mark.parametrize("provider", ["keycloak", "entra", "okta", "pingfederate"])
+    def test_forged_id_token_denies_login_and_never_persists_groups(self, provider):
+        """A present id_token that fails verification must fail closed: the
+        session is never created, so forged group/identity claims cannot reach
+        the session store.
+        """
+        # Import the error via the SAME module path the server uses at runtime
+        # (auth_server/ is on sys.path, so the server imports `providers.base`).
+        # Using a different path (`auth_server.providers.base`) would create a
+        # distinct class object that the server's `except` would not catch.
+        from providers.base import IdTokenVerificationError
+
+        forged_claims_groups = ["mcp-registry-admin"]
+
+        def _raise(_token, expected_nonce=None):
+            # Simulate a forged token whose (unverified) claims assert admin;
+            # verification rejects it before any claim is used.
+            raise IdTokenVerificationError(f"forged token asserting {forged_claims_groups}")
+
+        response, create_called, captured = self._drive_callback(provider, _raise)
+
+        # Login denied (not a 302 success redirect to the registry).
+        assert response.status_code == 401
+        # Fail closed: no session persisted at all.
+        assert create_called is False
+        assert captured == {}
+
+    def test_verified_id_token_allows_login(self):
+        """A verified id_token proceeds to session creation with its claims."""
+        verified = {
+            "sub": "alice",
+            "preferred_username": "alice",
+            "email": "alice@example.com",
+            "name": "Alice",
+            "groups": ["mcp-registry-user"],
+        }
+        response, create_called, captured = self._drive_callback(
+            "keycloak", lambda _t, expected_nonce=None: verified
+        )
+
+        assert response.status_code == 302
+        assert create_called is True
+        assert captured["username"] == "alice"
+
+
+class TestOAuth2PkceAndNonce:
+    """The OAuth2 flow must use PKCE (S256) and an OIDC nonce.
+
+    - The authorization request carries a code_challenge (S256) and a nonce.
+    - The callback fails closed when the PKCE code_verifier is absent.
+    - The callback rejects an id_token whose nonce does not match the value
+      bound to this login (replay/injection), even if the signature is valid.
+    - The happy path (matching nonce + verifier present) succeeds and forwards
+      the verifier to the token exchange.
+    """
+
+    def test_pkce_code_challenge_matches_rfc7636(self):
+        """S256 challenge is BASE64URL(SHA256(verifier)) with padding stripped."""
+        import base64
+        import hashlib
+
+        from auth_server.server import _pkce_code_challenge
+
+        verifier = "a-high-entropy-code-verifier-value"
+        expected = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        assert _pkce_code_challenge(verifier) == expected
+        assert "=" not in _pkce_code_challenge(verifier)
+
+    def test_authorization_request_includes_pkce_and_nonce(self):
+        """/oauth2/login redirects with code_challenge=S256 and a nonce, and
+        persists the verifier + nonce in the signed flow cookie."""
+        import urllib.parse
+
+        from auth_server import server as srv
+        from auth_server.server import app, signer
+
+        patched_config = dict(srv.OAUTH2_CONFIG)
+        patched_config["providers"] = dict(patched_config.get("providers", {}))
+        patched_config["providers"]["keycloak"] = {
+            "enabled": True,
+            "client_id": "gateway-web",
+            "response_type": "code",
+            "scopes": ["openid", "email", "profile"],
+            "auth_url": "https://idp.example.com/authorize",
+        }
+
+        client = TestClient(app, raise_server_exceptions=False)
+        with patch.object(srv, "OAUTH2_CONFIG", patched_config):
+            response = client.get("/oauth2/login/keycloak", follow_redirects=False)
+
+        assert response.status_code == 302
+        location = response.headers["location"]
+        query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(location).query))
+        assert query.get("code_challenge_method") == "S256"
+        assert query.get("code_challenge"), "code_challenge missing from auth request"
+        assert query.get("nonce"), "nonce missing from auth request"
+
+        # The verifier and nonce are persisted (integrity-protected) in the cookie.
+        temp_cookie = response.cookies.get("oauth2_temp_session")
+        assert temp_cookie is not None
+        session_data = signer.loads(temp_cookie)
+        assert session_data.get("code_verifier"), "code_verifier not persisted"
+        assert session_data.get("nonce") == query.get("nonce")
+        # The challenge on the wire is derived from the persisted verifier.
+        assert srv._pkce_code_challenge(session_data["code_verifier"]) == query["code_challenge"]
+
+    def _drive_callback(
+        self,
+        provider: str,
+        temp_session_data: dict,
+        validate_side_effect,
+    ):
+        """Drive the callback with a mocked provider. Returns
+        (response, create_session_called, captured_kwargs, exchange_mock)."""
+        from auth_server import server as srv
+        from auth_server.server import app, signer
+
+        mock_token_data = {
+            "access_token": "mock-access-token-value",
+            "id_token": "attacker-or-valid-id-token",
+        }
+        temp_cookie = signer.dumps(temp_session_data)
+
+        captured: dict = {}
+        create_called = {"value": False}
+
+        async def _fake_create_session(**kwargs):
+            create_called["value"] = True
+            captured.update(kwargs)
+            return "fake-session-id"
+
+        fake_provider = MagicMock()
+        fake_provider.validate_id_token.side_effect = validate_side_effect
+
+        patched_config = dict(srv.OAUTH2_CONFIG)
+        patched_config["providers"] = dict(patched_config.get("providers", {}))
+        patched_config["providers"][provider] = {
+            "client_id": "gateway-web",
+            "user_info_url": "https://idp.example.com/userinfo",
+            "username_claim": "sub",
+            "email_claim": "email",
+            "name_claim": "name",
+        }
+
+        exchange_mock = AsyncMock(return_value=mock_token_data)
+        client = TestClient(app, raise_server_exceptions=False)
+        with (
+            patch.object(srv, "OAUTH2_CONFIG", patched_config),
+            patch("auth_server.server.exchange_code_for_token", exchange_mock),
+            patch("auth_server.server.get_auth_provider", return_value=fake_provider),
+            patch("session_store.create_session", _fake_create_session),
+        ):
+            response = client.get(
+                f"/oauth2/callback/{provider}",
+                params={"code": "test-code", "state": "test-state"},
+                cookies={"oauth2_temp_session": temp_cookie},
+                follow_redirects=False,
+            )
+
+        return response, create_called["value"], captured, exchange_mock
+
+    def test_callback_denies_when_code_verifier_absent(self):
+        """A login flow with no persisted PKCE verifier fails closed."""
+        temp_session_data = {
+            "state": "test-state",
+            "provider": "keycloak",
+            "callback_uri": "http://localhost:8888/oauth2/callback/keycloak",
+            "nonce": "test-nonce",
+            # code_verifier deliberately absent
+        }
+        response, create_called, captured, exchange_mock = self._drive_callback(
+            "keycloak",
+            temp_session_data,
+            lambda _t, expected_nonce=None: {"sub": "alice"},
+        )
+
+        assert response.status_code == 400
+        assert create_called is False
+        assert captured == {}
+        # Fail closed BEFORE any token exchange.
+        exchange_mock.assert_not_called()
+
+    def test_callback_rejects_id_token_with_nonce_mismatch(self):
+        """A validly signed id_token whose nonce != stored is rejected (replay)."""
+        from providers.base import IdTokenVerificationError
+
+        temp_session_data = {
+            "state": "test-state",
+            "provider": "keycloak",
+            "callback_uri": "http://localhost:8888/oauth2/callback/keycloak",
+            "nonce": "expected-nonce",
+            "code_verifier": "test-code-verifier",
+        }
+
+        def _verify(_token, expected_nonce=None):
+            # Faithful provider: enforces the nonce it was handed. The injected
+            # token carries a DIFFERENT nonce, so verification fails closed.
+            token_nonce = "attacker-nonce"
+            if expected_nonce is not None and token_nonce != expected_nonce:
+                raise IdTokenVerificationError("nonce mismatch")
+            return {"sub": "alice", "groups": ["mcp-registry-admin"]}
+
+        response, create_called, captured, _exchange = self._drive_callback(
+            "keycloak", temp_session_data, _verify
+        )
+
+        assert response.status_code == 401
+        assert create_called is False
+        assert captured == {}
+
+    def test_callback_happy_path_forwards_verifier_and_matches_nonce(self):
+        """Matching nonce + present verifier: login succeeds and the verifier is
+        forwarded to the token exchange."""
+        verified = {
+            "sub": "alice",
+            "preferred_username": "alice",
+            "email": "alice@example.com",
+            "name": "Alice",
+            "groups": ["mcp-registry-user"],
+        }
+        temp_session_data = {
+            "state": "test-state",
+            "provider": "keycloak",
+            "callback_uri": "http://localhost:8888/oauth2/callback/keycloak",
+            "nonce": "expected-nonce",
+            "code_verifier": "the-code-verifier",
+        }
+
+        captured_nonce = {}
+
+        def _verify(_token, expected_nonce=None):
+            captured_nonce["value"] = expected_nonce
+            return verified
+
+        response, create_called, captured, exchange_mock = self._drive_callback(
+            "keycloak", temp_session_data, _verify
+        )
+
+        assert response.status_code == 302
+        assert create_called is True
+        assert captured["username"] == "alice"
+        # The stored nonce reached the verifier.
+        assert captured_nonce["value"] == "expected-nonce"
+        # The stored verifier was forwarded to the token exchange (PKCE proof).
+        _args, kwargs = exchange_mock.call_args
+        assert kwargs.get("code_verifier") == "the-code-verifier"
 
 
 # =============================================================================
