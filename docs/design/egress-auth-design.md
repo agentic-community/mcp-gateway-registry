@@ -53,7 +53,7 @@ flowchart TB
     NGINX -- "auth_request /validate" --> AS
     AS -- "5. vend (4-tuple)" --> REG
     REG -- "read token" --> VAULT
-    AS -- "6. inject Authorization: Bearer <vaulted>" --> MCP
+    AS -- "6. inject Authorization: Bearer [vaulted]" --> MCP
 
     UI -. "starts the flow" .-> BR
 ```
@@ -137,7 +137,7 @@ sequenceDiagram
     alt token present (HIT)
         VAULT-->>REG: StoredToken (refresh if near expiry)
         REG-->>AS: access_token
-        AS->>MCP: forward request, Authorization: Bearer <vaulted token>
+        AS->>MCP: forward request, Authorization: Bearer [vaulted token]
         MCP-->>AS: result
         AS-->>CA: result
     else no token (MISS)
@@ -186,7 +186,7 @@ sequenceDiagram
     participant MCPGW as mcpgw<br/>(airegistry-tools upstream)
     participant REG as registry API
 
-    CA->>NGINX: tools/call on /airegistry-tools/mcp<br/>Authorization: Bearer <ingress token>
+    CA->>NGINX: tools/call on /airegistry-tools/mcp<br/>Authorization: Bearer [ingress token]
     NGINX->>AS: auth_request /validate
     AS-->>NGINX: 200 + signed X-Internal-Token (server claim = "airegistry-tools")
     NGINX->>AS: proxy_pass /mcp-proxy/airegistry-tools/...
@@ -194,7 +194,7 @@ sequenceDiagram
     Note over AS: relay decision: claims["server"] == "airegistry-tools"<br/>-> in _INTERNAL_INGRESS_RELAY_SERVERS -> relay_authorization=True
     Note over AS: _forward_headers: KEEP Authorization;<br/>STRIP X-Authorization + Cookie (always)
 
-    AS->>MCPGW: forward request, Authorization: Bearer <ingress token>
+    AS->>MCPGW: forward request, Authorization: Bearer [ingress token]
     Note over MCPGW: FastMCP front door admits the call.<br/>If OIDC_ENABLED=true it validates this bearer<br/>(same Keycloak realm as the gateway).
 
     MCPGW->>MCPGW: _get_registry_headers() picks the credential for the registry call:<br/>1. REGISTRY_API_TOKEN (static) if set<br/>2. else M2M token (client_credentials) -> X-Authorization<br/>3. else fallback: caller bearer -> X-Authorization
