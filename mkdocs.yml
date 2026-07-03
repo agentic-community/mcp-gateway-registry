@@ -111,6 +111,7 @@ nav:
     - PingFederate Setup: idp/pingfederate.md
     - Access Control & Scopes: scopes.md
     - JWT Token Vending: jwt-token-vending.md
+    - Per-User Egress Credential Vault: egress-credential-vault.md
     - Security Policy: SECURITY.md
   - Architecture & Development:
     - Registry API: registry_api.md

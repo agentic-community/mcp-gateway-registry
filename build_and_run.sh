@@ -354,6 +354,25 @@ else
     log "SECRET_KEY already exists in .env"
 fi
 
+# Generate a random AUTH_SERVER_NGINX_MARKER_SECRET if not already in .env.
+# Required by both auth_server and registry: it guards all mcp-proxy token
+# minting (a direct :8888 /validate with a forged X-Resolved-Upstream cannot
+# obtain a token without it). Must be identical across both services.
+if ! grep -q "AUTH_SERVER_NGINX_MARKER_SECRET=" .env || grep -q "AUTH_SERVER_NGINX_MARKER_SECRET=$" .env || grep -q "AUTH_SERVER_NGINX_MARKER_SECRET=\"\"" .env; then
+    log "Generating AUTH_SERVER_NGINX_MARKER_SECRET..."
+    MARKER_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))') || handle_error "Failed to generate AUTH_SERVER_NGINX_MARKER_SECRET"
+
+    # Remove any existing empty marker line
+    sed -i '/^AUTH_SERVER_NGINX_MARKER_SECRET=$/d' .env 2>/dev/null || true
+    sed -i '/^AUTH_SERVER_NGINX_MARKER_SECRET=""$/d' .env 2>/dev/null || true
+
+    # Add new marker secret
+    echo "AUTH_SERVER_NGINX_MARKER_SECRET=$MARKER_SECRET" >> .env
+    log "AUTH_SERVER_NGINX_MARKER_SECRET added to .env"
+else
+    log "AUTH_SERVER_NGINX_MARKER_SECRET already exists in .env"
+fi
+
 # Validate required environment variables
 log "Validating required environment variables..."
 source .env

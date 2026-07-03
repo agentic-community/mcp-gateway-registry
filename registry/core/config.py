@@ -34,6 +34,16 @@ MONGODB_BACKENDS: frozenset[str] = frozenset(
 )
 
 
+# Accepted values for SECRET_STORE_BACKEND (per-user egress credential vault).
+# Mirrors the ALLOWED_STORAGE_BACKENDS pattern.
+ALLOWED_SECRET_STORES: frozenset[str] = frozenset(
+    {
+        "secrets-manager",
+        "openbao",
+    }
+)
+
+
 class DeploymentMode(str, Enum):
     """Deployment mode options."""
 
@@ -882,6 +892,17 @@ class Settings(BaseSettings):
             "with unusually large tool catalogs."
         ),
     )
+    mcp_proxy_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        description=(
+            "Timeout (seconds) for the auth-server proxy hop's upstream MCP "
+            "request. Raise for servers with long-running tools. The generated "
+            "/mcp-proxy/ nginx blocks derive their proxy_read_timeout from this "
+            "value (plus a 30s buffer), so raising it lifts the whole proxy "
+            "chain; no separate nginx change is needed."
+        ),
+    )
     tool_filter_audit_log_level: str = Field(
         default="INFO",
         description=(
@@ -902,7 +923,7 @@ class Settings(BaseSettings):
         default=5,
         ge=0,
         description=(
-            "Clock-skew leeway (seconds) on the /mcp-proxy internal token " "exp/iat checks."
+            "Clock-skew leeway (seconds) on the /mcp-proxy internal token exp/iat checks."
         ),
     )
 
@@ -977,6 +998,93 @@ class Settings(BaseSettings):
             "The 'file' backend was removed in v1.24.8."
         ),
     )
+
+    # Per-User Egress Credential Vault (third-party OBO support)
+    egress_auth_enabled: bool = Field(
+        default=False,
+        description="Switch for the per-user egress credential vault feature.",
+    )
+    secret_store_backend: str = Field(
+        default="openbao",
+        description=(
+            "Secret store for per-user egress tokens. Accepted values: secrets-manager, openbao."
+        ),
+    )
+    egress_oauth_callback_base_url: str = Field(
+        default="",
+        description=(
+            "Public base URL for the egress OAuth callback "
+            "({base}/oauth2/egress/callback). Empty means derive from "
+            "registry_url; if neither is set, startup fails when "
+            "egress_auth_enabled."
+        ),
+    )
+    egress_token_refresh_skew_seconds: int = Field(
+        default=300,
+        description="Refresh an access token when it expires within this window.",
+    )
+    egress_refresh_worker_interval_seconds: int = Field(
+        default=120,
+        description="Background refresh-loop scan interval; 0 disables the proactive sweep.",
+    )
+    egress_state_ttl_seconds: int = Field(
+        default=600,
+        description="Lifetime of the signed+encrypted OAuth consent state.",
+    )
+    egress_consent_use_elicitation: bool = Field(
+        default=False,
+        description=(
+            "How consent is delivered on a tools/call (etc.) for an unconnected "
+            "egress server. False (default, LLD baseline): a SUCCESSFUL tool "
+            "result with isError=true whose text carries the connect URL -- works "
+            "on every MCP client. True (enhancement): a -32042 "
+            "URLElicitationRequiredError -- cleaner UX but only on clients that "
+            "understand url-mode elicitation (others may swallow it)."
+        ),
+    )
+    egress_registry_internal_url: str = Field(
+        default="http://registry:8080",
+        description=(
+            "Internal URL auth_server uses to reach the registry's "
+            "/_internal/egress-token vend endpoint. The registry app binds loopback, "
+            "so this goes through nginx (registry:8080 -> :80 -> 127.0.0.1:7860), "
+            "which fronts the internal-only location."
+        ),
+    )
+    auth_server_nginx_marker_secret: str = Field(
+        default="",
+        description=(
+            "Shared secret: nginx force-sets it as X-Validate-Source-Secret on "
+            "the /validate subrequest; auth_server only mints the egress-capable mcp-proxy "
+            "token when it matches, so a direct :8888 /validate call with a forged "
+            "X-Resolved-Upstream cannot obtain one. Required (non-empty) when "
+            "EGRESS_AUTH_ENABLED=true -- startup fails otherwise, since an empty marker "
+            "would mint unconditionally. Treat as a secret."
+        ),
+    )
+    aws_secrets_region: str = Field(
+        default="",
+        description="AWS region for Secrets Manager (secret_store_backend=secrets-manager).",
+    )
+    secrets_manager_kms_key_id: str = Field(
+        default="",
+        description="Optional CMK for Secrets Manager envelope encryption.",
+    )
+    secrets_manager_path_prefix: str = Field(
+        default="mcp/egress",
+        description="Secret name prefix for the egress vault in Secrets Manager.",
+    )
+    openbao_addr: str = Field(
+        default="",
+        description="OpenBao server address (secret_store_backend=openbao).",
+    )
+    openbao_namespace: str = Field(default="", description="OpenBao namespace (optional).")
+    openbao_kv_mount: str = Field(default="secret", description="OpenBao KV v2 mount point.")
+    openbao_auth_method: str = Field(
+        default="token",
+        description="OpenBao auth method: token | kubernetes | approle.",
+    )
+    openbao_role: str = Field(default="", description="OpenBao role for kubernetes/approle auth.")
 
     @field_validator("app_log_dir", mode="before")
     @classmethod
@@ -1063,6 +1171,30 @@ class Settings(BaseSettings):
         if normalized not in ALLOWED_STORAGE_BACKENDS:
             accepted = ", ".join(sorted(ALLOWED_STORAGE_BACKENDS))
             raise ValueError(f"Invalid STORAGE_BACKEND={v!r}. Accepted values: {accepted}.")
+        return normalized
+
+    @field_validator("secret_store_backend", mode="before")
+    @classmethod
+    def _validate_secret_store_backend(
+        cls,
+        v: str | None,
+    ) -> str:
+        """Reject unknown SECRET_STORE_BACKEND values at startup.
+
+        Empty/None coerce to "openbao" (the default). Other values are
+        normalized and checked against ALLOWED_SECRET_STORES. Non-secret config
+        name, so echoing v in the error is safe. The egress-requires-Mongo
+        cross-field check lives in the model validator below, not here
+        (single-field validators can't see sibling fields).
+        """
+        if v is None or v == "":
+            return "openbao"
+        if not isinstance(v, str):
+            raise ValueError(f"SECRET_STORE_BACKEND must be a string, got {type(v).__name__}")
+        normalized = v.strip().lower()
+        if normalized not in ALLOWED_SECRET_STORES:
+            accepted = ", ".join(sorted(ALLOWED_SECRET_STORES))
+            raise ValueError(f"Invalid SECRET_STORE_BACKEND={v!r}. Accepted values: {accepted}.")
         return normalized
 
     @field_validator("internal_deployment_type", mode="before")
@@ -1191,6 +1323,69 @@ class Settings(BaseSettings):
                 "Set it to a value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml: global.secretKey)."
             )
+        if len(self.secret_key.encode()) < 32:
+            raise RuntimeError(
+                "SECRET_KEY must be at least 32 bytes long. The current value is too short "
+                "to safely sign HS256 tokens and derive the internal service-token signing "
+                "key (a short key can be brute-forced offline from any captured token). "
+                "Set it to a strong random value at least 32 bytes long, identical across "
+                "all auth_server and registry replicas (see chart values.yaml: global.secretKey)."
+            )
+        if not self.auth_server_nginx_marker_secret:
+            raise RuntimeError(
+                "AUTH_SERVER_NGINX_MARKER_SECRET environment variable is required. "
+                "Set it to a strong random value (at least 32 bytes), identical across all "
+                "auth_server and registry replicas (see chart values.yaml). Without it, the "
+                "auth_server mints mcp-proxy tokens unconditionally, letting a direct :8888 "
+                "/validate call with a forged X-Resolved-Upstream bypass nginx and obtain one."
+            )
+        if len(self.auth_server_nginx_marker_secret.encode()) < 32:
+            raise RuntimeError(
+                "AUTH_SERVER_NGINX_MARKER_SECRET must be at least 32 bytes long. Set it to a "
+                "strong random value at least 32 bytes long, identical across all auth_server "
+                "and registry replicas (see chart values.yaml)."
+            )
+        self._validate_egress_auth_config()
+
+    def _validate_egress_auth_config(self) -> None:
+        """Cross-field startup checks for the egress credential vault.
+
+        Single-field validators can't see siblings, so these live here:
+        - L0: the refresh lease lock is Mongo-only, so the vault requires a
+          Mongo-family storage_backend (the default 'file' backend has no lock
+          home -> would silently drop cross-replica single-flight refresh).
+        - a public callback base URL is required to build the redirect_uri.
+
+        The nginx marker secret is required unconditionally (in __init__), not
+        just for egress, since it guards all mcp-proxy token minting.
+        """
+        if not self.egress_auth_enabled:
+            return
+
+        if self.storage_backend not in MONGODB_BACKENDS:
+            raise ValueError(
+                f"EGRESS_AUTH_ENABLED=true requires a Mongo-family STORAGE_BACKEND "
+                f"(one of: {', '.join(sorted(MONGODB_BACKENDS))}); got "
+                f"{self.storage_backend!r}."
+            )
+
+        if not self.egress_oauth_callback_base_url and not self.registry_url:
+            raise ValueError(
+                "EGRESS_AUTH_ENABLED=true requires EGRESS_OAUTH_CALLBACK_BASE_URL "
+                "(the public base URL for {base}/oauth2/egress/callback), or a "
+                "REGISTRY_URL to derive it from; neither is set."
+            )
+
+    @property
+    def egress_oauth_callback_base(self) -> str:
+        """Resolved public base URL for the egress OAuth callback.
+
+        Explicit egress_oauth_callback_base_url wins; otherwise fall back to
+        registry_url (the callback is served by the same host through nginx).
+        Both empty is rejected at startup by _validate_egress_auth_config when
+        egress is enabled, so a non-empty value is guaranteed there.
+        """
+        return self.egress_oauth_callback_base_url or self.registry_url
 
     @property
     def embeddings_model_dir(self) -> Path:

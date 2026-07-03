@@ -30,6 +30,7 @@ spec:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
     spec:
+      serviceAccountName: {{ include "auth-server.serviceAccountName" . }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -58,6 +59,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: auth-server-app-log-config
+            {{- if .Values.egressAuth.enabled }}
+            # Per-user egress credential vault non-secret config (the marker
+            # secret rides the env secret below).
+            - configMapRef:
+                name: auth-server-egress-config
+            {{- end }}
             - secretRef:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if eq $authProviderType "keycloak" }}

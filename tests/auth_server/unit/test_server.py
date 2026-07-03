@@ -748,9 +748,7 @@ class TestValidateEndpoint:
         from unittest.mock import MagicMock
 
         provider = MagicMock()
-        provider.validate_token.side_effect = ValueError(
-            "Token missing 'kid' in header"
-        )
+        provider.validate_token.side_effect = ValueError("Token missing 'kid' in header")
         mock_get_provider.return_value = provider
 
         import auth_server.server as server_module
@@ -1168,13 +1166,20 @@ class TestReloadScopesEndpoint:
     def test_reload_scopes_success_with_jwt(
         self, mock_get_provider, mock_reload_scopes, auth_env_vars
     ):
-        """Test successful scopes reload using self-signed JWT."""
+        """Test successful scopes reload using an internal service JWT.
+
+        The token is minted via ``generate_internal_token`` (not hand-rolled)
+        so it carries the internal-service contract enforced by
+        ``validate_internal_auth``: audience ``mcp-internal``, a
+        ``token_kind=internal-service`` claim, and a signature made with the
+        derived internal key rather than the raw SECRET_KEY (Security Finding 1).
+        A user-shape token (aud=mcp-registry, raw-key signed) is now rejected.
+        """
         # Arrange
         mock_reload_scopes.return_value = {"group_mappings": {}}
 
-        import jwt
-
         import auth_server.server as server_module
+        from registry.auth.internal import generate_internal_token
 
         # Patch module-level SECRET_KEY to match the test env var
         # (it may already be set to a different value from earlier test imports)
@@ -1185,19 +1190,11 @@ class TestReloadScopesEndpoint:
         try:
             client = TestClient(server_module.app)
 
-            now = int(time.time())
-            token = jwt.encode(
-                {
-                    "iss": "mcp-auth-server",
-                    "aud": "mcp-registry",
-                    "sub": "registry-service",
-                    "purpose": "reload-scopes",
-                    "token_use": "access",
-                    "iat": now,
-                    "exp": now + 30,
-                },
-                secret_key,
-                algorithm="HS256",
+            # The auth_env_vars fixture sets SECRET_KEY in os.environ (monkeypatch),
+            # which is what generate_internal_token reads to derive the signing key.
+            token = generate_internal_token(
+                subject="registry-service",
+                purpose="reload-scopes",
             )
 
             # Act
@@ -2799,6 +2796,202 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         assert response.status_code == 401
 
+    def test_egress_consent_emits_iserror_baseline_with_connect_url(self):
+        """DEFAULT consent delivery: when egress is on and the user has no token,
+        a tools/call gets a SUCCESSFUL JSON-RPC result with isError=true whose
+        text carries the connect URL. This baseline works on every MCP client
+        (no -32042 support needed). Elicitation (-32042) is opt-in via
+        egress_consent_use_elicitation (covered separately below).
+        """
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "request_state": "AEAD-blob",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module.settings, "egress_consent_use_elicitation", False),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 7
+        assert "error" not in body
+        result = body["result"]
+        assert result["isError"] is True
+        text = result["content"][0]["text"]
+        assert vend["connect_url"] in text
+        assert "github" in text.lower()
+
+    def test_egress_consent_emits_url_elicitation_when_enabled(self):
+        """With egress_consent_use_elicitation=True, a tools/call for a tokenless
+        egress server returns the 2025-11-25 URLElicitationRequiredError (-32042)
+        whose data.elicitations[] carries a mode:url elicitation with an
+        elicitationId and the connect URL.
+        """
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "request_state": "AEAD-blob",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module.settings, "egress_consent_use_elicitation", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 7
+        assert "result" not in body
+        err = body["error"]
+        assert err["code"] == -32042
+        elicitations = err["data"]["elicitations"]
+        assert len(elicitations) == 1
+        e = elicitations[0]
+        assert e["mode"] == "url"
+        assert e["elicitationId"]  # present and non-empty
+        # connect URL is preserved and carries the elicitationId for correlation
+        assert e["url"].startswith(vend["connect_url"])
+        assert "elicitationId=" in e["url"]
+        assert "github" in e["message"]
+
+    def test_egress_consent_answers_initialize_locally(self):
+        """For an egress server with no vaulted token, the gateway must answer
+        initialize LOCALLY (not proxy it). The upstream (e.g. GitHub) is itself an
+        OAuth RS that 401s every call including initialize; proxying it tokenless
+        would 401 the handshake and a legacy client could never reach tools/call.
+        initialize is capability negotiation with the gateway, so it is answered
+        here -- the handshake completes and the client proceeds to the
+        token-requiring methods where consent is surfaced.
+        """
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-11-25"},
+                },
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        # Local initialize result -- no upstream proxied, no consent error.
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 1
+        assert "error" not in body
+        result = body["result"]
+        assert result["protocolVersion"] == "2025-11-25"
+        assert "capabilities" in result
+        assert result["serverInfo"]["name"] == "mcp-gateway-registry"
+
+    def test_egress_consent_acks_notifications_locally(self):
+        """notifications/* carry no result; for a tokenless egress server the
+        gateway acks them locally (202) rather than proxying to the 401-ing
+        upstream."""
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 202
+
+    def test_egress_consent_tools_list_returns_empty(self):
+        """tools/list must NOT error (erroring dead-ends clients -- they mark the
+        server failed and never call a tool). The upstream tool list needs the
+        token, so for a tokenless egress server the gateway answers LOCALLY with
+        an EMPTY tool list. The user connects out of band via the Connected
+        Accounts UI; once the token is vaulted, the vend HITs and the real
+        upstream tools are proxied.
+        """
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 9, "method": "tools/list"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "error" not in body
+        assert body["result"]["tools"] == []
+
     def test_set_cookie_and_location_dropped_end_to_end(self):
         """End-to-end regression: even if an upstream MCP server emits
         Set-Cookie and Location, the Starlette response the gateway
@@ -2915,9 +3108,7 @@ class TestLogScopesLoaded:
         from auth_server import server as server_module
 
         with patch.object(server_module, "logger") as mock_logger:
-            server_module._log_scopes_loaded(
-                {"group_mappings": {"mcp-registry-admin": ["admin"]}}
-            )
+            server_module._log_scopes_loaded({"group_mappings": {"mcp-registry-admin": ["admin"]}})
 
         mock_logger.warning.assert_not_called()
         mock_logger.info.assert_called_once()
