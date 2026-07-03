@@ -6,7 +6,11 @@ Validates IP extraction and sanitization from proxied requests.
 
 from unittest.mock import MagicMock
 
-from registry.utils.request_utils import get_client_ip
+from registry.utils.request_utils import (
+    get_client_ip,
+    is_sensitive_header,
+    redact_sensitive_headers,
+)
 
 
 def _make_request(headers=None, client_host="127.0.0.1", client=None):
@@ -85,3 +89,52 @@ class TestGetClientIp:
             client_host="10.0.0.1",
         )
         assert get_client_ip(request) == "10.0.0.1"
+
+
+class TestRedactSensitiveHeaders:
+    """Tests for header redaction used by diagnostic header dumps."""
+
+    def test_redacts_authorization_and_cookie(self):
+        """Authorization and Cookie values are never logged."""
+        redacted = redact_sensitive_headers(
+            {"Authorization": "Bearer abc", "Cookie": "session=xyz", "Accept": "*/*"}
+        )
+        assert redacted["Authorization"] == "[REDACTED]"
+        assert redacted["Cookie"] == "[REDACTED]"
+        assert redacted["Accept"] == "*/*"
+
+    def test_redacts_the_skill_parse_credential_header(self):
+        """The X-Auth-Credential header used by parse-skill-md is redacted."""
+        redacted = redact_sensitive_headers({"X-Auth-Credential": "super-secret-token"})
+        assert redacted["X-Auth-Credential"] == "[REDACTED]"
+        assert "super-secret-token" not in str(redacted)
+
+    def test_redacts_variant_credential_headers(self):
+        """Variant credential-bearing header names are redacted (fail closed)."""
+        headers = {
+            "X-Api-Key": "k1",
+            "X-Access-Token": "t1",
+            "X-Client-Secret": "s1",
+            "Proxy-Authorization": "p1",
+            "X-User-Password": "pw1",
+        }
+        redacted = redact_sensitive_headers(headers)
+        for name in headers:
+            assert redacted[name] == "[REDACTED]", name
+
+    def test_leaves_nonsensitive_headers_intact(self):
+        """Ordinary headers pass through unmodified."""
+        headers = {
+            "User-Agent": "curl/8",
+            "Accept": "application/json",
+            "X-Forwarded-For": "10.0.0.1",
+            "Content-Length": "42",
+        }
+        assert redact_sensitive_headers(headers) == headers
+
+    def test_is_sensitive_header_case_insensitive(self):
+        """Sensitivity detection ignores case."""
+        assert is_sensitive_header("AUTHORIZATION")
+        assert is_sensitive_header("x-auth-credential")
+        assert is_sensitive_header("X-Auth-Credential")
+        assert not is_sensitive_header("User-Agent")

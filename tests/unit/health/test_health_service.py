@@ -63,6 +63,36 @@ def mock_server_info():
 
 
 # =============================================================================
+# HEADER MASKING TESTS
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestHealthHeaderMasking:
+    """Outbound-probe header dumps must redact credential-bearing headers."""
+
+    def test_masks_authorization_and_credential_variants(self, health_service):
+        """Authorization, Cookie, and token/credential headers are redacted."""
+        headers = {
+            "Authorization": "Bearer secret-token-value",
+            "Cookie": "session=abc",
+            "X-Api-Key": "api-key-value",
+            "X-Auth-Credential": "cred-value",
+            "Content-Type": "application/json",
+        }
+
+        masked = health_service._mask_sensitive_headers(headers)
+
+        assert masked["Authorization"] == "[REDACTED]"
+        assert masked["Cookie"] == "[REDACTED]"
+        assert masked["X-Api-Key"] == "[REDACTED]"
+        assert masked["X-Auth-Credential"] == "[REDACTED]"
+        assert masked["Content-Type"] == "application/json"
+        assert "secret-token-value" not in str(masked)
+        assert "cred-value" not in str(masked)
+
+
+# =============================================================================
 # HIGHPERFORMANCEWEBSOCKETMANAGER TESTS
 # =============================================================================
 

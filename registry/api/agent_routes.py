@@ -66,7 +66,7 @@ from ..services.lifecycle_events import (
 from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import flatten_metadata_to_text
-from ..utils.request_utils import get_client_ip
+from ..utils.request_utils import get_client_ip, redact_sensitive_headers
 from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_agent_url
 from ._etag_utils import (
     parse_if_match,
@@ -1050,7 +1050,7 @@ async def list_agents(
 
     # CRITICAL DIAGNOSTIC: Log that we reached this endpoint
     logger.info(f"[GET_AGENTS_ENTRY] GET /api/agents called from {get_client_ip(request)}")
-    logger.info(f"[GET_AGENTS_ENTRY] Request headers: {dict(request.headers)}")
+    logger.info(f"[GET_AGENTS_ENTRY] Request headers: {redact_sensitive_headers(request.headers)}")
 
     # CRITICAL DIAGNOSTIC: Log user_context received by endpoint (for comparison with /servers)
     logger.info(f"[GET_AGENTS_DEBUG] Received user_context: {user_context}")

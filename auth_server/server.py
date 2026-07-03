@@ -885,12 +885,41 @@ def _mask_sensitive_dict(
     return masked
 
 
+# Substrings that mark a header name (case-insensitive) as credential-bearing.
+# Matching is fail-closed: any header whose name contains one of these markers
+# has its value masked, so a new credential header (e.g. ``X-Auth-Credential``,
+# ``X-Api-Key``) forwarded on the auth subrequest is never logged in plaintext.
+_SENSITIVE_HEADER_SUBSTRINGS: tuple[str, ...] = (
+    "authorization",
+    "cookie",
+    "token",
+    "secret",
+    "credential",
+    "password",
+    "api-key",
+    "apikey",
+    "auth",
+)
+
+
+def _is_sensitive_header_name(name: str) -> bool:
+    """Return True when a header name should be masked before logging."""
+    lowered = name.lower()
+    return any(marker in lowered for marker in _SENSITIVE_HEADER_SUBSTRINGS)
+
+
 def mask_headers(headers: dict) -> dict:
-    """Mask sensitive headers for logging compliance."""
+    """Mask sensitive headers for logging compliance.
+
+    Uses fail-closed substring matching so any credential-bearing header is
+    masked, not just a fixed allowlist a new header name could slip past.
+    """
     masked = {}
     for key, value in headers.items():
         key_lower = key.lower()
-        if key_lower in ["x-authorization", "authorization", "cookie"]:
+        if key_lower in ["x-user-pool-id", "x-client-id"]:
+            masked[key] = mask_sensitive_id(value)
+        elif _is_sensitive_header_name(key):
             if "bearer" in str(value).lower():
                 # Extract token part and mask it
                 parts = str(value).split(" ", 1)
@@ -900,8 +929,6 @@ def mask_headers(headers: dict) -> dict:
                     masked[key] = mask_token(value)
             else:
                 masked[key] = "***MASKED***"
-        elif key_lower in ["x-user-pool-id", "x-client-id"]:
-            masked[key] = mask_sensitive_id(value)
         else:
             masked[key] = value
     return masked

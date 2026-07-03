@@ -1731,13 +1731,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       if (skillForm.auth_scheme !== 'none') {
         params.set('auth_scheme', skillForm.auth_scheme);
       }
-      if (skillForm.auth_credential && skillForm.auth_scheme !== 'none' && skillForm.auth_scheme !== 'global_credentials') {
-        params.set('auth_credential', skillForm.auth_credential);
-      }
       if (skillForm.auth_header_name && skillForm.auth_scheme === 'api_key') {
         params.set('auth_header_name', skillForm.auth_header_name);
       }
-      const response = await axios.post(`/api/skills/parse-skill-md?${params.toString()}`);
+      // The credential is sent as a request header (never a query parameter) so
+      // it is not captured in access logs, proxy logs, browser history, or the
+      // audit log's recorded query parameters.
+      const parseConfig: { headers?: Record<string, string> } = {};
+      if (skillForm.auth_credential && skillForm.auth_scheme !== 'none' && skillForm.auth_scheme !== 'global_credentials') {
+        parseConfig.headers = { 'X-Auth-Credential': skillForm.auth_credential };
+      }
+      const response = await axios.post(`/api/skills/parse-skill-md?${params.toString()}`, null, parseConfig);
       const data = response.data;
 
       if (data.success) {

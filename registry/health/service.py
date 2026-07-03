@@ -13,6 +13,7 @@ from registry.constants import DeploymentType, HealthStatus
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
 from ..exceptions import UrlValidationError
+from ..utils.request_utils import redact_sensitive_headers
 from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_url
 
 logger = logging.getLogger(__name__)
@@ -512,7 +513,7 @@ class HealthMonitoringService:
             for header_dict in server_headers:
                 if isinstance(header_dict, dict):
                     headers.update(header_dict)
-                    logger.debug(f"Added server headers: {header_dict}")
+                    logger.debug(f"Added server headers: {redact_sensitive_headers(header_dict)}")
 
         # Custom headers go first; auth_scheme below overwrites name collisions
         encrypted_custom = server_info.get("custom_headers_encrypted")
@@ -972,21 +973,18 @@ class HealthMonitoringService:
         """
         Mask sensitive authentication headers for logging.
 
+        Delegates to the shared, fail-closed header redactor so any
+        credential-bearing header (Authorization, Cookie, and anything carrying
+        a token/secret/credential/api-key) is masked — not just an exact-match
+        allowlist that a new header name could slip past.
+
         Args:
             headers: Dictionary of HTTP headers
 
         Returns:
-            Dictionary with sensitive headers masked
+            Dictionary with sensitive header values redacted
         """
-        masked = headers.copy()
-        sensitive_headers = ["Authorization", "X-API-Key", "X-Api-Key", "Api-Key"]
-
-        for key in masked:
-            # Check for common auth headers (case-insensitive)
-            if key in sensitive_headers or key.lower() in [h.lower() for h in sensitive_headers]:
-                masked[key] = "***REDACTED***"
-
-        return masked
+        return redact_sensitive_headers(headers)
 
     def _is_mcp_endpoint_healthy_streamable(self, response) -> bool:
         """

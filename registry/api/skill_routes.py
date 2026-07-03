@@ -21,6 +21,7 @@ from typing import (
 from fastapi import (
     APIRouter,
     Depends,
+    Header,
     HTTPException,
     Path,
     Query,
@@ -305,16 +306,24 @@ async def parse_skill_md(
     auth_scheme: str = Query(
         "none", description="Auth scheme: none, global_credentials, bearer, api_key"
     ),
-    auth_credential: str | None = Query(
-        None, description="Plaintext credential for bearer/api_key"
-    ),
     auth_header_name: str | None = Query(None, description="Custom header name for api_key scheme"),
+    auth_credential: str | None = Header(
+        None,
+        alias="X-Auth-Credential",
+        description="Plaintext credential for bearer/api_key (sent as a request header, "
+        "never a query parameter, so it is not captured in access/audit logs)",
+    ),
 ) -> dict:
     """Parse SKILL.md content and extract metadata.
 
     Returns name, description, version, and tags from the SKILL.md file.
     Useful for auto-populating the skill registration form.
     Accepts optional auth parameters for parsing private repo SKILL.md files.
+
+    The credential for bearer/api_key schemes is accepted via the
+    ``X-Auth-Credential`` request header (not a query parameter) so it never
+    lands in web-server access logs, proxy logs, browser history, or the audit
+    log's captured query parameters.
     """
     # Authorization: this registration helper drives a server-side fetch of a
     # caller-supplied URL (SSRF is mitigated by the service's _is_safe_url

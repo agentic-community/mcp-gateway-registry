@@ -71,6 +71,32 @@ class TestMaskingFunctions:
         assert result.endswith("...")
         assert len(result) < len(token)
 
+    def test_mask_headers_masks_auth_credential_and_variants(self):
+        """mask_headers redacts credential-bearing headers via substring match."""
+        from auth_server.server import mask_headers
+
+        headers = {
+            "X-Auth-Credential": "super-secret-token",
+            "Authorization": "Bearer eyJabc.def.ghi",
+            "Cookie": "mcp_gateway_session=abc",
+            "X-Api-Key": "k123456",
+            "X-Access-Token": "t123456",
+            "Accept": "application/json",
+        }
+
+        masked = mask_headers(headers)
+
+        # The plaintext credential never appears in the masked output.
+        assert masked["X-Auth-Credential"] == "***MASKED***"
+        assert masked["Cookie"] == "***MASKED***"
+        assert masked["X-Api-Key"] == "***MASKED***"
+        assert masked["X-Access-Token"] == "***MASKED***"
+        assert masked["Authorization"].startswith("Bearer ")
+        assert "eyJabc.def.ghi" not in masked["Authorization"]
+        # Non-sensitive headers pass through untouched.
+        assert masked["Accept"] == "application/json"
+        assert "super-secret-token" not in str(masked)
+
     def test_anonymize_ip_ipv4(self):
         """Test IPv4 anonymization."""
         from auth_server.server import anonymize_ip
