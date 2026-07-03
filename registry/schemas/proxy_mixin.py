@@ -66,6 +66,7 @@ PROXY_FIELD_NAMES: frozenset[str] = frozenset(
         "proxy_resolved_ips",
         "proxy_target_host",
         "proxy_disabled_reason",
+        "proxy_client_url",
     }
 )
 
@@ -168,6 +169,50 @@ class ProxyableMixin(BaseModel):
             "to a denied IP). When non-null the entity is treated as NOT proxied."
         ),
     )
+    # DERIVED, read-only: the client-facing gateway path ({prefix}/{type}/{name}).
+    # Never user-set — it is recomputed from the entity's type + path on every
+    # construction (see populate_proxy_client_url, called from each storage
+    # model's after-validator), so any client-supplied or stored value is
+    # overwritten. Distinct from proxy_target_url (the backend/origin the gateway
+    # forwards to). Null when the entity is not proxied.
+    proxy_client_url: str | None = Field(
+        default=None,
+        description=(
+            "Read-only, auto-derived client-facing gateway path "
+            "(/{gateway_proxy_prefix}/{entity_type}/{name}). Clients connect here; "
+            "the registry forwards to proxy_target_url. Recomputed on every read — "
+            "any value sent by a client is ignored."
+        ),
+    )
+
+    def populate_proxy_client_url(
+        self,
+        entity_type: str,
+    ) -> None:
+        """Set ``proxy_client_url`` from the entity's type + path, or clear it.
+
+        Called from each storage model's ``model_validator(mode="after")`` so the
+        derived client path is present in ``model_dump`` for API reads and stays
+        self-healing (recomputed on every construction, never trusted from the DB
+        or a client payload). Populated whenever ``is_proxied`` is set and the
+        model carries a non-empty ``path``; cleared to None otherwise.
+
+        Args:
+            entity_type: The entity-type token used as the URL's type segment
+                (must match the authz key, e.g. "skill", "a2a_agent", or a custom
+                type name).
+        """
+        path = getattr(self, "path", None)
+        if self.is_proxied and path:
+            from registry.core.config import settings
+
+            self.proxy_client_url = build_proxy_client_path(
+                entity_type,
+                path,
+                settings.gateway_proxy_prefix,
+            )
+        else:
+            self.proxy_client_url = None
 
     # NOTE: no raising field_validator on proxy_target_url here. Storage models
     # inherit this mixin and are RECONSTRUCTED from the DB on every read; a
@@ -284,6 +329,42 @@ async def validate_and_pin_proxy_target(
         return {}
     host, ips = await resolve_and_validate_proxy_target(target)
     return {"proxy_resolved_ips": ips, "proxy_target_host": host or ""}
+
+
+def build_proxy_client_path(
+    entity_type: str,
+    path: str,
+    prefix: str,
+) -> str:
+    """Return the client-facing gateway path for a proxied entity.
+
+    This is the URL a CLIENT connects to — distinct from ``proxy_target_url``
+    (the backend/origin the gateway forwards to). It is ALWAYS auto-derived, so
+    operators never hand-enter it: they only supply the origin.
+
+    Shape: ``/{prefix}/{entity_type}/{name}`` where ``{name}`` is the registered
+    ``path`` with its leading namespace segment stripped, so a skill at
+    ``/skills/pdf-processing`` (entity_type ``skill``) yields
+    ``/gateway/skill/pdf-processing`` — not the doubled ``/skill/skills/...``.
+    Uniqueness follows from ``path`` being unique per type (the Mongo ``_id``),
+    so the stripped name cannot collide within a type's namespace.
+
+    Args:
+        entity_type: The entity-type token (e.g. "skill", "a2a_agent", or a
+            custom type name). Used verbatim as the URL's type segment so it
+            matches the authz key (``X-Generic-Proxy-Kind``).
+        path: The registered entity path (e.g. "/skills/pdf-processing").
+        prefix: The configured gateway path prefix (settings.gateway_proxy_prefix).
+
+    Returns:
+        The client-facing path, leading-slash-prefixed and with no trailing slash.
+    """
+    clean = path.strip("/")
+    # Drop the leading namespace segment (skills/, agents/, {custom-type}/) so the
+    # type is not doubled; keep any remaining structure (nested paths stay unique).
+    _head, _sep, rest = clean.partition("/")
+    name = rest if rest else clean
+    return f"/{prefix.strip('/')}/{entity_type}/{name}"
 
 
 def _is_federated(doc: dict[str, Any]) -> bool:

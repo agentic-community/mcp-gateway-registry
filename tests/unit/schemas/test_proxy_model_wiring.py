@@ -344,3 +344,125 @@ class TestServiceLayerRoundTrip:
         src = inspect.getsource(agent_routes)
         assert "is_proxied=request.is_proxied" in src
         assert "proxy_target_url=request.proxy_target_url" in src
+
+
+class TestDerivedClientUrl:
+    """proxy_client_url is DERIVED read-only: recomputed from type+path on every
+    construction, present in model_dump for API reads, never trusted from input."""
+
+    def test_skill_dump_carries_derived_client_url(self):
+        from registry.schemas.skill_models import SkillCard
+
+        s = SkillCard(
+            path="/skills/pdf",
+            name="pdf",
+            description="d",
+            skill_md_url="https://s/",
+            is_proxied=True,
+            proxy_target_url=_OK,
+        )
+        # Convention: {prefix}/{type}/{name} with the /skills/ namespace stripped.
+        assert s.proxy_client_url == "/gateway/skill/pdf"
+        assert s.model_dump()["proxy_client_url"] == "/gateway/skill/pdf"
+
+    def test_agent_dump_carries_derived_client_url(self):
+        from registry.schemas.agent_models import AgentCard
+
+        a = AgentCard(
+            name="a",
+            description="d",
+            url=_OK,
+            version="1",
+            path="/agents/code-reviewer",
+            is_proxied=True,
+        )
+        assert a.proxy_client_url == "/gateway/a2a_agent/code-reviewer"
+
+    def test_none_when_not_proxied(self):
+        from registry.schemas.skill_models import SkillCard
+
+        s = SkillCard(path="/skills/pdf", name="pdf", description="d", skill_md_url="https://s/")
+        assert s.proxy_client_url is None
+
+    def test_self_healing_overwrites_bogus_stored_value(self):
+        """A stored/injected proxy_client_url is ignored — recomputed on load. This
+        is why it can never be a stale or attacker-controlled route."""
+        from registry.schemas.skill_models import SkillCard
+
+        s = SkillCard(
+            path="/skills/pdf",
+            name="pdf",
+            description="d",
+            skill_md_url="https://s/",
+            is_proxied=True,
+            proxy_target_url=_OK,
+            proxy_client_url="/evil/injected/path",
+        )
+        assert s.proxy_client_url == "/gateway/skill/pdf"
+
+    def test_custom_entity_uses_type_token(self):
+        from registry.schemas.custom_entity_models import CustomEntityRecord
+
+        r = CustomEntityRecord(
+            entity_type="workflow",
+            name="n",
+            path="/workflow/abc-123",
+            is_proxied=True,
+            proxy_target_url=_OK,
+        )
+        assert r.proxy_client_url == "/gateway/workflow/abc-123"
+
+
+class TestListModelsCarryProxyFields:
+    """The lightweight LIST models (SkillInfo, AgentInfo) must expose the proxy
+    fields — the list endpoints build them field-by-field, and a missing field
+    silently drops the badge/toggle from every card (the recurring bug class)."""
+
+    def test_skill_info_accepts_proxy_fields(self):
+        from registry.schemas.skill_models import SkillInfo
+
+        info = SkillInfo(
+            id="00000000-0000-0000-0000-000000000001",
+            path="/skills/x",
+            name="x",
+            description="d",
+            skill_md_url="https://s/",
+            is_proxied=True,
+            proxy_target_url=_OK,
+            proxy_client_url="/gateway/skill/x",
+        )
+        dumped = info.model_dump()
+        assert dumped["is_proxied"] is True
+        assert dumped["proxy_target_url"] == _OK
+        assert dumped["proxy_client_url"] == "/gateway/skill/x"
+
+    def test_agent_info_accepts_proxy_fields(self):
+        from registry.schemas.agent_models import AgentInfo
+
+        info = AgentInfo(
+            name="a",
+            description="d",
+            path="/agents/a",
+            url=_OK,
+            is_proxied=True,
+            proxy_target_url=_OK,
+            proxy_client_url="/gateway/a2a_agent/a",
+        )
+        dumped = info.model_dump()
+        assert dumped["is_proxied"] is True
+        assert dumped["proxy_client_url"] == "/gateway/a2a_agent/a"
+
+    def test_list_models_default_to_not_proxied(self):
+        from registry.schemas.agent_models import AgentInfo
+        from registry.schemas.skill_models import SkillInfo
+
+        s = SkillInfo(
+            id="00000000-0000-0000-0000-000000000002",
+            path="/skills/y",
+            name="y",
+            description="d",
+            skill_md_url="https://s/",
+        )
+        a = AgentInfo(name="b", description="d", path="/agents/b", url=_OK)
+        assert s.is_proxied is False and s.proxy_client_url is None
+        assert a.is_proxied is False and a.proxy_client_url is None

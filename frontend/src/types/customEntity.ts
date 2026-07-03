@@ -55,6 +55,11 @@ export interface CustomEntityRecord {
   created_at: string;
   updated_at: string;
   attributes: Record<string, unknown>;
+  // Gateway-proxy opt-in. Top-level (mixin) fields on the wire, NOT in attributes.
+  // proxy_client_url is the read-only, server-derived client path.
+  is_proxied?: boolean;
+  proxy_target_url?: string | null;
+  proxy_client_url?: string | null;
 }
 
 /** Client payload for POST /api/custom/{type}. */
@@ -65,6 +70,8 @@ export interface CustomEntityCreate {
   allowed_groups: string[];
   tags: string[];
   attributes: Record<string, unknown>;
+  is_proxied?: boolean;
+  proxy_target_url?: string | null;
 }
 
 /** Client payload for PUT /api/custom/{type}/{uuid} (all optional). */
@@ -75,6 +82,8 @@ export interface CustomEntityUpdate {
   allowed_groups?: string[];
   tags?: string[];
   attributes?: Record<string, unknown> | null;
+  is_proxied?: boolean;
+  proxy_target_url?: string | null;
 }
 
 /** Shape of the 400 validation-error body: { detail: [{ field, message }, ...] }. */

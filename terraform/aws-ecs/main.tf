@@ -341,6 +341,7 @@ module "mcp_gateway" {
   gateway_canonical_namespace_enabled       = var.gateway_canonical_namespace_enabled
   gateway_proxy_allow_private_targets       = var.gateway_proxy_allow_private_targets
   gateway_generic_client_max_body_size      = var.gateway_generic_client_max_body_size
+  gateway_proxy_prefix                      = var.gateway_proxy_prefix
   generic_proxy_token_ttl_seconds           = var.generic_proxy_token_ttl_seconds
   generic_proxy_max_body_bytes              = var.generic_proxy_max_body_bytes
   gateway_generic_require_bearer_for_writes = var.gateway_generic_require_bearer_for_writes

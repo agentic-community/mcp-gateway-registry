@@ -26,6 +26,7 @@ from registry.schemas.proxy_mixin import (
     EgressPolicyError,
     ProxyableMixin,
     _assert_egress_allowed,
+    build_proxy_client_path,
     resolve_proxy_target,
 )
 
@@ -323,3 +324,60 @@ class TestClientMaxBodySizeValidator:
 
         with pytest.raises(ValidationError):
             Settings(gateway_generic_client_max_body_size=bad)
+
+
+@pytest.mark.unit
+class TestBuildProxyClientPath:
+    """The client-facing path is auto-derived {prefix}/{type}/{name}; the leading
+    namespace segment of the registered path is stripped so the type is not doubled."""
+
+    @pytest.mark.parametrize(
+        "entity_type,path,expected",
+        [
+            ("skill", "/skills/pdf-processing", "/gateway/skill/pdf-processing"),
+            ("a2a_agent", "/agents/code-reviewer", "/gateway/a2a_agent/code-reviewer"),
+            ("skill", "skills/no-leading-slash", "/gateway/skill/no-leading-slash"),
+            # custom entity path is /{type}/{uuid}; the type segment is stripped.
+            ("workflow", "/workflow/abc-123", "/gateway/workflow/abc-123"),
+            # nested remainder is preserved (still unique under the type namespace).
+            ("skill", "/skills/team/tool", "/gateway/skill/team/tool"),
+        ],
+    )
+    def test_strips_namespace_and_prefixes(self, entity_type, path, expected):
+        assert build_proxy_client_path(entity_type, path, "gateway") == expected
+
+    def test_single_segment_path_kept_when_no_namespace(self):
+        # A bare single-segment path (no namespace to strip) uses the whole thing.
+        assert build_proxy_client_path("skill", "/solo", "gateway") == "/gateway/skill/solo"
+
+    def test_prefix_slashes_normalized(self):
+        # A prefix given with stray slashes still yields a single clean segment.
+        assert build_proxy_client_path("skill", "/skills/x", "/gateway/") == "/gateway/skill/x"
+
+    def test_custom_prefix_value(self):
+        assert build_proxy_client_path("skill", "/skills/x", "proxy") == "/proxy/skill/x"
+
+
+@pytest.mark.unit
+class TestGatewayProxyPrefixValidator:
+    """gateway_proxy_prefix is rendered into nginx location paths, so it must be a
+    single URL-safe segment (path-injection guard)."""
+
+    @pytest.mark.parametrize("good", ["gateway", "proxy", "gw_1", "edge-node", "/gateway/"])
+    def test_valid_prefixes_accepted(self, good):
+        from registry.core.config import Settings
+
+        s = Settings(gateway_proxy_prefix=good)
+        # Stored normalized (stripped of surrounding slashes).
+        assert s.gateway_proxy_prefix == good.strip().strip("/")
+
+    @pytest.mark.parametrize(
+        "bad", ["a/b", "has space", "semi;colon", "brace}", "", "$var", "a\nb"]
+    )
+    def test_invalid_prefixes_rejected(self, bad):
+        from pydantic import ValidationError
+
+        from registry.core.config import Settings
+
+        with pytest.raises(ValidationError):
+            Settings(gateway_proxy_prefix=bad)

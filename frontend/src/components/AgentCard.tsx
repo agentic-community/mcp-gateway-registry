@@ -90,6 +90,8 @@ export interface Agent {
   // Gateway-proxy opt-in (registry extension): served through the generic hop.
   is_proxied?: boolean;
   proxy_target_url?: string;
+  // Read-only, auto-derived client path ({prefix}/{type}/{name}).
+  proxy_client_url?: string;
 }
 
 /**
@@ -491,8 +493,9 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                       <span
                         className="px-2 py-0.5 text-xs font-semibold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 rounded-full flex-shrink-0 border border-cyan-200 dark:border-cyan-600"
                         title={
-                          agent.proxy_target_url
-                            ? `Proxied through the gateway to ${agent.proxy_target_url}`
+                          agent.proxy_client_url
+                            ? `Clients connect at ${agent.proxy_client_url}` +
+                              (agent.proxy_target_url ? ` (forwards to ${agent.proxy_target_url})` : '')
                             : 'Served through the gateway proxy'
                         }
                       >

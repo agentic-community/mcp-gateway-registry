@@ -155,11 +155,35 @@ describe('ProxyField', () => {
     onProxyTargetUrlChange: jest.fn(),
   };
 
-  it('hides the target URL input until proxying is enabled', () => {
+  it('hides the backend URL input until proxying is enabled', () => {
     const { rerender } = render(<ProxyField isProxied={false} {...base} />);
-    expect(screen.queryByText('Proxy target URL')).not.toBeInTheDocument();
+    expect(screen.queryByText('Backend URL')).not.toBeInTheDocument();
     rerender(<ProxyField isProxied={true} {...base} />);
-    expect(screen.getByText('Proxy target URL')).toBeInTheDocument();
+    expect(screen.getByText('Backend URL')).toBeInTheDocument();
+  });
+
+  it('pops up the client URL as plain text when proxied and provided', () => {
+    render(
+      <ProxyField isProxied={true} {...base} clientUrl="/gateway/skill/demo" />,
+    );
+    // The client path is shown as read-only text (a <code> element), NOT an
+    // editable/disabled input the user might mistake for a field.
+    const code = screen.getByText('/gateway/skill/demo');
+    expect(code.tagName).toBe('CODE');
+    expect(screen.getByText(/Clients connect at/)).toBeInTheDocument();
+  });
+
+  it('shows a generated-on-save note when no client URL exists yet', () => {
+    // Create path: no clientUrl available; show the affordance as plain text.
+    render(<ProxyField isProxied={true} {...base} />);
+    expect(
+      screen.getByText(/generated automatically when you save/),
+    ).toBeInTheDocument();
+  });
+
+  it('hides the client-URL popup entirely when not proxied', () => {
+    render(<ProxyField isProxied={false} {...base} clientUrl="/gateway/skill/demo" />);
+    expect(screen.queryByText('/gateway/skill/demo')).not.toBeInTheDocument();
   });
 
   it('reports checkbox toggles through onIsProxiedChange', () => {

@@ -64,6 +64,12 @@ export const useSkills = (): UseSkillsReturn => {
         // descriptor URL so the SkillCard can render the discovery treatment.
         is_read_only: skillInfo.is_read_only ?? false,
         ard_source_url: skillInfo.ard_source_url,
+        // Gateway-proxy opt-in. Carry through so the card badge and edit modal
+        // reflect the stored state. proxy_client_url is the read-only,
+        // auto-derived client path; proxy_target_url is the origin/backend URL.
+        is_proxied: skillInfo.is_proxied ?? false,
+        proxy_target_url: skillInfo.proxy_target_url ?? undefined,
+        proxy_client_url: skillInfo.proxy_client_url ?? undefined,
       }));
 
       setSkills(transformedSkills);

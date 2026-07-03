@@ -336,6 +336,8 @@ class SkillCard(ProxyableMixin):
             },
             read_safe=True,  # storage model: reconstructed on read, log-not-raise
         )
+        # Derive the read-only client-facing path from type + path (self-healing).
+        self.populate_proxy_client_url("skill")
         return self
 
 
@@ -403,6 +405,21 @@ class SkillInfo(BaseModel):
     )
     external_tags: list[str] = Field(
         default_factory=list, description="Tags from external/federated registries"
+    )
+    # Gateway-proxy opt-in (mirrored from the SkillCard so listings show the badge
+    # and the edit modal populates the toggle). proxy_client_url is the read-only,
+    # server-derived client path; proxy_target_url is the backend/origin.
+    is_proxied: bool = Field(
+        default=False,
+        description="When true, the skill is served through the gateway generic proxy.",
+    )
+    proxy_target_url: str | None = Field(
+        default=None,
+        description="Backend/origin HTTP(S) URL the gateway forwards to (skills require it explicitly).",
+    )
+    proxy_client_url: str | None = Field(
+        default=None,
+        description="Read-only, auto-derived client-facing gateway path (/{prefix}/skill/{name}).",
     )
 
 

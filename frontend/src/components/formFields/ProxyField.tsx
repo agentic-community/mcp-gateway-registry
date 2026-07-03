@@ -18,6 +18,14 @@ interface ProxyFieldProps {
   accent?: keyof typeof FIELD_FOCUS;
   /** Validation error for the target URL. */
   error?: string | null;
+  /**
+   * The read-only, auto-derived client-facing gateway path
+   * ({prefix}/{type}/{name}) the registry generated. Shown (not editable) when
+   * present so the user sees where clients connect. Undefined on create (the
+   * path is assigned server-side) — the helper text explains it will be
+   * generated on save.
+   */
+  clientUrl?: string | null;
 }
 
 /**
@@ -36,6 +44,7 @@ const ProxyField: React.FC<ProxyFieldProps> = ({
   targetRequired = false,
   accent = 'purple',
   error,
+  clientUrl,
 }) => {
   const showTargetWarning =
     isProxied && targetRequired && proxyTargetUrl.trim() === '';
@@ -59,14 +68,34 @@ const ProxyField: React.FC<ProxyFieldProps> = ({
       </FormField>
 
       {isProxied && (
+        <div className="rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm dark:border-cyan-800 dark:bg-cyan-900/20">
+          {clientUrl ? (
+            <p className="text-cyan-800 dark:text-cyan-200">
+              Clients connect at{' '}
+              <code className="rounded bg-cyan-100 px-1 py-0.5 font-mono text-xs text-cyan-900 dark:bg-cyan-800/50 dark:text-cyan-100">
+                {clientUrl}
+              </code>
+              . The registry forwards this to the backend URL below.
+            </p>
+          ) : (
+            <p className="text-cyan-800 dark:text-cyan-200">
+              A client URL (<code className="font-mono text-xs">/{'{prefix}'}/{'{type}'}/{'{name}'}</code>)
+              is generated automatically when you save. Clients connect there; the registry forwards to
+              the backend URL below.
+            </p>
+          )}
+        </div>
+      )}
+
+      {isProxied && (
         <FormField
-          label="Proxy target URL"
+          label="Backend URL"
           required={targetRequired}
           error={error}
           hint={
             targetRequired
-              ? 'The http(s) backend the gateway forwards to (required).'
-              : 'The http(s) backend the gateway forwards to. Leave blank to use the entity’s own URL.'
+              ? 'The http(s) origin the gateway forwards to (required).'
+              : 'The http(s) origin the gateway forwards to. Leave blank to use the entity’s own URL.'
           }
         >
           <input

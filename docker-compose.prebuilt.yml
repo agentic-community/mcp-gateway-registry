@@ -97,6 +97,7 @@ services:
       - GATEWAY_CANONICAL_NAMESPACE_ENABLED=${GATEWAY_CANONICAL_NAMESPACE_ENABLED:-false}
       - GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=${GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS:-false}
       - GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE=${GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE:-1m}
+      - GATEWAY_PROXY_PREFIX=${GATEWAY_PROXY_PREFIX:-gateway}
       # BUILD_VERSION is NOT set here: it is baked into the image by the
       # publish pipeline (issue #919). Setting it at the compose level with
       # a "${BUILD_VERSION:-1.0.0}" default would stomp the image-baked
