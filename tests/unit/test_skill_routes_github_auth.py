@@ -45,7 +45,7 @@ class TestGetSkillContentAuth:
         mock_response.text = "# My Skill"
         mock_response.url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        with patch("registry.services.skill_service.guarded_async_client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -86,7 +86,7 @@ class TestGetSkillContentAuth:
         mock_response.text = "# Public Skill"
         mock_response.url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        with patch("registry.services.skill_service.guarded_async_client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)

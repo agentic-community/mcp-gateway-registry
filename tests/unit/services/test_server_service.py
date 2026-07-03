@@ -217,6 +217,73 @@ class TestLoadServersAndState:
 
 @pytest.mark.unit
 @pytest.mark.servers
+class TestRegisterServerUrlValidation:
+    """Registration-time SSRF/scheme validation of proxy_pass_url (fail closed)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "http://169.254.169.254/latest/meta-data/",  # cloud metadata literal
+            "http://10.0.0.1:8080/mcp",  # RFC-1918 literal
+            "http://127.0.0.1:8080/mcp",  # loopback literal
+            "ftp://acme.com/mcp",  # disallowed scheme
+            'http://acme.com/";} location /x { proxy_pass http://evil;',  # nginx injection
+        ],
+    )
+    async def test_register_rejects_unsafe_proxy_pass_url(
+        self,
+        server_service: ServerService,
+        sample_server_dict: dict[str, Any],
+        mock_server_repository,
+        bad_url,
+    ):
+        """A malicious proxy_pass_url is rejected before anything is persisted."""
+        from registry.exceptions import UrlValidationError
+
+        mock_server_repository.get.return_value = None
+        payload = {**sample_server_dict, "proxy_pass_url": bad_url}
+
+        with pytest.raises(UrlValidationError):
+            await server_service.register_server(payload)
+
+        mock_server_repository.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_unsafe_proxy_pass_url(
+        self,
+        server_service: ServerService,
+        sample_server_dict: dict[str, Any],
+        mock_server_repository,
+    ):
+        """Editing a server's proxy_pass_url to a metadata target is rejected."""
+        from registry.exceptions import UrlValidationError
+
+        payload = {**sample_server_dict, "proxy_pass_url": "http://169.254.169.254/"}
+
+        with pytest.raises(UrlValidationError):
+            await server_service.update_server(sample_server_dict["path"], payload)
+
+        mock_server_repository.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_without_url_change_is_not_validated(
+        self,
+        server_service: ServerService,
+        mock_server_repository,
+    ):
+        """Health/tool updates that omit proxy_pass_url are unaffected."""
+        mock_server_repository.update.return_value = True
+        mock_server_repository.get_state.return_value = False
+
+        # No proxy_pass_url in the payload -> no validation, update proceeds.
+        result = await server_service.update_server(
+            "/test-server", {"health_status": "healthy", "num_tools": 3}
+        )
+        assert result is True
+        mock_server_repository.update.assert_called_once()
+
+
 class TestRegisterServer:
     """Test server registration functionality."""
 

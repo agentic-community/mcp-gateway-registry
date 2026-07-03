@@ -436,6 +436,47 @@ class Settings(BaseSettings):
         description="GitHub API base URL for App token exchange (for GHES: https://github.mycompany.com/api/v3)",
     )
 
+    # SSRF guard allowlist for server/agent targets that legitimately live on
+    # private networks (e.g. self-hosted MCP servers behind Docker service DNS
+    # or an internal VPC). The URL guard fails closed by default: any host that
+    # resolves to a private/loopback/link-local/metadata address is rejected at
+    # registration and refused at fetch time. Operators who proxy to internal
+    # backends must explicitly opt those targets in here. The cloud metadata
+    # endpoint (169.254.169.254) can never be allowlisted.
+    ssrf_allowed_hosts: str = Field(
+        default="",
+        description=(
+            "Comma-separated hostnames (or literal IPs) that may resolve to "
+            "private addresses and still be accepted by the SSRF guard for "
+            "proxy_pass_url / agent URLs (e.g. 'mcpgw,host.docker.internal,"
+            "localhost'). Keep this list tight. The cloud metadata endpoint is "
+            "never permitted."
+        ),
+    )
+    ssrf_allowed_cidrs: str = Field(
+        default="",
+        description=(
+            "Comma-separated CIDR ranges whose addresses the SSRF guard accepts "
+            "for proxy_pass_url / agent URLs even though they are private (e.g. "
+            "'10.0.0.0/8,192.168.0.0/16'). Use for internal MCP-server subnets. "
+            "The cloud metadata address 169.254.169.254 is never permitted."
+        ),
+    )
+    nginx_config_validation_required: bool = Field(
+        default=False,
+        description=(
+            "Fail closed when a generated nginx config cannot be validated with "
+            "'nginx -t' because the nginx binary is absent from this process. "
+            "Leave False for single-container and local-dev deployments where the "
+            "registry and nginx share a process/image (a missing binary means "
+            "there is no nginx to cold-start). Set True for split topologies where "
+            "nginx runs in a separate container/sidecar sharing the config volume: "
+            "the registry cannot run 'nginx -t' itself, so an unvalidated config "
+            "must NOT be promoted (it would poison the sidecar's next cold start). "
+            "When True and the binary is absent, the last-known-good config is kept."
+        ),
+    )
+
     # Update check (GitHub Releases API for newer registry versions)
     update_check_enabled: bool = Field(
         default=True,
