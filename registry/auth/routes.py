@@ -118,7 +118,7 @@ async def login_form(request: Request, error: str | None = None):
     """Show login form with OAuth2 providers"""
     oauth_providers = await get_oauth2_providers()
     return templates.TemplateResponse(
-        "login.html", {"request": request, "error": error, "oauth_providers": oauth_providers}
+        request, "login.html", {"error": error, "oauth_providers": oauth_providers}
     )
 
 

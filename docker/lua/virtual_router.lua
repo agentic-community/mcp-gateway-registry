@@ -65,6 +65,28 @@ local SUPPORTED_PROTOCOL_VERSIONS = {
 local LATEST_PROTOCOL_VERSION = "2025-11-25"
 
 
+-- Resolve the authenticated user identity for the current request.
+-- Used both when creating sessions (_handle_initialize) and when enforcing
+-- session ownership, so the values compared are always the same.
+-- Returns nil when no real identity is present: nginx auth_request_set yields
+-- an EMPTY STRING (not nil) for an absent upstream X-User header, and in Lua
+-- "" is truthy, so a plain `a or b or "anonymous"` chain would lock onto the
+-- empty string and never fall through. We normalize "" to nil at each step so
+-- callers can fail closed instead of treating an unauthenticated/identity-less
+-- request as a shared "anonymous" owner whose sessions everyone could hijack.
+local function _auth_user_id()
+    local u = ngx.var.auth_user
+    if u and u ~= "" then
+        return u
+    end
+    u = ngx.var.auth_username
+    if u and u ~= "" then
+        return u
+    end
+    return nil
+end
+
+
 -- Ensure inputSchema has "type": "object" as required by MCP spec
 local function _ensure_mcp_schema(schema)
     if not schema or type(schema) ~= "table" then
@@ -211,6 +233,10 @@ end
 
 -- Get or create a backend session for a given client session + backend location.
 -- Two-tier cache: L1 shared dict (30s) -> L2 MongoDB -> initialize backend
+-- client_session_id is always a gate-validated ^vs-[0-9a-f]+$ id here (route()
+-- allowlists it before any method that reaches this function), and
+-- backend_location comes from the trusted mapping file -- so session_key has no
+-- attacker-injectable query/path metacharacters.
 local function _get_backend_session(client_session_id, backend_location, server_id)
     local session_key = client_session_id .. ":" .. backend_location
     local cache_key = "bsess:" .. session_key
@@ -221,10 +247,18 @@ local function _get_backend_session(client_session_id, backend_location, server_
         return session_id
     end
 
-    -- L2: MongoDB via internal FastAPI API
-    local res = ngx.location.capture("/_internal/sessions/backend/" .. session_key, {
-        method = ngx.HTTP_GET,
-    })
+    -- L2: MongoDB via internal FastAPI API, bound to the authenticated owner
+    -- so a backend session belonging to a different user is never returned
+    -- (defense in depth behind the client-session gate). Escape the session-id
+    -- segment as well -- a no-op for valid vs-<hex> ids, but it keeps the
+    -- subrequest URI safe regardless of how the key was built.
+    local owner = _auth_user_id()
+    local owner_qs = owner and ("?user_id=" .. ngx.escape_uri(owner)) or ""
+    local backend_path = ngx.escape_uri(client_session_id) .. ":" .. backend_location
+    local res = ngx.location.capture(
+        "/_internal/sessions/backend/" .. backend_path .. owner_qs, {
+            method = ngx.HTTP_GET,
+        })
     if res and res.status == 200 then
         local ok, data = pcall(cjson.decode, res.body)
         if ok and data.backend_session_id then
@@ -239,15 +273,17 @@ local function _get_backend_session(client_session_id, backend_location, server_
     session_id = _initialize_backend(backend_location)
 
     if session_id then
-        -- Store in L2 (MongoDB)
-        local user_id = ngx.var.auth_user or ngx.var.auth_username or "anonymous"
+        -- Store in L2 (MongoDB). Store the resolved owner ("anonymous" only as
+        -- a last-resort audit label; the gate rejects identity-less requests
+        -- before any backend session is created).
+        local user_id = owner or "anonymous"
         local store_body = cjson.encode({
             backend_session_id = session_id,
             client_session_id = client_session_id,
             user_id = user_id,
             virtual_server_path = "/virtual/" .. server_id,
         })
-        ngx.location.capture("/_internal/sessions/backend/" .. session_key, {
+        ngx.location.capture("/_internal/sessions/backend/" .. backend_path, {
             method = ngx.HTTP_PUT,
             body = store_body,
         })
@@ -264,11 +300,18 @@ local function _invalidate_backend_session(client_session_id, backend_location)
     local session_key = client_session_id .. ":" .. backend_location
     local cache_key = "bsess:" .. session_key
 
-    -- Remove from L1
+    -- Remove from L1 (uses the raw key, matching how _get_backend_session
+    -- populated the shared dict)
     session_cache:delete(cache_key)
 
-    -- Remove from L2
-    ngx.location.capture("/_internal/sessions/backend/" .. session_key, {
+    -- Remove from L2, scoped to the authenticated owner (symmetric with the GET
+    -- lookup). Escape the session-id segment in the subrequest URI for the same
+    -- defense-in-depth reason as the GET/PUT paths (a no-op for valid vs-<hex>
+    -- ids, which is all that reaches here past the route() allowlist).
+    local backend_path = ngx.escape_uri(client_session_id) .. ":" .. backend_location
+    local owner = _auth_user_id()
+    local owner_qs = owner and ("?user_id=" .. ngx.escape_uri(owner)) or ""
+    ngx.location.capture("/_internal/sessions/backend/" .. backend_path .. owner_qs, {
         method = ngx.HTTP_DELETE,
     })
 end
@@ -647,24 +690,44 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
 end
 
 
--- Validate a client session ID against MongoDB (L2).
--- Uses L1 cache to avoid repeated DB lookups.
--- Returns true if valid, false otherwise.
-local function _validate_client_session(client_session_id)
+-- Validate a client session ID against MongoDB (L2), bound to the caller's
+-- authenticated identity AND the virtual server the session was minted for.
+-- A session that exists but belongs to a different user is rejected (returns
+-- false), preventing session hijacking via a guessed or stolen Mcp-Session-Id
+-- header; a session minted for a different virtual server is likewise rejected,
+-- so it cannot be replayed across virtual servers.
+-- Uses L1 cache to avoid repeated DB lookups; the cache key includes both the
+-- user and the virtual server path so a cached "valid" result can never
+-- authorize a different user or a different virtual server.
+-- Returns true if valid AND owned by the caller for this server, false otherwise.
+local function _validate_client_session(client_session_id, user_id, virtual_server_path)
     if not client_session_id or client_session_id == "" then
         return false
     end
 
-    -- L1: fast path check (cache valid sessions for SESSION_CACHE_TTL)
-    local cache_key = "csess_valid:" .. client_session_id
+    -- L1: fast path check (cache valid sessions for SESSION_CACHE_TTL).
+    -- Key on user_id and virtual_server_path so a session validated for one
+    -- user/server is never reused to authorize a different one from the shared
+    -- per-worker cache.
+    local cache_key = "csess_valid:" .. user_id .. ":"
+        .. (virtual_server_path or "") .. ":" .. client_session_id
     local cached = session_cache:get(cache_key)
     if cached == "1" then
         return true
     end
 
-    -- L2: validate via internal FastAPI endpoint
+    -- L2: validate via internal FastAPI endpoint, passing the authenticated
+    -- user and virtual server path so the registry enforces both bindings in
+    -- the DB query.
+    -- Escape the session ID into the path segment as defense in depth -- the
+    -- caller (route()) already allowlists it to ^vs-[0-9a-f]+$, but escaping
+    -- here means this function is safe even if a future caller forgets to.
+    local query = "?user_id=" .. ngx.escape_uri(user_id)
+    if virtual_server_path then
+        query = query .. "&virtual_server_path=" .. ngx.escape_uri(virtual_server_path)
+    end
     local res = ngx.location.capture(
-        "/_internal/sessions/client/" .. client_session_id,
+        "/_internal/sessions/client/" .. ngx.escape_uri(client_session_id) .. query,
         { method = ngx.HTTP_GET }
     )
 
@@ -687,9 +750,19 @@ local function _negotiate_protocol_version(client_version)
 end
 
 
--- Handle initialize method - create client session, return MCP capabilities
+-- Handle initialize method - create client session, return MCP capabilities.
+-- Returns (response_string, err) where err is nil on success, or one of:
+--   "unauthenticated" -- no authenticated identity; route() emits 401 (a
+--       session must be owned by a concrete user, so we refuse to mint one).
+--   "create_failed"   -- the client session could not be created; route()
+--       emits an error instead of a misleading 200 with no Mcp-Session-Id
+--       (which would make the client 400 on its very next request).
 local function _handle_initialize(request_id, server_id, params)
-    local user_id = ngx.var.auth_user or ngx.var.auth_username or "anonymous"
+    local user_id = _auth_user_id()
+    if not user_id then
+        ngx.log(ngx.WARN, "initialize rejected: no authenticated user for server=", server_id)
+        return nil, "unauthenticated"
+    end
     local virtual_path = "/virtual/" .. server_id
 
     -- Create client session in MongoDB via internal API
@@ -710,14 +783,19 @@ local function _handle_initialize(request_id, server_id, params)
         end
     end
 
-    -- Set Mcp-Session-Id response header so client includes it in future requests
-    if client_session_id then
-        ngx.header["Mcp-Session-Id"] = client_session_id
-        ngx.log(ngx.INFO, "Created client session ", client_session_id,
-            " for user=", user_id, " server=", server_id)
-    else
-        ngx.log(ngx.WARN, "Failed to create client session for server=", server_id)
+    -- Fail loudly if the session could not be created: returning a successful
+    -- initialize with no Mcp-Session-Id just defers the failure to the client's
+    -- next request (which 400s on the missing session).
+    if not client_session_id then
+        ngx.log(ngx.ERR, "Failed to create client session for server=", server_id,
+            " status=", res and res.status or "nil")
+        return nil, "create_failed"
     end
+
+    -- Set Mcp-Session-Id response header so client includes it in future requests
+    ngx.header["Mcp-Session-Id"] = client_session_id
+    ngx.log(ngx.INFO, "Created client session ", client_session_id,
+        " for user=", user_id, " server=", server_id)
 
     -- Negotiate protocol version with client
     local client_version = params and params.protocolVersion
@@ -948,11 +1026,26 @@ function _M.route()
         return
     end
 
-    -- Handle initialize: generate a client session and return capabilities
+    -- Handle initialize: generate a client session and return capabilities.
+    -- A session must be owned by a concrete user; refuse to mint one for a
+    -- request with no authenticated identity, and surface a session-creation
+    -- failure as an error rather than a misleading 200 with no Mcp-Session-Id.
     if method == "initialize" then
-        ngx.status = 200
+        local init_response, init_err = _handle_initialize(request_id, server_id, params)
         ngx.header["Content-Type"] = "application/json"
-        ngx.say(_handle_initialize(request_id, server_id, params))
+        if init_err == "unauthenticated" then
+            ngx.status = 401
+            ngx.say(_jsonrpc_error(request_id, -32600,
+                "Authenticated user identity required."))
+            return
+        elseif init_err or not init_response then
+            ngx.status = 503
+            ngx.say(_jsonrpc_error(request_id, -32603,
+                "Failed to create session. Please retry."))
+            return
+        end
+        ngx.status = 200
+        ngx.say(init_response)
         return
     end
 
@@ -967,10 +1060,46 @@ function _M.route()
     -- Get client session ID from request header (set during initialize)
     local client_session_id = ngx.var.http_mcp_session_id
 
+    -- Resolve the authenticated identity. Fail closed if absent: every session
+    -- is owned by a concrete user, so an identity-less request can never own
+    -- one. This also avoids treating a missing identity as a shared
+    -- "anonymous" owner whose sessions any other identity-less caller could
+    -- reach (auth_request normally blocks unauthenticated callers upstream,
+    -- but we do not depend on that single layer for session ownership).
+    local auth_user = _auth_user_id()
+    if not auth_user then
+        ngx.status = 401
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say(_jsonrpc_error(request_id, -32600,
+            "Authenticated user identity required."))
+        return
+    end
+
+    -- Reject any session ID that is not in the server-minted format before it
+    -- reaches an internal subrequest. The ID is attacker-controlled (it comes
+    -- straight from the Mcp-Session-Id header) and is interpolated into the
+    -- /_internal/sessions/ subrequest URI; without this allowlist a crafted
+    -- value like "vs-x?user_id=victim&" could inject an earlier user_id query
+    -- param and shadow the owner check that the ownership binding relies on.
+    -- Server-minted IDs are always "vs-" + uuid4 hex (see create_client_session),
+    -- so this strict pattern rejects every injection vector with no escaping
+    -- reasoning required.
+    if not client_session_id or not string.match(client_session_id, "^vs%-[0-9a-f]+$") then
+        ngx.status = 400
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say(_jsonrpc_error(request_id, -32600,
+            "Missing or invalid Mcp-Session-Id. Send an initialize request first."))
+        return
+    end
+
     -- Validate client session: per MCP spec, servers that require a session ID
     -- SHOULD respond with 400 Bad Request to requests without a valid Mcp-Session-Id.
     -- Initialize and ping are exempt; notifications already handled above with 202.
-    if not _validate_client_session(client_session_id) then
+    -- The session must also belong to the authenticated caller AND have been
+    -- minted for this virtual server -- presenting another user's session ID,
+    -- or replaying a session from a different virtual server, is rejected here
+    -- before any session context is loaded or routed.
+    if not _validate_client_session(client_session_id, auth_user, "/virtual/" .. server_id) then
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"
         ngx.say(_jsonrpc_error(request_id, -32600,

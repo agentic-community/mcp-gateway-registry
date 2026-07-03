@@ -56,6 +56,35 @@ async def user_can_access_server(
     )
 
 
+def user_can_access_server_from_doc(
+    path: str,
+    server_name: str,
+    user_context: dict,
+) -> bool:
+    """Visibility check for an MCP server whose existence is already confirmed.
+
+    Same access rules as :func:`user_can_access_server` but for callers that
+    have already fetched the server (e.g. the ANS status endpoints), so it
+    performs the ``accessible_servers`` comparison purely in memory instead of
+    re-fetching the server through ``server_service`` just to re-confirm it
+    exists. The ``"*"`` wildcard grants access here because the caller has
+    proven the server exists by holding its document.
+    """
+    if user_context.get("is_admin"):
+        return True
+
+    accessible_servers = user_context.get("accessible_servers") or []
+    if "all" in accessible_servers or "*" in accessible_servers:
+        return True
+    if not accessible_servers:
+        return False
+
+    technical_name = path.strip("/")
+    return technical_name in accessible_servers or (
+        bool(server_name) and server_name in accessible_servers
+    )
+
+
 async def user_can_access_agent(
     agent_path: str,
     user_context: dict,

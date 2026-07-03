@@ -4192,7 +4192,11 @@ def cmd_group_create(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        result = client.create_keycloak_group(name=args.name, description=args.description)
+        result = client.create_keycloak_group(
+            name=args.name,
+            description=args.description,
+            create_in_idp=getattr(args, "idp", False),
+        )
 
         logger.info(f"IAM group created successfully: {result.name}")
         print(f"\nGroup: {result.name}")
@@ -6878,6 +6882,11 @@ Examples:
     group_create_parser = subparsers.add_parser("group-create", help="Create a new IAM group")
     group_create_parser.add_argument("--name", required=True, help="Group name")
     group_create_parser.add_argument("--description", help="Group description")
+    group_create_parser.add_argument(
+        "--idp",
+        action="store_true",
+        help="Also create the group in the configured IdP (Keycloak/Entra), not just the local scopes store",
+    )
 
     # Delete IAM group command
     group_delete_parser = subparsers.add_parser("group-delete", help="Delete an IAM group")

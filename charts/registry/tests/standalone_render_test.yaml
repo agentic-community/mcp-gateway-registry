@@ -17,10 +17,20 @@ tests:
       - failedTemplate:
           errorPattern: "secretKey.*required for standalone deployment"
 
-  - it: renders cleanly when app.secretKey is supplied
+  - it: fails without a marker secret (real validation, not nil-deref)
     set:
       app:
         secretKey: "test-key-not-for-prod"
+    asserts:
+      - failedTemplate:
+          errorPattern: "egressAuth.markerSecret is required for standalone deployment"
+
+  - it: renders cleanly when app.secretKey and markerSecret are supplied
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
     # If any template nil-derefs on a missing global.* key, helm fails
     # before reaching the asserts and the test fails. Multiple
     # per-template asserts below give the regression locality, not just
