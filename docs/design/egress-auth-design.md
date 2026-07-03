@@ -7,7 +7,7 @@ How the MCP Gateway lets a user reach an authentication-protected ("auth-based")
 
 ---
 
-## First principle: client auth headers are INGRESS-only (issue #1266)
+## First principle: client auth headers are INGRESS-only
 
 Everything below rests on one rule. Every auth header a client sends (`Authorization`, `X-Authorization`, `Cookie`) is an **ingress** credential: it authenticates the caller **to the gateway** and is **stripped on the egress hop** — it is never forwarded to an upstream MCP server. A coding assistant only ever holds its gateway ingress token; it never holds an upstream credential.
 
@@ -148,7 +148,7 @@ sequenceDiagram
 
 What each hop guarantees:
 
-- **`/validate`** binds the verified `subject` (user identity) into a signed `X-Internal-Token`. `mcp_proxy` reads identity from these verified claims, not from forgeable inbound headers (internal-hop hardening, #1260/#1262).
+- **`/validate`** binds the verified `subject` (user identity) into a signed `X-Internal-Token`. `mcp_proxy` reads identity from these verified claims, not from forgeable inbound headers (internal-hop hardening).
 - **`/internal/egress-token`** (registry) is guarded by internal auth, re-checks the server is `egress_auth_mode == oauth_user`, and returns the access token only (never the refresh token). Lazy refresh + cross-replica single-flight happen here.
 - **Injection** happens last in `mcp_proxy`: the user's own gateway credentials/identity headers are stripped and replaced with `Authorization: Bearer <vaulted third-party token>`. The token never transits the coding assistant.
 
@@ -173,7 +173,7 @@ The gateway **owns the authentication to every third-party MCP server**, which t
 
 ## The internal relay: airegistry-tools -> registry API (sequence)
 
-The one exception to "client auth headers are stripped on egress" (issue #1266). `airegistry-tools` is the gateway's own bundled registry-tools MCP server (the `mcpgw` service). It is same-trust-domain, so a hardcoded constant (`_INTERNAL_INGRESS_RELAY_SERVERS = {"airegistry-tools"}` in `auth_server/server.py`) relays the ingress `Authorization` to it (never `X-Authorization`/`Cookie`). The mcpgw server then needs to call the **registry API** (list/search servers, agents, skills) — and it chooses which credential to present for that call, NOT the relayed one by default.
+The one exception to "client auth headers are stripped on egress." `airegistry-tools` is the gateway's own bundled registry-tools MCP server (the `mcpgw` service). It is same-trust-domain, so a hardcoded constant (`_INTERNAL_INGRESS_RELAY_SERVERS = {"airegistry-tools"}` in `auth_server/server.py`) relays the ingress `Authorization` to it (never `X-Authorization`/`Cookie`). The mcpgw server then needs to call the **registry API** (list/search servers, agents, skills) — and it chooses which credential to present for that call, NOT the relayed one by default.
 
 Key point: the relayed ingress `Authorization` lets mcpgw's FastMCP front door admit the MCP call when it is configured to validate a bearer (`OIDC_ENABLED=true`). For its OUTBOUND registry API calls, mcpgw's `_get_registry_headers` picks a credential by priority — static `REGISTRY_API_TOKEN`, else its own M2M token, else (fallback) the caller's bearer. So in the common deployment mcpgw reaches the registry as **itself** (M2M), not by forwarding the user's token again.
 
@@ -225,7 +225,7 @@ What this shows:
 | **`vault-oauth` (3LO)** | Yes | User completes provider OAuth (3LO) out of band; the gateway vaults the per-user token and injects it. This document's main flow. | **Implemented** (`egress_auth_mode = "oauth_user"`) |
 | **`token-exchange` (OBO)** | No | For same-trust-domain backends, the gateway exchanges the user's ingress token for a backend-audience token (RFC 8693 / Entra jwt-bearer). `sub` preserved; nothing stored. | **Placeholder — not implemented** |
 | **`vault-pat` (PAT)** | Yes | A per-user static Personal Access Token / API key is stored in the vault and injected. No OAuth dance. | **Placeholder — not implemented** |
-| **custom-header** | Yes | A per-user credential the operator specifies by header **name + value**, stored in the vault and injected verbatim on egress. For backends with a bespoke/out-of-band auth scheme. Generalizes `vault-pat`. | **Placeholder — not implemented (planned with PAT, #1268)** |
+| **custom-header** | Yes | A per-user credential the operator specifies by header **name + value**, stored in the vault and injected verbatim on egress. For backends with a bespoke/out-of-band auth scheme. Generalizes `vault-pat`. | **Placeholder — not implemented (planned with PAT)** |
 
 > **Internal relay (not a configurable mode).** The built-in `airegistry-tools` server receives the relayed ingress `Authorization` via a hardcoded constant (see "First principle" above). It is not an `egress_auth_mode` value and is not selectable per server — external servers that need an upstream credential use the vault modes above.
 
@@ -245,9 +245,9 @@ The flow described throughout this document. `egress_auth_mode = "oauth_user"` o
 
 > Not yet implemented. Design intent: for backends that only accept a static Personal Access Token / API key, store a per-user PAT in the same vault (keyed by the same 4-tuple) and inject it on egress, skipping the OAuth dance. Admin seed-on-behalf is planned (an admin may seed a PAT for another user, audit-logged). Same "token never on the laptop" property as 3LO.
 
-### custom-header — placeholder (planned with PAT, #1268)
+### custom-header — placeholder (planned with PAT)
 
-> Not yet implemented. Design intent: the replacement for "I did the auth out of band and just want to send a token to this upstream." The operator specifies the header **name** and **value** in the registry UI/API; the value is stored in the same secrets vault (keyed by the 4-tuple) and injected verbatim under that header name on egress — like `vault-pat`, but for a backend whose scheme is a non-`Authorization` header or a bespoke format. This is the sanctioned way to reach a custom-auth upstream now that client-header relay is ingress-only; it is expected to land as part of the `vault-pat` (#1268) work, not as a relay feature.
+> Not yet implemented. Design intent: the replacement for "I did the auth out of band and just want to send a token to this upstream." The operator specifies the header **name** and **value** in the registry UI/API; the value is stored in the same secrets vault (keyed by the 4-tuple) and injected verbatim under that header name on egress — like `vault-pat`, but for a backend whose scheme is a non-`Authorization` header or a bespoke format. This is the sanctioned way to reach a custom-auth upstream now that client-header relay is ingress-only; it is expected to land as part of the `vault-pat` work, not as a relay feature.
 
 ---
 
