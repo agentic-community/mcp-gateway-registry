@@ -59,6 +59,19 @@ _DEFAULT_TIMEOUT_SECONDS: float = 15.0
 # The cloud metadata endpoint can never be reached, regardless of allowlists.
 _CLOUD_METADATA_IPS: frozenset[str] = frozenset({"169.254.169.254", "fd00:ec2::254"})
 
+# The gateway's own bundled registry-tools MCP server (airegistry-tools ->
+# mcpgw-server), reached over private container/service DNS (Docker Compose
+# service name, ECS Service Connect alias, Kubernetes service name). This is a
+# first-party component of the gateway itself, not an operator-supplied target,
+# so the SSRF guard trusts it by default -- an operator upgrading to a build with
+# the SSRF guard should not have to hand-configure SSRF_ALLOWED_HOSTS just to
+# keep the built-in registry-tools server healthy. Operator-supplied
+# ssrf_allowed_hosts are UNIONED with this set, never replace it. The cloud
+# metadata endpoint is still never reachable. (The demo servers -- currenttime,
+# realserverfaketools -- are opt-in via enable_demo_servers and are NOT trusted
+# by default; operators who enable them add them to SSRF_ALLOWED_HOSTS.)
+_BUILTIN_PROXY_ALLOWED_HOSTS: frozenset[str] = frozenset({"mcpgw-server"})
+
 # Nginx metacharacters that must never appear in a proxy_pass_url. A valid URL
 # never legitimately contains these; their presence indicates an attempt to
 # break out of an nginx directive/string context (config injection).
@@ -142,11 +155,13 @@ def _proxy_allowlist() -> _Allowlist:
     """Return the server/agent target bypass allowlist.
 
     Reads ``settings.ssrf_allowed_hosts`` and ``settings.ssrf_allowed_cidrs`` so
-    operators can proxy to internal MCP servers. Cached because settings are
-    immutable per-process.
+    operators can proxy to internal MCP servers. The bundled first-party MCP
+    server hostnames (_BUILTIN_PROXY_ALLOWED_HOSTS) are always unioned in so an
+    upgrade to an SSRF-guarded build keeps them healthy with zero configuration.
+    Cached because settings are immutable per-process.
     """
     return _Allowlist(
-        hosts=_parse_hosts(settings.ssrf_allowed_hosts),
+        hosts=_BUILTIN_PROXY_ALLOWED_HOSTS | _parse_hosts(settings.ssrf_allowed_hosts),
         cidrs=_parse_cidrs(settings.ssrf_allowed_cidrs),
     )
 
