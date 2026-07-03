@@ -424,6 +424,10 @@ module "ecs_service_auth" {
           value = tostring(var.mcp_proxy_max_body_bytes)
         },
         {
+          name  = "MCP_PROXY_TIMEOUT"
+          value = tostring(var.mcp_proxy_timeout)
+        },
+        {
           name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
           value = var.tool_filter_audit_log_level
         },
@@ -458,6 +462,18 @@ module "ecs_service_auth" {
         {
           name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
           value = "grpc"
+        },
+        # Per-user egress credential vault: auth-server only needs the feature
+        # flag and the internal vend URL (it does NOT touch the secret store).
+        # AUTH_SERVER_NGINX_MARKER_SECRET is injected via secrets/valueFrom below
+        # (required unconditionally, not just for egress).
+        {
+          name  = "EGRESS_AUTH_ENABLED"
+          value = tostring(var.egress_auth_enabled)
+        },
+        {
+          name  = "EGRESS_REGISTRY_INTERNAL_URL"
+          value = var.egress_registry_internal_url
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -479,6 +495,10 @@ module "ecs_service_auth" {
           {
             name      = "SECRET_KEY"
             valueFrom = aws_secretsmanager_secret.secret_key.arn
+          },
+          {
+            name      = "AUTH_SERVER_NGINX_MARKER_SECRET"
+            valueFrom = aws_secretsmanager_secret.nginx_marker_secret.arn
           },
           {
             name      = "KEYCLOAK_CLIENT_SECRET"
@@ -719,6 +739,11 @@ module "ecs_service_registry" {
     # Cognito read-only access for the registry IAM management UI (list groups/users)
     var.cognito_enabled ? {
       CognitoIamRead = aws_iam_policy.cognito_iam_read[0].arn
+    } : {},
+    # Per-user egress credential vault: runtime CRUD on per-user secrets under
+    # the egress path prefix (+ CMK KMS when configured). Registry only.
+    var.egress_auth_enabled && var.egress_secret_store_backend == "secrets-manager" ? {
+      EgressVaultAccess = aws_iam_policy.ecs_egress_vault_access[0].arn
     } : {},
     # Issue #1122: per-task ADOT sidecar needs AMP remote-write permission
     var.enable_observability ? {
@@ -1487,6 +1512,39 @@ module "ecs_service_registry" {
           name  = "GITHUB_API_BASE_URL"
           value = var.github_api_base_url
         },
+        # Per-user egress credential vault (third-party OBO). Registry owns the
+        # full set (secret store + OAuth engine). secrets-manager is the natural
+        # backend on ECS; the task role grants are added in iam.tf when enabled.
+        {
+          name  = "EGRESS_AUTH_ENABLED"
+          value = tostring(var.egress_auth_enabled)
+        },
+        {
+          name  = "SECRET_STORE_BACKEND"
+          value = var.egress_secret_store_backend
+        },
+        {
+          name  = "EGRESS_OAUTH_CALLBACK_BASE_URL"
+          value = var.egress_oauth_callback_base_url
+        },
+        {
+          name  = "EGRESS_TOKEN_REFRESH_SKEW_SECONDS"
+          value = tostring(var.egress_token_refresh_skew_seconds)
+        },
+        {
+          name  = "EGRESS_STATE_TTL_SECONDS"
+          value = tostring(var.egress_state_ttl_seconds)
+        },
+        # AUTH_SERVER_NGINX_MARKER_SECRET is injected via secrets/valueFrom below
+        # (required unconditionally, not just for egress).
+        {
+          name  = "SECRETS_MANAGER_KMS_KEY_ID"
+          value = var.egress_secrets_manager_kms_key_id
+        },
+        {
+          name  = "SECRETS_MANAGER_PATH_PREFIX"
+          value = var.egress_secrets_manager_path_prefix
+        },
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
         # Only emitted when var.mongodb_connection_string is non-empty and a
@@ -1507,6 +1565,10 @@ module "ecs_service_registry" {
           {
             name      = "SECRET_KEY"
             valueFrom = aws_secretsmanager_secret.secret_key.arn
+          },
+          {
+            name      = "AUTH_SERVER_NGINX_MARKER_SECRET"
+            valueFrom = aws_secretsmanager_secret.nginx_marker_secret.arn
           },
           {
             name      = "KEYCLOAK_CLIENT_SECRET"

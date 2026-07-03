@@ -13,6 +13,13 @@ image:
   tag: "" # Overrides global.image.tag when set
   pullPolicy: "" # Overrides global.image.pullPolicy when set
 # Application configuration
+# ServiceAccount the auth-server pod runs as. Created by default so roles can be
+# attached to a stable identity. Set create=false + name to bring your own.
+serviceAccount:
+  create: true
+  name: ""  # defaults to app.name ("auth-server") when empty
+  annotations: {}
+
 app:
   name: auth-server
   replicas: 1
@@ -59,6 +66,7 @@ app:
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
   mcpProxyMaxBodyBytes: "2097152" # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
+  mcpProxyTimeout: "30" # Timeout (seconds) for the proxy hop's upstream MCP request; min 1. Values >60s also need nginx proxy_read_timeout raised
   toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
   internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
   internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
@@ -118,8 +126,38 @@ cognito:
   userPoolId: "" # Cognito User Pool ID
   clientId: ""
   clientSecret: ""
-  domain: "" # Optional: custom Cognito domain
-  region: "us-east-1" # AWS region for the User Pool
+  domain: ""  # Optional: custom Cognito domain
+  region: "us-east-1"  # AWS region for the User Pool
+
+# Per-user egress credential vault (third-party OBO support).
+# The auth-server only needs the feature flag + the internal vend URL (it calls
+# the registry's /_egress_internal vend endpoint) + the nginx marker secret; it
+# does NOT touch the secret store. Renders a discrete `auth-server-egress-config`
+# ConfigMap consumed via envFrom; the marker secret rides the chart env secret
+# (standalone) or the shared-secret (stack). Keep `enabled` in sync with the
+# registry subchart.
+egressAuth:
+  enabled: false
+  # URL of the registry's internal vend endpoint (cluster-internal). MUST match
+  # the registry Service name + port (charts/registry: service.port=8000, which
+  # targets the in-pod nginx). The old default of :8080 is the registry pod's
+  # INTERNAL nginx listen port, NOT the Service port -- it is unreachable
+  # cross-pod, so the egress token vend silently fails and the gateway forwards
+  # to the upstream without the user's vaulted token (upstream 400/401). Keep
+  # this aligned with mcpgw.registryUrl (also http://registry:8000).
+  registryInternalUrl: "http://registry:8000"
+  # Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback).
+  # The auth-server imports registry.core.config, whose startup validation
+  # REQUIRES this when egressAuth.enabled. Leave empty to derive it from
+  # global.domain + the ingress routing mode (see templates/configmap-egress.yaml);
+  # set it only to point at a custom public front door.
+  oauthCallbackBaseUrl: ""
+  # nginx marker secret. REQUIRED for standalone deployment (chart render fails
+  # if empty) -- it guards all mcp-proxy token minting and the app requires it
+  # at startup. Set a strong random value, identical to the registry's. In the
+  # stack it is auto-generated + shared, so leave empty there.
+  markerSecret: ""
+
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false

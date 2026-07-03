@@ -1529,11 +1529,13 @@ async def get_agent_security_scan(
 
     # Authorization: scan results expose security findings for the agent, so
     # restrict to users who can see the agent (admins always can). Without this
-    # a non-admin could read scan results for a private/group agent.
-    if not user_context.get("is_admin"):
-        from ..services.visibility import user_can_access_agent
+    # a non-admin could read scan results for a private/group agent. Reuse the
+    # agent_info we already fetched via the *_from_doc helper so the visibility
+    # check does not trigger a second identical agent lookup.
+    if not user_context["is_admin"]:
+        from ..services.visibility import user_can_access_agent_from_doc
 
-        if not await user_can_access_agent(path, user_context):
+        if not user_can_access_agent_from_doc(agent_info.model_dump(), user_context):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to this agent",

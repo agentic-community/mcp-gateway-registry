@@ -1,0 +1,13 @@
+{
+  "server_name": "Slack MCP",
+  "description": "Slack's hosted MCP server. Uses per-user egress OAuth (3LO): each user connects their own Slack account once, the gateway vaults the user token and injects it on egress. Configure egress OAuth separately after registration via POST /servers/slack/egress-auth (egress_provider=slack).",
+  "path": "/slack",
+  "proxy_pass_url": "https://mcp.slack.com/mcp",
+  "tags": ["slack", "messaging", "egress-oauth"],
+  "auth_scheme": "none",
+  "supported_transports": ["streamable-http"],
+  "status": "active",
+  "provider_organization": "Slack Technologies",
+  "provider_url": "https://slack.com",
+  "visibility": "public"
+}

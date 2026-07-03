@@ -273,6 +273,24 @@ tests:
       - failedTemplate:
           errorPattern: "\"DOCUMENTDB_PASSWORD\" is a reserved variable"
 
+  - it: fails when extraEnv contains a reserved egress name (EGRESS_AUTH_ENABLED)
+    set:
+      extraEnv:
+        - name: EGRESS_AUTH_ENABLED
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"EGRESS_AUTH_ENABLED\" is a reserved variable"
+
+  - it: fails when extraEnv contains the egress marker secret name
+    set:
+      extraEnv:
+        - name: AUTH_SERVER_NGINX_MARKER_SECRET
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"AUTH_SERVER_NGINX_MARKER_SECRET\" is a reserved variable"
+
   - it: fails when extraEnv contains REGISTRY_API_KEYS
     set:
       extraEnv:

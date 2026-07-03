@@ -568,9 +568,9 @@ async def read_root(
             )
 
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "services": service_data,
             "username": user_context["username"],
             "user_context": user_context,  # Pass full user context to template
@@ -2223,9 +2223,9 @@ async def edit_server_form(
             )
 
     return templates.TemplateResponse(
+        request,
         "edit_server.html",
         {
-            "request": request,
             "server": server_info,
             "username": user_context["username"],
             "user_context": user_context,
@@ -2595,9 +2595,9 @@ async def token_generation_page(
 ):
     """Show token generation page for authenticated users."""
     return templates.TemplateResponse(
+        request,
         "token_generation.html",
         {
-            "request": request,
             "username": user_context["username"],
             "user_context": user_context,
             "user_scopes": user_context["scopes"],
@@ -5723,6 +5723,11 @@ async def get_server_connect_config(
         "oauth_client_id": oauth_client_id,
         "oauth_callback_port": callback_port,
         "append_mcp_path": server_info.get("append_mcp_path"),
+        # Per-user egress credential vault mode. When "oauth_user", the gateway
+        # injects the user's vaulted upstream token on egress, so the Connect
+        # config must NOT emit a server Authorization/API-key header (the client
+        # sends none; a placeholder would be forwarded verbatim and break it).
+        "egress_auth_mode": server_info.get("egress_auth_mode", "none"),
         "decrypt_failures": decrypt_failures,
     }
 

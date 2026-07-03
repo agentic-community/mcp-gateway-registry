@@ -91,7 +91,8 @@ output "service_discovery_namespace_hosted_zone_id" {
 output "secret_arns" {
   description = "ARNs of MCP Gateway Registry secrets"
   value = {
-    secret_key = aws_secretsmanager_secret.secret_key.arn
+    secret_key          = aws_secretsmanager_secret.secret_key.arn
+    nginx_marker_secret = aws_secretsmanager_secret.nginx_marker_secret.arn
   }
   sensitive = false
 }

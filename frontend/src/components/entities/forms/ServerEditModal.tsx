@@ -34,6 +34,13 @@ export interface ServerEditForm {
   deployment: 'remote' | 'local';
   local_runtime: LocalRuntimeFormData;
   custom_headers: Array<{ name: string; value: string }>;
+  // Per-user egress credential vault (admin config). egress_provider empty == off.
+  egress_provider: string;
+  egress_client_id: string;
+  egress_client_secret: string; // write-only; blank on edit keeps the stored one
+  egress_scopes: string; // comma/space separated
+  egress_custom_authorize_url: string;
+  egress_custom_token_url: string;
 }
 
 interface ServerEditModalProps {
@@ -42,6 +49,8 @@ interface ServerEditModalProps {
   form: ServerEditForm;
   setForm: React.Dispatch<React.SetStateAction<ServerEditForm>>;
   loading: boolean;
+  /** Whether the per-user egress credential vault feature is enabled (gates the egress section). */
+  egressEnabled: boolean;
   onSave: () => Promise<void> | void;
   onClose: () => void;
 }
@@ -56,6 +65,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
   form,
   setForm,
   loading,
+  egressEnabled,
   onSave,
   onClose,
 }) => {
@@ -200,6 +210,117 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                 setForm((prev) => ({ ...prev, auth_header_name: v }))
               }
             />
+          )}
+
+          {/* Per-user egress credential vault (admin config) */}
+          {egressEnabled && form.deployment !== 'local' && (
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+                Per-User Egress Auth (OAuth)
+              </h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                Let each user connect their own third-party account (GitHub, Slack, …). The
+                gateway injects the user&apos;s token on egress. Leave provider blank to disable.
+                Register this callback URL in your OAuth app:{' '}
+                <code className="text-purple-600 dark:text-purple-400">
+                  {`${window.location.origin}/oauth2/egress/callback`}
+                </code>
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className={LABEL}>Provider</label>
+                  <select
+                    value={form.egress_provider}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, egress_provider: e.target.value }))
+                    }
+                    className={FIELD}
+                  >
+                    <option value="">Disabled</option>
+                    <option value="github">GitHub</option>
+                    <option value="google">Google</option>
+                    <option value="atlassian">Atlassian</option>
+                    <option value="microsoft">Microsoft</option>
+                    <option value="slack">Slack</option>
+                    <option value="custom">Custom OIDC</option>
+                  </select>
+                </div>
+                {form.egress_provider && (
+                  <>
+                    <div>
+                      <label className={LABEL}>Client ID</label>
+                      <input
+                        type="text"
+                        value={form.egress_client_id}
+                        onChange={(e) =>
+                          setForm((prev) => ({ ...prev, egress_client_id: e.target.value }))
+                        }
+                        className={FIELD}
+                      />
+                    </div>
+                    <div>
+                      <label className={LABEL}>Client Secret</label>
+                      <input
+                        type="password"
+                        value={form.egress_client_secret}
+                        onChange={(e) =>
+                          setForm((prev) => ({ ...prev, egress_client_secret: e.target.value }))
+                        }
+                        placeholder="leave blank to keep current"
+                        autoComplete="new-password"
+                        className={FIELD}
+                      />
+                    </div>
+                    <div>
+                      <label className={LABEL}>Scopes</label>
+                      <input
+                        type="text"
+                        value={form.egress_scopes}
+                        onChange={(e) =>
+                          setForm((prev) => ({ ...prev, egress_scopes: e.target.value }))
+                        }
+                        placeholder="repo, read:user"
+                        className={FIELD}
+                      />
+                    </div>
+                    {form.egress_provider === 'custom' && (
+                      <>
+                        <div>
+                          <label className={LABEL}>Authorize URL</label>
+                          <input
+                            type="text"
+                            value={form.egress_custom_authorize_url}
+                            onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                egress_custom_authorize_url: e.target.value,
+                              }))
+                            }
+                            placeholder="https://idp.example/authorize"
+                            className={FIELD}
+                          />
+                        </div>
+                        <div>
+                          <label className={LABEL}>Token URL</label>
+                          <input
+                            type="text"
+                            value={form.egress_custom_token_url}
+                            onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                egress_custom_token_url: e.target.value,
+                              }))
+                            }
+                            placeholder="https://idp.example/token"
+                            className={FIELD}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
           )}
 
           {/* Custom Headers */}
