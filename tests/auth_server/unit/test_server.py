@@ -672,6 +672,77 @@ class TestValidateEndpoint:
             assert data["username"] == "testuser"
 
     @patch("auth_server.server.get_auth_provider")
+    def test_validate_uninspectable_body_fails_closed(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A server-scoped request with an uninspectable (spilled) body is denied.
+
+        When capture_body.lua could not buffer the body in memory it sets
+        X-Body-Uninspectable=1 and no X-Body. /validate must not default the
+        method to "initialize" and authorize -- it must fail closed so a
+        privileged body cannot slip through unauthorized (TM-15 edge defense).
+        """
+        mock_get_provider.return_value = mock_cognito_provider
+
+        import auth_server.server as server_module
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            client = TestClient(server_module.app)
+
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer test-token",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-Body-Uninspectable": "1",
+                },
+            )
+
+        assert response.status_code == 413
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_validate_unparseable_body_fails_closed(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A server-scoped request whose X-Body is present but unparseable is denied.
+
+        A non-empty body that cannot be parsed into a scope-relevant payload
+        must not silently default to "initialize" -- the real method is unknown,
+        so /validate fails closed rather than authorizing it (TM-15 edge defense).
+        """
+        mock_get_provider.return_value = mock_cognito_provider
+
+        import auth_server.server as server_module
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            client = TestClient(server_module.app)
+
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer test-token",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-Body": "{not-valid-json",
+                },
+            )
+
+        assert response.status_code == 400
+
+    @patch("auth_server.server.get_auth_provider")
     def test_validate_missing_auth_header(self, mock_get_provider, auth_env_vars):
         """Test validation without Authorization header returns 401."""
         # Arrange
@@ -748,9 +819,7 @@ class TestValidateEndpoint:
         from unittest.mock import MagicMock
 
         provider = MagicMock()
-        provider.validate_token.side_effect = ValueError(
-            "Token missing 'kid' in header"
-        )
+        provider.validate_token.side_effect = ValueError("Token missing 'kid' in header")
         mock_get_provider.return_value = provider
 
         import auth_server.server as server_module
@@ -2622,6 +2691,7 @@ class TestForwardedResponseHeadersAllowlist:
 def _mcp_proxy_token_headers(
     server_name: str = "office-docs",
     upstream_url: str = "https://upstream.example/mcp",
+    scopes: list[str] | None = None,
 ) -> dict:
     """Build the X-Internal-Token nginx would forward to /mcp-proxy.
 
@@ -2629,16 +2699,41 @@ def _mcp_proxy_token_headers(
     process-wide by the test conftest), and mint_mcp_proxy_token reads the same,
     so a token minted here verifies in-process. Identity/scopes/upstream are read
     from these claims; the handler ignores the inbound X-User/X-Scopes/X-Upstream-Url.
+
+    The handler now re-authorizes the forwarded body against these scopes, so the
+    default carries a wildcard scope (``admin:all``); pair it with
+    ``_patch_scope_repo_allow_all`` so the re-auth passes. Pass an explicit
+    ``scopes`` (e.g. ``[]``) to exercise the forwarded-body denial path.
     """
     from auth_server.internal_request_token import mint_mcp_proxy_token
 
     token = mint_mcp_proxy_token(
         subject="test-user",
-        scopes=[],
+        scopes=["admin:all"] if scopes is None else scopes,
         server_name=server_name,
         upstream_url=upstream_url,
     )
     return {"X-Internal-Token": token}
+
+
+def _patch_scope_repo_allow_all():
+    """Patch get_scope_repository so ``admin:all`` grants any server/method.
+
+    The /mcp-proxy handler re-authorizes the forwarded body via
+    validate_server_tool_access, which consults the scope repository. These
+    header-passthrough tests care about response-header handling, not the
+    allowlist itself, so they run with a wildcard-granting repository and an
+    ``admin:all`` token.
+    """
+    repo = AsyncMock()
+
+    async def _get_server_scopes(scope_name: str):
+        if scope_name == "admin:all":
+            return [{"server": "*", "methods": ["*"], "tools": ["*"]}]
+        return []
+
+    repo.get_server_scopes.side_effect = _get_server_scopes
+    return patch("auth_server.server.get_scope_repository", return_value=repo)
 
 
 class TestMcpProxyEndpointHeaderPassthrough:
@@ -2670,6 +2765,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         ):
             client = TestClient(server_module.app)
@@ -2705,6 +2801,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=True),
             patch.object(
                 server_module,
@@ -2740,6 +2837,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=True),
         ):
             client = TestClient(server_module.app)
@@ -2771,6 +2869,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         ):
             client = TestClient(server_module.app)
@@ -2799,6 +2898,33 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         assert response.status_code == 401
 
+    def test_forwarded_body_reauthorized_denies_unscoped_caller(self):
+        """A token with no scopes is denied at the proxy hop before any
+        outbound call -- the forwarded body is re-authorized here, not only
+        at /validate on a separately-captured copy (TM-15).
+        """
+        import auth_server.server as server_module
+
+        # No upstream patch: if the guard fails open we would attempt the
+        # outbound call and this test would surface a different failure.
+        with (
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/office-docs",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "privileged-tool"},
+                },
+                headers=_mcp_proxy_token_headers(scopes=[]),
+            )
+
+        assert response.status_code == 403
+
     def test_set_cookie_and_location_dropped_end_to_end(self):
         """End-to-end regression: even if an upstream MCP server emits
         Set-Cookie and Location, the Starlette response the gateway
@@ -2823,6 +2949,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         ):
             client = TestClient(server_module.app)
@@ -2860,6 +2987,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         ):
             client = TestClient(server_module.app)
@@ -2915,9 +3043,7 @@ class TestLogScopesLoaded:
         from auth_server import server as server_module
 
         with patch.object(server_module, "logger") as mock_logger:
-            server_module._log_scopes_loaded(
-                {"group_mappings": {"mcp-registry-admin": ["admin"]}}
-            )
+            server_module._log_scopes_loaded({"group_mappings": {"mcp-registry-admin": ["admin"]}})
 
         mock_logger.warning.assert_not_called()
         mock_logger.info.assert_called_once()
@@ -2995,3 +3121,233 @@ class TestTokenLifetimeEnforcement:
         """Requesting 0 or negative hours must be clamped to 1 h."""
         result = self._generate_self_signed_token(auth_env_vars, expires_in_hours=0)
         assert result["expires_in"] == 1 * 3600
+
+
+# =============================================================================
+# FORWARDED-BODY RE-AUTHORIZATION TESTS (MCP proxy hop)
+# =============================================================================
+
+
+class TestRegisteredServerFromProxyPath:
+    """Tests for _registered_server_from_proxy_path scope-key derivation.
+
+    The scope key must match what /validate authorizes against so both hops
+    check the identical server. Only a trailing MCP transport segment is
+    stripped; federated "peer/server" keys are preserved.
+    """
+
+    def test_local_server_no_transport(self):
+        """A bare server name is returned unchanged."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert _registered_server_from_proxy_path("currenttime") == "currenttime"
+
+    def test_local_server_strips_trailing_transport(self):
+        """A trailing mcp/sse/messages segment is stripped."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert _registered_server_from_proxy_path("currenttime/mcp") == "currenttime"
+        assert _registered_server_from_proxy_path("currenttime/sse") == "currenttime"
+        assert _registered_server_from_proxy_path("currenttime/messages") == "currenttime"
+
+    def test_federated_peer_server_preserved(self):
+        """A federated peer/server key is preserved (not truncated to peer)."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert (
+            _registered_server_from_proxy_path("peer-registry-lob-1/cloudflare-docs")
+            == "peer-registry-lob-1/cloudflare-docs"
+        )
+
+    def test_federated_peer_server_strips_trailing_transport(self):
+        """peer/server/mcp -> peer/server (only the transport tail is stripped)."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert (
+            _registered_server_from_proxy_path("peer-registry-lob-1/cloudflare-docs/mcp")
+            == "peer-registry-lob-1/cloudflare-docs"
+        )
+
+    def test_leading_and_trailing_slashes_ignored(self):
+        """Surrounding slashes do not change the derived key."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert _registered_server_from_proxy_path("/currenttime/mcp/") == "currenttime"
+
+
+class TestAuthorizeForwardedMcpBody:
+    """Tests for _authorize_forwarded_mcp_body (TM-15 forwarded-body re-auth).
+
+    The proxy hop must re-authorize the EXACT forwarded body, independently of
+    the separately-captured X-Body /validate saw, and must fail closed on any
+    body it cannot parse well enough to determine the scope-relevant method.
+    """
+
+    @staticmethod
+    def _body(method: str, tool: str | None = None) -> bytes:
+        """Build a JSON-RPC request body as raw bytes."""
+        import json
+
+        payload: dict = {"jsonrpc": "2.0", "id": 1, "method": method}
+        if tool is not None:
+            payload["params"] = {"name": tool}
+        return json.dumps(payload).encode("utf-8")
+
+    @pytest.mark.asyncio
+    async def test_divergent_tools_call_rejected_for_readonly_scope(
+        self, mock_scope_repository_with_data
+    ):
+        """A tools/call forwarded body is rejected for a read-only scope.
+
+        This is the concrete TM-15 bypass: /validate saw no X-Body (or an
+        "initialize" default) and passed, but the forwarded body is a
+        privileged tools/call. read:servers only allows initialize/tools/list
+        on test-server, so re-authorizing the real body must deny.
+        """
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body(
+                    "test-server/mcp",
+                    self._body("tools/call", tool="danger-tool"),
+                    ["read:servers"],
+                )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_tools_call_allowed_for_write_scope(self, mock_scope_repository_with_data):
+        """A tools/call body is allowed when the scope permits it (no raise)."""
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            # write:servers allows tools/call with wildcard tools on test-server.
+            await _authorize_forwarded_mcp_body(
+                "test-server/mcp",
+                self._body("tools/call", tool="any-tool"),
+                ["write:servers"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_small_initialize_body_allowed(self, mock_scope_repository_with_data):
+        """A normal small initialize body still authorizes for a valid scope."""
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            await _authorize_forwarded_mcp_body(
+                "test-server/mcp",
+                self._body("initialize"),
+                ["read:servers"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_empty_body_treated_as_initialize(self, mock_scope_repository_with_data):
+        """An empty forwarded body is authorized as the initialize method."""
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            # Allowed for a scope that grants initialize on the server ...
+            await _authorize_forwarded_mcp_body("test-server/mcp", b"", ["read:servers"])
+
+    @pytest.mark.asyncio
+    async def test_empty_body_denied_without_matching_scope(self, mock_scope_repository_with_data):
+        """Empty body (initialize) is denied when no scope grants the server."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body("other-server/mcp", b"", ["read:servers"])
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_unparseable_body_fails_closed(self, mock_scope_repository_with_data):
+        """A non-JSON forwarded body is rejected (cannot determine method)."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body(
+                    "test-server/mcp",
+                    b"\xff\xfe not json at all {",
+                    ["write:servers"],
+                )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_non_object_json_fails_closed(self, mock_scope_repository_with_data):
+        """A well-formed JSON value that is not a JSON-RPC object is rejected."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body(
+                    "test-server/mcp",
+                    b'["tools/call", "danger"]',
+                    ["write:servers"],
+                )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_no_scopes_denied(self, mock_scope_repository_with_data):
+        """A caller with no scopes is denied regardless of body."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body("test-server/mcp", self._body("initialize"), [])
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_tools_call_missing_tool_name_denied_for_readonly(
+        self, mock_scope_repository_with_data
+    ):
+        """tools/call with no tool name is denied under a read-only scope."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body(
+                    "test-server/mcp",
+                    self._body("tools/call"),
+                    ["read:servers"],
+                )
+        assert exc_info.value.status_code == 403

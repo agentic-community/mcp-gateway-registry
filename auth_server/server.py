@@ -92,6 +92,12 @@ from registry.auth.internal import validate_internal_auth
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
 
+# Trailing path segments that are MCP transport endpoints, not part of the
+# registered server name. Used when deriving the scope key from a proxied path
+# so that /validate and the mcp-proxy hop authorize against the SAME server
+# name (see _registered_server_from_proxy_path).
+MCP_TRANSPORT_ENDPOINTS: frozenset[str] = frozenset({"mcp", "sse", "messages"})
+
 # Rate limiting for token generation (simple in-memory counter)
 user_token_generation_counts = {}
 MAX_TOKENS_PER_USER_PER_HOUR = int(os.environ.get("MAX_TOKENS_PER_USER_PER_HOUR", "100"))
@@ -951,6 +957,39 @@ def _server_names_match(name1: str, name2: str) -> bool:
     if normalized_name1 == "*":
         return True
     return normalized_name1 == _normalize_server_name(name2)
+
+
+def _registered_server_from_proxy_path(
+    server_path: str,
+) -> str:
+    """Derive the registered server name (the scope key) from a proxy path.
+
+    The ``/mcp-proxy/{server_name:path}`` capture and the ``X-Original-URL``
+    /validate parses both contain the registered server name plus any MCP
+    transport endpoint the client appended (``mcp``/``sse``/``messages``). The
+    scope allowlist is keyed on the registered server name WITHOUT that trailing
+    transport segment. Both the /validate hop and the mcp-proxy hop must strip
+    it identically, otherwise they authorize against different keys and a body
+    authorized by one is not re-checked by the other.
+
+    For local servers the path is ``server-name[/transport]``; for federated
+    servers it is ``peer-name/server-name[/transport]``. Only a trailing
+    transport segment is stripped -- the rest of the path is preserved so
+    federated ``peer/server`` keys stay intact.
+
+    Args:
+        server_path: The proxied path segment (e.g. ``currenttime/mcp`` or
+            ``peer-registry-lob-1/cloudflare-docs``).
+
+    Returns:
+        The registered server name used for the scope lookup.
+    """
+    parts = [p for p in server_path.strip("/").split("/") if p]
+    if not parts:
+        return server_path.strip("/")
+    if len(parts) >= 2 and parts[-1] in MCP_TRANSPORT_ENDPOINTS:
+        return "/".join(parts[:-1])
+    return "/".join(parts)
 
 
 async def validate_server_tool_access(
@@ -1892,6 +1931,11 @@ async def validate_request(request: Request):
         region = request.headers.get("X-Region", "us-east-1")
         original_url = request.headers.get("X-Original-URL")
         body = request.headers.get("X-Body")
+        # capture_body.lua sets this when the request body was too large to buffer
+        # in memory and spilled to a temp file, so no X-Body could be captured.
+        # Without the body we cannot determine the scope-relevant method/tool, so
+        # any server-scoped request in this state must fail closed (see below).
+        body_uninspectable = request.headers.get("X-Body-Uninspectable") == "1"
 
         # Extract server_name and endpoint from original_url early for logging
         server_name_from_url = None
@@ -1909,8 +1953,11 @@ async def validate_request(request: Request):
 
                 path_parts = path.split("/") if path else []
 
-                # MCP endpoints that should be treated as endpoints, not server names
-                mcp_endpoints = {"mcp", "sse", "messages"}
+                # MCP transport endpoints that should be treated as endpoints,
+                # not server names. Shared with the mcp-proxy hop via
+                # MCP_TRANSPORT_ENDPOINTS / _registered_server_from_proxy_path so
+                # both authorize against the identical scope key.
+                mcp_endpoints = MCP_TRANSPORT_ENDPOINTS
 
                 # For peer/federated registries, path is: peer-name/server-name/endpoint
                 # For local servers, path is: server-name/endpoint
@@ -1940,6 +1987,11 @@ async def validate_request(request: Request):
 
         # Read request body
         request_payload = None
+        # True when a non-empty X-Body was present but could not be parsed into
+        # a scope-relevant payload. We must not silently default such a request
+        # to the unprivileged "initialize" method (that would authorize a body
+        # whose real method we could not read) -- fail closed below instead.
+        body_parse_failed = False
         try:
             if body:
                 payload_text = body  # .decode('utf-8')
@@ -1955,10 +2007,13 @@ async def validate_request(request: Request):
                 logger.debug("No request body provided, skipping payload parsing")
         except UnicodeDecodeError as e:
             logger.warning(f"Could not decode body as UTF-8: {e}")
+            body_parse_failed = True
         except json.JSONDecodeError as e:
             logger.warning(f"Could not parse JSON RPC payload: {e}")
+            body_parse_failed = True
         except Exception as e:
             logger.error(f"Error reading request payload: {type(e).__name__}: {e}")
+            body_parse_failed = True
 
         # Log request for debugging with anonymized IP
         client_ip = get_client_ip(request)
@@ -2438,6 +2493,48 @@ async def validate_request(request: Request):
         if server_name:
             # For ANY server access, enforce scope validation (fail closed principle)
             # This includes MCP initialization methods that may not have a specific tool
+
+            # Fail closed when the scope-relevant body could not be captured.
+            # capture_body.lua sets X-Body-Uninspectable when the request body
+            # spilled to a temp file (larger than client_body_buffer_size) and
+            # get_body_data() returned nil. In that state we would otherwise see
+            # no X-Body and default the method to the unprivileged "initialize"
+            # while the full (potentially privileged) body is forwarded upstream
+            # -- a scope-check bypass. Refuse rather than authorize an
+            # uninspectable body.
+            if body_uninspectable:
+                logger.warning(
+                    "Access denied for user %s to %s - request body was not "
+                    "captured for scope validation (spilled to temp file); "
+                    "failing closed",
+                    hash_username(validation_result.get("username", "")),
+                    server_name,
+                )
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "Request body too large to authorize; scope validation "
+                        "requires an in-memory body"
+                    ),
+                    headers={"Connection": "close"},
+                )
+
+            # Fail closed when a non-empty body was present but could not be
+            # parsed into a scope-relevant payload. Defaulting to "initialize"
+            # here would authorize a request whose real method we could not
+            # determine; the forwarded body could still be a privileged call.
+            if body_parse_failed:
+                logger.warning(
+                    "Access denied for user %s to %s - request body could not "
+                    "be parsed for scope validation; failing closed",
+                    hash_username(validation_result.get("username", "")),
+                    server_name,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Request body could not be parsed for authorization",
+                    headers={"Connection": "close"},
+                )
 
             # Determine the method to validate:
             # 1. If we have a tool_name from JSON-RPC payload, use that
@@ -3053,9 +3150,7 @@ async def generate_user_token(
                 auth_method=user_context.get("auth_method", "unknown"),
                 provider=user_context.get("provider"),
                 internal_caller=caller,
-                token_kind=(
-                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
-                ),
+                token_kind=(TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value),
                 resource_type=(request.resource.type.value if request.resource else None),
                 resource_id=(request.resource.id if request.resource else None),
                 token_path="unknown",
@@ -3166,9 +3261,7 @@ async def generate_user_token(
                 auth_method=auth_method,
                 provider=provider,
                 internal_caller=caller,
-                token_kind=(
-                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
-                ),
+                token_kind=(TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value),
                 resource_type=(request.resource.type.value if request.resource else None),
                 resource_id=(request.resource.id if request.resource else None),
                 token_path="self_signed",
@@ -4507,6 +4600,130 @@ def _select_forwarded_response_headers(
     return selected
 
 
+async def _authorize_forwarded_mcp_body(
+    server_name: str,
+    request_body: bytes,
+    user_scopes: list[str],
+) -> None:
+    """Re-authorize the caller's scopes against the EXACT body being forwarded.
+
+    The nginx /validate hop authorizes on a separately-captured copy of the
+    request body (the ``X-Body`` header built by ``capture_body.lua``). That
+    copy can diverge from the body this handler actually forwards upstream --
+    e.g. when the body spills to an on-disk temp file, nginx captures no
+    ``X-Body`` and /validate falls back to treating the request as the
+    unprivileged ``initialize`` method while a privileged ``tools/call`` body
+    is forwarded. To close that gap, we authorize the forwarded bytes here,
+    independently of whatever /validate saw.
+
+    Fail-closed rules:
+      * A non-empty body that cannot be parsed as a JSON-RPC object is
+        rejected -- we cannot determine the scope-relevant method, so we must
+        not forward it.
+      * A body with no ``method`` (or an empty body) is treated as the
+        ``initialize`` method, mirroring the /validate default so an
+        unauthenticated-for-this-server caller is still denied.
+      * ``tools/call`` requires the specific tool named in ``params.name`` to
+        be allowed; a missing/blank tool name is rejected.
+
+    Args:
+        server_name: The full ``/mcp-proxy/{server_name:path}`` value. The
+            registered server name (scope key) is derived from it the same way
+            /validate derives it from X-Original-URL, so both hops authorize
+            against the identical key.
+        request_body: The exact bytes being forwarded to the upstream.
+        user_scopes: The scopes from the verified X-Internal-Token claims.
+
+    Raises:
+        HTTPException: 403 when the forwarded body is not authorized by the
+            caller's scopes, or when the body is present but cannot be parsed
+            to determine the scope-relevant method/tool.
+    """
+    # Strip only a trailing MCP transport segment (mcp/sse/messages) so the
+    # scope key matches what /validate authorized against -- including federated
+    # "peer/server" keys, which the naive first-segment split would truncate.
+    registered_server = _registered_server_from_proxy_path(server_name)
+
+    method: str | None = None
+    actual_tool_name: str | None = None
+
+    if request_body:
+        try:
+            payload = json.loads(request_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "mcp_proxy: rejecting forwarded body for server=%s that is not "
+                "parseable JSON-RPC (cannot authorize): %s",
+                registered_server,
+                exc,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Request body could not be authorized",
+                headers={"Connection": "close"},
+            ) from exc
+
+        if isinstance(payload, dict):
+            method = payload.get("method")
+            if method == "tools/call":
+                params = payload.get("params")
+                if isinstance(params, dict):
+                    actual_tool_name = params.get("name")
+        else:
+            # A well-formed JSON value that is not a JSON-RPC object (e.g. a
+            # bare array/string/number) has no method we can authorize.
+            logger.warning(
+                "mcp_proxy: rejecting forwarded body for server=%s that is not "
+                "a JSON-RPC object (type=%s)",
+                registered_server,
+                type(payload).__name__,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Request body could not be authorized",
+                headers={"Connection": "close"},
+            )
+
+    # Mirror /validate: absent method defaults to the unprivileged
+    # "initialize" so a caller with no scope on this server is still denied.
+    effective_method = method or "initialize"
+
+    if not user_scopes:
+        logger.warning(
+            "mcp_proxy: access denied to %s.%s (tool=%s) -- no scopes in token",
+            registered_server,
+            effective_method,
+            actual_tool_name,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: no scopes configured",
+            headers={"Connection": "close"},
+        )
+
+    if not await validate_server_tool_access(
+        registered_server, effective_method, actual_tool_name, user_scopes
+    ):
+        logger.warning(
+            "mcp_proxy: access denied to %s.%s (tool=%s) on forwarded body",
+            registered_server,
+            effective_method,
+            actual_tool_name,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied to {registered_server}.{effective_method}",
+            headers={"Connection": "close"},
+        )
+
+    logger.debug(
+        "mcp_proxy: forwarded-body authorization passed for %s.%s (tool=%s)",
+        registered_server,
+        effective_method,
+        actual_tool_name,
+    )
+
+
 @app.post("/mcp-proxy/{server_name:path}", dependencies=[Depends(verify_mcp_proxy_token)])
 async def mcp_proxy(
     server_name: str,
@@ -4558,6 +4775,14 @@ async def mcp_proxy(
     except Exception as exc:
         logger.error(f"mcp_proxy: failed to read request body: {exc}")
         raise HTTPException(status_code=400, detail="Invalid request body") from exc
+
+    # Re-authorize the caller's scopes against the EXACT body we are about to
+    # forward. /validate authorizes on a separately-captured copy (X-Body) that
+    # can diverge from this body (e.g. a large body that spilled to disk, which
+    # /validate then treats as an unprivileged "initialize"). Enforcing here on
+    # the forwarded bytes closes that gap and fails closed on any body we cannot
+    # parse well enough to authorize. Raises 403 before any outbound call.
+    await _authorize_forwarded_mcp_body(server_name, request_body, user_scopes)
 
     # Determine the JSON-RPC method (best-effort; non-JSON bodies pass
     # through as-is).
