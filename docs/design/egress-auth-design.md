@@ -171,6 +171,50 @@ The gateway **owns the authentication to every third-party MCP server**, which t
 
 ---
 
+## The internal relay: airegistry-tools -> registry API (sequence)
+
+The one exception to "client auth headers are stripped on egress" (issue #1266). `airegistry-tools` is the gateway's own bundled registry-tools MCP server (the `mcpgw` service). It is same-trust-domain, so a hardcoded constant (`_INTERNAL_INGRESS_RELAY_SERVERS = {"airegistry-tools"}` in `auth_server/server.py`) relays the ingress `Authorization` to it (never `X-Authorization`/`Cookie`). The mcpgw server then needs to call the **registry API** (list/search servers, agents, skills) — and it chooses which credential to present for that call, NOT the relayed one by default.
+
+Key point: the relayed ingress `Authorization` lets mcpgw's FastMCP front door admit the MCP call when it is configured to validate a bearer (`OIDC_ENABLED=true`). For its OUTBOUND registry API calls, mcpgw's `_get_registry_headers` picks a credential by priority — static `REGISTRY_API_TOKEN`, else its own M2M token, else (fallback) the caller's bearer. So in the common deployment mcpgw reaches the registry as **itself** (M2M), not by forwarding the user's token again.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CA as Coding assistant
+    participant NGINX as nginx
+    participant AS as auth-server<br/>(mcp_proxy)
+    participant MCPGW as mcpgw<br/>(airegistry-tools upstream)
+    participant REG as registry API
+
+    CA->>NGINX: tools/call on /airegistry-tools/mcp<br/>Authorization: Bearer <ingress token>
+    NGINX->>AS: auth_request /validate
+    AS-->>NGINX: 200 + signed X-Internal-Token (server claim = "airegistry-tools")
+    NGINX->>AS: proxy_pass /mcp-proxy/airegistry-tools/...
+
+    Note over AS: relay decision: claims["server"] == "airegistry-tools"<br/>-> in _INTERNAL_INGRESS_RELAY_SERVERS -> relay_authorization=True
+    Note over AS: _forward_headers: KEEP Authorization;<br/>STRIP X-Authorization + Cookie (always)
+
+    AS->>MCPGW: forward request, Authorization: Bearer <ingress token>
+    Note over MCPGW: FastMCP front door admits the call.<br/>If OIDC_ENABLED=true it validates this bearer<br/>(same Keycloak realm as the gateway).
+
+    MCPGW->>MCPGW: _get_registry_headers() picks the credential for the registry call:<br/>1. REGISTRY_API_TOKEN (static) if set<br/>2. else M2M token (client_credentials) -> X-Authorization<br/>3. else fallback: caller bearer -> X-Authorization
+    MCPGW->>NGINX: GET /api/... (registry API) with chosen credential
+    NGINX->>AS: auth_request /validate (validates that credential)
+    AS-->>NGINX: 200 + identity
+    NGINX->>REG: proxy_pass /api/...
+    REG-->>MCPGW: servers / agents / skills JSON
+    MCPGW-->>AS: MCP tool result
+    AS-->>CA: result
+```
+
+What this shows:
+
+- **The relayed `Authorization` is only for reaching mcpgw's front door** (the internal same-trust hop). It is NOT forwarded onward to any third party.
+- **mcpgw calls the registry API as itself** (M2M) in the standard deployment, so the user's token is not chained through a second time; `REGISTRY_API_TOKEN` overrides that if an operator sets it. The caller-bearer fallback only applies when neither is configured.
+- **`X-Authorization` and `Cookie` are stripped even on this relay path** — only `Authorization` is relayed, and only for this one hardcoded internal server.
+
+---
+
 ## The egress modes
 
 `egress_auth_mode` on the server entry selects how the gateway obtains the outbound credential. Today the **no-auth** and **vault-OAuth (3LO)** paths are implemented; the others are designed and reserved.
