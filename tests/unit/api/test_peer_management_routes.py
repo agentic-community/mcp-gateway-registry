@@ -325,3 +325,159 @@ class TestUpdatePeerToken:
 
             # Assert
             assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+# =============================================================================
+# Federation token is write-only on read/list responses (SSRF/leak hardening)
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestFederationTokenNeverSerialized:
+    """The peer federation bearer token must never appear in a read response.
+
+    GET /api/peers, GET /api/peers/{id}, and the create/update/enable/disable
+    responses are callable by any principal with the federation/peers scope. They
+    must return a redacted view (``has_federation_token`` boolean only) so a
+    non-admin cannot harvest the plaintext token and impersonate this registry.
+    """
+
+    @pytest.mark.asyncio
+    async def test_list_peers_omits_federation_token(
+        self,
+        mock_auth_admin,
+        sample_peer_config,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+
+        service = AsyncMock()
+        service.list_peers.return_value = [sample_peer_config]
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=service,
+        ):
+            response = client.get("/api/peers")
+
+        assert response.status_code == status.HTTP_200_OK
+        body = response.text
+        assert "original-token-abc123" not in body
+        data = response.json()
+        assert "federation_token" not in data[0]
+        # Presence is surfaced as a non-sensitive boolean instead of the value.
+        assert data[0]["has_federation_token"] is True
+        assert data[0]["endpoint"] == "https://peer.example.com"
+
+    @pytest.mark.asyncio
+    async def test_get_peer_omits_federation_token(
+        self,
+        mock_auth_admin,
+        sample_peer_config,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+
+        service = AsyncMock()
+        service.get_peer.return_value = sample_peer_config
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=service,
+        ):
+            response = client.get(f"/api/peers/{sample_peer_config.peer_id}")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert "original-token-abc123" not in response.text
+        data = response.json()
+        assert "federation_token" not in data
+        assert data["has_federation_token"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_peer_without_token_reports_false(
+        self,
+        mock_auth_admin,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+
+        no_token_peer = PeerRegistryConfig(
+            peer_id="no-token-peer",
+            name="No Token Peer",
+            endpoint="https://peer2.example.com",
+        )
+        service = AsyncMock()
+        service.get_peer.return_value = no_token_peer
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=service,
+        ):
+            response = client.get("/api/peers/no-token-peer")
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "federation_token" not in data
+        assert data["has_federation_token"] is False
+
+    @pytest.mark.asyncio
+    async def test_create_peer_response_omits_federation_token(
+        self,
+        mock_auth_admin,
+        sample_peer_config,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+
+        service = AsyncMock()
+        service.add_peer.return_value = sample_peer_config
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=service,
+        ):
+            response = client.post(
+                "/api/peers",
+                json={
+                    "peer_id": "test-peer",
+                    "name": "Test Peer Registry",
+                    "endpoint": "https://peer.example.com",
+                    "federation_token": "original-token-abc123",
+                },
+            )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert "original-token-abc123" not in response.text
+        data = response.json()
+        assert "federation_token" not in data
+        assert data["has_federation_token"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_peer_response_omits_federation_token(
+        self,
+        mock_auth_admin,
+        sample_peer_config,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+
+        service = AsyncMock()
+        service.update_peer.return_value = sample_peer_config
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=service,
+        ):
+            response = client.put(
+                "/api/peers/test-peer",
+                json={"enabled": False},
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert "original-token-abc123" not in response.text
+        assert "federation_token" not in response.json()

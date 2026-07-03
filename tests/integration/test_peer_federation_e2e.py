@@ -355,37 +355,44 @@ class TestPeerFederationServiceIntegration:
         mock_client.fetch_servers = MagicMock(return_value=mock_servers)
         mock_client.fetch_agents = MagicMock(return_value=mock_agents)
 
-        # Mock server and agent services
+        # Mock server and agent services. The sync path validates the endpoint
+        # via the SSRF guard first; this fixture uses a loopback endpoint
+        # (correctly rejected in production), so stub the guard here since this
+        # test exercises sync mechanics, not SSRF (see TestPeerEndpointSsrfGuard).
         with patch(
-            "registry.services.peer_federation_service.PeerRegistryClient",
-            return_value=mock_client,
+            "registry.services.peer_federation_service._assert_endpoint_safe",
+            return_value=None,
         ):
             with patch(
-                "registry.services.peer_federation_service.server_service"
-            ) as mock_server_svc:
+                "registry.services.peer_federation_service.PeerRegistryClient",
+                return_value=mock_client,
+            ):
                 with patch(
-                    "registry.services.peer_federation_service.agent_service"
-                ) as mock_agent_svc:
-                    mock_server_svc.registered_servers = {}
-                    mock_server_svc.register_server = AsyncMock(return_value={"success": True})
-                    mock_server_svc.update_server = AsyncMock(return_value=True)
-                    mock_server_svc.get_server_info = AsyncMock(return_value=None)
-                    mock_server_svc.get_all_servers = AsyncMock(return_value={})
+                    "registry.services.peer_federation_service.server_service"
+                ) as mock_server_svc:
+                    with patch(
+                        "registry.services.peer_federation_service.agent_service"
+                    ) as mock_agent_svc:
+                        mock_server_svc.registered_servers = {}
+                        mock_server_svc.register_server = AsyncMock(return_value={"success": True})
+                        mock_server_svc.update_server = AsyncMock(return_value=True)
+                        mock_server_svc.get_server_info = AsyncMock(return_value=None)
+                        mock_server_svc.get_all_servers = AsyncMock(return_value={})
 
-                    mock_agent_svc.registered_agents = {}
-                    mock_agent_svc.register_agent = AsyncMock(side_effect=lambda agent: agent)
-                    mock_agent_svc.update_agent = AsyncMock(return_value=MagicMock())
-                    mock_agent_svc.get_agent_info = AsyncMock(return_value=None)
-                    mock_agent_svc.get_all_agents = AsyncMock(return_value=[])
+                        mock_agent_svc.registered_agents = {}
+                        mock_agent_svc.register_agent = AsyncMock(side_effect=lambda agent: agent)
+                        mock_agent_svc.update_agent = AsyncMock(return_value=MagicMock())
+                        mock_agent_svc.get_agent_info = AsyncMock(return_value=None)
+                        mock_agent_svc.get_all_agents = AsyncMock(return_value=[])
 
-                    # Execute sync
-                    result = await service.sync_peer(peer_config.peer_id)
+                        # Execute sync
+                        result = await service.sync_peer(peer_config.peer_id)
 
-                    # Verify result
-                    assert result.success is True
-                    assert result.peer_id == peer_config.peer_id
-                    assert result.servers_synced == len(mock_servers)
-                    assert result.agents_synced == len(mock_agents)
+                        # Verify result
+                        assert result.success is True
+                        assert result.peer_id == peer_config.peer_id
+                        assert result.servers_synced == len(mock_servers)
+                        assert result.agents_synced == len(mock_agents)
 
     async def test_service_filter_by_whitelist(
         self,
@@ -542,6 +549,3 @@ class TestOrphanDetection:
         # Item without sync_metadata
         new_item = {"path": "/server-new"}
         assert service.is_locally_overridden(new_item) is False
-
-
-

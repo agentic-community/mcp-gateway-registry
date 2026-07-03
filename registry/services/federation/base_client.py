@@ -89,6 +89,22 @@ class BaseFederationClient(ABC):
         Returns:
             Response JSON or None if request fails
         """
+        # Fail-closed SSRF guard at the single egress chokepoint. Federation
+        # requests carry a bearer credential in ``headers``; if the target URL
+        # resolves to a private/loopback/link-local/metadata address we must not
+        # connect (SSRF) and must not leak the token. Endpoints are validated at
+        # write time too; this re-check defends against DNS rebinding and any
+        # unvalidated caller. On any validation error the request is denied.
+        from ..skill_service import _is_safe_url
+
+        if not _is_safe_url(url):
+            logger.error(
+                f"Refusing federation request to unsafe URL {url!r}: it resolves "
+                "to a blocked (private/loopback/link-local/metadata) address or "
+                "uses a disallowed scheme."
+            )
+            return None
+
         for attempt in range(self.retry_attempts):
             try:
                 logger.debug(

@@ -14,6 +14,21 @@ from registry.schemas.peer_federation_schema import PeerRegistryConfig
 from registry.services.federation.peer_registry_client import PeerRegistryClient
 
 
+@pytest.fixture(autouse=True)
+def _allow_safe_endpoints():
+    """Treat endpoints as SSRF-safe unless a test overrides the guard.
+
+    The base federation client now validates every request URL (and the health
+    URL) with the shared SSRF guard, which resolves DNS and fails closed on
+    unresolvable hosts. Most tests here use example.com placeholders and are not
+    about SSRF, so the guard is stubbed to accept by default. The SSRF-specific
+    tests re-patch it to reject inside their own ``with`` block, which overrides
+    this fixture.
+    """
+    with patch("registry.services.skill_service._is_safe_url", return_value=True):
+        yield
+
+
 @pytest.fixture
 def peer_config():
     """Create a test peer registry configuration."""
@@ -793,3 +808,68 @@ class TestPeerRegistryClientFetchAllServers:
 
             # Assert
             assert servers == []
+
+
+class TestPeerRegistryClientSsrfGuard:
+    """The federation bearer token must never be sent to an unsafe endpoint.
+
+    _make_request is the single egress chokepoint and attaches the token via the
+    Authorization header. If the target URL resolves to a blocked address the
+    request must be denied before any HTTP call, so the token cannot be exfiltrated.
+    """
+
+    def test_make_request_denies_unsafe_url_without_calling_http(
+        self,
+        peer_config,
+        mock_auth_manager,
+        mock_http_client,
+    ):
+        client = PeerRegistryClient(peer_config=peer_config)
+
+        with patch("registry.services.skill_service._is_safe_url", return_value=False):
+            result = client._make_request(
+                "http://169.254.169.254/latest/meta-data/",
+                headers={"Authorization": "Bearer super-secret-token"},
+            )
+
+        assert result is None
+        # No HTTP request was ever issued, so the token never left the process.
+        client.client.request.assert_not_called()
+
+    def test_fetch_servers_does_not_send_token_to_unsafe_endpoint(
+        self,
+        mock_auth_manager,
+        mock_http_client,
+    ):
+        # A peer whose endpoint resolves to a private address: fetch must abort
+        # before the HTTP call rather than send the bearer token there.
+        peer = PeerRegistryConfig(
+            peer_id="evil-peer",
+            name="Evil Peer",
+            endpoint="http://10.0.0.9",
+            federation_token="super-secret-token",
+        )
+        client = PeerRegistryClient(peer_config=peer)
+
+        with patch("registry.services.skill_service._is_safe_url", return_value=False):
+            result = client.fetch_servers()
+
+        assert result is None
+        client.client.request.assert_not_called()
+
+    def test_check_peer_health_denies_unsafe_endpoint(
+        self,
+        mock_auth_manager,
+        mock_http_client,
+    ):
+        peer = PeerRegistryConfig(
+            peer_id="evil-peer",
+            name="Evil Peer",
+            endpoint="http://127.0.0.1:9000",
+        )
+        client = PeerRegistryClient(peer_config=peer)
+
+        with patch("registry.services.skill_service._is_safe_url", return_value=False):
+            assert client.check_peer_health() is False
+
+        client.client.get.assert_not_called()
