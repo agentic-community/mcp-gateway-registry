@@ -2995,3 +2995,83 @@ class TestTokenLifetimeEnforcement:
         """Requesting 0 or negative hours must be clamped to 1 h."""
         result = self._generate_self_signed_token(auth_env_vars, expires_in_hours=0)
         assert result["expires_in"] == 1 * 3600
+
+
+# =============================================================================
+# MCP-PROXY REQUEST HEADER FORWARDING TESTS
+# =============================================================================
+
+
+class TestForwardHeaders:
+    """Tests for _forward_headers.
+
+    The MCP proxy forwards a request to a registrant-controlled (untrusted)
+    upstream. The caller's gateway credential must never cross that trust
+    boundary, or a malicious registered upstream could capture and replay it.
+    """
+
+    def test_authorization_header_is_dropped(self):
+        """The caller's Authorization bearer must NOT reach the upstream."""
+        from auth_server.server import _forward_headers
+
+        forwarded = _forward_headers(
+            {
+                "Authorization": "Bearer registry-scoped-token",
+                "Content-Type": "application/json",
+            }
+        )
+        assert "authorization" not in {k.lower() for k in forwarded}
+        assert forwarded["Content-Type"] == "application/json"
+
+    def test_cookie_header_is_dropped(self):
+        """Session cookies must NOT reach the untrusted upstream."""
+        from auth_server.server import _forward_headers
+
+        forwarded = _forward_headers(
+            {
+                "Cookie": "session=secret-session-value",
+                "Accept": "application/json",
+            }
+        )
+        assert "cookie" not in {k.lower() for k in forwarded}
+        assert forwarded["Accept"] == "application/json"
+
+    def test_sensitive_headers_dropped_case_insensitively(self):
+        """Header-name matching must be case-insensitive (RFC 9110)."""
+        from auth_server.server import _forward_headers
+
+        forwarded = _forward_headers(
+            {
+                "AUTHORIZATION": "Bearer t",
+                "CoOkIe": "s=1",
+                "X-Authorization": "Bearer alt",
+                "Proxy-Authorization": "Basic abc",
+            }
+        )
+        assert forwarded == {}
+
+    def test_upstream_url_hint_still_stripped(self):
+        """The internal routing header must still never leak upstream."""
+        from auth_server.server import _forward_headers
+
+        forwarded = _forward_headers(
+            {"X-Upstream-Url": "https://attacker.example/mcp", "Accept": "application/json"}
+        )
+        assert "x-upstream-url" not in {k.lower() for k in forwarded}
+
+    def test_benign_headers_preserved(self):
+        """Non-sensitive headers pass through unchanged."""
+        from auth_server.server import _forward_headers
+
+        forwarded = _forward_headers(
+            {
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                "Mcp-Session-Id": "abc123",
+            }
+        )
+        assert forwarded == {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Mcp-Session-Id": "abc123",
+        }

@@ -4404,6 +4404,29 @@ _HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
 )
 
 
+# Request headers that carry the caller's gateway credential and must NEVER be
+# relayed to an upstream MCP server. The upstream URL (``proxy_pass_url``) is
+# controlled by whoever registered the server -- a registrant-controlled, not-
+# fully-trusted destination sitting on the far side of the gateway's trust
+# boundary. Forwarding the caller's ``Authorization``/``Cookie`` verbatim would
+# hand a malicious registrant the caller's registry-scoped bearer token and
+# session cookies, enabling impersonation against the registry API.
+#
+# The gateway authenticates itself to the upstream via its own mechanism (the
+# upstream's registered credentials / the transport it establishes), NOT by
+# relaying the caller's registry token. Every entry is stored lowercase;
+# matching is case-insensitive (HTTP header names are case-insensitive per
+# RFC 9110 section 5.1).
+_SENSITIVE_REQUEST_HEADERS: frozenset[str] = frozenset(
+    {
+        "authorization",
+        "x-authorization",
+        "cookie",
+        "proxy-authorization",
+    }
+)
+
+
 # Allowlist of upstream response headers the proxy is permitted to forward
 # back to the MCP client. The auth-server sits on a trust boundary in front
 # of arbitrary upstream MCP servers, so the default posture is to drop
@@ -4467,13 +4490,22 @@ async def _read_bounded(
 def _forward_headers(
     incoming: dict[str, str],
 ) -> dict[str, str]:
-    """Copy incoming request headers, stripping hop-by-hop and proxy-hint
-    headers so httpx can set them correctly for the upstream connection.
+    """Copy incoming request headers, stripping hop-by-hop, proxy-hint, and
+    credential-bearing headers before forwarding to the upstream connection.
+
+    The upstream MCP server is registrant-controlled and not fully trusted, so
+    the caller's gateway credential must not cross the trust boundary. This
+    drops ``Authorization``/``Cookie`` (and aliases) so a malicious registered
+    upstream cannot capture and replay the caller's registry-scoped token; the
+    hop-by-hop set is stripped so httpx can recompute framing headers correctly.
     """
     forwarded: dict[str, str] = {}
     for key, value in incoming.items():
         lower = key.lower()
         if lower in _HOP_BY_HOP_HEADERS:
+            continue
+        if lower in _SENSITIVE_REQUEST_HEADERS:
+            # Never relay the caller's credential to an untrusted upstream.
             continue
         if lower in ("x-upstream-url",):
             # Never leak this internal routing header to the upstream.
