@@ -146,6 +146,11 @@ variable "keycloak_database_password" {
   description = "Keycloak database password"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = !can(regex("[/ @\"'+:?#&!=%]", var.keycloak_database_password))
+    error_message = "Password cannot contain URI-reserved or RDS-rejected characters: / @ \" ' + : ? # & ! = % or spaces."
+  }
 }
 
 variable "keycloak_database_min_acu" {
@@ -377,6 +382,11 @@ variable "documentdb_admin_password" {
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    condition     = var.documentdb_admin_password == "" || !can(regex("[/ @\"'+:?#&!=%]", var.documentdb_admin_password))
+    error_message = "Password cannot contain URI-reserved or RDS-rejected characters: / @ \" ' + : ? # & ! = % or spaces."
+  }
 }
 
 variable "documentdb_shard_capacity" {

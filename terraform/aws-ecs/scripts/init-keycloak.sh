@@ -55,10 +55,10 @@ wait_for_keycloak() {
 get_admin_token() {
     local response=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=${KEYCLOAK_ADMIN}" \
-        -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-        -d "grant_type=password" \
-        -d "client_id=admin-cli")
+        --data-urlencode "username=${KEYCLOAK_ADMIN}" \
+        --data-urlencode "password=${KEYCLOAK_ADMIN_PASSWORD}" \
+        --data-urlencode "grant_type=password" \
+        --data-urlencode "client_id=admin-cli")
 
     echo "$response" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4
 }
