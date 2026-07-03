@@ -3618,3 +3618,71 @@ class TestForwardHeadersIngressStrip:
         from auth_server.server import _INTERNAL_INGRESS_RELAY_SERVERS
 
         assert _INTERNAL_INGRESS_RELAY_SERVERS == frozenset({"airegistry-tools"})
+
+    def test_proxy_authorization_stripped(self):
+        """Proxy-Authorization (hop-by-hop and an auth header) never reaches upstream."""
+        out = self._forward({"Proxy-Authorization": "Bearer p"}, relay=True)
+        assert "proxy-authorization" not in {k.lower() for k in out}
+
+    def test_empty_headers_no_crash(self):
+        """Empty input yields empty output without error."""
+        assert self._forward({}) == {}
+
+    def test_relay_false_strips_all_three_auth_headers_together(self):
+        """The core leak-closure: a request carrying all three auth headers to a
+        non-internal server forwards none of them."""
+        out = self._forward(
+            {
+                "Authorization": "Bearer a",
+                "X-Authorization": "Bearer x",
+                "Cookie": "mcp_gateway_session=s",
+                "Accept": "application/json",
+            },
+            relay=False,
+        )
+        assert set(k.lower() for k in out) == {"accept"}
+
+    def test_bearer_value_not_needed_key_only(self):
+        """Stripping is by header name, independent of value shape."""
+        out = self._forward({"Authorization": "Basic Zm9vOmJhcg=="}, relay=False)
+        assert "authorization" not in {k.lower() for k in out}
+
+
+class TestInternalRelayDecision:
+    """The mcp_proxy relay decision keys on the verified `server` claim (first
+    path segment), matches the hardcoded internal set exactly, and normalizes
+    case. Mirrors the inline logic in mcp_proxy (issue #1266).
+    """
+
+    def _decides_relay(self, server_claim):
+        from auth_server.server import _INTERNAL_INGRESS_RELAY_SERVERS
+
+        # Mirror mcp_proxy: registered_server = (claims.get("server") or "").lower()
+        registered_server = (server_claim or "").lower()
+        return registered_server in _INTERNAL_INGRESS_RELAY_SERVERS
+
+    def test_exact_internal_server_relays(self):
+        assert self._decides_relay("airegistry-tools") is True
+
+    def test_case_insensitive_match(self):
+        assert self._decides_relay("AiRegistry-Tools") is True
+
+    def test_missing_claim_does_not_relay(self):
+        assert self._decides_relay("") is False
+        assert self._decides_relay(None) is False
+
+    def test_similar_but_not_exact_name_does_not_relay(self):
+        """No substring/prefix match: only the exact internal name relays."""
+        for name in (
+            "airegistry-tools-evil",
+            "evil-airegistry-tools",
+            "airegistry",
+            "airegistry_tools",
+            "ai-registry",
+        ):
+            assert self._decides_relay(name) is False, name
+
+    def test_federated_prefixed_name_does_not_relay(self):
+        """A federated copy (e.g. server claim 'ai-registry' from /ai-registry/...)
+        is a different first path segment and must NOT relay."""
+        assert self._decides_relay("ai-registry") is False
