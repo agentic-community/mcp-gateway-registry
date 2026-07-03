@@ -101,6 +101,33 @@ resource "aws_secretsmanager_secret_version" "secret_key" {
   secret_string = random_password.secret_key.result
 }
 
+# nginx marker secret. Required unconditionally by both auth-server and registry
+# (they refuse to start without it): nginx force-sets it as X-Validate-Source-Secret
+# on the /validate subrequest, and the auth-server only mints an mcp-proxy token
+# when it matches -- so a direct :8888 /validate with a forged X-Resolved-Upstream
+# cannot obtain one. Generated like secret_key (not gated on egress). special=false
+# because the registry substitutes the value verbatim into the generated nginx conf,
+# where quotes/backslashes/$ would break parsing.
+resource "random_password" "nginx_marker_secret" {
+  length  = 64
+  special = false
+}
+
+#checkov:skip=CKV2_AWS_57:Application-generated marker secret - rotation requires coordinated service restart
+resource "aws_secretsmanager_secret" "nginx_marker_secret" {
+  name_prefix             = "${local.name_prefix}-nginx-marker-"
+  description             = "nginx marker secret shared by auth-server and registry (guards mcp-proxy token minting)"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "nginx_marker_secret" {
+  secret_id = aws_secretsmanager_secret.nginx_marker_secret.id
+  # Operator-supplied value wins; otherwise use the auto-generated one.
+  secret_string = var.egress_nginx_marker_secret != "" ? var.egress_nginx_marker_secret : random_password.nginx_marker_secret.result
+}
+
 # Keycloak client secrets (created with placeholder, updated by init-keycloak.sh)
 #checkov:skip=CKV2_AWS_57:Keycloak client secret managed by Keycloak init script, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "keycloak_client_secret" {

@@ -31,6 +31,8 @@ from registry.api.auth0_m2m_routes import router as auth0_m2m_router
 from registry.api.config_routes import router as config_router
 from registry.api.custom_entity_routes import router as custom_entity_router
 from registry.api.custom_type_routes import router as custom_type_router
+from registry.api.egress_auth_routes import router as egress_auth_router
+from registry.api.egress_oauth_facade_routes import router as egress_oauth_facade_router
 from registry.api.embeddings_admin_routes import router as embeddings_admin_router
 from registry.api.export_routes import router as export_router
 from registry.api.federation_export_routes import router as federation_export_router
@@ -848,6 +850,7 @@ async def lifespan(app: FastAPI):
 
         # Start the GitHub-release update-check poller (admin banner; air-gap safe)
         from registry.core.update_check import start_update_checker
+
         await start_update_checker()
 
     except Exception as e:
@@ -885,6 +888,7 @@ async def lifespan(app: FastAPI):
 
         # Stop update-check poller
         from registry.core.update_check import stop_update_checker
+
         await stop_update_checker()
 
         # Shutdown audit logger if enabled
@@ -1081,6 +1085,11 @@ if settings.audit_log_enabled:
 # Register API routers with /api prefix
 app.include_router(system_router, tags=["System"])  # /api/version, /api/stats
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+# Egress credential vault routes MUST be registered before servers_router: the
+# servers_router has a greedy GET/PUT/PATCH "/servers/{path:path}" that would
+# otherwise shadow "/servers/{server_path}/egress-auth" (matching the egress
+# suffix as part of the server path and 404ing). First match wins in Starlette.
+app.include_router(egress_auth_router, prefix="/api")
 app.include_router(servers_router, prefix="/api", tags=["Server Management"])
 app.include_router(ans_router, prefix="/api", tags=["ANS Integration"])
 app.include_router(agent_router, prefix="/api", tags=["Agent Management"])
@@ -1095,6 +1104,12 @@ if settings.custom_entity_types_enabled:
     app.include_router(custom_entity_router, prefix="/api", tags=["custom-entities"])
     logger.info("Custom entity types feature enabled; registered custom-type/custom routes")
 app.include_router(internal_router, prefix="/api")
+# Note: egress_auth_router is registered earlier (before servers_router) so its
+# /servers/{server_path}/egress-auth routes are not shadowed by the greedy
+# servers "/servers/{path:path}" route.
+if settings.egress_auth_enabled:
+    app.include_router(egress_oauth_facade_router, tags=["Egress OAuth Facade"])
+    logger.info("Egress OAuth AS facade enabled; registered /oauth2/egress/* routes")
 app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring"])
 app.include_router(federation_export_router)
 app.include_router(peer_management_router)

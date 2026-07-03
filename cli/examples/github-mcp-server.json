@@ -1,0 +1,13 @@
+{
+  "server_name": "GitHub MCP",
+  "description": "GitHub's hosted MCP server (repos, issues, pull requests, code search). Uses per-user egress OAuth (3LO): each user connects their own GitHub account once, the gateway vaults the user token and injects it on egress. Configure egress OAuth separately after registration via POST /servers/github/egress-auth (egress_provider=github).",
+  "path": "/github",
+  "proxy_pass_url": "https://api.githubcopilot.com/mcp/",
+  "tags": ["github", "code", "issues", "pull-requests", "egress-oauth"],
+  "auth_scheme": "none",
+  "supported_transports": ["streamable-http"],
+  "status": "active",
+  "provider_organization": "GitHub",
+  "provider_url": "https://github.com",
+  "visibility": "public"
+}

@@ -1635,15 +1635,19 @@ class BackendSessionRepositoryBase(ABC):
         self,
         client_session_id: str,
         backend_key: str,
+        user_id: str | None = None,
     ) -> str | None:
         """Get backend session ID and bump last_used_at atomically.
 
         Args:
             client_session_id: Client-facing session ID
             backend_key: Backend location key
+            user_id: Authenticated user identity the session must belong to.
+                When None, ownership is not enforced (legacy behavior).
 
         Returns:
-            Backend session ID if found, None otherwise
+            Backend session ID if found (and owned by ``user_id`` when given),
+            None otherwise
         """
         pass
 
@@ -1672,12 +1676,15 @@ class BackendSessionRepositoryBase(ABC):
         self,
         client_session_id: str,
         backend_key: str,
+        user_id: str | None = None,
     ) -> None:
         """Delete a stale backend session.
 
         Args:
             client_session_id: Client-facing session ID
             backend_key: Backend location key
+            user_id: Authenticated user identity the session must belong to.
+                When None, ownership is not enforced (legacy behavior).
         """
         pass
 
@@ -1701,14 +1708,21 @@ class BackendSessionRepositoryBase(ABC):
     async def validate_client_session(
         self,
         client_session_id: str,
+        user_id: str | None = None,
+        virtual_server_path: str | None = None,
     ) -> bool:
-        """Check if a client session exists and bump last_used_at.
+        """Check if a client session exists, is owned by ``user_id``, and bump last_used_at.
 
         Args:
             client_session_id: Client-facing session ID
+            user_id: Authenticated user identity the session must belong to.
+                When None, ownership is not enforced (legacy behavior).
+            virtual_server_path: Virtual server path the session was minted for.
+                When None, the path is not enforced (legacy behavior).
 
         Returns:
-            True if session exists, False otherwise
+            True if session exists (and matches ``user_id`` /
+            ``virtual_server_path`` when given), False otherwise
         """
         pass
 

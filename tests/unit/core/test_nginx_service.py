@@ -569,6 +569,14 @@ def test_create_location_block_streamable_http(nginx_service):
     assert "proxy_set_header X-Internal-Token $auth_internal_token" in block
     assert "proxy_buffering off" in block
     assert "auth_request /validate" in block
+    # Upstream timeouts derived from MCP_PROXY_TIMEOUT so long-running MCP tool
+    # calls aren't severed by nginx before the inner auth-server hop times out.
+    # The exact read/send value is asserted in TestResolveMcpProxyReadTimeout;
+    # here we only assert the directives are emitted (no unresolved f-string).
+    assert "proxy_read_timeout " in block
+    assert "proxy_send_timeout " in block
+    assert "proxy_connect_timeout 10s" in block
+    assert "{mcp_proxy_read_timeout}" not in block
 
 
 @pytest.mark.unit
@@ -1317,3 +1325,54 @@ def test_generated_protected_api_block_carries_internal_token():
         "$upstream_http_x_internal_token_registry;" in src
     )
     assert "proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;" in src
+
+
+@pytest.mark.unit
+class TestResolveMcpProxyReadTimeout:
+    """Tests for the nginx MCP proxy_read_timeout derivation helper.
+
+    The nginx read/send timeout for the /mcp-proxy/ location blocks is derived
+    from settings.mcp_proxy_timeout (MCP_PROXY_TIMEOUT) plus a fixed buffer, so
+    the inner auth-server hop always times out first. Credit: derivation
+    approach contributed by @go-faustino (PR #1321).
+    """
+
+    def test_default_is_upstream_plus_buffer(self):
+        """Default 30s upstream timeout yields 60s (30s + 30s buffer)."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout=30.0)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
+
+    def test_raised_upstream_scales(self):
+        """A raised upstream timeout scales the nginx read timeout with headroom."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout=300.0)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 330
+
+    def test_fractional_upstream_rounds_up(self):
+        """A fractional upstream timeout is rounded up before adding the buffer."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout=45.5)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 76
+
+    def test_invalid_value_falls_back_to_default(self):
+        """A non-numeric value falls back to the 30s default (-> 60s)."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout="not-a-float")
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
+
+    def test_none_value_falls_back_to_default(self):
+        """A missing (None) value falls back to the 30s default (-> 60s)."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout=None)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60

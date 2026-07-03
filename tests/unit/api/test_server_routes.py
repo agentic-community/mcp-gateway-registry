@@ -3112,3 +3112,33 @@ class TestServerModifyApiAuthorization:
             )
 
         assert response.status_code == 403
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestTemplateRenderingRoutes:
+    """Regression tests for server-rendered HTML routes.
+
+    These routes call ``templates.TemplateResponse`` and render a real Jinja2
+    template (auth/services are mocked, but the template engine is not). They
+    guard the Starlette TemplateResponse signature: Starlette removed the
+    legacy ``TemplateResponse(name, context)`` form, so the request must be the
+    first positional argument (``TemplateResponse(request, name, context)``).
+    The old form made Jinja try to load the context dict as a template name and
+    returned HTTP 500 (unhashable dict key).
+    """
+
+    def test_token_generation_page_renders(self, test_client_regular) -> None:
+        """GET /api/tokens renders the token page (200), not a 500."""
+        response = test_client_regular.get("/api/tokens")
+
+        assert response.status_code == 200
+        assert "Generate API Token" in response.text
+
+    def test_token_generation_page_lists_user_scopes(self, test_client_regular) -> None:
+        """The rendered page includes the user's scopes."""
+        response = test_client_regular.get("/api/tokens")
+
+        assert response.status_code == 200
+        # regular_user_context grants "test-server/read"
+        assert "test-server/read" in response.text

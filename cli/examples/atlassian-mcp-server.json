@@ -1,0 +1,13 @@
+{
+  "server_name": "Atlassian MCP",
+  "description": "Atlassian's hosted MCP server (Jira and Confluence). Uses per-user egress OAuth (3LO): each user connects their own Atlassian account once, the gateway vaults the user token and injects it on egress. Configure egress OAuth separately after registration via POST /servers/atlassian/egress-auth (egress_provider=atlassian).",
+  "path": "/atlassian",
+  "proxy_pass_url": "https://mcp.atlassian.com/v1/mcp",
+  "tags": ["atlassian", "jira", "confluence", "egress-oauth"],
+  "auth_scheme": "none",
+  "supported_transports": ["streamable-http"],
+  "status": "active",
+  "provider_organization": "Atlassian",
+  "provider_url": "https://www.atlassian.com",
+  "visibility": "public"
+}
