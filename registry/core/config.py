@@ -3,9 +3,66 @@ from datetime import UTC
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def _normalize_cors_origin(value: str) -> str | None:
+    """Validate and normalize a single CORS origin string.
+
+    A valid origin is ``scheme://host[:port]`` with an ``http`` or ``https``
+    scheme and no path, query, fragment, credentials, or wildcard. This is a
+    strict allowlist check: anything that does not parse cleanly to an exact
+    origin returns ``None`` so the caller can reject it rather than widening
+    the CORS policy.
+
+    Args:
+        value: Candidate origin string (already whitespace-stripped).
+
+    Returns:
+        The normalized ``scheme://host[:port]`` origin (lower-cased scheme and
+        host), or ``None`` if the value is not a well-formed exact origin.
+    """
+    if not value or "*" in value:
+        return None
+    try:
+        parsed = urlparse(value)
+        # Accessing .port validates the port and may raise ValueError for an
+        # out-of-range or non-numeric port; catching it here fails closed.
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    if not parsed.hostname:
+        return None
+    # Reject anything carrying a path/query/fragment or userinfo: an origin is
+    # only scheme + host + optional port.
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    host = parsed.hostname.lower()
+    # Strip a single trailing dot (FQDN root label). Browsers never send a
+    # trailing-dot Origin header, so a configured "example.com." would be a
+    # dead entry; normalizing it keeps the allowlist matching real origins.
+    if host.endswith(".") and not host.endswith(".."):
+        host = host[:-1]
+    if not host:
+        return None
+    # urlparse strips the brackets from IPv6 literals; restore them so the
+    # reconstructed origin matches the bracketed form a browser sends in the
+    # Origin header (e.g. http://[::1]:8080). A colon in the hostname is only
+    # valid for an IPv6 literal.
+    if ":" in host:
+        host = f"[{host}]"
+    scheme = parsed.scheme.lower()
+    if port is not None:
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
+
 
 # Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist
 # at terraform/aws-ecs/variables.tf (issue #955) so both layers reject the same
@@ -17,6 +74,22 @@ ALLOWED_STORAGE_BACKENDS: frozenset[str] = frozenset(
         "mongodb",
         "mongodb-atlas",
     }
+)
+
+
+# Loopback origins auto-trusted for CORS only in local development (when the
+# container /app directory is absent). Covers the common React/Vite dev-server
+# ports on both localhost and 127.0.0.1. These are NEVER added in a container
+# deployment; production must configure CORS_ALLOWED_ORIGINS explicitly.
+LOCAL_DEV_CORS_ORIGINS: tuple[str, ...] = (
+    "http://localhost",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8000",
 )
 
 
@@ -90,8 +163,29 @@ class Settings(BaseSettings):
     secret_key: str = ""
     session_cookie_name: str = "mcp_gateway_session"
     session_max_age_seconds: int = 60 * 60 * 8  # 8 hours
-    session_cookie_secure: bool = False  # Set to True in production with HTTPS
+    # Secure-by-default: the session cookie carries the Secure flag so browsers
+    # only transmit it over HTTPS. Operators running a plain-HTTP local dev
+    # stack can explicitly opt out with SESSION_COOKIE_SECURE=false; every other
+    # deployment stays protected without extra configuration.
+    session_cookie_secure: bool = True
     session_cookie_domain: str | None = None  # e.g., ".example.com" for cross-subdomain sharing
+
+    # CORS allowlist. Comma-separated list of exact origins (scheme + host +
+    # optional port) permitted to make credentialed cross-origin requests to
+    # the registry API, e.g. "https://app.example.com,https://admin.example.com".
+    # There is deliberately NO wildcard / regex fallback: an unset or empty list
+    # means only same-origin requests are accepted (fail closed). In local dev
+    # (no /app dir) the loopback origins are auto-added so the React dev server
+    # keeps working; production must set this explicitly.
+    cors_allowed_origins: str = Field(
+        default="",
+        description=(
+            "Comma-separated exact origins allowed to make credentialed "
+            "cross-origin requests (e.g. https://app.example.com). Empty means "
+            "same-origin only; there is no wildcard fallback. Loopback origins "
+            "are auto-added in local dev."
+        ),
+    )
     auth_server_url: str = "http://localhost:8888"
     auth_server_external_url: str = "http://localhost:8888"  # External URL for OAuth redirects
     auth_provider: str = "cognito"  # Auth provider: cognito, keycloak, entra, github
@@ -1355,6 +1449,84 @@ class Settings(BaseSettings):
     def is_local_dev(self) -> bool:
         """Check if running in local development mode."""
         return not Path("/app").exists()
+
+    def _registry_url_is_loopback(self) -> bool:
+        """Return True when ``registry_url`` points at a loopback host.
+
+        Used to gate auto-trust of loopback CORS dev origins so a production
+        host that merely lacks the container ``/app`` directory does not widen
+        its CORS policy. Fails closed: an unparseable URL returns False.
+        """
+        try:
+            host = urlparse(self.registry_url).hostname
+        except ValueError:
+            return False
+        if not host:
+            return False
+        host = host.lower()
+        return host in ("localhost", "127.0.0.1", "::1") or host.endswith(".localhost")
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        """Resolve the effective CORS allowlist of exact origins.
+
+        The list is the union of:
+
+        1. Explicit operator-configured origins from ``CORS_ALLOWED_ORIGINS``
+           (comma-separated), each validated to be a well-formed origin
+           (``scheme://host[:port]`` with an http/https scheme, no path, query,
+           fragment, or wildcard). Malformed entries are dropped with a warning
+           rather than silently widening the policy.
+        2. The registry's own external origin derived from ``registry_url``
+           (so the app can always talk to itself).
+        3. The loopback dev origins in :data:`LOCAL_DEV_CORS_ORIGINS`, but only
+           when running against a loopback registry (a genuine local-dev stack).
+
+        There is intentionally no wildcard or regex fallback. If nothing is
+        configured and we are not in local dev, the result is either just the
+        registry's own origin or an empty list, meaning cross-origin requests
+        from third parties are denied (fail closed).
+
+        Returns:
+            De-duplicated list of exact origin strings, order-stable.
+        """
+        origins: list[str] = []
+
+        for raw in self.cors_allowed_origins.split(","):
+            candidate = raw.strip()
+            if not candidate:
+                continue
+            normalized = _normalize_cors_origin(candidate)
+            if normalized is None:
+                logger.warning(
+                    "Ignoring invalid CORS origin %r in CORS_ALLOWED_ORIGINS; "
+                    "expected an exact origin like https://app.example.com",
+                    candidate,
+                )
+                continue
+            origins.append(normalized)
+
+        self_origin = _normalize_cors_origin(self.registry_url)
+        if self_origin is not None:
+            origins.append(self_origin)
+
+        # Auto-trust loopback dev-server origins ONLY for a genuine local-dev
+        # stack. is_local_dev alone is a filesystem heuristic (no /app dir) that
+        # is also true on bare-metal / custom-image hosts, so we additionally
+        # require the registry itself to be reachable at a loopback host. This
+        # prevents a production host that merely lacks /app from silently
+        # trusting http://localhost:* origins (fail closed).
+        if self.is_local_dev and self._registry_url_is_loopback():
+            origins.extend(LOCAL_DEV_CORS_ORIGINS)
+
+        # De-duplicate while preserving insertion order.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for origin in origins:
+            if origin not in seen:
+                seen.add(origin)
+                deduped.append(origin)
+        return deduped
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

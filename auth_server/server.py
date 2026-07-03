@@ -4382,8 +4382,13 @@ async def oauth2_callback(
         # Check if HTTPS is terminated at load balancer/CloudFront
         is_https = is_request_https(request)
 
-        # Only set secure=True if the original request was HTTPS
-        cookie_secure_config = OAUTH2_CONFIG.get("session", {}).get("secure", False)
+        # Secure-by-default: the Secure flag is enabled unless an operator has
+        # explicitly set session.secure to false for a plain-HTTP local dev
+        # stack. A missing config key must NOT silently drop the flag, so the
+        # code-level fallback is True (fail closed). The flag is only actually
+        # emitted when the inbound request is HTTPS, because a browser rejects a
+        # Secure Set-Cookie sent over plain HTTP.
+        cookie_secure_config = OAUTH2_CONFIG.get("session", {}).get("secure", True)
         cookie_secure = cookie_secure_config and is_https
         cookie_samesite = OAUTH2_CONFIG.get("session", {}).get("samesite", "lax")
         cookie_domain = OAUTH2_CONFIG.get("session", {}).get("domain", "")

@@ -1025,14 +1025,33 @@ except ValueError as exc:
         "MCP discovery clients will not receive WWW-Authenticate headers on 401s."
     )
 
-# Add CORS middleware for React development and Docker deployment
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r"https?://(localhost(:[0-9]+)?|.*\.compute.*\.amazonaws\.com(:[0-9]+)?)",
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+# Add CORS middleware with an explicit, fail-closed origin allowlist.
+#
+# Because credentials (cookies / Authorization) are sent cross-origin, the set
+# of trusted origins MUST be exact and operator-controlled — never a wildcard
+# or a broad regex. settings.cors_allowed_origins_list resolves to the union of
+# CORS_ALLOWED_ORIGINS, the registry's own origin, and (only in local dev) the
+# loopback dev-server origins. If nothing resolves, the list is empty and only
+# same-origin requests are accepted.
+_cors_allowed_origins = settings.cors_allowed_origins_list
+if _cors_allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
+    logger.info(f"CORS enabled for {len(_cors_allowed_origins)} allowed origin(s)")
+else:
+    # Fail closed: no trusted origins resolved, so do not register a
+    # credentialed CORS policy at all. Cross-origin browser requests are
+    # rejected; same-origin traffic is unaffected.
+    logger.warning(
+        "No CORS origins configured (CORS_ALLOWED_ORIGINS empty and registry_url "
+        "did not resolve to a usable origin); cross-origin requests will be denied. "
+        "Set CORS_ALLOWED_ORIGINS to the exact browser origins that need access."
+    )
 
 # Add registry mode middleware to filter endpoints based on REGISTRY_MODE
 # This must be after CORS (to allow preflight) and before audit (to log blocked requests)

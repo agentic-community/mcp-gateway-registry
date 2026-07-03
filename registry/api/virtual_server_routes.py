@@ -52,27 +52,38 @@ router = APIRouter()
 def _require_admin(
     user_context: dict,
 ) -> None:
-    """Check that user has admin or server-modify permissions.
+    """Check that the user is an actual registry administrator.
+
+    Virtual server CRUD lets a caller aggregate tools from arbitrary backend
+    servers into a single virtual server, which sidesteps per-server
+    scope-based access control. That capability must therefore be restricted
+    to genuine administrators only.
+
+    A per-server ``*/execute`` scope (surfaced as ``can_modify_servers``) is
+    deliberately NOT treated as admin-equivalent here: holding execute on one
+    backend must not grant the ability to mint virtual servers that pull in
+    other backends. Authorization fails closed -- anything short of an explicit
+    admin signal is denied.
 
     Args:
-        user_context: Authenticated user context
+        user_context: Authenticated user context.
 
     Raises:
-        HTTPException: 403 if user lacks permissions
+        HTTPException: 403 if the user is not an administrator.
     """
     is_admin = user_context.get("is_admin", False)
-    can_modify = user_context.get("can_modify_servers", False)
 
-    # Also check groups and scopes for mcp-registry-admin
+    # Explicit admin group/scope membership is also accepted as an admin
+    # signal. can_modify_servers is intentionally excluded.
     groups = user_context.get("groups", [])
     scopes = user_context.get("scopes", [])
     has_admin_group = "mcp-registry-admin" in groups
     has_admin_scope = "mcp-registry-admin" in scopes
 
-    if not (is_admin or can_modify or has_admin_group or has_admin_scope):
+    if not (is_admin or has_admin_group or has_admin_scope):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin or server-modify permissions required",
+            detail="Administrator privileges required",
         )
 
 
@@ -365,7 +376,7 @@ async def create_virtual_server(
 ) -> VirtualServerConfig:
     """Create a new virtual MCP server.
 
-    Requires admin or server-modify permissions.
+    Requires administrator privileges.
     """
     _require_admin(user_context)
 
@@ -421,7 +432,7 @@ async def update_virtual_server(
 ) -> VirtualServerConfig:
     """Update an existing virtual MCP server.
 
-    Requires admin or server-modify permissions.
+    Requires administrator privileges.
     """
     _require_admin(user_context)
     normalized = _normalize_virtual_path(vs_path)
@@ -481,7 +492,7 @@ async def delete_virtual_server(
 ) -> None:
     """Delete a virtual MCP server.
 
-    Requires admin or server-modify permissions.
+    Requires administrator privileges.
     """
     _require_admin(user_context)
     normalized = _normalize_virtual_path(vs_path)
@@ -524,7 +535,7 @@ async def toggle_virtual_server(
 ) -> dict:
     """Enable or disable a virtual MCP server.
 
-    Requires admin or server-modify permissions.
+    Requires administrator privileges.
     Enabling triggers nginx configuration regeneration.
     """
     _require_admin(user_context)
