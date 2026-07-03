@@ -100,7 +100,7 @@ sequenceDiagram
 
     Note over User,UI: Operator has already registered the server and set<br/>egress OAuth (provider, client_id/secret, scopes).<br/>The gateway callback URL is registered in the provider's OAuth app.
 
-    User->>UI: Select the auth-based server, click "Connect"
+    User->>UI: Select the auth-based server and click Connect
     UI->>REG: build consent URL (PKCE, signed state)
     REG-->>User: redirect to provider authorize URL
     User->>IDP: log in + approve (out of band, in browser)
@@ -109,7 +109,7 @@ sequenceDiagram
     REG->>IDP: exchange code (+ client_secret) for tokens
     IDP-->>REG: access_token (+ refresh_token)
     REG->>VAULT: store StoredToken at 4-tuple key
-    REG-->>User: "Connected" — token vaulted, laptop holds nothing
+    REG-->>User: Connected — token vaulted, laptop holds nothing
 ```
 
 The consent `state` is AEAD-encrypted and session-bound (anti-phishing): the callback verifies the opener is the same user who started the flow, so a stolen consent URL opened by someone else cannot bind a token to the wrong account.
@@ -182,27 +182,27 @@ sequenceDiagram
     autonumber
     participant CA as Coding assistant
     participant NGINX as nginx
-    participant AS as auth-server<br/>(mcp_proxy)
-    participant MCPGW as mcpgw<br/>(airegistry-tools upstream)
+    participant AS as auth-server (mcp_proxy)
+    participant MCPGW as mcpgw (airegistry-tools upstream)
     participant REG as registry API
 
-    CA->>NGINX: tools/call on /airegistry-tools/mcp<br/>Authorization: Bearer [ingress token]
+    CA->>NGINX: tools/call on /airegistry-tools/mcp with ingress Authorization bearer
     NGINX->>AS: auth_request /validate
-    AS-->>NGINX: 200 + signed X-Internal-Token (server claim = "airegistry-tools")
-    NGINX->>AS: proxy_pass /mcp-proxy/airegistry-tools/...
+    AS-->>NGINX: 200 plus signed X-Internal-Token (server claim is airegistry-tools)
+    NGINX->>AS: proxy_pass /mcp-proxy/airegistry-tools/
 
-    Note over AS: relay decision: claims["server"] == "airegistry-tools"<br/>-> in _INTERNAL_INGRESS_RELAY_SERVERS -> relay_authorization=True
-    Note over AS: _forward_headers: KEEP Authorization;<br/>STRIP X-Authorization + Cookie (always)
+    Note over AS: relay decision: the server claim is in the internal relay set,<br/>so relay_authorization is true
+    Note over AS: _forward_headers KEEPS Authorization and always STRIPS<br/>X-Authorization and Cookie
 
-    AS->>MCPGW: forward request, Authorization: Bearer [ingress token]
-    Note over MCPGW: FastMCP front door admits the call.<br/>If OIDC_ENABLED=true it validates this bearer<br/>(same Keycloak realm as the gateway).
+    AS->>MCPGW: forward request with ingress Authorization bearer
+    Note over MCPGW: FastMCP front door admits the call.<br/>When OIDC is enabled it validates this bearer<br/>(same Keycloak realm as the gateway).
 
-    MCPGW->>MCPGW: _get_registry_headers() picks the credential for the registry call:<br/>1. REGISTRY_API_TOKEN (static) if set<br/>2. else M2M token (client_credentials) -> X-Authorization<br/>3. else fallback: caller bearer -> X-Authorization
-    MCPGW->>NGINX: GET /api/... (registry API) with chosen credential
-    NGINX->>AS: auth_request /validate (validates that credential)
-    AS-->>NGINX: 200 + identity
-    NGINX->>REG: proxy_pass /api/...
-    REG-->>MCPGW: servers / agents / skills JSON
+    MCPGW->>MCPGW: _get_registry_headers picks the credential for the registry call<br/>1. REGISTRY_API_TOKEN if set, 2. else its own M2M token, 3. else the caller bearer
+    MCPGW->>NGINX: GET /api registry call with the chosen credential
+    NGINX->>AS: auth_request /validate for that credential
+    AS-->>NGINX: 200 plus identity
+    NGINX->>REG: proxy_pass /api
+    REG-->>MCPGW: servers, agents, skills JSON
     MCPGW-->>AS: MCP tool result
     AS-->>CA: result
 ```
