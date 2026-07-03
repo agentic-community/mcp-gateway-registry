@@ -156,6 +156,182 @@ def _cleanup_stale_temp_files(config_path: Path) -> None:
             logger.warning(f"Failed to remove stale temp file {stale}: {e}")
 
 
+# Suffix for the last-known-good copy kept beside the live config while a
+# candidate is being validated. On a failed validation the live config is
+# restored from this copy so the broken candidate never survives on disk.
+_LAST_GOOD_SUFFIX: str = ".last-good"
+
+
+# Sentinel returned by the config test when the nginx binary is absent. There
+# is no nginx to protect from a bad cold start on such a host (e.g. registry-
+# only mode or local dev), so the caller promotes the candidate without a test
+# rather than rejecting a legitimate render it cannot validate.
+_NGINX_TEST_NO_BINARY: str = "__nginx_binary_missing__"
+
+
+def _run_nginx_config_test() -> tuple[bool, str]:
+    """Run ``nginx -t`` against the live config tree.
+
+    ``nginx -t`` parses the full configuration tree exactly as a cold start
+    (container restart) would - main ``nginx.conf`` plus every ``include``d
+    fragment and the Lua modules they reference. Validating the candidate in
+    place (see :func:`_write_and_validate_config`) is therefore the only
+    faithful predictor of whether a subsequent cold start will boot.
+
+    Returns:
+        A ``(passed, message)`` tuple. ``passed`` is False on a non-zero exit,
+        a timeout, or any other error (fail closed); ``message`` carries
+        nginx's stderr or the failure reason. When the nginx binary is not
+        installed, ``message`` is the ``_NGINX_TEST_NO_BINARY`` sentinel so the
+        caller can distinguish "no nginx to protect" from "config is invalid".
+    """
+    import subprocess  # nosec B404
+
+    try:
+        result = subprocess.run(
+            ["nginx", "-t"],  # nosec B603 B607 - hardcoded command
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        return False, _NGINX_TEST_NO_BINARY
+    except subprocess.TimeoutExpired:
+        return False, "nginx -t timed out"
+    except Exception as e:  # pragma: no cover - defensive
+        return False, f"nginx -t raised: {e}"
+
+    if result.returncode != 0:
+        return False, result.stderr or "nginx -t returned non-zero"
+    return True, result.stderr or ""
+
+
+def _write_and_validate_config(
+    path: Path,
+    content: str,
+) -> None:
+    """Promote a rendered nginx config only if ``nginx -t`` accepts it.
+
+    A malformed config (whether from a config-injection attempt that still
+    parses partially, an unhealthy-backend edge case, or a template bug) must
+    never persist on disk: even when the running nginx keeps serving its
+    in-memory config, the broken file on disk takes down the *next* cold start
+    (routine on ECS/K8s) and with it the whole gateway.
+
+    This renders the candidate to a temporary file, atomically promotes it into
+    ``path`` after backing up the current live config, then runs ``nginx -t``
+    against the real config tree. If the test passes, the backup is discarded.
+    If it fails, the previous last-known-good config is restored (or, when
+    there was no prior config, the rejected file is removed) so the gateway can
+    still cold-start on the last-good config. Fails closed: any error leaves the
+    last-good config in place and raises.
+
+    Args:
+        path: The live nginx config path.
+        content: The rendered candidate config content.
+
+    Raises:
+        RuntimeError: If ``nginx -t`` rejects the candidate (the live config is
+            restored to the last-known-good state before raising).
+        OSError: If the temp write / rename cannot be performed.
+    """
+    import shutil
+
+    path = Path(path)
+
+    # Pre-flight: decide the missing-binary policy BEFORE the candidate ever
+    # touches the live path, so a split/sidecar deployment cannot pick up an
+    # unvalidated config in the window between write and restore.
+    #
+    # When the nginx binary is absent we cannot run ``nginx -t``. In a
+    # single-container / local-dev deployment that means there is no nginx to
+    # cold-start, so promoting the candidate matches the pre-existing behavior.
+    # In a split topology (nginx in a separate container/sidecar sharing this
+    # config volume) an unvalidated config WOULD poison the sidecar's next cold
+    # start, so operators set ``nginx_config_validation_required=True`` to fail
+    # closed — and here we refuse before writing, leaving the live config
+    # untouched entirely.
+    nginx_available = shutil.which("nginx") is not None
+    if not nginx_available:
+        if settings.nginx_config_validation_required:
+            NGINX_CONFIG_WRITES.labels(status="rejected").inc()
+            raise RuntimeError(
+                "nginx config rejected: nginx binary not found and "
+                "nginx_config_validation_required=True (refusing to promote an "
+                "unvalidated config to the shared config path)"
+            )
+        # No nginx on this host to protect: promote as before. In with-gateway
+        # mode this is surfaced at WARNING so a misconfigured split deployment
+        # is visible without enabling debug logging.
+        if settings.nginx_updates_enabled:
+            logger.warning(
+                "nginx binary not found; promoting config without nginx -t validation. "
+                "If nginx runs in a separate container sharing this path, set "
+                "NGINX_CONFIG_VALIDATION_REQUIRED=true to fail closed."
+            )
+        else:
+            logger.debug("nginx binary not found; promoting config without nginx -t validation")
+        _atomic_write_text(path, content)
+        return
+
+    had_previous = path.exists()
+    backup_path = path.with_name(path.name + _LAST_GOOD_SUFFIX)
+
+    # Back up the current live config so we can restore it on rejection.
+    if had_previous:
+        try:
+            # copy2 preserves mode/timestamps; a plain copy keeps the live file
+            # intact (unlike a rename, which would briefly leave no live file).
+            shutil.copy2(path, backup_path)
+        except OSError as e:
+            logger.error("Could not back up live nginx config before validation: %s", e)
+            raise
+
+    # Promote the candidate into the live path (atomic, preserves mode).
+    _atomic_write_text(path, content)
+
+    passed, message = _run_nginx_config_test()
+
+    if passed:
+        # Candidate accepted: drop the backup.
+        if had_previous:
+            try:
+                backup_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.warning("Could not remove nginx config backup %s: %s", backup_path, e)
+        return
+
+    # Candidate rejected: restore the last-known-good config so a cold start
+    # still boots, then fail closed.
+    logger.error(
+        "Rejected nginx config candidate (nginx -t failed); restoring last-good config: %s",
+        message.strip(),
+    )
+    NGINX_CONFIG_WRITES.labels(status="rejected").inc()
+    if had_previous:
+        try:
+            os.replace(backup_path, path)
+        except OSError as e:
+            logger.error("Failed to restore last-good nginx config from %s: %s", backup_path, e)
+            raise RuntimeError(
+                f"nginx config validation failed and last-good restore failed: {message.strip()}"
+            ) from e
+    else:
+        # No prior config existed: remove the rejected file so nothing invalid
+        # is left for a cold start to load.
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.error("Failed to remove rejected nginx config %s: %s", path, e)
+            raise
+
+    raise RuntimeError(f"nginx config rejected by nginx -t: {message.strip()}")
+
+
 def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]:
     """Ensure inputSchema conforms to MCP spec by adding 'type': 'object' if missing.
 
@@ -419,7 +595,13 @@ class NginxConfigService:
             # Write virtual server Lua mapping files (side effect, not part of render)
             await self._commit_virtual_server_mappings()
 
-            _atomic_write_text(settings.nginx_config_path, config_content)
+            # Validate the candidate against the real config tree BEFORE it is
+            # allowed to persist as the live config. A rejected candidate is
+            # never left on disk (the last-known-good config is restored), so a
+            # subsequent nginx cold start cannot be poisoned by a bad render.
+            await asyncio.to_thread(
+                _write_and_validate_config, settings.nginx_config_path, config_content
+            )
 
             logger.info(
                 "Generated Nginx configuration with location blocks and additional server names"
@@ -577,12 +759,19 @@ class NginxConfigService:
                             location_blocks.extend(transport_blocks)
                             logger.debug(f"Added location blocks for healthy service: {path}")
                         else:
-                            # Add commented out block for unhealthy services
+                            # Add commented out block for unhealthy services.
+                            # Sanitize both the path and the backend URL: a
+                            # newline in a stored value would otherwise break out
+                            # of the leading '#' and emit a live directive.
+                            # Registration validation now rejects such values;
+                            # this protects legacy data persisted beforehand.
+                            safe_commented_path = self._sanitize_for_nginx_set(path)
+                            safe_commented_url = self._sanitize_for_nginx_set(proxy_pass_url)
                             commented_block = f"""
-#    location {{{{ROOT_PATH}}}}{path}/ {{
+#    location {{{{ROOT_PATH}}}}{safe_commented_path}/ {{
 #        # Service currently unhealthy (status: {health_status})
 #        # Proxy to MCP server
-#        proxy_pass {proxy_pass_url};
+#        proxy_pass {safe_commented_url};
 #        proxy_http_version 1.1;
 #        proxy_set_header Host $host;
 #        proxy_set_header X-Real-IP $remote_addr;
@@ -739,8 +928,7 @@ class NginxConfigService:
                 )
             except Exception as e:
                 logger.warning(
-                    f"Failed to parse AUTH_SERVER_URL '{auth_server_url}': {e}. "
-                    "Using defaults."
+                    f"Failed to parse AUTH_SERVER_URL '{auth_server_url}': {e}. Using defaults."
                 )
                 auth_host = "auth-server"
                 auth_port = "8888"
@@ -1004,19 +1192,29 @@ class NginxConfigService:
             # Handle paths like /context7, /currenttime/, /ai.smithery-xxx
             escaped_path = re.escape(path.rstrip("/"))
 
+            # Defense-in-depth: escape backend URLs before interpolating them
+            # into the quoted nginx map values (belt-and-suspenders with the
+            # registration-time metacharacter rejection).
+            safe_default_backend = self._sanitize_for_nginx_set(default_backend)
+
             # Add map entries for this server
             # Entry for no header (empty string after colon)
-            map_entries.append(f'    "~^{escaped_path}(/.*)?:$"            "{default_backend}";')
+            map_entries.append(
+                f'    "~^{escaped_path}(/.*)?:$"            "{safe_default_backend}";'
+            )
             # Entry for explicit "latest"
-            map_entries.append(f'    "~^{escaped_path}(/.*)?:latest$"      "{default_backend}";')
+            map_entries.append(
+                f'    "~^{escaped_path}(/.*)?:latest$"      "{safe_default_backend}";'
+            )
 
             # Entry for each version
             for v in versions:
                 version_str = v.get("version", "")
                 backend_url = v.get("proxy_pass_url", "")
                 if version_str and backend_url:
+                    safe_backend_url = self._sanitize_for_nginx_set(backend_url)
                     map_entries.append(
-                        f'    "~^{escaped_path}(/.*)?:{re.escape(version_str)}$"  "{backend_url}";'
+                        f'    "~^{escaped_path}(/.*)?:{re.escape(version_str)}$"  "{safe_backend_url}";'
                     )
 
             logger.info(f"Generated version map entries for {path} with {len(versions)} versions")
@@ -1138,10 +1336,14 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 # Sanitize values for safe interpolation into nginx config
                 safe_name = self._sanitize_for_nginx_comment(vs.server_name)
                 safe_id = self._sanitize_for_nginx_set(server_id)
+                # The path is interpolated into a location directive; escape any
+                # nginx-special characters (defense-in-depth over Pydantic path
+                # validation) so it cannot break out of the directive.
+                safe_vs_path = self._sanitize_for_nginx_set(vs.path)
 
                 block = f"""
     # Virtual MCP Server: {safe_name}
-    location {{{{ROOT_PATH}}}}{vs.path} {{
+    location {{{{ROOT_PATH}}}}{safe_vs_path} {{
         set $virtual_server_id "{safe_id}";
         auth_request /validate;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -1252,8 +1454,18 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                     backend_hostname
                 )
 
+                # Defense-in-depth: escape the backend URL and Host header before
+                # interpolating them into proxy_pass / set / proxy_set_header
+                # directives, matching the escaping applied to the versioned
+                # backend map. Registration-time validation already rejects URLs
+                # with nginx metacharacters; escaping here means legacy data
+                # persisted before validation still cannot break out of the
+                # directive context.
+                safe_mcp_proxy_url = self._sanitize_for_nginx_set(mcp_proxy_url)
+                safe_upstream_host = self._sanitize_for_nginx_set(upstream_host)
+
                 if host_is_resolvable_at_startup:
-                    proxy_directive = f"proxy_pass {mcp_proxy_url};"
+                    proxy_directive = f"proxy_pass {safe_mcp_proxy_url};"
                 else:
                     # sanitized is already underscore-safe (valid nginx var name).
                     backend_var = f"$vs_backend{sanitized}"
@@ -1262,7 +1474,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                     proxy_directive = (
                         f"resolver {dns_resolver} valid=10s;\n"
                         f"        resolver_timeout {dns_resolver_timeout}s;\n"
-                        f'        set {backend_var} "{mcp_proxy_url}";\n'
+                        f'        set {backend_var} "{safe_mcp_proxy_url}";\n'
                         f"        proxy_pass {backend_var};"
                     )
 
@@ -1272,7 +1484,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         {proxy_directive}
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
-        proxy_set_header Host {upstream_host};
+        proxy_set_header Host {safe_upstream_host};
         proxy_set_header Authorization $http_authorization;
         proxy_buffering off;
         proxy_set_header Accept "application/json, text/event-stream";
@@ -1453,6 +1665,14 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             other_version_ids = server_info.get("other_version_ids", [])
             has_versions = len(other_version_ids) > 0
 
+        # Defense-in-depth: escape the backend URL before it is interpolated
+        # into any nginx directive/string. Registration-time validation already
+        # rejects URLs containing nginx metacharacters, but escaping here means a
+        # value that somehow reaches this point (e.g. legacy data persisted
+        # before validation existed) still cannot break out of the quoted
+        # `set $backend_url "..."` context.
+        safe_proxy_pass_url = self._sanitize_for_nginx_set(proxy_pass_url)
+
         # Extract hostname from proxy_pass_url for external services
         parsed_url = urlparse(proxy_pass_url)
         upstream_host = parsed_url.netloc
@@ -1461,8 +1681,11 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # For external services (https), use the upstream hostname
         # For internal services (http without dots in hostname), preserve original host
         if parsed_url.scheme == "https" or "." in upstream_host:
-            # External service - use upstream hostname
-            host_header = upstream_host
+            # External service - use upstream hostname. Sanitize before it is
+            # interpolated into `proxy_set_header Host ...` (defense-in-depth: the
+            # netloc comes from a proxy_pass_url whose metacharacters are rejected
+            # at registration, but legacy data must not break out of the directive).
+            host_header = self._sanitize_for_nginx_set(upstream_host)
             logger.info(f"Using upstream hostname for Host header: {host_header}")
         else:
             # Internal service - preserve original host
@@ -1481,11 +1704,11 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         if has_versions:
             # Multi-version server: use map variable with fallback, then proxy the selected
             # upstream URL to auth_server via X-Upstream-Url so it knows where to forward.
-            proxy_directive = f'''
+            proxy_directive = f"""
         # Version routing - use header-based backend selection
         # If X-MCP-Server-Version header matches a version, use that backend
         # Otherwise, use the default backend
-        set $backend_url "{proxy_pass_url}";
+        set $backend_url "{safe_proxy_pass_url}";
         if ($versioned_backend != "") {{
             set $backend_url $versioned_backend;
         }}
@@ -1494,7 +1717,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_set_header X-Upstream-Url $backend_url;
 
         # Proxy to auth_server mcp-proxy hop (Issue #1026)
-        proxy_pass {mcp_proxy_target};'''
+        proxy_pass {mcp_proxy_target};"""
             version_headers = """
 
         # Add version info to response
@@ -1505,7 +1728,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             # bind it into the internal token via X-Resolved-Upstream, matching what
             # is forwarded here. Quote the URL so nginx does not interpret braces.
             proxy_directive = f"""
-        set $backend_url "{proxy_pass_url}";
+        set $backend_url "{safe_proxy_pass_url}";
 
         # Tell auth_server which upstream to forward to after filtering
         proxy_set_header X-Upstream-Url $backend_url;
@@ -1732,7 +1955,12 @@ class NginxReloadScheduler:
                 await nginx_service._commit_virtual_server_mappings()
 
                 async with nginx_service.reload_lock:
-                    _atomic_write_text(settings.nginx_config_path, config_text)
+                    # Validate the candidate in-tree before it can persist as
+                    # the live config; a rejected render restores last-good and
+                    # raises, so the cold-start path can never load a bad file.
+                    await asyncio.to_thread(
+                        _write_and_validate_config, settings.nginx_config_path, config_text
+                    )
                     reloaded = await asyncio.to_thread(nginx_service.reload_nginx)
                 if reloaded:
                     self._last_config_hash = new_hash

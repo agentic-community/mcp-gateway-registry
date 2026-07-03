@@ -746,7 +746,9 @@ async def lifespan(app: FastAPI):
         try:
             ard_cfg = await get_ard_ingestion_service().get_config()
             if ard_cfg.enabled and ard_cfg.sync_on_startup and ard_cfg.sources:
-                logger.info("Running ARD ingestion startup pass for %d source(s)", len(ard_cfg.sources))
+                logger.info(
+                    "Running ARD ingestion startup pass for %d source(s)", len(ard_cfg.sources)
+                )
                 await get_ard_ingestion_service().ingest_all()
         except Exception as e:  # noqa: BLE001
             logger.error("ARD ingestion startup pass failed: %s", e, exc_info=True)
@@ -884,6 +886,7 @@ async def lifespan(app: FastAPI):
 
         # Stop ARD ingestion scheduler
         from registry.services.ard_ingestion_scheduler import get_ard_ingestion_scheduler
+
         await get_ard_ingestion_scheduler().stop()
 
         # Stop update-check poller
@@ -1154,6 +1157,33 @@ app.include_router(ard_router, prefix="/api/ard", tags=["ARD Registry"])
 # default behavior is preserved for every other path.
 app.add_exception_handler(StarletteHTTPException, ard_http_exception_handler)
 app.add_exception_handler(RequestValidationError, ard_validation_exception_handler)
+
+
+# SSRF / URL validation: any registration or fetch path that persists or
+# reaches a user/registry-controlled URL raises UrlValidationError when the
+# target is unsafe (bad scheme, private/metadata IP, or nginx metacharacters).
+# Surface it as a clean 400 rather than a 500 so the caller learns the URL was
+# rejected. Fails closed by construction: the request is denied before any
+# outbound connection or persistence.
+from fastapi.responses import JSONResponse  # noqa: E402
+from starlette.requests import Request as _StarletteRequest  # noqa: E402
+
+from registry.exceptions import UrlValidationError  # noqa: E402
+
+
+async def _url_validation_exception_handler(
+    request: _StarletteRequest,
+    exc: Exception,
+) -> JSONResponse:
+    """Return HTTP 400 for a rejected user/registry-controlled URL."""
+    reason = getattr(exc, "reason", "URL failed validation")
+    return JSONResponse(
+        status_code=400,
+        content={"detail": f"URL rejected by security policy: {reason}"},
+    )
+
+
+app.add_exception_handler(UrlValidationError, _url_validation_exception_handler)
 
 # Register public, anonymous per-record endpoints (ARD catalog url targets, issue #1294)
 app.include_router(public_record_router, prefix="/api", tags=["Public Records"])

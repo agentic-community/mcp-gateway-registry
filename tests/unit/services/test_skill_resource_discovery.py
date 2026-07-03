@@ -207,8 +207,8 @@ class TestDiscoverSkillResources:
 
     @pytest.fixture
     def mock_async_client(self):
-        """Patch httpx.AsyncClient and yield the mock response object."""
-        with patch("registry.services.skill_service.httpx.AsyncClient") as client_cls:
+        """Patch the guarded async client and yield the mock response object."""
+        with patch("registry.services.skill_service.guarded_async_client") as client_cls:
             response = MagicMock()
             response.status_code = 200
             response.json = MagicMock()
@@ -397,7 +397,7 @@ class TestDiscoverSkillResources:
         client_instance.__aexit__ = AsyncMock(return_value=False)
 
         with patch(
-            "registry.services.skill_service.httpx.AsyncClient",
+            "registry.services.skill_service.guarded_async_client",
             return_value=client_instance,
         ):
             await _discover_skill_resources(

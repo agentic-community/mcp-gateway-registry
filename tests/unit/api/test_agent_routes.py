@@ -1022,7 +1022,7 @@ class TestCheckAgentHealth:
         # Arrange
         with (
             patch("registry.api.agent_routes.agent_service") as mock_agent_service,
-            patch("httpx.AsyncClient") as mock_httpx_client,
+            patch("registry.api.agent_routes.guarded_async_client") as mock_httpx_client,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
@@ -1055,7 +1055,7 @@ class TestCheckAgentHealth:
 
         with (
             patch("registry.api.agent_routes.agent_service") as mock_agent_service,
-            patch("httpx.AsyncClient") as mock_httpx_client,
+            patch("registry.api.agent_routes.guarded_async_client") as mock_httpx_client,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
@@ -1961,9 +1961,9 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
         assert search_repo_mock.index_agent.await_count == 1
         called_path, called_card = search_repo_mock.index_agent.await_args.args
         assert called_path == path
-        assert isinstance(called_card, AgentCard), (
-            f"index_agent was called with {type(called_card).__name__}, expected AgentCard"
-        )
+        assert isinstance(
+            called_card, AgentCard
+        ), f"index_agent was called with {type(called_card).__name__}, expected AgentCard"
 
     @pytest.mark.asyncio
     async def test_safe_scan_does_not_call_update_agent(

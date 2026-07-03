@@ -20,6 +20,41 @@ from mcp.client.streamable_http import streamablehttp_client
 logger = logging.getLogger(__name__)
 
 
+def _assert_mcp_url_fetchable(
+    url: str,
+) -> bool:
+    """Fail-closed SSRF check before an MCP SDK connection is opened.
+
+    The MCP SDK transports (``streamablehttp_client`` / ``sse_client``) build
+    their own httpx client, so they cannot use the pinned guarded transport that
+    protects the registry's direct fetches. This helper re-validates the target
+    against the proxy profile (public-only unless the operator allowlisted the
+    internal target) immediately before a connection is opened, so a
+    ``proxy_pass_url`` that resolves to a private/metadata address is rejected
+    *before* any decrypted credential is built or sent. It resolves DNS at call
+    time, closing the window between registration-time validation and this
+    fetch. Any validation error results in refusal (returns ``False``).
+
+    Args:
+        url: The MCP endpoint / base URL about to be connected to.
+
+    Returns:
+        True if the URL passed validation and may be connected to, else False.
+    """
+    from ..exceptions import UrlValidationError
+    from ..utils.url_guard import PROXY_PROFILE, validate_url
+
+    try:
+        validate_url(url, profile=PROXY_PROFILE)
+        return True
+    except UrlValidationError as e:
+        logger.warning("MCP connection blocked by SSRF guard for %s: %s", url, e)
+        return False
+    except Exception as e:  # pragma: no cover - defensive, fail closed
+        logger.warning("MCP connection blocked (validation error) for %s: %s", url, e)
+        return False
+
+
 class MCPServerInfo(TypedDict, total=False):
     """Server info returned from MCP initialize response."""
 
@@ -227,6 +262,12 @@ async def detect_server_transport(base_url: str) -> str:
         logger.debug(f"Server URL {base_url} already has MCP endpoint")
         return "streamable-http"
 
+    # Fail closed on SSRF before probing the target with the (unpinnable) SDK
+    # client. Both probe endpoints share this host, so validating base_url once
+    # covers them. Default to streamable-http (no connection) when blocked.
+    if not _assert_mcp_url_fetchable(base_url):
+        return "streamable-http"
+
     # Test streamable-http first (default preference)
     try:
         mcp_url = base_url.rstrip("/") + "/mcp/"
@@ -291,11 +332,18 @@ async def get_tools_from_server_with_transport(
 
 async def _get_tools_streamable_http(base_url: str, server_info: dict = None) -> list[dict] | None:
     """Get tools using streamable-http transport"""
-    # Build headers for the server
-    headers = _build_headers_for_server(server_info)
-
     # Check if server_info has explicit mcp_endpoint
     explicit_endpoint = server_info.get("mcp_endpoint") if server_info else None
+
+    # Fail closed on SSRF BEFORE decrypting/building credential headers: a
+    # target that resolves to a private/metadata address must never receive the
+    # server's decrypted backend credentials. Validate the actual endpoint about
+    # to be connected to (explicit endpoint if set, else the base URL).
+    if not _assert_mcp_url_fetchable(explicit_endpoint or base_url):
+        return None
+
+    # Build headers for the server
+    headers = _build_headers_for_server(server_info)
 
     # If explicit endpoint is provided, use it directly (single attempt)
     if explicit_endpoint:
@@ -416,6 +464,10 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
 
     secure_prefix = "s" if sse_url.startswith("https://") else ""
     mcp_server_url = f"http{secure_prefix}://{sse_url[len(f'http{secure_prefix}://') :]}"
+
+    # Fail closed on SSRF BEFORE decrypting/building credential headers.
+    if not _assert_mcp_url_fetchable(mcp_server_url):
+        return None
 
     # Build headers for the server
     headers = _build_headers_for_server(server_info)
@@ -597,6 +649,15 @@ async def get_mcp_connection_result(
         logger.error("MCP Check Error: Base URL is empty.")
         return None
 
+    # Determine the MCP endpoint URL
+    explicit_endpoint = server_info.get("mcp_endpoint") if server_info else None
+
+    # Fail closed on SSRF BEFORE any transport probe or credential build: a
+    # target that resolves to a private/metadata address must never receive the
+    # server's decrypted backend credentials.
+    if not _assert_mcp_url_fetchable(explicit_endpoint or base_url):
+        return None
+
     # Use transport-aware detection
     transport = await detect_server_transport_aware(base_url, server_info)
 
@@ -604,9 +665,6 @@ async def get_mcp_connection_result(
 
     # Build headers for the server
     headers = _build_headers_for_server(server_info)
-
-    # Determine the MCP endpoint URL
-    explicit_endpoint = server_info.get("mcp_endpoint") if server_info else None
 
     if explicit_endpoint:
         mcp_url = explicit_endpoint

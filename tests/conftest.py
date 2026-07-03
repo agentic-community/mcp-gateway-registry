@@ -166,6 +166,18 @@ os.environ.setdefault(
     "AUTH_SERVER_NGINX_MARKER_SECRET", "test-marker-secret-for-testing-only-do-not-use"
 )
 
+# SSRF guard allowlist for tests: fixtures register proxy_pass_url / agent URLs
+# on localhost and Docker-service hostnames. Allowlisting them lets the guard
+# accept these targets without a DNS lookup. Set at import time (before the
+# first Settings() construction) so registry.utils.url_guard reads it. Dedicated
+# SSRF rejection tests override url_guard.settings directly.
+os.environ.setdefault(
+    "SSRF_ALLOWED_HOSTS",
+    "localhost,127.0.0.1,mcpgw,auth-server,registry,keycloak,upstream,test,"
+    "host.docker.internal,example.com,server.com,test-server,fake-server,"
+    "currenttime,realserverfaketools,external.example.com",
+)
+
 
 # Now we can safely import registry modules
 from registry.core.config import Settings  # noqa: E402
