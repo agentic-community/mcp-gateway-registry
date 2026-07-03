@@ -840,7 +840,9 @@ def wait_for_callback(timeout: int = 300) -> bool:
         logger.error("No authorization code received")
         return False
 
-    logger.info(f"Received authorization code: {authorization_code[:20]}...")
+    # Do not log any portion of the authorization code — it is a single-use
+    # credential that exchanges for tokens; log only that one was received.
+    logger.info("Received authorization code")
     return True
 
 
@@ -1542,8 +1544,12 @@ Supported providers: """
     # Run the OAuth flow
     success = run_oauth_flow(oauth_config, force_new=args.force)
 
-    # Output token data as JSON if successful (for integration with other scripts)
-    # This stdout output is consumed by egress_oauth.py and other scripts in the pipeline
+    # Output token data as JSON on success. This is a deliberate IPC channel:
+    # egress_oauth.py runs this module as a child process with
+    # subprocess.run(capture_output=True) and json.loads() the last stdout line.
+    # The token therefore travels only over the private parent<->child pipe (in
+    # memory), never to a terminal, log, or file. The consumer must NOT log the
+    # captured stdout (see egress_oauth.py) or the token would leak in clear text.
     if success and oauth_config.access_token:
         token_output = {
             "provider": oauth_config.provider,
