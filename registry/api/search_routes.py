@@ -344,6 +344,9 @@ async def _get_tool_schema_for_virtual_server(
 # original underscore-prefixed names so existing callers in this module
 # don't have to change.
 from ..services.visibility import (
+    should_redact_backend_urls,
+)
+from ..services.visibility import (
     user_can_access_agent as _user_can_access_agent,
 )
 from ..services.visibility import (
@@ -561,6 +564,19 @@ async def semantic_search(
         )
         filtered_num_tools = len(allowed_full)
 
+        # Strip the raw internal backend URLs for non-admins in with-gateway
+        # mode, mirroring the redaction GET /servers/{path} enforces. The
+        # computed endpoint_url (the gateway-facing URL, or the direct URL in
+        # registry-only mode) is preserved so clients can still connect.
+        if should_redact_backend_urls(user_context):
+            result_proxy_url = None
+            result_mcp_endpoint = None
+            result_sse_endpoint = None
+        else:
+            result_proxy_url = server_proxy_url
+            result_mcp_endpoint = server_mcp_endpoint
+            result_sse_endpoint = server.get("sse_endpoint")
+
         filtered_servers.append(
             ServerSearchResult(
                 path=server_path,
@@ -574,9 +590,9 @@ async def semantic_search(
                 matching_tools=matching_tools,
                 sync_metadata=sync_meta,
                 endpoint_url=endpoint_url,
-                proxy_pass_url=server_proxy_url,
-                mcp_endpoint=server_mcp_endpoint,
-                sse_endpoint=server.get("sse_endpoint"),
+                proxy_pass_url=result_proxy_url,
+                mcp_endpoint=result_mcp_endpoint,
+                sse_endpoint=result_sse_endpoint,
                 supported_transports=server.get("supported_transports", []),
                 trust_verified=server_trust,
                 deployment=server_deployment,
@@ -793,9 +809,7 @@ async def semantic_search(
     # search scope). Gate this result loop too so a custom hit is never surfaced
     # even if one reaches here (e.g. a stale scope cache), keeping all paths in
     # agreement: off = feature invisible, existing records dormant.
-    custom_results = (
-        raw_results.get("custom", []) if settings.custom_entity_types_enabled else []
-    )
+    custom_results = raw_results.get("custom", []) if settings.custom_entity_types_enabled else []
     filtered_custom: list[CustomEntitySearchResult] = []
     for record in custom_results:
         record_path = record.get("path", "")

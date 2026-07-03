@@ -27,6 +27,10 @@ from ..services.transform_service import (
     transform_to_server_list,
     transform_to_server_response,
 )
+from ..services.visibility import (
+    redact_server_backend_fields,
+    should_redact_backend_urls,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,6 +91,11 @@ async def list_servers(
     # No additional filtering needed here - the get_all_servers_with_permissions already filtered by accessible_servers
     filtered_servers = []
 
+    # In with-gateway mode a non-admin reaches servers through the gateway, so
+    # the raw backend URL (surfaced as transport.url after the transform) must
+    # be stripped. Compute the decision once for the whole page.
+    redact_backend = should_redact_backend_urls(user_context)
+
     for path, server_info in all_servers.items():
         # The Anthropic-compatible API is a remote-discovery surface (HTTP
         # transport, URL-based connect). Local stdio servers are not network
@@ -109,6 +118,9 @@ async def list_servers(
         server_info_with_status["health_status"] = health_data["status"]
         server_info_with_status["last_checked_iso"] = health_data["last_checked_iso"]
         server_info_with_status["is_enabled"] = is_enabled
+
+        if redact_backend:
+            redact_server_backend_fields(server_info_with_status)
 
         filtered_servers.append(server_info_with_status)
 
@@ -210,6 +222,11 @@ async def list_server_versions(
     server_info_with_status["health_status"] = health_data["status"]
     server_info_with_status["last_checked_iso"] = health_data["last_checked_iso"]
     server_info_with_status["is_enabled"] = is_enabled
+
+    # Strip the raw backend URL (surfaced as transport.url) for non-admins in
+    # with-gateway mode, matching the sibling server read endpoints.
+    if should_redact_backend_urls(user_context):
+        redact_server_backend_fields(server_info_with_status)
 
     # Since we only have one version, return a list with one item
     server_list = transform_to_server_list([server_info_with_status])
@@ -317,6 +334,11 @@ async def get_server_version(
     server_info_with_status["health_status"] = health_data["status"]
     server_info_with_status["last_checked_iso"] = health_data["last_checked_iso"]
     server_info_with_status["is_enabled"] = is_enabled
+
+    # Strip the raw backend URL (surfaced as transport.url) for non-admins in
+    # with-gateway mode, matching the sibling server read endpoints.
+    if should_redact_backend_urls(user_context):
+        redact_server_backend_fields(server_info_with_status)
 
     # Transform to Anthropic format
     server_response = transform_to_server_response(
@@ -823,8 +845,7 @@ async def set_cloud_provider_hint(
     _invalidate_hint_cache()
 
     logger.info(
-        f"[banner] cloud_provider_hint persisted: {payload.hint!r} "
-        f"(registry_id={str(card.id)[:8]})"
+        f"[banner] cloud_provider_hint persisted: {payload.hint!r} (registry_id={str(card.id)[:8]})"
     )
 
     await _audit_cloud_hint_set(request, user_context, payload.hint)

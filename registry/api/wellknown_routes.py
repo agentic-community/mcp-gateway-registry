@@ -157,12 +157,27 @@ def _format_server_discovery(server_info: dict, request: Request) -> dict:
 def _get_server_url(server_path: str, request: Request, server_info: dict = None) -> str:
     """Generate full URL for MCP server based on request host and server config.
 
-    Priority:
-    1. If server_info has mcp_endpoint, use it as the full URL
-    2. Otherwise, construct URL from request host + server_path + /mcp
+    This is an UNAUTHENTICATED public discovery surface, so it must never expose
+    an internal backend address. Priority:
+
+    1. In registry-only mode (no gateway) an explicit ``mcp_endpoint`` override
+       is the legitimate public connect URL, so use it when set.
+    2. Otherwise (with-gateway mode, or no override) always construct the
+       gateway URL from the request host. In with-gateway mode the override is
+       deliberately ignored here: clients reach the server through the gateway,
+       and ``mcp_endpoint`` may point at an internal address that anonymous
+       callers must not learn.
     """
-    # Check if server has explicit mcp_endpoint configured
-    if server_info and server_info.get("mcp_endpoint"):
+    from ..core.config import DeploymentMode
+
+    # Only surface an explicit endpoint override when there is no gateway in
+    # front of the server (registry-only mode). Fail closed to the gateway URL
+    # everywhere else so an internal override never leaks to the public.
+    if (
+        settings.deployment_mode == DeploymentMode.REGISTRY_ONLY
+        and server_info
+        and server_info.get("mcp_endpoint")
+    ):
         return server_info.get("mcp_endpoint")
 
     # Get host from request headers
