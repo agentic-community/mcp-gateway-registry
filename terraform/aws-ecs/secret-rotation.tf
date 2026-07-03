@@ -334,7 +334,7 @@ resource "aws_lambda_function" "documentdb_rotation" {
   environment {
     variables = {
       SECRETS_MANAGER_ENDPOINT = "https://secretsmanager.${var.aws_region}.amazonaws.com"
-      EXCLUDE_CHARACTERS       = "/@\"\x27+:?#&!=% "
+      EXCLUDE_CHARACTERS       = "/@\"\\x27+:?#&!=% "
     }
   }
 
@@ -381,7 +381,7 @@ resource "aws_lambda_function" "rds_rotation" {
   environment {
     variables = {
       SECRETS_MANAGER_ENDPOINT = "https://secretsmanager.${var.aws_region}.amazonaws.com"
-      EXCLUDE_CHARACTERS       = "/@\"\x27+:?#&!=% "
+      EXCLUDE_CHARACTERS       = "/@\"\\x27+:?#&!=% "
     }
   }
 
