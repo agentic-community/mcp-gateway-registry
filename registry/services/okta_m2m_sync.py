@@ -5,6 +5,7 @@ to track service accounts and their group mappings without hardcoding them in
 authorization server expressions.
 """
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -22,12 +23,66 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Okta client ID to groups mapping
-# TODO: Make this configurable via database or config file
-DEFAULT_CLIENT_GROUPS = {
-    "0oa1100req1AzfKaY698": ["registry-admins"],  # ai-agent
-    "0oa110977fajZVrlY698": ["public-mcp-users"],  # ai-agent-public-servers-only
-}
+# Environment variable holding the operator-supplied Okta M2M client-id -> groups
+# mapping. Format: a JSON object, e.g.
+#   {"0oa1100req1AzfKaY698": ["public-mcp-users"]}
+# There is intentionally NO hardcoded/default mapping: a client ID that is not
+# explicitly listed here is synced with NO group memberships (fail closed). This
+# prevents an attacker who can influence the Okta API response, point OKTA_DOMAIN
+# at a rogue tenant, or write to MongoDB from having an injected client_id
+# auto-granted privileged (e.g. admin) RBAC via a code-shipped mapping.
+OKTA_M2M_CLIENT_GROUPS_ENV = "OKTA_M2M_CLIENT_GROUPS"
+
+
+def _load_client_groups_mapping() -> dict[str, list[str]]:
+    """Load the Okta M2M client-id -> groups mapping from the environment.
+
+    Reads ``OKTA_M2M_CLIENT_GROUPS`` as a JSON object mapping each client_id to
+    a list of group names. Fails closed: a malformed or unset value yields an
+    empty mapping (no client is auto-assigned any group). Entries whose value is
+    not a list of strings are dropped with a warning rather than trusted.
+
+    Returns:
+        Mapping of client_id to the list of group names to assign.
+    """
+    raw = os.environ.get(OKTA_M2M_CLIENT_GROUPS_ENV, "").strip()
+    if not raw:
+        return {}
+
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        logger.error(
+            "%s is not valid JSON; no M2M client groups will be assigned: %s",
+            OKTA_M2M_CLIENT_GROUPS_ENV,
+            exc,
+        )
+        return {}
+
+    if not isinstance(parsed, dict):
+        logger.error(
+            "%s must be a JSON object of client_id -> [groups]; got %s. "
+            "No M2M client groups will be assigned.",
+            OKTA_M2M_CLIENT_GROUPS_ENV,
+            type(parsed).__name__,
+        )
+        return {}
+
+    mapping: dict[str, list[str]] = {}
+    for client_id, groups in parsed.items():
+        if (
+            isinstance(client_id, str)
+            and isinstance(groups, list)
+            and all(isinstance(g, str) for g in groups)
+        ):
+            mapping[client_id] = groups
+        else:
+            logger.warning(
+                "Ignoring malformed %s entry for client_id=%r (expected list[str])",
+                OKTA_M2M_CLIENT_GROUPS_ENV,
+                client_id,
+            )
+    return mapping
 
 
 class OktaM2MSync:
@@ -51,8 +106,15 @@ class OktaM2MSync:
         self.okta_api_token = okta_api_token
         self.collection = db["okta_m2m_clients"]
         self.idp_collection = db["idp_m2m_clients"]
+        # Config-driven client_id -> groups mapping (fail closed: unset means no
+        # client is auto-assigned any group). Never derived from Okta responses.
+        self.client_groups = _load_client_groups_mapping()
 
-        logger.info(f"Initialized Okta M2M sync for domain: {self.okta_domain}")
+        logger.info(
+            "Initialized Okta M2M sync for domain: %s (%d configured client-group mappings)",
+            self.okta_domain,
+            len(self.client_groups),
+        )
 
     async def _get_okta_applications(self) -> list[dict]:
         """Fetch all applications from Okta Admin API.
@@ -114,19 +176,20 @@ class OktaM2MSync:
         return m2m_apps
 
     def _determine_groups(self, client_id: str) -> list[str]:
-        """Determine groups for a client ID.
+        """Determine groups for a client ID from the configured mapping.
 
-        This checks the hardcoded mapping (DEFAULT_CLIENT_GROUPS) to determine
-        which groups a client should have. In the future, this could query a
-        configuration table or use other logic.
+        Consults the operator-supplied mapping loaded from
+        ``OKTA_M2M_CLIENT_GROUPS`` only. A client ID that is not explicitly
+        listed receives NO groups (fail closed), so an injected/attacker-chosen
+        client ID cannot be auto-granted privileged RBAC.
 
         Args:
             client_id: Okta client ID
 
         Returns:
-            List of group names for this client
+            List of group names for this client (empty if not configured)
         """
-        groups = DEFAULT_CLIENT_GROUPS.get(client_id, [])
+        groups = self.client_groups.get(client_id, [])
         masked_id = f"{client_id[:8]}..." if client_id else "<none>"
         logger.debug(f"Client {masked_id} assigned groups: {groups}")
         return groups

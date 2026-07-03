@@ -19,6 +19,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _parse_allowed_audiences(env_var: str) -> list[str]:
+    """Parse a comma/whitespace-separated M2M audience allowlist from an env var.
+
+    Returns the de-duplicated, order-preserving list of non-empty audience
+    values. An unset or empty variable yields an empty list, which makes the
+    provider fail closed (only the configured client ids are accepted).
+
+    Args:
+        env_var: Name of the environment variable to read.
+
+    Returns:
+        List of accepted M2M audience strings (may be empty).
+    """
+    raw = os.environ.get(env_var, "")
+    seen: set[str] = set()
+    audiences: list[str] = []
+    for token in raw.replace(",", " ").split():
+        value = token.strip()
+        if value and value not in seen:
+            seen.add(value)
+            audiences.append(value)
+    return audiences
+
+
 def get_auth_provider(provider_type: str | None = None) -> AuthProvider:
     """Factory function to get the appropriate auth provider.
 
@@ -172,6 +196,7 @@ def _create_okta_provider() -> OktaProvider:
     client_secret = os.environ.get("OKTA_CLIENT_SECRET")
     m2m_client_id = os.environ.get("OKTA_M2M_CLIENT_ID")
     m2m_client_secret = os.environ.get("OKTA_M2M_CLIENT_SECRET")
+    m2m_allowed_audiences = _parse_allowed_audiences("OKTA_M2M_ALLOWED_AUDIENCES")
 
     missing_vars = []
     if not okta_domain:
@@ -195,6 +220,7 @@ def _create_okta_provider() -> OktaProvider:
         client_secret=client_secret,
         m2m_client_id=m2m_client_id,
         m2m_client_secret=m2m_client_secret,
+        m2m_allowed_audiences=m2m_allowed_audiences,
     )
 
 
@@ -248,6 +274,7 @@ def _create_pingfederate_provider() -> PingFederateProvider:
     m2m_client_secret = os.environ.get("PINGFEDERATE_M2M_CLIENT_SECRET")
     application_id_uri = os.environ.get("PINGFEDERATE_APPLICATION_ID_URI")
     groups_claim = os.environ.get("PINGFEDERATE_GROUPS_CLAIM", "groups")
+    m2m_allowed_audiences = _parse_allowed_audiences("PINGFEDERATE_M2M_ALLOWED_AUDIENCES")
 
     missing_vars = []
     if not base_url:
@@ -273,6 +300,7 @@ def _create_pingfederate_provider() -> PingFederateProvider:
         m2m_client_secret=m2m_client_secret,
         application_id_uri=application_id_uri,
         groups_claim=groups_claim,
+        m2m_allowed_audiences=m2m_allowed_audiences,
     )
 
 

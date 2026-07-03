@@ -5,6 +5,7 @@ to track service accounts and their group mappings without hardcoding them in
 authorization server expressions.
 """
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -22,12 +23,66 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Auth0 client ID to groups mapping
-# TODO: Make this configurable via database or config file
-DEFAULT_CLIENT_GROUPS = {
-    # Add Auth0 M2M client IDs and their default groups here
-    # Example: "EXAMPLE_AUTH0_CLIENT_ID": ["registry-admins"],
-}
+# Environment variable holding the operator-supplied Auth0 M2M client-id -> groups
+# mapping. Format: a JSON object, e.g.
+#   {"abc123clientid": ["public-mcp-users"]}
+# There is intentionally NO hardcoded/default mapping: a client ID that is not
+# explicitly listed here is synced with NO group memberships (fail closed). This
+# prevents an attacker who can influence the Auth0 API response, point the sync
+# at a rogue tenant, or write to MongoDB from having an injected client_id
+# auto-granted privileged (e.g. admin) RBAC via a code-shipped mapping.
+AUTH0_M2M_CLIENT_GROUPS_ENV = "AUTH0_M2M_CLIENT_GROUPS"
+
+
+def _load_client_groups_mapping() -> dict[str, list[str]]:
+    """Load the Auth0 M2M client-id -> groups mapping from the environment.
+
+    Reads ``AUTH0_M2M_CLIENT_GROUPS`` as a JSON object mapping each client_id to
+    a list of group names. Fails closed: a malformed or unset value yields an
+    empty mapping (no client is auto-assigned any group). Entries whose value is
+    not a list of strings are dropped with a warning rather than trusted.
+
+    Returns:
+        Mapping of client_id to the list of group names to assign.
+    """
+    raw = os.environ.get(AUTH0_M2M_CLIENT_GROUPS_ENV, "").strip()
+    if not raw:
+        return {}
+
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        logger.error(
+            "%s is not valid JSON; no M2M client groups will be assigned: %s",
+            AUTH0_M2M_CLIENT_GROUPS_ENV,
+            exc,
+        )
+        return {}
+
+    if not isinstance(parsed, dict):
+        logger.error(
+            "%s must be a JSON object of client_id -> [groups]; got %s. "
+            "No M2M client groups will be assigned.",
+            AUTH0_M2M_CLIENT_GROUPS_ENV,
+            type(parsed).__name__,
+        )
+        return {}
+
+    mapping: dict[str, list[str]] = {}
+    for client_id, groups in parsed.items():
+        if (
+            isinstance(client_id, str)
+            and isinstance(groups, list)
+            and all(isinstance(g, str) for g in groups)
+        ):
+            mapping[client_id] = groups
+        else:
+            logger.warning(
+                "Ignoring malformed %s entry for client_id=%r (expected list[str])",
+                AUTH0_M2M_CLIENT_GROUPS_ENV,
+                client_id,
+            )
+    return mapping
 
 
 class Auth0M2MSync:
@@ -54,8 +109,15 @@ class Auth0M2MSync:
         self.m2m_client_secret = m2m_client_secret
         self.collection = db["auth0_m2m_clients"]
         self.idp_collection = db["idp_m2m_clients"]
+        # Config-driven client_id -> groups mapping (fail closed: unset means no
+        # client is auto-assigned any group). Never derived from Auth0 responses.
+        self.client_groups = _load_client_groups_mapping()
 
-        logger.info(f"Initialized Auth0 M2M sync for domain: {self.auth0_domain}")
+        logger.info(
+            "Initialized Auth0 M2M sync for domain: %s (%d configured client-group mappings)",
+            self.auth0_domain,
+            len(self.client_groups),
+        )
 
     async def _get_management_api_token(self) -> str:
         """Get Auth0 Management API access token.
@@ -147,19 +209,20 @@ class Auth0M2MSync:
         return m2m_clients
 
     def _determine_groups(self, client_id: str) -> list[str]:
-        """Determine groups for a client ID.
+        """Determine groups for a client ID from the configured mapping.
 
-        This checks the hardcoded mapping (DEFAULT_CLIENT_GROUPS) to determine
-        which groups a client should have. In the future, this could query a
-        configuration table or use other logic.
+        Consults the operator-supplied mapping loaded from
+        ``AUTH0_M2M_CLIENT_GROUPS`` only. A client ID that is not explicitly
+        listed receives NO groups (fail closed), so an injected/attacker-chosen
+        client ID cannot be auto-granted privileged RBAC.
 
         Args:
             client_id: Auth0 client ID
 
         Returns:
-            List of group names for this client
+            List of group names for this client (empty if not configured)
         """
-        groups = DEFAULT_CLIENT_GROUPS.get(client_id, [])
+        groups = self.client_groups.get(client_id, [])
         logger.debug(f"Client {client_id} assigned groups: {groups}")
         return groups
 

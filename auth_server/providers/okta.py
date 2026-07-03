@@ -47,6 +47,7 @@ class OktaProvider(AuthProvider):
         client_secret: str,
         m2m_client_id: str | None = None,
         m2m_client_secret: str | None = None,
+        m2m_allowed_audiences: list[str] | None = None,
     ):
         """Initialize Okta provider.
 
@@ -56,6 +57,16 @@ class OktaProvider(AuthProvider):
             client_secret: OAuth2 client secret
             m2m_client_id: Optional separate M2M client ID
             m2m_client_secret: Optional separate M2M client secret
+            m2m_allowed_audiences: Explicit allowlist of ``aud`` values accepted
+                on M2M (client-credentials) access tokens. Custom Okta
+                authorization servers mint M2M tokens whose ``aud`` is the API
+                identifier (e.g. ``api://ai-registry``) rather than a client_id;
+                each such identifier that this gateway should accept must be
+                listed here. Audience validation is ALWAYS enforced against the
+                union of the client ids and this allowlist — an ``aud`` not
+                present is rejected. If empty, only the configured client ids are
+                accepted, so a token minted for a different resource in the same
+                Okta tenant fails closed.
         """
         # Normalize domain (remove https:// if present)
         self.okta_domain = okta_domain.replace("https://", "").rstrip("/")
@@ -63,6 +74,10 @@ class OktaProvider(AuthProvider):
         self.client_secret = client_secret
         self.m2m_client_id = m2m_client_id or client_id
         self.m2m_client_secret = m2m_client_secret or client_secret
+        # Explicit, config-driven allowlist of accepted M2M audiences. Never
+        # derived from token claims. Empty (unset) means no custom-audience M2M
+        # token is accepted — only the client ids below.
+        self.m2m_allowed_audiences = list(m2m_allowed_audiences or [])
 
         # Validate Okta domain format (security: warn on non-standard domains)
         standard_okta_pattern = r"^[a-zA-Z0-9-]+\.(okta\.com|oktapreview\.com|okta-emea\.com)$"
@@ -155,35 +170,34 @@ class OktaProvider(AuthProvider):
             if not signing_key:
                 raise ValueError(f"No matching key found for kid: {kid}")
 
-            # Accept both web client_id and M2M client_id as valid audiences
+            # Build the explicit set of accepted audiences: the web/M2M client
+            # ids PLUS any operator-configured M2M audiences (custom Okta
+            # authorization servers mint M2M tokens whose "aud" is the API
+            # identifier, e.g. "api://ai-registry", not a client_id). Audience
+            # verification is ALWAYS enforced against this allowlist. We never
+            # derive verify_aud from unverified claims — a token whose "aud" is
+            # not in the allowlist (e.g. one minted for a different resource in
+            # the same Okta tenant) is rejected even though its signature and
+            # issuer are genuine.
             valid_audiences = [self.client_id]
             if self.m2m_client_id and self.m2m_client_id != self.client_id:
                 valid_audiences.append(self.m2m_client_id)
+            for aud in self.m2m_allowed_audiences:
+                if aud and aud not in valid_audiences:
+                    valid_audiences.append(aud)
 
-            # For custom authorization servers, M2M tokens use API identifier as audience
-            # Decode without audience validation first to check token type
-            unverified_claims = jwt.decode(token, options={"verify_signature": False})
-
-            # Check if this is an M2M token (has cid but audience is not client_id)
-            is_m2m_token = "cid" in unverified_claims
-            aud_claim = unverified_claims.get("aud", "")
-            aud_is_client_id = aud_claim in valid_audiences
-
-            # For M2M tokens with custom auth server, skip audience validation
-            # since Okta uses API identifier (e.g., "api://ai-registry") as audience
-            verify_audience = not (is_m2m_token and not aud_is_client_id)
-
-            # Validate and decode token
+            # Validate and decode token — audience is always verified against
+            # the allowlist above (fail closed).
             claims = jwt.decode(
                 token,
                 signing_key,
                 algorithms=["RS256"],
                 issuer=self.issuer,
-                audience=valid_audiences if verify_audience else None,
+                audience=valid_audiences,
                 options={
                     "verify_exp": True,
                     "verify_iat": True,
-                    "verify_aud": verify_audience,
+                    "verify_aud": True,
                 },
             )
 

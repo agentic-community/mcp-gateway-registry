@@ -52,6 +52,7 @@ class PingFederateProvider(AuthProvider):
         m2m_client_secret: str | None = None,
         application_id_uri: str | None = None,
         groups_claim: str = "groups",
+        m2m_allowed_audiences: list[str] | None = None,
     ):
         """Initialize PingFederate provider.
 
@@ -63,6 +64,14 @@ class PingFederateProvider(AuthProvider):
             m2m_client_secret: Optional separate M2M client secret
             application_id_uri: Optional resource-server identifier accepted as aud
             groups_claim: JWT claim name for group memberships (default: groups)
+            m2m_allowed_audiences: Explicit allowlist of ``aud`` values accepted
+                on M2M (client-credentials) access tokens whose audience is a
+                resource identifier rather than a client_id. Audience validation
+                is ALWAYS enforced against the union of the client ids,
+                ``application_id_uri``, and this allowlist — an ``aud`` not
+                present is rejected. If empty, only the configured client ids and
+                ``application_id_uri`` are accepted, so a token minted for a
+                different resource in the same PingFederate tenant fails closed.
         """
         self.base_url = base_url.rstrip("/")
         self.client_id = client_id
@@ -71,6 +80,9 @@ class PingFederateProvider(AuthProvider):
         self.m2m_client_secret = m2m_client_secret or client_secret
         self.application_id_uri = application_id_uri
         self.groups_claim = groups_claim
+        # Explicit, config-driven allowlist of accepted M2M audiences. Never
+        # derived from token claims.
+        self.m2m_allowed_audiences = list(m2m_allowed_audiences or [])
 
         # Discovery URL — all other endpoint URLs are resolved lazily from
         # the cached discovery document on first use.
@@ -269,35 +281,34 @@ class PingFederateProvider(AuthProvider):
             if not signing_key:
                 raise ValueError(f"No matching key found for kid: {kid}")
 
-            # Accept client_id, m2m_client_id, and application_id_uri as valid audiences
+            # Build the explicit set of accepted audiences: the web/M2M client
+            # ids, the resource-server identifier (application_id_uri), PLUS any
+            # operator-configured M2M audiences. Audience verification is ALWAYS
+            # enforced against this allowlist. We never derive verify_aud from
+            # unverified claims — a genuinely-signed token from this issuer whose
+            # "aud" is not in the allowlist (e.g. one minted for a different
+            # resource in the same tenant) is rejected.
             valid_audiences = [self.client_id]
             if self.m2m_client_id and self.m2m_client_id != self.client_id:
                 valid_audiences.append(self.m2m_client_id)
-            if self.application_id_uri:
+            if self.application_id_uri and self.application_id_uri not in valid_audiences:
                 valid_audiences.append(self.application_id_uri)
+            for aud in self.m2m_allowed_audiences:
+                if aud and aud not in valid_audiences:
+                    valid_audiences.append(aud)
 
-            # Decode without audience validation first to check token type
-            unverified_claims = jwt.decode(token, options={"verify_signature": False})
-
-            # Check if this is an M2M token (has client_id/cid claim but aud differs)
-            is_m2m_token = "client_id" in unverified_claims or "cid" in unverified_claims
-            aud_claim = unverified_claims.get("aud", "")
-            aud_is_known = aud_claim in valid_audiences
-
-            # For M2M tokens with custom audience, skip audience validation
-            verify_audience = not (is_m2m_token and not aud_is_known)
-
-            # Validate and decode token
+            # Validate and decode token — audience is always verified against
+            # the allowlist above (fail closed).
             claims = jwt.decode(
                 token,
                 signing_key,
                 algorithms=["RS256"],
                 issuer=self.issuer,
-                audience=valid_audiences if verify_audience else None,
+                audience=valid_audiences,
                 options={
                     "verify_exp": True,
                     "verify_iat": True,
-                    "verify_aud": verify_audience,
+                    "verify_aud": True,
                 },
             )
 
