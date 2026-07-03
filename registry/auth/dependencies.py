@@ -4,6 +4,7 @@ from typing import Annotated, Any
 from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
 from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
@@ -588,9 +589,7 @@ async def _context_from_internal_token(
         session_data = await _store_resolve_session(session_id)
         if session_data is None or not session_data.get("username"):
             # Present token bound to a session that no longer resolves: fail closed.
-            logger.warning(
-                "signed-token auth: session_id in token did not resolve; rejecting"
-            )
+            logger.warning("signed-token auth: session_id in token did not resolve; rejecting")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required",
@@ -644,7 +643,7 @@ async def enhanced_auth(
     # Set user context on request state for audit logging middleware
     request.state.user_context = user_context
 
-    logger.debug(f"Enhanced auth context for {username}: {user_context}")
+    logger.debug(f"Enhanced auth context for {username}: {redact_mapping(user_context)}")
     return user_context
 
 
@@ -692,18 +691,14 @@ async def nginx_proxied_auth(
     )
     logger.debug(f"[NGINX_AUTH_DEBUG] Session cookie present: {session is not None}")
     logger.debug(
-        f"[NGINX_AUTH_DEBUG] Authorization header: {request.headers.get('authorization', 'NOT PRESENT')[:50] if request.headers.get('authorization') else 'NOT PRESENT'}"
+        "[NGINX_AUTH_DEBUG] Authorization header present: "
+        f"{request.headers.get('authorization') is not None}"
     )
 
     # Log ALL headers for complete diagnostic, with sensitive values redacted.
     # cookie/authorization carry the session and bearer token; even at DEBUG we
-    # don't want them in logs.
-    _redacted_header_names = {"cookie", "authorization"}
-    all_headers = {
-        name: ("[REDACTED]" if name.lower() in _redacted_header_names else value)
-        for name, value in request.headers.items()
-    }
-    logger.debug(f"[NGINX_AUTH_DEBUG] ALL REQUEST HEADERS: {all_headers}")
+    # never emit the value (not even a prefix). Uses the shared redaction helper.
+    logger.debug(f"[NGINX_AUTH_DEBUG] ALL REQUEST HEADERS: {redact_headers(request.headers)}")
 
     # Signed-token path. The auth_server's /validate mints an HS256 token
     # (X-Internal-Token-Registry) bound to the validated identity; nginx forwards
@@ -739,12 +734,10 @@ async def nginx_proxied_auth(
     # either no identity headers, or NGINX_DISABLE_API_AUTH_REQUEST is set (local-dev
     # mode where FastAPI authenticates the cookie/bearer itself). The inbound identity
     # headers are ignored in every case.
-    logger.info(
-        "[NGINX_AUTH_FALLBACK] No internal token; falling back to session cookie auth"
-    )
-    logger.info(
-        f"[NGINX_AUTH_FALLBACK] Session cookie value: {session[:20] if session else 'None'}..."
-    )
+    logger.info("[NGINX_AUTH_FALLBACK] No internal token; falling back to session cookie auth")
+    # The session cookie is a signed credential: log only its presence, never
+    # any part of its value (a prefix is still credential material).
+    logger.info(f"[NGINX_AUTH_FALLBACK] Session cookie present: {session is not None}")
     logger.info(f"[NGINX_AUTH_FALLBACK] Request path: {request.url.path}")
     try:
         return await enhanced_auth(request, session)

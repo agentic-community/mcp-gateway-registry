@@ -31,6 +31,7 @@ from ..auth.csrf import (
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..auth.tool_filter import filter_tools_for_user
+from ..common.log_redaction import redact_mapping
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
@@ -629,9 +630,9 @@ async def get_servers_json(
     # Set audit action for server list
     set_audit_action(request, "list", "server", description="List all servers")
 
-    # CRITICAL DIAGNOSTIC: Log user_context received by endpoint
-    logger.debug(f"[GET_SERVERS_DEBUG] Received user_context: {user_context}")
-    logger.debug(f"[GET_SERVERS_DEBUG] user_context type: {type(user_context)}")
+    # Diagnostics: user_context can carry credential material, so redact before
+    # logging even at DEBUG.
+    logger.debug(f"[GET_SERVERS_DEBUG] user_context (redacted): {redact_mapping(user_context)}")
     if user_context:
         logger.debug(f"[GET_SERVERS_DEBUG] Username: {user_context.get('username', 'NOT PRESENT')}")
         logger.debug(f"[GET_SERVERS_DEBUG] Scopes: {user_context.get('scopes', 'NOT PRESENT')}")

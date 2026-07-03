@@ -325,3 +325,54 @@ class TestUpdatePeerToken:
 
             # Assert
             assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+# =============================================================================
+# PUT /api/peers/{peer_id} log-redaction tests
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestUpdatePeerLogRedaction:
+    """The peer update endpoint must never log a federation_token value."""
+
+    _SECRET_TOKEN = "super-secret-federation-token-value-1234567890"
+
+    @pytest.mark.asyncio
+    async def test_update_peer_does_not_log_federation_token(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+        sample_peer_config,
+        caplog,
+    ):
+        """A PUT that carries a federation_token must not emit it to logs."""
+        from registry.main import app
+
+        client = TestClient(app)
+
+        updated_peer = sample_peer_config.model_copy()
+        mock_peer_federation_service.update_peer.return_value = updated_peer
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            with caplog.at_level(logging.DEBUG, logger="registry.api.peer_management_routes"):
+                response = client.put(
+                    f"/api/peers/{sample_peer_config.peer_id}",
+                    json={
+                        "enabled": True,
+                        "federation_token": self._SECRET_TOKEN,
+                    },
+                )
+
+        assert response.status_code == status.HTTP_200_OK
+        # The raw token must not appear anywhere in the captured logs, even at
+        # DEBUG (the redacted payload is logged instead).
+        combined = "\n".join(record.getMessage() for record in caplog.records)
+        assert self._SECRET_TOKEN not in combined
+        # The field NAME is still logged for diagnostics.
+        assert "federation_token" in combined
+        # The redaction marker appears in the DEBUG payload dump.
+        assert "[REDACTED]" in combined

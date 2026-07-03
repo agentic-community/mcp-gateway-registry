@@ -115,6 +115,68 @@ class TestMaskingFunctions:
         assert hash_username(username) == result
 
 
+class TestSafeIdentitySummary:
+    """safe_identity_summary must never leak claim/user-info values."""
+
+    def test_omits_email_name_and_group_values(self):
+        from auth_server.server import safe_identity_summary
+
+        claims = {
+            "sub": "1234567890abcdef",
+            "email": "alice@example.com",
+            "name": "Alice Example",
+            "preferred_username": "alice.example",
+            "groups": ["engineering", "admins", "finance"],
+            "aud": "my-client",
+        }
+
+        summary = safe_identity_summary(claims)
+        rendered = str(summary)
+
+        # PII / authz values must NOT appear anywhere in the summary.
+        assert "alice@example.com" not in rendered
+        assert "Alice Example" not in rendered
+        assert "engineering" not in rendered
+        assert "admins" not in rendered
+        assert "finance" not in rendered
+        # sub is masked, not raw.
+        assert summary["sub"] != claims["sub"]
+        assert "..." in summary["sub"]
+        # Only counts and claim NAMES are exposed.
+        assert summary["group_count"] == 3
+        assert set(summary["claim_names"]) == set(claims.keys())
+        assert "email" in summary["claim_names"]  # the NAME, not the value
+
+    def test_counts_roles_when_groups_absent(self):
+        from auth_server.server import safe_identity_summary
+
+        claims = {"sub": "abcd1234efgh", "roles": ["r1", "r2"]}
+        summary = safe_identity_summary(claims)
+        assert summary["group_count"] == 2
+
+    def test_handles_missing_sub_and_non_dict(self):
+        from auth_server.server import safe_identity_summary
+
+        assert safe_identity_summary({})["sub"] is None
+        assert safe_identity_summary(None) == {"claims": "unavailable"}
+
+    def test_mapped_user_dict_is_safe(self):
+        """A mapped_user dict (email/name/groups) must not leak its values."""
+        from auth_server.server import safe_identity_summary
+
+        mapped_user = {
+            "username": "bob@corp.com",
+            "email": "bob@corp.com",
+            "name": "Bob Corp",
+            "groups": ["g1", "g2", "g3", "g4"],
+        }
+        rendered = str(safe_identity_summary(mapped_user))
+        assert "bob@corp.com" not in rendered
+        assert "Bob Corp" not in rendered
+        assert "g1" not in rendered
+        assert safe_identity_summary(mapped_user)["group_count"] == 4
+
+
 class TestServerNameNormalization:
     """Tests for server name normalization and matching."""
 

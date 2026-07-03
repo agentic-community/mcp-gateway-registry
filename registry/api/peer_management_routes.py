@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from ..auth.dependencies import nginx_proxied_auth
+from ..common.log_redaction import redact_mapping
 from ..schemas.peer_federation_schema import (
     PeerRegistryConfig,
     PeerSyncStatus,
@@ -351,9 +352,12 @@ async def update_peer(
         }
     """
     _check_peer_management_scope(user_context)
+    # Never log the raw ``updates`` payload: it can carry a federation_token.
     logger.info(
-        f"User '{user_context.get('username')}' updating peer '{peer_id}' with updates: {updates}"
+        f"User '{user_context.get('username')}' updating peer '{peer_id}' "
+        f"with fields: {sorted(updates.keys())}"
     )
+    logger.debug(f"Peer '{peer_id}' update payload (redacted): {redact_mapping(updates)}")
 
     service = get_peer_federation_service()
 
