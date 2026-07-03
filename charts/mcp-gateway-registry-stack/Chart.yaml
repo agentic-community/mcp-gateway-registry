@@ -31,3 +31,7 @@ dependencies:
     version: 0.1.0
     repository: "file://../mongodb-configure"
     condition: mongodb-configure.enabled
+  - name: openbao
+    version: 0.28.4
+    repository: https://openbao.github.io/openbao-helm
+    condition: openbao.enabled

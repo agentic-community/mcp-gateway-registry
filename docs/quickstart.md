@@ -133,7 +133,8 @@ Save and exit (Ctrl+X, then Y, then Enter if using nano).
 
 **Set environment variables for deployment:**
 ```bash
-export DOCKERHUB_ORG=mcpgateway
+# Pre-built images are pulled from Amazon ECR Public (public.ecr.aws/p3v1o3c6)
+# by default. No registry login or DOCKERHUB_ORG is required.
 source .env
 export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
 ```

@@ -150,19 +150,25 @@ class TestStoreSessionRequest:
         assert req.backend_session_id == "backend-sess-xyz"
         assert req.client_session_id == "vs-abc123"
 
-    def test_default_user_id(self):
-        """Test that user_id defaults to anonymous."""
-        req = StoreSessionRequest(
-            backend_session_id="backend-sess-xyz",
-            client_session_id="vs-abc123",
-        )
-        assert req.user_id == "anonymous"
+    def test_requires_user_id(self):
+        """user_id is required: a session must have a concrete owner.
+
+        Defaulting it (previously "anonymous") would silently store a
+        wrong-owner document if a caller forgot to set it -- the same
+        silent-fallback footgun removed from the ownership-bound endpoints.
+        """
+        with pytest.raises(ValidationError):
+            StoreSessionRequest(
+                backend_session_id="backend-sess-xyz",
+                client_session_id="vs-abc123",
+            )
 
     def test_default_virtual_server_path(self):
         """Test that virtual_server_path defaults to empty string."""
         req = StoreSessionRequest(
             backend_session_id="backend-sess-xyz",
             client_session_id="vs-abc123",
+            user_id="admin",
         )
         assert req.virtual_server_path == ""
 
@@ -171,6 +177,7 @@ class TestStoreSessionRequest:
         with pytest.raises(ValidationError):
             StoreSessionRequest(
                 client_session_id="vs-abc123",
+                user_id="admin",
             )
 
     def test_requires_client_session_id(self):
@@ -178,6 +185,7 @@ class TestStoreSessionRequest:
         with pytest.raises(ValidationError):
             StoreSessionRequest(
                 backend_session_id="backend-sess-xyz",
+                user_id="admin",
             )
 
 
@@ -193,10 +201,14 @@ class TestCreateClientSessionRequest:
         assert req.user_id == "admin"
         assert req.virtual_server_path == "/virtual/my-server"
 
-    def test_defaults(self):
-        """Test default values."""
-        req = CreateClientSessionRequest()
-        assert req.user_id == "anonymous"
+    def test_requires_user_id(self):
+        """user_id is required: refuse to mint a session with no concrete owner."""
+        with pytest.raises(ValidationError):
+            CreateClientSessionRequest()
+
+    def test_default_virtual_server_path(self):
+        """virtual_server_path still defaults to empty string."""
+        req = CreateClientSessionRequest(user_id="admin")
         assert req.virtual_server_path == ""
 
 
@@ -276,7 +288,7 @@ class TestBackendSessionInternalAPI:
         ):
             from registry.api.internal_routes import validate_client_session
 
-            result = await validate_client_session("vs-abc123")
+            result = await validate_client_session("vs-abc123", user_id="admin")
             assert result == {"status": "valid"}
 
     @pytest.mark.asyncio
@@ -293,8 +305,57 @@ class TestBackendSessionInternalAPI:
             from registry.api.internal_routes import validate_client_session
 
             with pytest.raises(HTTPException) as exc_info:
-                await validate_client_session("vs-nonexistent")
+                await validate_client_session("vs-nonexistent", user_id="admin")
             assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_validate_client_session_forwards_owner(self, mock_repo):
+        """The authenticated user identity is forwarded to the repo for ownership check.
+
+        The router supplies the validated user via the user_id query param; the
+        endpoint must pass it through so the repository can reject sessions owned
+        by a different user (session-hijacking fix).
+        """
+        mock_repo.validate_client_session.return_value = True
+
+        with patch(
+            "registry.api.internal_routes.get_backend_session_repository",
+            return_value=mock_repo,
+        ):
+            from registry.api.internal_routes import validate_client_session
+
+            result = await validate_client_session(
+                "vs-abc123", user_id="alice", virtual_server_path="/virtual/a"
+            )
+            assert result == {"status": "valid"}
+            mock_repo.validate_client_session.assert_awaited_once_with(
+                "vs-abc123", user_id="alice", virtual_server_path="/virtual/a"
+            )
+
+    @pytest.mark.asyncio
+    async def test_validate_client_session_wrong_owner_404(self, mock_repo):
+        """A session that does not belong to the caller is rejected with 404.
+
+        The repo returns False when the stored owner does not match the
+        authenticated user, so the attacker presenting a victim's session ID
+        gets the same 404 as a non-existent session.
+        """
+        mock_repo.validate_client_session.return_value = False
+
+        with patch(
+            "registry.api.internal_routes.get_backend_session_repository",
+            return_value=mock_repo,
+        ):
+            from fastapi import HTTPException
+
+            from registry.api.internal_routes import validate_client_session
+
+            with pytest.raises(HTTPException) as exc_info:
+                await validate_client_session("vs-victim", user_id="attacker")
+            assert exc_info.value.status_code == 404
+            mock_repo.validate_client_session.assert_awaited_once_with(
+                "vs-victim", user_id="attacker", virtual_server_path=None
+            )
 
     @pytest.mark.asyncio
     async def test_get_backend_session_found(self, mock_repo):
@@ -307,8 +368,32 @@ class TestBackendSessionInternalAPI:
         ):
             from registry.api.internal_routes import get_backend_session
 
-            result = await get_backend_session("vs-abc123:/_vs_backend_weather_")
+            result = await get_backend_session("vs-abc123:/_vs_backend_weather_", user_id="admin")
             assert result.backend_session_id == "backend-sess-xyz"
+
+    @pytest.mark.asyncio
+    async def test_get_backend_session_forwards_owner(self, mock_repo):
+        """The authenticated user is forwarded to the repo for the owner check.
+
+        Defense in depth: the backend-session lookup is bound to the caller so
+        a single missed client-session gate cannot leak another user's live
+        backend session ID.
+        """
+        mock_repo.get_backend_session.return_value = "backend-sess-xyz"
+
+        with patch(
+            "registry.api.internal_routes.get_backend_session_repository",
+            return_value=mock_repo,
+        ):
+            from registry.api.internal_routes import get_backend_session
+
+            result = await get_backend_session("vs-abc123:/_vs_backend_weather_", user_id="alice")
+            assert result.backend_session_id == "backend-sess-xyz"
+            mock_repo.get_backend_session.assert_awaited_once_with(
+                client_session_id="vs-abc123",
+                backend_key="/_vs_backend_weather_",
+                user_id="alice",
+            )
 
     @pytest.mark.asyncio
     async def test_get_backend_session_not_found(self, mock_repo):
@@ -324,7 +409,7 @@ class TestBackendSessionInternalAPI:
             from registry.api.internal_routes import get_backend_session
 
             with pytest.raises(HTTPException) as exc_info:
-                await get_backend_session("vs-abc123:/_vs_backend_weather_")
+                await get_backend_session("vs-abc123:/_vs_backend_weather_", user_id="admin")
             assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -339,7 +424,7 @@ class TestBackendSessionInternalAPI:
             from registry.api.internal_routes import get_backend_session
 
             with pytest.raises(HTTPException) as exc_info:
-                await get_backend_session("no-colon-in-key")
+                await get_backend_session("no-colon-in-key", user_id="admin")
             assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -379,11 +464,14 @@ class TestBackendSessionInternalAPI:
         ):
             from registry.api.internal_routes import delete_backend_session
 
-            result = await delete_backend_session("vs-abc123:/_vs_backend_weather_")
+            result = await delete_backend_session(
+                "vs-abc123:/_vs_backend_weather_", user_id="alice"
+            )
             assert result == {"status": "deleted"}
             mock_repo.delete_backend_session.assert_called_once_with(
                 client_session_id="vs-abc123",
                 backend_key="/_vs_backend_weather_",
+                user_id="alice",
             )
 
     @pytest.mark.asyncio

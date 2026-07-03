@@ -36,6 +36,15 @@ image:
   tag: "" # Overrides global.image.tag when set
   pullPolicy: "" # Overrides global.image.pullPolicy when set
 # Application configuration
+# ServiceAccount the registry pod runs as. Created by default so roles can be
+# attached to a stable identity (OpenBao kubernetes-auth `registry` role for the
+# egress vault binds here; future RBAC/IRSA can too). Set create=false + name to
+# bring your own.
+serviceAccount:
+  create: true
+  name: ""  # defaults to app.name ("registry") when empty
+  annotations: {}
+
 app:
   name: registry
   replicas: 2
@@ -348,8 +357,44 @@ cognito:
   userPoolId: "" # Cognito User Pool ID
   clientId: ""
   clientSecret: ""
-  domain: "" # Optional: custom Cognito domain
-  region: "us-east-1" # AWS region for the User Pool
+  domain: ""  # Optional: custom Cognito domain
+  region: "us-east-1"  # AWS region for the User Pool
+
+# Per-user egress credential vault (third-party OBO support).
+# When enabled, the registry renders a discrete `registry-egress-config`
+# ConfigMap (non-secret vars) consumed via envFrom; the nginx marker secret is
+# the single secret value (chart env secret in standalone, shared-secret in the
+# stack). openbao is the natural backend on EKS (Kubernetes SA + kubernetes
+# auth, no static token). The registry owns the FULL var set.
+egressAuth:
+  enabled: false
+  # Secret store for per-user tokens: openbao | secrets-manager.
+  secretStoreBackend: "openbao"
+  # Public base URL for the OAuth callback ({base}/oauth2/egress/callback).
+  # Typically the gateway's external URL.
+  oauthCallbackBaseUrl: ""
+  tokenRefreshSkewSeconds: "300"
+  refreshWorkerIntervalSeconds: "300"
+  stateTtlSeconds: "600"
+  # nginx marker secret. REQUIRED for standalone deployment (chart render fails
+  # if empty) -- it guards all mcp-proxy token minting and the app requires it
+  # at startup. Set a strong random value, identical to auth-server's. In the
+  # stack it is auto-generated + shared, so leave empty there. Only used by the
+  # standalone subchart secret.
+  markerSecret: ""
+  secretsManager:
+    kmsKeyId: ""  # Optional CMK; empty uses the AWS-managed key.
+    pathPrefix: "mcp/egress"
+  openbao:
+    addr: ""  # e.g. http://openbao.default.svc:8200
+    namespace: ""  # Enterprise namespaces only.
+    kvMount: "secret"
+    authMethod: "token"  # token | kubernetes
+    # OpenBao kubernetes-auth role, bound to the registry ServiceAccount by the
+    # stack's openbao-init Job. Named "registry" (not egress-specific) so more
+    # policies can attach to the same role/SA over time.
+    role: "registry"
+
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false

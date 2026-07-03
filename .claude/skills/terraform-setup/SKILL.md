@@ -52,7 +52,7 @@ Before applying, **state clearly to the user** that this stack creates and pays 
 | Amazon VPC | Dedicated VPC across 2 AZs: public/private subnets, Internet Gateway, NAT Gateway, route tables, security groups |
 | Amazon ECS (Fargate) | ECS cluster + services/tasks for Registry, Auth Server, and Keycloak (no servers to manage) |
 | Amazon RDS — Aurora PostgreSQL Serverless v2 | User/session/Keycloak data; multi-AZ; accessed via RDS Proxy |
-| Amazon DocumentDB | MongoDB-compatible store for server/agent metadata, scopes, embeddings (HNSW vector search). **Only when `storage_backend = "documentdb"` (the default) — region-gated, see Step 0.** With `file` or external-mongodb backends, no DocumentDB is provisioned. |
+| Amazon DocumentDB | MongoDB-compatible store for server/agent metadata, scopes, embeddings (HNSW vector search). **Only when `storage_backend = "documentdb"` (the default) — region-gated, see Step 0.** With an external-mongodb backend, no DocumentDB is provisioned. |
 | Elastic Load Balancing (ALB) | Two Application Load Balancers (main + Keycloak) |
 | AWS Certificate Manager (ACM) | TLS certificates for HTTPS |
 | Amazon CloudFront | CDN / public HTTPS entry point (`*.cloudfront.net`) — this is the default access mode |
@@ -122,18 +122,17 @@ echo "Installation directory: ${INSTALL_DIR}"
 ```
 How should the registry store its data (servers, agents, scopes, embeddings)?
 
-  documentdb (recommended for production, Terraform DEFAULT) - Provision an
-            Amazon DocumentDB cluster in this Terraform state. Region-gated (see
-            below). Adds cost (~$60-80/month) and provisioning time.
+  documentdb (recommended, Terraform DEFAULT) - Provision an Amazon DocumentDB
+            cluster in this Terraform state. Simplest option: nothing external
+            to set up. Region-gated (see below). Adds cost (~$60-80/month) and
+            provisioning time.
 
-  file      - JSON files only. No DocumentDB provisioned. Simplest/cheapest;
-            single-task, not horizontally scalable.
-
-  external mongodb - Connect to a MongoDB you already own (Atlas / self-managed).
-            Requires mongodb_connection_string or *_secret_arn. No DocumentDB
+  external mongodb (mongodb-ce / mongodb / mongodb-atlas) - Connect to a MongoDB
+            you already own (Atlas / self-managed). Requires
+            mongodb_connection_string or *_secret_arn. No DocumentDB
             provisioned.
 ```
-Store the answer as `STORAGE_BACKEND` = `documentdb`, `file`, or `mongodb-atlas`/`mongodb-ce`. **This maps directly to the `storage_backend` variable** (default `documentdb`). DocumentDB resources are gated `local.is_aws_documentdb = var.storage_backend == "documentdb"`, so they are ONLY created when `documentdb` is chosen. For any external-mongodb value, `mongodb_connection_string` or `mongodb_connection_string_secret_arn` is REQUIRED (collect it in Phase 5).
+Store the answer as `STORAGE_BACKEND` = `documentdb` (default), or one of `mongodb-ce` / `mongodb` / `mongodb-atlas`. **This maps directly to the `storage_backend` variable** (default `documentdb`), whose Terraform validation accepts ONLY these values (`file` is NOT a valid backend here and fails at `terraform plan`). DocumentDB resources are gated `local.is_aws_documentdb = var.storage_backend == "documentdb"`, so they are ONLY created when `documentdb` is chosen. For any external-mongodb value, `mongodb_connection_string` or `mongodb_connection_string_secret_arn` is REQUIRED (collect it in Phase 5).
 
 **Question 4 — AWS region:**
 ```
@@ -143,7 +142,7 @@ Default: us-east-1
 ```
 Store the answer as `AWS_REGION`.
 
-**DocumentDB region gate — ONLY when `STORAGE_BACKEND = documentdb`.** Amazon DocumentDB is not available in every region. If (and only if) the user chose `documentdb`, verify the region supports it and refuse to proceed otherwise. (With `file` or external-mongodb backends, this check does not apply — skip it.)
+**DocumentDB region gate — ONLY when `STORAGE_BACKEND = documentdb`.** Amazon DocumentDB is not available in every region. If (and only if) the user chose `documentdb`, verify the region supports it and refuse to proceed otherwise. (With an external-mongodb backend, this check does not apply — skip it.)
 
 **Note:** the `/aws/service/global-infrastructure/...` parameters are only served from `us-east-1`, so this query **must** pass `--region us-east-1` regardless of where you are deploying. (Without it the CLI errors "You must specify a region" and the check would wrongly report the region as unsupported.)
 

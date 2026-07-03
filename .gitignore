@@ -312,7 +312,6 @@ lerna-debug.log*
 coverage/
 .cache/
 .parcel-cache/
-.scratchpad/
 
 #MCP Json
 .tmp/anthropic-import
@@ -432,6 +431,9 @@ NEXT-STEPS-TELEMETRY.md
 .env.telemetry-test
 registry_metrics.csv
 .claude/skills/usage-report/known-internal-instances.md
+
+# Local-only security-audit skill (not committed); findings live under the git-ignored .scratchpad/
+.claude/skills/security-audit/
 
 # Stress test generated data and results (may move to a separate repo later)
 tests/stress/data/

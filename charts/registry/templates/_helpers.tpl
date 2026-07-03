@@ -22,6 +22,8 @@ Sections (in order below):
   6. keycloak-client-secret (runtime-created by keycloak-configure Job)
   7. mongo-credentials secret
   8. shared-secret (stack-level)
+  9. registry-egress-config configmap (egress vault, when egressAuth.enabled)
+     + AUTH_SERVER_NGINX_MARKER_SECRET (env/shared secret)
 
 Over-rejection is preferred to under-rejection: a user attempting to
 inject one of these via extraEnv gets a clear template-render error.
@@ -29,6 +31,20 @@ inject one of these via extraEnv gets a clear template-render error.
 {{- define "registry.reservedEnvNames" -}}
 {{- $content := .Files.Get "reserved-env-names.txt" -}}
 {{- compact (splitList "\n" $content) | toYaml -}}
+{{- end -}}
+
+{{/*
+Name of the ServiceAccount the registry pod runs as. Explicit
+serviceAccount.name wins; otherwise defaults to the app name ("registry").
+OpenBao's kubernetes-auth `registry` role is bound to this SA, and other
+roles (RBAC, IRSA, etc.) can be attached to the same SA over time.
+*/}}
+{{- define "registry.serviceAccountName" -}}
+{{- if .Values.serviceAccount.name -}}
+{{- .Values.serviceAccount.name -}}
+{{- else -}}
+{{- .Values.app.name -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

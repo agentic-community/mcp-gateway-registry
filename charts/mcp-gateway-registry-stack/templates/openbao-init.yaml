@@ -1,0 +1,266 @@
+{{- /*
+Standalone OpenBao init + bootstrap (entirely Kubernetes-driven; no KMS/SM).
+
+A post-install/post-upgrade hook Job that is fully idempotent and re-runnable:
+
+  1. Wait for the OpenBao pod to answer (it boots SEALED + uninitialized).
+  2. If uninitialized: `operator init` with Shamir 1-of-1, then write the single
+     unseal key + the root token into the `openbao-keys` Secret via the k8s API
+     (using the Job SA's projected token + CA — no kubectl/secret pre-creation).
+     The unseal sidecar (configured in values) consumes that key on every boot.
+  3. Unseal using the stored key (no-op if already unsealed).
+  4. Using the root token: ensure the KV v2 mount, write the `mcp-egress` policy,
+     enable `kubernetes` auth, and create the `registry-egress` role bound to the
+     registry-egress ServiceAccount in this namespace.
+
+Gated on the egress vault being enabled on the registry subchart AND OpenBao
+being deployed by this stack.
+*/ -}}
+{{- $egressEnabled := false }}
+{{- if and .Values.registry .Values.registry.egressAuth }}
+  {{- $egressEnabled = .Values.registry.egressAuth.enabled | default false }}
+{{- end }}
+{{- $openbaoEnabled := false }}
+{{- if .Values.openbao }}
+  {{- $openbaoEnabled = .Values.openbao.enabled | default false }}
+{{- end }}
+{{- if and $egressEnabled $openbaoEnabled }}
+{{- $ns := .Release.Namespace }}
+{{- $kvMount := "secret" }}
+{{- $egressPrefix := "mcp/egress" }}
+{{- if .Values.registry.egressAuth.secretsManager }}
+  {{- $egressPrefix = .Values.registry.egressAuth.secretsManager.pathPrefix | default "mcp/egress" }}
+{{- end }}
+{{- $role := "registry" }}
+{{- if .Values.registry.egressAuth.openbao }}
+  {{- $role = .Values.registry.egressAuth.openbao.role | default "registry" }}
+{{- end }}
+{{- /* The registry pod runs as this ServiceAccount (registry chart's
+       serviceAccount.name, default app name "registry"); the OpenBao role binds
+       to it. */ -}}
+{{- $registrySa := "registry" }}
+{{- if and .Values.registry .Values.registry.serviceAccount .Values.registry.serviceAccount.name }}
+  {{- $registrySa = .Values.registry.serviceAccount.name }}
+{{- end }}
+{{- /* The OpenBao server ServiceAccount (subchart fullname; holds
+       system:auth-delegator via "<fullname>-server-binding"). Its long-lived
+       token is used as the kubernetes-auth token_reviewer_jwt. */ -}}
+{{- $openbaoSa := include "mcp-gateway-registry-stack.openbaoName" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-init
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openbao-init
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  # Read/create/update the keys Secret (operator init output) and the OpenBao
+  # server SA's long-lived token Secret (used as the kubernetes-auth
+  # token_reviewer_jwt). create needs collection-level create.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-init
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-init
+subjects:
+  - kind: ServiceAccount
+    name: openbao-init
+    namespace: {{ $ns | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openbao-init
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-gateway-registry-stack.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: openbao-init
+      containers:
+        - name: init
+          # AWS-mirrored Docker library image (no Bitnami, no Docker Hub rate
+          # limits) -- matches the keycloak-configure / mongodb-configure house
+          # pattern. We apt-install curl + jq + kubectl at runtime: curl drives
+          # OpenBao's plain-HTTP REST API (tls_disable=1, no TLS to fight); jq
+          # parses the init JSON robustly; kubectl writes the keys Secret with
+          # proper k8s TLS (busybox wget in the openbao image cannot verify the
+          # API cert -- the original failure mode).
+          image: public.ecr.aws/docker/library/python:3.14-slim
+          env:
+            - name: BAO_ADDR
+              value: "http://{{ include "mcp-gateway-registry-stack.openbaoServiceHost" . }}:8200"
+            - name: KEYS_SECRET
+              value: "openbao-keys"
+            - name: NAMESPACE
+              value: {{ $ns | quote }}
+            - name: KV_MOUNT
+              value: {{ $kvMount | quote }}
+            - name: EGRESS_PREFIX
+              value: {{ $egressPrefix | quote }}
+            - name: ROLE
+              value: {{ $role | quote }}
+            - name: REGISTRY_SA
+              value: {{ $registrySa | quote }}
+            - name: OPENBAO_SA
+              value: {{ $openbaoSa | quote }}
+            - name: REVIEWER_SECRET
+              value: "openbao-reviewer-token"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              apt-get update -qq && apt-get install -y -qq curl jq kubectl >/dev/null
+
+              # All OpenBao calls go over plain HTTP (tls_disable=1) to the REST
+              # API; helper wraps curl with the (optional) root token header.
+              bao_api() { # method path [json-body]
+                local m="$1" p="$2" body="${3:-}"
+                if [ -n "$body" ]; then
+                  curl -sS -X "$m" ${BAO_TOKEN:+-H "X-Vault-Token: $BAO_TOKEN"} \
+                    -H 'Content-Type: application/json' -d "$body" "$BAO_ADDR/v1/$p"
+                else
+                  curl -sS -X "$m" ${BAO_TOKEN:+-H "X-Vault-Token: $BAO_TOKEN"} "$BAO_ADDR/v1/$p"
+                fi
+              }
+
+              echo "waiting for openbao to answer..."
+              for _ in $(seq 1 60); do
+                curl -sf "$BAO_ADDR/v1/sys/health?uninitcode=200&sealedcode=200" >/dev/null 2>&1 && break || true
+                sleep 2
+              done
+
+              # --- 1. init if needed -------------------------------------------------
+              INITED=$(bao_api GET sys/init | jq -r '.initialized')
+              if [ "$INITED" = "true" ]; then
+                echo "already initialized"
+                # Keys must already be in the Secret from the first run; read them.
+                UNSEAL_KEY=$(kubectl -n "$NAMESPACE" get secret "$KEYS_SECRET" \
+                  -o jsonpath='{.data.unseal_key}' 2>/dev/null | base64 -d || true)
+                ROOT_TOKEN=$(kubectl -n "$NAMESPACE" get secret "$KEYS_SECRET" \
+                  -o jsonpath='{.data.root_token}' 2>/dev/null | base64 -d || true)
+                if [ -z "$UNSEAL_KEY" ] || [ -z "$ROOT_TOKEN" ]; then
+                  echo "FATAL: vault is initialized but $KEYS_SECRET has no keys;" >&2
+                  echo "the unseal key/root token are unrecoverable. Delete the" >&2
+                  echo "OpenBao PVC to re-init from scratch." >&2
+                  exit 1
+                fi
+              else
+                echo "initializing (Shamir 1-of-1)..."
+                INIT_JSON=$(bao_api PUT sys/init '{"secret_shares":1,"secret_threshold":1}')
+                UNSEAL_KEY=$(echo "$INIT_JSON" | jq -r '.keys_base64[0]')
+                ROOT_TOKEN=$(echo "$INIT_JSON" | jq -r '.root_token')
+                [ -n "$UNSEAL_KEY" ] && [ "$UNSEAL_KEY" != "null" ] || { echo "init produced no unseal key" >&2; exit 1; }
+                # Persist BEFORE anything else so a crash can't lose the keys.
+                kubectl -n "$NAMESPACE" create secret generic "$KEYS_SECRET" \
+                  --from-literal=unseal_key="$UNSEAL_KEY" \
+                  --from-literal=root_token="$ROOT_TOKEN" \
+                  --dry-run=client -o yaml | kubectl apply -f -
+                echo "keys stored in Secret/$KEYS_SECRET"
+              fi
+
+              # --- 2. unseal (no-op if already unsealed) ----------------------------
+              SEALED=$(bao_api GET sys/seal-status | jq -r '.sealed')
+              if [ "$SEALED" = "true" ]; then
+                echo "unsealing..."
+                bao_api PUT sys/unseal "$(jq -nc --arg k "$UNSEAL_KEY" '{key:$k}')" >/dev/null
+              fi
+
+              export BAO_TOKEN="$ROOT_TOKEN"
+
+              # --- 3. bootstrap KV mount + policy + kubernetes auth + role ----------
+              echo "ensuring KV v2 mount '$KV_MOUNT'..."
+              if ! bao_api GET sys/mounts | jq -e --arg m "$KV_MOUNT/" '.data[$m] // .[$m]' >/dev/null 2>&1; then
+                bao_api POST "sys/mounts/$KV_MOUNT" '{"type":"kv","options":{"version":"2"}}' >/dev/null
+              fi
+
+              echo "writing policy mcp-egress..."
+              POLICY="path \"$KV_MOUNT/data/$EGRESS_PREFIX/*\" { capabilities = [\"create\",\"read\",\"update\",\"delete\"] }
+              path \"$KV_MOUNT/metadata/$EGRESS_PREFIX/*\" { capabilities = [\"read\",\"delete\",\"list\"] }
+              path \"$KV_MOUNT/metadata/$EGRESS_PREFIX\" { capabilities = [\"list\"] }"
+              bao_api PUT sys/policies/acl/mcp-egress "$(jq -nc --arg p "$POLICY" '{policy:$p}')" >/dev/null
+
+              echo "enabling kubernetes auth..."
+              if ! bao_api GET sys/auth | jq -e '."kubernetes/"' >/dev/null 2>&1; then
+                bao_api POST sys/auth/kubernetes '{"type":"kubernetes"}' >/dev/null
+              fi
+
+              # Provision a STABLE token_reviewer_jwt. Without it, OpenBao reviews
+              # incoming logins by calling TokenReview with its OWN pod's projected
+              # SA token -- which the kubelet rotates/expires (~1h). OpenBao caches
+              # that token and does not re-read it, so once it lapses every login
+              # fails with "permission denied" ("works for a while, then breaks").
+              # A kubernetes.io/service-account-token Secret yields a non-expiring
+              # token for the OpenBao server SA (which holds system:auth-delegator
+              # via "<fullname>-server-binding"), so TokenReview keeps working.
+              echo "ensuring reviewer-token Secret $REVIEWER_SECRET for SA $OPENBAO_SA..."
+              # Build the manifest with jq (kubectl accepts JSON) to avoid heredoc
+              # indentation pitfalls inside this YAML block scalar.
+              jq -nc --arg name "$REVIEWER_SECRET" --arg sa "$OPENBAO_SA" \
+                '{apiVersion:"v1",kind:"Secret",metadata:{name:$name,annotations:{"kubernetes.io/service-account.name":$sa}},type:"kubernetes.io/service-account-token"}' \
+                | kubectl -n "$NAMESPACE" apply -f -
+              # The token controller populates .data.token asynchronously.
+              REVIEWER_JWT=""
+              for _ in $(seq 1 30); do
+                REVIEWER_JWT=$(kubectl -n "$NAMESPACE" get secret "$REVIEWER_SECRET" \
+                  -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)
+                [ -n "$REVIEWER_JWT" ] && break
+                sleep 2
+              done
+              [ -n "$REVIEWER_JWT" ] || { echo "FATAL: reviewer token Secret never populated" >&2; exit 1; }
+
+              echo "configuring kubernetes auth (with stable token_reviewer_jwt)..."
+              CACERT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt)
+              bao_api POST auth/kubernetes/config \
+                "$(jq -nc --arg ca "$CACERT" --arg rjwt "$REVIEWER_JWT" \
+                  '{kubernetes_host:"https://kubernetes.default.svc",kubernetes_ca_cert:$ca,token_reviewer_jwt:$rjwt,disable_iss_validation:true}')" >/dev/null
+
+              echo "creating role $ROLE (sa=$REGISTRY_SA ns=$NAMESPACE)..."
+              bao_api POST "auth/kubernetes/role/$ROLE" \
+                "$(jq -nc --arg sa "$REGISTRY_SA" --arg ns "$NAMESPACE" \
+                  '{bound_service_account_names:$sa,bound_service_account_namespaces:$ns,policies:"mcp-egress",ttl:"1h"}')" >/dev/null
+
+              echo "DONE"
+{{- end }}

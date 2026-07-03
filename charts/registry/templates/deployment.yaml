@@ -25,6 +25,9 @@ spec:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
     spec:
+      # Run as the chart's ServiceAccount so attached roles apply (e.g. OpenBao
+      # kubernetes-auth for the egress vault).
+      serviceAccountName: {{ include "registry.serviceAccountName" . }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -64,6 +67,12 @@ spec:
                 name: registry-app-log-config
             - configMapRef:
                 name: registry-batch-config
+            {{- if .Values.egressAuth.enabled }}
+            # Per-user egress credential vault non-secret config (the marker
+            # secret rides the env secret below).
+            - configMapRef:
+                name: registry-egress-config
+            {{- end }}
             - secretRef:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if eq (.Values.global.authProvider.type | default "keycloak") "keycloak" }}

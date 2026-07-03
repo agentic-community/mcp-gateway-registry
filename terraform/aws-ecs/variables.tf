@@ -1257,6 +1257,17 @@ variable "mcp_proxy_max_body_bytes" {
   }
 }
 
+variable "mcp_proxy_timeout" {
+  description = "Timeout (seconds) for the auth-server proxy hop's upstream MCP request. Raise for servers with long-running tools. Default 30. Values above 60 also require raising proxy_read_timeout on the generated /mcp-proxy/ nginx blocks (they inherit nginx's 60s default)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.mcp_proxy_timeout >= 1
+    error_message = "mcp_proxy_timeout must be at least 1"
+  }
+}
+
 variable "tool_filter_audit_log_level" {
   description = "Log level for tool-pruning audit lines during the launch window. Valid values: DEBUG, INFO, WARNING. Default INFO during launch; flip to DEBUG after two quiet weeks in production."
   type        = string
@@ -1733,4 +1744,64 @@ variable "autoscaling_target_memory" {
   description = "Target memory utilization percentage for autoscaling. Scale-up triggers when average memory exceeds this threshold."
   type        = number
   default     = 80
+}
+
+# ---------------------------------------------------------------------------
+# Per-user egress credential vault (third-party OBO support).
+# secrets-manager backend on ECS (openbao is the EKS/Helm path).
+# ---------------------------------------------------------------------------
+
+variable "egress_auth_enabled" {
+  description = "Enable the per-user egress credential vault. Default: false."
+  type        = bool
+  default     = false
+}
+
+variable "egress_secret_store_backend" {
+  description = "Egress secret store backend: secrets-manager (openbao is the EKS/Helm path)."
+  type        = string
+  default     = "secrets-manager"
+}
+
+variable "egress_oauth_callback_base_url" {
+  description = "Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback)."
+  type        = string
+  default     = ""
+}
+
+variable "egress_token_refresh_skew_seconds" {
+  description = "Refresh a vaulted token this many seconds before expiry."
+  type        = number
+  default     = 300
+}
+
+variable "egress_state_ttl_seconds" {
+  description = "TTL for the AEAD-encrypted egress OAuth state blob."
+  type        = number
+  default     = 600
+}
+
+variable "egress_registry_internal_url" {
+  description = "URL the auth-server uses to reach the registry internal vend endpoint."
+  type        = string
+  default     = "http://registry:8080"
+}
+
+variable "egress_nginx_marker_secret" {
+  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally -- both services refuse to start without it."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "egress_secrets_manager_kms_key_id" {
+  description = "Optional KMS CMK id/ARN for the egress Secrets Manager secrets. Empty uses the AWS-managed key."
+  type        = string
+  default     = ""
+}
+
+variable "egress_secrets_manager_path_prefix" {
+  description = "Secrets Manager name prefix for the egress vault (also scopes the task IAM grant)."
+  type        = string
+  default     = "mcp/egress"
 }

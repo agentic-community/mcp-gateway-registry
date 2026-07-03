@@ -688,17 +688,25 @@ class TestListAgents:
     async def test_list_agents_query_search(self, test_app, mock_user_context):
         """Test searching agents by query string."""
         # Arrange
+        # Pin skills explicitly: the /agents query filter also searches skill
+        # names, and AgentCardFactory defaults `skills` to [SkillFactory()] whose
+        # name/description are random Faker values. If Faker happens to emit a
+        # word/sentence containing "data" for image_agent, it spuriously matches
+        # `query=data` and the test flakes (assert 2 == 1). Deterministic,
+        # query-disjoint skills make the substring match unambiguous.
         data_agent = AgentCardFactory(
             name="data-processor",
             description="Process data efficiently",
             tags=["data", "processing"],
             path="/agents/data-processor",
+            skills=[SkillFactory(name="ingest", description="Ingest records")],
         )
         image_agent = AgentCardFactory(
             name="image-processor",
             description="Process images",
             tags=["image", "processing"],
             path="/agents/image-processor",
+            skills=[SkillFactory(name="resize", description="Resize pictures")],
         )
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
@@ -916,6 +924,9 @@ class TestListAgents:
     @pytest.mark.asyncio
     async def test_list_agents_fallback_with_query_filter(self, test_app, mock_user_context):
         """Unrestricted user with query filter falls back to full fetch + slice."""
+        # Pin skills (see test_list_agents_query_search): the query filter also
+        # matches skill names, and the factory's default random Faker skill can
+        # spuriously contain "data" on image-agent and flake the count.
         agents = [
             AgentCardFactory(
                 name="data-agent",
@@ -923,6 +934,7 @@ class TestListAgents:
                 path="/agents/data",
                 tags=["data"],
                 visibility="public",
+                skills=[SkillFactory(name="ingest", description="Ingest records")],
             ),
             AgentCardFactory(
                 name="image-agent",
@@ -930,6 +942,7 @@ class TestListAgents:
                 path="/agents/image",
                 tags=["image"],
                 visibility="public",
+                skills=[SkillFactory(name="resize", description="Resize pictures")],
             ),
         ]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:

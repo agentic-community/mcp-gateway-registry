@@ -76,6 +76,100 @@ global:
     # KEYCLOAK_EXTERNAL_URL.
     paths:
       registry: /registry
+
+openbao:
+  enabled: false # This is temporarily set to false as the actual usage is prepared in a different PR
+  # NOTE: deliberately NO fullnameOverride here. The subchart's server-binding is
+  # a CLUSTER-scoped ClusterRoleBinding (system:auth-delegator, for kubernetes-auth
+  # TokenReview) named "<fullname>-server-binding" — a fixed name collides across
+  # releases/namespaces. Leaving fullnameOverride unset makes the subchart derive
+  # "<release>-openbao", so the binding + Service are unique per release. The
+  # egress OPENBAO_ADDR + init/unseal Job derive the service DNS from the same
+  # logic via the stack "openbaoServiceHost" helper. Set fullnameOverride only if
+  # you deliberately want a shared/pinned name (and accept the cross-release CRB
+  # collision that implies).
+  # The agent injector is not needed for this integration (the registry talks to
+  # OpenBao directly via the k8s-auth role); leave it off to reduce surface.
+  injector:
+    enabled: false
+  server:
+    # Standalone (NOT dev): file storage on a PVC so vaulted tokens survive pod
+    # restarts. Entirely Kubernetes-driven — NO KMS, NO Secrets Manager. The
+    # vault starts SEALED on every boot; the openbaoInit Job (stack template)
+    # does one-time `operator init` (Shamir 1-of-1) storing the unseal key +
+    # root token in a k8s Secret, then enables kubernetes auth + the mcp-egress
+    # policy + registry-egress role. The unseal sidecar below re-unseals from
+    # that Secret on every restart so the vault is available hands-off.
+    dev:
+      enabled: false
+    ha:
+      enabled: false
+    standalone:
+      enabled: true
+      config: |
+        ui = true
+        listener "tcp" {
+          tls_disable = 1
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+        }
+        storage "file" {
+          path = "/openbao/data"
+        }
+    # Readiness via the HTTP health endpoint that reports READY even when the
+    # vault is sealed/uninitialized (sealedcode/uninitcode=204). The DEFAULT
+    # probe runs `bao status`, which exits non-zero while sealed — so the pod
+    # would never go Ready, the Service would drop it, and the init Job (which
+    # connects through the Service) could never reach OpenBao to initialize +
+    # unseal it: a boot deadlock. This path lets the pod become Ready as soon as
+    # the API is listening; the init Job + unseal sidecar then unseal it.
+    readinessProbe:
+      enabled: true
+      path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204&drsecondarycode=204&performancestandbycode=204"
+      port: 8200
+    dataStorage:
+      enabled: true
+      size: 1Gi
+      mountPath: /openbao/data
+      accessMode: ReadWriteOnce
+    # Unseal sidecar: standalone OpenBao boots SEALED. This sidecar polls seal
+    # status and unseals using the key in the openbao-keys Secret (written by the
+    # init Job). Shares the pod network so it reaches the server on localhost.
+    # Idempotent: a no-op once the server is unsealed.
+    shareProcessNamespace: false
+    extraContainers:
+      - name: unseal
+        # Match the server image (same layer already pulled in the pod) so the
+        # `bao` CLI version + registry agree with the OpenBao server container.
+        image: quay.io/openbao/openbao:2.5.5
+        command:
+          - /bin/sh
+          - -c
+          - |
+            export BAO_ADDR=http://127.0.0.1:8200
+            while true; do
+              if bao status 2>/dev/null | grep -q 'Sealed.*false'; then
+                sleep 15; continue
+              fi
+              if [ -f /openbao/keys/unseal_key ]; then
+                bao operator unseal "$(cat /openbao/keys/unseal_key)" >/dev/null 2>&1 || true
+              fi
+              sleep 5
+            done
+        volumeMounts:
+          - name: openbao-keys
+            mountPath: /openbao/keys
+            readOnly: true
+    volumes:
+      - name: openbao-keys
+        secret:
+          secretName: openbao-keys
+          optional: true
+    volumeMounts:
+      - name: openbao-keys
+        mountPath: /openbao/keys
+        readOnly: true
+
 mongodb-kubernetes:
   operator:
     enableClusterMongoDBRoles: false

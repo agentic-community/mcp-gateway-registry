@@ -157,11 +157,14 @@ def _setup_auto_mocking() -> None:
 _setup_auto_mocking()
 
 
-# SECRET_KEY must be set before importing registry.core.config, because
-# Settings() is constructed at module-import time and refuses to start
-# without one. pytest_configure() runs AFTER conftest import, so setting it
-# there is too late.
+# SECRET_KEY and AUTH_SERVER_NGINX_MARKER_SECRET must be set before importing
+# registry.core.config, because Settings() is constructed at module-import time
+# and refuses to start without them. pytest_configure() runs AFTER conftest
+# import, so setting them there is too late.
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only-do-not-use-in-production")
+os.environ.setdefault(
+    "AUTH_SERVER_NGINX_MARKER_SECRET", "test-marker-secret-for-testing-only-do-not-use"
+)
 
 
 # Now we can safely import registry modules

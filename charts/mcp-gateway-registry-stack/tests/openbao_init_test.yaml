@@ -1,0 +1,112 @@
+suite: standalone openbao init + bootstrap (egress vault)
+release:
+  name: test
+  namespace: default
+templates:
+  - templates/openbao-init.yaml
+tests:
+  - it: emits nothing when egress is disabled (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: emits nothing when egress enabled but openbao subchart disabled
+    set:
+      registry:
+        egressAuth:
+          enabled: true
+      openbao:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders SA + RBAC + Job (4 docs) when egress + openbao enabled
+    set:
+      registry:
+        egressAuth:
+          enabled: true
+      openbao:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: doc 0 is the init ServiceAccount
+    documentIndex: 0
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: openbao-init
+
+  - it: doc 1 is a least-privilege Role (secrets only, no delete)
+    documentIndex: 1
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: rules[0].resources[0]
+          value: secrets
+      - notContains:
+          path: rules[0].verbs
+          content: delete
+
+  - it: doc 3 is the init Job, a helm hook running as the init SA
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: openbao-init
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
+
+  - it: Job passes the OpenBao server SA + reviewer-secret name for the stable token_reviewer_jwt
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      # OPENBAO_SA must be the subchart fullname (<release>-openbao), which owns
+      # the system:auth-delegator binding used to review TokenReviews.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENBAO_SA
+            value: test-openbao
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REVIEWER_SECRET
+            value: openbao-reviewer-token
+
+  - it: Job script provisions and uses a stable token_reviewer_jwt (not the rotating pod token)
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      # Creates the long-lived SA-token Secret for the OpenBao server SA...
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubernetes\.io/service-account-token'
+      # ...and feeds it into auth/kubernetes/config as token_reviewer_jwt.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'token_reviewer_jwt:\$rjwt'
