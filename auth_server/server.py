@@ -4748,19 +4748,48 @@ async def _read_bounded(
     return b"".join(chunks)
 
 
+# Client-sent auth headers are INGRESS credentials (issue #1266): they
+# authenticate the caller to the GATEWAY and are stripped on the egress hop --
+# they are never forwarded to an upstream MCP server. Upstream credentials are
+# supplied exclusively by the egress vault (oauth_user / PAT / custom-header),
+# never relayed from the client. The single exception is the built-in,
+# same-trust-domain registry-tools server (see _INTERNAL_INGRESS_RELAY_SERVERS).
+
+# The ONLY servers whose backend receives the relayed ingress Authorization.
+# Hardcoded (not configurable) and internal by design: airegistry-tools is the
+# gateway's own bundled registry-tools MCP server (proxied to mcpgw), a
+# same-trust-domain component. Keyed on the verified, path-validated `server`
+# claim (first path segment). This is NOT a general relay feature -- external
+# servers that need an upstream credential use the egress vault.
+_INTERNAL_INGRESS_RELAY_SERVERS: frozenset[str] = frozenset({"airegistry-tools"})
+
+
 def _forward_headers(
     incoming: dict[str, str],
+    relay_authorization: bool = False,
 ) -> dict[str, str]:
-    """Copy incoming request headers, stripping hop-by-hop and proxy-hint
-    headers so httpx can set them correctly for the upstream connection.
+    """Copy incoming request headers to the upstream, stripping hop-by-hop and
+    proxy-hint headers so httpx can set them correctly for the connection.
+
+    Ingress-auth policy (issue #1266): X-Authorization and Cookie are ALWAYS
+    stripped (never forwarded to any upstream). Authorization is also stripped
+    UNLESS ``relay_authorization`` is True -- set only for the built-in internal
+    registry-tools server (_INTERNAL_INGRESS_RELAY_SERVERS). Every other server
+    gets no client auth header on egress; upstream creds come from the vault.
     """
     forwarded: dict[str, str] = {}
     for key, value in incoming.items():
         lower = key.lower()
         if lower in _HOP_BY_HOP_HEADERS:
             continue
-        if lower in ("x-upstream-url",):
+        if lower == "x-upstream-url":
             # Never leak this internal routing header to the upstream.
+            continue
+        if lower in ("x-authorization", "cookie"):
+            # Ingress-only credentials; never forwarded to any upstream.
+            continue
+        if lower == "authorization" and not relay_authorization:
+            # Ingress token; forwarded only for the internal relay server.
             continue
         forwarded[key] = value
     return forwarded
@@ -5140,7 +5169,18 @@ async def mcp_proxy(
     filter_enabled = _read_mcp_filter_enabled()
     max_body_bytes = _read_mcp_proxy_max_body_bytes()
     proxy_timeout = _read_mcp_proxy_timeout()
-    forward_headers = _forward_headers(dict(request.headers))
+
+    # Ingress-auth policy (issue #1266): client auth headers authenticate the
+    # caller to the gateway and are stripped on egress. The ONLY exception is
+    # the built-in internal registry-tools server, which receives the relayed
+    # Authorization (it is a same-trust-domain component). The decision keys on
+    # the verified, path-validated `server` claim, never a forgeable header.
+    registered_server = (claims.get("server") or "").lower()
+    relay_ingress_auth = registered_server in _INTERNAL_INGRESS_RELAY_SERVERS
+    forward_headers = _forward_headers(
+        dict(request.headers),
+        relay_authorization=relay_ingress_auth,
+    )
 
     # True once we inject a vaulted egress token below. An egress upstream is
     # itself an OAuth resource server: if it rejects our injected token it 401s

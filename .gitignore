@@ -452,3 +452,6 @@ pingfederate/setup/pingfederate-ca-bundle.pem
 
 # Local Docker Compose override (machine-specific paths, e.g. macOS log-dir redirect)
 docker-compose.override.yml
+
+# Local MCP connect command with bearer token (never commit)
+.mcp
