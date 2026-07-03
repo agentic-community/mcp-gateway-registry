@@ -38,6 +38,8 @@ export interface AgentEditForm {
   // optional (falls back to the agent's url when blank).
   is_proxied: boolean;
   proxy_target_url: string;
+  // Read-only, server-derived client path.
+  proxy_client_url: string;
 }
 
 interface AgentEditModalProps {
@@ -115,6 +117,7 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({
             proxyTargetUrl={form.proxy_target_url}
             onProxyTargetUrlChange={(v) => setForm((prev) => ({ ...prev, proxy_target_url: v }))}
             accent="cyan"
+            clientUrl={form.proxy_client_url}
           />
 
           <FormField label="Version">

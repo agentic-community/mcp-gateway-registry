@@ -98,21 +98,24 @@ describe('CustomEntityForm', () => {
     );
     const nameInput = screen.getAllByRole('textbox')[0];
     fireEvent.change(nameInput, { target: { value: 'proxied-ds' } });
-    // Enable proxying, which reveals the target URL input.
+    // Enable proxying, which reveals the backend URL input.
     fireEvent.click(screen.getByRole('checkbox'));
     const urlInput = screen.getByPlaceholderText('https://backend.example.com/');
     fireEvent.change(urlInput, { target: { value: 'https://backend.example.com/' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    // Proxy fields are TOP-LEVEL on the wire (mixin fields), NOT in attributes.
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith(
         expect.objectContaining({
-          attributes: expect.objectContaining({
-            is_proxied: true,
-            proxy_target_url: 'https://backend.example.com/',
-          }),
+          is_proxied: true,
+          proxy_target_url: 'https://backend.example.com/',
         }),
       ),
     );
+    // And they must NOT leak into the attributes bag.
+    const saved = onSave.mock.calls[0][0];
+    expect(saved.attributes).not.toHaveProperty('is_proxied');
+    expect(saved.attributes).not.toHaveProperty('proxy_target_url');
   });
 
   it('blocks submit when proxying is on but the target URL is blank', async () => {

@@ -1285,6 +1285,40 @@ class Settings(BaseSettings):
             "canonical URLs)."
         ),
     )
+    gateway_proxy_prefix: str = Field(
+        default="gateway",
+        description=(
+            "URL path segment that namespaces every auto-generated client-facing "
+            "proxy route. The client connects to /{prefix}/{entity_type}/{name}; "
+            "the registry derives this path automatically from the entity's type "
+            "and registered path, so operators never hand-enter the client path "
+            "(they only provide the backend/origin proxy_target_url). Rendered "
+            "verbatim into nginx location directives, so it is restricted to a "
+            "single URL-safe path segment (letters, digits, hyphen, underscore)."
+        ),
+    )
+
+    @field_validator("gateway_proxy_prefix")
+    @classmethod
+    def _validate_gateway_proxy_prefix(
+        cls,
+        v: str,
+    ) -> str:
+        """Reject anything that is not a single URL-safe path segment.
+
+        This value is rendered verbatim into an nginx ``location`` path, so a
+        slash, whitespace, or config-special character would either break the
+        reload or open a path-injection surface. Enforce a strict single-segment
+        grammar (no leading/trailing slash, no embedded separators) at load time.
+        """
+        stripped = v.strip().strip("/")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", stripped):
+            raise ValueError(
+                f"gateway_proxy_prefix={v!r} is not a valid path segment "
+                "(expected letters, digits, hyphen, or underscore; no slashes)"
+            )
+        return stripped
+
     gateway_proxy_allow_private_targets: bool = Field(
         default=False,
         description=(

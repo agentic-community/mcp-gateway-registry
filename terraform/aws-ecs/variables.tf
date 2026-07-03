@@ -2188,6 +2188,12 @@ variable "gateway_generic_client_max_body_size" {
   default     = "1m"
 }
 
+variable "gateway_proxy_prefix" {
+  description = "URL path prefix for auto-generated client-facing proxy routes (/{prefix}/{entity_type}/{name}). Single URL-safe path segment; the registry derives the client path automatically."
+  type        = string
+  default     = "gateway"
+}
+
 # Auth-server container settings
 variable "generic_proxy_token_ttl_seconds" {
   description = "Lifetime (seconds) of the auth-server-minted generic-proxy internal token; the replay-window cap."

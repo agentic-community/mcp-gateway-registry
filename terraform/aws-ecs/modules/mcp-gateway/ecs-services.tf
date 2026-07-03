@@ -1542,6 +1542,10 @@ module "ecs_service_registry" {
           name  = "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE"
           value = tostring(var.gateway_generic_client_max_body_size)
         },
+        {
+          name  = "GATEWAY_PROXY_PREFIX"
+          value = tostring(var.gateway_proxy_prefix)
+        },
         # Internal/workshop deployment classification (telemetry labels; issue #1216)
         {
           name  = "INTERNAL_ONLY_DEPLOYMENT"

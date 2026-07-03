@@ -154,6 +154,8 @@ interface Agent {
   // Gateway-proxy opt-in (registry extension): served through the generic hop.
   is_proxied?: boolean;
   proxy_target_url?: string;
+  // Read-only, auto-derived client path ({prefix}/{type}/{name}).
+  proxy_client_url?: string;
 }
 
 // Toast notification component
@@ -527,6 +529,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     status: 'active' as 'active' | 'draft' | 'deprecated' | 'beta',
     is_proxied: false,
     proxy_target_url: '',
+    proxy_client_url: '',
   });
   const [editAgentLoading, setEditAgentLoading] = useState(false);
   const [skillsJsonError, setSkillsJsonError] = useState<string | null>(null);
@@ -550,6 +553,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     auth_header_name: '',
     is_proxied: false,
     proxy_target_url: '',
+    proxy_client_url: '',
   });
   const [skillFormLoading, setSkillFormLoading] = useState(false);
   const [showDeleteSkillConfirm, setShowDeleteSkillConfirm] = useState<string | null>(null);
@@ -672,6 +676,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       ans_metadata: a.ans_metadata,
       registered_by: a.registered_by,
       lifecycle_status: a.lifecycle_status,
+      // Gateway-proxy opt-in — carry through for the card badge + edit modal.
+      is_proxied: a.is_proxied ?? false,
+      proxy_target_url: a.proxy_target_url,
+      proxy_client_url: a.proxy_client_url,
     }));
   }, [agentsFromStats]);
 
@@ -1384,6 +1392,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         // them snake_case even where sibling fields are camelCased.
         is_proxied: (fullAgent.is_proxied ?? agent.is_proxied) ?? false,
         proxy_target_url: fullAgent.proxy_target_url || agent.proxy_target_url || '',
+        proxy_client_url: fullAgent.proxy_client_url || agent.proxy_client_url || '',
       });
     } catch (error) {
       console.error('Failed to fetch agent details for editing:', error);
@@ -1404,6 +1413,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         status: agent.lifecycle_status || 'active',
         is_proxied: agent.is_proxied ?? false,
         proxy_target_url: agent.proxy_target_url || '',
+        proxy_client_url: agent.proxy_client_url || '',
       });
     }
   }, [agentApiToken]);
@@ -1791,6 +1801,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_header_name: skill.auth_header_name || '',
         is_proxied: skill.is_proxied ?? false,
         proxy_target_url: skill.proxy_target_url || '',
+        proxy_client_url: skill.proxy_client_url || '',
       });
     } else {
       // Create mode - reset form
@@ -1812,6 +1823,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_header_name: '',
         is_proxied: false,
         proxy_target_url: '',
+        proxy_client_url: '',
       });
     }
     setShowSkillModal(true);

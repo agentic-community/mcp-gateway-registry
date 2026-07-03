@@ -298,6 +298,7 @@ app:
   gatewayCanonicalNamespaceEnabled: false # Emit /entity_type/path canonical aliases
   gatewayProxyAllowPrivateTargets: false # Allow private/loopback proxy targets (metadata always denied)
   gatewayGenericClientMaxBodySize: "1m" # nginx client_max_body_size for generic blocks
+  gatewayProxyPrefix: "gateway" # URL path prefix for auto-generated client routes (/{prefix}/{type}/{name})
   # Registry-UI internal token verification (the /api/ hop). The auth-server mints
   # the token (using its own INTERNAL_TOKEN_TTL_SECONDS); the registry verifies it
   # and uses the leeway below. Not secrets -- plain env. See docs/unified-parameter-reference.md.

@@ -18,6 +18,7 @@ const baseForm: SkillForm = {
   auth_header_name: '',
   is_proxied: false,
   proxy_target_url: '',
+  proxy_client_url: '',
 };
 
 function Harness({

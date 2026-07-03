@@ -35,6 +35,8 @@ export interface SkillForm {
   // is required when is_proxied is true.
   is_proxied: boolean;
   proxy_target_url: string;
+  // Read-only, server-derived client path (empty on create until saved).
+  proxy_client_url: string;
 }
 
 interface SkillFormModalProps {
@@ -228,6 +230,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
             onProxyTargetUrlChange={(v) => setForm((prev) => ({ ...prev, proxy_target_url: v }))}
             targetRequired
             accent="amber"
+            clientUrl={form.proxy_client_url}
           />
 
           <div>

@@ -294,6 +294,11 @@ class CustomEntityRecord(ProxyableMixin):
             },
             read_safe=True,  # storage model: reconstructed on read, log-not-raise
         )
+        # Derive the read-only client-facing path from entity_type + path
+        # (self-healing). On create the synthetic path may not be assigned yet
+        # (assign_path runs later); populate handles the empty path (clears) and
+        # the value is recomputed on the next read when the path is present.
+        self.populate_proxy_client_url(self.entity_type)
         return self
 
 

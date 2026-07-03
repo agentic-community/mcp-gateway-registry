@@ -1415,6 +1415,11 @@ async def list_agents(
                 metadata=project_metadata(
                     agent.metadata if agent.metadata else {}, _metadata_paths
                 ),
+                # Gateway-proxy opt-in: carry through so the card badge + edit
+                # modal reflect stored state (proxy_client_url is server-derived).
+                is_proxied=getattr(agent, "is_proxied", False),
+                proxy_target_url=getattr(agent, "proxy_target_url", None),
+                proxy_client_url=getattr(agent, "proxy_client_url", None),
             )
             filtered_agents.append(agent_info)
 

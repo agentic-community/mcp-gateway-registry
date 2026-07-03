@@ -84,6 +84,8 @@ export interface Skill {
   // Gateway-proxy opt-in (registry extension).
   is_proxied?: boolean;
   proxy_target_url?: string;
+  // Read-only, auto-derived client path ({prefix}/{type}/{name}).
+  proxy_client_url?: string;
   num_stars?: number;
   rating_details?: Array<{ user: string; rating: number }>;
   // Lightweight scan summary from the list payload, used to colour the shield

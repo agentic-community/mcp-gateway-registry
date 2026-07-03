@@ -157,20 +157,26 @@ class TestCreateBlock:
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
+            s.gateway_proxy_prefix = "gateway"
             return _service()._create_generic_proxy_block(entity_type, path, target)
 
-    def test_location_is_entity_type_namespaced(self):
+    def test_location_is_prefixed_type_name(self):
+        # Client-facing path = /{prefix}/{type}/{name} (namespace segment stripped
+        # from the registered path, so /skills/proxy-demo -> /gateway/skill/proxy-demo,
+        # NOT the doubled /skill/skills/proxy-demo).
         block = self._block()
-        assert "location {{ROOT_PATH}}/skill/skills/proxy-demo/ {" in block
+        assert "location {{ROOT_PATH}}/gateway/skill/proxy-demo/ {" in block
+        assert "location {{ROOT_PATH}}/skill/skills/proxy-demo" not in block
 
     def test_location_has_trailing_slash_no_prefix_hijack(self):
-        # Issue #1501 class: a bare `location /skill/foo` prefix-matches sibling
-        # routes like `/skill/foobar`, pulling them into this entity's /validate
-        # auth subrequest. The rendered location MUST carry a trailing slash so it
-        # only matches the subtree (same guard real/virtual servers apply).
+        # Issue #1501 class: a bare `location /gateway/skill/foo` prefix-matches
+        # sibling routes like `/gateway/skill/foobar`, pulling them into this
+        # entity's /validate auth subrequest. The rendered location MUST carry a
+        # trailing slash so it only matches the subtree (same guard real/virtual
+        # servers apply).
         block = self._block(path="/skills/foo")
-        assert "location {{ROOT_PATH}}/skill/skills/foo/ {" in block
-        assert "location {{ROOT_PATH}}/skill/skills/foo {" not in block
+        assert "location {{ROOT_PATH}}/gateway/skill/foo/ {" in block
+        assert "location {{ROOT_PATH}}/gateway/skill/foo {" not in block
 
     def test_proxy_pass_targets_auth_server_generic_hop(self):
         block = self._block()
@@ -193,11 +199,16 @@ class TestCreateBlock:
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "8m"
+            s.gateway_proxy_prefix = "gateway"
             block = _service()._create_generic_proxy_block(
                 "a2a_agent", "/agents/code-reviewer", "https://x/"
             )
+        # authz markers use the FULL registered path (unchanged by the client-path
+        # rename): X-Generic-Proxy-Kind + X-Entity-Path are the scope key.
         assert 'set $generic_proxy_kind "a2a_agent";' in block
         assert 'set $entity_path "agents/code-reviewer";' in block
+        # ...while the outward location uses the stripped, prefixed client path.
+        assert "location {{ROOT_PATH}}/gateway/a2a_agent/code-reviewer/ {" in block
         assert "client_max_body_size 8m;" in block
 
     def test_forwards_token_under_generic_header_name(self):
@@ -207,6 +218,7 @@ class TestCreateBlock:
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
+            s.gateway_proxy_prefix = "gateway"
             block = _service()._create_generic_proxy_block("skill", "/skills/x", "https://x/")
         assert "proxy_set_header X-Internal-Token-Generic $auth_internal_token_generic;" in block
         # must NOT forward the generic token under the MCP header name
@@ -216,6 +228,7 @@ class TestCreateBlock:
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888/"
             s.gateway_generic_client_max_body_size = "1m"
+            s.gateway_proxy_prefix = "gateway"
             block = _service()._create_generic_proxy_block("skill", "/skills/x", "https://x/")
         assert "proxy_pass http://auth-server:8888/proxy/skill/skills/x/;" in block
 
@@ -233,6 +246,7 @@ class TestSafeBlock:
             s.auth_server_url = auth_url
             s.gateway_generic_client_max_body_size = "1m"
             s.gateway_proxy_allow_private_targets = allow_private
+            s.gateway_proxy_prefix = "gateway"
             return _service()._safe_generic_block(entity_type, path, target)
 
     def test_valid_target_returns_block(self):
@@ -321,6 +335,7 @@ class TestGenerateGenericBlocks:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
             s.gateway_proxy_allow_private_targets = False
+            s.gateway_proxy_prefix = "gateway"
             with patch(
                 "registry.core.nginx_service._fetch_generic_proxied_resources",
                 new=AsyncMock(return_value=resources),
@@ -339,19 +354,21 @@ class TestGenerateGenericBlocks:
         assert len(blocks) == 2
 
     async def test_generic_dropped_on_collision_with_claimed_path(self):
-        # A legacy MCP server already claimed /skill/skills/a (precedence).
+        # A prior block already claimed the client path /gateway/skill/a (precedence).
+        # Collision is checked against the CLIENT path (the location line), which is
+        # now {prefix}/{type}/{name}, not the legacy /skill/skills/... form.
         resources = [
             {"entity_type": "skill", "path": "/skills/a", "target_url": "https://a/"},
             {"entity_type": "skill", "path": "/skills/b", "target_url": "https://b/"},
         ]
-        # Claimed paths carry a trailing slash (that is how MCP/virtual blocks
-        # render their location), and the generic block now normalises to a
-        # trailing slash too — so the exact-match collision dedup catches it.
-        claimed = {"/skill/skills/a/"}
+        # Claimed client paths carry a trailing slash (that is how MCP/virtual blocks
+        # render their location), and the generic block now normalises to a trailing
+        # slash too — so the exact-match collision dedup catches it.
+        claimed = {"/gateway/skill/a/"}
         blocks = await self._generate(resources, claimed)
         # only /skills/b survives; the colliding /skills/a is dropped
         assert len(blocks) == 1
-        assert "/skill/skills/b/" in blocks[0]
+        assert "/gateway/skill/b/" in blocks[0]
 
     async def test_generic_vs_generic_first_seen_wins(self):
         # Two entities rendering the SAME location path: deterministic first-wins
@@ -362,8 +379,8 @@ class TestGenerateGenericBlocks:
         resources = [
             {"entity_type": "skill", "path": "/skills/dup", "target_url": "https://a/"},
         ]
-        # Pre-claim the path; the single generic must be dropped, not duplicated.
-        blocks = await self._generate(resources, {"/skill/skills/dup/"})
+        # Pre-claim the client path; the single generic must be dropped, not duplicated.
+        blocks = await self._generate(resources, {"/gateway/skill/dup/"})
         assert blocks == []
 
     async def test_invalid_target_skipped_but_others_render(self):
@@ -377,4 +394,4 @@ class TestGenerateGenericBlocks:
         ]
         blocks = await self._generate(resources, set())
         assert len(blocks) == 1
-        assert "/skill/skills/good" in blocks[0]
+        assert "/gateway/skill/good" in blocks[0]

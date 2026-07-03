@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import httpx
 
 from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
-from registry.schemas.proxy_mixin import _assert_egress_allowed
+from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 
 from .config import settings
 from .endpoint_utils import get_endpoint_url_from_server_info
@@ -1860,18 +1860,22 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         Returns:
             The nginx location block string (with ``{{ROOT_PATH}}`` placeholder).
         """
-        norm_path = path if path.startswith("/") else "/" + path
         entity_path = path.strip("/")
         proxy_target = f"{settings.auth_server_url.rstrip('/')}/proxy/{entity_type}/{entity_path}/"
-        # Normalise to a trailing slash for the same reason as real and virtual
-        # servers (issue #1501): a bare `location /skill/foo` prefix-matches
-        # unrelated routes like `/skill/foobar`, hijacking them into this entity's
-        # /validate auth subrequest. `location /skill/foo/` only matches the
-        # subtree, and — paired with the trailing-slash proxy_pass target — appends
-        # a client sub-path cleanly onto the pinned base. It also makes the
-        # cross-block collision dedup exact-match correctly against the MCP/virtual
-        # location paths, which already carry a trailing slash.
-        location_path = f"/{entity_type}{norm_path}".rstrip("/") + "/"
+        # Client-facing location = {prefix}/{type}/{name} (auto-derived, never
+        # hand-entered). This is ONLY the outward path; the authz key is unchanged
+        # — it still keys off $generic_proxy_kind ($entity_path) below and the
+        # /proxy/{type}/{entity_path}/ proxy_pass, both of which use the FULL
+        # registered path. Changing this line does not invalidate existing scopes.
+        #
+        # Normalise to a trailing slash (issue #1501): a bare location prefix-matches
+        # unrelated routes (e.g. /gateway/skill/foobar), hijacking them into this
+        # entity's /validate auth subrequest. A trailing-slash location matches only
+        # the subtree and dedups exactly against the MCP/virtual location paths.
+        location_path = (
+            build_proxy_client_path(entity_type, path, settings.gateway_proxy_prefix).rstrip("/")
+            + "/"
+        )
         body_size = settings.gateway_generic_client_max_body_size
         return f"""
     # Proxied {entity_type}: {location_path}
