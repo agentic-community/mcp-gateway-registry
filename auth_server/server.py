@@ -4882,6 +4882,12 @@ def _forward_headers(
         if lower == "x-upstream-url":
             # Never leak this internal routing header to the upstream.
             continue
+        if lower in ("x-body", "x-body-uninspectable"):
+            # Gateway-internal body-capture headers set by capture_body.lua for
+            # the /validate hop. Their value is the raw request body, which is
+            # not a legal HTTP header value (braces/spaces) and must never be
+            # forwarded to the upstream.
+            continue
         if lower in ("x-authorization", "cookie"):
             # Ingress-only credentials; never forwarded to any upstream.
             continue
