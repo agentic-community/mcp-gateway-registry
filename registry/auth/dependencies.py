@@ -9,6 +9,7 @@ from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
 )
+from .privileged_constants import ADMIN_ACTION_PREFIXES
 from .proxied_token import (
     _api_auth_request_enabled,
     verify_registry_ui_token,
@@ -333,21 +334,13 @@ async def user_has_wildcard_access(user_scopes: list[str]) -> bool:
     return False
 
 
-# Prefixes for mutating (management) UI-Scopes actions.
-# Any action starting with these prefixes is a management action.
-# A user with any such action for "all" resources is considered an admin.
-# Read-only prefixes (list_, get_, health_check_) are NOT included.
-#
-# SECURITY BOUNDARY: Changes to this tuple affect who is considered an admin.
+# Prefixes for mutating (management) UI-Scopes actions; single source of truth
+# in registry/auth/privileged_constants.py so the scope-service / scope-repo
+# privileged-write guard cannot drift out of sync with this admin-derivation
+# rule. Module-level alias kept for backwards compatibility with existing
+# references and tests.
 # Reference: scripts/registry-admins.json for the complete admin permissions set.
-_ADMIN_ACTION_PREFIXES: tuple[str, ...] = (
-    "register_",
-    "modify_",
-    "toggle_",
-    "delete_",
-    "publish_",
-    "create_",
-)
+_ADMIN_ACTION_PREFIXES: tuple[str, ...] = ADMIN_ACTION_PREFIXES
 
 
 def _user_is_admin(

@@ -183,7 +183,7 @@ sequenceDiagram
     participant IdP as Identity Provider
     participant API as Registry API
 
-    Client->>NGINX: 1. API Request<br/>Authorization: Bearer <token>
+    Client->>NGINX: 1. API Request<br/>Authorization: Bearer [token]
     NGINX->>Auth: 2. auth_request /validate
 
     alt Self-Signed Token (iss: mcp-auth-server)
@@ -651,6 +651,15 @@ When AI coding assistants connect to a server through the gateway:
 2. Gateway validates user permissions
 3. Gateway retrieves and decrypts server credential
 4. Gateway proxies the request with the server's auth header
+
+> **Ingress vs egress (issue #1266).** The client's `X-Authorization` (or
+> `Authorization`) is an **ingress** credential: it authenticates the caller to
+> the gateway and is **stripped on egress** — never forwarded to the upstream
+> MCP server. Upstream credentials are supplied by the gateway itself (stored
+> server credential, or the per-user egress vault), not by relaying the client's
+> gateway token. Custom headers the server expects (e.g. `CONTEXT7_API_KEY`) are
+> not affected. The sole exception is the built-in internal `airegistry-tools`
+> server, which receives the relayed `Authorization`.
 
 **Example MCP client configuration:**
 

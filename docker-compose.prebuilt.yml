@@ -27,7 +27,9 @@ services:
       - BAO_DEV_ROOT_TOKEN_ID=${OPENBAO_TOKEN:-dev-root-token}
       - BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200
     ports:
-      - "8200:8200"
+      # Loopback-only: vault root == all egress credentials; never expose beyond
+      # the host. Override with HOST_BIND_IP=0.0.0.0 only if you understand the risk.
+      - "${HOST_BIND_IP:-127.0.0.1}:8200:8200"
     healthcheck:
       # Health endpoint reports 200 once the API is listening (dev mode is
       # always unsealed + initialized, so the default codes are fine).
@@ -78,6 +80,26 @@ services:
       # value whenever the operator's .env did not set BUILD_VERSION,
       # which is the silent-fallback symptom this PR fixes.
       - SECRET_KEY=${SECRET_KEY}
+      # Per-user egress credential vault (off by default)
+      - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
+      - SECRET_STORE_BACKEND=${SECRET_STORE_BACKEND:-openbao}
+      - EGRESS_OAUTH_CALLBACK_BASE_URL=${EGRESS_OAUTH_CALLBACK_BASE_URL:-}
+      - EGRESS_TOKEN_REFRESH_SKEW_SECONDS=${EGRESS_TOKEN_REFRESH_SKEW_SECONDS:-300}
+      - EGRESS_STATE_TTL_SECONDS=${EGRESS_STATE_TTL_SECONDS:-600}
+      - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
+      - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
+      - SECRETS_MANAGER_KMS_KEY_ID=${SECRETS_MANAGER_KMS_KEY_ID:-}
+      - SECRETS_MANAGER_PATH_PREFIX=${SECRETS_MANAGER_PATH_PREFIX:-mcp/egress}
+      # Default to the in-stack OpenBao container (dev mode). Override for an
+      # external vault.
+      - OPENBAO_ADDR=${OPENBAO_ADDR:-http://openbao:8200}
+      - OPENBAO_NAMESPACE=${OPENBAO_NAMESPACE:-}
+      - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
+      - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
+      - OPENBAO_ROLE=${OPENBAO_ROLE:-}
+      # Static token for OPENBAO_AUTH_METHOD=token; matches the dev OpenBao root
+      # token. Required for token auth (kubernetes auth is EKS-only).
+      - OPENBAO_TOKEN=${OPENBAO_TOKEN:-dev-root-token}
       - AUTH_SERVER_URL=${AUTH_SERVER_URL}
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -294,6 +316,8 @@ services:
         condition: service_started
       mongodb-init:
         condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
     restart: unless-stopped
 
   # NOTE: The standalone metrics-service (and its SQLite metrics-db) were removed
@@ -310,6 +334,12 @@ services:
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
       - SECRET_KEY=${SECRET_KEY}
+      # Per-user egress credential vault: auth-server only needs the feature flag,
+      # the internal vend URL, and the nginx marker secret (it does NOT touch the
+      # secret store, so no SECRET_STORE/AWS/OPENBAO vars here).
+      - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
+      - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8080}
+      - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - GITHUB_ENABLED=${GITHUB_ENABLED:-false}
@@ -405,11 +435,14 @@ services:
       # Tool-level access control (Issue #1026)
       - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
       - MCP_PROXY_MAX_BODY_BYTES=${MCP_PROXY_MAX_BODY_BYTES:-2097152}
+      - MCP_PROXY_TIMEOUT=${MCP_PROXY_TIMEOUT:-30}
       - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
     ports:
-      - "8888:8888"
+      # Loopback-only: normal traffic goes through the nginx front door; direct
+      # port is for host health checks / tests only.
+      - "${HOST_BIND_IP:-127.0.0.1}:8888:8888"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -465,7 +498,8 @@ services:
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
-      - "8003:8003"
+      # Loopback-only: reached through the nginx front door in normal use.
+      - "${HOST_BIND_IP:-127.0.0.1}:8003:8003"
     depends_on:
       - registry
     restart: unless-stopped
@@ -474,7 +508,8 @@ services:
   prometheus:
     image: prom/prometheus:${PROMETHEUS_VERSION:-v3.11.3}
     ports:
-      - "9090:9090"
+      # Loopback-only: Prometheus UI is a local-dev convenience, not a public surface.
+      - "${HOST_BIND_IP:-127.0.0.1}:9090:9090"
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
@@ -495,7 +530,8 @@ services:
   grafana:
     image: grafana/grafana:${GRAFANA_VERSION:-12.3.1}
     ports:
-      - "3000:3000"
+      # Loopback-only: Grafana UI is a local-dev convenience, not a public surface.
+      - "${HOST_BIND_IP:-127.0.0.1}:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -560,7 +596,8 @@ services:
       KC_LOG_LEVEL: INFO
 
     ports:
-      - "8080:8080"
+      # Loopback-only: Keycloak is reached through the nginx front door in normal use.
+      - "${HOST_BIND_IP:-127.0.0.1}:8080:8080"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -591,8 +628,9 @@ services:
       - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
       - SERVER_PROFILE_PATH=getting-started/pingfederate
     ports:
-      - "9031:9031"
-      - "9999:9999"
+      # Loopback-only: PingFederate runtime + admin console stay on the host.
+      - "${HOST_BIND_IP:-127.0.0.1}:9031:9031"
+      - "${HOST_BIND_IP:-127.0.0.1}:9999:9999"
     volumes:
       - pingfederate-data:/opt/out/instance/server/default/data
     restart: unless-stopped
@@ -636,7 +674,9 @@ services:
       - MONGO_INITDB_ROOT_USERNAME=${DOCUMENTDB_USERNAME:-admin}
       - MONGO_INITDB_ROOT_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
     ports:
-      - "27017:27017"
+      # Loopback-only: host tools (mongosh, tests) reach it via localhost, but it
+      # is never exposed on other interfaces. Set HOST_BIND_IP=0.0.0.0 to override.
+      - "${HOST_BIND_IP:-127.0.0.1}:27017:27017"
     volumes:
       - mongodb-data:/data/db
       - mongodb-config:/data/configdb

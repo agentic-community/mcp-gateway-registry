@@ -271,6 +271,33 @@ class TestRegisterAgent:
 
         assert await fake_repo.get_state("/new-agent") is False
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "http://169.254.169.254/",  # cloud metadata literal
+            "http://10.0.0.1:9000/agent",  # RFC-1918 literal
+            # Non-http(s) schemes (ftp/file/gopher) are rejected earlier by the
+            # AgentCard Pydantic model before the service guard runs; the scheme
+            # check is exercised directly in tests/unit/utils/test_url_guard.py.
+        ],
+    )
+    async def test_register_agent_rejects_unsafe_url(
+        self,
+        agent_service: AgentService,
+        fake_repo: InMemoryAgentRepository,
+        bad_url,
+    ):
+        """A malicious agent url is rejected before the card is persisted."""
+        from registry.exceptions import UrlValidationError
+
+        agent_card = AgentCardFactory(path="/ssrf-agent", url=bad_url)
+
+        with pytest.raises(UrlValidationError):
+            await agent_service.register_agent(agent_card)
+
+        assert await fake_repo.get("/ssrf-agent") is None
+
 
 # =============================================================================
 # TEST: Get Agent

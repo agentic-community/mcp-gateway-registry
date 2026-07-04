@@ -224,6 +224,14 @@ keycloak_database_password = "CHANGE-ME-DB-PASSWORD"
 # Default: true
 session_cookie_secure = true
 
+# CORS allowlist for the registry API (credentialed cross-origin requests).
+# Comma-separated EXACT origins (scheme + host + optional port). The registry's
+# own origin is always trusted, so this is only needed when a separate frontend
+# origin must call the API from the browser. There is no wildcard fallback:
+# leaving this empty means same-origin only.
+# Example: cors_allowed_origins = "https://app.example.com,https://admin.example.com"
+# cors_allowed_origins = ""
+
 # Session cookie domain (for cross-subdomain authentication)
 # Leave unset or empty for single-domain deployments (RECOMMENDED for most cases)
 # Set to domain with leading dot for cross-subdomain sharing
@@ -672,6 +680,12 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # return HTTP 413. Default 2097152 (2 MiB); raise only for servers with
 # unusually large tool catalogs.
 # mcp_proxy_max_body_bytes = 2097152
+
+# Timeout (seconds) for the auth-server proxy hop's upstream MCP request.
+# Raise for servers with long-running tools. Default 30. Values above 60 also
+# require raising proxy_read_timeout on the generated /mcp-proxy/ nginx blocks
+# (they inherit nginx's 60s default).
+# mcp_proxy_timeout = 30
 
 # Log level for tool-pruning audit lines during the launch window.
 # Valid values: "DEBUG", "INFO", "WARNING". Default "INFO" during launch;
@@ -1130,3 +1144,24 @@ aws_registry_federation_enabled = true
 # pingfederate_m2m_client_secret    = ""
 # pingfederate_application_id_uri   = ""
 # pingfederate_groups_claim         = "groups"
+
+# ---------------------------------------------------------------------------
+# Per-user egress credential vault (third-party OBO support). Off by default.
+# On ECS the secret store is AWS Secrets Manager; enabling this grants the
+# registry task role scoped secretsmanager + KMS access under the path prefix.
+# ---------------------------------------------------------------------------
+# egress_auth_enabled                = true
+# egress_secret_store_backend        = "secrets-manager"
+# egress_oauth_callback_base_url     = "https://mcpgateway.example.com"
+# egress_token_refresh_skew_seconds  = 300
+# egress_state_ttl_seconds           = 600
+# egress_registry_internal_url       = "http://registry:8080"
+# egress_secrets_manager_kms_key_id  = ""   # optional CMK; empty uses the AWS-managed key
+# egress_secrets_manager_path_prefix = "mcp/egress"
+
+# nginx marker secret shared by auth-server + registry. REQUIRED unconditionally
+# (both services refuse to start without it), NOT egress-specific -- it guards all
+# mcp-proxy token minting. Auto-generated into Secrets Manager when left empty;
+# set this only to pin a specific value. Avoid quotes/backslashes/$ (the registry
+# substitutes it verbatim into the generated nginx config).
+# egress_nginx_marker_secret         = ""

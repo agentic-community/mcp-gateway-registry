@@ -248,16 +248,23 @@ class SkillScannerService:
             Path to temporary directory containing downloaded skill content
 
         Raises:
-            httpx.HTTPError: If download fails
+            UrlValidationError: If the URL fails SSRF validation (private/
+                metadata target, bad scheme, or DNS rebinding at fetch time).
+            httpx.HTTPError: If download fails.
         """
-        import httpx
+        from ..utils.url_guard import guarded_client, validate_url
+
+        # Fail-closed pre-check for a clear early rejection; the guarded client
+        # additionally pins the resolved public IP so the fetch cannot rebind to
+        # a private address between this check and the connect (and re-validates
+        # every redirect hop).
+        validate_url(skill_md_url)
 
         temp_dir = tempfile.mkdtemp(prefix="skill_scan_")
         skill_md_path = Path(temp_dir) / "SKILL.md"
 
-        response = httpx.get(
-            skill_md_url, headers=headers or {}, follow_redirects=True, timeout=30.0
-        )
+        with guarded_client(timeout=30.0) as client:
+            response = client.get(skill_md_url, headers=headers or {}, follow_redirects=True)
         response.raise_for_status()
         skill_md_path.write_text(response.text)
 

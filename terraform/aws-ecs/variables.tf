@@ -349,6 +349,12 @@ variable "session_cookie_secure" {
   default     = true
 }
 
+variable "cors_allowed_origins" {
+  description = "Comma-separated exact browser origins allowed to make credentialed cross-origin requests to the registry API (e.g. 'https://app.example.com,https://admin.example.com'). The registry's own origin is always trusted. Empty means same-origin only; there is no wildcard fallback."
+  type        = string
+  default     = ""
+}
+
 variable "session_cookie_domain" {
   description = "Domain for session cookies (e.g., '.example.com' for cross-subdomain sharing). Leave empty for single-domain deployments (cookie scoped to exact host only)."
   type        = string
@@ -849,10 +855,15 @@ variable "pf_admin_user" {
 }
 
 variable "pf_admin_pass" {
-  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production."
+  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production. No default: supply a strong value when pingfederate_enabled is true."
   type        = string
-  default     = "2FederateM0re"
+  default     = ""
   sensitive   = true
+
+  validation {
+    condition     = var.pf_admin_pass != "2FederateM0re"
+    error_message = "pf_admin_pass must not be the well-known development default. Set a strong, unique PingFederate admin password."
+  }
 }
 
 # =============================================================================
@@ -1254,6 +1265,17 @@ variable "mcp_proxy_max_body_bytes" {
   validation {
     condition     = var.mcp_proxy_max_body_bytes >= 1024
     error_message = "mcp_proxy_max_body_bytes must be at least 1024"
+  }
+}
+
+variable "mcp_proxy_timeout" {
+  description = "Timeout (seconds) for the auth-server proxy hop's upstream MCP request. Raise for servers with long-running tools. Default 30. Values above 60 also require raising proxy_read_timeout on the generated /mcp-proxy/ nginx blocks (they inherit nginx's 60s default)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.mcp_proxy_timeout >= 1
+    error_message = "mcp_proxy_timeout must be at least 1"
   }
 }
 
@@ -1733,4 +1755,64 @@ variable "autoscaling_target_memory" {
   description = "Target memory utilization percentage for autoscaling. Scale-up triggers when average memory exceeds this threshold."
   type        = number
   default     = 80
+}
+
+# ---------------------------------------------------------------------------
+# Per-user egress credential vault (third-party OBO support).
+# secrets-manager backend on ECS (openbao is the EKS/Helm path).
+# ---------------------------------------------------------------------------
+
+variable "egress_auth_enabled" {
+  description = "Enable the per-user egress credential vault. Default: false."
+  type        = bool
+  default     = false
+}
+
+variable "egress_secret_store_backend" {
+  description = "Egress secret store backend: secrets-manager (openbao is the EKS/Helm path)."
+  type        = string
+  default     = "secrets-manager"
+}
+
+variable "egress_oauth_callback_base_url" {
+  description = "Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback)."
+  type        = string
+  default     = ""
+}
+
+variable "egress_token_refresh_skew_seconds" {
+  description = "Refresh a vaulted token this many seconds before expiry."
+  type        = number
+  default     = 300
+}
+
+variable "egress_state_ttl_seconds" {
+  description = "TTL for the AEAD-encrypted egress OAuth state blob."
+  type        = number
+  default     = 600
+}
+
+variable "egress_registry_internal_url" {
+  description = "URL the auth-server uses to reach the registry internal vend endpoint."
+  type        = string
+  default     = "http://registry:8080"
+}
+
+variable "egress_nginx_marker_secret" {
+  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally -- both services refuse to start without it."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "egress_secrets_manager_kms_key_id" {
+  description = "Optional KMS CMK id/ARN for the egress Secrets Manager secrets. Empty uses the AWS-managed key."
+  type        = string
+  default     = ""
+}
+
+variable "egress_secrets_manager_path_prefix" {
+  description = "Secrets Manager name prefix for the egress vault (also scopes the task IAM grant)."
+  type        = string
+  default     = "mcp/egress"
 }

@@ -783,6 +783,33 @@ def get_secret(key: str, default: Optional[str] = None) -> str:
   app.run(host=private_ip, port=8000)
   ```
 
+### LLM Agent Tool-Execution Safety
+
+When an LLM autonomously emits tool calls (a tool loop, an agent, an A2A server),
+the model's output is untrusted: it can be steered by prompt injection in registry
+data, upstream tool results, documentation, or inbound messages. System-prompt
+`<security>` guidance is NOT an enforcement control — it can be ignored or
+overridden. Enforce at the execution boundary instead:
+
+- **Gate every mutating/destructive tool call behind a mandatory human confirmation.**
+  Classify each tool invocation read vs. mutate at the point of execution;
+  anything not provably read-only is treated as mutating and requires explicit
+  approval. Fail closed: if no confirmation channel is available (e.g.
+  non-interactive mode), deny the action rather than run it.
+- **Deny-by-default executable allowlist for any shell/exec tool.** Permit only a
+  fixed set of read-only diagnostic binaries; reject unknown executables,
+  path-qualified executables, and shell metacharacters (`;`, `|`, `&`, backticks,
+  redirection) before running. Run with a scrubbed environment so read-only
+  commands cannot read credential-bearing variables and echo them back.
+- **Do not authenticate an agent/tool-loop endpoint by network isolation alone.**
+  An A2A / agent HTTP server that drives an LLM tool loop must validate an inbound
+  bearer JWT (signature/issuer/expiry/audience against the IdP JWKS) on every
+  request before the message reaches the model. Bind to loopback by default;
+  require an explicit opt-in to expose on all interfaces. Auth stays enforced
+  regardless of bind address, and an unconfigured auth layer denies (never falls
+  open). Provide the guard as the shipped default so downstream copies of sample
+  agents inherit it.
+
 ### Subprocess Security Guidelines
 
 When using the `subprocess` module, follow these security patterns to prevent Bandit B603/B607 findings and avoid shell injection vulnerabilities.

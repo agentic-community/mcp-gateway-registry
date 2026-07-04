@@ -19,6 +19,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from ..auth.dependencies import nginx_proxied_auth
 from ..schemas.peer_federation_schema import (
     PeerRegistryConfig,
+    PeerRegistryConfigResponse,
     PeerSyncStatus,
     SyncResult,
 )
@@ -83,7 +84,7 @@ router = APIRouter(
 # ============================================================================
 
 
-@router.get("", response_model=list[PeerRegistryConfig])
+@router.get("", response_model=list[PeerRegistryConfigResponse])
 async def list_peers(
     enabled: bool | None = None,
     user_context: dict = Depends(nginx_proxied_auth),
@@ -113,7 +114,7 @@ async def list_peers(
     return peers
 
 
-@router.post("", response_model=PeerRegistryConfig, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=PeerRegistryConfigResponse, status_code=status.HTTP_201_CREATED)
 async def create_peer(
     config: PeerRegistryConfig,
     user_context: dict = Depends(nginx_proxied_auth),
@@ -285,7 +286,7 @@ async def get_shared_resources(
 # ============================================================================
 
 
-@router.get("/{peer_id}", response_model=PeerRegistryConfig)
+@router.get("/{peer_id}", response_model=PeerRegistryConfigResponse)
 async def get_peer(
     peer_id: str,
     user_context: dict = Depends(nginx_proxied_auth),
@@ -322,7 +323,7 @@ async def get_peer(
         )
 
 
-@router.put("/{peer_id}", response_model=PeerRegistryConfig)
+@router.put("/{peer_id}", response_model=PeerRegistryConfigResponse)
 async def update_peer(
     peer_id: str,
     updates: dict[str, Any] = Body(...),
@@ -578,7 +579,7 @@ async def get_peer_status(
     return sync_status
 
 
-@router.post("/{peer_id}/enable", response_model=PeerRegistryConfig)
+@router.post("/{peer_id}/enable", response_model=PeerRegistryConfigResponse)
 async def enable_peer(
     peer_id: str,
     user_context: dict = Depends(nginx_proxied_auth),
@@ -616,7 +617,7 @@ async def enable_peer(
         )
 
 
-@router.post("/{peer_id}/disable", response_model=PeerRegistryConfig)
+@router.post("/{peer_id}/disable", response_model=PeerRegistryConfigResponse)
 async def disable_peer(
     peer_id: str,
     user_context: dict = Depends(nginx_proxied_auth),

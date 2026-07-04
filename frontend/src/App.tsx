@@ -11,6 +11,7 @@ import Logout from './pages/Logout';
 import OAuthCallback from './pages/OAuthCallback';
 import ProtectedRoute from './components/ProtectedRoute';
 import SettingsPage from './pages/SettingsPage';
+import ConnectedAccountsPage from './pages/ConnectedAccountsPage';
 import { getBasename } from './utils/basePath';
 
 function App() {
@@ -47,6 +48,13 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <SettingsPage />
+                </Layout>
+              </ProtectedRoute>
+            } />
+            <Route path="/connected-accounts" element={
+              <ProtectedRoute>
+                <Layout>
+                  <ConnectedAccountsPage />
                 </Layout>
               </ProtectedRoute>
             } />

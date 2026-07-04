@@ -1394,3 +1394,60 @@ def test_health_service_get_service_health_data_legacy_method(health_service, mo
     health_data = health_service._get_service_health_data(service_path, mock_server_info)
 
     assert health_data["status"] == HealthStatus.HEALTHY
+
+
+# =============================================================================
+# SSRF: health check must not send credentials to a blocked proxy_pass_url
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+        "http://10.0.0.1:8000/mcp",  # RFC-1918
+        "http://127.0.0.1:8000/mcp",  # loopback
+        "gopher://acme.com/x",  # disallowed scheme
+    ],
+)
+async def test_endpoint_check_blocks_unsafe_url_without_sending_credentials(
+    health_service, bad_url
+):
+    """A blocked proxy_pass_url returns unhealthy and never builds/sends creds.
+
+    The credential header builder must not be invoked, and no HTTP request may
+    be issued, when the target fails SSRF validation.
+    """
+    from registry.utils import url_guard
+
+    url_guard._proxy_allowlist.cache_clear()
+
+    server_info = {
+        "server_name": "evil",
+        "proxy_pass_url": bad_url,
+        "supported_transports": ["streamable-http"],
+        "auth_scheme": "bearer",
+        "auth_credential_encrypted": "should-never-be-decrypted",
+    }
+
+    client = AsyncMock()
+    settings_stub = MagicMock()
+    settings_stub.ssrf_allowed_hosts = ""
+    settings_stub.ssrf_allowed_cidrs = ""
+
+    with patch.object(url_guard, "settings", settings_stub):
+        with patch.object(health_service, "_build_headers_for_server") as mock_build_headers:
+            is_healthy, status_detail = await health_service._check_server_endpoint_transport_aware(
+                client, bad_url, server_info
+            )
+
+    assert is_healthy is False
+    assert status_detail == HealthStatus.UNHEALTHY_URL_BLOCKED
+    # Credentials were never built for the blocked target.
+    mock_build_headers.assert_not_called()
+    # No outbound request was issued through the client.
+    client.get.assert_not_called()
+    client.head.assert_not_called()
+    client.post.assert_not_called()

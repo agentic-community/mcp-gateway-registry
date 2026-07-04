@@ -30,6 +30,8 @@ from urllib.parse import parse_qs, urlencode
 import requests
 from dotenv import load_dotenv
 
+from registry.common.secret_key import validate_secret_key
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -75,6 +77,16 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 if not all([COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, SECRET_KEY]):
     logger.error("Missing required environment variables")
     logger.error("Required: COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, SECRET_KEY")
+    sys.exit(1)
+
+# SECRET_KEY signs the session cookie and must match the registry. Enforce the
+# same strength rules the registry applies at startup so this CLI can never sign
+# a cookie with a weak or short key that the registry would then reject or that
+# an attacker could forge.
+try:
+    SECRET_KEY = validate_secret_key(SECRET_KEY)
+except RuntimeError as exc:
+    logger.error(str(exc))
     sys.exit(1)
 
 # Construct the Cognito domain

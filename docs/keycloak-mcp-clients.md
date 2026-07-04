@@ -623,7 +623,7 @@ Run `bash keycloak/setup/init-keycloak.sh`. The script:
 2. Creates `mcp-gateway-web` and `mcp-gateway-m2m` pre-defined clients
 3. Creates the registry-internal scopes (`mcp-registry-admin`, etc.)
 4. Creates Keycloak groups + maps them to scopes
-5. Creates initial admin + testuser users
+5. Creates the realm admin user (password from `INITIAL_ADMIN_PASSWORD`, set temporary)
 6. Sets up groups mappers on the pre-defined clients (web-UI flow)
 7. **Sets up DCR-specific config (added by PR #1115)**:
    - Groups mapper on `basic` client-scope (covers DCR'd clients, emits `groups` claim)

@@ -52,6 +52,29 @@ class CustomHeaderEncrypted(BaseModel):
     value_encrypted: str
 
 
+class EgressOAuthConfig(BaseModel):
+    """Per-server egress OAuth config for the per-user credential vault.
+
+    None on ServerInfo == no per-user egress auth. The operator supplies
+    client_id/client_secret/scopes at registration time (write path not yet
+    implemented); custom_* fields apply only when provider == 'custom'.
+    """
+
+    provider: str = Field(..., description="Provider key: 'github', 'google', 'custom', ...")
+    client_id: str = Field(default="", description="Operator-supplied OAuth app client_id.")
+    client_secret_encrypted: str | None = Field(
+        default=None,
+        description="Fernet-encrypted client_secret. Never returned in API responses.",
+    )
+    scopes: list[str] = Field(default_factory=list)
+    # Custom-OIDC overrides (only when provider == 'custom')
+    custom_authorize_url: str | None = None
+    custom_token_url: str | None = None
+    custom_scope_separator: str | None = None
+    custom_token_auth_style: str | None = None
+    updated_at: str | None = None
+
+
 class ServerVersion(BaseModel):
     """Represents a single version of an MCP server.
 
@@ -334,6 +357,17 @@ class ServerInfo(BaseModel):
     custom_headers_updated_at: str | None = Field(
         default=None,
         description="ISO timestamp of last custom-headers update.",
+    )
+
+    # Per-user egress credential vault (third-party OBO). Default 'none' keeps
+    # today's behavior; the registration write path is not yet implemented.
+    egress_auth_mode: str = Field(
+        default="none",
+        description="Egress auth to the upstream: 'none' or 'oauth_user'.",
+    )
+    egress_oauth: EgressOAuthConfig | None = Field(
+        default=None,
+        description="Per-user egress OAuth config; required when egress_auth_mode == 'oauth_user'.",
     )
 
     # Lifecycle and federation metadata fields

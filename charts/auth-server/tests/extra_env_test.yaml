@@ -145,6 +145,15 @@ tests:
       - failedTemplate:
           errorPattern: "\"INTERNAL_TOKEN_TTL_SECONDS\" is a reserved variable"
 
+  - it: fails when extraEnv contains a reserved egress name (EGRESS_REGISTRY_INTERNAL_URL)
+    set:
+      extraEnv:
+        - name: EGRESS_REGISTRY_INTERNAL_URL
+          value: "http://evil"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"EGRESS_REGISTRY_INTERNAL_URL\" is a reserved variable"
+
   - it: fails on duplicate names within extraEnv
     set:
       extraEnv:

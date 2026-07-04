@@ -1,0 +1,12 @@
+# Checkov configuration for the aws-ecs Terraform stack.
+#
+# Do not download and scan external (registry) modules. When enabled, Checkov
+# pulls terraform-aws-modules/* source into .external_modules/ and reports
+# findings inside that upstream code we do not own or edit. Those findings are
+# not actionable here and only add noise to our code-scanning alerts. Checkov
+# still evaluates how we configure those modules via their input arguments;
+# only the modules' internal resources are skipped.
+#
+# Note: skip-path does NOT suppress downloaded-module findings (it is applied
+# before module resolution), so disabling the download is the effective control.
+download-external-modules: false

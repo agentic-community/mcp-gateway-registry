@@ -129,3 +129,81 @@ def verify_registry_ui_token(token: str) -> dict:
         )
 
     return claims
+
+
+# Must match auth_server/internal_request_token.py (MCP_PROXY_AUDIENCE/USE).
+_MCP_PROXY_AUDIENCE: str = "mcp-proxy"
+_MCP_PROXY_TOKEN_USE: str = "mcp-proxy"
+
+
+def verify_mcp_proxy_token(token: str) -> dict:
+    """Decode and validate the /mcp-proxy internal token, registry-side.
+
+    The registry deliberately does NOT import auth_server's verifier (see the
+    module docstring); this mirrors ``verify_registry_ui_token`` with the
+    ``mcp-proxy`` audience/token_use so the egress vend endpoint can independently
+    re-derive ``sub``/``auth_method`` from the SECRET_KEY-signed token rather than
+    trusting an asserted body field.
+
+    Returns the verified claims: ``sub``, ``auth_method``, ``scopes``, ``server``,
+    ``upstream_url`` (plus standard JWT claims).
+
+    Raises:
+        HTTPException: 500 if ``SECRET_KEY`` is unset; 401 on any token failure
+            (missing/garbage/expired/wrong-audience/wrong-issuer/wrong-token_use/
+            tampered/missing-upstream-binding).
+    """
+    secret_key = os.environ.get("SECRET_KEY")
+    if not secret_key:
+        logger.error("SECRET_KEY not set, cannot verify mcp-proxy token")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server configuration error",
+        )
+
+    try:
+        claims = pyjwt.decode(
+            token,
+            secret_key,
+            algorithms=["HS256"],
+            issuer=_ISSUER,
+            audience=_MCP_PROXY_AUDIENCE,
+            leeway=_leeway_seconds(),
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_iss": True,
+                "verify_aud": True,
+            },
+        )
+    except pyjwt.ExpiredSignatureError:
+        logger.warning("mcp-proxy token expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Internal token expired",
+        )
+    except pyjwt.InvalidTokenError as exc:
+        logger.warning(f"mcp-proxy token invalid: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal token",
+        )
+
+    if claims.get("token_use") != _MCP_PROXY_TOKEN_USE:
+        logger.warning("mcp-proxy token has wrong token_use")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal token",
+        )
+
+    # The token MUST carry an upstream binding -- without it the vend endpoint
+    # cannot run the upstream cross-check; fail closed.
+    if not claims.get("upstream_url"):
+        logger.warning("mcp-proxy token missing upstream binding")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal token",
+        )
+
+    return claims

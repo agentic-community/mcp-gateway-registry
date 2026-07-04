@@ -145,7 +145,7 @@ forwarding the upstream request to the registry.
 
 | Header | Purpose |
 |--------|---------|
-| `X-Authorization` (preferred) or `Authorization` | The bearer token. Custom `X-Authorization` is the canonical form to avoid clashing with downstream `Authorization` use. |
+| `X-Authorization` (preferred) or `Authorization` | The gateway ingress bearer token. `X-Authorization` is the canonical custom header; `Authorization` is accepted too. Both are **ingress-only** and stripped on the egress hop (issue #1266) — neither is forwarded to an upstream (except the internal `airegistry-tools` relay). |
 | `Cookie` | If a session cookie is present and no Authorization header is set, the cookie path is used (rare; mostly browser SSE). |
 | `X-User-Pool-Id` | Cognito-specific — required to validate Cognito tokens against the right user pool. |
 | `X-Client-Id` | Cognito-specific — used to set the audience constraint. |
@@ -377,11 +377,22 @@ code reads. Both are set for backward compatibility with older upstreams.
 The registry's `nginx_proxied_auth` reads `X-Username or X-User`.
 
 **Q: Why does `/validate` accept both `X-Authorization` and `Authorization`?**
-A: Because some downstream MCP servers also use `Authorization` for their
-own purposes (e.g. an MCP server that proxies to GitHub needs to forward the
-GitHub token). Using `X-Authorization` for the gateway-level token avoids
-the clash. The standard `Authorization` is accepted as a fallback for
-clients that can't set custom headers.
+A: Both are accepted as the gateway ingress token (`/validate` checks
+`X-Authorization` first, then `Authorization`). `X-Authorization` is the
+canonical custom header; `Authorization` is accepted for clients that cannot
+set custom headers.
+
+> **Ingress vs egress (issue #1266).** All client-sent auth headers
+> (`Authorization`, `X-Authorization`, `Cookie`) are **ingress** credentials:
+> they authenticate the caller to the gateway and are **stripped on the egress
+> hop** — they are never forwarded to an upstream MCP server. An upstream that
+> needs a credential gets it from the egress vault (per-user OAuth/3LO, PAT),
+> not by relaying a client header. The one exception is the gateway's built-in,
+> same-trust-domain registry-tools server (`airegistry-tools`), a hardcoded
+> internal constant that receives the relayed `Authorization` (never
+> `X-Authorization`/`Cookie`). So the historical "downstream server reuses
+> `Authorization`" pattern is no longer served by client-header relay for
+> external servers — use the vault.
 
 **Q: Can a client present both a cookie and a Bearer token?**
 A: Yes. The header path takes precedence — `nginx_proxied_auth` checks

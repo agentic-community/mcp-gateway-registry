@@ -8,11 +8,11 @@
 #
 # S3 Bucket for CloudFront Logs
 #
-#checkov:skip=CKV_AWS_18:This is a logging destination bucket - enabling access logging would create recursion
-#checkov:skip=CKV_AWS_144:Cross-region replication not required for logging bucket
-#checkov:skip=CKV_AWS_145:SSE-S3 encryption is sufficient for logging bucket
-#checkov:skip=CKV2_AWS_62:Event notifications not required for logging bucket
 resource "aws_s3_bucket" "cloudfront_logs" {
+  #checkov:skip=CKV_AWS_18:This is a logging destination bucket - enabling access logging would create recursion
+  #checkov:skip=CKV_AWS_144:Cross-region replication not required for logging bucket
+  #checkov:skip=CKV_AWS_145:SSE-S3 encryption is sufficient for logging bucket
+  #checkov:skip=CKV2_AWS_62:Event notifications not required for logging bucket
   bucket = "ai-registry-${var.aws_region}-${data.aws_caller_identity.current.account_id}-cloudfront-logs"
 
   tags = merge(
@@ -63,6 +63,15 @@ resource "aws_s3_bucket_lifecycle_configuration" "cloudfront_logs" {
       days = 90
     }
   }
+
+  rule {
+    id     = "abort-incomplete-multipart-uploads"
+    status = "Enabled"
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
 
 #
@@ -72,8 +81,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "cloudfront_logs" {
 # so we need BucketOwnerPreferred to ensure the bucket owner
 # gets full control of the objects written by CloudFront.
 #
-#checkov:skip=CKV2_AWS_65:Access point policy not applicable for CloudFront logging bucket
 resource "aws_s3_bucket_ownership_controls" "cloudfront_logs" {
+  #checkov:skip=CKV2_AWS_65:Access point policy not applicable for CloudFront logging bucket
   bucket = aws_s3_bucket.cloudfront_logs.id
 
   rule {
