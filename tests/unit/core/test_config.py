@@ -30,14 +30,16 @@ class TestSettingsInstantiation:
         can assert the rest of the defaults.
         """
         monkeypatch.delenv("AUTH_SERVER_URL", raising=False)
-        monkeypatch.setenv("SECRET_KEY", "test-key-for-defaults")
+        monkeypatch.setenv("SECRET_KEY", "test-key-for-defaults-at-least-32-bytes-long")
         monkeypatch.chdir(tmp_path)
 
         settings = Settings()
 
         assert settings.session_cookie_name == "mcp_gateway_session"
         assert settings.session_max_age_seconds == 60 * 60 * 8  # 8 hours
-        assert settings.session_cookie_secure is False
+        # Secure-by-default: the session cookie carries the Secure flag unless a
+        # deployment explicitly opts out (SESSION_COOKIE_SECURE=false).
+        assert settings.session_cookie_secure is True
         assert settings.session_cookie_domain is None
         assert settings.auth_server_url == "http://localhost:8888"
         assert settings.auth_server_external_url == "http://localhost:8888"
@@ -108,10 +110,27 @@ class TestSettingsInstantiation:
         with pytest.raises(RuntimeError, match="SECRET_KEY"):
             Settings(secret_key="")
 
+    def test_settings_fails_without_marker_secret(self, monkeypatch, tmp_path) -> None:
+        """Settings refuses to instantiate when AUTH_SERVER_NGINX_MARKER_SECRET is unset.
+
+        An empty marker makes the auth_server mint mcp-proxy tokens
+        unconditionally, so a direct :8888 /validate with a forged
+        X-Resolved-Upstream could bypass nginx. The missing-marker path is a
+        hard startup error, like SECRET_KEY.
+        """
+        monkeypatch.delenv("AUTH_SERVER_NGINX_MARKER_SECRET", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(RuntimeError, match="AUTH_SERVER_NGINX_MARKER_SECRET"):
+            Settings(
+                secret_key="present-and-at-least-32-bytes-long-key",
+                auth_server_nginx_marker_secret="",
+            )
+
     def test_settings_secret_key_not_overridden(self) -> None:
         """Test that provided secret_key is not overridden."""
         # Arrange
-        custom_key = "my-custom-secret-key-12345"
+        custom_key = "my-custom-secret-key-12345-at-least-32-bytes"
 
         # Act
         settings = Settings(secret_key=custom_key)
@@ -123,7 +142,7 @@ class TestSettingsInstantiation:
         """Test Settings instantiation with custom values."""
         # Arrange
         custom_values = {
-            "secret_key": "test-secret",
+            "secret_key": "test-secret-value-at-least-32-bytes-long",
             "session_cookie_name": "test_cookie",
             "session_max_age_seconds": 3600,
             "embeddings_provider": "litellm",
@@ -160,14 +179,14 @@ class TestSettingsEnvironmentVariables:
     def test_settings_load_from_env_auth(self, monkeypatch) -> None:
         """Test loading auth settings from environment variables."""
         # Arrange
-        monkeypatch.setenv("SECRET_KEY", "env-secret-key")
+        monkeypatch.setenv("SECRET_KEY", "env-secret-key-at-least-32-bytes-long-value")
         monkeypatch.setenv("SESSION_COOKIE_NAME", "env_session")
 
         # Act
         settings = Settings()
 
         # Assert
-        assert settings.secret_key == "env-secret-key"
+        assert settings.secret_key == "env-secret-key-at-least-32-bytes-long-value"
         assert settings.session_cookie_name == "env_session"
 
     def test_settings_load_from_env_embeddings(self, monkeypatch) -> None:
@@ -720,6 +739,35 @@ class TestSettingsSecretKey:
         settings = Settings(secret_key=custom)
         assert settings.secret_key == custom
 
+    def test_short_secret_key_rejected(self, monkeypatch, tmp_path) -> None:
+        """A secret_key shorter than 32 characters is rejected at startup."""
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="at least 32"):
+            Settings(secret_key="too-short-key")
+
+    def test_weak_default_secret_key_rejected(self, monkeypatch, tmp_path) -> None:
+        """The historical 'development-secret-key' literal is rejected."""
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="well-known placeholder"):
+            Settings(secret_key="development-secret-key")
+
+    def test_valid_long_secret_key_accepted(self, monkeypatch) -> None:
+        """A random 32+ character key is accepted."""
+        custom = "a-sufficiently-long-random-secret-key-value"
+        settings = Settings(secret_key=custom)
+        assert settings.secret_key == custom
+
+    def test_short_marker_secret_rejected(self, monkeypatch, tmp_path) -> None:
+        """An AUTH_SERVER_NGINX_MARKER_SECRET shorter than 32 bytes is rejected."""
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="AUTH_SERVER_NGINX_MARKER_SECRET must be at least"):
+            Settings(
+                secret_key="a-valid-secret-key-of-at-least-32-bytes",
+                auth_server_nginx_marker_secret="short",
+            )
+
 
 # =============================================================================
 # TEST CLASS: Session Cookie Configuration
@@ -731,8 +779,26 @@ class TestSettingsSecretKey:
 class TestSettingsSessionCookie:
     """Test session cookie configuration."""
 
-    def test_session_cookie_secure_false_by_default(self) -> None:
-        """Test that session_cookie_secure is False by default."""
+    def test_session_cookie_secure_true_by_default(self, monkeypatch) -> None:
+        """Test that session_cookie_secure defaults to True (secure by default).
+
+        _env_file=None isolates this from a developer's local .env, which may
+        pin SESSION_COOKIE_SECURE=false for a plain-HTTP dev stack.
+        """
+        # Arrange
+        monkeypatch.delenv("SESSION_COOKIE_SECURE", raising=False)
+
+        # Act
+        settings = Settings(_env_file=None)
+
+        # Assert
+        assert settings.session_cookie_secure is True
+
+    def test_session_cookie_secure_can_be_disabled(self, monkeypatch) -> None:
+        """Test that session_cookie_secure can be explicitly disabled for dev."""
+        # Arrange
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+
         # Act
         settings = Settings()
 
@@ -740,7 +806,7 @@ class TestSettingsSessionCookie:
         assert settings.session_cookie_secure is False
 
     def test_session_cookie_secure_can_be_enabled(self, monkeypatch) -> None:
-        """Test that session_cookie_secure can be enabled via env var."""
+        """Test that session_cookie_secure can be explicitly enabled via env var."""
         # Arrange
         monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
 
@@ -778,6 +844,231 @@ class TestSettingsSessionCookie:
 
         # Assert
         assert settings.session_max_age_seconds == 28800  # 8 hours in seconds
+
+
+# =============================================================================
+# TEST CLASS: CORS allowlist resolution
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestSettingsCorsAllowedOrigins:
+    """Test the fail-closed CORS origin allowlist resolution."""
+
+    def _settings(self, monkeypatch, **env: str) -> Settings:
+        """Build Settings with a fixed registry_url and no local .env leakage."""
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+        monkeypatch.setenv("REGISTRY_URL", "https://registry.example.com")
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        return Settings(_env_file=None)
+
+    def test_arbitrary_ec2_origin_is_rejected(self, monkeypatch) -> None:
+        """A non-allowlisted EC2 public DNS origin must NOT be trusted.
+
+        This is the core regression guard: the old broad regex matched any
+        *.compute*.amazonaws.com host. With an explicit allowlist, such an
+        origin only appears if the operator lists it.
+        """
+        # Arrange - production mode, no CORS origins configured
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        settings = self._settings(monkeypatch)
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert - the attacker EC2 origin is absent; only the registry's own
+        # origin is trusted (fail closed, no wildcard fallback).
+        assert "http://ec2-1-2-3-4.compute-1.amazonaws.com" not in origins
+        assert "https://ec2-1-2-3-4.compute-1.amazonaws.com" not in origins
+        assert origins == ["https://registry.example.com"]
+
+    def test_only_configured_origins_are_allowed(self, monkeypatch) -> None:
+        """Only explicitly configured origins (plus self) are returned."""
+        # Arrange
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        settings = self._settings(
+            monkeypatch,
+            CORS_ALLOWED_ORIGINS="https://app.example.com, https://admin.example.com",
+        )
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert
+        assert "https://app.example.com" in origins
+        assert "https://admin.example.com" in origins
+        assert "https://registry.example.com" in origins
+        # Nothing else leaks in.
+        assert set(origins) == {
+            "https://app.example.com",
+            "https://admin.example.com",
+            "https://registry.example.com",
+        }
+
+    def test_no_wildcard_fallback_when_unconfigured(self, monkeypatch) -> None:
+        """An empty allowlist must never resolve to '*' or a regex wildcard."""
+        # Arrange - production mode, registry_url that cannot resolve to an origin
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+        monkeypatch.setenv("REGISTRY_URL", "not-a-valid-url")
+        settings = Settings(_env_file=None)
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert - fail closed: empty list, no wildcard.
+        assert origins == []
+        assert "*" not in origins
+
+    def test_malformed_origins_are_dropped(self, monkeypatch) -> None:
+        """Wildcards, paths, and bad schemes are rejected, not widened."""
+        # Arrange
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        settings = self._settings(
+            monkeypatch,
+            CORS_ALLOWED_ORIGINS=(
+                "https://*.example.com,"  # wildcard
+                "https://good.example.com/path,"  # path component
+                "ftp://bad-scheme.example.com,"  # disallowed scheme
+                "https://ok.example.com"  # valid
+            ),
+        )
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert - only the valid entry (and self) survive.
+        assert "https://ok.example.com" in origins
+        assert not any("*" in o for o in origins)
+        assert not any("/path" in o for o in origins)
+        assert not any(o.startswith("ftp://") for o in origins)
+
+    def test_userinfo_and_bad_port_origins_are_rejected(self, monkeypatch) -> None:
+        """Origins carrying userinfo or an invalid port are dropped."""
+        # Arrange
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        settings = self._settings(
+            monkeypatch,
+            CORS_ALLOWED_ORIGINS=(
+                "https://evil@app.example.com,"  # userinfo smuggling
+                "https://app.example.com:99999,"  # out-of-range port
+                "https://valid.example.com"  # valid
+            ),
+        )
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert
+        assert "https://valid.example.com" in origins
+        assert not any("evil" in o for o in origins)
+        assert not any("99999" in o for o in origins)
+
+    def test_ipv6_origin_keeps_brackets(self, monkeypatch) -> None:
+        """An IPv6 literal origin is normalized with brackets intact.
+
+        Browsers send IPv6 origins bracketed (e.g. http://[::1]:8080); the
+        normalized allowlist entry must match that exact bracketed form.
+        """
+        # Arrange
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        settings = self._settings(
+            monkeypatch,
+            CORS_ALLOWED_ORIGINS="http://[::1]:8080,https://[2001:db8::1]",
+        )
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert
+        assert "http://[::1]:8080" in origins
+        assert "https://[2001:db8::1]" in origins
+
+    def test_origin_normalization_strips_path_and_lowercases(self, monkeypatch) -> None:
+        """Configured origins are normalized to scheme://host[:port]."""
+        # Arrange
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        settings = self._settings(
+            monkeypatch,
+            CORS_ALLOWED_ORIGINS="HTTPS://App.Example.COM:8443",
+        )
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert
+        assert "https://app.example.com:8443" in origins
+
+    def test_local_dev_adds_loopback_origins(self, monkeypatch) -> None:
+        """A genuine local-dev stack (loopback registry) auto-trusts loopback.
+
+        Loopback dev origins are only injected when is_local_dev is True AND the
+        registry is itself reachable at a loopback host.
+        """
+        # Arrange - force local dev mode with a loopback registry URL
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: True))
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+        monkeypatch.setenv("REGISTRY_URL", "http://localhost:7860")
+        settings = Settings(_env_file=None)
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert
+        assert "http://localhost:3000" in origins
+        assert "http://127.0.0.1:3000" in origins
+
+    def test_loopback_origins_absent_in_production(self, monkeypatch) -> None:
+        """Container/production deployments must NOT auto-trust loopback."""
+        # Arrange
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        settings = self._settings(monkeypatch)
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert
+        assert "http://localhost:3000" not in origins
+        assert "http://127.0.0.1:3000" not in origins
+
+    def test_loopback_origins_absent_on_prod_host_without_app_dir(self, monkeypatch) -> None:
+        """A bare-metal prod host (no /app, real registry_url) must fail closed.
+
+        is_local_dev is a filesystem heuristic that can be True on hosts that
+        merely lack the container /app directory. Loopback dev origins must NOT
+        be auto-trusted there, because the registry serves a real public origin.
+        """
+        # Arrange - is_local_dev True (no /app) but a genuine public registry URL
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: True))
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+        monkeypatch.setenv("REGISTRY_URL", "https://registry.example.com")
+        settings = Settings(_env_file=None)
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert - no loopback origins leaked in; only the real self-origin.
+        assert "http://localhost:3000" not in origins
+        assert "http://127.0.0.1:3000" not in origins
+        assert origins == ["https://registry.example.com"]
+
+    def test_trailing_dot_host_is_normalized(self, monkeypatch) -> None:
+        """A configured trailing-dot FQDN is normalized to match real origins."""
+        # Arrange
+        monkeypatch.setattr(Settings, "is_local_dev", property(lambda self: False))
+        settings = self._settings(
+            monkeypatch,
+            CORS_ALLOWED_ORIGINS="https://app.example.com.",
+        )
+
+        # Act
+        origins = settings.cors_allowed_origins_list
+
+        # Assert
+        assert "https://app.example.com" in origins
+        assert "https://app.example.com." not in origins
 
 
 # =============================================================================

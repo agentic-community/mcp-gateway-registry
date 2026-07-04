@@ -110,7 +110,9 @@ class TestPATAuth:
         from registry.services.github_auth import GitHubAuthProvider
 
         provider = GitHubAuthProvider()
-        headers = await provider.get_auth_headers("https://github.com/owner/repo")
+        headers = await provider.get_auth_headers(
+            "https://github.com/owner/repo", allow_global_credentials=True
+        )
         assert headers == {"Authorization": "Bearer ghp_test_token_123"}
 
     @patch("registry.services.github_auth.settings")
@@ -125,7 +127,9 @@ class TestPATAuth:
         from registry.services.github_auth import GitHubAuthProvider
 
         provider = GitHubAuthProvider()
-        headers = await provider.get_auth_headers("https://github.com/owner/repo")
+        headers = await provider.get_auth_headers(
+            "https://github.com/owner/repo", allow_global_credentials=True
+        )
         assert headers == {}
 
     @patch("registry.services.github_auth.settings")
@@ -140,7 +144,9 @@ class TestPATAuth:
         from registry.services.github_auth import GitHubAuthProvider
 
         provider = GitHubAuthProvider()
-        headers = await provider.get_auth_headers("https://gitlab.com/owner/repo")
+        headers = await provider.get_auth_headers(
+            "https://gitlab.com/owner/repo", allow_global_credentials=True
+        )
         assert headers == {}
 
     @patch("registry.services.github_auth.settings")
@@ -156,7 +162,8 @@ class TestPATAuth:
 
         provider = GitHubAuthProvider()
         headers = await provider.get_auth_headers(
-            "https://raw.githubusercontent.com/owner/repo/main/SKILL.md"
+            "https://raw.githubusercontent.com/owner/repo/main/SKILL.md",
+            allow_global_credentials=True,
         )
         assert headers == {"Authorization": "Bearer ghp_test_token_123"}
 
@@ -217,7 +224,9 @@ class TestTokenExchange:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            headers = await provider.get_auth_headers("https://github.com/owner/repo")
+            headers = await provider.get_auth_headers(
+                "https://github.com/owner/repo", allow_global_credentials=True
+            )
             assert headers == {"Authorization": "Bearer ghs_installation_token_abc"}
 
     @patch("registry.services.github_auth.settings")
@@ -240,8 +249,12 @@ class TestTokenExchange:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            headers1 = await provider.get_auth_headers("https://github.com/owner/repo")
-            headers2 = await provider.get_auth_headers("https://github.com/owner/repo")
+            headers1 = await provider.get_auth_headers(
+                "https://github.com/owner/repo", allow_global_credentials=True
+            )
+            headers2 = await provider.get_auth_headers(
+                "https://github.com/owner/repo", allow_global_credentials=True
+            )
 
             assert headers1 == {"Authorization": "Bearer ghs_cached_token"}
             assert headers2 == {"Authorization": "Bearer ghs_cached_token"}
@@ -267,7 +280,9 @@ class TestTokenExchange:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            headers = await provider.get_auth_headers("https://github.com/owner/repo")
+            headers = await provider.get_auth_headers(
+                "https://github.com/owner/repo", allow_global_credentials=True
+            )
             assert headers == {"Authorization": "Bearer ghp_fallback_token"}
 
     @patch("registry.services.github_auth.settings")
@@ -286,7 +301,9 @@ class TestTokenExchange:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            headers = await provider.get_auth_headers("https://github.com/owner/repo")
+            headers = await provider.get_auth_headers(
+                "https://github.com/owner/repo", allow_global_credentials=True
+            )
             assert headers == {}
 
     @patch("registry.services.github_auth.settings")
@@ -314,7 +331,9 @@ class TestTokenExchange:
             mock_settings.github_extra_hosts = "github.mycompany.com"
             provider._allowed_hosts = provider._build_allowed_hosts()
 
-            headers = await provider.get_auth_headers("https://github.mycompany.com/org/repo")
+            headers = await provider.get_auth_headers(
+                "https://github.mycompany.com/org/repo", allow_global_credentials=True
+            )
             assert headers == {"Authorization": "Bearer ghs_enterprise_token"}
 
             # Verify the POST was made to the custom API URL
@@ -322,3 +341,44 @@ class TestTokenExchange:
             assert post_call.args[0] == (
                 "https://github.mycompany.com/api/v3/app/installations/67890/access_tokens"
             )
+
+
+class TestGlobalCredentialGate:
+    """The shared credentials must not be attached unless the caller opts in.
+
+    ``allow_global_credentials`` defaults to False so any caller that forgets to
+    opt in gets no headers -- the shared server identity never leaks by default.
+    """
+
+    @patch("registry.services.github_auth.settings")
+    async def test_pat_not_attached_without_opt_in(self, mock_settings):
+        """A configured PAT is withheld when allow_global_credentials is False."""
+        mock_settings.github_pat = "ghp_test_token_123"
+        mock_settings.github_app_id = ""
+        mock_settings.github_app_installation_id = ""
+        mock_settings.github_app_private_key = ""
+        mock_settings.github_extra_hosts = ""
+
+        from registry.services.github_auth import GitHubAuthProvider
+
+        provider = GitHubAuthProvider()
+        # Default (no opt-in) must fail closed.
+        headers = await provider.get_auth_headers("https://github.com/owner/repo")
+        assert headers == {}
+
+    @patch("registry.services.github_auth.settings")
+    async def test_pat_attached_with_opt_in(self, mock_settings):
+        """The same PAT is attached only when the caller opts in."""
+        mock_settings.github_pat = "ghp_test_token_123"
+        mock_settings.github_app_id = ""
+        mock_settings.github_app_installation_id = ""
+        mock_settings.github_app_private_key = ""
+        mock_settings.github_extra_hosts = ""
+
+        from registry.services.github_auth import GitHubAuthProvider
+
+        provider = GitHubAuthProvider()
+        headers = await provider.get_auth_headers(
+            "https://github.com/owner/repo", allow_global_credentials=True
+        )
+        assert headers == {"Authorization": "Bearer ghp_test_token_123"}

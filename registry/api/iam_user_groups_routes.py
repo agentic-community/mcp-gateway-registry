@@ -35,6 +35,7 @@ from registry.services.user_group_management_service import (
     UserGroupNotFound,
     get_user_group_management_service,
 )
+from registry.utils.pingfederate_manager import _get_pf_admin_pass, _get_pf_verify
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +50,17 @@ _LIST_MAX_LIMIT: int = 1000
 # override via environment variables when the registry runs outside Docker.
 _PF_ADMIN_URL = os.environ.get("PF_ADMIN_URL", "https://pingfederate:9999")
 _PF_ADMIN_USER = os.environ.get("PF_ADMIN_USER", "administrator")
-_PF_ADMIN_PASS = os.environ.get("PF_ADMIN_PASS", "2FederateM0re")
+# PF_ADMIN_PASS has no default: it is a secret resolved lazily via
+# _get_pf_admin_pass(), which fails closed when it is unset.
 _PF_USERS_PATH = "/pf-admin-api/v1/passwordCredentialValidators/simple"
 _PF_HTTP_TIMEOUT_SECONDS = 10.0
 _PF_USERS_TABLE_NAME = "Users"
 _PF_USERNAME_FIELD = "Username"
-_PF_PASSWORD_FIELD = "Password"
-_PF_CONFIRM_PASSWORD_FIELD = "Confirm Password"
-_PF_RELAX_PASSWORD_FIELD = "Relax Password Requirements"
+# The three constants below are PingFederate Simple PCV form-field *labels*
+# (API field names), not credentials; allowlisted for the secret scanner.
+_PF_PASSWORD_FIELD = "Password"  # pragma: allowlist secret
+_PF_CONFIRM_PASSWORD_FIELD = "Confirm Password"  # pragma: allowlist secret
+_PF_RELAX_PASSWORD_FIELD = "Relax Password Requirements"  # pragma: allowlist secret
 
 
 def _require_admin(
@@ -183,6 +187,10 @@ async def _pingfederate_upsert_user(
         "created" or "updated" depending on whether the username pre-existed.
 
     Raises:
+        HTTPException(500): If the PingFederate admin password is not
+            configured, or the configured TLS CA bundle is missing (fails
+            closed rather than using a default credential or an unverified
+            TLS channel).
         HTTPException(502): On any failure to talk to PingFederate. Errors are
             logged with type+status server-side; the response body is never
             echoed to the client (it could leak admin credentials).
@@ -191,11 +199,20 @@ async def _pingfederate_upsert_user(
         "X-XSRF-Header": "PingFederate",
         "Content-Type": "application/json",
     }
-    auth = (_PF_ADMIN_USER, _PF_ADMIN_PASS)
+    try:
+        pf_admin_pass = _get_pf_admin_pass()
+        verify = _get_pf_verify()
+    except ValueError as exc:
+        logger.error("PingFederate integration is not configured: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="PingFederate integration is not configured",
+        ) from exc
+    auth = (_PF_ADMIN_USER, pf_admin_pass)
     url = f"{_PF_ADMIN_URL}{_PF_USERS_PATH}"
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=_PF_HTTP_TIMEOUT_SECONDS) as client:  # nosec B501 - PF admin API uses self-signed cert in default deployment
+        async with httpx.AsyncClient(verify=verify, timeout=_PF_HTTP_TIMEOUT_SECONDS) as client:
             get_resp = await client.get(url, auth=auth, headers=headers)
             if get_resp.status_code >= 300:
                 logger.error(

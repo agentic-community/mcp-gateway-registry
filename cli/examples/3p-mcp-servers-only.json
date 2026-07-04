@@ -1,0 +1,58 @@
+{
+  "scope_name": "3p-mcp-servers-only",
+  "scope_type": "server_scope",
+  "description": "Restricted to 3rd-party egress MCP servers (GitHub, Slack, Figma, Atlassian); list/use only, no register/toggle/delete.",
+  "group_mappings": ["3p-mcp-servers-only"],
+  "server_access": [
+    {
+      "server": "api",
+      "methods": ["initialize", "GET", "POST", "servers", "search", "tokens"],
+      "tools": []
+    },
+    {
+      "server": "/com-github-github-mcp-server",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/com-github-github-mcp-server/",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/slack",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/slack/",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/figma",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/figma/",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/atlassian",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/atlassian/",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    }
+  ],
+  "ui_permissions": {
+    "list_service": ["/com-github-github-mcp-server", "/slack", "/figma", "/atlassian"],
+    "health_check_service": ["all"]
+  },
+  "create_in_idp": true
+}

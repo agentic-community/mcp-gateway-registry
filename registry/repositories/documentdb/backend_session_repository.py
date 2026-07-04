@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import ASCENDING
+from pymongo.errors import DuplicateKeyError
 
 from ..interfaces import BackendSessionRepositoryBase
 from .client import get_collection_name, get_documentdb_client
@@ -96,24 +97,43 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
         self,
         client_session_id: str,
         backend_key: str,
+        user_id: str | None = None,
     ) -> str | None:
         """Get backend session ID and atomically bump last_used_at.
 
         Uses find_one_and_update so the TTL is refreshed on every access,
         keeping active sessions alive.
 
+        When ``user_id`` is provided, the lookup also filters on the stored
+        owner. This is defense in depth: although every in-router path to a
+        backend session already passes the owner-bound client-session gate,
+        binding the backend-session read to the owner too means a single missed
+        gate cannot leak another user's live backend session ID. The owner
+        match is in the same atomic query that refreshes the TTL.
+
         Args:
             client_session_id: Client-facing session ID
             backend_key: Backend location key
+            user_id: Authenticated user identity the session must belong to.
+                When None, ownership is not enforced (legacy behavior).
 
         Returns:
-            Backend session ID if found, None otherwise
+            Backend session ID if found (and owned by ``user_id`` when given),
+            None otherwise
         """
         collection = await self._get_collection()
         doc_id = _make_backend_session_id(client_session_id, backend_key)
 
+        query: dict[str, str] = {"_id": doc_id}
+        # `is not None` is load-bearing: only None means "no owner filter". An
+        # empty-string user_id must add an (always-non-matching) filter, NOT skip
+        # it -- do not "simplify" this to `if user_id:` or an empty owner would
+        # reopen the existence-only hijack gap.
+        if user_id is not None:
+            query["user_id"] = user_id
+
         result = await collection.find_one_and_update(
-            {"_id": doc_id},
+            query,
             {"$set": {"last_used_at": datetime.now(UTC)}},
         )
 
@@ -153,28 +173,54 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
             "last_used_at": now,
         }
 
-        await collection.replace_one(
-            {"_id": doc_id},
-            doc,
-            upsert=True,
-        )
-        logger.debug(f"Stored backend session: {doc_id} -> {backend_session_id}")
+        # Pin the owner in the upsert filter so a document with this _id owned by
+        # a different user is never overwritten. client_session_id is already
+        # owner-namespaced (each initialize mints a fresh vs-<uuid4> for one
+        # user), so a mismatch cannot happen on the legitimate path; if it ever
+        # did, the upsert tries to insert a new doc with a colliding _id and
+        # raises DuplicateKeyError, which we swallow as a safe refusal rather
+        # than clobbering another user's live backend session.
+        try:
+            await collection.replace_one(
+                {"_id": doc_id, "user_id": user_id},
+                doc,
+                upsert=True,
+            )
+            logger.debug(f"Stored backend session: {doc_id} -> {backend_session_id}")
+        except DuplicateKeyError:
+            logger.warning(
+                f"Refused to store backend session {doc_id} for user={user_id}: "
+                f"_id already owned by a different user"
+            )
 
     async def delete_backend_session(
         self,
         client_session_id: str,
         backend_key: str,
+        user_id: str | None = None,
     ) -> None:
         """Delete a stale backend session.
+
+        When ``user_id`` is provided, the delete is scoped to the owner so a
+        caller can only invalidate its own backend session (defense in depth,
+        symmetric with get/store). When None, ownership is not enforced
+        (legacy behavior).
 
         Args:
             client_session_id: Client-facing session ID
             backend_key: Backend location key
+            user_id: Authenticated user identity the session must belong to.
         """
         collection = await self._get_collection()
         doc_id = _make_backend_session_id(client_session_id, backend_key)
 
-        result = await collection.delete_one({"_id": doc_id})
+        query: dict[str, str] = {"_id": doc_id}
+        # `is not None` is load-bearing -- see get_backend_session: only None
+        # means "no owner filter"; an empty string must filter, not skip.
+        if user_id is not None:
+            query["user_id"] = user_id
+
+        result = await collection.delete_one(query)
         if result.deleted_count > 0:
             logger.debug(f"Deleted backend session: {doc_id}")
 
@@ -216,20 +262,45 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
     async def validate_client_session(
         self,
         client_session_id: str,
+        user_id: str | None = None,
+        virtual_server_path: str | None = None,
     ) -> bool:
-        """Check if a client session exists and bump last_used_at.
+        """Check if a client session exists, is owned by ``user_id``, and bump last_used_at.
+
+        When ``user_id`` is provided, the lookup filters on the stored owner so a
+        session belonging to a different user is treated as not found. This binds
+        the session to the authenticated identity and prevents session hijacking
+        via a guessed or stolen Mcp-Session-Id header (the match is done in the
+        same atomic query that refreshes the TTL, so there is no check/use gap).
+
+        When ``virtual_server_path`` is provided, the lookup also filters on it so
+        a session minted for one virtual server cannot be replayed against
+        another (issue #2: virtual-server binding).
 
         Args:
             client_session_id: Client-facing session ID
+            user_id: Authenticated user identity the session must belong to.
+                When None, ownership is not enforced (legacy behavior).
+            virtual_server_path: Virtual server path the session was minted for.
+                When None, the path is not enforced (legacy behavior).
 
         Returns:
-            True if session exists, False otherwise
+            True if session exists (and matches ``user_id`` /
+            ``virtual_server_path`` when given), False otherwise
         """
         collection = await self._get_collection()
         doc_id = _make_client_session_id(client_session_id)
 
+        query: dict[str, str] = {"_id": doc_id}
+        # `is not None` is load-bearing -- see get_backend_session: only None
+        # means "no owner filter"; an empty string must filter, not skip.
+        if user_id is not None:
+            query["user_id"] = user_id
+        if virtual_server_path is not None:
+            query["virtual_server_path"] = virtual_server_path
+
         result = await collection.find_one_and_update(
-            {"_id": doc_id},
+            query,
             {"$set": {"last_used_at": datetime.now(UTC)}},
         )
 

@@ -39,13 +39,13 @@ M2M accounts are stored in **THREE** MongoDB collections with different purposes
 ```javascript
 {
   "_id": ObjectId("..."),
-  "client_id": "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd",
+  "client_id": "EXAMPLE_AUTH0_CLIENT_ID",
   "name": "MCP Gateway M2M",
   "description": "M2M client for registry access",
   "groups": ["registry-admins", "developers"],
   "enabled": true,
   "provider": "auth0",  // or "okta", "keycloak", "entra"
-  "idp_app_id": "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd",
+  "idp_app_id": "EXAMPLE_AUTH0_CLIENT_ID",
   "created_at": ISODate("2026-03-29T00:00:00Z"),
   "updated_at": ISODate("2026-03-29T00:00:00Z")
 }
@@ -80,12 +80,12 @@ M2M accounts are stored in **THREE** MongoDB collections with different purposes
 ```javascript
 {
   "_id": ObjectId("..."),
-  "client_id": "0oa1100req1AzfKaY698",
+  "client_id": "EXAMPLE_OKTA_CLIENT_ID",
   "name": "ai-agent",
   "description": "AI agent with admin access",
   "groups": ["registry-admins"],
   "enabled": true,
-  "okta_app_id": "0oa1100req1AzfKaY698",
+  "okta_app_id": "EXAMPLE_OKTA_CLIENT_ID",
   "last_synced": ISODate("2026-03-29T00:00:00Z"),
   "created_at": ISODate("2026-03-29T00:00:00Z"),
   "updated_at": ISODate("2026-03-29T00:00:00Z")
@@ -113,12 +113,12 @@ M2M accounts are stored in **THREE** MongoDB collections with different purposes
 ```javascript
 {
   "_id": ObjectId("..."),
-  "client_id": "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd",
+  "client_id": "EXAMPLE_AUTH0_CLIENT_ID",
   "name": "MCP Gateway M2M",
   "description": "M2M client for registry access",
   "groups": ["registry-admins"],
   "enabled": true,
-  "auth0_client_id": "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd",
+  "auth0_client_id": "EXAMPLE_AUTH0_CLIENT_ID",
   "app_type": "non_interactive",
   "last_synced": ISODate("2026-03-29T00:00:00Z"),
   "created_at": ISODate("2026-03-29T00:00:00Z"),
@@ -216,7 +216,7 @@ db.idp_m2m_clients.find({ provider: "okta" }).pretty()
 
 ### Find specific M2M client
 ```javascript
-db.idp_m2m_clients.findOne({ client_id: "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd" })
+db.idp_m2m_clients.findOne({ client_id: "EXAMPLE_AUTH0_CLIENT_ID" })
 ```
 
 ### Check groups for client

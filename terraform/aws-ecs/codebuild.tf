@@ -35,8 +35,9 @@ locals {
   ])
 }
 
-#checkov:skip=CKV_AWS_51:Mutable tags required for latest tag workflow in CI/CD pipeline
 resource "aws_ecr_repository" "services" {
+  #checkov:skip=CKV_AWS_51:Mutable tags required for latest tag workflow in CI/CD pipeline
+  #checkov:skip=CKV_AWS_136:AES256 default encryption is sufficient for these container images
   for_each = var.create_codebuild ? local.ecr_repositories : toset([])
 
   name                 = each.key
@@ -95,11 +96,11 @@ resource "aws_ecr_lifecycle_policy" "services" {
 # S3 BUCKET FOR CODEBUILD ARTIFACTS
 # =============================================================================
 
-#checkov:skip=CKV_AWS_18:This is a build artifacts bucket - access logging not required
-#checkov:skip=CKV_AWS_144:Cross-region replication not required for build artifacts
-#checkov:skip=CKV_AWS_145:SSE-S3 encryption is sufficient for build artifacts
-#checkov:skip=CKV2_AWS_62:Event notifications not required for build artifacts bucket
 resource "aws_s3_bucket" "codebuild" {
+  #checkov:skip=CKV_AWS_18:This is a build artifacts bucket - access logging not required
+  #checkov:skip=CKV_AWS_144:Cross-region replication not required for build artifacts
+  #checkov:skip=CKV_AWS_145:SSE-S3 encryption is sufficient for build artifacts
+  #checkov:skip=CKV2_AWS_62:Event notifications not required for build artifacts bucket
   count  = var.create_codebuild ? 1 : 0
   bucket = "mcp-gateway-terraform-${data.aws_caller_identity.current.account_id}"
 

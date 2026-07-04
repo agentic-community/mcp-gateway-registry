@@ -325,3 +325,61 @@ class TestUpdatePeerToken:
 
             # Assert
             assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+# =============================================================================
+# federation_token must never be serialized in responses (write-only)
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestFederationTokenNotLeaked:
+    """GET /api/peers and GET /api/peers/{id} must not return federation_token."""
+
+    @pytest.mark.asyncio
+    async def test_list_peers_omits_federation_token(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+        sample_peer_config,
+    ):
+        """The list endpoint must strip federation_token from every entry."""
+        from registry.main import app
+
+        client = TestClient(app)
+        mock_peer_federation_service.list_peers.return_value = [sample_peer_config]
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.get("/api/peers")
+
+        assert response.status_code == status.HTTP_200_OK
+        # The token is set on the stored config, but must not appear in the body.
+        assert "original-token-abc123" not in response.text
+        for peer in response.json():
+            assert "federation_token" not in peer
+
+    @pytest.mark.asyncio
+    async def test_get_peer_omits_federation_token(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+        sample_peer_config,
+    ):
+        """The single-peer GET must strip federation_token."""
+        from registry.main import app
+
+        client = TestClient(app)
+        mock_peer_federation_service.get_peer.return_value = sample_peer_config
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.get(f"/api/peers/{sample_peer_config.peer_id}")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert "original-token-abc123" not in response.text
+        assert "federation_token" not in response.json()

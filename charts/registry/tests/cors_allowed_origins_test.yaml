@@ -1,0 +1,30 @@
+suite: CORS allowed origins secret rendering
+release:
+  name: test
+  namespace: default
+templates:
+  - templates/secret.yaml
+tests:
+  - it: omits CORS_ALLOWED_ORIGINS when app.corsAllowedOrigins is empty
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        corsAllowedOrigins: ""
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+    asserts:
+      - notExists:
+          path: data.CORS_ALLOWED_ORIGINS
+
+  - it: renders CORS_ALLOWED_ORIGINS (base64) when configured
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        corsAllowedOrigins: "https://app.example.com,https://admin.example.com"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+    asserts:
+      - equal:
+          path: data.CORS_ALLOWED_ORIGINS
+          # base64("https://app.example.com,https://admin.example.com")
+          value: aHR0cHM6Ly9hcHAuZXhhbXBsZS5jb20saHR0cHM6Ly9hZG1pbi5leGFtcGxlLmNvbQ==  # pragma: allowlist secret

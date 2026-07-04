@@ -91,3 +91,89 @@ class TestInternalSessionSecretGate:
         )
         assert response.status_code != status.HTTP_403_FORBIDDEN
         assert response.status_code == status.HTTP_201_CREATED
+
+
+@pytest.mark.unit
+class TestOwnershipParamRequired:
+    """The ownership-bound endpoints require user_id so the check cannot be
+    silently skipped.
+
+    Ownership binding is the session-hijacking control. If user_id were an
+    optional query param defaulting to None, any caller that forgot it would
+    silently fall back to existence-only validation (the original vulnerable
+    behavior) with no error. Making it a required param turns that mistake into
+    a loud 422 at request time. The Lua router always supplies it, so this is
+    no behavior change on the live path.
+    """
+
+    _SECRET = {"X-Internal-Secret": "test-internal-secret"}
+
+    @pytest.fixture
+    def mock_repo(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        import registry.api.internal_routes as internal_routes
+
+        repo = AsyncMock()
+        repo.validate_client_session = AsyncMock(return_value=True)
+        repo.get_backend_session = AsyncMock(return_value="be-1")
+        repo.delete_backend_session = AsyncMock(return_value=None)
+        monkeypatch.setattr(internal_routes, "get_backend_session_repository", lambda: repo)
+        return repo
+
+    def test_validate_client_session_missing_user_id_is_422(self, client, mock_repo) -> None:
+        response = client.get(
+            "/api/internal/sessions/client/vs-abc",
+            headers=self._SECRET,
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        mock_repo.validate_client_session.assert_not_awaited()
+
+    def test_validate_client_session_with_user_id_passes(self, client, mock_repo) -> None:
+        response = client.get(
+            "/api/internal/sessions/client/vs-abc",
+            params={"user_id": "alice", "virtual_server_path": "/virtual/a"},
+            headers=self._SECRET,
+        )
+        assert response.status_code == status.HTTP_200_OK
+        mock_repo.validate_client_session.assert_awaited_once_with(
+            "vs-abc", user_id="alice", virtual_server_path="/virtual/a"
+        )
+
+    def test_get_backend_session_missing_user_id_is_422(self, client, mock_repo) -> None:
+        response = client.get(
+            "/api/internal/sessions/backend/vs-abc:loc",
+            headers=self._SECRET,
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        mock_repo.get_backend_session.assert_not_awaited()
+
+    def test_get_backend_session_with_user_id_passes(self, client, mock_repo) -> None:
+        response = client.get(
+            "/api/internal/sessions/backend/vs-abc:loc",
+            params={"user_id": "alice"},
+            headers=self._SECRET,
+        )
+        assert response.status_code == status.HTTP_200_OK
+        mock_repo.get_backend_session.assert_awaited_once_with(
+            client_session_id="vs-abc", backend_key="loc", user_id="alice"
+        )
+
+    def test_delete_backend_session_missing_user_id_is_422(self, client, mock_repo) -> None:
+        response = client.delete(
+            "/api/internal/sessions/backend/vs-abc:loc",
+            headers=self._SECRET,
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        mock_repo.delete_backend_session.assert_not_awaited()
+
+    def test_delete_backend_session_with_user_id_passes(self, client, mock_repo) -> None:
+        response = client.delete(
+            "/api/internal/sessions/backend/vs-abc:loc",
+            params={"user_id": "alice"},
+            headers=self._SECRET,
+        )
+        assert response.status_code == status.HTTP_200_OK
+        mock_repo.delete_backend_session.assert_awaited_once_with(
+            client_session_id="vs-abc", backend_key="loc", user_id="alice"
+        )

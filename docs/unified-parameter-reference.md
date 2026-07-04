@@ -365,8 +365,9 @@ that server's Connect dialog:
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
-| Secure flag | `SESSION_COOKIE_SECURE` | `session_cookie_secure` | `auth-server.app.sessionCookieSecure` | Must be `true` in HTTPS, `false` on plain-HTTP localhost. |
+| Secure flag | `SESSION_COOKIE_SECURE` | `session_cookie_secure` | `auth-server.app.sessionCookieSecure` | Secure by default (`true`); set `false` only on plain-HTTP localhost. |
 | Cookie domain | `SESSION_COOKIE_DOMAIN` | `session_cookie_domain` | `auth-server.app.sessionCookieDomain` | Leading dot for cross-subdomain; empty is safest. |
+| CORS allowlist | `CORS_ALLOWED_ORIGINS` | `cors_allowed_origins` | `registry.app.corsAllowedOrigins` | Comma-separated exact origins for credentialed cross-origin API access. Registry's own origin is always trusted; empty means same-origin only (no wildcard fallback). |
 
 ---
 
@@ -378,6 +379,7 @@ Controls the per-user tool allowlist filter applied at the registry REST endpoin
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Enable MCP tools/list filter | `MCP_TOOLS_LIST_FILTER_ENABLED` | `mcp_tools_list_filter_enabled` | `auth-server.app.mcpToolsListFilterEnabled`, `registry.app.mcpToolsListFilterEnabled` | Master switch for the MCP protocol tools/list filter. Default `true`. REST endpoints always filter regardless of this flag. |
 | MCP proxy max body bytes | `MCP_PROXY_MAX_BODY_BYTES` | `mcp_proxy_max_body_bytes` | `auth-server.app.mcpProxyMaxBodyBytes` | Upper bound (bytes) the auth-server proxy hop buffers when filtering tools/list; oversize returns HTTP 413. Default `2097152` (2 MiB). |
+| MCP proxy timeout | `MCP_PROXY_TIMEOUT` | `mcp_proxy_timeout` | `auth-server.app.mcpProxyTimeout` | Timeout (seconds) for the auth-server proxy hop's upstream MCP request; raise for servers with long-running tools. Minimum `1`. Default `30`. The generated `/mcp-proxy/` nginx blocks derive their `proxy_read_timeout`/`proxy_send_timeout` from this value plus a 30s buffer (default `30` -> `60s`), so raising it lifts the whole proxy chain and no separate nginx change is needed. Terraform var `mcp_proxy_timeout`. |
 | Tool-filter audit log level | `TOOL_FILTER_AUDIT_LOG_LEVEL` | `tool_filter_audit_log_level` | `auth-server.app.toolFilterAuditLogLevel`, `registry.app.toolFilterAuditLogLevel` | Launch-window log level for prune audit lines: `DEBUG`, `INFO`, or `WARNING`. Default `INFO`; flip to `DEBUG` after two quiet weeks in production. |
 | Internal token TTL | `INTERNAL_TOKEN_TTL_SECONDS` | `internal_token_ttl_seconds` | `auth-server.app.internalTokenTtlSeconds`, `registry.app.internalTokenTtlSeconds` | Lifetime (seconds) of the `/validate`-minted internal hop tokens that harden the `/mcp-proxy` hop and the registry `/api/` hop; the replay-window cap. Minimum 5. Default `30`. (auth-server mints; the value is the same TTL on both surfaces.) |
 | Internal token leeway | `INTERNAL_TOKEN_LEEWAY_SECONDS` | `internal_token_leeway_seconds` | `auth-server.app.internalTokenLeewaySeconds`, `registry.app.internalTokenLeewaySeconds` | Clock-skew leeway (seconds) on the internal hop tokens' `exp`/`iat` checks. Default `5`. Verification is always enforced (fail-closed); there is no opt-out. Reuses `SECRET_KEY` — no new secret. |
@@ -678,6 +680,43 @@ User-supplied environment variables passed to the registry, auth-server, and mcp
 - **Helm**: `registry.validateExtraEnv` / `auth-server.validateExtraEnv` / `mcpgw.validateExtraEnv` helpers in `_helpers.tpl` fail `helm template`/`install` with a clear error if a reserved name is supplied via `extraEnv`.
 
 **Secret handling:** For production secrets, prefer Kubernetes `extraEnvFrom` (Helm) or AWS Secrets Manager ARNs wired into the task definition's `secrets` block (Terraform; see `mongodb_connection_string_secret_arn` as a reference pattern) rather than passing plaintext values via `*_extra_env`. The `extra_env/*.env` files on the Docker surface are plaintext on disk and should not be used for production secrets.
+
+---
+
+## Group 31 — Egress Credential Vault (third-party OBO)
+
+Per-user egress OAuth: MCP servers act on a user's behalf with the user's own
+third-party token (e.g. GitHub), brokered by the gateway's OAuth AS facade and
+stored in a per-user vault. The registry owns the full set (secret store + OAuth
+engine); the auth-server needs only the feature flag, the internal vend URL, and
+the nginx marker secret. Backend: `secrets-manager` is the natural ECS choice;
+`openbao` is the EKS/Helm choice (Kubernetes auth, no static token). Helm reads
+non-secret vars from a discrete `registry-egress-config`
+/ `auth-server-egress-config` ConfigMap; the marker secret is auto-generated and
+shared in the stack `shared-secret`.
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose                                                           |
+|-----------|-----------------|-----------------------|----------------------|-------------------------------------------------------------------|
+| Enable vault | `EGRESS_AUTH_ENABLED` | `egress_auth_enabled` | `registry.egressAuth.enabled` / `auth-server.egressAuth.enabled` | Switch for the per-user egress credential vault.                  |
+| Secret store backend | `SECRET_STORE_BACKEND` | `egress_secret_store_backend` | `registry.egressAuth.secretStoreBackend` | `secrets-manager` \| `openbao`.                                   |
+| OAuth callback base URL | `EGRESS_OAUTH_CALLBACK_BASE_URL` | `egress_oauth_callback_base_url` | `registry.egressAuth.oauthCallbackBaseUrl` | Public base for `{base}/oauth2/egress/callback`.                  |
+| Token refresh skew (s) | `EGRESS_TOKEN_REFRESH_SKEW_SECONDS` | `egress_token_refresh_skew_seconds` | `registry.egressAuth.tokenRefreshSkewSeconds` | Refresh a vaulted token this many seconds before expiry.          |
+| Refresh worker interval (s) | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | — | `registry.egressAuth.refreshWorkerIntervalSeconds` | Background refresh sweep interval.                                |
+| OAuth state TTL (s) | `EGRESS_STATE_TTL_SECONDS` | `egress_state_ttl_seconds` | `registry.egressAuth.stateTtlSeconds` | TTL for the AEAD-encrypted OAuth `state` blob.                    |
+| Registry internal vend URL | `EGRESS_REGISTRY_INTERNAL_URL` | `egress_registry_internal_url` | `auth-server.egressAuth.registryInternalUrl` | Auth-server → registry internal vend endpoint.                    |
+| nginx marker secret **(secret)** | `AUTH_SERVER_NGINX_MARKER_SECRET` | `egress_nginx_marker_secret` | auto-generated in stack `shared-secret`; `*.egressAuth.markerSecret` (standalone) | Marker shared by registry + auth-server; required at startup (both refuse to start without it). |
+| Secrets Manager KMS key **(secret)** | `SECRETS_MANAGER_KMS_KEY_ID` | `egress_secrets_manager_kms_key_id` | `registry.egressAuth.secretsManager.kmsKeyId` | Optional CMK for the vault secrets (secrets-manager backend).     |
+| Secrets Manager path prefix | `SECRETS_MANAGER_PATH_PREFIX` | `egress_secrets_manager_path_prefix` | `registry.egressAuth.secretsManager.pathPrefix` | Secret name prefix; also scopes the ECS task IAM grant.           |
+| OpenBao address | `OPENBAO_ADDR` | — | `registry.egressAuth.openbao.addr` | OpenBao server URL (openbao backend).                             |
+| OpenBao namespace | `OPENBAO_NAMESPACE` | — | `registry.egressAuth.openbao.namespace` | Enterprise namespaces only.                                       |
+| OpenBao KV mount | `OPENBAO_KV_MOUNT` | — | `registry.egressAuth.openbao.kvMount` | KV v2 mount point (default `secret`).                             |
+| OpenBao auth method | `OPENBAO_AUTH_METHOD` | — | `registry.egressAuth.openbao.authMethod` | `token` \| `kubernetes`. EKS uses `kubernetes` (no static token). |
+| OpenBao role | `OPENBAO_ROLE` | — | `registry.egressAuth.openbao.role` | Kubernetes-auth role bound to the registry ServiceAccount.        |
+
+**Backend by surface:** ECS wires only the `secrets-manager` knobs (`OPENBAO_*`
+omitted); EKS/Helm defaults to `openbao` with `authMethod: kubernetes` and a
+self-bootstrapping standalone OpenBao (init/unseal/bootstrap Job + unseal
+sidecar, entirely Kubernetes-driven — no KMS, no Secrets Manager).
 
 ---
 
