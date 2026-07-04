@@ -474,36 +474,8 @@ class TestAnthropicApiBackendUrlRedaction:
         assert transport.get("url") == "http://internal-backend:9000"
 
 
-# =============================================================================
-# Sibling sweep: unauthenticated /.well-known/mcp-servers discovery URL
-# =============================================================================
-
-
-class TestWellKnownServerUrl:
-    """The public discovery URL must never expose an internal mcp_endpoint in
-    with-gateway mode; registry-only mode legitimately uses the override."""
-
-    def _request(self):
-        req = MagicMock()
-        req.headers = {"host": "gateway.example.com", "x-forwarded-proto": "https"}
-        req.url.scheme = "https"
-        return req
-
-    def test_with_gateway_ignores_internal_mcp_endpoint(self):
-        from registry.api.wellknown_routes import _get_server_url
-
-        server_info = {"mcp_endpoint": "http://internal-backend:8080/mcp"}
-        with _force_with_gateway():
-            url = _get_server_url("/my-server", self._request(), server_info)
-
-        assert url == "https://gateway.example.com/my-server/mcp"
-        assert "internal-backend" not in url
-
-    def test_registry_only_uses_mcp_endpoint(self):
-        from registry.api.wellknown_routes import _get_server_url
-
-        server_info = {"mcp_endpoint": "https://public.example.com/mcp"}
-        with _force_registry_only():
-            url = _get_server_url("/my-server", self._request(), server_info)
-
-        assert url == "https://public.example.com/mcp"
+# NOTE: the unauthenticated /.well-known/mcp-servers discovery endpoint that this
+# suite's original TestWellKnownServerUrl covered was removed upstream (the
+# anonymous discovery URL no longer exists), so those tests were dropped when
+# upstream/main was merged in. The remaining redaction contract is exercised by
+# the authenticated server read endpoints and semantic search above.

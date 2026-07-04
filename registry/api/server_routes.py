@@ -576,9 +576,9 @@ async def read_root(
                 redact_server_backend_fields(service_data[-1])
 
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "services": service_data,
             "username": user_context["username"],
             "user_context": user_context,  # Pass full user context to template
@@ -2238,9 +2238,9 @@ async def edit_server_form(
             )
 
     return templates.TemplateResponse(
+        request,
         "edit_server.html",
         {
-            "request": request,
             "server": server_info,
             "username": user_context["username"],
             "user_context": user_context,
@@ -2610,9 +2610,9 @@ async def token_generation_page(
 ):
     """Show token generation page for authenticated users."""
     return templates.TemplateResponse(
+        request,
         "token_generation.html",
         {
-            "request": request,
             "username": user_context["username"],
             "user_context": user_context,
             "user_scopes": user_context["scopes"],
@@ -4103,6 +4103,29 @@ async def register_service_api(
     # Check if server exists and handle overwrite/version logic
     existing_server = await server_service.get_server_info(path)
 
+    # Ownership guard: overwriting (or auto-versioning) an existing server
+    # replaces another user's registration and can redirect its traffic. Only
+    # the original owner (registered_by) or an admin may do so. Without this,
+    # any user with registration permission could hijack any server by
+    # re-registering at the same path. Mirrors the guard on the dedicated
+    # update endpoint. Fails closed when ownership can't be established.
+    if existing_server and (
+        not user_context.get("is_admin")
+        and existing_server.get("registered_by") != user_context.get("username")
+    ):
+        logger.warning(
+            f"SERVERS REGISTER: User {user_context.get('username')} attempted to "
+            f"overwrite server {path} owned by {existing_server.get('registered_by')}"
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Service registration failed",
+                "reason": "You can only overwrite servers you registered",
+                "detail": f"Server at path '{path}' is owned by another user",
+            },
+        )
+
     # If server exists with a different version, register_server will auto-create new version
     # Only reject if overwrite=False AND it's the same version (or no version specified)
     if existing_server and not overwrite:
@@ -4246,6 +4269,26 @@ async def update_server_auth_credential(
         existing_server.get("server_name", server_path),
         user_context,
     )
+
+    # Ownership guard: overwriting a backend credential can hijack the server's
+    # upstream connection, so only the original owner (registered_by) or an
+    # admin may do it -- matching PUT /servers/{path}. modify_service alone is
+    # granted to any user with an /execute scope and is not sufficient. Fails
+    # closed when ownership cannot be established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {username} attempted to update auth credential for server "
+            f"{server_path} owned by {existing_server.get('registered_by')}"
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Not authorized",
+                "reason": "You can only modify servers you registered",
+            },
+        )
 
     # Validate auth_scheme
     if body.auth_scheme not in VALID_AUTH_SCHEMES:
@@ -4536,18 +4579,26 @@ async def remove_service_api(
             },
         )
 
-    # Fine-grained delete permission check (gateway already validated api.servers access)
+    # Fine-grained delete permission check (gateway already validated api.servers access).
+    # Key the check on the stored server_name (matching every other mutation handler),
+    # not the URL path token, so the trust key is consistent and cannot be satisfied by
+    # a delete_service grant for a raw path string that differs from the server_name.
     if not user_context.get("is_admin", False):
-        ui_permissions = user_context.get("ui_permissions", {})
-        delete_service_perms = ui_permissions.get("delete_service", [])
-        server_name = path.strip("/")
-        if "all" not in delete_service_perms and server_name not in delete_service_perms:
-            logger.warning(f"User {user_context.get('username')} denied delete for server {path}")
+        from ..auth.dependencies import user_has_ui_permission_for_service
+
+        service_name = server_info["server_name"]
+        if not user_has_ui_permission_for_service(
+            "delete_service", service_name, user_context.get("ui_permissions", {})
+        ):
+            logger.warning(
+                f"User {user_context.get('username')} denied delete for server "
+                f"'{service_name}' ({path})"
+            )
             return JSONResponse(
                 status_code=403,
                 content={
                     "error": "Permission denied",
-                    "reason": f"User does not have delete_service permission for '{path}'",
+                    "reason": f"User does not have delete_service permission for '{service_name}'",
                 },
             )
 
@@ -5608,6 +5659,24 @@ async def remove_server_version(
         user_context,
     )
 
+    # Ownership guard: removing a version mutates another user's server and can
+    # break its routing, so only the owner (registered_by) or an admin may do
+    # it -- matching PUT /servers/{path}. modify_service alone (any /execute
+    # scope) is not sufficient. Fails closed when ownership cannot be
+    # established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to remove version "
+            f"{version} from server {decoded_path} owned by "
+            f"{existing_server.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only modify servers you registered",
+        )
+
     try:
         result = await server_service.remove_server_version(path=decoded_path, version=version)
 
@@ -5654,6 +5723,23 @@ async def set_default_version(
         existing_server.get("server_name", decoded_path),
         user_context,
     )
+
+    # Ownership guard: changing the default version reroutes another user's
+    # server, so only the owner (registered_by) or an admin may do it --
+    # matching PUT /servers/{path}. modify_service alone (any /execute scope) is
+    # not sufficient. Fails closed when ownership cannot be established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to set default "
+            f"version for server {decoded_path} owned by "
+            f"{existing_server.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only modify servers you registered",
+        )
 
     try:
         result = await server_service.set_default_version(
@@ -5797,6 +5883,11 @@ async def get_server_connect_config(
         "oauth_client_id": oauth_client_id,
         "oauth_callback_port": callback_port,
         "append_mcp_path": server_info.get("append_mcp_path"),
+        # Per-user egress credential vault mode. When "oauth_user", the gateway
+        # injects the user's vaulted upstream token on egress, so the Connect
+        # config must NOT emit a server Authorization/API-key header (the client
+        # sends none; a placeholder would be forwarded verbatim and break it).
+        "egress_auth_mode": server_info.get("egress_auth_mode", "none"),
         "decrypt_failures": decrypt_failures,
     }
 

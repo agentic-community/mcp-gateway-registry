@@ -116,7 +116,6 @@ KEYCLOAK_ADMIN=admin
 KEYCLOAK_ADMIN_PASSWORD=<YOUR_SECURE_ADMIN_PASSWORD>
 
 # Keycloak Runtime
-KEYCLOAK_HOSTNAME=mcpgateway.ddns.net   # consumed by keycloak/setup/disable-ssl.sh
 KC_PROXY=edge                           # consumed by docker-compose.yml
 KC_HTTP_ENABLED=true                    # consumed by docker-compose.yml
 ```

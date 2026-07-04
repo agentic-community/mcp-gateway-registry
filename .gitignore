@@ -312,7 +312,6 @@ lerna-debug.log*
 coverage/
 .cache/
 .parcel-cache/
-.scratchpad/
 
 #MCP Json
 .tmp/anthropic-import
@@ -433,6 +432,9 @@ NEXT-STEPS-TELEMETRY.md
 registry_metrics.csv
 .claude/skills/usage-report/known-internal-instances.md
 
+# Local-only security-audit skill (not committed); findings live under the git-ignored .scratchpad/
+.claude/skills/security-audit/
+
 # Stress test generated data and results (may move to a separate repo later)
 tests/stress/data/
 tests/stress/results/
@@ -450,3 +452,6 @@ pingfederate/setup/pingfederate-ca-bundle.pem
 
 # Local Docker Compose override (machine-specific paths, e.g. macOS log-dir redirect)
 docker-compose.override.yml
+
+# Local MCP connect command with bearer token (never commit)
+.mcp

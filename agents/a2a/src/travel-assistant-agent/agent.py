@@ -178,10 +178,15 @@ async def discover_remote_agents(query: str, max_results: int = 5) -> str:
                 }
             )
 
-        # Get auth token and cache the agents
-        auth_token = await registry_client._get_token()
+        # Cache the discovered agents. SECURITY: the registry-scoped token is
+        # NOT forwarded to remote agents -- those endpoints are registrant-
+        # controlled and not fully trusted, and the registry token could be
+        # replayed against the registry API. Outbound A2A calls carry no
+        # credential in this sample; a production deployment should supply a
+        # delegation_token_provider that mints an audience-restricted, short-
+        # lived token bound to each specific target agent.
         cache = get_remote_agent_cache()
-        newly_cached = cache.cache_discovered_agents(discovered, auth_token)
+        newly_cached = cache.cache_discovered_agents(discovered)
 
         result = {
             "query": query,

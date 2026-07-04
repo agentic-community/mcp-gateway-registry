@@ -88,14 +88,37 @@ class GitHubAuthProvider:
             and settings.github_app_private_key
         )
 
-    async def get_auth_headers(self, url: str) -> dict[str, str]:
+    async def get_auth_headers(
+        self,
+        url: str,
+        allow_global_credentials: bool = False,
+    ) -> dict[str, str]:
         """Return auth headers if url matches an allowed GitHub host.
 
-        Returns empty dict if:
-        - URL host is not in the allowed hosts set
-        - No credentials are configured
-        - Token exchange fails (logged, falls back gracefully)
+        The server's shared GitHub credentials (PAT / GitHub App installation
+        token) are privileged: they can read any private repository the server
+        principal can see. Attaching them to a caller-supplied URL is therefore
+        a privilege-escalation vector unless the caller has been authorized to
+        use the shared identity. This method fails closed -- the shared
+        credentials are only attached when ``allow_global_credentials`` is
+        explicitly True (set by callers after an admin authorization check).
+
+        Args:
+            url: Target URL the headers will be sent to.
+            allow_global_credentials: Whether the caller is authorized to use
+                the server's shared GitHub credentials. Defaults to False so
+                that any caller that forgets to opt in gets no credentials.
+
+        Returns:
+            Auth headers dict. Empty when:
+            - ``allow_global_credentials`` is False (not authorized)
+            - URL host is not in the allowed hosts set
+            - No credentials are configured
+            - Token exchange fails (logged, falls back gracefully)
         """
+        if not allow_global_credentials:
+            return {}
+
         if not self._is_allowed_host(url):
             return {}
 

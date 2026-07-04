@@ -4,6 +4,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
+import jwt
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
@@ -12,8 +14,186 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class IdTokenVerificationError(Exception):
+    """Raised when an OIDC id_token cannot be cryptographically verified.
+
+    Signals that a present id_token failed signature, issuer, audience, or
+    expiry verification. Callers MUST fail closed on this error (deny the
+    login) rather than fall back to an unverified claim source, because a
+    verification failure indicates the token may have been forged or tampered.
+    """
+
+
 class AuthProvider(ABC):
     """Abstract base class for authentication providers."""
+
+    def _verify_id_token_with_jwks(
+        self,
+        id_token: str,
+        valid_issuers: list[str],
+        accepted_audiences: list[str],
+        leeway_seconds: int = 0,
+        expected_nonce: str | None = None,
+    ) -> dict[str, Any]:
+        """Cryptographically verify an OIDC id_token against the provider JWKS.
+
+        This is the single shared verification path for id_tokens received from
+        an OAuth2 token endpoint. It verifies the RS256 signature against the
+        provider's published JWKS, and enforces issuer, audience, and expiry
+        BEFORE any claim is returned. It fails closed: any missing key,
+        unknown issuer, bad audience, expired token, or malformed input raises
+        ``IdTokenVerificationError`` and no claims are returned.
+
+        When ``expected_nonce`` is supplied, the token's ``nonce`` claim is
+        enforced AFTER signature verification: the claim must be present and
+        equal the value bound to this login. This binds a (validly signed)
+        id_token to the specific authorization request it was issued for,
+        defeating replay/injection of a token minted for a different login.
+
+        Args:
+            id_token: The raw compact-serialized JWT id_token string.
+            valid_issuers: Issuers the token's ``iss`` claim may match. The
+                token issuer is matched against this allowlist before signature
+                verification so PyJWT validates against the exact expected value.
+            accepted_audiences: Audiences the token's ``aud`` claim may match.
+                For id_tokens this is normally the OAuth2 client_id only.
+            leeway_seconds: Optional clock-skew leeway for expiry checks.
+            expected_nonce: The nonce bound to this login (persisted in the
+                OAuth2 flow cookie). When not ``None`` the verified token's
+                ``nonce`` claim MUST match it exactly; a missing or mismatched
+                nonce fails closed. ``None`` skips the nonce check (used only
+                where no nonce was issued, e.g. a legacy in-flight login).
+
+        Returns:
+            The verified claim set as a dict. Safe to trust for identity and
+            authorization decisions.
+
+        Raises:
+            IdTokenVerificationError: If the token is absent, malformed, signed
+                by an unknown key, from an unexpected issuer/audience, expired,
+                nonce-mismatched, or otherwise fails verification.
+        """
+        if not id_token or not isinstance(id_token, str):
+            raise IdTokenVerificationError("id_token is missing or not a string")
+
+        if not valid_issuers:
+            raise IdTokenVerificationError("No valid issuers configured for id_token verification")
+
+        if not accepted_audiences:
+            raise IdTokenVerificationError(
+                "No accepted audiences configured for id_token verification"
+            )
+
+        try:
+            unverified_header = jwt.get_unverified_header(id_token)
+        except jwt.InvalidTokenError as e:
+            raise IdTokenVerificationError(f"Malformed id_token header: {e}") from e
+
+        kid = unverified_header.get("kid")
+        if not kid:
+            raise IdTokenVerificationError("id_token header missing 'kid'")
+
+        alg = unverified_header.get("alg")
+        if alg != "RS256":
+            # OIDC id_tokens from the supported IdPs are RS256. Reject anything
+            # else (notably 'none' and HS256, which would let an attacker sign
+            # with a public value) instead of trusting the header's algorithm.
+            raise IdTokenVerificationError(f"Unsupported id_token signing algorithm: {alg}")
+
+        # Determine the expected issuer without trusting a signature yet: read
+        # the unverified 'iss' only to pick which allowlisted issuer PyJWT will
+        # enforce. The subsequent jwt.decode still verifies the signature and
+        # re-checks iss against this exact value, so a spoofed iss cannot pass.
+        try:
+            unverified_claims = jwt.decode(id_token, options={"verify_signature": False})
+        except jwt.InvalidTokenError as e:
+            raise IdTokenVerificationError(f"Malformed id_token payload: {e}") from e
+
+        token_issuer = unverified_claims.get("iss")
+        if token_issuer not in valid_issuers:
+            raise IdTokenVerificationError(
+                f"id_token issuer '{token_issuer}' is not in the expected issuer allowlist"
+            )
+
+        try:
+            jwks = self.get_jwks()
+        except Exception as e:
+            # Fail closed: if we cannot reach the JWKS, we cannot verify.
+            raise IdTokenVerificationError(f"Unable to retrieve JWKS for verification: {e}") from e
+
+        signing_key = None
+        for key in jwks.get("keys", []):
+            if key.get("kid") == kid:
+                from jwt import PyJWK
+
+                signing_key = PyJWK(key).key
+                break
+
+        if signing_key is None:
+            raise IdTokenVerificationError(f"No JWKS key matches id_token 'kid': {kid}")
+
+        try:
+            claims: dict[str, Any] = jwt.decode(
+                id_token,
+                signing_key,
+                algorithms=["RS256"],
+                issuer=token_issuer,
+                audience=accepted_audiences,
+                leeway=leeway_seconds,
+                options={
+                    "verify_signature": True,
+                    "verify_exp": True,
+                    "verify_iat": True,
+                    "verify_aud": True,
+                    "require": ["exp", "iss", "aud"],
+                },
+            )
+        except jwt.InvalidTokenError as e:
+            raise IdTokenVerificationError(f"id_token verification failed: {e}") from e
+
+        # Bind the (now cryptographically verified) token to THIS login. Done
+        # after signature verification so a forged nonce on an unsigned token
+        # can never reach this check. A signed token whose nonce does not match
+        # the one bound to this authorization request is a replay/injection.
+        if expected_nonce is not None:
+            token_nonce = claims.get("nonce")
+            if not token_nonce or token_nonce != expected_nonce:
+                raise IdTokenVerificationError(
+                    "id_token nonce does not match the value bound to this login"
+                )
+
+        return claims
+
+    def validate_id_token(
+        self,
+        id_token: str,
+        expected_nonce: str | None = None,
+    ) -> dict[str, Any]:
+        """Verify an OIDC id_token and return its verified claims.
+
+        Providers that issue an id_token during the authorization-code flow MUST
+        override this to verify the token's signature (against their JWKS),
+        issuer, audience (the gateway's client_id), and expiry before returning
+        any claim. The default implementation refuses to trust an id_token,
+        failing closed for providers that have not opted in.
+
+        Args:
+            id_token: The raw id_token string from the token endpoint.
+            expected_nonce: The nonce bound to this login. When not ``None`` the
+                verified token's ``nonce`` claim must match it exactly (replay
+                protection). Overriding implementations MUST forward this to
+                ``_verify_id_token_with_jwks``.
+
+        Returns:
+            The verified claim set.
+
+        Raises:
+            IdTokenVerificationError: Always, unless a subclass overrides this
+                with a real JWKS-backed verification.
+        """
+        raise IdTokenVerificationError(
+            f"{type(self).__name__} does not support verified id_token extraction"
+        )
 
     @abstractmethod
     def validate_token(self, token: str, **kwargs: Any) -> dict[str, Any]:
@@ -197,9 +377,7 @@ class AuthProvider(ABC):
         metadata = self.authorization_server_metadata()
         issuer = metadata.get("issuer")
         if not issuer:
-            raise ValueError(
-                "Authorization server metadata missing 'issuer' field"
-            )
+            raise ValueError("Authorization server metadata missing 'issuer' field")
         return issuer
 
     def protected_resource_metadata(

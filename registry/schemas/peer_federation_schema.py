@@ -318,6 +318,20 @@ class PeerRegistryConfig(BaseModel):
         return self
 
 
+class PeerRegistryConfigResponse(PeerRegistryConfig):
+    """Response view of a peer registry config.
+
+    ``federation_token`` is the static bearer token this registry uses to
+    authenticate against the remote peer. It is write-only: settable via
+    create/update and ``PATCH /{peer_id}/token``, but never serialized back out
+    (otherwise any principal with the federation scope could harvest peer
+    tokens and impersonate this registry). ``exclude`` drops it from every
+    response regardless of value.
+    """
+
+    federation_token: str | None = Field(default=None, exclude=True)
+
+
 class SyncHistoryEntry(BaseModel):
     """
     Record of a single sync operation.

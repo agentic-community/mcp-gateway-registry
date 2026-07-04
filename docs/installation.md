@@ -50,33 +50,14 @@ docker compose up mongodb-init
 docker compose restart auth-server
 
 # 7. Initialize Keycloak (wait for Keycloak to start first)
-# Disable SSL for master realm
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "username=${KEYCLOAK_ADMIN}" \
-    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    -d "grant_type=password" \
-    -d "client_id=admin-cli" | jq -r '.access_token') && \
-curl -X PUT "http://localhost:8080/admin/realms/master" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"sslRequired": "none"}'
+# Note: both realms ship with sslRequired=external, which requires TLS for
+# external requests but allows plaintext HTTP from loopback. These commands talk
+# to Keycloak over http://localhost, so no SSL change is needed. Do NOT set
+# sslRequired=none (that would disable TLS enforcement for external requests too).
 
 # Initialize realm and clients
 chmod +x keycloak/setup/init-keycloak.sh
 ./keycloak/setup/init-keycloak.sh
-
-# Disable SSL for application realm
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "username=${KEYCLOAK_ADMIN}" \
-    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    -d "grant_type=password" \
-    -d "client_id=admin-cli" | jq -r '.access_token') && \
-curl -X PUT "http://localhost:8080/admin/realms/mcp-gateway" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"sslRequired": "none"}'
 
 # Get client credentials
 chmod +x keycloak/setup/get-all-client-credentials.sh
@@ -150,33 +131,14 @@ podman compose up mongodb-init
 podman compose restart auth-server
 
 # 9. Initialize Keycloak (wait for Keycloak to start first)
-# Note: Podman uses port 18080 for Keycloak
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:18080/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "username=${KEYCLOAK_ADMIN}" \
-    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    -d "grant_type=password" \
-    -d "client_id=admin-cli" | jq -r '.access_token') && \
-curl -X PUT "http://localhost:18080/admin/realms/master" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"sslRequired": "none"}'
+# Note: Podman uses port 18080 for Keycloak.
+# Both realms ship with sslRequired=external (TLS required for external requests,
+# plaintext allowed from loopback). These commands talk to Keycloak over
+# http://localhost, so no SSL change is needed. Do NOT set sslRequired=none.
 
 # Initialize realm and clients
 chmod +x keycloak/setup/init-keycloak.sh
 KEYCLOAK_URL=http://localhost:18080 ./keycloak/setup/init-keycloak.sh
-
-# Disable SSL for application realm
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:18080/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "username=${KEYCLOAK_ADMIN}" \
-    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    -d "grant_type=password" \
-    -d "client_id=admin-cli" | jq -r '.access_token') && \
-curl -X PUT "http://localhost:18080/admin/realms/mcp-gateway" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"sslRequired": "none"}'
 
 # Get client credentials
 chmod +x keycloak/setup/get-all-client-credentials.sh

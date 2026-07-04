@@ -12,6 +12,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..audit import set_audit_action
+from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..repositories.factory import get_federation_config_repository
 from ..repositories.interfaces import FederationConfigRepositoryBase
@@ -165,6 +166,7 @@ async def save_federation_config(
     config_id: str = "default",
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Create or update federation configuration.
@@ -274,6 +276,7 @@ async def update_federation_config(
     config: FederationConfig,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Update a specific federation configuration.
@@ -354,6 +357,7 @@ async def delete_federation_config(
     config_id: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, str]:
     """
     Delete a federation configuration.
@@ -425,6 +429,7 @@ async def add_anthropic_server(
     server_name: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Add a server to Anthropic federation configuration.
@@ -481,6 +486,7 @@ async def remove_anthropic_server(
     server_name: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Remove a server from Anthropic federation configuration.
@@ -559,6 +565,7 @@ async def add_asor_agent(
     agent_id: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Add an agent to ASOR federation configuration.
@@ -615,6 +622,7 @@ async def remove_asor_agent(
     agent_id: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Remove an agent from ASOR federation configuration.
@@ -669,6 +677,7 @@ async def add_aws_registry(
     registry_config: AwsRegistryConfig,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Add a registry to AWS Registry federation configuration.
@@ -734,6 +743,7 @@ async def remove_aws_registry(
     registry_id: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Remove a registry from AWS Registry federation configuration.
@@ -974,6 +984,7 @@ async def sync_federation(
     source: str | None = None,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """
     Manually trigger federation sync to import servers/agents from configured sources.
@@ -1323,6 +1334,7 @@ async def add_ai_catalog_source(
     source: AiCatalogSourceConfig,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Add an ai-catalog.json source to the ARD ingestion configuration."""
     _check_federation_management_scope(user_context)
@@ -1340,9 +1352,7 @@ async def add_ai_catalog_source(
         resource_id=config_id,
         description=f"Add ARD ai-catalog source {source.source_id}",
     )
-    logger.info(
-        f"User {user_context['username']} adding ARD ai-catalog source: {source.source_id}"
-    )
+    logger.info(f"User {user_context['username']} adding ARD ai-catalog source: {source.source_id}")
 
     config = await repo.get_config(config_id)
     if not config:
@@ -1374,6 +1384,7 @@ async def remove_ai_catalog_source(
     source_id: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     repo: FederationConfigRepositoryBase = Depends(_get_federation_repo),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Remove an ai-catalog.json source from the ARD ingestion configuration."""
     _check_federation_management_scope(user_context)
@@ -1395,9 +1406,7 @@ async def remove_ai_catalog_source(
         )
 
     original_count = len(config.ai_catalog.sources)
-    config.ai_catalog.sources = [
-        s for s in config.ai_catalog.sources if s.source_id != source_id
-    ]
+    config.ai_catalog.sources = [s for s in config.ai_catalog.sources if s.source_id != source_id]
     if len(config.ai_catalog.sources) == original_count:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1420,6 +1429,7 @@ async def sync_ai_catalog(
     request: Request,
     source_id: str | None = None,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Trigger ingestion for all enabled ai-catalog sources, or one source_id."""
     _check_federation_management_scope(user_context)

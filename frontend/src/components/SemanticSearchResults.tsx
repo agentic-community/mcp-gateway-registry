@@ -20,6 +20,8 @@ import {
   SemanticCustomHit
 } from '../hooks/useSemanticSearch';
 import { humanize } from '../utils/humanize';
+import { isSafeUrl } from '../utils/safeUrl';
+import { SafeLink, safeMarkdownAnchor } from './SafeLink';
 import ServerConfigModal from './ServerConfigModal';
 import AgentDetailsModal from './AgentDetailsModal';
 import type { Server } from './ServerCard';
@@ -339,7 +341,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
         {/* Action buttons */}
         <div className="flex items-center gap-4 px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
           {skill.skill_md_url && (
-            <a
+            <SafeLink
               href={skill.skill_md_url}
               target="_blank"
               rel="noopener noreferrer"
@@ -347,10 +349,10 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
             >
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               View Skill
-            </a>
+            </SafeLink>
           )}
           {skill.repository_url && (
-            <a
+            <SafeLink
               href={skill.repository_url}
               target="_blank"
               rel="noopener noreferrer"
@@ -358,7 +360,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
             >
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               View Repo
-            </a>
+            </SafeLink>
           )}
           {content && (
             <>
@@ -393,14 +395,14 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               {skill.skill_md_url && (
                 <p className="mt-2 text-sm">
                   Try visiting the{' '}
-                  <a
+                  <SafeLink
                     href={skill.skill_md_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-amber-600 hover:underline"
                   >
                     source URL
-                  </a>{' '}
+                  </SafeLink>{' '}
                   directly.
                 </p>
               )}
@@ -428,7 +430,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               )}
               {/* Markdown Body */}
               <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-amber-800 dark:prose-headings:text-amber-200 prose-a:text-amber-600 dark:prose-a:text-amber-400 prose-code:bg-gray-100 dark:prose-code:bg-gray-900 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: safeMarkdownAnchor }}>{body}</ReactMarkdown>
               </div>
             </>
           ) : (
@@ -968,7 +970,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                         (read-only, no endpoint). The gear instead links to the
                         source descriptor, and only renders when that URL exists. */}
                     {isArdDiscovery ? (
-                      ardSourceUrl && (
+                      ardSourceUrl && isSafeUrl(ardSourceUrl) && (
                         <button
                           type="button"
                           onClick={() => window.open(ardSourceUrl, '_blank', 'noopener,noreferrer')}

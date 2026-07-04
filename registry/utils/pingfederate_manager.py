@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import secrets
+import ssl
 from typing import Any
 
 import httpx
@@ -38,9 +39,33 @@ logger = logging.getLogger(__name__)
 # Configuration -- mirrors registry.api.iam_user_groups_routes
 _PF_ADMIN_URL: str = os.environ.get("PF_ADMIN_URL", "https://pingfederate:9999")
 _PF_ADMIN_USER: str = os.environ.get("PF_ADMIN_USER", "administrator")
-_PF_ADMIN_PASS: str = os.environ.get("PF_ADMIN_PASS", "2FederateM0re")
 _PF_ADMIN_API_BASE: str = "/pf-admin-api/v1"
 _PF_HTTP_TIMEOUT: float = 10.0
+
+# Environment variable name for the PingFederate admin API password. It has no
+# default: the password is a secret and must be supplied by the deployment.
+_PF_ADMIN_PASS_ENV: str = "PF_ADMIN_PASS"
+
+# Well-known development password that must never be used to authenticate to a
+# PingFederate admin API. It historically shipped as a hardcoded code default
+# and as docker-compose/Terraform fallbacks; rejecting it here makes every
+# deployment surface fail closed even if the weak value is supplied via the
+# environment.
+_PF_ADMIN_PASS_DENYLIST: frozenset[str] = frozenset({"2FederateM0re"})
+
+# TLS verification for the PingFederate admin API connection.
+#
+# Verification is ON by default (fail closed): admin credentials must never be
+# sent over an unauthenticated TLS channel. A private/self-signed PingFederate
+# admin certificate is trusted explicitly by pointing PF_ADMIN_CA_BUNDLE at a
+# PEM file (the CA that signed the admin cert), NOT by disabling verification.
+#
+# PF_ADMIN_TLS_INSECURE is a last-resort, dev-only escape hatch that fully
+# disables verification. It defaults OFF, requires an explicit opt-in, is
+# loudly logged, and should never be set in production.
+_PF_ADMIN_CA_BUNDLE_ENV: str = "PF_ADMIN_CA_BUNDLE"
+_PF_ADMIN_TLS_INSECURE_ENV: str = "PF_ADMIN_TLS_INSECURE"
+_TRUTHY_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 
 # clientId allowed character set per PingFederate admin API:
 # alphanumerics, dash, underscore, period, length 1-256.
@@ -88,9 +113,102 @@ def _build_client_payload(
     }
 
 
+def _get_pf_admin_pass() -> str:
+    """Resolve the PingFederate admin password from the environment.
+
+    The password is a secret with no safe default. It is read lazily at first
+    use so that importing this module never requires it, but any code path that
+    actually authenticates to the PingFederate admin API fails closed when the
+    password is unset.
+
+    Returns:
+        The PingFederate admin API password.
+
+    Raises:
+        ValueError: If ``PF_ADMIN_PASS`` is unset, blank, or set to a known
+            weak development default. Configure a strong value before using the
+            PingFederate integration.
+    """
+    value = os.environ.get(_PF_ADMIN_PASS_ENV)
+    if not value or not value.strip():
+        raise ValueError(
+            f"Required secret '{_PF_ADMIN_PASS_ENV}' is not set. "
+            "Set the PingFederate admin API password in the environment before "
+            "using the PingFederate integration."
+        )
+    if value in _PF_ADMIN_PASS_DENYLIST:
+        raise ValueError(
+            f"'{_PF_ADMIN_PASS_ENV}' is set to a well-known development default. "
+            "Set a strong, unique PingFederate admin API password."
+        )
+    return value
+
+
+def _get_pf_verify() -> bool | ssl.SSLContext:
+    """Resolve the TLS ``verify`` setting for the PingFederate admin client.
+
+    The connection carries admin credentials, so TLS verification is enabled by
+    default and fails closed. A private or self-signed PingFederate admin
+    certificate is trusted explicitly by pointing ``PF_ADMIN_CA_BUNDLE`` at the
+    PEM file for the signing CA. Disabling verification entirely is a dev-only
+    escape hatch gated behind ``PF_ADMIN_TLS_INSECURE``.
+
+    Resolution order:
+        1. If ``PF_ADMIN_TLS_INSECURE`` is truthy, return ``False`` (verification
+           disabled) after logging a prominent warning. Explicit opt-in only.
+        2. If ``PF_ADMIN_CA_BUNDLE`` is set, load it into an SSL context that
+           verifies the peer against that CA. A missing/unreadable file fails
+           closed with ``ValueError`` rather than falling back to system trust.
+        3. Otherwise return ``True`` (verify against the system trust store).
+
+    Returns:
+        ``True`` for default system-trust verification, an ``ssl.SSLContext``
+        pinned to the configured CA bundle, or ``False`` when the dev-only
+        insecure escape hatch is explicitly enabled.
+
+    Raises:
+        ValueError: If ``PF_ADMIN_CA_BUNDLE`` is set but the file is missing or
+            cannot be loaded (fail closed instead of silently verifying against
+            the default trust store).
+    """
+    insecure = os.environ.get(_PF_ADMIN_TLS_INSECURE_ENV, "").strip().lower()
+    if insecure in _TRUTHY_VALUES:
+        logger.warning(
+            "%s is enabled: TLS verification for the PingFederate admin API is "
+            "DISABLED. This is insecure and must only be used in local "
+            "development. Configure %s with the admin certificate's CA instead.",
+            _PF_ADMIN_TLS_INSECURE_ENV,
+            _PF_ADMIN_CA_BUNDLE_ENV,
+        )
+        return False
+
+    ca_bundle = os.environ.get(_PF_ADMIN_CA_BUNDLE_ENV)
+    if ca_bundle and ca_bundle.strip():
+        ca_path = ca_bundle.strip()
+        if not os.path.isfile(ca_path):
+            raise ValueError(
+                f"{_PF_ADMIN_CA_BUNDLE_ENV} points to '{ca_path}', which does not "
+                "exist or is not a file. Provide a readable PEM CA bundle for the "
+                "PingFederate admin certificate."
+            )
+        try:
+            return ssl.create_default_context(cafile=ca_path)
+        except (ssl.SSLError, OSError) as exc:
+            raise ValueError(
+                f"Failed to load {_PF_ADMIN_CA_BUNDLE_ENV} '{ca_path}': "
+                f"{type(exc).__name__}. Provide a valid PEM CA bundle."
+            ) from exc
+
+    return True
+
+
 def _pf_auth() -> tuple[str, str]:
-    """Return basic-auth tuple for PingFederate admin API."""
-    return (_PF_ADMIN_USER, _PF_ADMIN_PASS)
+    """Return basic-auth tuple for PingFederate admin API.
+
+    Raises:
+        ValueError: If the ``PF_ADMIN_PASS`` secret is not configured.
+    """
+    return (_PF_ADMIN_USER, _get_pf_admin_pass())
 
 
 def _pf_headers() -> dict[str, str]:
@@ -144,15 +262,11 @@ async def _create_or_update_client(
 
     if exists:
         url = f"{_PF_ADMIN_URL}{_PF_ADMIN_API_BASE}/oauth/clients/{client_id}"
-        response = await client.put(
-            url, auth=_pf_auth(), headers=_pf_headers(), json=payload
-        )
+        response = await client.put(url, auth=_pf_auth(), headers=_pf_headers(), json=payload)
         action = "update"
     else:
         url = f"{_PF_ADMIN_URL}{_PF_ADMIN_API_BASE}/oauth/clients"
-        response = await client.post(
-            url, auth=_pf_auth(), headers=_pf_headers(), json=payload
-        )
+        response = await client.post(url, auth=_pf_auth(), headers=_pf_headers(), json=payload)
         action = "create"
 
     if not (200 <= response.status_code < 300):
@@ -210,7 +324,8 @@ async def create_pingfederate_service_account_client(
         - groups: list[str] (echoes input -- caller persists)
 
     Raises:
-        ValueError: client_id fails validation.
+        ValueError: client_id fails validation, the ``PF_ADMIN_PASS`` secret is
+            not configured, or the configured ``PF_ADMIN_CA_BUNDLE`` is missing.
         PingFederateAdminError: PF admin API call failed.
     """
     _validate_client_id(client_id)
@@ -223,9 +338,12 @@ async def create_pingfederate_service_account_client(
     )
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=_PF_HTTP_TIMEOUT) as client:  # nosec B501 - PF admin uses self-signed cert in baseline profile
+        async with httpx.AsyncClient(verify=_get_pf_verify(), timeout=_PF_HTTP_TIMEOUT) as client:
             await _create_or_update_client(client, client_id, payload)
-    except PingFederateAdminError:
+    except (PingFederateAdminError, ValueError):
+        # ValueError signals a configuration error (e.g. missing PF_ADMIN_PASS)
+        # and must surface unchanged so the caller gets an actionable message
+        # rather than an opaque PingFederateAdminError.
         raise
     except httpx.HTTPStatusError as exc:
         logger.error(

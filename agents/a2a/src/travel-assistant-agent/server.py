@@ -11,6 +11,7 @@ from agent import (
     search_flights,
     strands_agent,
 )
+from auth_middleware import install_agent_auth
 from dependencies import (
     get_db_manager,
     get_env,
@@ -49,6 +50,16 @@ async def lifespan(
 
 
 app = FastAPI(title="Travel Assistant Agent", lifespan=lifespan)
+
+# Authenticate every request (except health probes) before it reaches the A2A
+# mount or the /api endpoints, which drive the LLM tool loop. Fails closed.
+install_agent_auth(
+    app,
+    keycloak_url=env_settings.keycloak_url,
+    realm=env_settings.keycloak_realm,
+    audience=env_settings.agent_audience,
+    bind_host=env_settings.host,
+)
 
 
 @app.get("/ping")

@@ -1,0 +1,80 @@
+suite: egress credential vault config
+templates:
+  - templates/configmap-egress.yaml
+tests:
+  - it: is absent when egressAuth is disabled (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the full registry egress var set when enabled
+    set:
+      egressAuth:
+        enabled: true
+        secretStoreBackend: openbao
+        oauthCallbackBaseUrl: https://gw.example.com
+        openbao:
+          addr: http://openbao.default.svc:8200
+          authMethod: kubernetes
+          role: registry-egress
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: registry-egress-config
+      - equal:
+          path: data.EGRESS_AUTH_ENABLED
+          value: "true"
+      - equal:
+          path: data.SECRET_STORE_BACKEND
+          value: "openbao"
+      - equal:
+          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
+          value: "https://gw.example.com"
+      - equal:
+          path: data.OPENBAO_ADDR
+          value: "http://openbao.default.svc:8200"
+      - equal:
+          path: data.OPENBAO_AUTH_METHOD
+          value: "kubernetes"
+      - equal:
+          path: data.OPENBAO_ROLE
+          value: "registry-egress"
+      # The marker SECRET must NOT appear in the (non-secret) configmap.
+      - notExists:
+          path: data.AUTH_SERVER_NGINX_MARKER_SECRET
+
+  - it: derives the callback base URL from global.domain + routing mode
+    set:
+      global:
+        domain: agents-path.example.com
+        ingress:
+          routingMode: path
+          tls: true
+      egressAuth:
+        enabled: true
+    asserts:
+      # No explicit oauthCallbackBaseUrl: must fall back to the public host so
+      # registry.core.config startup validation passes (path mode => bare host).
+      - equal:
+          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
+          value: "https://agents-path.example.com"
+
+  - it: defaults timeouts + path prefix when only enabled
+    set:
+      egressAuth:
+        enabled: true
+    asserts:
+      - equal:
+          path: data.EGRESS_TOKEN_REFRESH_SKEW_SECONDS
+          value: "300"
+      - equal:
+          path: data.EGRESS_STATE_TTL_SECONDS
+          value: "600"
+      - equal:
+          path: data.SECRETS_MANAGER_PATH_PREFIX
+          value: "mcp/egress"
+      - equal:
+          path: data.OPENBAO_KV_MOUNT
+          value: "secret"

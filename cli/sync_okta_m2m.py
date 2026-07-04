@@ -35,7 +35,7 @@ async def main():
     if not okta_domain or not okta_api_token:
         logger.error("ERROR: OKTA_DOMAIN and OKTA_API_TOKEN environment variables must be set")
         logger.error("Example:")
-        logger.error("  export OKTA_DOMAIN=integrator-9917255.okta.com")
+        logger.error("  export OKTA_DOMAIN=YOUR_ORG.okta.com")
         logger.error("  export OKTA_API_TOKEN=your_api_token_here")
         sys.exit(1)
 

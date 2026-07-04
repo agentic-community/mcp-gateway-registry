@@ -20,6 +20,8 @@ Sections (in order below):
   4. keycloak-client-secret (runtime-created by keycloak-configure Job)
   5. mongo-credentials secret
   6. shared-secret (stack-level)
+  7. auth-server-egress-config configmap (egress vault, when egressAuth.enabled)
+     + AUTH_SERVER_NGINX_MARKER_SECRET (env/shared secret)
 
 Over-rejection is preferred to under-rejection: a user attempting to
 inject one of these via extraEnv gets a clear template-render error.
@@ -27,6 +29,19 @@ inject one of these via extraEnv gets a clear template-render error.
 {{- define "auth-server.reservedEnvNames" -}}
 {{- $content := .Files.Get "reserved-env-names.txt" -}}
 {{- compact (splitList "\n" $content) | toYaml -}}
+{{- end -}}
+
+{{/*
+Name of the ServiceAccount the auth-server pod runs as. Explicit
+serviceAccount.name wins; otherwise defaults to the app name ("auth-server").
+Provides a stable identity to attach roles to (RBAC, IRSA, etc.).
+*/}}
+{{- define "auth-server.serviceAccountName" -}}
+{{- if .Values.serviceAccount.name -}}
+{{- .Values.serviceAccount.name -}}
+{{- else -}}
+{{- .Values.app.name -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

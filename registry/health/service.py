@@ -12,6 +12,8 @@ from registry.constants import DeploymentType, HealthStatus
 
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
+from ..exceptions import UrlValidationError
+from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -360,8 +362,9 @@ class HealthMonitoringService:
         HEALTH_CHECK_BATCH_SIZE = 10
         HEALTH_CHECK_BATCH_DELAY_SECONDS = 0.5
 
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(settings.health_check_timeout_seconds)
+        async with guarded_async_client(
+            profile=PROXY_PROFILE,
+            timeout=httpx.Timeout(settings.health_check_timeout_seconds),
         ) as client:
             check_tasks = []
             for service_path in enabled_services:
@@ -369,16 +372,13 @@ class HealthMonitoringService:
                     service_path, include_credentials=True
                 )
                 if server_info and server_info.get("proxy_pass_url"):
-                    check_tasks.append(
-                        (service_path, server_info)
-                    )
+                    check_tasks.append((service_path, server_info))
 
             # Execute health checks in staggered batches
             for batch_start in range(0, len(check_tasks), HEALTH_CHECK_BATCH_SIZE):
-                batch = check_tasks[batch_start:batch_start + HEALTH_CHECK_BATCH_SIZE]
+                batch = check_tasks[batch_start : batch_start + HEALTH_CHECK_BATCH_SIZE]
                 batch_coros = [
-                    self._check_single_service(client, path, info)
-                    for path, info in batch
+                    self._check_single_service(client, path, info) for path, info in batch
                 ]
                 results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
@@ -396,16 +396,12 @@ class HealthMonitoringService:
 
             # Regenerate nginx configuration when health status changes
             try:
-                from ..core.nginx_service import nginx_service
-
                 from registry.core.nginx_service import nginx_reload_scheduler
 
                 nginx_reload_scheduler.mark_dirty()
                 logger.info("Nginx config marked dirty due to health status changes")
             except Exception as e:
-                logger.error(
-                    f"Failed to mark nginx config dirty after health status change: {e}"
-                )
+                logger.error(f"Failed to mark nginx config dirty after health status change: {e}")
 
     async def _check_single_service(
         self, client: httpx.AsyncClient, service_path: str, server_info: dict
@@ -681,6 +677,22 @@ class HealthMonitoringService:
         """
         if not proxy_pass_url:
             return False, HealthStatus.UNHEALTHY_MISSING_PROXY_URL
+
+        # Fail closed on SSRF before any credential decryption or header build:
+        # a proxy_pass_url that resolves to a private/metadata target (or uses a
+        # disallowed scheme) must never receive the server's decrypted
+        # credentials. This validates the URL up front; the guarded client used
+        # for the actual request additionally pins the resolved public IP so the
+        # host cannot rebind to a private address after this check.
+        try:
+            validate_url(proxy_pass_url, profile=PROXY_PROFILE)
+        except UrlValidationError as e:
+            logger.warning(
+                "Health check blocked by SSRF guard for %s: %s (credentials NOT sent)",
+                proxy_pass_url,
+                e,
+            )
+            return False, HealthStatus.UNHEALTHY_URL_BLOCKED
 
         # Get transport information from server_info
         supported_transports = server_info.get("supported_transports", ["streamable-http"])
@@ -1234,8 +1246,9 @@ class HealthMonitoringService:
         self.server_health_status[service_path] = HealthStatus.CHECKING
 
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(settings.health_check_timeout_seconds)
+            async with guarded_async_client(
+                profile=PROXY_PROFILE,
+                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
             ) as client:
                 # Use transport-aware endpoint checking
                 is_healthy, status_detail = await self._check_server_endpoint_transport_aware(
@@ -1298,9 +1311,7 @@ class HealthMonitoringService:
                     f"Nginx config marked dirty due to status change for {service_path}: {previous_status} -> {current_status}"
                 )
             except Exception as e:
-                logger.error(
-                    f"Failed to mark nginx config dirty after immediate health check: {e}"
-                )
+                logger.error(f"Failed to mark nginx config dirty after immediate health check: {e}")
 
         return current_status, last_checked_time
 

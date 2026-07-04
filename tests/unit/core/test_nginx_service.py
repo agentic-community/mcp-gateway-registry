@@ -12,7 +12,14 @@ import httpx
 import pytest
 
 from registry.constants import HealthStatus
+from registry.core import nginx_service as nginx_module
 from registry.core.nginx_service import NginxConfigService
+
+# Capture the real write-validate-promote helpers before the autouse fixture
+# stubs the module attributes, so the dedicated validation tests can exercise
+# the genuine flow (temp write, nginx -t gate, promote-or-restore).
+_REAL_WRITE_AND_VALIDATE = nginx_module._write_and_validate_config
+_REAL_ATOMIC_WRITE = nginx_module._atomic_write_text
 
 # =============================================================================
 # TEST FIXTURES
@@ -21,20 +28,26 @@ from registry.core.nginx_service import NginxConfigService
 
 @pytest.fixture(autouse=True)
 def mock_atomic_write():
-    """Stub _atomic_write_text so tests don't touch /etc/nginx (#1044).
+    """Stub the config write + validate path so tests don't touch /etc/nginx.
 
-    The real helper does tempfile + os.replace against
-    settings.nginx_config_path. In unit tests the path is a fixture
-    string ('/etc/nginx/conf.d/nginx_rev_proxy.conf') that the test
-    user typically can't write to. Patching here keeps every test
-    that reaches generate_config_async hermetic.
+    The real helpers do tempfile + os.replace against
+    settings.nginx_config_path and run ``nginx -t``. In unit tests the path is a
+    fixture string ('/etc/nginx/conf.d/nginx_rev_proxy.conf') that the test user
+    typically can't write to, and no nginx binary is present. Patching here keeps
+    every test that reaches generate_config_async hermetic.
 
-    Tests that need to inspect what was written can declare this
-    fixture as a parameter and read mock_atomic_write.call_args_list -
-    each call is (path, content).
+    ``_write_and_validate_config`` is stubbed to delegate to the (mocked)
+    ``_atomic_write_text`` so tests that inspect what was written can declare
+    this fixture as a parameter and read ``mock_atomic_write.call_args_list`` -
+    each call is (path, content). The dedicated validation tests below opt out
+    of this stub to exercise the real write-validate-promote flow.
     """
     with patch("registry.core.nginx_service._atomic_write_text") as mock_write:
-        yield mock_write
+        with patch(
+            "registry.core.nginx_service._write_and_validate_config",
+            side_effect=lambda path, content: mock_write(path, content),
+        ):
+            yield mock_write
 
 
 @pytest.fixture
@@ -569,6 +582,14 @@ def test_create_location_block_streamable_http(nginx_service):
     assert "proxy_set_header X-Internal-Token $auth_internal_token" in block
     assert "proxy_buffering off" in block
     assert "auth_request /validate" in block
+    # Upstream timeouts derived from MCP_PROXY_TIMEOUT so long-running MCP tool
+    # calls aren't severed by nginx before the inner auth-server hop times out.
+    # The exact read/send value is asserted in TestResolveMcpProxyReadTimeout;
+    # here we only assert the directives are emitted (no unresolved f-string).
+    assert "proxy_read_timeout " in block
+    assert "proxy_send_timeout " in block
+    assert "proxy_connect_timeout 10s" in block
+    assert "{mcp_proxy_read_timeout}" not in block
 
 
 @pytest.mark.unit
@@ -1140,9 +1161,7 @@ server {
                                 "registry.core.nginx_service.urlparse",
                                 side_effect=_selective_urlparse,
                             ):
-                                result = await nginx_service.generate_config_async(
-                                    sample_servers
-                                )
+                                result = await nginx_service.generate_config_async(sample_servers)
 
                                 assert result is True
                                 written_content = mock_atomic_write.call_args_list[0][0][1]
@@ -1317,3 +1336,314 @@ def test_generated_protected_api_block_carries_internal_token():
         "$upstream_http_x_internal_token_registry;" in src
     )
     assert "proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;" in src
+
+
+@pytest.mark.unit
+class TestResolveMcpProxyReadTimeout:
+    """Tests for the nginx MCP proxy_read_timeout derivation helper.
+
+    The nginx read/send timeout for the /mcp-proxy/ location blocks is derived
+    from settings.mcp_proxy_timeout (MCP_PROXY_TIMEOUT) plus a fixed buffer, so
+    the inner auth-server hop always times out first. Credit: derivation
+    approach contributed by @go-faustino (PR #1321).
+    """
+
+    def test_default_is_upstream_plus_buffer(self):
+        """Default 30s upstream timeout yields 60s (30s + 30s buffer)."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout=30.0)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
+
+    def test_raised_upstream_scales(self):
+        """A raised upstream timeout scales the nginx read timeout with headroom."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout=300.0)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 330
+
+    def test_fractional_upstream_rounds_up(self):
+        """A fractional upstream timeout is rounded up before adding the buffer."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout=45.5)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 76
+
+    def test_invalid_value_falls_back_to_default(self):
+        """A non-numeric value falls back to the 30s default (-> 60s)."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout="not-a-float")
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
+
+    def test_none_value_falls_back_to_default(self):
+        """A missing (None) value falls back to the 30s default (-> 60s)."""
+        from registry.core import nginx_service as ns
+
+        fake_settings = MagicMock(mcp_proxy_timeout=None)
+        with patch.object(ns, "settings", fake_settings):
+            assert ns._resolve_mcp_proxy_read_timeout_seconds() == 60
+
+
+# =============================================================================
+# CONFIG-INJECTION DEFENSE: proxy_pass_url is escaped at interpolation
+# =============================================================================
+
+
+@pytest.mark.unit
+def test_location_block_escapes_backend_url_metacharacters(nginx_service):
+    """A crafted proxy_pass_url cannot break out of the quoted set directive.
+
+    Registration validation already rejects nginx metacharacters, but the
+    location-block builder escapes defensively so legacy/persisted values still
+    cannot inject nginx directives.
+    """
+    malicious = 'http://evil.com/";}\nlocation /x { proxy_pass http://attacker;'
+
+    block = nginx_service._create_location_block(
+        path="/evil",
+        proxy_pass_url=malicious,
+        transport_type="streamable-http",
+        server_info={"server_name": "evil"},
+    )
+
+    # The raw injection payload must not appear verbatim: quotes/backslashes are
+    # escaped and newlines collapsed, so the "; }" directive terminator cannot
+    # close the `set $backend_url "..."` string context.
+    assert 'set $backend_url "http://evil.com/";}' not in block
+    # A real newline must not survive inside the generated directive value.
+    assert "\nlocation /x { proxy_pass http://attacker;" not in block
+    # The escaped form (backslash-quote) is what lands in the config.
+    assert '\\"' in block
+
+
+@pytest.mark.unit
+def test_sanitize_for_nginx_set_escapes_quotes_and_newlines():
+    """The nginx sanitizer escapes quotes/backslashes and collapses newlines."""
+    out = NginxConfigService._sanitize_for_nginx_set('a"b\\c\nd')
+    assert '"' not in out.replace('\\"', "")  # only escaped quotes remain
+    assert "\n" not in out
+
+
+# =============================================================================
+# Config validation before persistence (cold-start DoS protection)
+# =============================================================================
+#
+# A malformed generated config must never overwrite the live config on disk:
+# even though a bad reload is skipped, a broken file on disk takes down the
+# NEXT nginx cold start (container restart), downing the whole gateway. These
+# tests exercise the real _write_and_validate_config flow (the autouse fixture
+# stubs the module attribute, so we call the captured real function directly).
+
+
+class TestConfigValidationBeforePersist:
+    @pytest.fixture(autouse=True)
+    def _real_atomic_write(self):
+        """Restore the real _atomic_write_text so these tests actually write to
+        the tmp_path (the module-level autouse fixture stubs it), and make the
+        nginx binary appear present by default so the validation branch runs.
+        Tests that model a missing binary re-patch shutil.which themselves."""
+        with (
+            patch.object(nginx_module, "_atomic_write_text", _REAL_ATOMIC_WRITE),
+            patch("shutil.which", return_value="/usr/sbin/nginx"),
+        ):
+            yield
+
+    def test_valid_config_is_promoted(self, tmp_path):
+        """A candidate that passes nginx -t replaces the live config."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        live.write_text("# last good\n")
+
+        with patch.object(nginx_module, "_run_nginx_config_test", return_value=(True, "")):
+            _REAL_WRITE_AND_VALIDATE(live, "# new valid config\n")
+
+        assert live.read_text() == "# new valid config\n"
+        # No backup left behind on success.
+        assert not (tmp_path / (live.name + nginx_module._LAST_GOOD_SUFFIX)).exists()
+
+    def test_invalid_config_does_not_overwrite_live_config(self, tmp_path):
+        """A candidate rejected by nginx -t must not persist; the last-good
+        config is restored so a subsequent cold start still boots."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        live.write_text("# last good\n")
+
+        with patch.object(
+            nginx_module,
+            "_run_nginx_config_test",
+            return_value=(False, "nginx: [emerg] unexpected }"),
+        ):
+            with pytest.raises(RuntimeError, match="nginx config rejected"):
+                _REAL_WRITE_AND_VALIDATE(live, "# broken }\ninjected junk\n")
+
+        # The broken candidate never survives on disk: last-good is intact.
+        assert live.read_text() == "# last good\n"
+        # No stray backup file remains.
+        assert not (tmp_path / (live.name + nginx_module._LAST_GOOD_SUFFIX)).exists()
+
+    def test_invalid_config_with_no_prior_config_leaves_nothing_on_disk(self, tmp_path):
+        """When there is no prior live config, a rejected candidate is removed
+        entirely so a cold start does not load a broken file."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        assert not live.exists()
+
+        with patch.object(nginx_module, "_run_nginx_config_test", return_value=(False, "bad")):
+            with pytest.raises(RuntimeError, match="nginx config rejected"):
+                _REAL_WRITE_AND_VALIDATE(live, "# broken\n")
+
+        assert not live.exists()
+
+    def test_missing_nginx_binary_promotes_without_validation(self, tmp_path):
+        """On a single-container host with no nginx (default), the candidate is
+        promoted without a test — there is no nginx cold start to protect."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        live.write_text("# last good\n")
+
+        settings_stub = MagicMock()
+        settings_stub.nginx_config_validation_required = False
+        settings_stub.nginx_updates_enabled = True
+        with (
+            patch.object(nginx_module, "settings", settings_stub),
+            patch("shutil.which", return_value=None),
+        ):
+            _REAL_WRITE_AND_VALIDATE(live, "# new config, unvalidatable\n")
+
+        assert live.read_text() == "# new config, unvalidatable\n"
+
+    def test_missing_nginx_binary_fails_closed_when_validation_required(self, tmp_path):
+        """In a split/sidecar topology (nginx in another container) the operator
+        sets nginx_config_validation_required=True. When the registry cannot run
+        nginx -t, an unvalidated config must NOT be promoted — and the candidate
+        must never even touch the live path (no TOCTOU window for the sidecar)."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        live.write_text("# last good\n")
+
+        settings_stub = MagicMock()
+        settings_stub.nginx_config_validation_required = True
+        with (
+            patch.object(nginx_module, "settings", settings_stub),
+            patch("shutil.which", return_value=None),
+        ):
+            with pytest.raises(RuntimeError, match="nginx config rejected"):
+                _REAL_WRITE_AND_VALIDATE(live, "# unvalidatable candidate\n")
+
+        # Last-good config is intact; the unvalidated candidate never reached disk.
+        assert live.read_text() == "# last good\n"
+
+
+class TestRunNginxConfigTest:
+    def test_returns_no_binary_sentinel_when_nginx_absent(self):
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            passed, message = nginx_module._run_nginx_config_test()
+        assert passed is False
+        assert message == nginx_module._NGINX_TEST_NO_BINARY
+
+    def test_returns_false_on_nonzero_exit(self):
+        result = MagicMock()
+        result.returncode = 1
+        result.stderr = "nginx: [emerg] boom"
+        with patch("subprocess.run", return_value=result):
+            passed, message = nginx_module._run_nginx_config_test()
+        assert passed is False
+        assert "boom" in message
+
+    def test_returns_false_on_timeout(self):
+        import subprocess
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("nginx", 5)):
+            passed, message = nginx_module._run_nginx_config_test()
+        assert passed is False
+        assert "timed out" in message
+
+    def test_returns_true_on_success(self):
+        result = MagicMock()
+        result.returncode = 0
+        result.stderr = "syntax is ok"
+        with patch("subprocess.run", return_value=result):
+            passed, _message = nginx_module._run_nginx_config_test()
+        assert passed is True
+
+
+def _scheduler_settings(live):
+    """A settings stub exposing just the attributes the scheduler reload path
+    reads, so the read-only nginx_config_path property can be redirected."""
+    s = MagicMock()
+    s.nginx_config_path = live
+    s.nginx_updates_enabled = True
+    s.deployment_mode = MagicMock()
+    s.deployment_mode.value = "with-gateway"
+    return s
+
+
+@pytest.mark.asyncio
+async def test_scheduler_still_reloads_valid_config(monkeypatch, tmp_path):
+    """The debounced scheduler applies a changed, valid config and advances its
+    last-applied hash (validation is wired in without breaking the reload)."""
+    from registry.core.nginx_service import NginxReloadScheduler
+
+    scheduler = NginxReloadScheduler(debounce_seconds=0.0, poll_external=False)
+
+    live = tmp_path / "nginx_rev_proxy.conf"
+
+    async def _fake_fetch():
+        return {}
+
+    monkeypatch.setattr(nginx_module, "settings", _scheduler_settings(live))
+    monkeypatch.setattr(nginx_module, "_atomic_write_text", _REAL_ATOMIC_WRITE)
+    monkeypatch.setattr(nginx_module, "_write_and_validate_config", _REAL_WRITE_AND_VALIDATE)
+    monkeypatch.setattr(nginx_module, "_fetch_all_enabled_servers", _fake_fetch)
+    monkeypatch.setattr(
+        nginx_module.nginx_service, "render_config", AsyncMock(return_value="# valid config\n")
+    )
+    monkeypatch.setattr(nginx_module.nginx_service, "_commit_virtual_server_mappings", AsyncMock())
+    # nginx binary present; nginx -t accepts the candidate; reload succeeds.
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/sbin/nginx")
+    monkeypatch.setattr(nginx_module, "_run_nginx_config_test", lambda: (True, ""))
+    monkeypatch.setattr(nginx_module.nginx_service, "reload_nginx", MagicMock(return_value=True))
+
+    await scheduler._do_reload_if_changed()
+
+    assert live.read_text() == "# valid config\n"
+    assert scheduler._last_config_hash != ""
+
+
+@pytest.mark.asyncio
+async def test_scheduler_rejects_invalid_config_and_keeps_last_good(monkeypatch, tmp_path):
+    """When nginx -t rejects the rendered config, the scheduler must NOT
+    overwrite the live config, must NOT advance its hash, and must stay dirty
+    for a later retry."""
+    from registry.core.nginx_service import NginxReloadScheduler
+
+    scheduler = NginxReloadScheduler(debounce_seconds=0.0, poll_external=False)
+
+    live = tmp_path / "nginx_rev_proxy.conf"
+    live.write_text("# last good\n")
+
+    async def _fake_fetch():
+        return {}
+
+    monkeypatch.setattr(nginx_module, "settings", _scheduler_settings(live))
+    monkeypatch.setattr(nginx_module, "_atomic_write_text", _REAL_ATOMIC_WRITE)
+    monkeypatch.setattr(nginx_module, "_write_and_validate_config", _REAL_WRITE_AND_VALIDATE)
+    monkeypatch.setattr(nginx_module, "_fetch_all_enabled_servers", _fake_fetch)
+    monkeypatch.setattr(
+        nginx_module.nginx_service, "render_config", AsyncMock(return_value="# broken }\n")
+    )
+    monkeypatch.setattr(nginx_module.nginx_service, "_commit_virtual_server_mappings", AsyncMock())
+    # nginx binary present; nginx -t rejects the candidate.
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/sbin/nginx")
+    monkeypatch.setattr(nginx_module, "_run_nginx_config_test", lambda: (False, "emerg"))
+    reload_mock = MagicMock(return_value=True)
+    monkeypatch.setattr(nginx_module.nginx_service, "reload_nginx", reload_mock)
+
+    await scheduler._do_reload_if_changed()
+
+    # Live config untouched, hash never advanced (stays initial ""), reload
+    # never issued, dirty stays set for a later retry.
+    assert live.read_text() == "# last good\n"
+    assert scheduler._last_config_hash == ""
+    reload_mock.assert_not_called()
+    assert scheduler._dirty is True
