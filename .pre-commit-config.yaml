@@ -115,7 +115,7 @@ repos:
       # Run fast unit tests
       - id: pytest-fast
         name: Run fast tests
-        entry: uv run pytest -m "not slow" --tb=short
+        entry: uv run --frozen pytest -m "not slow" --tb=short
         language: system
         pass_filenames: false
         always_run: true

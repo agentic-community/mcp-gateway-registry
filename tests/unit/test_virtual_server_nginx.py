@@ -180,6 +180,33 @@ class TestGenerateVirtualBackendLocations:
         assert "resolver " not in result
 
     @pytest.mark.asyncio
+    async def test_credentials_not_forwarded_to_untrusted_backend(self, mock_server_repository):
+        """The caller's credential must not be relayed to a registrant-controlled backend.
+
+        This location proxies directly to the MCP backend URL supplied by whoever
+        registered the server. Forwarding ``Authorization`` or the parent
+        request's ``Cookie`` (inherited by the Lua subrequest) would leak the
+        caller's registry-scoped token or session cookie to that untrusted
+        upstream. Both must be cleared instead.
+        """
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://api.github.com",
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        result = await service._generate_virtual_backend_locations([vs])
+
+        assert 'proxy_set_header Authorization "";' in result
+        assert "proxy_set_header Authorization $http_authorization;" not in result
+        # The Lua subrequest inherits the parent request's Cookie header, so the
+        # user's registry session cookie must also be cleared before reaching
+        # the untrusted backend.
+        assert 'proxy_set_header Cookie "";' in result
+
+    @pytest.mark.asyncio
     async def test_bare_hostname_backend_uses_deferred_resolution(
         self, mock_server_repository
     ):

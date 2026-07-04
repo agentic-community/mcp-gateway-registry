@@ -11,18 +11,50 @@ version: '3.8'
 # Note: DocumentDB is a managed AWS service and runs outside of Docker.
 
 services:
+  # MongoDB keyfile initialization: generates the shared keyfile that MongoDB
+  # requires for replica-set internal authentication when --auth is enabled.
+  # Runs once before mongodb starts; idempotent (skips if the keyfile exists).
+  mongodb-keyfile-init:
+    image: alpine:latest
+    container_name: mcp-mongodb-keyfile-init
+    volumes:
+      - mongodb-keyfile:/keyfile
+    command: >
+      sh -c "
+      if [ ! -f /keyfile/replica.key ]; then
+        echo 'Generating MongoDB keyfile...';
+        apk add --no-cache openssl;
+        openssl rand -base64 756 > /keyfile/replica.key;
+        chmod 400 /keyfile/replica.key;
+        chown 999:999 /keyfile/replica.key;
+        echo 'Keyfile generated successfully';
+      else
+        echo 'Keyfile already exists, skipping generation';
+      fi
+      "
+    restart: "no"
+
   # MongoDB Community Edition 8.2 (alternative to DocumentDB for local development)
   # Vector search is implemented in application code (see search_repository.py)
-  # Running without authentication for local development simplicity
+  # Authentication is enabled (--auth): the root user is created on first boot
+  # from DOCUMENTDB_USERNAME/DOCUMENTDB_PASSWORD, which must be set (no default).
   mongodb:
     image: mongo:8.2
     container_name: mcp-mongodb
-    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb
+    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb --auth --keyFile /keyfile/replica.key
+    environment:
+      # Root user is created only on first boot (empty data dir). Fail closed if
+      # either is unset so we never fall back to a weak default like admin/admin.
+      - MONGO_INITDB_ROOT_USERNAME=${DOCUMENTDB_USERNAME:?set DOCUMENTDB_USERNAME in .env}
+      - MONGO_INITDB_ROOT_PASSWORD=${DOCUMENTDB_PASSWORD:?set DOCUMENTDB_PASSWORD in .env}
     ports:
-      - "27017:27017"
+      # Loopback-only: host tools (mongosh, tests) reach it via localhost, but it
+      # is never exposed on other interfaces. Set HOST_BIND_IP=0.0.0.0 to override.
+      - "${HOST_BIND_IP:-127.0.0.1}:27017:27017"
     volumes:
       - mongodb-data:/data/db
       - mongodb-config:/data/configdb
+      - mongodb-keyfile:/keyfile:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -32,8 +64,11 @@ services:
       - SETGID   # Required by gosu to switch to mongodb group at startup
       - CHOWN    # Required by entrypoint to fix /data/db ownership
       - DAC_OVERRIDE  # Required by entrypoint to read /data/db before chown
+    depends_on:
+      mongodb-keyfile-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "-u", "${DOCUMENTDB_USERNAME}", "-p", "${DOCUMENTDB_PASSWORD}", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')"]
       interval: 60s
       timeout: 5s
       retries: 5
@@ -51,8 +86,10 @@ services:
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
-      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-}
-      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-}
+      # Required (no default): must match the root creds MongoDB was initialized
+      # with, so the init job can authenticate against the now-authenticated DB.
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:?set DOCUMENTDB_USERNAME in .env}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:?set DOCUMENTDB_PASSWORD in .env}
       - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
       - ENTRA_GROUP_ADMIN_ID=${ENTRA_GROUP_ADMIN_ID:-}
     volumes:
@@ -85,7 +122,10 @@ services:
       - BAO_DEV_ROOT_TOKEN_ID=${OPENBAO_TOKEN:-dev-root-token}
       - BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200
     ports:
-      - "8200:8200"
+      # Loopback-only: reaching the vault means root access to every stored egress
+      # credential, so it must never be exposed beyond the host. Override with
+      # HOST_BIND_IP=0.0.0.0 only if you understand the risk.
+      - "${HOST_BIND_IP:-127.0.0.1}:8200:8200"
     healthcheck:
       # Health endpoint reports 200 once the API is listening (dev mode is
       # always unsealed + initialized, so the default codes are fine).
@@ -137,6 +177,27 @@ services:
       - MCP_RESOURCE_DOCUMENTATION_URL=${MCP_RESOURCE_DOCUMENTATION_URL:-}
       - MCP_ADVERTISED_SCOPES=${MCP_ADVERTISED_SCOPES:-}
       - SECRET_KEY=${SECRET_KEY}
+      # Per-user egress credential vault (off by default)
+      - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
+      - SECRET_STORE_BACKEND=${SECRET_STORE_BACKEND:-openbao}
+      - EGRESS_OAUTH_CALLBACK_BASE_URL=${EGRESS_OAUTH_CALLBACK_BASE_URL:-}
+      - EGRESS_TOKEN_REFRESH_SKEW_SECONDS=${EGRESS_TOKEN_REFRESH_SKEW_SECONDS:-300}
+      - EGRESS_STATE_TTL_SECONDS=${EGRESS_STATE_TTL_SECONDS:-600}
+      - EGRESS_CONSENT_USE_ELICITATION=${EGRESS_CONSENT_USE_ELICITATION:-false}
+      - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
+      - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
+      - SECRETS_MANAGER_KMS_KEY_ID=${SECRETS_MANAGER_KMS_KEY_ID:-}
+      - SECRETS_MANAGER_PATH_PREFIX=${SECRETS_MANAGER_PATH_PREFIX:-mcp/egress}
+      # Default to the in-stack OpenBao container (dev mode). Override for an
+      # external vault.
+      - OPENBAO_ADDR=${OPENBAO_ADDR:-http://openbao:8200}
+      - OPENBAO_NAMESPACE=${OPENBAO_NAMESPACE:-}
+      - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
+      - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
+      - OPENBAO_ROLE=${OPENBAO_ROLE:-}
+      # Static token for OPENBAO_AUTH_METHOD=token; matches the dev OpenBao root
+      # token. Required for token auth (kubernetes auth is EKS-only).
+      - OPENBAO_TOKEN=${OPENBAO_TOKEN:-dev-root-token}
       - AUTH_SERVER_URL=${AUTH_SERVER_URL}
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -399,6 +460,8 @@ services:
         condition: service_healthy
       mongodb-init:
         condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
     restart: unless-stopped
 
   # Metrics Collection Service
@@ -425,8 +488,11 @@ services:
       - OTEL_OTLP_EXPORT_INTERVAL_MS=${OTEL_OTLP_EXPORT_INTERVAL_MS:-30000}
       - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE:-cumulative}
     ports:
-      - "8890:8890"
-      - "9465:9465"  # Prometheus metrics endpoint
+      # Loopback-only API port (build_and_run.sh health-checks it from the host).
+      - "${HOST_BIND_IP:-127.0.0.1}:8890:8890"
+      # 9465 (Prometheus exporter) is scraped container-to-container by Prometheus
+      # (see config/prometheus.yml job 'mcp-metrics-service' -> metrics-service:9465),
+      # so it needs no host mapping. Not published.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -458,6 +524,13 @@ services:
       - REGISTRY_ORGANIZATION_NAME=${REGISTRY_ORGANIZATION_NAME:-ACME Inc.}
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL:-http://localhost:8888}
       - SECRET_KEY=${SECRET_KEY}
+      # Egress vault: auth-server does the marker check + the vend call to the
+      # registry (it does NOT touch the secret store, so no SECRET_STORE/AWS/
+      # OPENBAO vars here).
+      - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
+      - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8080}
+      - EGRESS_CONSENT_USE_ELICITATION=${EGRESS_CONSENT_USE_ELICITATION:-false}
+      - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - GITHUB_ENABLED=${GITHUB_ENABLED:-false}
@@ -575,11 +648,14 @@ services:
       # Tool-level access control (Issue #1026)
       - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
       - MCP_PROXY_MAX_BODY_BYTES=${MCP_PROXY_MAX_BODY_BYTES:-2097152}
+      - MCP_PROXY_TIMEOUT=${MCP_PROXY_TIMEOUT:-30}
       - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
     ports:
-      - "8888:8888"
+      # Loopback-only: normal traffic reaches auth-server through the nginx front
+      # door; this direct port is for host health checks / tests only.
+      - "${HOST_BIND_IP:-127.0.0.1}:8888:8888"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -612,7 +688,9 @@ services:
       - PORT=8000
       - MCP_TRANSPORT=streamable-http
     ports:
-      - "8000:8000"
+      # Loopback-only: reached through the nginx front door in normal use; direct
+      # port is for host testing only.
+      - "${HOST_BIND_IP:-127.0.0.1}:8000:8000"
     restart: unless-stopped
 
   # MCP Gateway Server
@@ -653,7 +731,9 @@ services:
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
-      - "8003:8003"
+      # Loopback-only: reached through the nginx front door in normal use; direct
+      # port is for host testing only.
+      - "${HOST_BIND_IP:-127.0.0.1}:8003:8003"
     depends_on:
       - registry
     restart: unless-stopped
@@ -669,7 +749,9 @@ services:
     environment:
       - PORT=8002
     ports:
-      - "8002:8002"
+      # Loopback-only: reached through the nginx front door in normal use; direct
+      # port is for host testing only.
+      - "${HOST_BIND_IP:-127.0.0.1}:8002:8002"
     restart: unless-stopped
 
   # SQLite container for metrics database
@@ -706,10 +788,15 @@ services:
     volumes:
       - ./config/otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
-      - "4317:4317"   # OTLP gRPC (services push here)
-      - "4318:4318"   # OTLP HTTP
-      - "8889:8889"   # Prometheus exporter on the collector itself
-      - "13133:13133" # health_check extension
+      # Loopback-only OTLP receivers so a locally-run (non-compose) service can
+      # still push to the collector via localhost. Compose services push over the
+      # container network (otel-collector:4317) regardless of these mappings.
+      - "${HOST_BIND_IP:-127.0.0.1}:4317:4317"   # OTLP gRPC (services push here)
+      - "${HOST_BIND_IP:-127.0.0.1}:4318:4318"   # OTLP HTTP
+      # 8889 (Prometheus exporter) is scraped container-to-container (see
+      # config/prometheus.yml job 'otel-collector' -> otel-collector:8889) and
+      # 13133 (health_check) is used only by the in-container healthcheck below,
+      # so neither needs a host mapping. Not published.
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133"]
       interval: 10s
@@ -726,7 +813,8 @@ services:
   prometheus:
     image: prom/prometheus:v3.11.3
     ports:
-      - "9090:9090"
+      # Loopback-only: Prometheus UI is a local-dev convenience, not a public surface.
+      - "${HOST_BIND_IP:-127.0.0.1}:9090:9090"
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
@@ -747,7 +835,8 @@ services:
   grafana:
     image: grafana/grafana:12.3.1
     ports:
-      - "3000:3000"
+      # Loopback-only: Grafana UI is a local-dev convenience, not a public surface.
+      - "${HOST_BIND_IP:-127.0.0.1}:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -812,7 +901,9 @@ services:
       KC_LOG_LEVEL: INFO
 
     ports:
-      - "8080:8080"
+      # Loopback-only: Keycloak is reached through the nginx front door in normal
+      # use; direct admin/console access stays on the host.
+      - "${HOST_BIND_IP:-127.0.0.1}:8080:8080"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -843,9 +934,10 @@ services:
       - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
       - SERVER_PROFILE_PATH=baseline/pingfederate
     ports:
-      - "9031:9031"
-      - "9032:9032"
-      - "9999:9999"
+      # Loopback-only: PingFederate runtime + admin console stay on the host.
+      - "${HOST_BIND_IP:-127.0.0.1}:9031:9031"
+      - "${HOST_BIND_IP:-127.0.0.1}:9032:9032"
+      - "${HOST_BIND_IP:-127.0.0.1}:9999:9999"
     volumes:
       - pingfederate-data:/opt/out/instance/server/default/data
       - ./pingfederate/config/run.properties:/opt/staging/instance/bin/run.properties
@@ -865,6 +957,7 @@ volumes:
   grafana-data:
   mongodb-data:
   mongodb-config:
+  mongodb-keyfile:
   pingfederate-data:
   # Application logs and scans (managed by containers, proper permissions)
   registry-logs:

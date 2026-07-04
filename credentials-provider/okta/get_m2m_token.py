@@ -27,7 +27,7 @@ def _get_okta_domain() -> str:
     """Get Okta domain from CLI arg or environment variable.
 
     Returns:
-        Okta domain (e.g., integrator-9917255.okta.com)
+        Okta domain (e.g., YOUR_ORG.okta.com)
 
     Raises:
         ValueError: If domain not provided
@@ -83,7 +83,7 @@ def _request_m2m_token(
     """Request M2M token from Okta using client credentials.
 
     Args:
-        okta_domain: Okta domain (e.g., integrator-9917255.okta.com)
+        okta_domain: Okta domain (e.g., YOUR_ORG.okta.com)
         client_id: OAuth2 client ID
         client_secret: OAuth2 client secret
         scope: OAuth2 scopes (space-separated)
@@ -240,18 +240,18 @@ def main() -> None:
         description="Get Okta M2M token using client credentials flow",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Example usage:
+Example usage (replace the placeholders with your own Okta values):
     # Using environment variables
-    export OKTA_DOMAIN=integrator-9917255.okta.com
-    export OKTA_CLIENT_ID=0oa1100req1AzfKaY698
-    export OKTA_CLIENT_SECRET=EiZC6S2dyaWJ_qKmuToJ1KuZooVwOpGH4qF3N4Eao6YTFueAShId595ot9AyYCC6
+    export OKTA_DOMAIN=YOUR_ORG.okta.com
+    export OKTA_CLIENT_ID=YOUR_OKTA_CLIENT_ID
+    export OKTA_CLIENT_SECRET=YOUR_OKTA_CLIENT_SECRET
     uv run python -m credentials-provider.okta.get_m2m_token
 
     # Using CLI arguments
     uv run python -m credentials-provider.okta.get_m2m_token \\
-        --okta-domain integrator-9917255.okta.com \\
-        --client-id 0oa1100req1AzfKaY698 \\
-        --client-secret EiZC6S2dyaWJ_qKmuToJ1KuZooVwOpGH4qF3N4Eao6YTFueAShId595ot9AyYCC6 \\
+        --okta-domain YOUR_ORG.okta.com \\
+        --client-id YOUR_OKTA_CLIENT_ID \\
+        --client-secret YOUR_OKTA_CLIENT_SECRET \\
         --scope "openid email profile"
 """,
     )
@@ -259,7 +259,7 @@ Example usage:
     parser.add_argument(
         "--okta-domain",
         type=str,
-        help="Okta domain (e.g., integrator-9917255.okta.com). Can also use OKTA_DOMAIN env var.",
+        help="Okta domain (e.g., YOUR_ORG.okta.com). Can also use OKTA_DOMAIN env var.",
     )
 
     parser.add_argument(

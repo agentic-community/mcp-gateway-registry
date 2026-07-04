@@ -18,8 +18,8 @@ data "aws_ec2_managed_prefix_list" "cloudfront" {
 # Separate security group for CloudFront prefix list ingress
 # This avoids hitting the 60 rules per security group limit since the CloudFront
 # prefix list has ~55 reserved entries that count against the quota
-#checkov:skip=CKV2_AWS_5:Security group is attached to ALB via security_groups parameter
 resource "aws_security_group" "alb_cloudfront" {
+  #checkov:skip=CKV2_AWS_5:Security group is attached to ALB via security_groups parameter
   count       = var.cloudfront_prefix_list_name != "" ? 1 : 0
   name        = "${local.name_prefix}-alb-cloudfront"
   description = "Security group for CloudFront access to MCP Gateway ALB"
@@ -44,8 +44,8 @@ resource "aws_security_group_rule" "alb_cloudfront_ingress_http" {
   security_group_id = aws_security_group.alb_cloudfront[0].id
 }
 
-# checkov:skip=CKV_AWS_382:ALB security group requires unrestricted egress to reach ECS tasks and health checks
 resource "aws_security_group_rule" "alb_cloudfront_egress" {
+  #checkov:skip=CKV_AWS_382:ALB security group requires unrestricted egress to reach ECS tasks and health checks
   count             = var.cloudfront_prefix_list_name != "" ? 1 : 0
   description       = "Egress to all"
   type              = "egress"
@@ -57,8 +57,8 @@ resource "aws_security_group_rule" "alb_cloudfront_egress" {
 }
 
 # Main Application Load Balancer (for registry, auth, gradio)
-#checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "alb" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   source  = "terraform-aws-modules/alb/aws"
   version = "~> 9.0"
 

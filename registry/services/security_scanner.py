@@ -193,6 +193,17 @@ class SecurityScannerService:
         """
         config = self.get_scan_config()
 
+        # Fail closed on SSRF before spawning the scanner subprocess: the
+        # scanner performs its own outbound requests to server_url, so a
+        # proxy_pass_url that resolves to a private/metadata target must be
+        # rejected here even though registration already validated it (defence
+        # in depth against stored data predating validation, and a live
+        # resolve catches a host that has since been pointed at an internal
+        # address). Raises UrlValidationError -> surfaced by the caller.
+        from ..utils.url_guard import PROXY_PROFILE, validate_url
+
+        validate_url(server_url, profile=PROXY_PROFILE)
+
         # Use config values if not provided
         if analyzers is None:
             analyzers = config.analyzers

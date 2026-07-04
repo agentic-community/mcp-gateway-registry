@@ -12722,54 +12722,6 @@
         ]
       }
     },
-    "/.well-known/mcp-servers": {
-      "get": {
-        "tags": [
-          "Discovery"
-        ],
-        "summary": "Get Wellknown Mcp Servers",
-        "description": "Main endpoint handler for /.well-known/mcp-servers\nReturns JSON with all discoverable MCP servers",
-        "operationId": "get_wellknown_mcp_servers__well_known_mcp_servers_get",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "User Context"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/.well-known/registry-card": {
       "get": {
         "tags": [

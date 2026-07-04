@@ -13,6 +13,7 @@ from typing import (
 import httpx
 
 from ..auth.internal import generate_internal_token
+from ..auth.privileged_constants import PRIVILEGED_SCOPE_NAMES
 from ..core.config import settings
 from ..repositories.factory import get_scope_repository
 from .server_service import server_service
@@ -36,20 +37,10 @@ STANDARD_METHODS: list[str] = [
     "resources/templates/list",
 ]
 
-# Privileged scope/group names that grant administrative access. Writing a group
-# definition that creates or maps any of these is an admin-only operation: it can
-# elevate the privileges of whichever IdP groups are listed in group_mappings.
-# Used as a defense-in-depth guard in import_group so that even a caller that
-# reaches this layer without a route-level admin check cannot self-assign admin.
-PRIVILEGED_SCOPE_NAMES: frozenset[str] = frozenset(
-    {
-        "mcp-registry-admin",
-        "mcp-registry-operator",
-        "registry-admins",
-        "mcp-servers-unrestricted/execute",
-        "mcp-servers-unrestricted/read",
-    }
-)
+# PRIVILEGED_SCOPE_NAMES is imported from registry.auth.privileged_constants
+# (single source of truth, shared with the repository-layer guard and the
+# admin-derivation rule). Re-exported here so existing callers/tests that import
+# it from this module keep working.
 
 
 def _grants_all(granted_resources: object) -> bool:

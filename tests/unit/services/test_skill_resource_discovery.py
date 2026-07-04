@@ -207,8 +207,8 @@ class TestDiscoverSkillResources:
 
     @pytest.fixture
     def mock_async_client(self):
-        """Patch httpx.AsyncClient and yield the mock response object."""
-        with patch("registry.services.skill_service.httpx.AsyncClient") as client_cls:
+        """Patch the guarded async client and yield the mock response object."""
+        with patch("registry.services.skill_service.guarded_async_client") as client_cls:
             response = MagicMock()
             response.status_code = 200
             response.json = MagicMock()
@@ -397,7 +397,7 @@ class TestDiscoverSkillResources:
         client_instance.__aexit__ = AsyncMock(return_value=False)
 
         with patch(
-            "registry.services.skill_service.httpx.AsyncClient",
+            "registry.services.skill_service.guarded_async_client",
             return_value=client_instance,
         ):
             await _discover_skill_resources(
@@ -428,6 +428,34 @@ class TestDiscoverSkillResources:
         # (full-equality assertion -- avoids CodeQL's
         # py/incomplete-url-substring-sanitization rule, and is also stricter
         # because it would catch a regression that called the wrong endpoint).
+        # The shared credentials are only offered when the caller opted into the
+        # (admin-gated) global_credentials scheme; the default "none" scheme must
+        # NOT opt in, so allow_global_credentials is False here.
         mock_github_auth.get_auth_headers.assert_awaited_once_with(
             "https://api.github.com/repos/foo/bar/git/trees/main?recursive=1",
+            allow_global_credentials=False,
+        )
+
+    async def test_global_credentials_scheme_opts_into_shared_token(
+        self,
+        mock_github_auth,
+        mock_async_client,
+    ):
+        """auth_scheme=global_credentials is the only scheme that opts in."""
+        mock_github_auth.get_auth_headers.return_value = {"Authorization": "Bearer ghs_xxx"}
+        mock_async_client.json.return_value = _trees_payload(
+            [
+                {"type": "blob", "path": "x/SKILL.md", "size": 100},
+                {"type": "blob", "path": "x/r.py", "size": 100},
+            ]
+        )
+
+        await _discover_skill_resources(
+            "https://github.com/foo/bar/blob/main/x/SKILL.md",
+            auth_scheme="global_credentials",
+        )
+
+        mock_github_auth.get_auth_headers.assert_awaited_once_with(
+            "https://api.github.com/repos/foo/bar/git/trees/main?recursive=1",
+            allow_global_credentials=True,
         )
