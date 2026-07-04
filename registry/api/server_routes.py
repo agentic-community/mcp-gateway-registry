@@ -5781,9 +5781,10 @@ async def get_server_versions(
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
-    # Resolve the server first so a missing-access decision and a not-found
-    # decision return the same 404 to a non-admin who cannot see the server,
-    # instead of leaking existence via a 403-vs-404 oracle.
+    # Resolve the server first, then authorize — mirroring GET /servers/{path}:
+    # 404 for an unknown path, 403 for a real-but-inaccessible server. (The
+    # 403-vs-404 split is the established contract across the native server read
+    # endpoints; see FOLLOWUPS for the shared existence-oracle note.)
     server_info = await server_service.get_server_info(decoded_path)
     if not server_info:
         raise HTTPException(

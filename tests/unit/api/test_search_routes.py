@@ -1236,6 +1236,10 @@ class TestSemanticSearchBackendUrlRedaction:
         assert server.proxy_pass_url is None
         assert server.mcp_endpoint is None
         assert server.sse_endpoint is None
+        # The derived endpoint_url must NOT echo the internal mcp_endpoint
+        # override either (that is the Priority-1 leak): a non-admin only ever
+        # gets the public gateway URL, never the internal backend host.
+        assert "internal-backend" not in (server.endpoint_url or "")
 
     @pytest.mark.asyncio
     async def test_admin_backend_urls_present(
@@ -1258,6 +1262,9 @@ class TestSemanticSearchBackendUrlRedaction:
         assert server.proxy_pass_url == "http://internal-backend:8080"
         assert server.mcp_endpoint == "http://internal-backend:8080/mcp"
         assert server.sse_endpoint == "http://internal-backend:8080/sse"
+        # Admins are not redacted, so the endpoint_url still resolves to the
+        # explicit mcp_endpoint override (Priority 1).
+        assert server.endpoint_url == "http://internal-backend:8080/mcp"
 
     @pytest.mark.asyncio
     async def test_registry_only_keeps_backend_urls_for_non_admin(

@@ -58,6 +58,7 @@ def _compute_endpoint_url(
     proxy_pass_url: str | None,
     mcp_endpoint: str | None,
     base_url: str | None,
+    redact_backend_urls: bool = False,
 ) -> str | None:
     """Compute the endpoint URL for an MCP server.
 
@@ -71,10 +72,29 @@ def _compute_endpoint_url(
         proxy_pass_url: Internal backend URL
         mcp_endpoint: Custom endpoint override
         base_url: Base URL from request (e.g., https://mcpgateway.ddns.net)
+        redact_backend_urls: When True the caller must not learn an internal
+            backend address, so the raw ``mcp_endpoint`` override and
+            ``proxy_pass_url`` are never returned; only the constructed public
+            gateway URL is (or None if it cannot be built). Callers pass
+            ``should_redact_backend_urls(user_context)`` here. This is only True
+            in with-gateway mode (registry-only never redacts), so skipping the
+            override and the proxy fallback loses nothing the caller may see.
 
     Returns:
-        The computed endpoint URL, or None if not determinable
+        The computed endpoint URL, or None if not determinable.
     """
+    if redact_backend_urls:
+        # Non-admin in with-gateway mode: only the public gateway URL is
+        # allowed. The mcp_endpoint override and proxy_pass_url are internal
+        # addresses and must not leak via the derived endpoint_url. Fail closed
+        # to None if the gateway base URL is unavailable.
+        if base_url:
+            clean_path = path.rstrip("/")
+            if not clean_path.startswith("/"):
+                clean_path = f"/{clean_path}"
+            return f"{base_url}{clean_path}/mcp"
+        return None
+
     # Priority 1: Explicit mcp_endpoint override
     if mcp_endpoint:
         return mcp_endpoint
@@ -490,6 +510,11 @@ async def semantic_search(
     else:
         base_url = str(http_request.base_url).rstrip("/")
 
+    # One redaction decision for the whole response: non-admins in with-gateway
+    # mode must never receive an internal backend address, including via the
+    # derived endpoint_url (which otherwise echoes an mcp_endpoint override).
+    redact_backend = should_redact_backend_urls(user_context)
+
     filtered_servers: list[ServerSearchResult] = []
     for server in raw_results.get("servers", []):
         if not await _user_can_access_server(
@@ -535,6 +560,7 @@ async def semantic_search(
             proxy_pass_url=server_proxy_url,
             mcp_endpoint=server_mcp_endpoint,
             base_url=base_url,
+            redact_backend_urls=redact_backend,
         )
 
         # Look up ANS metadata from server info for trust verification
@@ -566,9 +592,10 @@ async def semantic_search(
 
         # Strip the raw internal backend URLs for non-admins in with-gateway
         # mode, mirroring the redaction GET /servers/{path} enforces. The
-        # computed endpoint_url (the gateway-facing URL, or the direct URL in
-        # registry-only mode) is preserved so clients can still connect.
-        if should_redact_backend_urls(user_context):
+        # endpoint_url computed above already honored redact_backend, so it is
+        # the public gateway URL here (never the mcp_endpoint override), and
+        # clients can still connect.
+        if redact_backend:
             result_proxy_url = None
             result_mcp_endpoint = None
             result_sse_endpoint = None
@@ -632,6 +659,7 @@ async def semantic_search(
                 proxy_pass_url=None,  # We don't have this info for tools
                 mcp_endpoint=None,
                 base_url=base_url,
+                redact_backend_urls=redact_backend,
             )
 
         filtered_tools.append(
@@ -762,6 +790,7 @@ async def semantic_search(
             proxy_pass_url=None,  # Virtual servers don't have proxy_pass_url
             mcp_endpoint=None,
             base_url=base_url,
+            redact_backend_urls=redact_backend,
         )
 
         metadata = vs.get("metadata", {})
