@@ -5735,11 +5735,42 @@ async def get_server_versions(
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
-    try:
-        return await server_service.get_server_versions(decoded_path)
+    # Authorization: nginx_proxied_auth only authenticates; it does not
+    # authorize. A non-admin may read versions only for a server they can
+    # access. Mirror GET /servers/{path}: 404 for an unknown path, 403 for a
+    # real-but-inaccessible server.
+    existing_server = await server_service.get_server_info(decoded_path)
+    if not existing_server:
+        raise HTTPException(status_code=404, detail="Service path not registered")
 
+    if not user_context.get("is_admin"):
+        accessible_servers = user_context.get("accessible_servers", [])
+        has_access = await server_service.user_can_access_server_path(
+            decoded_path, accessible_servers
+        )
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
+
+    try:
+        result = await server_service.get_server_versions(decoded_path)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    # Strip the internal backend URL per version for non-admins in with-gateway
+    # mode (they reach servers through the gateway, so the raw proxy_pass_url
+    # must not leak). In registry-only mode users need it to connect directly.
+    # Mirrors the proxy_pass_url stripping in GET /servers/{path}.
+    if (
+        not user_context.get("is_admin")
+        and settings.deployment_mode != DeploymentMode.REGISTRY_ONLY
+    ):
+        for version in result.get("versions", []):
+            version.pop("proxy_pass_url", None)
+
+    return result
 
 
 @router.get("/servers/{service_path:path}/connect-config")
