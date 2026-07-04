@@ -227,3 +227,36 @@ class TestCallback:
         assert "Connected github" in r.text
         assert svc.handle_callback.await_count == 1
         state_codec.reset_cipher_for_tests()
+
+    def test_callback_success_page_escapes_server_path(self, client, monkeypatch):
+        # server_path is admin-registrant-supplied; validate_server_path blocks
+        # nginx metacharacters but not '<'/'>', so the success HTML must escape it
+        # or a crafted path executes script in the connecting user's browser.
+        monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-testing-only-do-not-use")
+        from registry.egress_auth import state_codec
+        from registry.egress_auth.schemas import EgressConnection, OAuthState
+
+        state_codec.reset_cipher_for_tests()
+        evil_path = "/<svg/onload=alert(1)>"
+        blob = state_codec.encode_state(
+            OAuthState(
+                user_id="alice",
+                auth_method="oauth2",
+                provider="github",
+                server_path=evil_path,
+                nonce="n1",
+                issued_at="2026-06-19T00:00:00+00:00",
+            )
+        )
+        svc = AsyncMock()
+        svc.handle_callback = AsyncMock(
+            return_value=EgressConnection(provider="<b>github</b>", server_path=evil_path)
+        )
+        c = client(USER, server=_server(), svc=svc)
+        r = c.get("/api/oauth2/egress/callback", params={"code": "the-code", "state": blob})
+        assert r.status_code == 200
+        # The raw script-bearing markup must NOT appear; the escaped form must.
+        assert "<svg/onload=alert(1)>" not in r.text
+        assert "<b>github</b>" not in r.text
+        assert "&lt;svg/onload=alert(1)&gt;" in r.text
+        state_codec.reset_cipher_for_tests()
