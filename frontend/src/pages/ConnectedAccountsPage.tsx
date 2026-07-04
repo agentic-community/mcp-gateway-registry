@@ -18,6 +18,7 @@ import {
   type EgressConnection,
   type AvailableEgressServer,
 } from '../utils/egressAuth';
+import { isSafeUrl } from '../utils/safeUrl';
 
 /**
  * Connected Accounts: the end-user surface for the per-user egress credential
@@ -86,6 +87,13 @@ const ConnectedAccountsPage: React.FC = () => {
     setError('');
     try {
       const authorizeUrl = await initiateConsent(path);
+      // The authorize URL derives from per-server egress OAuth config, so treat
+      // it as untrusted: only open http/https, never a javascript:/data: scheme
+      // that would execute in the user's session on connect.
+      if (!isSafeUrl(authorizeUrl)) {
+        setError(`Could not start a connection for "${path}": the provider returned an unsafe authorization URL.`);
+        return;
+      }
       // Open the provider consent in a new tab; the callback stores the token.
       window.open(authorizeUrl, '_blank', 'noopener,noreferrer');
     } catch {
