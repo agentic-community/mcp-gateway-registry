@@ -11,13 +11,42 @@ version: '3.8'
 # Note: DocumentDB is a managed AWS service and runs outside of Docker.
 
 services:
+  # MongoDB keyfile initialization: generates the shared keyfile that MongoDB
+  # requires for replica-set internal authentication when --auth is enabled.
+  # Runs once before mongodb starts; idempotent (skips if the keyfile exists).
+  mongodb-keyfile-init:
+    image: alpine:latest
+    container_name: mcp-mongodb-keyfile-init
+    volumes:
+      - mongodb-keyfile:/keyfile
+    command: >
+      sh -c "
+      if [ ! -f /keyfile/replica.key ]; then
+        echo 'Generating MongoDB keyfile...';
+        apk add --no-cache openssl;
+        openssl rand -base64 756 > /keyfile/replica.key;
+        chmod 400 /keyfile/replica.key;
+        chown 999:999 /keyfile/replica.key;
+        echo 'Keyfile generated successfully';
+      else
+        echo 'Keyfile already exists, skipping generation';
+      fi
+      "
+    restart: "no"
+
   # MongoDB Community Edition 8.2 (alternative to DocumentDB for local development)
   # Vector search is implemented in application code (see search_repository.py)
-  # Running without authentication for local development simplicity
+  # Authentication is enabled (--auth): the root user is created on first boot
+  # from DOCUMENTDB_USERNAME/DOCUMENTDB_PASSWORD, which must be set (no default).
   mongodb:
     image: mongo:8.2
     container_name: mcp-mongodb
-    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb
+    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb --auth --keyFile /keyfile/replica.key
+    environment:
+      # Root user is created only on first boot (empty data dir). Fail closed if
+      # either is unset so we never fall back to a weak default like admin/admin.
+      - MONGO_INITDB_ROOT_USERNAME=${DOCUMENTDB_USERNAME:?set DOCUMENTDB_USERNAME in .env}
+      - MONGO_INITDB_ROOT_PASSWORD=${DOCUMENTDB_PASSWORD:?set DOCUMENTDB_PASSWORD in .env}
     ports:
       # Loopback-only: host tools (mongosh, tests) reach it via localhost, but it
       # is never exposed on other interfaces. Set HOST_BIND_IP=0.0.0.0 to override.
@@ -25,6 +54,7 @@ services:
     volumes:
       - mongodb-data:/data/db
       - mongodb-config:/data/configdb
+      - mongodb-keyfile:/keyfile:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -34,8 +64,11 @@ services:
       - SETGID   # Required by gosu to switch to mongodb group at startup
       - CHOWN    # Required by entrypoint to fix /data/db ownership
       - DAC_OVERRIDE  # Required by entrypoint to read /data/db before chown
+    depends_on:
+      mongodb-keyfile-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "-u", "${DOCUMENTDB_USERNAME}", "-p", "${DOCUMENTDB_PASSWORD}", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')"]
       interval: 60s
       timeout: 5s
       retries: 5
@@ -53,8 +86,10 @@ services:
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
-      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-}
-      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-}
+      # Required (no default): must match the root creds MongoDB was initialized
+      # with, so the init job can authenticate against the now-authenticated DB.
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:?set DOCUMENTDB_USERNAME in .env}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:?set DOCUMENTDB_PASSWORD in .env}
       - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
       - ENTRA_GROUP_ADMIN_ID=${ENTRA_GROUP_ADMIN_ID:-}
     volumes:
@@ -922,6 +957,7 @@ volumes:
   grafana-data:
   mongodb-data:
   mongodb-config:
+  mongodb-keyfile:
   pingfederate-data:
   # Application logs and scans (managed by containers, proper permissions)
   registry-logs:
