@@ -118,6 +118,13 @@ services:
       - AUTH_PROVIDER=${AUTH_PROVIDER:-cognito}
       - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-false}
       - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
+      # Browser-reachable Keycloak URL: the wellknown/OAuth-discovery responses
+      # must advertise a host clients can reach, not the internal keycloak:8080.
+      # Podman maps Keycloak to host 18080 (8080 is taken by the registry UI).
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-http://localhost:18080}
+      # Allow plain-HTTP resource URLs for local dev; the RFC 9728
+      # /.well-known/oauth-protected-resource endpoint 500s otherwise (enforce_https).
+      - MCP_HTTPS_REQUIRED=${MCP_HTTPS_REQUIRED:-false}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-mcp-gateway-web}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
@@ -398,6 +405,8 @@ services:
       # Podman note: host port 8080 is used by the registry UI (8080->80),
       # so Keycloak is exposed on 18080->8080 by default in this Podman compose.
       - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-http://localhost:18080}
+      # Allow plain-HTTP resource URLs for local dev (see registry service note).
+      - MCP_HTTPS_REQUIRED=${MCP_HTTPS_REQUIRED:-false}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-mcp-gateway-web}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
@@ -644,6 +653,12 @@ services:
   # Keycloak Identity Provider
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
+    # Realm setup is NOT done by --import-realm. The mcp-gateway realm, clients,
+    # groups, and users are created programmatically by keycloak/setup/init-keycloak.sh,
+    # which you run once after the stack is up (see docs/complete-setup-guide.md).
+    # keycloak/import/realm-config.json is not imported here (it is not compatible
+    # with stock --import-realm on this Keycloak version), so do NOT add
+    # --import-realm expecting it to work -- run init-keycloak.sh instead.
     command: start-dev  # Use 'start' for production with proper SSL
     environment:
       # Database configuration
@@ -761,8 +776,12 @@ services:
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
-      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-admin}
-      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
+      # The paired mongodb service in this file runs WITHOUT authentication, so
+      # these must default to empty (not admin/admin) -- init-mongodb-ce.py only
+      # builds a SCRAM auth string when a username is set, and authenticating
+      # against a no-user Mongo fails. Leave blank for the no-auth local setup.
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-}
       - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
       - ENTRA_GROUP_ADMIN_ID=${ENTRA_GROUP_ADMIN_ID:-}
     volumes:
