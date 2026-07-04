@@ -175,11 +175,16 @@ class TestImportGroupMappingGuard:
 
 
 def test_repo_privileged_names_match_service_layer():
-    """The repo's privileged-name set must stay in sync with the service's.
+    """The repo and service privileged-name sets must be the one leaf constant.
 
-    They are duplicated (repo must not import service -- layering), so a test
-    pins them together; drift would open a hole at one layer.
+    These were previously duplicated across layers and kept aligned only by
+    comments; they are now both re-exports of the single source of truth in
+    registry.auth.privileged_constants. Asserting identity (``is``) pins that
+    structural guarantee: if anyone re-introduces a local copy at either layer,
+    the ``is`` check fails even when the values happen to be equal.
     """
+    from registry.auth.privileged_constants import PRIVILEGED_SCOPE_NAMES as leaf
     from registry.services.scope_service import PRIVILEGED_SCOPE_NAMES
 
-    assert _PRIVILEGED_SCOPE_NAMES == PRIVILEGED_SCOPE_NAMES
+    assert _PRIVILEGED_SCOPE_NAMES is leaf
+    assert PRIVILEGED_SCOPE_NAMES is leaf

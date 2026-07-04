@@ -17,6 +17,7 @@ class HealthStatus(str, Enum):
     UNHEALTHY_CONNECTION_ERROR = "unhealthy: connection error"
     UNHEALTHY_ENDPOINT_CHECK_FAILED = "unhealthy: endpoint check failed"
     UNHEALTHY_MISSING_PROXY_URL = "unhealthy: missing proxy URL"
+    UNHEALTHY_URL_BLOCKED = "unhealthy: url blocked by SSRF guard"
     CHECKING = "checking"
     UNKNOWN = "unknown"
     LOCAL = "local"

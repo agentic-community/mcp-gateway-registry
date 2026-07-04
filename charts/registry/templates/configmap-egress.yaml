@@ -1,0 +1,74 @@
+{{- /*
+Per-user egress credential vault — NON-secret config.
+
+Rendered only when egressAuth.enabled. The single secret value
+(AUTH_SERVER_NGINX_MARKER_SECRET) lives in the chart-managed env secret
+(secret.yaml) / the stack shared-secret, NOT here. Wired into the registry
+container via `envFrom: configMapRef` in deployment.yaml.
+
+The registry needs the FULL set (it owns the secret store + OAuth engine).
+*/ -}}
+{{- if .Values.egressAuth.enabled }}
+{{- /*
+EGRESS_OAUTH_CALLBACK_BASE_URL is the PUBLIC base URL the browser is redirected
+back to after third-party OAuth; the registry app appends "/oauth2/egress/callback".
+It must equal the same public host the registry/auth-server are reached on, so we
+derive it from global.domain + the ingress routing mode exactly like the public
+URLs in secret.yaml ($authServerHost):
+  - path mode:      {protocol}://{domain}            (siblings share the ALB host)
+  - subdomain mode: {protocol}://mcpregistry.{domain}
+An explicit egressAuth.oauthCallbackBaseUrl wins (e.g. a custom front door). The
+app refuses to start with EGRESS_AUTH_ENABLED=true and an empty value, so this
+default keeps the out-of-the-box stack deploy from crash-looping.
+*/ -}}
+{{- $routingMode := .Values.global.ingress.routingMode | default "subdomain" }}
+{{- $domain := .Values.global.domain | default "localhost" }}
+{{- $protocol := ternary "https" "http" .Values.global.ingress.tls }}
+{{- $derivedCallbackBaseUrl := "" }}
+{{- if eq $routingMode "path" }}
+  {{- $derivedCallbackBaseUrl = printf "%s://%s" $protocol $domain }}
+{{- else }}
+  {{- $derivedCallbackBaseUrl = printf "%s://mcpregistry.%s" $protocol $domain }}
+{{- end }}
+{{- $callbackBaseUrl := .Values.egressAuth.oauthCallbackBaseUrl | default $derivedCallbackBaseUrl }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-egress-config
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+data:
+  EGRESS_AUTH_ENABLED: {{ .Values.egressAuth.enabled | toString | quote }}
+  SECRET_STORE_BACKEND: {{ .Values.egressAuth.secretStoreBackend | default "openbao" | quote }}
+  EGRESS_OAUTH_CALLBACK_BASE_URL: {{ $callbackBaseUrl | quote }}
+  EGRESS_TOKEN_REFRESH_SKEW_SECONDS: {{ .Values.egressAuth.tokenRefreshSkewSeconds | default "300" | quote }}
+  EGRESS_REFRESH_WORKER_INTERVAL_SECONDS: {{ .Values.egressAuth.refreshWorkerIntervalSeconds | default "300" | quote }}
+  EGRESS_STATE_TTL_SECONDS: {{ .Values.egressAuth.stateTtlSeconds | default "600" | quote }}
+  {{- if .Values.egressAuth.secretsManager }}
+  {{- if .Values.egressAuth.secretsManager.kmsKeyId }}
+  SECRETS_MANAGER_KMS_KEY_ID: {{ .Values.egressAuth.secretsManager.kmsKeyId | quote }}
+  {{- end }}
+  SECRETS_MANAGER_PATH_PREFIX: {{ .Values.egressAuth.secretsManager.pathPrefix | default "mcp/egress" | quote }}
+  {{- end }}
+  {{- if .Values.egressAuth.openbao }}
+  # OPENBAO_ADDR: explicit addr wins; otherwise default to the release-scoped
+  # OpenBao Service the stack deploys ("<release>-openbao.<ns>.svc"). Subcharts
+  # share the parent release name, matching the stack's openbaoServiceHost
+  # helper. If openbao.fullnameOverride is set at the stack level, set addr too.
+  {{- if .Values.egressAuth.openbao.addr }}
+  OPENBAO_ADDR: {{ .Values.egressAuth.openbao.addr | quote }}
+  {{- else }}
+  OPENBAO_ADDR: {{ printf "http://%s-openbao.%s.svc:8200" .Release.Name .Release.Namespace | quote }}
+  {{- end }}
+  {{- if .Values.egressAuth.openbao.namespace }}
+  OPENBAO_NAMESPACE: {{ .Values.egressAuth.openbao.namespace | quote }}
+  {{- end }}
+  OPENBAO_KV_MOUNT: {{ .Values.egressAuth.openbao.kvMount | default "secret" | quote }}
+  OPENBAO_AUTH_METHOD: {{ .Values.egressAuth.openbao.authMethod | default "token" | quote }}
+  {{- if .Values.egressAuth.openbao.role }}
+  OPENBAO_ROLE: {{ .Values.egressAuth.openbao.role | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}

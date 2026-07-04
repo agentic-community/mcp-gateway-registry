@@ -26,6 +26,12 @@ const baseForm: ServerEditForm = {
     envRows: [],
   },
   custom_headers: [],
+  egress_provider: '',
+  egress_client_id: '',
+  egress_client_secret: '',
+  egress_scopes: '',
+  egress_custom_authorize_url: '',
+  egress_custom_token_url: '',
 };
 
 // Harness that owns the form state so controlled-input edits are observable.
@@ -34,11 +40,13 @@ function Harness({
   onSave = jest.fn(),
   onClose = jest.fn(),
   loading = false,
+  egressEnabled = false,
 }: {
   initial?: ServerEditForm;
   onSave?: () => void;
   onClose?: () => void;
   loading?: boolean;
+  egressEnabled?: boolean;
 }) {
   const [form, setForm] = useState<ServerEditForm>(initial);
   return (
@@ -47,6 +55,7 @@ function Harness({
       form={form}
       setForm={setForm}
       loading={loading}
+      egressEnabled={egressEnabled}
       onSave={onSave}
       onClose={onClose}
     />
@@ -107,5 +116,20 @@ describe('ServerEditModal', () => {
     render(<Harness loading />);
     const save = screen.getByRole('button', { name: 'Saving...' });
     expect(save).toBeDisabled();
+  });
+
+  it('hides the egress section when the feature is disabled', () => {
+    render(<Harness egressEnabled={false} />);
+    expect(screen.queryByText('Per-User Egress Auth (OAuth)')).not.toBeInTheDocument();
+  });
+
+  it('shows the egress section for remote servers when the feature is enabled', () => {
+    render(<Harness egressEnabled />);
+    expect(screen.getByText('Per-User Egress Auth (OAuth)')).toBeInTheDocument();
+  });
+
+  it('hides the egress section for local deployments even when enabled', () => {
+    render(<Harness initial={{ ...baseForm, deployment: 'local' }} egressEnabled />);
+    expect(screen.queryByText('Per-User Egress Auth (OAuth)')).not.toBeInTheDocument();
   });
 });

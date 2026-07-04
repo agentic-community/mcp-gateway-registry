@@ -27,7 +27,9 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from pydantic import ValidationError
 
+from ...exceptions import UrlValidationError
 from ...schemas.ard_models import AICatalogManifest
+from ...utils.url_guard import SKILL_PROFILE, guarded_client
 from ..ard_net_guard import assert_fetchable
 from ..ard_search_service import ArdValidationError
 
@@ -51,8 +53,19 @@ class AiCatalogFederationClient:
         self.max_depth = max_depth
         self.polite_interval_ms = polite_interval_ms
         self.same_domain_only = same_domain_only
-        # Auth-less client: NEVER send Authorization to a third-party catalog host.
-        self.client = httpx.Client(timeout=timeout_seconds, follow_redirects=False)
+        # Auth-less, SSRF-pinned client: NEVER send Authorization to a
+        # third-party catalog host, and connect only to an IP that the guard
+        # validated inside this same request. assert_fetchable() enforces the
+        # ARD-specific https-only + same-domain policy up front; the guarded
+        # client then pins the resolved public IP at connect time so the fetch
+        # cannot re-resolve a rebound hostname to a private/metadata address
+        # between validation and connect (SKILL_PROFILE = public-only, no proxy
+        # allowlist — the strictest profile, correct for third-party catalogs).
+        self.client = guarded_client(
+            profile=SKILL_PROFILE,
+            timeout=timeout_seconds,
+            follow_redirects=False,
+        )
 
     def __del__(self):
         if hasattr(self, "client"):
@@ -89,7 +102,15 @@ class AiCatalogFederationClient:
             return
         visited.add(url)
 
-        manifest = self._fetch_one(url, root_domain)
+        # Fail closed per-URL, never per-crawl: a single poisoned entry (e.g. a
+        # URL that httpx rejects with InvalidURL, or any unexpected error) must
+        # skip that node and let the crawl continue with its siblings, so a
+        # hostile catalog cannot DoS the whole ingestion run with one bad link.
+        try:
+            manifest = self._fetch_one(url, root_domain)
+        except Exception as e:
+            logger.warning("ARD ingestion: skipping catalog URL %s after error: %s", url, e)
+            return
         if manifest is None:
             return
         out.append((manifest, url))
@@ -124,11 +145,25 @@ class AiCatalogFederationClient:
         try:
             with self.client.stream("GET", url, headers={"Accept": "application/json"}) as response:
                 response.raise_for_status()
+                # follow_redirects=False means a 3xx is returned as-is and does
+                # NOT raise_for_status() (which only raises on 4xx/5xx); refuse
+                # it explicitly so a hostile host cannot smuggle a fake catalog
+                # body inside a redirect response (the guard pins the original
+                # host, not the unfollowed Location).
+                if 300 <= response.status_code < 400:
+                    logger.warning(
+                        "ARD ingestion: catalog %s returned redirect status %d, skipping",
+                        url,
+                        response.status_code,
+                    )
+                    return None
                 declared = response.headers.get("content-length")
                 if declared and declared.isdigit() and int(declared) > _MAX_BYTES:
                     logger.warning(
                         "ARD ingestion: catalog %s Content-Length %s exceeds %d cap, skipping",
-                        url, declared, _MAX_BYTES,
+                        url,
+                        declared,
+                        _MAX_BYTES,
                     )
                     return None
                 chunks: list[bytes] = []
@@ -138,11 +173,19 @@ class AiCatalogFederationClient:
                     if total > _MAX_BYTES:
                         logger.warning(
                             "ARD ingestion: catalog %s exceeds %d byte cap, aborting",
-                            url, _MAX_BYTES,
+                            url,
+                            _MAX_BYTES,
                         )
                         return None
                     chunks.append(chunk)
                 content = b"".join(chunks)
+        except UrlValidationError as e:
+            # The pinned guarded transport re-resolves and re-validates the host
+            # at connect time (and on every redirect hop). A hostname that
+            # passed assert_fetchable() but rebinds to a private/metadata IP
+            # before the connect is blocked here — skip and log, never fatal.
+            logger.warning("ARD ingestion: refusing rebound/unsafe catalog URL %s: %s", url, e)
+            return None
         except httpx.HTTPError as e:
             logger.warning("ARD ingestion: fetch failed for %s: %s", url, e)
             return None

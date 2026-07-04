@@ -32,6 +32,7 @@ from ..audit import set_audit_action
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..core.config import settings
+from ..exceptions import UrlValidationError
 from ..repositories.factory import get_search_repository
 from ..repositories.interfaces import SearchRepositoryBase
 from ..schemas.agent_models import (
@@ -66,6 +67,7 @@ from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import flatten_metadata_to_text
 from ..utils.request_utils import get_client_ip
+from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_agent_url
 from ._etag_utils import (
     parse_if_match,
     updated_ms,
@@ -293,12 +295,17 @@ async def _fetch_remote_agent_card(
     """
     import json
 
+    # Fail-closed pre-check: reject a caller-supplied base_url that targets a
+    # private/metadata address or bad scheme before any outbound fetch. The
+    # guarded client below additionally re-validates and pins at connect time.
+    validate_agent_url(base_url)
+
     urls = _build_agent_health_urls(base_url)
     agent_card_url = urls[0]
     timeout_seconds = max(1, settings.health_check_timeout_seconds)
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with guarded_async_client(profile=PROXY_PROFILE, timeout=timeout_seconds) as client:
             response = await client.get(agent_card_url)
 
         if response.status_code != 200:
@@ -327,6 +334,12 @@ async def _fetch_remote_agent_card(
 
     except HTTPException:
         raise
+    except UrlValidationError as exc:
+        logger.warning("Agent card fetch blocked by SSRF guard for %s: %s", agent_card_url, exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent URL failed SSRF validation and cannot be fetched",
+        ) from exc
     except httpx.TimeoutException:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1239,7 +1252,9 @@ async def check_agent_health(
         start_time = datetime.now(UTC)
 
         try:
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            async with guarded_async_client(
+                profile=PROXY_PROFILE, timeout=timeout_seconds
+            ) as client:
                 response = await client.get(url)
             status_code = response.status_code
             response_time_ms = int((datetime.now(UTC) - start_time).total_seconds() * 1000)
@@ -1269,7 +1284,9 @@ async def check_agent_health(
         logger.info(f"Agent {path} GET checks failed, falling back to HEAD ping on {base_url}")
         try:
             start_time = datetime.now(UTC)
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            async with guarded_async_client(
+                profile=PROXY_PROFILE, timeout=timeout_seconds
+            ) as client:
                 response = await client.head(base_url)
             status_code = response.status_code
             response_time_ms = int((datetime.now(UTC) - start_time).total_seconds() * 1000)
@@ -1529,11 +1546,13 @@ async def get_agent_security_scan(
 
     # Authorization: scan results expose security findings for the agent, so
     # restrict to users who can see the agent (admins always can). Without this
-    # a non-admin could read scan results for a private/group agent.
-    if not user_context.get("is_admin"):
-        from ..services.visibility import user_can_access_agent
+    # a non-admin could read scan results for a private/group agent. Reuse the
+    # agent_info we already fetched via the *_from_doc helper so the visibility
+    # check does not trigger a second identical agent lookup.
+    if not user_context["is_admin"]:
+        from ..services.visibility import user_can_access_agent_from_doc
 
-        if not await user_can_access_agent(path, user_context):
+        if not user_can_access_agent_from_doc(agent_info.model_dump(), user_context):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to this agent",
@@ -1832,6 +1851,28 @@ async def pull_agent_card(
                 f"'{change.current_value}' to '{change.remote_value}' "
                 f"(requested by '{user_context['username']}')"
             )
+            # Fail closed on a remote card that tries to point the stored agent
+            # URL at an internal/metadata target. Reject in BOTH preview and
+            # apply modes so a poisoned card is surfaced during dry-run and can
+            # never be persisted. update_agent re-validates on the write path;
+            # this earlier check also covers the preview, which does not persist
+            # the URL and therefore would not otherwise validate it.
+            try:
+                validate_agent_url(str(change.remote_value))
+            except UrlValidationError as exc:
+                logger.warning(
+                    "pull-card: rejecting URL change for agent %s -> %s: %s",
+                    path,
+                    change.remote_value,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Remote agent card URL failed SSRF validation and was "
+                        "rejected (private/internal addresses are not allowed)"
+                    ),
+                ) from exc
 
     # R4: single structured log line per pull-card op so adoption/outcomes can be
     #     scraped without a dedicated metric. The audit trail also records this.
@@ -1862,6 +1903,17 @@ async def pull_agent_card(
     #    mode it is health + A2A fields in one call.
     try:
         updated_agent = await agent_service.update_agent(path, updates)
+    except UrlValidationError as e:
+        # A poisoned URL that reached the write path is a client-side rejection,
+        # not a server error: surface it as 400 and never persist it.
+        logger.warning(f"pull-card: URL rejected on write for agent {path}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Remote agent card URL failed SSRF validation and was rejected "
+                "(private/internal addresses are not allowed)"
+            ),
+        ) from e
     except Exception as e:
         # In dry-run mode a failed health write should not fail the preview.
         if dry_run or not has_changes:

@@ -347,6 +347,38 @@ class PingFederateProvider(AuthProvider):
             logger.error(f"PingFederate token validation error: {e}")
             raise ValueError(f"Token validation failed: {e}")
 
+    def validate_id_token(
+        self,
+        id_token: str,
+        expected_nonce: str | None = None,
+    ) -> dict[str, Any]:
+        """Verify a PingFederate OIDC id_token and return its verified claims.
+
+        Verifies the RS256 signature against the discovered JWKS and enforces
+        issuer (the discovery ``issuer``), audience (the gateway's client_id —
+        the id_token ``aud`` for PingFederate), and expiry before any claim is
+        trusted. When ``expected_nonce`` is supplied, the token's ``nonce``
+        claim must match it. Fails closed.
+
+        Args:
+            id_token: The raw id_token string from the token endpoint.
+            expected_nonce: The nonce bound to this login (replay protection).
+
+        Returns:
+            The verified id_token claim set.
+
+        Raises:
+            IdTokenVerificationError: If verification fails.
+        """
+        accepted_audiences = [self.client_id]
+        if self.m2m_client_id and self.m2m_client_id != self.client_id:
+            accepted_audiences.append(self.m2m_client_id)
+        if self.application_id_uri:
+            accepted_audiences.append(self.application_id_uri.rstrip("/"))
+        return self._verify_id_token_with_jwks(
+            id_token, [self.issuer], accepted_audiences, expected_nonce=expected_nonce
+        )
+
     def get_jwks(self) -> dict[str, Any]:
         """Get JSON Web Key Set from PingFederate with caching.
 

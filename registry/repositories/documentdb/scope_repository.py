@@ -7,6 +7,11 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
+from ...auth.privileged_constants import (
+    ADMIN_ACTION_PREFIXES,
+    PRIVILEGED_GRANTS,
+    PRIVILEGED_SCOPE_NAMES,
+)
 from ..interfaces import ScopeRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
@@ -24,39 +29,18 @@ def _looks_like_guid(
     return bool(_GUID_RE.match(value or ""))
 
 
-# Mutating UI actions that confer registry-wide admin when granted "all".
-# Mirrors _ADMIN_ACTION_PREFIXES / _user_is_admin in
-# registry/auth/dependencies.py -- keep the two lists in sync.
+# Admin-boundary constants are imported from registry.auth.privileged_constants
+# (the dependency-free leaf module that is the single source of truth, shared
+# with the admin-derivation rule in registry/auth/dependencies.py). Module-level
+# aliases are kept so existing references and tests that import these private
+# names from this module keep working.
 #
-# IMPORTANT: admin is conferred only by the literal "all" grant, NOT "*".
-# "*" on a mutating action grants access to every server WITHOUT admin (see
-# issue #663), so it must not be treated as admin-conferring here or this guard
-# would block a legitimate non-admin permission.
-_PRIVILEGED_ACTION_PREFIXES = (
-    "register_",
-    "modify_",
-    "toggle_",
-    "delete_",
-    "publish_",
-    "create_",
-)
-_PRIVILEGED_GRANTS = {"all"}
-
-# Privileged scope/group names that confer administrative access by membership.
-# Mapping a group to any of these (or naming a scope one of these) elevates
-# whoever holds it -- this is the original /api/servers/groups/import privesc
-# vector. Kept in sync with PRIVILEGED_SCOPE_NAMES in
-# registry/services/scope_service.py (duplicated rather than imported to avoid a
-# repository -> service layering dependency; both must move together).
-_PRIVILEGED_SCOPE_NAMES = frozenset(
-    {
-        "mcp-registry-admin",
-        "mcp-registry-operator",
-        "registry-admins",
-        "mcp-servers-unrestricted/execute",
-        "mcp-servers-unrestricted/read",
-    }
-)
+# IMPORTANT: admin is conferred only by the literal "all" grant, NOT "*". "*" on
+# a mutating action grants access to every server WITHOUT admin (see issue
+# #663), which is why PRIVILEGED_GRANTS is {"all"} and not {"all", "*"}.
+_PRIVILEGED_ACTION_PREFIXES = ADMIN_ACTION_PREFIXES
+_PRIVILEGED_GRANTS = PRIVILEGED_GRANTS
+_PRIVILEGED_SCOPE_NAMES = PRIVILEGED_SCOPE_NAMES
 
 
 def _grants_admin(
