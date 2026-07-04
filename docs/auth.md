@@ -183,7 +183,7 @@ sequenceDiagram
     participant IdP as Identity Provider
     participant API as Registry API
 
-    Client->>NGINX: 1. API Request<br/>Authorization: Bearer <token>
+    Client->>NGINX: 1. API Request<br/>Authorization: Bearer [token]
     NGINX->>Auth: 2. auth_request /validate
 
     alt Self-Signed Token (iss: mcp-auth-server)
