@@ -1,0 +1,24 @@
+{
+  "server_name": "Xquik MCP Server",
+  "description": "Connect agents to Xquik for X data workflows through the hosted MCP endpoint.",
+  "path": "/xquik",
+  "proxy_pass_url": "https://xquik.com/mcp",
+  "auth_scheme": "bearer",
+  "supported_transports": ["streamable-http"],
+  "headers": [
+    {
+      "Authorization": "Bearer $XQUIK_API_KEY"
+    }
+  ],
+  "tags": ["x", "twitter", "social-media", "mcp", "data"],
+  "status": "active",
+  "provider_organization": "Xquik",
+  "provider_url": "https://docs.xquik.com",
+  "visibility": "public",
+  "license": "MIT",
+  "metadata": {
+    "category": "social-data",
+    "mcp_compatible": "1.0",
+    "requires_api_key": true
+  }
+}
