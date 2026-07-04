@@ -1,30 +1,15 @@
 # How do I migrate an existing local MongoDB to authenticated mode?
 
-> **This applies to LOCAL DEVELOPMENT (Docker Compose) ONLY.**
->
-> It is relevant only if you previously ran the default `docker-compose.yml`
-> with **MongoDB CE and no authentication** and are now pulling a version where
-> the default MongoDB requires authentication.
+> **This applies to LOCAL DEVELOPMENT (Docker Compose) ONLY.** It is relevant only if you previously ran the default `docker-compose.yml` with **MongoDB CE and no authentication** and are now pulling a version where the default MongoDB requires authentication.
 >
 > **You do NOT need this if any of the following are true:**
-> - You deploy on **AWS ECS / Terraform** or **EKS / Helm** — those use Amazon
->   DocumentDB (or an external MongoDB), which is already authenticated and
->   unaffected by this change.
-> - You used the **`docker-compose.prebuilt.yml`** variant — its MongoDB was
->   already authenticated, so your data volume already has the admin user.
-> - This is a **fresh install** — MongoDB creates the admin user on first boot
->   from `DOCUMENTDB_USERNAME` / `DOCUMENTDB_PASSWORD`, so there is nothing to
->   migrate.
+> - You deploy on **AWS ECS / Terraform** or **EKS / Helm** — those use Amazon DocumentDB (or an external MongoDB), which is already authenticated and unaffected by this change.
+> - You used the **`docker-compose.prebuilt.yml`** variant — its MongoDB was already authenticated, so your data volume already has the admin user.
+> - This is a **fresh install** — MongoDB creates the admin user on first boot from `DOCUMENTDB_USERNAME` / `DOCUMENTDB_PASSWORD`, so there is nothing to migrate.
 
 ## Why this is needed
 
-The default local `docker-compose.yml` now starts MongoDB with `--auth` and
-creates a root user on first boot from `DOCUMENTDB_USERNAME` /
-`DOCUMENTDB_PASSWORD`. MongoDB only creates that user when the **data directory
-is empty** (first boot). If you already have a `mongodb-data` volume that was
-created **without** authentication, turning on `--auth` leaves you in a state
-where authentication is required but **no user exists**, so every connection is
-rejected.
+The default local `docker-compose.yml` now starts MongoDB with `--auth` and creates a root user on first boot from `DOCUMENTDB_USERNAME` / `DOCUMENTDB_PASSWORD`. MongoDB only creates that user when the **data directory is empty** (first boot). If you already have a `mongodb-data` volume that was created **without** authentication, turning on `--auth` leaves you in a state where authentication is required but **no user exists**, so every connection is rejected.
 
 You have two options. Pick based on whether your local data is worth keeping.
 
@@ -32,9 +17,7 @@ You have two options. Pick based on whether your local data is worth keeping.
 
 ## Option A: Recreate the volume (simplest — discards local data)
 
-For most local-dev setups the MongoDB data is disposable (servers/agents are
-re-registered and scopes are re-seeded by `mongodb-init`). Drop and recreate the
-volume, then let the fresh-boot path create the user.
+For most local-dev setups the MongoDB data is disposable (servers/agents are re-registered and scopes are re-seeded by `mongodb-init`). Drop and recreate the volume, then let the fresh-boot path create the user.
 
 ```bash
 cd <your-clone>/mcp-gateway-registry
@@ -78,8 +61,7 @@ docker exec mcp-mongodb mongosh --quiet \
 
 ## Option B: Keep your data (create the admin user in place)
 
-If you want to preserve the existing local database, create the admin user on
-the old no-auth volume **before** enabling `--auth`, then switch auth on.
+If you want to preserve the existing local database, create the admin user on the old no-auth volume **before** enabling `--auth`, then switch auth on.
 
 ```bash
 cd <your-clone>/mcp-gateway-registry
@@ -111,9 +93,7 @@ docker rm -f mongo-migrate
 ./build_and_run.sh
 ```
 
-> **Note on the keyfile:** the authenticated stack also uses a replica-set
-> keyfile, generated automatically by the `mongodb-keyfile-init` service into
-> the `mongodb-keyfile` volume on startup. You do not need to create it by hand.
+> **Note on the keyfile:** the authenticated stack also uses a replica-set keyfile, generated automatically by the `mongodb-keyfile-init` service into the `mongodb-keyfile` volume on startup. You do not need to create it by hand.
 
 Verify the same way as Option A.
 
@@ -121,13 +101,6 @@ Verify the same way as Option A.
 
 ## Troubleshooting
 
-- **`Authentication failed` from `mongodb-init` or the registry.** The password
-  in `.env` does not match the user stored in the volume. Either fix `.env` to
-  match, or use Option A to start clean.
-- **`docker compose up` errors with `required variable DOCUMENTDB_PASSWORD is
-  missing a value`.** That is the intended fail-closed behavior — set
-  `DOCUMENTDB_PASSWORD` in `.env` (or run `build_and_run.sh`, which generates
-  one).
-- **`node is not in primary or recovering state`.** The replica set needs to
-  reinitialize after the migration; restart the `mongodb` container and wait for
-  the healthcheck to pass.
+- **`Authentication failed` from `mongodb-init` or the registry.** The password in `.env` does not match the user stored in the volume. Either fix `.env` to match, or use Option A to start clean.
+- **`docker compose up` errors with `required variable DOCUMENTDB_PASSWORD is missing a value`.** That is the intended fail-closed behavior — set `DOCUMENTDB_PASSWORD` in `.env` (or run `build_and_run.sh`, which generates one).
+- **`node is not in primary or recovering state`.** The replica set needs to reinitialize after the migration; restart the `mongodb` container and wait for the healthcheck to pass.
