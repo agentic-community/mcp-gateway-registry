@@ -950,8 +950,8 @@ docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh get realm
 
 Fix by accessing Keycloak via `http://localhost:8080` (loopback), or by putting
 it behind the nginx/TLS front door for external access. Do NOT set
-`sslRequired=NONE`: that disables TLS enforcement for external requests and is
-the weakness removed by the SA-8 security fix.
+`sslRequired=NONE`: that disables TLS enforcement for external requests too,
+allowing admin login and OIDC/token traffic over plaintext HTTP.
 
 #### Services Won't Start
 ```bash
