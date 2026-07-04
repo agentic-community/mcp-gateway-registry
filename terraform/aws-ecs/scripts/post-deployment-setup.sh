@@ -27,11 +27,8 @@
 #   AWS_REGION                    AWS region (default: us-east-1)
 #   KEYCLOAK_ADMIN_PASSWORD       Keycloak admin password (or loaded from SSM)
 #   INITIAL_ADMIN_PASSWORD        Password for admin user in mcp-gateway realm
-#
-# Optional Environment Variables:
-#   INITIAL_USER_PASSWORD         Password for testuser (default: testpass)
-#   LOB1_USER_PASSWORD            Password for lob1-user (default: lob1pass)
-#   LOB2_USER_PASSWORD            Password for lob2-user (default: lob2pass)
+#   LOB1_USER_PASSWORD            Password for lob1-user (required, no default)
+#   LOB2_USER_PASSWORD            Password for lob2-user (required, no default)
 #
 ################################################################################
 
@@ -485,6 +482,17 @@ _initialize_keycloak() {
         log_error "INITIAL_ADMIN_PASSWORD could not be loaded from Secrets Manager."
         log_error "Either set it manually or ensure the secret exists:"
         log_error "  export INITIAL_ADMIN_PASSWORD='YourSecurePassword123'"
+        STEPS_FAILED=$((STEPS_FAILED + 1))
+        return 1
+    fi
+
+    # SA-9: init-keycloak.sh now requires explicit LOB user passwords (no weak
+    # defaults). Fail early here with a clear message rather than mid-run.
+    if [[ -z "${LOB1_USER_PASSWORD:-}" || -z "${LOB2_USER_PASSWORD:-}" ]]; then
+        log_error "LOB1_USER_PASSWORD and LOB2_USER_PASSWORD are required (no default)."
+        log_error "Export both before running post-deployment setup, e.g.:"
+        log_error "  export LOB1_USER_PASSWORD='YourSecurePassword1'"
+        log_error "  export LOB2_USER_PASSWORD='YourSecurePassword2'"
         STEPS_FAILED=$((STEPS_FAILED + 1))
         return 1
     fi

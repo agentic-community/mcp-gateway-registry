@@ -120,6 +120,7 @@ module "mcp_gateway" {
   # Session cookie security configuration
   session_cookie_secure = var.session_cookie_secure
   session_cookie_domain = var.session_cookie_domain
+  cors_allowed_origins  = var.cors_allowed_origins
   bind_host             = var.bind_host
 
   # DocumentDB configuration
@@ -283,6 +284,7 @@ module "mcp_gateway" {
   # Tool-level access control (issue #1026)
   mcp_tools_list_filter_enabled = var.mcp_tools_list_filter_enabled
   mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
+  mcp_proxy_timeout             = var.mcp_proxy_timeout
   tool_filter_audit_log_level   = var.tool_filter_audit_log_level
 
   internal_token_ttl_seconds    = var.internal_token_ttl_seconds
@@ -354,6 +356,18 @@ module "mcp_gateway" {
   registry_extra_env    = var.registry_extra_env
   auth_server_extra_env = var.auth_server_extra_env
   mcpgw_extra_env       = var.mcpgw_extra_env
+
+  # Per-user egress credential vault (third-party OBO). secrets-manager backend
+  # on ECS; IAM grants are added in the module when enabled.
+  egress_auth_enabled                = var.egress_auth_enabled
+  egress_secret_store_backend        = var.egress_secret_store_backend
+  egress_oauth_callback_base_url     = var.egress_oauth_callback_base_url
+  egress_token_refresh_skew_seconds  = var.egress_token_refresh_skew_seconds
+  egress_state_ttl_seconds           = var.egress_state_ttl_seconds
+  egress_registry_internal_url       = var.egress_registry_internal_url
+  egress_nginx_marker_secret         = var.egress_nginx_marker_secret
+  egress_secrets_manager_kms_key_id  = var.egress_secrets_manager_kms_key_id
+  egress_secrets_manager_path_prefix = var.egress_secrets_manager_path_prefix
 
   # Wait for S3 bucket policy to propagate (30s delay)
   # This prevents "Access Denied" errors when ALB tests write permissions

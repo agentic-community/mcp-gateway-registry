@@ -15,6 +15,7 @@ resource "aws_iam_policy" "ecs_secrets_access" {
         Resource = concat(
           [
             aws_secretsmanager_secret.secret_key.arn,
+            aws_secretsmanager_secret.nginx_marker_secret.arn,
             aws_secretsmanager_secret.keycloak_client_secret.arn,
             aws_secretsmanager_secret.keycloak_m2m_client_secret.arn,
             aws_secretsmanager_secret.embeddings_api_key.arn,
@@ -55,6 +56,52 @@ resource "aws_iam_policy" "ecs_secrets_access" {
         ]
       }
     ]
+  })
+
+  tags = local.common_tags
+}
+
+# Per-user egress credential vault: the registry task creates/reads/updates/
+# deletes per-user secrets at RUNTIME under the configured path prefix (these
+# are not pre-provisioned ARNs), so it needs a broader verb set scoped to the
+# prefix, plus KMS for the CMK encrypting them. Only created when the egress
+# vault is enabled with the secrets-manager backend.
+resource "aws_iam_policy" "ecs_egress_vault_access" {
+  count       = var.egress_auth_enabled && var.egress_secret_store_backend == "secrets-manager" ? 1 : 0
+  name_prefix = "${local.name_prefix}-egress-vault-"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      [
+        {
+          Effect = "Allow"
+          Action = [
+            "secretsmanager:CreateSecret",
+            "secretsmanager:GetSecretValue",
+            "secretsmanager:PutSecretValue",
+            "secretsmanager:DeleteSecret",
+            "secretsmanager:DescribeSecret",
+            "secretsmanager:ListSecretVersionIds"
+          ]
+          # Scope to the egress path prefix only. Secrets Manager ARNs append a
+          # random 6-char suffix, so the wildcard covers "<prefix>/*-??????".
+          Resource = "arn:aws:secretsmanager:*:*:secret:${var.egress_secrets_manager_path_prefix}/*"
+        }
+      ],
+      # KMS only when a customer-managed CMK is configured; the AWS-managed key
+      # needs no explicit grant.
+      var.egress_secrets_manager_kms_key_id != "" ? [
+        {
+          Effect = "Allow"
+          Action = [
+            "kms:Decrypt",
+            "kms:GenerateDataKey"
+          ]
+          Resource = [var.egress_secrets_manager_kms_key_id]
+        }
+      ] : []
+    )
   })
 
   tags = local.common_tags

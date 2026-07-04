@@ -10,14 +10,20 @@ from registry.core.nginx_service import NginxConfigService
 
 @pytest.fixture(autouse=True)
 def mock_atomic_write():
-    """Stub _atomic_write_text so tests don't touch the real config path (#1044).
+    """Stub the config write + validate path so tests don't touch the real
+    config path (#1044) and don't shell out to ``nginx -t``.
 
-    Tests can declare this fixture as a parameter to inspect what was
-    written: each call is _atomic_write_text(path, content), so
-    mock_atomic_write.call_args_list[i][0][1] is the content string.
+    ``_write_and_validate_config`` is stubbed to delegate to the (mocked)
+    ``_atomic_write_text`` so tests that inspect what was written can declare
+    this fixture as a parameter: each recorded call is (path, content), so
+    ``mock_atomic_write.call_args_list[i][0][1]`` is the content string.
     """
     with patch("registry.core.nginx_service._atomic_write_text") as m:
-        yield m
+        with patch(
+            "registry.core.nginx_service._write_and_validate_config",
+            side_effect=lambda path, content: m(path, content),
+        ):
+            yield m
 
 
 @pytest.fixture

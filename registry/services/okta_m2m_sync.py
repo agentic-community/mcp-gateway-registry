@@ -43,7 +43,7 @@ class OktaM2MSync:
 
         Args:
             db: MongoDB database instance
-            okta_domain: Okta org domain (e.g., integrator-9917255.okta.com)
+            okta_domain: Okta org domain (e.g., YOUR_ORG.okta.com)
             okta_api_token: Okta API token for Admin API access
         """
         self.db = db

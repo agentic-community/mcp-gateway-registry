@@ -440,11 +440,15 @@ Log: `{ 8, "Keycloak Startup", DONE/FAILED, "Ready in Xs / timed out" }`
 
 ---
 
-### Phase 9: Fix macOS SSL Requirement
+### Phase 9: Verify Keycloak SSL Posture
 
-**Announce:** "Disabling Keycloak HTTPS requirement for local macOS development..."
+**Announce:** "Verifying Keycloak's SSL requirement (should be 'external', reachable over loopback)..."
 
-On macOS, Docker's VM causes Keycloak to enforce HTTPS on all connections. This must be disabled for local development.
+The realms ship with `sslRequired: external`, which requires TLS for external
+requests but allows plaintext HTTP from loopback (localhost). The setup commands
+talk to Keycloak over `http://localhost:8080`, so no change is needed. Do NOT set
+`sslRequired=NONE` — that disables TLS enforcement for external requests too,
+allowing admin login and OIDC/token traffic over plaintext HTTP.
 
 Detect the Keycloak container name:
 ```bash
@@ -453,23 +457,13 @@ echo "Keycloak container: ${KEYCLOAK_CONTAINER}"
 [ -z "$KEYCLOAK_CONTAINER" ] && echo "ERROR: No Keycloak container running" && docker ps && exit 1
 ```
 
-Disable SSL on master realm:
-```bash
-docker exec ${KEYCLOAK_CONTAINER} /opt/keycloak/bin/kcadm.sh config credentials \
-    --server http://localhost:8080 --realm master \
-    --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
-
-docker exec ${KEYCLOAK_CONTAINER} /opt/keycloak/bin/kcadm.sh update realms/master -s sslRequired=NONE
-echo "SSL disabled for master realm, exit code: $?"
-```
-
-Verify:
+Confirm the master realm is reachable over loopback HTTP (external allows this):
 ```bash
 HTTP=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/admin/")
 echo "Admin endpoint: HTTP ${HTTP} (302 = success)"
 ```
 
-Log: `{ 9, "Keycloak SSL Fix (master realm)", DONE/FAILED, "HTTP ${HTTP}" }`
+Log: `{ 9, "Keycloak SSL Posture (external, loopback OK)", DONE/FAILED, "HTTP ${HTTP}" }`
 
 ---
 
@@ -488,18 +482,8 @@ export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}"
 echo "Init exit code: $?"
 ```
 
-After initialization, disable SSL on the newly created `mcp-gateway` realm:
-
-```bash
-KEYCLOAK_CONTAINER=$(docker ps --format "{{.Names}}" | grep keycloak | grep -v db | head -1)
-
-docker exec ${KEYCLOAK_CONTAINER} /opt/keycloak/bin/kcadm.sh config credentials \
-    --server http://localhost:8080 --realm master \
-    --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
-
-docker exec ${KEYCLOAK_CONTAINER} /opt/keycloak/bin/kcadm.sh update realms/mcp-gateway -s sslRequired=NONE
-echo "SSL disabled for mcp-gateway realm, exit code: $?"
-```
+The newly created `mcp-gateway` realm ships with `sslRequired: external`, which
+works over loopback HTTP — no SSL change is needed. Do NOT set `sslRequired=NONE`.
 
 Verify both realms:
 ```bash
@@ -508,7 +492,7 @@ curl -s http://localhost:8080/realms/mcp-gateway | python3 -c "import sys,json; 
 ```
 
 **Common failures and fixes:**
-- If the script fails with an SSL error: re-run Phase 9 before retrying
+- If the script fails with an "HTTPS required" error: you are reaching Keycloak over a non-loopback address. Use `http://localhost:8080`. Do NOT lower `sslRequired` to `none`.
 - If Keycloak is not responding: wait 30 seconds and retry — it may still be initializing
 - If admin credentials are rejected: verify `KEYCLOAK_ADMIN_PASSWORD` matches what was set in Phase 3
 
@@ -773,7 +757,7 @@ Step Summary:
 |  6    | Embeddings Model Download                  | DONE     | ~90MB downloaded            |
 |  7    | Directory Creation                         | DONE     | ~/mcp-gateway/...           |
 |  8    | Keycloak Startup                           | DONE     | ready in Xs                 |
-|  9    | Keycloak SSL Fix (master)                  | DONE     | sslRequired=NONE            |
+|  9    | Keycloak SSL Posture (external)            | DONE     | loopback HTTP reachable     |
 | 10    | Keycloak Init (realm + clients)            | DONE     | mcp-gateway realm           |
 | 11    | Client Credentials Retrieved               | DONE     | .oauth-tokens/ updated      |
 | 12    | Test Agents Created                        | DONE     | test-agent, ai-assistant    |

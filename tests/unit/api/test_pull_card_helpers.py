@@ -173,20 +173,29 @@ def test_641_a2a_and_registrant_fields_disjoint():
 class TestFetchRemoteAgentCard:
     async def test_651_valid_object(self):
         body = json.dumps({"name": "a"}).encode()
-        with patch.object(httpx, "AsyncClient", _mock_async_client(_http_response(200, body))):
+        with patch(
+            "registry.api.agent_routes.guarded_async_client",
+            _mock_async_client(_http_response(200, body)),
+        ):
             card, url = await _fetch_remote_agent_card("http://h:9000/a")
         assert card == {"name": "a"}
         assert url.endswith("/.well-known/agent-card.json")
 
     async def test_652_json_array_rejected(self):
-        with patch.object(httpx, "AsyncClient", _mock_async_client(_http_response(200, b"[]"))):
+        with patch(
+            "registry.api.agent_routes.guarded_async_client",
+            _mock_async_client(_http_response(200, b"[]")),
+        ):
             with pytest.raises(HTTPException) as e:
                 await _fetch_remote_agent_card("http://h:9000/a")
         assert e.value.status_code == 502
         assert "not a JSON object" in str(e.value.detail)
 
     async def test_653_non_200(self):
-        with patch.object(httpx, "AsyncClient", _mock_async_client(_http_response(404, b""))):
+        with patch(
+            "registry.api.agent_routes.guarded_async_client",
+            _mock_async_client(_http_response(404, b"")),
+        ):
             with pytest.raises(HTTPException) as e:
                 await _fetch_remote_agent_card("http://h:9000/a")
         assert e.value.status_code == 502
@@ -194,7 +203,7 @@ class TestFetchRemoteAgentCard:
 
     async def test_654_timeout(self):
         client = _mock_async_client(exc=httpx.TimeoutException("t"))
-        with patch.object(httpx, "AsyncClient", client):
+        with patch("registry.api.agent_routes.guarded_async_client", client):
             with pytest.raises(HTTPException) as e:
                 await _fetch_remote_agent_card("http://h:9000/a")
         assert e.value.status_code == 502
@@ -202,14 +211,17 @@ class TestFetchRemoteAgentCard:
 
     async def test_655_connect_error(self):
         client = _mock_async_client(exc=httpx.ConnectError("c"))
-        with patch.object(httpx, "AsyncClient", client):
+        with patch("registry.api.agent_routes.guarded_async_client", client):
             with pytest.raises(HTTPException) as e:
                 await _fetch_remote_agent_card("http://h:9000/a")
         assert e.value.status_code == 502
         assert "Failed to fetch" in str(e.value.detail)
 
     async def test_656_invalid_json(self):
-        with patch.object(httpx, "AsyncClient", _mock_async_client(_http_response(200, b"{bad"))):
+        with patch(
+            "registry.api.agent_routes.guarded_async_client",
+            _mock_async_client(_http_response(200, b"{bad")),
+        ):
             with pytest.raises(HTTPException) as e:
                 await _fetch_remote_agent_card("http://h:9000/a")
         assert e.value.status_code == 502
@@ -218,7 +230,10 @@ class TestFetchRemoteAgentCard:
     async def test_657_exceeds_size_cap(self):
         # S1: a body over 1 MiB is rejected before json.loads runs.
         oversized = b'{"name":"' + b"a" * 1_048_600 + b'"}'
-        with patch.object(httpx, "AsyncClient", _mock_async_client(_http_response(200, oversized))):
+        with patch(
+            "registry.api.agent_routes.guarded_async_client",
+            _mock_async_client(_http_response(200, oversized)),
+        ):
             with pytest.raises(HTTPException) as e:
                 await _fetch_remote_agent_card("http://h:9000/a")
         assert e.value.status_code == 502

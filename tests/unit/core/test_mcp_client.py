@@ -836,3 +836,88 @@ async def test_full_tool_discovery_flow_sse(mock_tools_response):
 
                 assert result is not None
                 assert len(result) == 1
+
+
+# =============================================================================
+# TEST: SSRF guard on MCP SDK connection paths (credentials never sent to
+# private/metadata targets; SDK transports cannot be IP-pinned so the URL is
+# re-validated at fetch time before any connection or credential build).
+# =============================================================================
+
+
+class TestMcpClientSsrfGuard:
+    """The MCP SDK connection paths fail closed on private/metadata targets."""
+
+    @pytest.mark.asyncio
+    async def test_streamable_http_blocks_private_ip_before_headers(self):
+        """A private-IP target is refused before credentials are built/sent."""
+        from registry.core.mcp_client import _get_tools_streamable_http
+
+        server_info = {"supported_transports": ["streamable-http"], "headers": []}
+
+        # streamablehttp_client and header build must NOT be reached.
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as mock_headers,
+            patch("registry.core.mcp_client.streamablehttp_client") as mock_client,
+            patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve,
+        ):
+            mock_resolve.return_value = [(None, None, None, None, ("10.0.0.5", 443))]
+
+            result = await _get_tools_streamable_http("https://evil.example/mcp", server_info)
+
+            assert result is None
+            mock_headers.assert_not_called()
+            mock_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_streamable_http_blocks_metadata_ip_literal(self):
+        """The cloud metadata IP literal is refused with no connection."""
+        from registry.core.mcp_client import _get_tools_streamable_http
+
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as mock_headers,
+            patch("registry.core.mcp_client.streamablehttp_client") as mock_client,
+        ):
+            result = await _get_tools_streamable_http(
+                "http://169.254.169.254/latest/meta-data/", {"headers": []}
+            )
+
+            assert result is None
+            mock_headers.assert_not_called()
+            mock_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sse_blocks_private_ip_before_headers(self):
+        """SSE path refuses a private-IP target before building credentials."""
+        from registry.core.mcp_client import _get_tools_sse
+
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as mock_headers,
+            patch("registry.core.mcp_client.sse_client") as mock_client,
+            patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve,
+        ):
+            mock_resolve.return_value = [(None, None, None, None, ("192.168.1.10", 443))]
+
+            result = await _get_tools_sse("https://evil.example/sse", {"headers": []})
+
+            assert result is None
+            mock_headers.assert_not_called()
+            mock_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connection_result_blocks_private_ip(self):
+        """get_mcp_connection_result refuses a private-IP target."""
+        from registry.core.mcp_client import get_mcp_connection_result
+
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as mock_headers,
+            patch("registry.core.mcp_client.streamablehttp_client") as mock_client,
+            patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve,
+        ):
+            mock_resolve.return_value = [(None, None, None, None, ("10.1.2.3", 443))]
+
+            result = await get_mcp_connection_result("https://evil.example", {"headers": []})
+
+            assert result is None
+            mock_headers.assert_not_called()
+            mock_client.assert_not_called()

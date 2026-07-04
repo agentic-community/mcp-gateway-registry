@@ -226,10 +226,11 @@ docker-compose ps keycloak
 # Configure Keycloak admin CLI (use your actual admin password)
 docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
 
-# Disable SSL requirement for master realm
-docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh update realms/master -s sslRequired=NONE
+# Note: the realms ship with sslRequired=external, which allows plaintext HTTP
+# from loopback (localhost) while still requiring TLS for external requests.
+# No SSL change is needed. Do NOT set sslRequired=NONE.
 
-# Verify the fix worked
+# Verify admin API is reachable over loopback HTTP
 curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/admin/"
 # Should return: 302 (redirect to login - this is correct)
 ```
@@ -281,17 +282,15 @@ chmod +x keycloak/setup/get-all-client-credentials.sh
 # Files created in: .oauth-tokens/
 ```
 
-### Fix SSL Requirement for mcp-gateway Realm
-**Important**: Now that the mcp-gateway realm is created, we need to disable SSL for it as well:
+### SSL Requirement for the mcp-gateway Realm (no action needed)
+
+**Note**: The mcp-gateway realm is created with `sslRequired: external`, which
+requires TLS for external requests but allows plaintext HTTP from loopback. No
+SSL change is needed. Do NOT set `sslRequired=NONE` (it disables TLS enforcement
+for external requests too).
 
 ```bash
-# Configure Keycloak admin CLI (if session expired)
-docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
-
-# Disable SSL requirement for the mcp-gateway realm
-docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh update realms/mcp-gateway -s sslRequired=NONE
-
-# Verify both realms are accessible
+# Verify both realms are accessible over loopback HTTP
 curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/admin/"
 # Should return: 302
 
@@ -650,13 +649,9 @@ podman compose logs -f keycloak
 **3. Configure Keycloak (same as Section 5-6)**
 
 ```bash
-# Disable SSL requirement
-podman exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh config credentials \
-  --server http://localhost:8080 --realm master \
-  --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
-
-podman exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh \
-  update realms/master -s sslRequired=NONE
+# Note: the realms ship with sslRequired=external, which allows plaintext HTTP
+# from loopback while requiring TLS for external requests. No SSL change is
+# needed. Do NOT set sslRequired=NONE.
 
 # Run Keycloak setup scripts
 cd keycloak/setup
@@ -942,17 +937,21 @@ chmod +x build_and_run.sh
 ```
 
 #### Keycloak "HTTPS Required" Error
+
+The realms use `sslRequired: external`, which permits plaintext HTTP only from
+loopback. If you hit "HTTPS Required", you are almost certainly reaching Keycloak
+over a non-loopback address (a LAN IP or hostname) rather than `localhost`.
+
 ```bash
-# This was fixed in Section 4, but if it persists:
-
-# Re-run SSL disable commands (use your actual admin password)
+# Confirm the realm's current setting (should be "external")
 docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
-
-docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh update realms/master -s sslRequired=NONE
-
-# Also disable for the mcp-gateway realm after it's created
-docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh update realms/mcp-gateway -s sslRequired=NONE
+docker exec mcp-gateway-registry-keycloak-1 /opt/keycloak/bin/kcadm.sh get realms/master --fields sslRequired
 ```
+
+Fix by accessing Keycloak via `http://localhost:8080` (loopback), or by putting
+it behind the nginx/TLS front door for external access. Do NOT set
+`sslRequired=NONE`: that disables TLS enforcement for external requests too,
+allowing admin login and OIDC/token traffic over plaintext HTTP.
 
 #### Services Won't Start
 ```bash

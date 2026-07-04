@@ -94,8 +94,12 @@ class StoreSessionRequest(BaseModel):
         description="Client-facing session ID",
     )
     user_id: str = Field(
-        default="anonymous",
-        description="User identity from auth context",
+        ...,
+        description=(
+            "User identity from auth context (required). A session must have a "
+            "concrete owner; defaulting this would silently store a wrong-owner "
+            "document if a caller omitted it."
+        ),
     )
     virtual_server_path: str = Field(
         default="",
@@ -107,8 +111,11 @@ class CreateClientSessionRequest(BaseModel):
     """Request body for creating a client session via internal API."""
 
     user_id: str = Field(
-        default="anonymous",
-        description="User identity from auth context",
+        ...,
+        description=(
+            "User identity from auth context (required). Refuse to mint a "
+            "session with no concrete owner rather than defaulting it."
+        ),
     )
     virtual_server_path: str = Field(
         default="",
