@@ -50,12 +50,16 @@ def _translate_iam_error(exc: Exception) -> HTTPException:
     Returns:
         HTTPException with appropriate status code
     """
-    detail = str(exc)
-    lowered = detail.lower()
+    # Classify on the raw message but do NOT reflect it back: IdP (Keycloak/Entra)
+    # error strings can carry internal URLs, config, and stack context. Return a
+    # generic, category-appropriate message instead of the raw exception text.
+    lowered = str(exc).lower()
     status_code = status.HTTP_502_BAD_GATEWAY
+    detail = "IAM provider error"
 
     if any(keyword in lowered for keyword in ("already exists", "not found", "provided")):
         status_code = status.HTTP_400_BAD_REQUEST
+        detail = "Invalid IAM request (see server logs for details)"
 
     return HTTPException(status_code=status_code, detail=detail)
 
@@ -832,7 +836,7 @@ async def management_get_group(
         logger.error("Failed to get group: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to get group details: {exc}",
+            detail="Failed to get group details",
         ) from exc
 
 

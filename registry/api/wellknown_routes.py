@@ -208,7 +208,8 @@ async def get_oauth_protected_resource() -> JSONResponse:
         logger.exception("Failed to initialize auth provider for PRM document")
         raise HTTPException(
             status_code=500,
-            detail=f"Auth provider not configured: {exc}",
+            # Public endpoint: do not reflect internal exception detail; logged above.
+            detail="Auth provider not configured",
         ) from exc
 
     try:
@@ -230,7 +231,7 @@ async def get_oauth_protected_resource() -> JSONResponse:
         logger.exception("Failed to build PRM document")
         raise HTTPException(
             status_code=502,
-            detail=f"Could not build Protected Resource Metadata: {exc}",
+            detail="Could not build Protected Resource Metadata",
         ) from exc
 
     return JSONResponse(content=document, headers=OAUTH_DISCOVERY_CACHE_HEADERS)
@@ -253,7 +254,7 @@ async def get_oauth_authorization_server() -> JSONResponse:
         logger.exception("Failed to initialize auth provider for AS metadata")
         raise HTTPException(
             status_code=500,
-            detail=f"Auth provider not configured: {exc}",
+            detail="Auth provider not configured",
         ) from exc
 
     try:
@@ -270,7 +271,7 @@ async def get_oauth_authorization_server() -> JSONResponse:
         logger.exception("Failed to fetch authorization server metadata")
         raise HTTPException(
             status_code=502,
-            detail=f"Could not fetch authorization server metadata: {exc}",
+            detail="Could not fetch authorization server metadata",
         ) from exc
 
     return JSONResponse(content=document, headers=OAUTH_DISCOVERY_CACHE_HEADERS)

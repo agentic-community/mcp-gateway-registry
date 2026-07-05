@@ -3025,7 +3025,8 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
         logger.error(f"ERROR during manual refresh check for {service_path}: {e}")
         # Still broadcast the error state
         await health_service.broadcast_health_update(service_path)
-        raise HTTPException(status_code=500, detail=f"Refresh check failed: {e}")
+        # Generic detail: the exception is logged above.
+        raise HTTPException(status_code=500, detail="Refresh check failed")
 
     # Update DocumentDB search index
     try:

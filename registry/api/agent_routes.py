@@ -347,14 +347,18 @@ async def _fetch_remote_agent_card(
             detail=f"Timeout fetching agent card from {agent_card_url}",
         )
     except httpx.HTTPError as exc:
+        # Do not reflect the httpx error (leaks resolved hosts / internal
+        # network detail); log it and return the URL only.
+        logger.warning("Failed to fetch agent card from %s: %s", agent_card_url, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch agent card from {agent_card_url}: {exc}",
+            detail=f"Failed to fetch agent card from {agent_card_url}",
         )
     except Exception as exc:
+        logger.warning("Invalid response from %s: %s", agent_card_url, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Invalid response from {agent_card_url}: {exc}",
+            detail=f"Invalid response from {agent_card_url}",
         )
 
 

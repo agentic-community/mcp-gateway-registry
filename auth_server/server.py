@@ -2506,7 +2506,9 @@ async def validate_request(request: Request):
                 logger.warning(f"Token validation failed: {e}")
                 raise HTTPException(
                     status_code=401,
-                    detail=f"Token validation failed: {e}",
+                    # Generic detail: the exception can reveal issuer/audience/IdP
+                    # config internals. The specifics are logged above.
+                    detail="Token validation failed",
                     headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
                 )
             except Exception as e:
@@ -3104,7 +3106,9 @@ async def validate_request(request: Request):
                     logger.warning(f"Failed to log MCP access error: {log_err}")
         raise HTTPException(
             status_code=401,
-            detail=str(e),
+            # Generic detail: the ValueError can reveal token/IdP internals; it is
+            # logged above.
+            detail="Authentication failed",
             headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
         )
     except HTTPException as e:
@@ -3574,7 +3578,8 @@ async def generate_user_token(
             )
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to generate token: {e}",
+                # Generic detail: the internal error is logged above.
+                detail="Failed to generate token",
                 headers={"Connection": "close"},
             )
 
