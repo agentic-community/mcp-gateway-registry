@@ -1285,6 +1285,12 @@ class TestSemanticSearchBackendUrlRedaction:
 
         server = response.servers[0]
         assert server.proxy_pass_url == "http://internal-backend:8080"
+        # The derived endpoint_url is what an agent copies to connect, so it
+        # must remain populated in registry-only mode (never redacted to None).
+        # With an explicit mcp_endpoint override present it resolves to that;
+        # this guards the "users can still find how to connect"
+        # property against future changes to _compute_endpoint_url.
+        assert server.endpoint_url == "http://internal-backend:8080/mcp"
 
 
 # =============================================================================
