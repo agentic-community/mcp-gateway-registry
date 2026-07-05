@@ -2,9 +2,11 @@ from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from typing import List, Dict, Any, Optional
 import uuid
 import logging
+from ..config import settings
 from ..core.models import MetricRequest, MetricResponse, ErrorResponse
 from ..core.processor import MetricsProcessor
 from ..core.retention import retention_manager
+from ..core.rate_limiter import ip_throttle
 from ..api.auth import verify_api_key, get_rate_limit_status
 from ..utils.helpers import generate_request_id, generate_api_key, hash_api_key
 from ..storage.database import MetricsStorage
@@ -12,6 +14,25 @@ from ..storage.database import MetricsStorage
 router = APIRouter()
 logger = logging.getLogger(__name__)
 processor = MetricsProcessor()
+
+
+def _client_ip(request: Request) -> str:
+    """Return a best-effort client IP for per-caller throttling.
+
+    Uses the direct socket peer only. We deliberately do NOT trust
+    ``X-Forwarded-For`` here: an attacker could rotate spoofed values to evade
+    the throttle. In deployments behind a trusted proxy the socket peer is the
+    proxy, which still bounds aggregate abuse.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        The client host string, or "unknown" if it cannot be determined.
+    """
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
 
 
 @router.post("/metrics", response_model=MetricResponse)
@@ -74,16 +95,40 @@ async def flush_metrics(
 
 @router.get("/rate-limit")
 async def get_rate_limit(request: Request):
-    """Get current rate limit status for the API key."""
+    """Get current rate limit status for the caller's own API key.
+
+    This endpoint accepts an unauthenticated request before it can verify the
+    key, so it is throttled per client IP to prevent it being used as a
+    high-throughput key-validity oracle. All failure modes (missing key,
+    throttled, invalid key, misconfiguration) return without revealing whether
+    a given key exists beyond the standard 401 that every authenticated
+    endpoint already returns for an unknown key.
+    """
+    # Throttle by client IP before doing any key work. Fail closed: a throttle
+    # breach returns 429 regardless of whether the key is valid.
+    if not await ip_throttle.allow(
+        _client_ip(request),
+        settings.RATE_LIMIT_ENDPOINT_MAX_REQUESTS,
+        settings.RATE_LIMIT_ENDPOINT_WINDOW_SECONDS,
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests",
+            headers={"Retry-After": str(settings.RATE_LIMIT_ENDPOINT_WINDOW_SECONDS)},
+        )
+
     api_key = request.headers.get("X-API-Key")
 
     if not api_key:
         raise HTTPException(status_code=401, detail="API key required in X-API-Key header")
 
     try:
-        status = await get_rate_limit_status(api_key)
-        return status
-    except Exception as e:
+        return await get_rate_limit_status(api_key)
+    except HTTPException:
+        # Preserve intentional auth/misconfig status codes (401/503); do not
+        # rewrite them to 500.
+        raise
+    except Exception:
         logger.exception("Error getting rate limit status")
         raise HTTPException(status_code=500, detail="Failed to get rate limit status")
 
@@ -108,13 +153,15 @@ async def get_cleanup_preview(
         preview = await retention_manager.get_cleanup_preview(table_name)
         return preview
     except ValueError as e:
-        # Security: Invalid table name - not in allowlist
+        # Security: Invalid table name - not in allowlist. Log the detail
+        # server-side but return static text so the response does not disclose
+        # the set of valid table names.
         logger.warning(f"Invalid table name in cleanup preview request: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid table name")
     except KeyError as e:
         logger.warning(f"Table not found in cleanup preview request: {e}")
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=404, detail="No retention policy for table")
+    except Exception:
         logger.exception("Error getting cleanup preview")
         raise HTTPException(status_code=500, detail="Failed to get cleanup preview")
 
@@ -141,10 +188,10 @@ async def run_cleanup(
             result = await retention_manager.cleanup_all_tables(dry_run)
         return result
     except ValueError as e:
-        # Security: Invalid table name - not in allowlist
+        # Security: Invalid table name - not in allowlist. Static response text.
         logger.warning(f"Invalid table name in cleanup request: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+    except Exception:
         logger.exception("Error running cleanup")
         raise HTTPException(status_code=500, detail="Failed to run cleanup")
 
@@ -196,10 +243,10 @@ async def update_retention_policy(
             "is_active": is_active,
         }
     except ValueError as e:
-        # Security: Invalid table name - not in allowlist
+        # Security: Invalid table name - not in allowlist. Static response text.
         logger.warning(f"Invalid table name in update policy request: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+    except Exception:
         logger.exception("Error updating retention policy")
         raise HTTPException(status_code=500, detail="Failed to update retention policy")
 

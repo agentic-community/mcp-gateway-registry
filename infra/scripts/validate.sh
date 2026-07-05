@@ -106,7 +106,7 @@ _http "Registry /health" "$REGISTRY_URL/health"
 _http "Auth-server /health" "$REGISTRY_URL:8888/health"
 _http "Keycloak /" "$KEYCLOAK_URL/" "200 302 303"
 _http "Keycloak realm OIDC" "$KEYCLOAK_URL/realms/mcp-gateway/.well-known/openid-configuration"
-_http ".well-known/mcp-servers" "$REGISTRY_URL/.well-known/mcp-servers"
+_http ".well-known/ai-catalog" "$REGISTRY_URL/.well-known/ai-catalog.json"
 _http ".well-known/oauth-auth-server" "$REGISTRY_URL/.well-known/oauth-authorization-server"
 
 # ----------------------------------------------------------------------

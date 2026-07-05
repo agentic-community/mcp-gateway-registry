@@ -5,7 +5,7 @@ import asyncio
 from .config import settings
 from .api.routes import router as api_router
 from .storage.database import init_database, wait_for_database, MetricsStorage
-from .core.rate_limiter import rate_limiter
+from .core.rate_limiter import rate_limiter, ip_throttle
 from .core.retention import retention_manager
 from .utils.helpers import hash_api_key
 import os
@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle."""
     logger.info("Starting Metrics Collection Service...")
+
+    # Fail closed at startup if the API-key HMAC pepper is missing/weak, rather
+    # than starting and failing every request later (or, worse, hashing under a
+    # predictable key). This validates METRICS_KEY_PEPPER once up front.
+    try:
+        settings.get_key_pepper()
+    except ValueError as e:
+        logger.error(f"Refusing to start: {e}")
+        raise
 
     # Wait for database container to be ready
     logger.info("Waiting for database container...")
@@ -80,6 +89,7 @@ async def rate_limit_cleanup_task():
         try:
             await asyncio.sleep(3600)  # Run every hour
             await rate_limiter.cleanup_old_buckets(max_age_hours=24)
+            await ip_throttle.cleanup_old_windows(max_age_seconds=3600)
         except asyncio.CancelledError:
             break
         except Exception as e:

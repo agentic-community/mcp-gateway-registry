@@ -51,10 +51,39 @@ class TestSecretStoreFactory:
         assert factory.get_secret_store() is not first
 
     def test_secrets_manager_requires_region(self, monkeypatch):
+        """With no explicit region AND no AWS_REGION/AWS_DEFAULT_REGION env, fail."""
         monkeypatch.setattr(factory.settings, "secret_store_backend", "secrets-manager")
         monkeypatch.setattr(factory.settings, "aws_secrets_region", "")
-        with pytest.raises(ValueError, match="AWS_SECRETS_REGION"):
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        with pytest.raises(ValueError, match="requires a region"):
             factory.get_secret_store()
+
+    def test_secrets_manager_falls_back_to_aws_region_env(self, monkeypatch):
+        """When AWS_SECRETS_REGION is unset, AWS_REGION is used (no error)."""
+        monkeypatch.setattr(factory.settings, "secret_store_backend", "secrets-manager")
+        monkeypatch.setattr(factory.settings, "aws_secrets_region", "")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        store = factory.get_secret_store()
+        assert isinstance(store, SecretStoreBase)
+
+    def test_secrets_manager_falls_back_to_aws_default_region_env(self, monkeypatch):
+        """AWS_DEFAULT_REGION is also honored when AWS_REGION is absent."""
+        monkeypatch.setattr(factory.settings, "secret_store_backend", "secrets-manager")
+        monkeypatch.setattr(factory.settings, "aws_secrets_region", "")
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+        store = factory.get_secret_store()
+        assert isinstance(store, SecretStoreBase)
+
+    def test_secrets_manager_explicit_region_takes_precedence(self, monkeypatch):
+        """An explicit AWS_SECRETS_REGION wins over the env fallback."""
+        monkeypatch.setattr(factory.settings, "secret_store_backend", "secrets-manager")
+        monkeypatch.setattr(factory.settings, "aws_secrets_region", "ap-south-1")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        store = factory.get_secret_store()
+        assert isinstance(store, SecretStoreBase)
 
     def test_openbao_requires_addr(self, monkeypatch):
         monkeypatch.setattr(factory.settings, "secret_store_backend", "openbao")

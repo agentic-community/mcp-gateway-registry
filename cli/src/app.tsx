@@ -5,6 +5,7 @@ import Spinner from "ink-spinner";
 import {renderMarkdown, hasMarkdown, formatToolOutput} from "./utils/markdown.js";
 import {Banner} from "./components/Banner.js";
 import {CommandSuggestions} from "./components/CommandSuggestions.js";
+import {ToolConfirmation, type ToolConfirmationRequest} from "./components/ToolConfirmation.js";
 import {TokenStatusFooter} from "./components/TokenStatusFooter.js";
 import {getCommandSuggestions} from "./utils/commands.js";
 
@@ -50,6 +51,32 @@ export default function App({options}: AppProps) {
   const [hasShownWelcome, setHasShownWelcome] = useState(false);
   const [commandSuggestions, setCommandSuggestions] = useState<ReturnType<typeof getCommandSuggestions>>([]);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
+
+  // Pending human-in-the-loop confirmation for a mutating / shell tool call.
+  const [pendingConfirmation, setPendingConfirmation] = useState<ToolConfirmationRequest | null>(null);
+  const confirmationResolver = useRef<((approved: boolean) => void) | null>(null);
+
+  // Bridge the async tool-execution boundary to the interactive prompt: return a
+  // promise that resolves once the operator answers. Only wired in interactive
+  // mode — non-interactive runs pass no handler, so the boundary fails closed.
+  const confirmToolExecution = useCallback(
+    (request: ToolConfirmationRequest): Promise<boolean> => {
+      return new Promise<boolean>((resolve) => {
+        confirmationResolver.current = resolve;
+        setPendingConfirmation(request);
+      });
+    },
+    []
+  );
+
+  const resolveConfirmation = useCallback((approved: boolean) => {
+    const resolver = confirmationResolver.current;
+    confirmationResolver.current = null;
+    setPendingConfirmation(null);
+    if (resolver) {
+      resolver(approved);
+    }
+  }, []);
 
   // Token status state
   const [tokenSecondsRemaining, setTokenSecondsRemaining] = useState<number | undefined>();
@@ -307,7 +334,7 @@ export default function App({options}: AppProps) {
         }
       }
     },
-    {isActive: interactive}
+    {isActive: interactive && !pendingConfirmation}
   );
 
   const handleSubmit = useCallback(
@@ -404,7 +431,8 @@ export default function App({options}: AppProps) {
           gatewayBaseUrl,
           gatewayToken: authState.context.gatewayToken,
           backendToken: authState.context.backendToken,
-          model: process.env.ANTHROPIC_MODEL
+          model: process.env.ANTHROPIC_MODEL,
+          confirmToolExecution: interactive ? confirmToolExecution : undefined
         });
 
         // Only show tool outputs if there's an error (for debugging)
@@ -444,7 +472,7 @@ export default function App({options}: AppProps) {
         setBusy(false);
       }
     },
-    [messages, authState, gatewayUrl, gatewayBaseUrl, agentAvailable, addMessage, commandSuggestions]
+    [messages, authState, gatewayUrl, gatewayBaseUrl, agentAvailable, addMessage, commandSuggestions, interactive, confirmToolExecution]
   );
 
   const renderMessages = () => {
@@ -511,6 +539,9 @@ export default function App({options}: AppProps) {
   return (
     <Box flexDirection="column" gap={1}>
       {renderMessages()}
+      {pendingConfirmation && (
+        <ToolConfirmation request={pendingConfirmation} onDecision={resolveConfirmation} />
+      )}
       {commandSuggestions.length > 0 && (
         <CommandSuggestions
           suggestions={commandSuggestions}
@@ -525,12 +556,14 @@ export default function App({options}: AppProps) {
           {inputPrompt}
           <Box marginLeft={1} flexGrow={1}>
             <Box>
-              <TextInput
-                value={inputValue}
-                onChange={setInputValue}
-                onSubmit={handleSubmit}
-                placeholder="Type a message or use /commands"
-              />
+              {!pendingConfirmation && (
+                <TextInput
+                  value={inputValue}
+                  onChange={setInputValue}
+                  onSubmit={handleSubmit}
+                  placeholder="Type a message or use /commands"
+                />
+              )}
               {commandSuggestions.length > 0 && commandSuggestions[selectedSuggestionIndex] && (
                 <Text color="gray" dimColor>
                   {commandSuggestions[selectedSuggestionIndex].command.substring(inputValue.length)}

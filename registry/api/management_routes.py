@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..audit.context import set_audit_action
+from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..core.metrics import M2M_ORPHAN_CLEANUPS_TOTAL
 from ..repositories.documentdb.client import get_documentdb_client
@@ -237,6 +238,7 @@ async def management_list_users(
 async def management_create_m2m_user(
     payload: M2MAccountRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Create a service account client and return its credentials (admin only)."""
     _require_admin(user_context)
@@ -290,6 +292,7 @@ async def management_create_m2m_user(
 async def management_create_human_user(
     payload: HumanUserRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Create a human user and assign groups (admin only)."""
     _require_admin(user_context)
@@ -324,6 +327,7 @@ async def management_delete_user(
     username: str,
     request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Delete a user by username (admin only)."""
     _require_admin(user_context)
@@ -388,6 +392,7 @@ async def management_update_user_groups(
     username: str,
     payload: UpdateUserGroupsRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Update a user's group memberships (admin only).
 
@@ -569,6 +574,7 @@ async def management_create_group(
     payload: GroupCreateRequest,
     request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """
     Create a new group in the identity provider and/or MongoDB (admin only).
@@ -691,6 +697,7 @@ async def management_delete_group(
     group_name: str,
     request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """
     Delete a group (admin only).
@@ -835,6 +842,7 @@ async def management_update_group(
     payload: GroupUpdateRequest,
     request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """
     Update a group's properties and scope configuration (admin only).

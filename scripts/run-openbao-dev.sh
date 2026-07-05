@@ -15,8 +15,12 @@
 set -e
 
 CONTAINER_NAME="mcp-openbao-dev"
-IMAGE="openbao/openbao:latest"
+# Pinned to match the version used by the compose stacks so the test fixture
+# tracks the deployed image rather than drifting to :latest.
+IMAGE="openbao/openbao:2.5.5"
 PORT="8200"
+# Ephemeral, in-memory test vault with a fixed, well-known token. Safe ONLY
+# because it is bound to loopback (see -p below) and holds no real secrets.
 ROOT_TOKEN="dev-root-token"
 
 action="${1:-start}"
@@ -29,7 +33,7 @@ case "$action" in
     fi
     echo "Starting OpenBao dev container on :${PORT}..."
     docker run -d --rm --name "$CONTAINER_NAME" \
-      -p "${PORT}:8200" \
+      -p "127.0.0.1:${PORT}:8200" \
       -e "BAO_DEV_ROOT_TOKEN_ID=${ROOT_TOKEN}" \
       -e "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200" \
       "$IMAGE" server -dev >/dev/null

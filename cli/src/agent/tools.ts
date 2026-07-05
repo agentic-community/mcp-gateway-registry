@@ -2,12 +2,24 @@ import {executeMcpCommand} from "../runtime/mcp.js";
 import type {TaskContext} from "../tasks/types.js";
 import {taskCatalog} from "../tasks/index.js";
 import {executeSlashCommand} from "../commands/executor.js";
+import {buildShellEnv, checkShellCommand, evaluateToolPolicy} from "./toolPolicy.js";
 
 export interface AgentToolInvocation {
   type: "mcp" | "task" | "shell" | "docs" | "unknown";
   name: string;
   input: Record<string, unknown>;
 }
+
+/**
+ * Request human approval for a gated (mutating or shell) tool invocation.
+ *
+ * Return `true` to allow execution, `false` to deny. The execution boundary fails
+ * closed: if no handler is supplied, every gated action is denied.
+ */
+export type ConfirmToolExecution = (request: {
+  toolName: string;
+  summary: string;
+}) => Promise<boolean>;
 
 export const anthropicTools: any[] = [
   {
@@ -49,13 +61,17 @@ export const anthropicTools: any[] = [
   },
   {
     name: "shell_command",
-    description: "Execute shell commands for system diagnostics, file operations, and debugging. Safe for read-only operations and credential inspection.",
+    description:
+      "Run a read-only diagnostic command. Only a fixed allowlist of inspection binaries " +
+      "(cat, ls, grep, jq, head, tail, etc.) is permitted; command chaining, redirection, " +
+      "and path-qualified executables are rejected. Every invocation requires explicit operator " +
+      "approval before it runs.",
     input_schema: {
       type: "object",
       properties: {
         command: {
           type: "string",
-          description: "Bash command to execute (e.g., './cli/service_mgmt.sh list-groups', 'cat /path/to/file.json')"
+          description: "A single read-only diagnostic command (e.g., 'cat /path/to/file.json', 'ls -la /path')"
         }
       },
       required: ["command"]
@@ -103,8 +119,33 @@ export function mapToolCall(tool: any): AgentToolInvocation {
 export async function executeMappedTool(
   invocation: AgentToolInvocation,
   gatewayUrl: string,
-  context: TaskContext
+  context: TaskContext,
+  confirm?: ConfirmToolExecution
 ): Promise<{output: string; isError?: boolean}> {
+  // Enforcement boundary: classify the invocation and, for anything mutating or
+  // shell, require an explicit human approval. This holds regardless of what the
+  // LLM emits or what untrusted context steered it to emit.
+  const policy = evaluateToolPolicy(invocation);
+  if (!policy.allowed) {
+    return {output: `Blocked by tool safety policy: ${policy.denyReason}`, isError: true};
+  }
+  if (policy.requiresConfirmation) {
+    if (!confirm) {
+      // Fail closed: no confirmation channel means no way to approve a mutating
+      // action, so it is denied rather than silently executed.
+      return {
+        output:
+          "Blocked by tool safety policy: this action requires human confirmation, " +
+          "but no confirmation handler is available.",
+        isError: true,
+      };
+    }
+    const approved = await confirm({toolName: invocation.name, summary: policy.summary});
+    if (!approved) {
+      return {output: "Action declined by operator; not executed.", isError: true};
+    }
+  }
+
   if (invocation.type === "mcp") {
     const command = String(invocation.input.command || "");
     if (!command) {
@@ -135,12 +176,26 @@ export async function executeMappedTool(
     if (!command) {
       return {output: "Missing command field", isError: true};
     }
+    // Defense in depth: re-validate against the deny-by-default allowlist at the
+    // point of execution, independent of the policy gate above.
+    const check = checkShellCommand(command);
+    if (!check.allowed) {
+      return {output: `Blocked by tool safety policy: ${check.reason}`, isError: true};
+    }
     // Split command into executable and arguments to avoid shell injection
     const parts = command.split(/\s+/);
     const executable = parts[0];
     const args = parts.slice(1);
     try {
-      const output = execFileSync(executable, args, {encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, timeout: 30000});
+      // Run with a scrubbed environment so a read-only command cannot read
+      // credential-bearing variables (tokens, client secrets) from the parent
+      // process and echo them back into the LLM conversation.
+      const output = execFileSync(executable, args, {
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 30000,
+        env: buildShellEnv(process.env)
+      });
       return {output};
     } catch (error) {
       const errorMessage = (error as Error).message || String(error);

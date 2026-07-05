@@ -2,6 +2,7 @@ import React from 'react';
 import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import DetailsModal from './DetailsModal';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
+import { SafeLink } from './SafeLink';
 
 interface AgentLike {
   name: string;
@@ -95,14 +96,14 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
             <div className="bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800 rounded-lg p-3 mt-2">
               <p className="text-sm text-cyan-800 dark:text-cyan-200">
                 <span className="font-medium">A2A Agent Card:</span>{' '}
-                <a
+                <SafeLink
                   href={cardUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-cyan-600 dark:text-cyan-400 hover:underline break-all"
                 >
                   {cardUrl}
-                </a>
+                </SafeLink>
               </p>
             </div>
           ) : null;

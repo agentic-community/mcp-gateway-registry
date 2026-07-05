@@ -129,8 +129,9 @@ resource "aws_ecs_cluster_capacity_providers" "keycloak" {
 }
 
 # CloudWatch Log Group
-#checkov:skip=CKV_AWS_158:KMS encryption for CloudWatch logs not required in this deployment
 resource "aws_cloudwatch_log_group" "keycloak" {
+  #checkov:skip=CKV_AWS_158:KMS encryption for CloudWatch logs not required in this deployment
+  #checkov:skip=CKV_AWS_338:Short retention is intentional for Keycloak container logs - cost-controlled
   name              = "/ecs/keycloak"
   retention_in_days = 7
 
@@ -164,9 +165,9 @@ resource "aws_iam_role_policy_attachment" "keycloak_task_exec_role_policy" {
 }
 
 # Policy to read from SSM Parameter Store
-#checkov:skip=CKV_AWS_290:kms:Decrypt requires wildcard resource as KMS key ARN is determined at runtime by SSM
-#checkov:skip=CKV_AWS_355:kms:Decrypt requires wildcard resource as KMS key ARN is determined at runtime by SSM
 resource "aws_iam_role_policy" "keycloak_task_exec_ssm_policy" {
+  #checkov:skip=CKV_AWS_290:kms:Decrypt requires wildcard resource as KMS key ARN is determined at runtime by SSM
+  #checkov:skip=CKV_AWS_355:kms:Decrypt requires wildcard resource as KMS key ARN is determined at runtime by SSM
   name = "keycloak-task-exec-ssm-policy"
   role = aws_iam_role.keycloak_task_exec_role.id
 
@@ -249,10 +250,10 @@ resource "aws_iam_role" "keycloak_task_role" {
 }
 
 # Policy for SSM Session Manager
-#checkov:skip=CKV_AWS_290:SSM Session Manager actions require wildcard resource per AWS documentation
-#checkov:skip=CKV_AWS_355:SSM Session Manager actions require wildcard resource per AWS documentation
-#checkov:skip=CKV_AWS_336:ECS Exec requires ssmmessages permissions which cannot be scoped to specific resources
 resource "aws_iam_role_policy" "keycloak_task_ssm_policy" {
+  #checkov:skip=CKV_AWS_290:SSM Session Manager actions require wildcard resource per AWS documentation
+  #checkov:skip=CKV_AWS_355:SSM Session Manager actions require wildcard resource per AWS documentation
+  #checkov:skip=CKV_AWS_336:ECS Exec requires ssmmessages permissions which cannot be scoped to specific resources
   name = "keycloak-task-ssm-policy"
   role = aws_iam_role.keycloak_task_role.id
 

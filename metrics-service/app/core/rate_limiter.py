@@ -123,3 +123,68 @@ class RateLimiter:
 
 # Global rate limiter instance
 rate_limiter = RateLimiter()
+
+
+class IPThrottle:
+    """Fixed-window per-client-IP throttle for unauthenticated endpoints.
+
+    Used to blunt abuse of endpoints that must accept a request before it can
+    be authenticated (e.g. the ``/rate-limit`` lookup, which would otherwise be
+    a high-throughput key-validity oracle). Fails closed: any bookkeeping error
+    results in the request being denied.
+
+    This is process-local. In multi-replica deployments it bounds per-replica
+    abuse rather than global; a shared store would be required for global
+    enforcement (documented as future hardening).
+    """
+
+    def __init__(self) -> None:
+        # {client_ip: (window_start_epoch, request_count)}
+        self._windows: Dict[str, Tuple[float, int]] = {}
+        self._lock = asyncio.Lock()
+
+    async def allow(
+        self,
+        client_ip: str,
+        max_requests: int,
+        window_seconds: int,
+    ) -> bool:
+        """Return True iff the client is within its request budget.
+
+        Args:
+            client_ip: The caller's IP address (or a stable stand-in).
+            max_requests: Maximum requests allowed within the window.
+            window_seconds: Length of the fixed window in seconds.
+
+        Returns:
+            True if the request is permitted; False if the budget is exhausted.
+        """
+        async with self._lock:
+            now = time.time()
+            window_start, count = self._windows.get(client_ip, (now, 0))
+
+            # Reset the window if it has elapsed.
+            if now - window_start >= window_seconds:
+                window_start, count = now, 0
+
+            if count >= max_requests:
+                self._windows[client_ip] = (window_start, count)
+                logger.warning("IP throttle exceeded for client")
+                return False
+
+            self._windows[client_ip] = (window_start, count + 1)
+            return True
+
+    async def cleanup_old_windows(self, max_age_seconds: int = 3600) -> None:
+        """Remove windows whose start time is older than the cutoff."""
+        async with self._lock:
+            cutoff = time.time() - max_age_seconds
+            stale = [ip for ip, (start, _) in self._windows.items() if start < cutoff]
+            for ip in stale:
+                del self._windows[ip]
+            if stale:
+                logger.info(f"Cleaned up {len(stale)} old IP throttle windows")
+
+
+# Global IP throttle instance for unauthenticated endpoints
+ip_throttle = IPThrottle()

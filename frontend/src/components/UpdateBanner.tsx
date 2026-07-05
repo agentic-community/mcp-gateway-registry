@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { isSafeUrl } from '../utils/safeUrl';
 
 interface UpdateCheckResponse {
   current: string;
@@ -11,9 +12,6 @@ interface UpdateCheckResponse {
 }
 
 const dismissedKey = (latest: string) => `mcp-update-banner-dismissed:${latest}`;
-
-const isSafeUrl = (url: string): boolean =>
-  url.startsWith('http://') || url.startsWith('https://');
 
 export const UpdateBanner: React.FC = () => {
   const [data, setData] = useState<UpdateCheckResponse | null>(null);

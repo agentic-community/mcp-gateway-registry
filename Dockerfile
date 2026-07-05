@@ -49,15 +49,17 @@ RUN mkdir -p /etc/nginx/lua/virtual_mappings && \
 # Expose ports for Nginx (HTTP/HTTPS on high ports for non-root) and the Registry
 EXPOSE 8080 8443 7860
 
-# Define environment variables for registry/server configuration (can be overridden at runtime)
-# Provide sensible defaults or leave empty if they should be explicitly set
+# Define environment variables for registry/server configuration.
+# BUILD_VERSION is a non-sensitive build arg. SECRET_KEY and POLYGON_API_KEY
+# are secrets and are NOT accepted as build args: build args are persisted in
+# the image history/metadata and would leak if passed at build time. They are
+# injected at runtime only (docker-compose `environment:` / `env_file`), so we
+# declare empty ENV placeholders that the runtime value overrides.
 ARG BUILD_VERSION="1.0.0"
-ARG SECRET_KEY=""
-ARG POLYGON_API_KEY=""
 
 ENV BUILD_VERSION=$BUILD_VERSION
-ENV SECRET_KEY=$SECRET_KEY
-ENV POLYGON_API_KEY=$POLYGON_API_KEY
+ENV SECRET_KEY=""
+ENV POLYGON_API_KEY=""
 
 # Add health check using the new HTTP endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

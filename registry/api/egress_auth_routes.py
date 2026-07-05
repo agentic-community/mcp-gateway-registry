@@ -21,6 +21,7 @@ Security model for POST /internal/egress-token:
 
 import logging
 import secrets
+from html import escape
 from typing import Annotated
 from urllib.parse import urlencode, urlparse
 
@@ -36,9 +37,11 @@ from registry.core.config import settings
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
 from registry.egress_auth.service import EgressAuthError, is_per_user_auth_method
+from registry.exceptions import UrlValidationError
 from registry.repositories.factory import get_server_repository
 from registry.services.server_service import server_service
 from registry.utils.credential_encryption import encrypt_credential
+from registry.utils.url_guard import PROXY_PROFILE, validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -366,6 +369,31 @@ async def configure_egress_auth(
             "custom_scope_separator": body.custom_scope_separator,
             "custom_token_auth_style": body.custom_token_auth_style,
         }
+        # For a 'custom' provider the authorize/token URLs are registrant-supplied
+        # and become an outbound token POST (carrying the client_secret) and a
+        # browser 302. Fail closed at registration: require https and reject any
+        # literal private/metadata IP or bad scheme via the shared SSRF guard, so
+        # a config that would exfiltrate the secret to an internal target (e.g.
+        # 169.254.169.254) can never be persisted. resolve=False keeps this a
+        # structural check; the rebinding-safe block for hostname targets is the
+        # pinned guarded client at token-exchange time.
+        if body.egress_provider == "custom":
+            for field, url in (
+                ("custom_authorize_url", body.custom_authorize_url),
+                ("custom_token_url", body.custom_token_url),
+            ):
+                try:
+                    validate_url(
+                        url or "",
+                        profile=PROXY_PROFILE,
+                        require_https=True,
+                        resolve=False,
+                    )
+                except UrlValidationError as exc:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        detail=f"{field} rejected: {exc}",
+                    ) from exc
         # Validate provider resolution (custom requires URLs) before persisting.
         try:
             resolve_provider(eo)
@@ -553,13 +581,17 @@ async def egress_callback(
         )
     except EgressAuthError as exc:
         logger.warning("egress callback failed: %s", exc)
-        return HTMLResponse(f"<h3>Connection failed: {exc}.</h3>", status_code=400)
+        # HTML-escape: the message can embed server/state-derived values.
+        return HTMLResponse(f"<h3>Connection failed: {escape(str(exc))}.</h3>", status_code=400)
 
     # The egress consent is the web Connected-Accounts / MCP URL-mode elicitation
     # flow: the token is now vaulted, so show the close-tab page and let the user
-    # retry their original request.
+    # retry their original request. HTML-escape the interpolated values: the
+    # server_path is admin-registrant-supplied and validate_server_path blocks
+    # nginx metacharacters but not '<'/'>' (a different sink), so escape here to
+    # keep a crafted path (e.g. /<svg onload=...>) from executing in the browser.
     return HTMLResponse(
-        f"<h3>Connected {conn.provider} for {conn.server_path}.</h3>"
+        f"<h3>Connected {escape(conn.provider)} for {escape(conn.server_path)}.</h3>"
         "<p>You can close this tab and retry your request.</p>"
     )
 

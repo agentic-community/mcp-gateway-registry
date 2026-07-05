@@ -108,8 +108,8 @@ tab_visible = REGISTRY_MODE enables the feature AND SHOW_*_TAB is true
 | `KEYCLOAK_M2M_CLIENT_ID` | Keycloak M2M client ID (see note below) | `mcp-gateway-m2m` | ✅ |
 | `KEYCLOAK_M2M_CLIENT_SECRET` | Keycloak M2M client secret (auto-generated) | `ZJqbsamnQs79hbUbkJLB...` | ✅ |
 | `KEYCLOAK_ENABLED` | Enable Keycloak in OAuth2 providers | `true` | ✅ |
-| `INITIAL_ADMIN_PASSWORD` | Initial admin user password | `changeme` | For setup |
-| `INITIAL_USER_PASSWORD` | Initial test user password | `testpass` | For setup |
+| `INITIAL_ADMIN_PASSWORD` | Realm admin user password (required, no default; set temporary) | `<your-secure-password>` | For setup |
+| `INITIAL_USER_PASSWORD` | Password for human LOB/demo users created by `bootstrap_user_and_m2m_setup.sh` (required, no default) | `<your-secure-password>` | For setup |
 
 **Note: Getting Keycloak Client IDs and Secrets**
 

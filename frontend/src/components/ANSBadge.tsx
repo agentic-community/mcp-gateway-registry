@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ShieldCheckIcon, ExclamationTriangleIcon, XCircleIcon, CodeBracketIcon } from '@heroicons/react/24/solid';
+import { SafeLink } from './SafeLink';
 
 interface ANSFunction {
   id?: string;
@@ -361,14 +362,14 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
                         <span className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded font-medium uppercase text-[10px]">
                           {ep.type || 'HTTP'}
                         </span>
-                        <a
+                        <SafeLink
                           href={ep.url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-cyan-600 dark:text-cyan-400 hover:underline font-mono truncate"
                         >
                           {ep.url}
-                        </a>
+                        </SafeLink>
                         {ep.protocol && (
                           <span className="px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded text-[10px] font-medium flex-shrink-0">
                             {ep.protocol}
@@ -428,14 +429,14 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
                       <span className="font-medium text-gray-600 dark:text-gray-400 min-w-[130px]">
                         {LINK_LABELS[link.rel || ''] || link.rel}:
                       </span>
-                      <a
+                      <SafeLink
                         href={link.href}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-cyan-600 dark:text-cyan-400 hover:underline font-mono truncate"
                       >
                         {link.href}
-                      </a>
+                      </SafeLink>
                     </div>
                   ))}
                 </div>
