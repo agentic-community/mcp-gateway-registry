@@ -27,8 +27,11 @@ async def add_test_key():
             (key_hash, "test-service"),
         )
         await db.commit()
-        print(f"Added test API key for service: test-service")
-        print(f"API Key: {api_key}")
+        # Do not print the API key in clear text (it lands in stdout/CI logs).
+        # This is a fixed local-dev test key; show only a masked form + the hash.
+        masked_key = f"{api_key[:4]}...{api_key[-2:]}" if len(api_key) > 8 else "***"
+        print("Added test API key for service: test-service")
+        print(f"API Key (masked): {masked_key}")
         print(f"Key Hash: {key_hash}")
 
 
