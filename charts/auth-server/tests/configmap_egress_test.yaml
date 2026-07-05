@@ -1,0 +1,68 @@
+suite: egress credential vault config
+templates:
+  - templates/configmap-egress.yaml
+tests:
+  - it: is absent when egressAuth is disabled (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders only the auth-server subset when enabled
+    set:
+      egressAuth:
+        enabled: true
+        registryInternalUrl: http://registry:8000
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: auth-server-egress-config
+      - equal:
+          path: data.EGRESS_AUTH_ENABLED
+          value: "true"
+      - equal:
+          path: data.EGRESS_REGISTRY_INTERNAL_URL
+          value: "http://registry:8000"
+      # registry.core.config validation requires a non-empty callback base URL
+      # when egress is enabled; standalone (no global.ingress) derives the
+      # subdomain-mode default from the localhost fallback.
+      - equal:
+          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
+          value: "http://mcpregistry.localhost"
+      # Auth-server does NOT touch the secret store: these must be absent.
+      - notExists:
+          path: data.SECRET_STORE_BACKEND
+      - notExists:
+          path: data.OPENBAO_ADDR
+      - notExists:
+          path: data.AUTH_SERVER_NGINX_MARKER_SECRET
+
+  - it: derives the path-mode callback base URL from global.domain
+    set:
+      global:
+        domain: agents-path.example.com
+        ingress:
+          routingMode: path
+          tls: true
+      egressAuth:
+        enabled: true
+    asserts:
+      - equal:
+          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
+          value: "https://agents-path.example.com"
+
+  - it: an explicit oauthCallbackBaseUrl overrides the derived value
+    set:
+      global:
+        domain: agents-path.example.com
+        ingress:
+          routingMode: path
+          tls: true
+      egressAuth:
+        enabled: true
+        oauthCallbackBaseUrl: https://login.example.com
+    asserts:
+      - equal:
+          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
+          value: "https://login.example.com"

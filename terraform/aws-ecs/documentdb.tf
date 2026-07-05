@@ -226,8 +226,8 @@ resource "aws_kms_alias" "documentdb" {
 # apply that re-plans this out destroys the secret IMMEDIATELY with no
 # recovery window. See PR release notes for the rollout warning.
 #
-#checkov:skip=CKV2_AWS_57:Secret rotation managed externally via dedicated rotation Lambda
 resource "aws_secretsmanager_secret" "documentdb_credentials" {
+  #checkov:skip=CKV2_AWS_57:Secret rotation managed externally via dedicated rotation Lambda
   count = local.is_aws_documentdb ? 1 : 0
 
   name                    = "${var.name}/documentdb/credentials"
@@ -416,8 +416,8 @@ resource "aws_docdb_cluster_instance" "registry_primary" {
 #
 # Update SSM Parameters with new cluster endpoints (gated on is_aws_documentdb)
 #
-#checkov:skip=CKV2_AWS_34:SSM parameter stores non-sensitive endpoint hostname, SecureString not required
 resource "aws_ssm_parameter" "documentdb_endpoint" {
+  #checkov:skip=CKV2_AWS_34:SSM parameter stores non-sensitive endpoint hostname, SecureString not required
   count = local.is_aws_documentdb ? 1 : 0
 
   name        = "/${var.name}/documentdb/endpoint"
@@ -434,8 +434,8 @@ resource "aws_ssm_parameter" "documentdb_endpoint" {
   )
 }
 
-#checkov:skip=CKV2_AWS_34:SSM parameter stores non-sensitive endpoint hostname, SecureString not required
 resource "aws_ssm_parameter" "documentdb_reader_endpoint" {
+  #checkov:skip=CKV2_AWS_34:SSM parameter stores non-sensitive endpoint hostname, SecureString not required
   count = local.is_aws_documentdb ? 1 : 0
 
   name        = "/${var.name}/documentdb/reader_endpoint"

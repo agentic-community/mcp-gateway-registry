@@ -91,15 +91,35 @@ async def create_client_session(
 )
 async def validate_client_session(
     client_session_id: str,
+    user_id: str,
+    virtual_server_path: str | None = None,
 ):
-    """Validate that a client session exists.
+    """Validate that a client session exists and belongs to the caller.
 
-    Returns 200 if valid, 404 if not found or expired.
-    Also bumps last_used_at to keep the session alive.
+    Returns 200 if valid, 404 if not found, expired, owned by a different user,
+    or minted for a different virtual server. Also bumps last_used_at to keep
+    the session alive.
+
+    The Lua router passes the authenticated user identity via the ``user_id``
+    query param and the virtual server path via ``virtual_server_path``. Binding
+    validation to the owner prevents session hijacking: an authenticated client
+    that presents another user's Mcp-Session-Id receives a 404 instead of
+    operating on the victim's session context. Binding to the virtual server
+    path stops a session minted for one virtual server being replayed against
+    another.
+
+    ``user_id`` is REQUIRED: ownership binding is the session-hijacking control,
+    so a request without it must fail loudly (422) rather than silently fall
+    back to existence-only validation. ``virtual_server_path`` stays optional
+    (a missing path widens the match but does not drop the owner check).
     """
     repo = _get_repo()
 
-    is_valid = await repo.validate_client_session(client_session_id)
+    is_valid = await repo.validate_client_session(
+        client_session_id,
+        user_id=user_id,
+        virtual_server_path=virtual_server_path,
+    )
     if not is_valid:
         raise HTTPException(status_code=404, detail="Client session not found")
 
@@ -112,12 +132,20 @@ async def validate_client_session(
 )
 async def get_backend_session(
     session_key: str,
+    user_id: str,
 ):
-    """Look up a backend session by compound key.
+    """Look up a backend session by compound key, bound to the caller.
 
     The session_key is '<client_session_id>:<backend_key>'.
     Returns the backend_session_id if found, 404 otherwise.
     Also bumps last_used_at atomically.
+
+    The Lua router passes the authenticated user via the ``user_id`` query
+    param. Binding the lookup to the owner is defense in depth (the
+    client-session gate already enforces ownership upstream): a backend session
+    belonging to a different user is treated as not found. ``user_id`` is
+    REQUIRED so the owner check cannot be silently skipped; a request without it
+    fails with 422.
     """
     repo = _get_repo()
 
@@ -134,6 +162,7 @@ async def get_backend_session(
     backend_session_id = await repo.get_backend_session(
         client_session_id=client_session_id,
         backend_key=backend_key,
+        user_id=user_id,
     )
 
     if backend_session_id is None:
@@ -184,11 +213,17 @@ async def store_backend_session(
 )
 async def delete_backend_session(
     session_key: str,
+    user_id: str,
 ):
     """Delete a stale backend session.
 
     Called by Lua router when a backend rejects a cached session ID
     (e.g., after backend restart). The router will then re-initialize.
+
+    The router passes the authenticated user via the ``user_id`` query param so
+    the delete is scoped to the owner (defense in depth, symmetric with the GET
+    lookup). ``user_id`` is REQUIRED so the scope cannot be silently dropped; a
+    request without it fails with 422.
     """
     repo = _get_repo()
 
@@ -205,6 +240,7 @@ async def delete_backend_session(
     await repo.delete_backend_session(
         client_session_id=client_session_id,
         backend_key=backend_key,
+        user_id=user_id,
     )
 
     return {"status": "deleted"}

@@ -61,7 +61,13 @@ def _resolves_only_to_public_ips(
     """
     from urllib.parse import urlparse
 
-    from .skill_service import _is_private_ip
+    from ..utils.url_guard import _Allowlist, _is_blocked_ip
+
+    # Federation grants NO allowlist bypass: an empty allowlist means every
+    # private/loopback/link-local/reserved/metadata address is blocked outright,
+    # so an allowlisted host (e.g. github.com) that resolves to a private IP is
+    # still rejected here.
+    federation_allowlist = _Allowlist()
 
     try:
         parsed = urlparse(endpoint)
@@ -73,7 +79,7 @@ def _resolves_only_to_public_ips(
         if not addr_info:
             return False
         for _family, _socktype, _proto, _canon, sockaddr in addr_info:
-            if _is_private_ip(sockaddr[0]):
+            if _is_blocked_ip(sockaddr[0], federation_allowlist):
                 return False
         return True
     except Exception as e:

@@ -31,6 +31,8 @@ from registry.api.auth0_m2m_routes import router as auth0_m2m_router
 from registry.api.config_routes import router as config_router
 from registry.api.custom_entity_routes import router as custom_entity_router
 from registry.api.custom_type_routes import router as custom_type_router
+from registry.api.egress_auth_routes import router as egress_auth_router
+from registry.api.egress_oauth_facade_routes import router as egress_oauth_facade_router
 from registry.api.embeddings_admin_routes import router as embeddings_admin_router
 from registry.api.export_routes import router as export_router
 from registry.api.federation_export_routes import router as federation_export_router
@@ -744,7 +746,9 @@ async def lifespan(app: FastAPI):
         try:
             ard_cfg = await get_ard_ingestion_service().get_config()
             if ard_cfg.enabled and ard_cfg.sync_on_startup and ard_cfg.sources:
-                logger.info("Running ARD ingestion startup pass for %d source(s)", len(ard_cfg.sources))
+                logger.info(
+                    "Running ARD ingestion startup pass for %d source(s)", len(ard_cfg.sources)
+                )
                 await get_ard_ingestion_service().ingest_all()
         except Exception as e:  # noqa: BLE001
             logger.error("ARD ingestion startup pass failed: %s", e, exc_info=True)
@@ -848,6 +852,7 @@ async def lifespan(app: FastAPI):
 
         # Start the GitHub-release update-check poller (admin banner; air-gap safe)
         from registry.core.update_check import start_update_checker
+
         await start_update_checker()
 
     except Exception as e:
@@ -881,10 +886,12 @@ async def lifespan(app: FastAPI):
 
         # Stop ARD ingestion scheduler
         from registry.services.ard_ingestion_scheduler import get_ard_ingestion_scheduler
+
         await get_ard_ingestion_scheduler().stop()
 
         # Stop update-check poller
         from registry.core.update_check import stop_update_checker
+
         await stop_update_checker()
 
         # Shutdown audit logger if enabled
@@ -1018,14 +1025,33 @@ except ValueError as exc:
         "MCP discovery clients will not receive WWW-Authenticate headers on 401s."
     )
 
-# Add CORS middleware for React development and Docker deployment
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r"https?://(localhost(:[0-9]+)?|.*\.compute.*\.amazonaws\.com(:[0-9]+)?)",
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+# Add CORS middleware with an explicit, fail-closed origin allowlist.
+#
+# Because credentials (cookies / Authorization) are sent cross-origin, the set
+# of trusted origins MUST be exact and operator-controlled — never a wildcard
+# or a broad regex. settings.cors_allowed_origins_list resolves to the union of
+# CORS_ALLOWED_ORIGINS, the registry's own origin, and (only in local dev) the
+# loopback dev-server origins. If nothing resolves, the list is empty and only
+# same-origin requests are accepted.
+_cors_allowed_origins = settings.cors_allowed_origins_list
+if _cors_allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
+    logger.info(f"CORS enabled for {len(_cors_allowed_origins)} allowed origin(s)")
+else:
+    # Fail closed: no trusted origins resolved, so do not register a
+    # credentialed CORS policy at all. Cross-origin browser requests are
+    # rejected; same-origin traffic is unaffected.
+    logger.warning(
+        "No CORS origins configured (CORS_ALLOWED_ORIGINS empty and registry_url "
+        "did not resolve to a usable origin); cross-origin requests will be denied. "
+        "Set CORS_ALLOWED_ORIGINS to the exact browser origins that need access."
+    )
 
 # Add registry mode middleware to filter endpoints based on REGISTRY_MODE
 # This must be after CORS (to allow preflight) and before audit (to log blocked requests)
@@ -1081,6 +1107,11 @@ if settings.audit_log_enabled:
 # Register API routers with /api prefix
 app.include_router(system_router, tags=["System"])  # /api/version, /api/stats
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+# Egress credential vault routes MUST be registered before servers_router: the
+# servers_router has a greedy GET/PUT/PATCH "/servers/{path:path}" that would
+# otherwise shadow "/servers/{server_path}/egress-auth" (matching the egress
+# suffix as part of the server path and 404ing). First match wins in Starlette.
+app.include_router(egress_auth_router, prefix="/api")
 app.include_router(servers_router, prefix="/api", tags=["Server Management"])
 app.include_router(ans_router, prefix="/api", tags=["ANS Integration"])
 app.include_router(agent_router, prefix="/api", tags=["Agent Management"])
@@ -1095,6 +1126,12 @@ if settings.custom_entity_types_enabled:
     app.include_router(custom_entity_router, prefix="/api", tags=["custom-entities"])
     logger.info("Custom entity types feature enabled; registered custom-type/custom routes")
 app.include_router(internal_router, prefix="/api")
+# Note: egress_auth_router is registered earlier (before servers_router) so its
+# /servers/{server_path}/egress-auth routes are not shadowed by the greedy
+# servers "/servers/{path:path}" route.
+if settings.egress_auth_enabled:
+    app.include_router(egress_oauth_facade_router, tags=["Egress OAuth Facade"])
+    logger.info("Egress OAuth AS facade enabled; registered /oauth2/egress/* routes")
 app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring"])
 app.include_router(federation_export_router)
 app.include_router(peer_management_router)
@@ -1139,6 +1176,33 @@ app.include_router(ard_router, prefix="/api/ard", tags=["ARD Registry"])
 # default behavior is preserved for every other path.
 app.add_exception_handler(StarletteHTTPException, ard_http_exception_handler)
 app.add_exception_handler(RequestValidationError, ard_validation_exception_handler)
+
+
+# SSRF / URL validation: any registration or fetch path that persists or
+# reaches a user/registry-controlled URL raises UrlValidationError when the
+# target is unsafe (bad scheme, private/metadata IP, or nginx metacharacters).
+# Surface it as a clean 400 rather than a 500 so the caller learns the URL was
+# rejected. Fails closed by construction: the request is denied before any
+# outbound connection or persistence.
+from fastapi.responses import JSONResponse  # noqa: E402
+from starlette.requests import Request as _StarletteRequest  # noqa: E402
+
+from registry.exceptions import UrlValidationError  # noqa: E402
+
+
+async def _url_validation_exception_handler(
+    request: _StarletteRequest,
+    exc: Exception,
+) -> JSONResponse:
+    """Return HTTP 400 for a rejected user/registry-controlled URL."""
+    reason = getattr(exc, "reason", "URL failed validation")
+    return JSONResponse(
+        status_code=400,
+        content={"detail": f"URL rejected by security policy: {reason}"},
+    )
+
+
+app.add_exception_handler(UrlValidationError, _url_validation_exception_handler)
 
 # Register public, anonymous per-record endpoints (ARD catalog url targets, issue #1294)
 app.include_router(public_record_router, prefix="/api", tags=["Public Records"])

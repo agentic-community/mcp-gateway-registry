@@ -104,6 +104,39 @@ def get_normalized_path(
     return normalize_skill_path(skill_path)
 
 
+def _require_admin_for_global_credentials(
+    user_context: dict,
+    auth_scheme: str | None,
+) -> None:
+    """Restrict the ``global_credentials`` auth scheme to administrators.
+
+    The ``global_credentials`` scheme causes the registry to attach the
+    server's shared GitHub credentials (PAT / GitHub App installation token) to
+    a caller-supplied URL. Those credentials can read any private repository the
+    server principal can see, so allowing a non-admin to select this scheme is a
+    privilege-escalation path (a caller could exfiltrate private repo contents
+    via the server's identity). Any caller-driven flow that honors the scheme
+    must therefore gate it behind an actual admin check and fail closed.
+
+    Args:
+        user_context: Authenticated user context.
+        auth_scheme: The auth scheme requested by the caller.
+
+    Raises:
+        HTTPException: 403 if a non-admin requests ``global_credentials``.
+    """
+    if auth_scheme != "global_credentials":
+        return
+    if not user_context.get("is_admin", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The 'global_credentials' auth scheme uses the server's shared "
+                "credentials and is restricted to administrators."
+            ),
+        )
+
+
 @router.get(
     "/discovery",
     response_model=DiscoveryResponse,
@@ -294,6 +327,10 @@ async def parse_skill_md(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to register skills",
         )
+
+    # The global_credentials scheme uses the server's shared GitHub token;
+    # only admins may select it (fail closed for everyone else).
+    _require_admin_for_global_credentials(user_context, auth_scheme)
 
     service = get_skill_service()
     try:
@@ -937,6 +974,10 @@ async def register_skill(
             detail="You do not have permission to register skills",
         )
 
+    # The global_credentials scheme uses the server's shared GitHub token;
+    # only admins may persist a skill that relies on it (fail closed).
+    _require_admin_for_global_credentials(user_context, getattr(request, "auth_scheme", None))
+
     # Set audit action for skill registration
     # Note: path is derived from name, so use name as resource_id
     set_audit_action(
@@ -1052,6 +1093,28 @@ async def update_skill(
 
     if not _user_can_modify_skill(existing, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # The global_credentials scheme uses the server's shared GitHub token; only
+    # admins may set (or switch a skill to) it. Only gate when the update
+    # actually requests global_credentials, so non-admins can still edit skills
+    # that use their own credentials.
+    if "auth_scheme" in request.model_fields_set:
+        _require_admin_for_global_credentials(user_context, request.auth_scheme)
+
+    # Guard against repointing a global_credentials skill at a new URL without
+    # admin authorization. The auth_scheme gate above only fires when the scheme
+    # is changed; without this, a non-admin owner of an existing
+    # global_credentials skill could aim the server's shared GitHub token at an
+    # arbitrary (e.g. private) repository by changing only skill_md_url.
+    effective_scheme = (
+        request.auth_scheme
+        if "auth_scheme" in request.model_fields_set
+        else getattr(existing, "auth_scheme", "none")
+    )
+    if effective_scheme == "global_credentials" and "skill_md_url" in request.model_fields_set:
+        new_url = str(request.skill_md_url)
+        if new_url != str(getattr(existing, "skill_md_url", "")):
+            _require_admin_for_global_credentials(user_context, "global_credentials")
 
     # Registration gate check for update (admission control, issue #809)
     gate_result = await check_registration_gate(

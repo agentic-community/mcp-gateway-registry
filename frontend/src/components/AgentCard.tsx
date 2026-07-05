@@ -25,6 +25,7 @@ import StatusBadge from './StatusBadge';
 import { ANSBadge } from './ANSBadge';
 import { formatRelativeTime } from '../utils/dateUtils';
 import { toScanSummary } from '../utils/securityScan';
+import { SafeLink } from './SafeLink';
 
 interface SyncMetadata {
   is_federated?: boolean;
@@ -551,14 +552,14 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     </span>
                   )}
                   {agent.url && (
-                    <a
+                    <SafeLink
                       href={agent.url}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="mt-2 inline-flex items-center gap-1 text-xs text-cyan-700 dark:text-cyan-300 break-all hover:underline"
                     >
                       <span className="font-mono">{agent.url}</span>
-                    </a>
+                    </SafeLink>
                   )}
                 </div>
 
@@ -632,14 +633,14 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
               {/* ARD discovery-only: link back to the source registry's server.json,
                   if the source published it (ard_source_url / upstream_path). */}
               {isArdDiscovery && ardSourceUrl && (
-                <a
+                <SafeLink
                   href={ardSourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mb-4 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
                 >
                   View at source ↗
-                </a>
+                </SafeLink>
               )}
 
               {/* Tags */}

@@ -58,16 +58,21 @@ dependencies = [
     "prometheus-client>=0.20.0",
     "opentelemetry-api>=1.41.1",
     "opentelemetry-sdk>=1.41.1",
-    "opentelemetry-exporter-prometheus>=0.62b1",
+    "opentelemetry-exporter-prometheus>=0.64b0",
     "opentelemetry-exporter-otlp>=1.41.1",
-    "opentelemetry-distro[otlp]>=0.62b1",
-    "opentelemetry-instrumentation>=0.62b1",
-    "opentelemetry-instrumentation-fastapi>=0.62b1",
-    "opentelemetry-instrumentation-httpx>=0.62b1",
-    "opentelemetry-instrumentation-asyncio>=0.62b1",
-    "opentelemetry-instrumentation-logging>=0.62b1",
-    "opentelemetry-instrumentation-pymongo>=0.62b1",
+    "opentelemetry-distro[otlp]>=0.64b0",
+    # 0.64b0 fixes the AttributeError on FastAPI 0.137+ routes added via
+    # include_router (otel-python-contrib PR #4700) -- the egress-auth router
+    # crashed the OTel ASGI middleware before this. Keep the instrumentation
+    # set on the same release (they pin each other ==).
+    "opentelemetry-instrumentation>=0.64b0",
+    "opentelemetry-instrumentation-fastapi>=0.64b0",
+    "opentelemetry-instrumentation-httpx>=0.64b0",
+    "opentelemetry-instrumentation-asyncio>=0.64b0",
+    "opentelemetry-instrumentation-logging>=0.64b0",
+    "opentelemetry-instrumentation-pymongo>=0.64b0",
     "opentelemetry-propagator-b3>=1.41.1",
+    "hvac>=2.0.0",  # OpenBao/Vault client for the egress credential vault  # pragma: allowlist secret
 ]
 
 [project.optional-dependencies]
@@ -85,6 +90,7 @@ dev = [
     "faker>=24.0.0",
     "freezegun>=1.4.0",
     "hypothesis>=6.100.0",
+    "moto[secretsmanager]>=5.0.0",  # mock AWS Secrets Manager for egress vault tests
 ]
 docs = [
     "mkdocs>=1.5.0",
@@ -203,6 +209,16 @@ torch = { index = "pytorch-cpu" }
 # NOTE: cli/ and scripts/ are NOT excluded - they contain operational code that should be scanned
 [tool.bandit]
 exclude_dirs = ["tests", "*/test/*", "*/tests/*", ".venv"]
+
+# MyPy Configuration
+# `registry` is a namespace package (no registry/__init__.py), so when mypy is
+# handed both a package __init__ and a sibling module that imports it as
+# `registry.<pkg>.<mod>`, it can resolve the same file under two module names
+# ("Source file found twice"). explicit_package_bases + mypy_path="." pins the
+# repo root as the single package base so the canonical `registry.*` name wins.
+[tool.mypy]
+explicit_package_bases = true
+mypy_path = "."
 
 # Ruff Configuration
 [tool.ruff]

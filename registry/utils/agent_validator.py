@@ -208,18 +208,28 @@ def _check_endpoint_reachability(
     Returns:
         Tuple of (is_reachable, error_message)
     """
+    # Use the SSRF/rebinding-safe guarded client: the agent URL is
+    # user-controlled, so this outbound reachability probe must resolve and pin
+    # a validated public IP (proxy profile) rather than fetch an arbitrary
+    # internal target. A blocked URL is reported as unreachable, not raised,
+    # because reachability is advisory and must not become a validation bypass.
+    from ..exceptions import UrlValidationError
+    from .url_guard import PROXY_PROFILE, guarded_client
+
     try:
         well_known_url = f"{url}/.well-known/agent-card.json"
 
-        response = httpx.get(
-            well_known_url,
-            timeout=5.0,
-        )
+        with guarded_client(profile=PROXY_PROFILE, timeout=5.0) as client:
+            response = client.get(well_known_url)
 
         if response.status_code == 200:
             return (True, None)
 
         return (False, f"Endpoint returned status {response.status_code}")
+
+    except UrlValidationError as e:
+        logger.warning(f"Endpoint blocked by SSRF guard for {url}: {e}")
+        return (False, "Endpoint URL failed SSRF validation")
 
     except httpx.TimeoutException:
         logger.warning(f"Endpoint timeout for {url}")

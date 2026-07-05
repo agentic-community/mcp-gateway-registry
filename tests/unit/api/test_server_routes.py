@@ -3053,6 +3053,75 @@ class TestRegisterApiAuthorization:
         response = test_client_regular.post("/api/servers/register", data=self._FORM)
         assert response.status_code == 403
 
+    def test_register_overwrite_rejected_for_non_owner(
+        self,
+        test_client_regular,
+        mock_server_service,
+        regular_user_context,
+    ):
+        """A non-owner cannot overwrite an existing server (server hijack).
+
+        The caller has register_service permission but does not own the target
+        server. Even with overwrite=true (the default), the ownership guard must
+        return 403 and update_server must not be called.
+        """
+        regular_user_context["ui_permissions"]["register_service"] = ["all"]
+        mock_server_service.get_server_info.return_value = {
+            "path": "/my-service",
+            "server_name": "Victim Service",
+            "registered_by": "victim-owner",
+            "proxy_pass_url": "http://victim:9000",
+        }
+        response = test_client_regular.post(
+            "/api/servers/register",
+            data={**self._FORM, "overwrite": "true"},
+        )
+        assert response.status_code == 403
+        mock_server_service.update_server.assert_not_called()
+
+    def test_register_overwrite_allowed_for_owner(
+        self,
+        test_client_regular,
+        mock_server_service,
+        regular_user_context,
+    ):
+        """The original owner may overwrite their own server."""
+        regular_user_context["ui_permissions"]["register_service"] = ["all"]
+        mock_server_service.get_server_info.return_value = {
+            "path": "/my-service",
+            "server_name": "My Service",
+            "registered_by": "testuser",  # matches regular_user_context username
+            "proxy_pass_url": "http://localhost:8080",
+        }
+        response = test_client_regular.post(
+            "/api/servers/register",
+            data={**self._FORM, "overwrite": "true"},
+        )
+        assert response.status_code != 403
+        mock_server_service.update_server.assert_called_once()
+
+    def test_register_overwrite_allowed_for_admin(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        """An admin may overwrite a server owned by another user."""
+        mock_server_service.get_server_info.return_value = {
+            "path": "/my-service",
+            "server_name": "Someone Elses Service",
+            "registered_by": "another-user",
+            "proxy_pass_url": "http://localhost:8080",
+        }
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/servers/register",
+                data={**self._FORM, "overwrite": "true"},
+            )
+        assert response.status_code != 403
+        mock_server_service.update_server.assert_called_once()
+
 
 class TestServerModifyApiAuthorization:
     """auth-credential + version routes must require modify_service."""
@@ -3112,3 +3181,143 @@ class TestServerModifyApiAuthorization:
             )
 
         assert response.status_code == 403
+
+
+class TestServerModifyOwnership:
+    """auth-credential + version routes must also enforce ownership.
+
+    Holding the modify_service UI permission (granted by any /execute scope) is
+    not sufficient to mutate a server you do not own: a non-admin non-owner must
+    be rejected even when the permission check passes, matching PUT
+    /servers/{path}. Owners and admins are allowed.
+    """
+
+    _VICTIM = {
+        "path": "/test-server",
+        "server_name": "Victim Service",
+        "registered_by": "victim-owner",
+        "proxy_pass_url": "http://victim:9000",
+    }
+    _OWNED = {
+        "path": "/test-server",
+        "server_name": "My Service",
+        "registered_by": "testuser",  # matches regular_user_context username
+        "proxy_pass_url": "http://localhost:8080",
+    }
+
+    def test_auth_credential_rejects_non_owner_with_permission(
+        self,
+        test_client_regular,
+        mock_server_service,
+    ):
+        """A non-owner with modify_service still cannot rewrite a credential."""
+        mock_server_service.get_server_info.return_value = dict(self._VICTIM)
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_regular.patch(
+                "/api/servers/test-server/auth-credential",
+                json={"auth_scheme": "bearer", "auth_credential": "stolen"},
+            )
+        assert response.status_code == 403
+        mock_server_service.update_server.assert_not_called()
+
+    def test_auth_credential_allowed_for_owner(
+        self,
+        test_client_regular,
+        mock_server_service,
+    ):
+        """The owner with modify_service may rewrite their own credential."""
+        mock_server_service.get_server_info.return_value = dict(self._OWNED)
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_regular.patch(
+                "/api/servers/test-server/auth-credential",
+                json={"auth_scheme": "bearer", "auth_credential": "mine"},
+            )
+        assert response.status_code != 403
+
+    def test_auth_credential_allowed_for_admin(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        """An admin may rewrite a credential on a server owned by someone else."""
+        mock_server_service.get_server_info.return_value = dict(self._VICTIM)
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_admin.patch(
+                "/api/servers/test-server/auth-credential",
+                json={"auth_scheme": "bearer", "auth_credential": "admin"},
+            )
+        assert response.status_code != 403
+
+    def test_set_default_version_rejects_non_owner_with_permission(
+        self,
+        test_client_regular,
+        mock_server_service,
+    ):
+        """A non-owner with modify_service cannot change the default version."""
+        mock_server_service.get_server_info.return_value = dict(self._VICTIM)
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_regular.put(
+                "/api/servers/test-server/versions/default",
+                json={"version": "v2.0.0"},
+            )
+        assert response.status_code == 403
+        mock_server_service.set_default_version.assert_not_called()
+
+    def test_remove_version_rejects_non_owner_with_permission(
+        self,
+        test_client_regular,
+        mock_server_service,
+    ):
+        """A non-owner with modify_service cannot remove a version."""
+        mock_server_service.get_server_info.return_value = dict(self._VICTIM)
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_regular.delete(
+                "/api/servers/test-server/versions/v1.0.0",
+            )
+        assert response.status_code == 403
+        mock_server_service.remove_server_version.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestTemplateRenderingRoutes:
+    """Regression tests for server-rendered HTML routes.
+
+    These routes call ``templates.TemplateResponse`` and render a real Jinja2
+    template (auth/services are mocked, but the template engine is not). They
+    guard the Starlette TemplateResponse signature: Starlette removed the
+    legacy ``TemplateResponse(name, context)`` form, so the request must be the
+    first positional argument (``TemplateResponse(request, name, context)``).
+    The old form made Jinja try to load the context dict as a template name and
+    returned HTTP 500 (unhashable dict key).
+    """
+
+    def test_token_generation_page_renders(self, test_client_regular) -> None:
+        """GET /api/tokens renders the token page (200), not a 500."""
+        response = test_client_regular.get("/api/tokens")
+
+        assert response.status_code == 200
+        assert "Generate API Token" in response.text
+
+    def test_token_generation_page_lists_user_scopes(self, test_client_regular) -> None:
+        """The rendered page includes the user's scopes."""
+        response = test_client_regular.get("/api/tokens")
+
+        assert response.status_code == 200
+        # regular_user_context grants "test-server/read"
+        assert "test-server/read" in response.text

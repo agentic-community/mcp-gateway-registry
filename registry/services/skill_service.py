@@ -8,12 +8,9 @@ Simplified design:
 """
 
 import hashlib
-import ipaddress
 import logging
 import re
-import socket
 from datetime import UTC, datetime
-from functools import lru_cache
 from typing import (
     Any,
 )
@@ -24,6 +21,7 @@ import httpx
 from ..core.config import settings
 from ..exceptions import (
     SkillUrlValidationError,
+    UrlValidationError,
 )
 from ..repositories.factory import (
     get_search_repository,
@@ -45,6 +43,12 @@ from ..schemas.skill_models import (
     VisibilityEnum,
 )
 from ..utils.path_utils import normalize_skill_path
+from ..utils.url_guard import (
+    guarded_async_client,
+)
+from ..utils.url_guard import (
+    validate_url as _validate_url_guard,
+)
 from ..utils.url_utils import (
     extract_repository_url,
     translate_skill_url,
@@ -66,80 +70,22 @@ URL_VALIDATION_TIMEOUT: int = 10
 # server that keeps echoing the x-next-page header cannot loop indefinitely.
 MAX_GITLAB_TREE_PAGES: int = 100
 
-# Built-in trusted domains that skip IP validation (SSRF protection allowlist).
-# Enterprise GitHub hosts are merged in at runtime from settings.github_extra_hosts
-# via _trusted_domains() so GHES instances on private IPs are reachable for
-# SKILL.md fetches (matches the host allowlist used by the GitHub auth provider).
-_DEFAULT_TRUSTED_DOMAINS: frozenset = frozenset(
-    {
-        "github.com",
-        "gitlab.com",
-        "raw.githubusercontent.com",
-        "bitbucket.org",
-    }
-)
-
-
-@lru_cache(maxsize=1)
-def _trusted_domains() -> frozenset[str]:
-    """Return SSRF allowlist: built-in defaults plus configured GHES hosts.
-
-    Reads settings.github_extra_hosts (the same setting that authorises auth
-    header injection) so a single config knob covers both trust decisions.
-    Cached because settings are immutable per-process.
-    """
-    extra_raw = settings.github_extra_hosts or ""
-    extra = frozenset(h.strip().lower() for h in extra_raw.split(",") if h.strip())
-    return _DEFAULT_TRUSTED_DOMAINS | extra
-
-
-def _is_private_ip(
-    ip_str: str,
-) -> bool:
-    """Check if an IP address is private, loopback, or link-local.
-
-    Args:
-        ip_str: IP address string to check
-
-    Returns:
-        True if the IP is private/loopback/link-local, False otherwise
-    """
-    try:
-        ip = ipaddress.ip_address(ip_str)
-
-        # Check for private, loopback, link-local, or reserved addresses
-        if ip.is_private:
-            return True
-        if ip.is_loopback:
-            return True
-        if ip.is_link_local:
-            return True
-        if ip.is_reserved:
-            return True
-
-        # Check for cloud metadata endpoint (169.254.169.254)
-        if ip_str == "169.254.169.254":
-            return True
-
-        return False
-    except ValueError:
-        # Invalid IP address format
-        return True
-
 
 def _is_safe_url(
     url: str,
 ) -> bool:
     """Check if a URL is safe to fetch (SSRF protection).
 
-    This function validates that a URL:
-    1. Uses http or https scheme
-    2. Does not resolve to a private/loopback/link-local IP address
-    3. Does not target cloud metadata endpoints
+    Thin boolean wrapper over the shared hardened guard
+    (:func:`registry.utils.url_guard.validate_url`) so this pre-check gains
+    IPv4-mapped-IPv6 unwrapping, multicast/unspecified blocking, and consistent
+    fail-closed semantics. Only hosts explicitly configured in the operator
+    bypass allowlist (``settings.github_extra_hosts``, e.g. GHES on a private
+    network) skip the private-IP block; built-in public forge domains are
+    IP-validated like any other host.
 
-    Trusted domains (github.com, gitlab.com, etc., plus any host configured
-    via settings.github_extra_hosts) skip the IP check so GHES instances on
-    private networks remain reachable.
+    The actual fetch is additionally protected by the pinned guarded client, so
+    a host that passes here cannot rebind to a private IP before the connect.
 
     Args:
         url: URL to validate
@@ -148,49 +94,13 @@ def _is_safe_url(
         True if the URL is safe to fetch, False otherwise
     """
     try:
-        parsed = urlparse(url)
-
-        # Check scheme - only allow http and https
-        if parsed.scheme not in ("http", "https"):
-            logger.warning(f"SSRF protection: Blocked URL with scheme '{parsed.scheme}'")
-            return False
-
-        hostname = parsed.hostname
-        if not hostname:
-            logger.warning("SSRF protection: URL has no hostname")
-            return False
-
-        # Check if hostname is in trusted domains allowlist
-        hostname_lower = hostname.lower()
-        if hostname_lower in _trusted_domains():
-            logger.debug(f"SSRF protection: Trusted domain '{hostname_lower}'")
-            return True
-
-        # Resolve hostname to IP addresses
-        try:
-            addr_info = socket.getaddrinfo(
-                hostname,
-                parsed.port or (443 if parsed.scheme == "https" else 80),
-                proto=socket.IPPROTO_TCP,
-            )
-        except socket.gaierror as e:
-            logger.warning(f"SSRF protection: Failed to resolve hostname '{hostname}': {e}")
-            return False
-
-        # Check all resolved IP addresses
-        for family, socktype, proto, canonname, sockaddr in addr_info:
-            ip_address = sockaddr[0]
-            if _is_private_ip(ip_address):
-                logger.warning(
-                    f"SSRF protection: Blocked URL resolving to private IP "
-                    f"'{ip_address}' for hostname '{hostname}'"
-                )
-                return False
-
+        _validate_url_guard(url)
         return True
-
-    except Exception as e:
-        logger.warning(f"SSRF protection: Error validating URL: {e}")
+    except UrlValidationError as e:
+        logger.warning("SSRF protection: %s", e)
+        return False
+    except Exception as e:  # pragma: no cover - defensive, fail closed
+        logger.warning("SSRF protection: Error validating URL: %s", e)
         return False
 
 
@@ -455,10 +365,14 @@ async def _discover_skill_resources(
     _, headers = _build_fetch_headers(tree_url, auth_scheme, auth_credential, auth_header_name)
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with guarded_async_client(timeout=15.0) as client:
             # Merge global GitHub auth headers (PAT / GitHub App) so private
-            # repos and rate-limited public repos work.
-            github_headers = await _github_auth.get_auth_headers(tree_url)
+            # repos and rate-limited public repos work -- but only when the
+            # caller is authorized to use the shared identity (global_credentials).
+            github_headers = await _github_auth.get_auth_headers(
+                tree_url,
+                allow_global_credentials=(auth_scheme == "global_credentials"),
+            )
             merged_headers = {**github_headers, **headers}
             resp = await client.get(tree_url, headers=merged_headers)
             if resp.status_code >= 400:
@@ -486,8 +400,7 @@ async def _discover_skill_resources(
                     next_page = resp.headers.get("x-next-page", "")
                 if next_page:
                     logger.warning(
-                        "GitLab tree pagination hit %s-page cap for %s; "
-                        "results may be incomplete",
+                        "GitLab tree pagination hit %s-page cap for %s; results may be incomplete",
                         MAX_GITLAB_TREE_PAGES,
                         tree_url,
                     )
@@ -604,9 +517,16 @@ async def _validate_skill_md_url(
     )
 
     try:
-        async with httpx.AsyncClient() as client:
-            github_headers = await _github_auth.get_auth_headers(str(url))
-            merged_headers = {**fetch_headers, **github_headers}
+        async with guarded_async_client() as client:
+            # The server's shared GitHub credentials are only attached when the
+            # caller explicitly requested the (admin-gated) global_credentials
+            # scheme. For every other scheme the caller's own credential (if
+            # any) is used, so the shared identity never leaks.
+            github_headers = await _github_auth.get_auth_headers(
+                str(url),
+                allow_global_credentials=(auth_scheme == "global_credentials"),
+            )
+            merged_headers = {**github_headers, **fetch_headers}
             response = await client.get(
                 fetch_url,
                 headers=merged_headers,
@@ -632,6 +552,10 @@ async def _validate_skill_md_url(
                 "content_updated_at": datetime.now(UTC),
             }
 
+    except UrlValidationError as e:
+        raise SkillUrlValidationError(
+            url, "URL failed SSRF validation - private/internal addresses are not allowed"
+        ) from e
     except httpx.RequestError as e:
         raise SkillUrlValidationError(url, str(e)) from e
 
@@ -686,7 +610,7 @@ async def _parse_skill_md_content(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with guarded_async_client() as client:
             fetch_url, fetch_headers = _build_fetch_headers(
                 raw_url_str,
                 auth_scheme,
@@ -696,10 +620,13 @@ async def _parse_skill_md_content(
             if auth_scheme == "none":
                 headers = fetch_headers
             elif auth_scheme == "global_credentials":
-                headers = await _github_auth.get_auth_headers(fetch_url)
+                headers = await _github_auth.get_auth_headers(
+                    fetch_url, allow_global_credentials=True
+                )
             else:
-                github_headers = await _github_auth.get_auth_headers(fetch_url)
-                headers = {**github_headers, **fetch_headers}
+                # bearer / api_key: use only the caller-supplied credential.
+                # The shared server identity is not attached for these schemes.
+                headers = fetch_headers
             response = await client.get(
                 fetch_url, headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
             )
@@ -839,6 +766,10 @@ async def _parse_skill_md_content(
             )
             return result
 
+    except UrlValidationError as e:
+        raise SkillUrlValidationError(
+            url, "URL failed SSRF validation - private/internal addresses are not allowed"
+        ) from e
     except httpx.RequestError as e:
         raise SkillUrlValidationError(url, str(e)) from e
 
@@ -883,8 +814,11 @@ async def _check_skill_health(
     fetch_url, fetch_headers = _build_fetch_headers(url, auth_scheme, credential, auth_header_name)
 
     try:
-        async with httpx.AsyncClient() as client:
-            github_headers = await _github_auth.get_auth_headers(str(url))
+        async with guarded_async_client() as client:
+            github_headers = await _github_auth.get_auth_headers(
+                str(url),
+                allow_global_credentials=(auth_scheme == "global_credentials"),
+            )
             merged_headers = {**github_headers, **fetch_headers}
             response = await client.head(
                 fetch_url,
@@ -916,6 +850,15 @@ async def _check_skill_health(
                 "response_time_ms": round(response_time_ms, 2),
             }
 
+    except UrlValidationError as e:
+        logger.warning("Skill health check blocked by SSRF guard for URL %s: %s", url, e)
+        response_time_ms = (time.perf_counter() - start_time) * 1000
+        return {
+            "healthy": False,
+            "status_code": None,
+            "error": "URL failed SSRF validation",
+            "response_time_ms": round(response_time_ms, 2),
+        }
     except httpx.RequestError as e:
         # Log detailed exception on the server, but return a generic message to the client
         logger.error("Error while checking skill health for URL %s: %s", url, e)
@@ -965,11 +908,14 @@ async def _compute_content_integrity(
                 return None
             digest = hashlib.sha256(resp.content).hexdigest()
             return FileHash(path=rel_path, sha256=digest, size_bytes=len(resp.content))
+        except UrlValidationError as e:
+            logger.warning("Integrity fetch blocked by SSRF guard for %s: %s", rel_path, e)
+            return None
         except httpx.RequestError as e:
             logger.warning("Integrity fetch error for %s: %s", rel_path, e)
             return None
 
-    async with httpx.AsyncClient() as client:
+    async with guarded_async_client() as client:
         skill_md_hash = await _hash_url(client, skill_md_url, "SKILL.md")
         if not skill_md_hash:
             return None
@@ -1055,13 +1001,15 @@ async def _fetch_authenticated_content(
     if auth_scheme == "none":
         merged_headers = fetch_headers
     elif auth_scheme == "global_credentials":
-        merged_headers = await _github_auth.get_auth_headers(fetch_url)
+        merged_headers = await _github_auth.get_auth_headers(
+            fetch_url, allow_global_credentials=True
+        )
     else:
-        github_headers = await _github_auth.get_auth_headers(fetch_url)
-        merged_headers = {**github_headers, **fetch_headers}
+        # bearer / api_key: use only the caller-supplied credential.
+        merged_headers = fetch_headers
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with guarded_async_client() as client:
             response = await client.get(
                 fetch_url,
                 headers=merged_headers,
@@ -1083,6 +1031,9 @@ async def _fetch_authenticated_content(
                 raise SkillContentTooLargeError(max_size)
 
             return response
+    except UrlValidationError as e:
+        logger.warning("Skill content fetch blocked by SSRF guard for %s: %s", url, e)
+        raise SkillContentSSRFError(url) from e
     except httpx.RequestError as e:
         logger.error("Failed to fetch from %s: %s", url, e)
         raise SkillContentFetchError(url, str(e))

@@ -143,6 +143,7 @@ def mint_mcp_proxy_token(
     scopes: list[str],
     server_name: str,
     upstream_url: str,
+    auth_method: str = "",
 ) -> str:
     """Mint the per-request /mcp-proxy token in /validate's 200 path.
 
@@ -150,6 +151,12 @@ def mint_mcp_proxy_token(
     append; mcp_proxy applies the append itself so the bound claim and /validate's
     view agree exactly. ``server`` is the first path segment, used as a
     path-traversal guard by the verifier.
+
+    ``auth_method`` is the CANONICAL egress principal method (see
+    ``EgressAuthService.canonical_auth_method``): the per-user egress vault keys
+    on it, so it MUST match what the consent/list paths resolve for the same
+    user (cookie users are ``oauth2``, never ``session_cookie``). It also lets
+    the registry vend endpoint reject non-per-user callers.
     """
     return _mint_internal_token(
         audience=MCP_PROXY_AUDIENCE,
@@ -158,6 +165,7 @@ def mint_mcp_proxy_token(
         extra_claims={
             "server": server_name.split("/", 1)[0] if server_name else "",
             "upstream_url": upstream_url,
+            "auth_method": auth_method,
             "token_use": MCP_PROXY_TOKEN_USE,
         },
     )
