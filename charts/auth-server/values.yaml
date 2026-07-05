@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.25.0
+    tag: 1.26.0
     pullPolicy: IfNotPresent
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
@@ -17,9 +17,8 @@ image:
 # attached to a stable identity. Set create=false + name to bring your own.
 serviceAccount:
   create: true
-  name: ""  # defaults to app.name ("auth-server") when empty
+  name: "" # defaults to app.name ("auth-server") when empty
   annotations: {}
-
 app:
   name: auth-server
   replicas: 1
@@ -126,9 +125,8 @@ cognito:
   userPoolId: "" # Cognito User Pool ID
   clientId: ""
   clientSecret: ""
-  domain: ""  # Optional: custom Cognito domain
-  region: "us-east-1"  # AWS region for the User Pool
-
+  domain: "" # Optional: custom Cognito domain
+  region: "us-east-1" # AWS region for the User Pool
 # Per-user egress credential vault (third-party OBO support).
 # The auth-server only needs the feature flag + the internal vend URL (it calls
 # the registry's /_egress_internal vend endpoint) + the nginx marker secret; it
@@ -157,7 +155,6 @@ egressAuth:
   # at startup. Set a strong random value, identical to the registry's. In the
   # stack it is auto-generated + shared, so leave empty there.
   markerSecret: ""
-
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false
