@@ -2157,14 +2157,18 @@ async def validate_request(request: Request):
         try:
             if body:
                 payload_text = body  # .decode('utf-8')
-                logger.debug(
-                    "Raw Request Payload (%d chars): %s...",
-                    len(payload_text),
-                    payload_text[:1000],
-                )
+                # Do NOT log the raw or parsed payload: a JSON-RPC tools/call
+                # carries user-supplied tool arguments that may contain
+                # credentials, API keys, or PII. Log only the size and, once
+                # parsed, the non-sensitive method name + request id.
+                logger.debug("Request payload received (%d chars)", len(payload_text))
                 request_payload = json.loads(payload_text)
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("JSON RPC Request Payload: %s", json.dumps(request_payload))
+                if logger.isEnabledFor(logging.DEBUG) and isinstance(request_payload, dict):
+                    logger.debug(
+                        "JSON-RPC request: method=%s id=%s",
+                        request_payload.get("method"),
+                        request_payload.get("id"),
+                    )
             else:
                 logger.debug("No request body provided, skipping payload parsing")
         except UnicodeDecodeError as e:
@@ -2638,7 +2642,15 @@ async def validate_request(request: Request):
         if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0"]:
             # Map IdP groups to scopes using the group mappings (query DocumentDB)
             user_scopes = await map_groups_to_scopes(user_groups)
-            logger.debug("Mapped %s groups %s to scopes: %s", auth_method, user_groups, user_scopes)
+            # Log counts only: group names are organizational PII (Entra groups
+            # often encode org units / cost centers) and scope lists reveal the
+            # authz model.
+            logger.debug(
+                "Mapped %s: %d groups -> %d scopes",
+                auth_method,
+                len(user_groups),
+                len(user_scopes),
+            )
         elif (
             user_groups
             and not existing_scopes
@@ -2654,10 +2666,10 @@ async def validate_request(request: Request):
             # unchanged.
             user_scopes = await map_groups_to_scopes(user_groups)
             logger.debug(
-                "Re-mapped pingfederate groups %s to scopes: %s "
+                "Re-mapped pingfederate: %d groups -> %d scopes "
                 "after fallback enrichment (transport=%s)",
-                user_groups,
-                user_scopes,
+                len(user_groups),
+                len(user_scopes),
                 auth_method,
             )
         else:

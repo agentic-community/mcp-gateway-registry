@@ -88,6 +88,22 @@ except ImportError:
     logger.debug("python-dotenv not available, skipping .env loading")
 
 
+def _safe_oauth_error(response: "requests.Response") -> str:
+    """Extract a non-sensitive OAuth error summary from a token-endpoint response.
+
+    The full response body can echo back the client_id or (on some providers)
+    partial credentials in ``error_description``, so never log ``response.text``.
+    Return only the standard ``error`` code when the body is JSON, else nothing.
+    """
+    try:
+        data = response.json()
+        if isinstance(data, dict) and data.get("error"):
+            return f"error={data['error']}"
+    except Exception:
+        pass
+    return "(body omitted)"
+
+
 def _validate_environment_variables() -> None:
     """Validate that all required INGRESS and EGRESS OAuth environment variables are set."""
     required_ingress_vars = [
@@ -271,7 +287,8 @@ class OAuthConfig:
 
             if not response.ok:
                 logger.error(
-                    f"Token exchange failed with status {response.status_code}. Response: {response.text}"
+                    f"Token exchange failed with status {response.status_code}. "
+                    f"{_safe_oauth_error(response)}"
                 )
                 return False
 
@@ -1104,7 +1121,8 @@ def run_m2m_flow(config: OAuthConfig) -> bool:
 
         if not response.ok:
             logger.error(
-                f"M2M token request failed with status {response.status_code}. Response: {response.text}"
+                f"M2M token request failed with status {response.status_code}. "
+                f"{_safe_oauth_error(response)}"
             )
             return False
 

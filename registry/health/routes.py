@@ -36,7 +36,9 @@ async def websocket_endpoint(websocket: WebSocket):
         if not session_cookie and hasattr(websocket, "headers"):
             cookie_header = websocket.headers.get("cookie", "")
             if cookie_header:
-                logger.debug(f"WebSocket cookie header: {cookie_header}")
+                # Never log the raw Cookie header: it carries the session cookie
+                # value. Presence is enough for this diagnostic.
+                logger.debug("WebSocket cookie header present")
                 # Parse cookie header manually
                 cookies = {}
                 for cookie_pair in cookie_header.split(";"):

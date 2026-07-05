@@ -545,7 +545,12 @@ async def _resolve_context_from_groups(
     they were authenticated (guards #933).
     """
     scopes = await map_cognito_groups_to_scopes(groups)
-    logger.info(f"User {username} with groups {groups} mapped to scopes: {scopes}")
+    # Count only: group names are organizational PII and the scope list reveals
+    # the authz model. The username is a non-sensitive identifier already logged
+    # in the sibling warning below.
+    logger.info(
+        f"User {username} with {len(groups)} groups mapped to {len(scopes)} scopes"
+    )
     if not groups:
         logger.warning(
             f"User {username} has no groups! This user may not have proper group assignments."

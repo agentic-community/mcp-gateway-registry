@@ -76,6 +76,23 @@ except ImportError:
     logger.debug("python-dotenv not available, skipping .env loading")
 
 
+def _safe_oauth_error(response: "requests.Response") -> str:
+    """Extract a non-sensitive OAuth error summary from a token-endpoint response.
+
+    The full response body can echo back the client_id or (on some providers)
+    partial credentials in ``error_description``, so never log or raise
+    ``response.text``. Return only the standard ``error`` code when the body is
+    JSON, else a generic marker.
+    """
+    try:
+        data = response.json()
+        if isinstance(data, dict) and data.get("error"):
+            return f"error={data['error']}"
+    except Exception:
+        pass
+    return "(body omitted)"
+
+
 def _validate_environment_variables() -> None:
     """Validate that all required INGRESS OAuth environment variables are set."""
     auth_provider = os.getenv("AUTH_PROVIDER", "cognito").lower()
@@ -147,10 +164,11 @@ def _perform_keycloak_m2m_authentication(
         response = requests.post(token_url, data=payload, headers=headers, timeout=30)
 
         if not response.ok:
+            _err = _safe_oauth_error(response)
             logger.error(
-                f"M2M token request failed with status {response.status_code}. Response: {response.text}"
+                f"M2M token request failed with status {response.status_code}. {_err}"
             )
-            raise ValueError(f"Token request failed: {response.text}")
+            raise ValueError(f"Token request failed with status {response.status_code} ({_err})")
 
         token_data = response.json()
 
@@ -227,10 +245,11 @@ def _perform_entra_m2m_authentication(
         response = requests.post(token_url, data=payload, headers=headers, timeout=30)
 
         if not response.ok:
+            _err = _safe_oauth_error(response)
             logger.error(
-                f"M2M token request failed with status {response.status_code}. Response: {response.text}"
+                f"M2M token request failed with status {response.status_code}. {_err}"
             )
-            raise ValueError(f"Token request failed: {response.text}")
+            raise ValueError(f"Token request failed with status {response.status_code} ({_err})")
 
         token_data = response.json()
 
@@ -312,10 +331,11 @@ def _perform_m2m_authentication(
         response = requests.post(token_url, data=payload, headers=headers, timeout=30)
 
         if not response.ok:
+            _err = _safe_oauth_error(response)
             logger.error(
-                f"M2M token request failed with status {response.status_code}. Response: {response.text}"
+                f"M2M token request failed with status {response.status_code}. {_err}"
             )
-            raise ValueError(f"Token request failed: {response.text}")
+            raise ValueError(f"Token request failed with status {response.status_code} ({_err})")
 
         token_data = response.json()
 

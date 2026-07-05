@@ -213,7 +213,8 @@ class EntraIdProvider(AuthProvider):
             if not groups and "roles" in claims:
                 # M2M token - use roles claim as groups
                 groups = claims.get("roles", [])
-                logger.debug(f"M2M token detected, using roles claim as groups: {groups}")
+                # Count only: role/group names reveal the internal authz structure.
+                logger.debug("M2M token detected, using %d roles as groups", len(groups))
 
             return {
                 "valid": True,
