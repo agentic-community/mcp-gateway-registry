@@ -151,8 +151,9 @@ class RegistryClient:
             try:
                 async with session.post(token_url, data=data) as response:
                     if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"Token request failed: {response.status} - {error_text}")
+                        # Do not log the response body: a token-endpoint error
+                        # can echo client_id or partial credential context.
+                        logger.error(f"Token request failed: HTTP {response.status} (body omitted)")
                         raise Exception(f"Failed to get token: {response.status}")
 
                     token_data = await response.json()

@@ -64,7 +64,7 @@ class AsorFederationClient(BaseFederationClient):
         access_token_env = os.getenv("ASOR_ACCESS_TOKEN")
         if access_token_env:
             logger.info("Using pre-obtained ASOR access token from environment")
-            logger.debug(f"Token starts with: {access_token_env[:10]}...")
+            logger.debug("ASOR access token present in environment (len=%d)", len(access_token_env))
             self._access_token = access_token_env
             # Set a reasonable expiry (1 hour from now)
             self._token_expiry = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=1)

@@ -242,7 +242,7 @@ def main():
                 scopes=scopes,
             )
             access_token = token_response["access_token"]
-            logger.info(f"Generated token: {access_token[:20]}...")
+            logger.info(f"Generated access token (len={len(access_token)})")
 
             # Print token details
             logger.info(f"Token type: {token_response.get('token_type', 'N/A')}")
@@ -257,7 +257,7 @@ def main():
     # Option 2: Use provided token
     elif args.token:
         access_token = args.token
-        logger.info(f"Using provided token: {access_token[:20]}...")
+        logger.info(f"Using provided access token (len={len(access_token)})")
 
     # No token available
     else:
@@ -273,7 +273,7 @@ def main():
     }
 
     logger.info("Sending validation request with headers:")
-    logger.info(f"  Authorization: Bearer {access_token[:10]}...")
+    logger.info(f"  Authorization: Bearer <token len={len(access_token)}>")
     logger.info(f"  X-Client-Id: {args.client_id}")
     logger.info(f"  X-User-Pool-Id: {args.user_pool_id}")
     logger.info(f"  X-Region: {args.region}")

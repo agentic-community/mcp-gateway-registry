@@ -186,10 +186,11 @@ class GitHubAuthProvider:
                     )
 
                 if response.status_code != 201:
+                    # Do not log the response body: a token-exchange error body
+                    # can carry credential context. Status code is enough.
                     logger.error(
-                        "GitHub App token exchange failed: HTTP %d - %s",
+                        "GitHub App token exchange failed: HTTP %d (body omitted)",
                         response.status_code,
-                        response.text[:200],
                     )
                     self._failure_retry_after = time.time() + 60
                     return None

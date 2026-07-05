@@ -256,7 +256,7 @@ def _make_request(
 ) -> requests.Response:
     """Make HTTP request with Bearer token."""
     headers = {
-        "Authorization": f"Bearer {token[:50]}..." if token else "Bearer <NO_TOKEN>",
+        "Authorization": f"Bearer {token}" if token else "Bearer <NO_TOKEN>",
         "Content-Type": "application/json",
     }
 
@@ -264,7 +264,7 @@ def _make_request(
     logger.info(f"  URL: {url}")
     logger.info("  Headers:")
     logger.info(
-        f"    Authorization: Bearer {token[:50]}..." if token else "    Authorization: <NO_TOKEN>"
+        f"    Authorization: Bearer <token len={len(token)}>" if token else "    Authorization: <NO_TOKEN>"
     )
     logger.info("    Content-Type: application/json")
     if params:
@@ -693,7 +693,7 @@ def register_agent(
             logger.error(f"  Token file location: {os.path.abspath('.oauth-tokens/ingress.json')}")
             logger.error(f"  Token length: {len(token) if token else 0} characters")
             logger.error(
-                f"  Authorization header: Bearer {token[:50]}..."
+                f"  Authorization header: Bearer <token len={len(token)}>"
                 if token
                 else "  Authorization header: <NO_TOKEN>"
             )

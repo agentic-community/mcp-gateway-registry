@@ -68,7 +68,7 @@ def get_asor_token():
             expires_in = tokens.get("expires_in", "unknown")
 
             print("✅ Successfully obtained access token!")
-            print(f"   Token: {access_token}")
+            print(f"   Token: {access_token[:8]}... (len={len(access_token)})")
             print(f"   Expires in: {expires_in} seconds")
             print()
 
@@ -83,8 +83,7 @@ def get_asor_token():
 
             return access_token
         else:
-            print(f"❌ Token exchange failed: {response.status_code}")
-            print(f"Response: {response.text}")
+            print(f"❌ Token exchange failed: HTTP {response.status_code} (body omitted)")
             return None
     except Exception as e:
         print(f"❌ Error during token exchange: {e}")
