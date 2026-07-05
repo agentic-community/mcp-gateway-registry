@@ -1447,6 +1447,7 @@ class UserRequest(BaseModel):
 ## Documentation Guidelines
 - Never add emojis to README.md files in repositories
 - Keep README files professional and emoji-free
+- Never hard word-wrap Markdown files at 76 characters (or any fixed column). Write one sentence or paragraph per line and let the editor soft-wrap. Hard wrapping creates noisy diffs and breaks tables, lists, and links.
 
 ### Emoji Usage Guidelines
 - **Code**: Absolutely no emojis in source code, comments, or docstrings
