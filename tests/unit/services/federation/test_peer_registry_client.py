@@ -18,14 +18,16 @@ from registry.services.federation.peer_registry_client import PeerRegistryClient
 def _allow_safe_endpoints():
     """Treat endpoints as SSRF-safe unless a test overrides the guard.
 
-    The base federation client now validates every request URL (and the health
-    URL) with the shared SSRF guard, which resolves DNS and fails closed on
-    unresolvable hosts. Most tests here use example.com placeholders and are not
-    about SSRF, so the guard is stubbed to accept by default. The SSRF-specific
-    tests re-patch it to reject inside their own ``with`` block, which overrides
-    this fixture.
+    The base federation client and the health check now validate every request
+    URL with the shared SSRF guard (``validate_url`` with the FEDERATION
+    profile), which resolves DNS and fails closed on unresolvable hosts. Most
+    tests here use example.com placeholders and are not about SSRF, so the guard
+    is stubbed to accept by default. The SSRF-specific tests re-patch it to
+    reject inside their own ``with`` block, which overrides this fixture.
     """
-    with patch("registry.services.skill_service._is_safe_url", return_value=True):
+    # Both the base client and the health check import validate_url
+    # function-locally from registry.utils.url_guard, so patch it at the source.
+    with patch("registry.utils.url_guard.validate_url", return_value=[]):
         yield
 
 
@@ -55,8 +57,13 @@ def mock_auth_manager():
 
 @pytest.fixture
 def mock_http_client():
-    """Mock httpx.Client for HTTP requests."""
-    with patch("registry.services.federation.base_client.httpx.Client") as mock:
+    """Mock the SSRF-guarded httpx client used for HTTP requests.
+
+    The base federation client builds its client via ``guarded_client`` (a
+    pinned, rebinding-safe transport). Patch that factory so tests get a mock
+    client without any real transport or DNS resolution.
+    """
+    with patch("registry.services.federation.base_client.guarded_client") as mock:
         instance = MagicMock()
         mock.return_value = instance
         yield instance
@@ -824,9 +831,14 @@ class TestPeerRegistryClientSsrfGuard:
         mock_auth_manager,
         mock_http_client,
     ):
+        from registry.exceptions import UrlValidationError
+
         client = PeerRegistryClient(peer_config=peer_config)
 
-        with patch("registry.services.skill_service._is_safe_url", return_value=False):
+        with patch(
+            "registry.utils.url_guard.validate_url",
+            side_effect=UrlValidationError("http://169.254.169.254/", "blocked"),
+        ):
             result = client._make_request(
                 "http://169.254.169.254/latest/meta-data/",
                 headers={"Authorization": "Bearer super-secret-token"},
@@ -841,6 +853,8 @@ class TestPeerRegistryClientSsrfGuard:
         mock_auth_manager,
         mock_http_client,
     ):
+        from registry.exceptions import UrlValidationError
+
         # A peer whose endpoint resolves to a private address: fetch must abort
         # before the HTTP call rather than send the bearer token there.
         peer = PeerRegistryConfig(
@@ -851,7 +865,10 @@ class TestPeerRegistryClientSsrfGuard:
         )
         client = PeerRegistryClient(peer_config=peer)
 
-        with patch("registry.services.skill_service._is_safe_url", return_value=False):
+        with patch(
+            "registry.utils.url_guard.validate_url",
+            side_effect=UrlValidationError("http://10.0.0.9", "blocked"),
+        ):
             result = client.fetch_servers()
 
         assert result is None
@@ -862,6 +879,8 @@ class TestPeerRegistryClientSsrfGuard:
         mock_auth_manager,
         mock_http_client,
     ):
+        from registry.exceptions import UrlValidationError
+
         peer = PeerRegistryConfig(
             peer_id="evil-peer",
             name="Evil Peer",
@@ -869,7 +888,40 @@ class TestPeerRegistryClientSsrfGuard:
         )
         client = PeerRegistryClient(peer_config=peer)
 
-        with patch("registry.services.skill_service._is_safe_url", return_value=False):
+        with patch(
+            "registry.utils.url_guard.validate_url",
+            side_effect=UrlValidationError("http://127.0.0.1:9000", "blocked"),
+        ):
             assert client.check_peer_health() is False
 
         client.client.get.assert_not_called()
+
+    def test_client_uses_pinned_federation_guarded_transport(
+        self,
+        peer_config,
+        mock_auth_manager,
+    ):
+        """The outbound client must be the rebinding-safe guarded transport.
+
+        The pre-check alone is TOCTOU-vulnerable to DNS rebinding, so the token
+        could otherwise be sent to a private/metadata address that the pre-check
+        just cleared. The authoritative defense is the pinned transport, which
+        re-resolves and validates inside every connect. This asserts the client
+        is built from the FEDERATION profile (no allowlist bypass) rather than a
+        plain httpx.Client.
+        """
+        from registry.utils.url_guard import (
+            FEDERATION_PROFILE,
+            GuardedTransport,
+        )
+
+        # Build with the real guarded_client (no mock) to inspect the transport.
+        client = PeerRegistryClient(peer_config=peer_config)
+
+        transport = client.client._transport
+        assert isinstance(transport, GuardedTransport)
+        assert transport._guard_profile is FEDERATION_PROFILE
+        # The federation profile grants no bypass: its allowlist is empty.
+        allowlist = FEDERATION_PROFILE.allowlist_factory()
+        assert not allowlist.hosts
+        assert not allowlist.cidrs
