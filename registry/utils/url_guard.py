@@ -166,6 +166,21 @@ def _proxy_allowlist() -> _Allowlist:
     )
 
 
+def _federation_allowlist() -> _Allowlist:
+    """Return the peer-federation allowlist: deliberately empty (no bypass).
+
+    Peer federation attaches a bearer credential to server-side requests and
+    connects to a registrant-supplied endpoint, so it must never inherit any
+    private-IP bypass. An empty allowlist means every private/loopback/
+    link-local/reserved/metadata address is blocked outright — an operator
+    ``github_extra_hosts``/``ssrf_allowed_hosts`` entry cannot re-permit a
+    private target on the federation path. This must match the empty allowlist
+    the write-time endpoint guard uses so write-time and fetch-time validation
+    share one trust boundary.
+    """
+    return _Allowlist()
+
+
 @dataclass(frozen=True)
 class _Profile:
     """A named validation profile: which allowlist and scheme rules apply."""
@@ -176,6 +191,7 @@ class _Profile:
 
 SKILL_PROFILE = _Profile(name="skill", allowlist_factory=_skill_allowlist)
 PROXY_PROFILE = _Profile(name="proxy", allowlist_factory=_proxy_allowlist)
+FEDERATION_PROFILE = _Profile(name="federation", allowlist_factory=_federation_allowlist)
 
 
 def _unwrap_ip(
