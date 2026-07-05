@@ -85,7 +85,8 @@ async def enrich_groups_from_mongodb(
     """
     # If groups already exist in token (non-empty array), use them
     if current_groups:
-        logger.debug(f"Client {client_id} has groups in token: {current_groups}")
+        # Count only: group names are organizational PII.
+        logger.debug(f"Client {client_id} has {len(current_groups)} groups in token")
         return current_groups
 
     logger.info(f"Client {client_id} has no groups in token, querying database")
@@ -100,7 +101,9 @@ async def enrich_groups_from_mongodb(
         if doc:
             db_groups = doc.get("groups", [])
             if db_groups:
-                logger.info(f"Enriched groups for client {client_id} from database: {db_groups}")
+                logger.info(
+                    f"Enriched {len(db_groups)} groups for client {client_id} from database"
+                )
                 return db_groups
             else:
                 logger.debug(f"Client {client_id} found in database but has no groups")
@@ -161,7 +164,8 @@ async def enrich_user_groups_from_mongodb(
     """
     # If groups already exist in token (non-empty array), use them
     if current_groups:
-        logger.debug(f"User {username} has groups in token: {current_groups}")
+        # Count only: group names are organizational PII.
+        logger.debug(f"User {username} has {len(current_groups)} groups in token")
         return current_groups
 
     logger.info(
@@ -179,7 +183,7 @@ async def enrich_user_groups_from_mongodb(
             db_groups = doc.get("groups", [])
             if db_groups:
                 logger.info(
-                    f"Enriched groups for user {username} from database: {db_groups}"
+                    f"Enriched {len(db_groups)} groups for user {username} from database"
                 )
                 return db_groups
             else:

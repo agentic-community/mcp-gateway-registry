@@ -366,9 +366,12 @@ class RetentionManager:
                         else 0,
                     }
 
-            except Exception as e:
-                logger.error(f"Failed to preview cleanup for {policy.table_name}: {e}")
-                preview[policy.table_name] = {"error": str(e)}
+            except Exception:
+                # Log the detail server-side only; do not return the raw
+                # exception string (it can carry a stack trace / internal paths
+                # and flows into the admin API response).
+                logger.exception(f"Failed to preview cleanup for {policy.table_name}")
+                preview[policy.table_name] = {"error": "preview failed"}
 
         return preview
 
@@ -434,9 +437,11 @@ class RetentionManager:
                     await db.rollback()
                     raise e
 
-        except Exception as e:
-            logger.error(f"Failed to cleanup table {table_name}: {e}")
-            return {"table": table_name, "status": "error", "error": str(e)}
+        except Exception:
+            # Log the detail server-side only; the raw exception string flows
+            # into the admin API response (stack-trace exposure).
+            logger.exception(f"Failed to cleanup table {table_name}")
+            return {"table": table_name, "status": "error", "error": "cleanup failed"}
 
     async def cleanup_all_tables(self, dry_run: bool = False) -> Dict[str, Any]:
         """Run cleanup on all tables with active retention policies."""
@@ -593,9 +598,10 @@ class RetentionManager:
                     except ValueError as e:
                         # Invalid identifier - skip this table
                         logger.warning(f"Skipping table with invalid name: {raw_table_name}: {e}")
-                    except Exception as e:
-                        logger.warning(f"Failed to get stats for table {raw_table_name}: {e}")
-                        stats[raw_table_name] = {"error": str(e)}
+                    except Exception:
+                        # Detail to server logs only; raw string flows to the API.
+                        logger.exception(f"Failed to get stats for table {raw_table_name}")
+                        stats[raw_table_name] = {"error": "stats unavailable"}
 
         except Exception as e:
             logger.error(f"Failed to get table statistics: {e}")
@@ -667,9 +673,10 @@ class RetentionManager:
 
             return size_info
 
-        except Exception as e:
-            logger.error(f"Failed to get database size: {e}")
-            return {"error": str(e)}
+        except Exception:
+            # Detail to server logs only; raw string flows to the API response.
+            logger.exception("Failed to get database size")
+            return {"error": "size unavailable"}
 
 
 # Global retention manager instance

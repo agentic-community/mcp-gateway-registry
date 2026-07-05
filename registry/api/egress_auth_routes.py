@@ -580,9 +580,15 @@ async def egress_callback(
             current_auth_method=current_method,
         )
     except EgressAuthError as exc:
+        # Detail to server logs only. Do NOT reflect the exception text into the
+        # browser response: EgressAuthError messages embed internal state (e.g.
+        # decryption / SECRET_KEY hints, wrapped upstream errors) — a
+        # stack-trace/internal-detail exposure. Show a generic message.
         logger.warning("egress callback failed: %s", exc)
-        # HTML-escape: the message can embed server/state-derived values.
-        return HTMLResponse(f"<h3>Connection failed: {escape(str(exc))}.</h3>", status_code=400)
+        return HTMLResponse(
+            "<h3>Connection failed. Please close this tab and try connecting again.</h3>",
+            status_code=400,
+        )
 
     # The egress consent is the web Connected-Accounts / MCP URL-mode elicitation
     # flow: the token is now vaulted, so show the close-tab page and let the user

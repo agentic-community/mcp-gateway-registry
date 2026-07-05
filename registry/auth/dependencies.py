@@ -545,9 +545,6 @@ async def _resolve_context_from_groups(
     they were authenticated (guards #933).
     """
     scopes = await map_cognito_groups_to_scopes(groups)
-    # Count only: group names are organizational PII and the scope list reveals
-    # the authz model. The username is a non-sensitive identifier already logged
-    # in the sibling warning below.
     logger.info(
         f"User {username} with {len(groups)} groups mapped to {len(scopes)} scopes"
     )
@@ -635,7 +632,9 @@ async def enhanced_auth(
     groups = session_data.get("groups", [])
     auth_method = session_data.get("auth_method", "oauth2")
 
-    logger.info(f"Enhanced auth debug for {username}: groups={groups}, auth_method={auth_method}")
+    logger.info(
+        f"Enhanced auth debug for {username}: {len(groups)} groups, auth_method={auth_method}"
+    )
 
     user_context = await _resolve_context_from_groups(
         username=username,
