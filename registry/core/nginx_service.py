@@ -1299,7 +1299,15 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
     ) -> str:
         """Sanitize a string for safe use inside an nginx set directive's double quotes.
 
-        Escapes double quotes and backslashes, and strips newlines.
+        Escapes double quotes and backslashes, strips newlines, and neutralizes
+        the ``$`` sigil. nginx has no backslash escape for ``$`` inside a quoted
+        string -- it always begins a variable reference -- so a stray ``$`` cannot
+        be safely represented and is stripped (like newlines). None of this
+        helper's legitimate inputs (backend URLs, hosts, paths, ids) contain a
+        live nginx variable, and a ``$`` reaching here is already malformed; a
+        rendered ``$undefined`` would otherwise fail ``nginx -t`` and block the
+        reload. It cannot break out to a new directive (that needs ``"`` + ``;``,
+        both handled), so this is defense-in-depth, not the primary guard.
 
         Args:
             value: Raw string (e.g., server_id from URL path)
@@ -1310,6 +1318,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         sanitized = re.sub(r"[\r\n]+", " ", value)
         sanitized = sanitized.replace("\\", "\\\\")
         sanitized = sanitized.replace('"', '\\"')
+        sanitized = sanitized.replace("$", "")
         return sanitized
 
     async def _generate_virtual_server_blocks(self) -> str:

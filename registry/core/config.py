@@ -1187,6 +1187,21 @@ class Settings(BaseSettings):
             "which fronts the internal-only location."
         ),
     )
+    egress_obo_allowed_audiences: str = Field(
+        default="",
+        description=(
+            "Optional operator allowlist for obo_exchange target_audience values "
+            "(whitespace-separated). When non-empty, a server may only register an "
+            "obo_exchange target_audience present in this exact set -- the "
+            "authoritative positive control. When empty (default), a shape "
+            "heuristic applies instead: the target must be an internal MCP "
+            "server's own IdP audience (an 'api://...' App ID URI or a bare "
+            "client-id/GUID), never an 'https://' host URL, so shared first-party "
+            "resources (Microsoft Graph, ARM, Key Vault, incl. sovereign clouds) "
+            "are rejected regardless of host spelling. Set this to lock obo down to "
+            "an explicit, audited set of internal server audiences."
+        ),
+    )
     auth_server_nginx_marker_secret: str = Field(
         default="",
         description=(

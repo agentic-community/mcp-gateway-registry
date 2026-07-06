@@ -28,26 +28,14 @@ _RFC7230_TOKEN_RE = re.compile(r"[A-Za-z0-9!#$%&'*+\-.^_`|~]+")
 _SERVER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
 
 
-# Well-known first-party IdP resources an obo_exchange target_audience must never
-# point at: exchanging the user's ingress token for one of these would mint a
-# broadly-scoped delegated token (e.g. Microsoft Graph) and forward it to the
-# server's upstream -- a confused-deputy token-exfiltration vector. obo targets
-# must be an internal MCP server's own app, not a shared first-party API. Matched
-# case-insensitively against both the GUID and host/URI forms.
-_FORBIDDEN_OBO_AUDIENCES: frozenset[str] = frozenset(
+# Well-known first-party IdP app-id GUIDs an obo_exchange target must never point
+# at (bare or in ``api://<guid>`` form): Microsoft Graph and legacy Azure AD Graph.
+# These are matched in addition to the shape rule below (a GUID is not an
+# ``https://`` host, so the shape rule alone would let them through).
+_FORBIDDEN_OBO_AUDIENCE_GUIDS: frozenset[str] = frozenset(
     {
-        # Microsoft Graph (app id + canonical hosts)
-        "00000003-0000-0000-c000-000000000000",
-        "https://graph.microsoft.com",
-        "https://graph.microsoft.com/",
-        "graph.microsoft.com",
-        # Azure AD Graph (legacy) + ARM + Key Vault + Office 365 shared APIs
-        "00000002-0000-0000-c000-000000000000",
-        "https://management.azure.com",
-        "https://management.azure.com/",
-        "https://management.core.windows.net",
-        "https://vault.azure.net",
-        "https://vault.azure.net/",
+        "00000003-0000-0000-c000-000000000000",  # Microsoft Graph
+        "00000002-0000-0000-c000-000000000000",  # Azure AD Graph (legacy)
     }
 )
 
@@ -110,20 +98,59 @@ def _is_gateway_own_audience(target_audience: str) -> bool:
     return target in own or target.rstrip("/") in own
 
 
-def _is_forbidden_obo_audience(target_audience: str) -> bool:
-    """True if target_audience is a well-known shared first-party IdP resource.
+def _obo_audience_allowlist() -> set[str]:
+    """Operator allowlist of permitted obo_exchange target_audience values.
 
-    An obo_exchange target must be an internal MCP server's own app. Pointing it
-    at Microsoft Graph / ARM / Key Vault / other shared APIs would exchange the
-    user's ingress token for a broadly-scoped delegated token and forward it to
-    the server's upstream (confused-deputy token exfiltration). Matched
-    case-insensitively against the GUID and host/URI forms, with and without a
-    trailing slash.
+    From ``EGRESS_OBO_ALLOWED_AUDIENCES`` (whitespace-separated). When non-empty
+    it is the authoritative positive control: only these exact audiences (compared
+    case-insensitively, trailing slash ignored) may be registered. Empty => the
+    shape heuristic in :func:`_is_disallowed_obo_audience` applies instead.
     """
-    target = target_audience.strip().lower()
+    from registry.core.config import settings
+
+    raw = getattr(settings, "egress_obo_allowed_audiences", "") or ""
+    return {a.strip().lower().rstrip("/") for a in raw.split() if a.strip()}
+
+
+def _is_disallowed_obo_audience(target_audience: str) -> bool:
+    """True if target_audience is not an acceptable obo_exchange target.
+
+    An obo target must be an internal MCP server's OWN IdP audience, never a
+    shared first-party resource (Microsoft Graph / ARM / Key Vault / any sovereign
+    cloud), or the exchange would mint a broadly-scoped delegated token and forward
+    it to the server's upstream (confused-deputy token exfiltration).
+
+    A **denylist of hosts cannot express this** (new first-party hosts, ports,
+    path suffixes, sovereign clouds, and ``api://<guid>`` forms all evade it), so
+    this is a POSITIVE control:
+
+    1. If the operator set ``EGRESS_OBO_ALLOWED_AUDIENCES``, the target must be in
+       that exact set (authoritative). Anything else is disallowed.
+    2. Otherwise a shape rule: an internal MCP server audience is an ``api://``
+       App ID URI (Entra) or a bare client-id / GUID (Keycloak/Entra), NOT an
+       ``http(s)://`` host URL. Every shared first-party API (Graph/ARM/Key Vault,
+       all clouds) is an ``https://`` host, so rejecting host-URL audiences blocks
+       them by construction regardless of host spelling, port, or path. The two
+       well-known first-party app-id GUIDs are additionally rejected in bare and
+       ``api://<guid>`` forms.
+    """
+    target = target_audience.strip().lower().rstrip("/")
     if not target:
+        # Empty is handled as "missing" by the caller; not this function's job.
         return False
-    return target in _FORBIDDEN_OBO_AUDIENCES or target.rstrip("/") in _FORBIDDEN_OBO_AUDIENCES
+
+    allowlist = _obo_audience_allowlist()
+    if allowlist:
+        return target not in allowlist
+
+    # Shape rule: reject host-based URLs (all shared first-party resources).
+    if target.startswith("https://") or target.startswith("http://"):
+        return True
+    # Reject the known first-party app-id GUIDs, bare or as api://<guid>.
+    bare = target[len("api://") :] if target.startswith("api://") else target
+    if bare in _FORBIDDEN_OBO_AUDIENCE_GUIDS:
+        return True
+    return False
 
 
 class CustomHeader(BaseModel):
@@ -641,13 +668,15 @@ class ServerInfo(BaseModel):
                 "egress_oauth.target_audience must differ from the gateway's own IdP "
                 "client id / app ID URI; same-app OBO is not a valid exchange"
             )
-        if _is_forbidden_obo_audience(target):
+        if _is_disallowed_obo_audience(target):
             raise ValueError(
-                f"egress_oauth.target_audience {target!r} is a shared first-party IdP "
-                "resource (e.g. Microsoft Graph / ARM / Key Vault); an obo_exchange "
-                "target must be an internal MCP server's own app, never a broad "
-                "first-party API (a delegated token for it would be exfiltrated to "
-                "the server's upstream)"
+                f"egress_oauth.target_audience {target!r} is not an allowed obo_exchange "
+                "target. It must be an internal MCP server's own IdP audience (an "
+                "'api://...' Entra App ID URI or a bare client-id/GUID), never an "
+                "'https://' host URL such as a shared first-party API (Microsoft Graph, "
+                "ARM, Key Vault). A delegated token for such a resource would be "
+                "exfiltrated to the server's upstream (confused deputy). Set "
+                "EGRESS_OBO_ALLOWED_AUDIENCES to pin an explicit allowlist."
             )
         return self
 

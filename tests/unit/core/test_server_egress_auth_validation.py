@@ -141,37 +141,86 @@ class TestGatewayOwnAudienceHelper:
 
 @pytest.mark.unit
 @pytest.mark.core
-class TestForbiddenOboAudience:
-    """target_audience must not be a shared first-party IdP resource (confused deputy)."""
+class TestDisallowedOboAudience:
+    """target_audience must be an internal app audience, never a shared first-party
+    resource. Enforced by a POSITIVE shape rule (not a bypassable host denylist)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_allowlist(self, monkeypatch):
+        # Exercise the shape heuristic (allowlist unset) unless a test opts in.
+        from registry.core.config import settings
+
+        monkeypatch.setattr(settings, "egress_obo_allowed_audiences", "", raising=False)
 
     @pytest.mark.parametrize(
         "aud",
         [
+            # Canonical shared resources ...
             "https://graph.microsoft.com",
             "https://graph.microsoft.com/",
             "https://GRAPH.microsoft.com",  # case-insensitive
-            "00000003-0000-0000-c000-000000000000",  # Graph app id GUID
             "https://management.azure.com",
             "https://vault.azure.net",
+            # ... and every denylist bypass the old exact-match check missed:
+            "https://graph.microsoft.com:443",  # explicit port
+            "https://graph.microsoft.com/.default",  # path/scope suffix
+            "https://graph.microsoft.us",  # GCC-High / DoD sovereign cloud
+            "https://dod-graph.microsoft.us",
+            "https://management.usgovcloudapi.net",  # sovereign ARM
+            "https://vault.azure.cn",  # China Key Vault
+            "http://graph.microsoft.com",  # http scheme
+            "00000003-0000-0000-c000-000000000000",  # Graph app id GUID (bare)
+            "api://00000003-0000-0000-c000-000000000000",  # Graph GUID in api:// form
         ],
     )
-    def test_forbidden_audiences_rejected(self, aud):
-        assert schemas._is_forbidden_obo_audience(aud) is True
+    def test_disallowed_audiences_rejected(self, aud):
+        assert schemas._is_disallowed_obo_audience(aud) is True
 
-    def test_internal_app_audience_allowed(self):
-        assert schemas._is_forbidden_obo_audience("api://outlook-mcp-server") is False
+    @pytest.mark.parametrize(
+        "aud",
+        [
+            "api://outlook-mcp-server",
+            "api://obo-echo-mcp-server",
+            "api://echo/access_as_user",
+            "7f3b0000-internal-app-guid",  # a non-first-party bare client id/GUID
+        ],
+    )
+    def test_internal_app_audiences_allowed(self, aud):
+        assert schemas._is_disallowed_obo_audience(aud) is False
 
     def test_obo_registration_rejects_graph_target(self, monkeypatch):
         from registry.core.config import settings
 
-        # No gateway id set, so the same-app check is inert -- the forbidden-audience
-        # check is what must reject Graph.
         monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
         monkeypatch.setattr(settings, "entra_client_id", "", raising=False)
-        with pytest.raises(ValidationError, match="shared first-party IdP resource"):
+        with pytest.raises(ValidationError, match="not an allowed obo_exchange target"):
             _server(
                 egress_auth_mode="obo_exchange",
-                egress_oauth=EgressOAuthConfig(target_audience="https://graph.microsoft.com"),
+                egress_oauth=EgressOAuthConfig(target_audience="https://graph.microsoft.com:443"),
+            )
+
+    def test_operator_allowlist_is_authoritative(self, monkeypatch):
+        from registry.core.config import settings
+
+        monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(settings, "entra_client_id", "", raising=False)
+        monkeypatch.setattr(
+            settings,
+            "egress_obo_allowed_audiences",
+            "api://outlook-mcp-server api://calendar-mcp-server",
+            raising=False,
+        )
+        # In-list target is accepted ...
+        s = _server(
+            egress_auth_mode="obo_exchange",
+            egress_oauth=EgressOAuthConfig(target_audience="api://outlook-mcp-server"),
+        )
+        assert s.egress_oauth.target_audience == "api://outlook-mcp-server"
+        # ... an api:// target NOT in the list is rejected even though its shape is fine.
+        with pytest.raises(ValidationError, match="not an allowed obo_exchange target"):
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth=EgressOAuthConfig(target_audience="api://not-approved"),
             )
 
 
