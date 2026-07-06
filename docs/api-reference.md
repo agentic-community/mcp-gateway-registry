@@ -1399,3 +1399,4 @@ curl -s http://localhost/openapi.json | \
 | Date | Version | Changes |
 |------|---------|---------|
 | 2025-11-01 | 1.0 | Initial API reference documentation, 49 endpoints cataloged |
+

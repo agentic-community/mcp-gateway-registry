@@ -155,15 +155,15 @@ Connected to DocumentDB/MongoDB 8.x.x
 
 > **Helm `storage_backend` note:** the `mongodb-configure` chart defaults to `storage_backend: mongodb-ce` (see [`charts/mongodb-configure/values.yaml`](../../charts/mongodb-configure/values.yaml)). That value is accepted by the registry. You may also override it to `mongodb` or `mongodb-atlas` — all three route to the same code path. Do not set it to `mongo` or other typos; the registry will fail startup at container init with a clear error listing accepted values.
 
-The [Helm chart](../../charts/mcp-gateway-registry-stack/) exposes the connection string through its values file. If using the [`mcp-gateway-registry-stack` chart](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/mcp-gateway-registry-stack), set the [mongodb.connectionString](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mcp-gateway-registry-stack/values.yaml#L95) variable (fill in the `"`s).
+The [Helm chart](../../charts/mcp-gateway-registry-stack/) exposes the connection string through its values file. If using the [`mcp-gateway-registry-stack` chart](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/mcp-gateway-registry-stack), set the [mongodb.connectionString](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mcp-gateway-registry-stack/values.yaml#L95) variable (fill in the `"`s). 
 
 This will set the connection string in the [`mongo-credentials` secret](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mongodb-configure/templates/secret.yaml#L17) , which will be used by both the mongodb configuration job and the registry to access MongoDB Atlas.
 
 You can also add the key to the mongodb-credentials secret manually (make sure to replace MYNAMESPACE with where you have deployed the registry:
 
 ```bash
-kubectl patch secret mongo-credentials -n MYNAMESPACE \
-  --patch '{"stringData":{"MONGODB_CONNECTION_STRING":"mongodb+srv://mcp_user:<urlencoded-password>@cluster0.abc123.mongodb.net/mcp_registry?retryWrites=true&w=majority"}}'
+kubectl patch secret mongo-credentials -n MYNAMESPACE \                                                                                                                                                                                                                                                      
+  --patch '{"stringData":{"MONGODB_CONNECTION_STRING":"mongodb+srv://mcp_user:<urlencoded-password>@cluster0.abc123.mongodb.net/mcp_registry?retryWrites=true&w=majority"}}'    
 ```
 
 ### Restart the registry
