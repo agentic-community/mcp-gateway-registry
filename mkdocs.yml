@@ -128,7 +128,8 @@ nav:
   - Legal:
     - License: LICENSE.md
     - Notice: NOTICE.md
-
+  - Release Notes:
+    - release-notes
 # Extra
 extra:
   social:

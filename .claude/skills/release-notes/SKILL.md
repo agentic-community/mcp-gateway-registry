@@ -15,13 +15,13 @@ Use this skill when the user wants to create release notes for a new version. Th
 
 The skill takes a version tag as input:
 - Format: `{major}.{minor}.{patch}` (e.g., `1.24.0`) - **no `v` prefix**, semver only
-- Older releases (pre-`1.23.0`) used a `v` prefix (e.g., `v1.0.22`) - existing artifacts under `release-notes/v*.md` and tags `v1.0.x` are preserved as-is, but **new releases must use the bare-semver convention**
+- Older releases (pre-`1.23.0`) used a `v` prefix (e.g., `v1.0.22`) - existing artifacts under `docs/release-notes/v*.md` and tags `v1.0.x` are preserved as-is, but **new releases must use the bare-semver convention**
 - If the user provides a `v`-prefixed version for a new release, strip the prefix and confirm
 
 ## Output
 
-Creates a release notes file in `release-notes/` and tags the repo:
-- `release-notes/{version}.md` - Release notes markdown file (e.g., `release-notes/1.24.0.md`)
+Creates a release notes file in `docs/release-notes/` and tags the repo:
+- `docs/release-notes/{version}.md` - Release notes markdown file (e.g., `docs/release-notes/1.24.0.md`)
 - Git tag `{version}` pointing to the commit that includes the release notes
 
 ## Workflow
@@ -39,7 +39,7 @@ The release notes are incremental from a previous version. Determine the base ve
 
 1. List existing release notes files (covers both old `v`-prefixed and new bare-semver names):
    ```bash
-   ls release-notes/*.md
+   ls docs/release-notes/*.md
    ```
 2. List existing git tags (any version-shaped tag, prefixed or bare):
    ```bash
@@ -162,8 +162,8 @@ Analyze all commits and PRs to categorize them:
 
 ### Step 5: Write Release Notes
 
-Create the file `release-notes/{version}.md` following this exact structure
-(note: bare semver, no `v` prefix, e.g. `release-notes/1.24.0.md`):
+Create the file `docs/release-notes/{version}.md` following this exact structure
+(note: bare semver, no `v` prefix, e.g. `docs/release-notes/1.24.0.md`):
 
 ```markdown
 # Release {version} - {Short Title Summarizing Major Features}
@@ -342,7 +342,7 @@ descending.}
 
 After writing the release notes file:
 
-1. Tell the user the file has been created at `release-notes/{version}.md`
+1. Tell the user the file has been created at `docs/release-notes/{version}.md`
 2. Present a brief summary:
    - Number of major features
    - Number of PRs included
@@ -356,18 +356,28 @@ After writing the release notes file:
 
 Once the user confirms the release notes are ready:
 
-1. **Commit the release notes:**
+1. **Add the new version to `mkdocs.yml`** so it appears at the top of the Release Notes nav in descending order. Find the `Release Notes:` section and insert the new entry immediately after the `- Overview:` line:
+   ```yaml
+   - Release Notes:
+     - Overview: release-notes/DISCLAIMER.md
+     - {version}: release-notes/{version}.md   # <-- insert here
+     - {previous_version}: release-notes/{previous_version}.md
+     ...
+   ```
+   Use Edit to insert the single line `    - {version}: release-notes/{version}.md` after the `Overview` line.
+
+2. **Commit the release notes and nav update together:**
    ```bash
-   git add release-notes/{version}.md
+   git add docs/release-notes/{version}.md mkdocs.yml
    git commit -m "docs: Add {version} release notes"
    ```
 
-2. **Push the commit:**
+3. **Push the commit:**
    ```bash
    git push origin main
    ```
 
-3. **Create or move the git tag** to point at this latest commit (which includes the release notes):
+4. **Create or move the git tag** to point at this latest commit (which includes the release notes):
    ```bash
    # If tag already exists, delete it locally and remotely first
    git tag -d {version} 2>/dev/null || true
@@ -380,20 +390,20 @@ Once the user confirms the release notes are ready:
    git push origin {version}
    ```
 
-4. **Verify:**
+5. **Verify:**
    ```bash
    git log --oneline -1
    git tag -l {version} --format="%(refname:short) -> %(objectname:short)"
    ```
 
-5. Tell the user the release notes are committed and the tag is created and pushed.
+6. Tell the user the release notes are committed and the tag is created and pushed.
 
 ## Important Rules
 
 - **Never skip the user confirmation** for base version in Step 2. The user may want to create release notes that span multiple versions.
 - **Never include emojis** in the release notes file. The project CLAUDE.md prohibits emojis in documentation.
 - **Never include Claude Code attribution** or "Co-Authored-By" lines in commits.
-- **Always use the `release-notes/` directory** at the project root for the output file.
+- **Always use the `docs/release-notes/` directory** for the output file.
 - **Always include upgrade instructions** for all three deployment methods (Docker Compose, Helm/EKS, Terraform/ECS).
 - **Always list breaking changes first** in the upgrade section -- this is the most critical information for operators.
 - **Always verify Helm Chart.yaml diffs** to detect dependency additions/removals -- these are the most common breaking changes for EKS users.
