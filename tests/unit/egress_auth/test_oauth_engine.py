@@ -144,6 +144,21 @@ class TestQuirkParsers:
         assert out["access_token"] == "xoxp-user"
         assert out["scope"] == "search:read"
 
+    def test_slack_user_endpoint_top_level_token(self):
+        # The v2_user token endpoint (oauth.v2.user.access) returns the user
+        # token at the TOP level rather than nested under authed_user. The parser
+        # must fall through to it instead of dropping the token.
+        cfg = PROVIDER_REGISTRY["slack"]
+        payload = {
+            "ok": True,
+            "access_token": "xoxp-user-top",
+            "token_type": "Bearer",
+            "scope": "search:read,chat:write",
+        }
+        out = oauth_engine._parse_token_response(cfg, payload)
+        assert out["access_token"] == "xoxp-user-top"
+        assert out["scope"] == "search:read,chat:write"
+
     def test_slack_error_raises(self):
         cfg = PROVIDER_REGISTRY["slack"]
         with pytest.raises(oauth_engine.OAuthEngineError, match="Slack token error"):
@@ -169,3 +184,51 @@ class TestQuirkParsers:
         assert data["client_secret"] == "sec"
         assert "Authorization" not in headers
         assert headers["Accept"] == "application/json"
+
+
+@pytest.mark.unit
+class TestPostTokenSsrfGuard:
+    """The token endpoint receives the operator client_secret (and, on refresh,
+    the user's refresh_token). For a 'custom' provider the token_url is
+    registrant-supplied, so ``_post_token`` must route through the SSRF/rebinding
+    -safe client and refuse a target that resolves to a private/metadata address
+    -- otherwise the credential is exfiltrated via SSRF. These exercise the real
+    ``_post_token`` (no monkeypatch of the chokepoint) so the transport guard is
+    on the path.
+    """
+
+    def _custom_cfg(self, token_url: str) -> OAuthProviderConfig:
+        return OAuthProviderConfig(
+            name="custom",
+            display_name="Custom OIDC",
+            is_builtin=False,
+            authorize_url="https://evil.example.com/authorize",
+            token_url=token_url,
+            use_pkce=True,
+        )
+
+    async def test_token_url_to_metadata_ip_fails_closed(self):
+        # A literal cloud-metadata target must be blocked before the secret is
+        # ever sent, surfaced as an OAuthEngineError (unreachable), not a token.
+        cfg = self._custom_cfg("http://169.254.169.254/latest/meta-data/")
+        data, headers = oauth_engine._build_token_request(
+            cfg, "cid", "supersecret", {"grant_type": "x"}
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="SSRF guard"):
+            await oauth_engine._post_token(cfg, data, headers)
+
+    async def test_token_url_to_loopback_fails_closed(self):
+        cfg = self._custom_cfg("http://127.0.0.1:8200/v1/secret")
+        data, headers = oauth_engine._build_token_request(
+            cfg, "cid", "supersecret", {"grant_type": "x"}
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="SSRF guard"):
+            await oauth_engine._post_token(cfg, data, headers)
+
+    async def test_token_url_to_rfc1918_fails_closed(self):
+        cfg = self._custom_cfg("http://10.0.0.5/token")
+        data, headers = oauth_engine._build_token_request(
+            cfg, "cid", "supersecret", {"grant_type": "x"}
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="SSRF guard"):
+            await oauth_engine._post_token(cfg, data, headers)

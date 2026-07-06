@@ -359,17 +359,26 @@ create_service_account_user() {
     fi
 }
 
-# Function to create test users
+# Function to create the realm admin user
 create_users() {
     local token=$1
-    
-    echo "Creating test users..."
-    
+
+    # SA-9: never create the admin user with a weak default password. Require an
+    # explicit INITIAL_ADMIN_PASSWORD and force a reset on first login.
+    if [ -z "$INITIAL_ADMIN_PASSWORD" ]; then
+        echo -e "${RED}Error: INITIAL_ADMIN_PASSWORD environment variable is required${NC}"
+        echo "This password is used for the realm 'admin' user in the ${REALM} realm."
+        echo "Set it in .env or export it before running this script:"
+        echo "  export INITIAL_ADMIN_PASSWORD='YourSecurePassword'"
+        exit 1
+    fi
+
+    echo "Creating realm admin user..."
+
     # Define usernames for consistency
     local admin_username="admin"
-    local test_username="testuser"
-    
-    # Create admin user
+
+    # Create admin user (temporary: true forces a password change on first login)
     local admin_user_json='{
         "username": "'$admin_username'",
         "email": "'$admin_username'@example.com",
@@ -380,113 +389,51 @@ create_users() {
         "credentials": [
             {
                 "type": "password",
-                "value": "'${INITIAL_ADMIN_PASSWORD:-changeme}'",
-                "temporary": false
+                "value": "'${INITIAL_ADMIN_PASSWORD}'",
+                "temporary": true
             }
         ]
     }'
-    
+
     curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
         -d "$admin_user_json" > /dev/null
-    
-    # Create test user
-    local test_user_json='{
-        "username": "'$test_username'",
-        "email": "'$test_username'@example.com",
-        "enabled": true,
-        "emailVerified": true,
-        "firstName": "Test",
-        "lastName": "User",
-        "credentials": [
-            {
-                "type": "password",
-                "value": "'${INITIAL_USER_PASSWORD:-testpass}'",
-                "temporary": false
-            }
-        ]
-    }'
-    
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
-        -H "Authorization: Bearer ${token}" \
-        -H "Content-Type: application/json" \
-        -d "$test_user_json" > /dev/null
-    
+
     echo "Assigning users to groups..."
-    
+
     # Get user IDs
     local admin_user_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$admin_username" | \
         jq -r '.[0].id')
-    
-    local test_user_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$test_username" | \
-        jq -r '.[0].id')
-    
-    # Get all group IDs
+
+    # Get the group IDs the admin user needs
     local admin_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" | \
         jq -r '.[] | select(.name=="mcp-registry-admin") | .id')
-    
-    local user_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" | \
-        jq -r '.[] | select(.name=="mcp-registry-user") | .id')
-    
-    local developer_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" | \
-        jq -r '.[] | select(.name=="mcp-registry-developer") | .id')
-    
-    local operator_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" | \
-        jq -r '.[] | select(.name=="mcp-registry-operator") | .id')
-    
+
     local unrestricted_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" | \
         jq -r '.[] | select(.name=="mcp-servers-unrestricted") | .id')
-    
-    local restricted_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" | \
-        jq -r '.[] | select(.name=="mcp-servers-restricted") | .id')
-    
+
     # Define usernames for consistent logging
     local admin_username="admin"
-    local test_username="testuser"
-    
+
     # Assign admin user to admin group and unrestricted servers group
     if [ ! -z "$admin_user_id" ] && [ ! -z "$admin_group_id" ]; then
         curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$admin_group_id" \
             -H "Authorization: Bearer ${token}" > /dev/null
         echo "  - $admin_username assigned to mcp-registry-admin group"
     fi
-    
+
     # Also assign admin to unrestricted servers group for full access
     if [ ! -z "$admin_user_id" ] && [ ! -z "$unrestricted_group_id" ]; then
         curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$unrestricted_group_id" \
             -H "Authorization: Bearer ${token}" > /dev/null
         echo "  - $admin_username assigned to mcp-servers-unrestricted group"
     fi
-    
-    # Assign test user to all groups except admin
-    if [ ! -z "$test_user_id" ]; then
-        # Arrays of group IDs and names for loop processing
-        local group_ids=("$user_group_id" "$developer_group_id" "$operator_group_id" "$unrestricted_group_id" "$restricted_group_id")
-        local group_names=("mcp-registry-user" "mcp-registry-developer" "mcp-registry-operator" "mcp-servers-unrestricted" "mcp-servers-restricted")
-        
-        # Loop through groups and assign test user to each
-        for i in "${!group_ids[@]}"; do
-            local group_id="${group_ids[$i]}"
-            local group_name="${group_names[$i]}"
-            
-            if [ ! -z "$group_id" ]; then
-                curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$test_user_id/groups/$group_id" \
-                    -H "Authorization: Bearer ${token}" > /dev/null
-                echo "  - $test_username assigned to $group_name group"
-            fi
-        done
-    fi
-    
-    echo -e "${GREEN}Users created and assigned to groups successfully!${NC}"
+
+    echo -e "${GREEN}Admin user created and assigned to groups successfully!${NC}"
 }
 
 # Function to create client secrets
@@ -925,11 +872,11 @@ main() {
     echo "Admin console: ${KEYCLOAK_URL}/admin"
     echo "Realm: ${REALM}"
     echo ""
-    echo "Default users created:"
-    echo "  - admin/changeme (admin access)"
-    echo "  - testuser/testpass (user access)"
+    echo "Users created:"
+    echo "  - admin (admin access) — password from INITIAL_ADMIN_PASSWORD"
     echo ""
-    echo -e "${YELLOW}Remember to change the default passwords!${NC}"
+    echo -e "${YELLOW}The admin password is set to 'temporary': you will be prompted to${NC}"
+    echo -e "${YELLOW}change it on first login.${NC}"
 }
 
 # Run main function

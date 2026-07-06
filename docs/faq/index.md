@@ -16,6 +16,7 @@ Common questions and answers about the MCP Gateway Registry.
 ## Connecting and Integration
 
 - [How do I get my AI coding assistant to work with this registry?](connect-ai-coding-assistant.md)
+- [How do I register commonly used third-party MCP servers like GitHub, Slack, and Atlassian?](registering-third-party-mcp-servers.md)
 - [How do I connect my agent to multiple MCP servers through the gateway?](connecting-multiple-mcp-servers.md)
 - [How do I test my agent's integration with the MCP Gateway locally?](local-testing-agent-integration.md)
 
@@ -23,6 +24,8 @@ Common questions and answers about the MCP Gateway Registry.
 
 - [How do I monitor the health of MCP servers?](monitoring-server-health.md)
 - [How do I configure MongoDB Atlas instead of MongoDB CE?](configuring-mongodb-atlas-backend.md)
+- [How do I migrate an existing local MongoDB to authenticated mode? (local dev only)](migrate-local-mongodb-to-authenticated.md)
+- [How do I rotate my MongoDB password and OpenBao token? (local Docker Compose, EC2/macOS)](rotate-mongodb-and-openbao-secrets.md)
 - [Why are some of my assets not showing up in semantic search?](fix-missing-search-embeddings.md)
 - [Why do I sometimes see search results for assets that no longer exist?](fix-stale-search-embeddings.md)
 
@@ -39,6 +42,7 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I restrict which agents a user can see based on their group?](group-restricted-agent-visibility.md)
 - [How do I restrict which MCP servers a user can see based on their Entra ID group?](restrict-server-visibility-by-entra-group.md)
 - [How do I create a non-admin group that can register servers and run health checks but cannot toggle, edit, or delete them?](read-write-non-admin-group.md)
+- [How do I set up a self-service workflow for AI assets (draft to review to active)?](self-service-asset-lifecycle-workflow.md)
 
 ## Authentication and API Access
 

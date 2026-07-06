@@ -35,6 +35,23 @@ _FALLBACK_DOMAIN = "example.com"  # RFC 2606 placeholder, never localhost
 _DEFAULT_HOST_DISPLAY_NAME = "MCP Gateway Registry"
 
 
+def _is_local_origin(
+    record: dict,
+) -> bool:
+    """Return True iff a record is locally owned (not synced from a peer/ingested).
+
+    The Publisher catalog must advertise only this registry's own assets, never
+    re-publish another registry's entries. Synced/ingested items are tagged by
+    ``sync_metadata.is_federated`` (peer sync) and/or ``registry_name != "local"``
+    (issue #1296). Skills are already filtered to ``registry_name="local"`` at the
+    query level; this guards servers and agents.
+    """
+    sync_metadata = record.get("sync_metadata") or {}
+    if sync_metadata.get("is_federated"):
+        return False
+    return (record.get("registry_name") or "local") == "local"
+
+
 def _resolve_publisher_domain() -> str:
     """Resolve the URN publisher FQDN.
 
@@ -138,6 +155,8 @@ async def _load_server_entries(
     entries: list[ArdCatalogEntry] = []
     skipped = 0
     for path, record in records.items():
+        if not _is_local_origin(record):
+            continue  # never re-publish synced/ingested items (issue #1296)
         url = _public_record_url(base_url, "servers", path)
         entry = ard_mapping.map_server(path, record, publisher, url, namespace)
         if entry is None:
@@ -158,6 +177,8 @@ async def _load_agent_entries(
     entries: list[ArdCatalogEntry] = []
     skipped = 0
     for path, record in records.items():
+        if not _is_local_origin(record):
+            continue  # never re-publish synced/ingested items (issue #1296)
         url = _public_record_url(base_url, "agents", path)
         entry = ard_mapping.map_agent(path, record, publisher, url, namespace)
         if entry is None:

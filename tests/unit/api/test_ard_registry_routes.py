@@ -57,7 +57,7 @@ class TestSearch:
         app = _make_app()
         with patch.object(
             ard_routes.ard_search_service, "search_and_scope",
-            AsyncMock(return_value=([_result("urn:air:x:server:a", 90)], 2)),
+            AsyncMock(return_value=([_result("urn:air:x:server:a", 90)], 2, [])),
         ):
             r = TestClient(app).post("/api/ard/search", json={"query": {"text": "hi"}})
         assert r.status_code == 200
@@ -72,7 +72,7 @@ class TestSearch:
         results = [_result(f"urn:air:x:server:{i}", 100 - i) for i in range(5)]
         with patch.object(
             ard_routes.ard_search_service, "search_and_scope",
-            AsyncMock(return_value=(results, 0)),
+            AsyncMock(return_value=(results, 0, [])),
         ):
             r = TestClient(app).post("/api/ard/search", json={"query": {"text": "q"}, "pageSize": 2})
         body = r.json()
@@ -84,7 +84,7 @@ class TestSearch:
         app = _make_app()
         with patch.object(
             ard_routes.ard_search_service, "search_and_scope",
-            AsyncMock(return_value=([], 0)),
+            AsyncMock(return_value=([], 0, [])),
         ):
             r = TestClient(app).post(
                 "/api/ard/search", json={"query": {"text": "q"}, "federation": federation}

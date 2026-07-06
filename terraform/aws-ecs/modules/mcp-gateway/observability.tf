@@ -126,8 +126,8 @@ locals {
 # METRICS-SERVICE ECS SERVICE
 # =============================================================================
 
-#checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "ecs_service_metrics" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   # metrics-service is optional: the core services (registry/auth/mcpgw) emit OTel
   # straight to their own ADOT sidecars, so the standalone metrics-service is only
   # created when an image is explicitly provided. Avoids requiring a build for a
@@ -267,6 +267,11 @@ module "ecs_service_metrics" {
           {
             name      = "METRICS_API_KEY_MCPGW"
             valueFrom = aws_secretsmanager_secret.metrics_api_key[0].arn
+          },
+          {
+            # Required: metrics-service refuses to start without a strong pepper.
+            name      = "METRICS_KEY_PEPPER"
+            valueFrom = aws_secretsmanager_secret.metrics_key_pepper[0].arn
           }
         ],
         var.otel_otlp_endpoint != "" ? [
@@ -412,8 +417,8 @@ resource "aws_iam_policy" "grafana_amp_query" {
 }
 
 # ALB target group for Grafana
-#checkov:skip=CKV_AWS_378:HTTP backend protocol is intentional - TLS terminates at ALB
 resource "aws_lb_target_group" "grafana" {
+  #checkov:skip=CKV_AWS_378:HTTP backend protocol is intentional - TLS terminates at ALB
   count       = var.enable_observability ? 1 : 0
   name_prefix = "graf-"
   port        = 3000
@@ -477,8 +482,8 @@ resource "aws_lb_listener_rule" "grafana_https" {
   tags = local.common_tags
 }
 
-#checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "ecs_service_grafana" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   count   = var.enable_observability ? 1 : 0
   source  = "terraform-aws-modules/ecs/aws//modules/service"
   version = "~> 6.0"
@@ -505,6 +510,9 @@ module "ecs_service_grafana" {
   create_task_exec_iam_role = true
   task_exec_iam_role_policies = {
     EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
+    # Issue #1325: lets the execution role pull the Grafana admin password from
+    # Secrets Manager (and KMS-decrypt it) for the container `secrets` valueFrom.
+    SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
   }
   create_tasks_iam_role = true
   tasks_iam_role_policies = {
@@ -579,10 +587,6 @@ module "ecs_service_grafana" {
           value = "false"
         },
         {
-          name  = "GF_SECURITY_ADMIN_PASSWORD"
-          value = var.grafana_admin_password
-        },
-        {
           name  = "GF_LOG_MODE"
           value = "console"
         },
@@ -593,6 +597,16 @@ module "ecs_service_grafana" {
         {
           name  = "GF_DASHBOARDS_MIN_REFRESH_INTERVAL"
           value = "10s"
+        }
+      ]
+
+      # Issue #1325: GF_SECURITY_ADMIN_PASSWORD comes from Secrets Manager via
+      # valueFrom (not a plaintext env value) so it does not appear in the
+      # rendered task definition.
+      secrets = [
+        {
+          name      = "GF_SECURITY_ADMIN_PASSWORD"
+          valueFrom = aws_secretsmanager_secret.grafana_admin_password[0].arn
         }
       ]
 
@@ -642,8 +656,17 @@ module "ecs_service_grafana" {
       environment = [
         { name = "AWS_REGION", value = data.aws_region.current.id },
         { name = "AMP_ENDPOINT", value = local.amp_query_endpoint },
-        { name = "GF_SECURITY_ADMIN_PASSWORD", value = var.grafana_admin_password },
         { name = "DASHBOARD_JSON", value = file("${path.module}/../../grafana/dashboards/mcp-analytics-comprehensive.json") },
+      ]
+
+      # Issue #1325: the post-install sidecar needs the admin password to build
+      # the Grafana API URL; pull it from Secrets Manager via valueFrom rather
+      # than a plaintext env value.
+      secrets = [
+        {
+          name      = "GF_SECURITY_ADMIN_PASSWORD"
+          valueFrom = aws_secretsmanager_secret.grafana_admin_password[0].arn
+        }
       ]
 
       # Log into the grafana container's log group (do NOT create a second group

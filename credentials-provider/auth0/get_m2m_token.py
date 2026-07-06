@@ -27,7 +27,7 @@ def _get_auth0_domain() -> str:
     """Get Auth0 domain from CLI arg or environment variable.
 
     Returns:
-        Auth0 domain (e.g., dev-abc123.us.auth0.com)
+        Auth0 domain (e.g., YOUR_TENANT.us.auth0.com)
 
     Raises:
         ValueError: If domain not provided
@@ -82,7 +82,7 @@ def _request_m2m_token(
     """Request M2M token from Auth0 using client credentials.
 
     Args:
-        auth0_domain: Auth0 domain (e.g., dev-abc123.us.auth0.com)
+        auth0_domain: Auth0 domain (e.g., YOUR_TENANT.us.auth0.com)
         client_id: OAuth2 client ID
         client_secret: OAuth2 client secret
         audience: API audience (defaults to Management API: https://{domain}/api/v2/)
@@ -122,13 +122,16 @@ def _request_m2m_token(
             timeout=30,
         )
 
-        # Log response details for debugging
+        # Log only the standard OAuth error code, not the full body: a
+        # token-endpoint error response can echo the client_id or partial
+        # credential context in error_description.
         if response.status_code != 200:
             try:
                 error_data = response.json()
-                logger.error(f"Auth0 error response: {json.dumps(error_data, indent=2)}")
+                _err = error_data.get("error", "unknown") if isinstance(error_data, dict) else "unknown"
+                logger.error(f"Auth0 token error (status {response.status_code}): error={_err}")
             except Exception:
-                logger.error(f"Auth0 error response (non-JSON): {response.text}")
+                logger.error(f"Auth0 token error (status {response.status_code}): non-JSON body omitted")
 
         response.raise_for_status()
 
@@ -173,7 +176,10 @@ def _display_decoded_token(claims: dict[str, str]) -> None:
     print("\n" + "=" * 60)
     print("DECODED JWT TOKEN CLAIMS")
     print("=" * 60)
-    print(json.dumps(claims, indent=2))
+    # Print claim NAMES only, not the full value dump: a token may carry custom
+    # or sensitive claims, and this stdout is the log sink in container/CI runs.
+    # The curated KEY INFORMATION section below shows specific structural fields.
+    print("Claims present: " + ", ".join(sorted(claims.keys())))
     print("\n" + "=" * 60)
     print("KEY INFORMATION")
     print("=" * 60)
@@ -240,24 +246,24 @@ def main() -> None:
         description="Get Auth0 M2M token using client credentials flow",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Example usage:
+Example usage (replace the placeholders with your own Auth0 values):
     # Using environment variables
-    export AUTH0_DOMAIN=dev-abc123.us.auth0.com
-    export AUTH0_M2M_CLIENT_ID=KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd
-    export AUTH0_M2M_CLIENT_SECRET=lbjH6Z81GkovgAHwXRV-qiKV9f6sUVzsnheJoX7KJcu2ojGXMTjJ4i0Zn49kKfVm
+    export AUTH0_DOMAIN=YOUR_TENANT.us.auth0.com
+    export AUTH0_M2M_CLIENT_ID=YOUR_AUTH0_CLIENT_ID
+    export AUTH0_M2M_CLIENT_SECRET=YOUR_AUTH0_CLIENT_SECRET
     uv run python -m credentials-provider.auth0.get_m2m_token
 
     # Using CLI arguments (Management API)
     uv run python -m credentials-provider.auth0.get_m2m_token \\
-        --auth0-domain dev-abc123.us.auth0.com \\
-        --client-id KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd \\
-        --client-secret lbjH6Z81GkovgAHwXRV-qiKV9f6sUVzsnheJoX7KJcu2ojGXMTjJ4i0Zn49kKfVm
+        --auth0-domain YOUR_TENANT.us.auth0.com \\
+        --client-id YOUR_AUTH0_CLIENT_ID \\
+        --client-secret YOUR_AUTH0_CLIENT_SECRET
 
     # Custom API audience
     uv run python -m credentials-provider.auth0.get_m2m_token \\
-        --auth0-domain dev-abc123.us.auth0.com \\
-        --client-id KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd \\
-        --client-secret lbjH6Z81GkovgAHwXRV-qiKV9f6sUVzsnheJoX7KJcu2ojGXMTjJ4i0Zn49kKfVm \\
+        --auth0-domain YOUR_TENANT.us.auth0.com \\
+        --client-id YOUR_AUTH0_CLIENT_ID \\
+        --client-secret YOUR_AUTH0_CLIENT_SECRET \\
         --audience https://my-api.example.com
 """,
     )
@@ -265,7 +271,7 @@ Example usage:
     parser.add_argument(
         "--auth0-domain",
         type=str,
-        help="Auth0 domain (e.g., dev-abc123.us.auth0.com). Can also use AUTH0_DOMAIN env var.",
+        help="Auth0 domain (e.g., YOUR_TENANT.us.auth0.com). Can also use AUTH0_DOMAIN env var.",
     )
 
     parser.add_argument(

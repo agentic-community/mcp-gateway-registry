@@ -49,9 +49,18 @@ PROVIDER_REGISTRY: dict[str, OAuthProviderConfig] = {
     "slack": OAuthProviderConfig(
         name="slack",
         display_name="Slack",
-        authorize_url="https://slack.com/oauth/v2/authorize",
-        token_url="https://slack.com/api/oauth.v2.access",  # nosec B106 - public OAuth token endpoint URL, not a credential
-        # Slack nests the user token under authed_user.access_token.
+        # mcp.slack.com is an OAuth resource server that requires a USER token
+        # (xoxp-), not a bot token (xoxb-). Its published AS metadata
+        # (https://mcp.slack.com/.well-known/oauth-authorization-server) points at
+        # Slack's dedicated user-token endpoints below -- NOT the classic
+        # oauth/v2/authorize + oauth.v2.access pair, which mints a bot token the
+        # MCP server rejects with 401. The user endpoints take a plain ``scope``
+        # (no ``user_scope`` indirection) and support PKCE S256 + client_secret_post.
+        authorize_url="https://slack.com/oauth/v2_user/authorize",
+        token_url="https://slack.com/api/oauth.v2.user.access",  # nosec B106 - public OAuth token endpoint URL, not a credential
+        # The user-token endpoint returns the token at the top level, but classic
+        # oauth.v2.access nests it under authed_user; the parser handles both
+        # (it falls back to the top-level access_token when authed_user is absent).
         token_response_parser="slack_nested",
     ),
 }

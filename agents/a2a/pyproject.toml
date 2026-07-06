@@ -10,6 +10,7 @@ dependencies = [
     "pydantic>=2.11.3",
     "python-dotenv>=1.2.2",
     "aiohttp>=3.14.0",
+    "pyjwt[crypto]>=2.9.0",
 ]
 
 [project.optional-dependencies]

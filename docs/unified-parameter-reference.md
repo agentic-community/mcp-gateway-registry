@@ -163,6 +163,8 @@ Fire-and-forget POST on register/delete.
 | Auth header name | `REGISTRATION_WEBHOOK_AUTH_HEADER` | `registration_webhook_auth_header` | `registry.app.registrationWebhookAuthHeader` | `Authorization` auto-prefixes `Bearer `. |
 | Auth token **(secret)** | `REGISTRATION_WEBHOOK_AUTH_TOKEN` | `registration_webhook_auth_token` | `registry.app.registrationWebhookAuthToken` | Token value. |
 | HTTP timeout | `REGISTRATION_WEBHOOK_TIMEOUT_SECONDS` | `registration_webhook_timeout_seconds` | `registry.app.registrationWebhookTimeoutSeconds` | Seconds. Default 10. |
+| Signing secret **(secret)** | `REGISTRATION_WEBHOOK_SIGNING_SECRET` | `registration_webhook_signing_secret` | `registry.app.registrationWebhookSigningSecret` | HMAC-SHA256 signing of payloads (`X-Registry-Signature`). Empty disables. (Issue #1330) |
+| Enforced initial status | `REGISTRATION_ENFORCED_STATUS` | `registration_enforced_status` | `registry.app.registrationEnforcedStatus` | Mandate initial lifecycle status (e.g. `draft`); mismatch 4xx. Empty = default `active`. (Issue #1330) |
 
 ---
 
@@ -363,8 +365,9 @@ that server's Connect dialog:
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
-| Secure flag | `SESSION_COOKIE_SECURE` | `session_cookie_secure` | `auth-server.app.sessionCookieSecure` | Must be `true` in HTTPS, `false` on plain-HTTP localhost. |
+| Secure flag | `SESSION_COOKIE_SECURE` | `session_cookie_secure` | `auth-server.app.sessionCookieSecure` | Secure by default (`true`); set `false` only on plain-HTTP localhost. |
 | Cookie domain | `SESSION_COOKIE_DOMAIN` | `session_cookie_domain` | `auth-server.app.sessionCookieDomain` | Leading dot for cross-subdomain; empty is safest. |
+| CORS allowlist | `CORS_ALLOWED_ORIGINS` | `cors_allowed_origins` | `registry.app.corsAllowedOrigins` | Comma-separated exact origins for credentialed cross-origin API access. Registry's own origin is always trusted; empty means same-origin only (no wildcard fallback). |
 
 ---
 
@@ -376,6 +379,7 @@ Controls the per-user tool allowlist filter applied at the registry REST endpoin
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Enable MCP tools/list filter | `MCP_TOOLS_LIST_FILTER_ENABLED` | `mcp_tools_list_filter_enabled` | `auth-server.app.mcpToolsListFilterEnabled`, `registry.app.mcpToolsListFilterEnabled` | Master switch for the MCP protocol tools/list filter. Default `true`. REST endpoints always filter regardless of this flag. |
 | MCP proxy max body bytes | `MCP_PROXY_MAX_BODY_BYTES` | `mcp_proxy_max_body_bytes` | `auth-server.app.mcpProxyMaxBodyBytes` | Upper bound (bytes) the auth-server proxy hop buffers when filtering tools/list; oversize returns HTTP 413. Default `2097152` (2 MiB). |
+| MCP proxy timeout | `MCP_PROXY_TIMEOUT` | `mcp_proxy_timeout` | `auth-server.app.mcpProxyTimeout` | Timeout (seconds) for the auth-server proxy hop's upstream MCP request; raise for servers with long-running tools. Minimum `1`. Default `30`. The generated `/mcp-proxy/` nginx blocks derive their `proxy_read_timeout`/`proxy_send_timeout` from this value plus a 30s buffer (default `30` -> `60s`), so raising it lifts the whole proxy chain and no separate nginx change is needed. Terraform var `mcp_proxy_timeout`. |
 | Tool-filter audit log level | `TOOL_FILTER_AUDIT_LOG_LEVEL` | `tool_filter_audit_log_level` | `auth-server.app.toolFilterAuditLogLevel`, `registry.app.toolFilterAuditLogLevel` | Launch-window log level for prune audit lines: `DEBUG`, `INFO`, or `WARNING`. Default `INFO`; flip to `DEBUG` after two quiet weeks in production. |
 | Internal token TTL | `INTERNAL_TOKEN_TTL_SECONDS` | `internal_token_ttl_seconds` | `auth-server.app.internalTokenTtlSeconds`, `registry.app.internalTokenTtlSeconds` | Lifetime (seconds) of the `/validate`-minted internal hop tokens that harden the `/mcp-proxy` hop and the registry `/api/` hop; the replay-window cap. Minimum 5. Default `30`. (auth-server mints; the value is the same TTL on both surfaces.) |
 | Internal token leeway | `INTERNAL_TOKEN_LEEWAY_SECONDS` | `internal_token_leeway_seconds` | `auth-server.app.internalTokenLeewaySeconds`, `registry.app.internalTokenLeewaySeconds` | Clock-skew leeway (seconds) on the internal hop tokens' `exp`/`iat` checks. Default `5`. Verification is always enforced (fail-closed); there is no opt-out. Reuses `SECRET_KEY` — no new secret. |

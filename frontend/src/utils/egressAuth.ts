@@ -16,6 +16,12 @@ export interface EgressConnection {
   last_refreshed_at: string | null;
 }
 
+export interface AvailableEgressServer {
+  server_path: string;
+  server_name: string;
+  provider: string;
+}
+
 async function csrfHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   try {
@@ -32,6 +38,12 @@ async function csrfHeaders(): Promise<Record<string, string>> {
 export async function listConnections(): Promise<EgressConnection[]> {
   const resp = await axios.get('/api/egress-auth/connections');
   return resp.data as EgressConnection[];
+}
+
+/** List egress-enabled servers the current user can access (for the dropdown). */
+export async function listAvailableServers(): Promise<AvailableEgressServer[]> {
+  const resp = await axios.get('/api/egress-auth/available-servers');
+  return resp.data as AvailableEgressServer[];
 }
 
 /** Begin consent for a server; returns the provider authorize URL to open. */

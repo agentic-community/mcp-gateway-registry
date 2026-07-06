@@ -132,10 +132,14 @@ async def _acquire_oauth2_token() -> str | None:
             )
 
         if response.status_code != 200:
+            # Do not log the response body: a token-endpoint error can echo the
+            # client_id or partial credential context. Log the OAuth error code.
+            try:
+                _err = response.json().get("error", "unknown")
+            except Exception:
+                _err = "unknown"
             logger.error(
-                f"OAuth2 token acquisition failed: "
-                f"status={response.status_code}, "
-                f"body={response.text[:200]}"
+                f"OAuth2 token acquisition failed: status={response.status_code}, error={_err}"
             )
             return None
 

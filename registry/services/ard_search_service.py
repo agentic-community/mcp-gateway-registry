@@ -24,7 +24,7 @@ from ..repositories.factory import (
     get_server_repository,
     get_skill_repository,
 )
-from ..schemas.ard_models import ArdCatalogEntry, ArdSearchResult
+from ..schemas.ard_models import ArdCatalogEntry, ArdReferral, ArdSearchResult
 from . import ard_mapping
 from .ard_service import (
     _namespace_for,
@@ -137,6 +137,72 @@ def _to_result(entry: ArdCatalogEntry, relevance: float, source: str) -> ArdSear
 # ---------------------------------------------------------------------------
 
 
+# Per-mode engine over-fetch multiplier. none/referrals drop foreign-origin hits
+# *after* the engine truncates, so over-fetch reduces short pages; auto drops
+# nothing. Capped at the engine hard limit (50) so it stays a single query.
+_OVERFETCH = {"none": 4, "referrals": 4, "auto": 1}
+_ENGINE_MAX = 50
+
+
+def _origin_id(
+    path: str,
+    known_ids: set[str],
+) -> str | None:
+    """Return the origin id (peer/source) embedded in ``path``, else None.
+
+    Synced servers/agents are stored at "/{id}/..." and ingested skills at
+    "/skills/{id}/...". A path identifies a foreign item only when one of its
+    segments is a registered peer or ai_catalog source id; otherwise it is local.
+    Scanning segments (rather than only the first) handles both layouts.
+    """
+    segments = [seg for seg in (path or "").split("/") if seg]
+    if len(segments) < 2:
+        return None  # a single-segment path is always local
+    for seg in segments:
+        if seg in known_ids:
+            return seg
+    return None
+
+
+async def _build_origin_map() -> tuple[dict[str, str], list[ArdReferral]]:
+    """Build {origin_id -> origin_url} and the peer referrals list in ONE pass.
+
+    A single ``list_peers`` call + one federation-config read (no per-item DB
+    read). Peers map to their ARD endpoint and become ``application/ai-registry+json``
+    referrals; ai_catalog sources map to their catalog URI for source attribution
+    only (publishers are folded into the index, not referred to).
+    """
+    origin_map: dict[str, str] = {}
+    referrals: list[ArdReferral] = []
+    try:
+        from .peer_federation_service import get_peer_federation_service
+
+        peers = await get_peer_federation_service().list_peers(enabled=True)
+        for peer in peers:
+            ard_url = peer.endpoint.rstrip("/") + "/api/ard"
+            origin_map[peer.peer_id] = ard_url
+            host = (peer.endpoint.split("//", 1)[-1].split("/", 1)[0]) or peer.peer_id
+            referrals.append(
+                ArdReferral(
+                    identifier=f"urn:air:{host}:registry:self",
+                    type=ard_mapping.MEDIA_TYPE_REGISTRY,
+                    url=ard_url,
+                )
+            )
+    except Exception as e:  # noqa: BLE001 - federation optional; degrade to local-only
+        logger.debug("Could not load peers for federation: %s", e)
+    try:
+        from ..repositories.factory import get_federation_config_repository
+
+        config = await get_federation_config_repository().get_config("default")
+        if config is not None:
+            for src in config.ai_catalog.sources:
+                origin_map[src.source_id] = src.resolve_uri()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Could not load ai_catalog sources for federation: %s", e)
+    return origin_map, referrals
+
+
 async def search_and_scope(
     text: str,
     entity_types: list[str] | None,
@@ -144,28 +210,59 @@ async def search_and_scope(
     window: int,
     user_context: dict,
     source_uri: str,
-) -> tuple[list[ArdSearchResult], int]:
-    """Run semantic search, access-scope each hit (no per-item DB read), map to
-    ARD results, rescale score to 0-100. Returns (ordered results, scoped_out).
+    federation: str = "auto",
+) -> tuple[list[ArdSearchResult], int, list[ArdReferral]]:
+    """Run semantic search, access-scope each hit (no per-item DB read), apply the
+    federation mode, map to ARD results, rescale score to 0-100.
+
+    Returns ``(ordered results, scoped_out, referrals)``. Modes:
+
+    - ``none``      - local-origin items only (no synced peer / ingested items).
+    - ``auto``      - the whole unified index; each result's ``source`` is its
+                      origin registry (peer ARD endpoint / catalog URI), local
+                      items keep this registry's search URI.
+    - ``referrals`` - local-origin items only, plus ``referrals[]`` pointers to
+                      peer registries.
 
     Ordering is deterministic (score desc, then identifier asc) so the opaque
     offset pageToken is stable across pages.
     """
     publisher = _resolve_publisher_domain()
     base_url = source_uri.rsplit("/api/ard", 1)[0]
+    origin_map, peer_referrals = await _build_origin_map()
+    known_ids = set(origin_map.keys())
+    drops_foreign = federation in ("none", "referrals")
+
+    factor = _OVERFETCH.get(federation, 1)
+    engine_window = min(max(window, 1) * factor, _ENGINE_MAX)
     search_repo = get_search_repository()
     raw = await search_repo.search(
         query=text,
         entity_types=entity_types,
-        max_results=min(max(window, 1), 50),
+        max_results=engine_window,
     )
 
     out: list[ArdSearchResult] = []
     scoped_out = 0
+    # Federated results whose url/identifier must be rewritten to the source's
+    # original descriptor (the "resolve" link). Collected here, overridden in one
+    # bulk read per type after the loops (no per-item DB read on the hot path).
+    fed_servers: list[tuple[ArdSearchResult, str]] = []
+    fed_agents: list[tuple[ArdSearchResult, str]] = []
+
+    def _src_for(path: str) -> str | None:
+        """Resolve a hit's source URI, or None when the mode drops it."""
+        sid = _origin_id(path, known_ids)
+        if drops_foreign and sid is not None:
+            return None
+        return origin_map.get(sid, source_uri) if sid else source_uri
 
     for hit in raw.get("servers", []):
         path = hit.get("path", "")
         if not _has_all_tags(hit.get("tags"), tags):
+            continue
+        src = _src_for(path)
+        if src is None:
             continue
         if not await user_can_access_server(path, hit.get("server_name", ""), user_context):
             scoped_out += 1
@@ -175,12 +272,18 @@ async def search_and_scope(
             _namespace_for("server"),
         )
         if entry:
-            out.append(_to_result(entry, hit.get("relevance_score", 0.0), source_uri))
+            result = _to_result(entry, hit.get("relevance_score", 0.0), src)
+            out.append(result)
+            if src != source_uri:  # federated -> resolve at source
+                fed_servers.append((result, path))
 
     for hit in raw.get("agents", []):
         path = hit.get("path", "")
         card = hit.get("agent_card") or {}
         if not _has_all_tags(card.get("tags"), tags):
+            continue
+        src = _src_for(path)
+        if src is None:
             continue
         if not user_can_access_agent_from_doc({"path": path, "agent_card": card}, user_context):
             scoped_out += 1
@@ -190,11 +293,17 @@ async def search_and_scope(
             _namespace_for("agent"),
         )
         if entry:
-            out.append(_to_result(entry, hit.get("relevance_score", 0.0), source_uri))
+            result = _to_result(entry, hit.get("relevance_score", 0.0), src)
+            out.append(result)
+            if src != source_uri:  # federated -> resolve at source
+                fed_agents.append((result, path))
 
     for hit in raw.get("skills", []):
         path = hit.get("path", "")
         if not _has_all_tags(hit.get("tags"), tags):
+            continue
+        src = _src_for(path)
+        if src is None:
             continue
         allowed = await user_can_access_skill(
             path, hit.get("visibility", ""), hit.get("owner", ""),
@@ -209,10 +318,44 @@ async def search_and_scope(
             _public_record_url(base_url, "skills", path), _namespace_for("skill"),
         )
         if entry:
-            out.append(_to_result(entry, hit.get("relevance_score", 0.0), source_uri))
+            out.append(_to_result(entry, hit.get("relevance_score", 0.0), src))
+
+    await _override_source_descriptor(fed_servers, get_server_repository())
+    await _override_source_descriptor(fed_agents, get_agent_repository())
 
     out.sort(key=lambda r: (-r.score, r.identifier))
-    return out, scoped_out
+    referrals = peer_referrals if federation == "referrals" else []
+    return out, scoped_out, referrals
+
+
+async def _override_source_descriptor(
+    federated: list[tuple[ArdSearchResult, str]],
+    repo,
+) -> None:
+    """Rewrite federated results' url/identifier to the source's original values.
+
+    One bulk read keyed by the federated paths (no per-item query). Ingested
+    records carry ``ard_source_url`` / ``ard_source_identifier`` (the link a
+    client dereferences to fetch the full descriptor and connect at the source).
+    """
+    if not federated:
+        return
+    paths = [path for _r, path in federated]
+    try:
+        # Records key on _id (== the stored path); the `path` field is unset, so
+        # filter by _id. find_with_filter returns a dict keyed by _id.
+        docs = await repo.find_with_filter({"_id": {"$in": paths}}, limit=None)
+    except Exception as e:  # noqa: BLE001 - degrade to locally-built url on error
+        logger.debug("Could not load source descriptors for federated results: %s", e)
+        return
+    for result, path in federated:
+        doc = docs.get(path) or {}
+        source_url = doc.get("ard_source_url")
+        source_identifier = doc.get("ard_source_identifier")
+        if source_url:
+            result.url = source_url
+        if source_identifier:
+            result.identifier = source_identifier
 
 
 # ---------------------------------------------------------------------------

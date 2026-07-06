@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from registry.utils.iam_errors import IdPForbiddenError, IdPNotFoundError
+from registry.utils.iam_errors import IdPNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -275,9 +275,11 @@ class TestManagementListUsers:
         # Act
         response = client.get("/api/management/iam/users")
 
-        # Assert
+        # Assert - generic message returned, raw IdP error NOT reflected (stack-trace exposure)
         assert response.status_code == 502
-        assert "Connection refused" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == "IAM provider error"
+        assert "Connection refused" not in detail
 
     def test_dedup_skips_mongo_entries_matching_idp(self, test_client_admin):
         """MongoDB entries whose client_id already appears in IdP are skipped.
@@ -435,7 +437,9 @@ class TestManagementDeleteUser:
             response = client.delete("/api/management/iam/users/some-user")
 
         assert response.status_code == 502
-        assert "Bad Gateway" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == "IAM provider error"
+        assert "Bad Gateway" not in detail
         mock_collection.delete_one.assert_not_called()
 
     def test_mongo_delete_filter_is_case_insensitive(self, test_client_admin):
@@ -459,10 +463,7 @@ class TestManagementDeleteUser:
         args, _kwargs = mock_collection.delete_one.call_args
         filter_doc = args[0]
         or_clauses = filter_doc["$or"]
-        patterns = [
-            clause.get("client_id") or clause.get("name")
-            for clause in or_clauses
-        ]
+        patterns = [clause.get("client_id") or clause.get("name") for clause in or_clauses]
         # Ensure each side of the $or is a compiled case-insensitive regex
         assert all(isinstance(p, _re.Pattern) for p in patterns)
         assert all(p.flags & _re.IGNORECASE for p in patterns)
@@ -623,6 +624,7 @@ class TestManagementCreateGroup:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=True,
+                allow_privileged=True,
             )
 
     def test_create_group_success_entra(self, test_client_admin):
@@ -674,6 +676,7 @@ class TestManagementCreateGroup:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=True,
+                allow_privileged=True,
             )
 
     def test_create_group_requires_admin(self, test_client_regular):
@@ -725,9 +728,11 @@ class TestManagementCreateGroup:
             },
         )
 
-        # Assert
+        # Assert - generic message returned, raw IdP error NOT reflected (stack-trace exposure)
         assert response.status_code == 502
-        assert "IAM service unavailable" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == "IAM provider error"
+        assert "IAM service unavailable" not in detail
 
     def test_create_group_scope_import_failure_logs_warning(self, test_client_admin):
         """Test that scope import failure is logged but doesn't fail the request."""
@@ -803,6 +808,7 @@ class TestManagementCreateGroup:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=True,
+                allow_privileged=True,
             )
 
 
@@ -858,6 +864,7 @@ class TestManagementCreateGroupCreateInIdp:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=False,
+                allow_privileged=True,
             )
 
     def test_create_group_with_create_in_idp_true(self, test_client_admin):
@@ -910,6 +917,7 @@ class TestManagementCreateGroupCreateInIdp:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=True,
+                allow_privileged=True,
             )
 
     def test_create_group_default_does_not_create_in_idp(self, test_client_admin):
@@ -949,6 +957,7 @@ class TestManagementCreateGroupCreateInIdp:
                 ui_permissions={},
                 agent_access=[],
                 is_idp_managed=False,
+                allow_privileged=True,
             )
 
 
@@ -976,9 +985,7 @@ class TestManagementDeleteGroupLocalOnly:
         client, mock_iam = test_client_admin
         # Provider managers translate a 404 error to IdPNotFoundError; the
         # route catches that typed exception and falls through.
-        mock_iam.delete_group.side_effect = IdPNotFoundError(
-            "Group 'local-group' not found"
-        )
+        mock_iam.delete_group.side_effect = IdPNotFoundError("Group 'local-group' not found")
 
         with (
             patch(
@@ -1060,9 +1067,7 @@ class TestManagementDeleteGroup:
         """Test that IdP 'not found' is handled gracefully (legacy record delete)."""
         # Arrange
         client, mock_iam = test_client_admin
-        mock_iam.delete_group.side_effect = IdPNotFoundError(
-            "Group 'nonexistent' not found"
-        )
+        mock_iam.delete_group.side_effect = IdPNotFoundError("Group 'nonexistent' not found")
 
         with (
             patch(
@@ -1101,9 +1106,11 @@ class TestManagementDeleteGroup:
         # Act
         response = client.delete("/api/management/iam/groups/test-group")
 
-        # Assert
+        # Assert - generic message returned, raw IdP error NOT reflected (stack-trace exposure)
         assert response.status_code == 502
-        assert "IAM service error" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == "IAM provider error"
+        assert "IAM service error" not in detail
 
     def test_delete_group_scope_deletion_failure_logs_warning(self, test_client_admin):
         """Test that scope deletion failure is logged but doesn't fail the request."""
@@ -1202,27 +1209,33 @@ class TestAgentWildcardNormalization:
 
     def test_coerce_wildcard_recognizes_all(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("all") == "all"
 
     def test_coerce_wildcard_recognizes_star(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("*") == "all"
 
     def test_coerce_wildcard_recognizes_slash_star(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("/*") == "all"
 
     def test_coerce_wildcard_strips_whitespace(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("  *  ") == "all"
 
     def test_coerce_wildcard_rejects_literal_paths(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard("/flight-booking") is None
         assert _coerce_agent_wildcard("agents/foo") is None
 
     def test_coerce_wildcard_rejects_non_strings(self):
         from registry.api.management_routes import _coerce_agent_wildcard
+
         assert _coerce_agent_wildcard(None) is None
         assert _coerce_agent_wildcard(42) is None
         assert _coerce_agent_wildcard([]) is None
@@ -1259,9 +1272,7 @@ class TestAgentWildcardNormalization:
     def test_normalize_agent_access_mixed_wildcard_and_paths(self):
         from registry.api.management_routes import _normalize_agent_paths_in_scope_config
 
-        agent_access, _ = _normalize_agent_paths_in_scope_config(
-            ["*", "flight-booking"], None
-        )
+        agent_access, _ = _normalize_agent_paths_in_scope_config(["*", "flight-booking"], None)
         assert agent_access == ["all", "/flight-booking"]
 
     def test_normalize_ui_permissions_collapses_wildcards(self):

@@ -1,5 +1,8 @@
 """Unit tests for the registration webhook notification service."""
 
+import hashlib
+import hmac
+import json
 import logging
 from unittest.mock import (
     AsyncMock,
@@ -10,7 +13,9 @@ import httpx
 import pytest
 
 from registry.services.webhook_service import (
+    SIGNATURE_HEADER,
     _build_auth_headers,
+    _sign_body,
     send_registration_webhook,
 )
 
@@ -19,6 +24,13 @@ SAMPLE_CARD = {
     "path": "test/server",
     "description": "A test server",
 }
+
+
+def _sent_payload(mock_client):
+    """Parse the JSON body sent via httpx content= from a mocked client."""
+    call = mock_client.post.call_args
+    body = call.kwargs["content"]
+    return json.loads(body)
 
 
 class TestBuildAuthHeaders:
@@ -87,6 +99,7 @@ class TestSendRegistrationWebhook:
             mock_settings.registration_webhook_auth_token = None
             mock_settings.registration_webhook_auth_header = "Authorization"
             mock_settings.registration_webhook_timeout_seconds = 10
+            mock_settings.registration_webhook_signing_secret = None
 
             await send_registration_webhook(
                 event_type="registration",
@@ -96,8 +109,7 @@ class TestSendRegistrationWebhook:
             )
 
             mock_client.post.assert_called_once()
-            call_kwargs = mock_client.post.call_args
-            payload = call_kwargs.kwargs["json"]
+            payload = _sent_payload(mock_client)
 
             assert payload["event_type"] == "registration"
             assert payload["registration_type"] == "server"
@@ -124,6 +136,7 @@ class TestSendRegistrationWebhook:
             mock_settings.registration_webhook_auth_token = None
             mock_settings.registration_webhook_auth_header = "Authorization"
             mock_settings.registration_webhook_timeout_seconds = 10
+            mock_settings.registration_webhook_signing_secret = None
 
             await send_registration_webhook(
                 event_type="deletion",
@@ -132,8 +145,7 @@ class TestSendRegistrationWebhook:
                 performed_by="bob",
             )
 
-            call_kwargs = mock_client.post.call_args
-            payload = call_kwargs.kwargs["json"]
+            payload = _sent_payload(mock_client)
 
             assert payload["event_type"] == "deletion"
             assert payload["registration_type"] == "agent"
@@ -155,6 +167,7 @@ class TestSendRegistrationWebhook:
             mock_settings.registration_webhook_auth_token = None
             mock_settings.registration_webhook_auth_header = "Authorization"
             mock_settings.registration_webhook_timeout_seconds = 10
+            mock_settings.registration_webhook_signing_secret = None
 
             await send_registration_webhook(
                 event_type="registration",
@@ -178,6 +191,7 @@ class TestSendRegistrationWebhook:
             mock_settings.registration_webhook_auth_token = None
             mock_settings.registration_webhook_auth_header = "Authorization"
             mock_settings.registration_webhook_timeout_seconds = 5
+            mock_settings.registration_webhook_signing_secret = None
 
             await send_registration_webhook(
                 event_type="registration",
@@ -235,6 +249,7 @@ class TestSendRegistrationWebhook:
             mock_settings.registration_webhook_auth_token = None
             mock_settings.registration_webhook_auth_header = "Authorization"
             mock_settings.registration_webhook_timeout_seconds = 10
+            mock_settings.registration_webhook_signing_secret = None
 
             await send_registration_webhook(
                 event_type="registration",
@@ -287,17 +302,20 @@ class TestSendRegistrationWebhook:
 
         captured_payload = {}
 
-        async def _capture_post(url, json, headers):
-            captured_payload.update(json)
+        async def _capture_post(url, content, headers):
+            import json as _json
+
+            captured_payload.update(_json.loads(content))
             response = MagicMock()
             response.status_code = 200
             return response
 
         with patch("registry.services.webhook_service.settings") as mock_settings:
             mock_settings.registration_webhook_url = "https://hooks.example.com/recv"
-            mock_settings.registration_webhook_auth_header_name = ""
+            mock_settings.registration_webhook_auth_header = "Authorization"
             mock_settings.registration_webhook_auth_token = ""
             mock_settings.registration_webhook_timeout_seconds = 10
+            mock_settings.registration_webhook_signing_secret = None
 
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value.post = _capture_post
@@ -325,3 +343,119 @@ class TestSendRegistrationWebhook:
         # Non-sensitive fields pass through.
         assert rt["package"] == "@acme/mcp"
         assert rt["required_env"] == ["API_KEY"]
+
+
+class TestSignBody:
+    """Tests for _sign_body (HMAC-SHA256 webhook signing, Issue #1330)."""
+
+    def test_returns_none_when_no_secret(self):
+        """No signature is produced when the signing secret is unset."""
+        with patch("registry.services.webhook_service.settings") as mock_settings:
+            mock_settings.registration_webhook_signing_secret = None
+            assert _sign_body(b'{"a":1}') is None
+
+    def test_matches_known_hmac_vector(self):
+        """Signature equals the HMAC-SHA256 of the body for the configured secret."""
+        with patch("registry.services.webhook_service.settings") as mock_settings:
+            mock_settings.registration_webhook_signing_secret = "sekret"
+            body = b'{"event_type":"registration"}'
+            expected = "sha256=" + hmac.new(b"sekret", body, hashlib.sha256).hexdigest()
+            assert _sign_body(body) == expected
+
+
+class TestWebhookSigningAndExtraFields:
+    """Signature header + extra_fields behavior on send_registration_webhook."""
+
+    def _mock_client(self):
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        return mock_client
+
+    @pytest.mark.asyncio
+    async def test_signature_header_present_and_verifiable(self):
+        """When a secret is set, X-Registry-Signature matches the sent bytes."""
+        mock_client = self._mock_client()
+        with (
+            patch("registry.services.webhook_service.settings") as mock_settings,
+            patch(
+                "registry.services.webhook_service.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            mock_settings.registration_webhook_url = "https://example.com/webhook"
+            mock_settings.registration_webhook_auth_token = None
+            mock_settings.registration_webhook_auth_header = "Authorization"
+            mock_settings.registration_webhook_timeout_seconds = 10
+            mock_settings.registration_webhook_signing_secret = "topsecret"
+
+            await send_registration_webhook(
+                event_type="registration",
+                registration_type="server",
+                card_data=SAMPLE_CARD,
+            )
+
+            call = mock_client.post.call_args
+            body = call.kwargs["content"]
+            headers = call.kwargs["headers"]
+            expected = "sha256=" + hmac.new(b"topsecret", body, hashlib.sha256).hexdigest()
+            assert headers[SIGNATURE_HEADER] == expected
+            assert hmac.compare_digest(headers[SIGNATURE_HEADER], expected)
+
+    @pytest.mark.asyncio
+    async def test_no_signature_header_when_secret_unset(self):
+        """No X-Registry-Signature header when the signing secret is unset."""
+        mock_client = self._mock_client()
+        with (
+            patch("registry.services.webhook_service.settings") as mock_settings,
+            patch(
+                "registry.services.webhook_service.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            mock_settings.registration_webhook_url = "https://example.com/webhook"
+            mock_settings.registration_webhook_auth_token = None
+            mock_settings.registration_webhook_auth_header = "Authorization"
+            mock_settings.registration_webhook_timeout_seconds = 10
+            mock_settings.registration_webhook_signing_secret = None
+
+            await send_registration_webhook(
+                event_type="registration",
+                registration_type="server",
+                card_data=SAMPLE_CARD,
+            )
+
+            headers = mock_client.post.call_args.kwargs["headers"]
+            assert SIGNATURE_HEADER not in headers
+
+    @pytest.mark.asyncio
+    async def test_extra_fields_merged_into_envelope(self):
+        """extra_fields are merged at the top level (e.g. scan_complete payload)."""
+        mock_client = self._mock_client()
+        with (
+            patch("registry.services.webhook_service.settings") as mock_settings,
+            patch(
+                "registry.services.webhook_service.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            mock_settings.registration_webhook_url = "https://example.com/webhook"
+            mock_settings.registration_webhook_auth_token = None
+            mock_settings.registration_webhook_auth_header = "Authorization"
+            mock_settings.registration_webhook_timeout_seconds = 10
+            mock_settings.registration_webhook_signing_secret = None
+
+            scan = {"is_safe": True, "severity_counts": {"critical": 0, "high": 0}}
+            await send_registration_webhook(
+                event_type="scan_complete",
+                registration_type="server",
+                card_data=SAMPLE_CARD,
+                extra_fields={"scan": scan},
+            )
+
+            payload = _sent_payload(mock_client)
+            assert payload["event_type"] == "scan_complete"
+            assert payload["scan"] == scan

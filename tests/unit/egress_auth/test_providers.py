@@ -30,6 +30,16 @@ class TestProviderRegistry:
     def test_slack_has_nested_parser(self):
         assert PROVIDER_REGISTRY["slack"].token_response_parser == "slack_nested"
 
+    def test_slack_uses_user_token_endpoints(self):
+        # mcp.slack.com requires a USER token (xoxp-), not a bot token (xoxb-).
+        # Its published AS metadata points at the v2_user endpoints; the classic
+        # oauth/v2/authorize + oauth.v2.access pair mints a bot token the MCP
+        # server rejects with 401. Pin the user-token endpoints so we don't
+        # regress to the bot-token flow.
+        slack = PROVIDER_REGISTRY["slack"]
+        assert slack.authorize_url == "https://slack.com/oauth/v2_user/authorize"
+        assert slack.token_url == "https://slack.com/api/oauth.v2.user.access"
+
     def test_google_offline_params(self):
         params = PROVIDER_REGISTRY["google"].extra_authorize_params
         assert params.get("access_type") == "offline"

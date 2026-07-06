@@ -40,6 +40,7 @@ All links verified working as of 2026-06-04.
 | **Virtual Servers** | Virtual MCP Server creation & management | ~few min | 2026-02-17 | Amit Arora | [Watch](https://app.vidcast.io/share/954e6296-f217-4559-8d86-88cec25af763) |
 | **Federation** | Federation Operational Guide demo | 0m 58s | 2026-02-05 | Amit Arora | [Watch](https://github.com/user-attachments/assets/630ce847-b151-4eaa-9cc9-2ec77797f2b5) |
 | **Federation** | AWS Agent Registry Federation | ~few min | 2026-04-11 | Amit Arora | [Watch](https://app.vidcast.io/share/6d2e0a43-4a68-477e-b5b9-2b3e2aa59f83?playerMode=vidcast) |
+| **Lifecycle / Governance** | Self-Service Asset Lifecycle Workflow (draft → active) with registration gate & webhook | under 7m | 2026-06-27 | Amit Arora | [Watch](https://app.vidcast.io/share/1313ea6e-2766-4380-88a6-c5142ee30a33) |
 | **AI Coding Assistants** | Codex CLI integration walkthrough | ~3m | 2026-06-02 | Amit Arora | [Watch](https://app.vidcast.io/share/25ed9141-b890-423c-b063-96da5cd9d533) |
 | **AI Coding Assistants** | AI coding assistant registry integration | ~few min | 2026-06-02 | Amit Arora | [Watch](https://app.vidcast.io/share/09a267f4-3a5c-43a4-91fb-f128ed0e7983) |
 

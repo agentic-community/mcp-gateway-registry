@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.26.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.26.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.26.0"
 }
 
 variable "enable_demo_servers" {
@@ -397,6 +397,12 @@ variable "session_cookie_secure" {
 
 variable "session_cookie_domain" {
   description = "Domain for session cookies (e.g., '.example.com' for cross-subdomain sharing). Leave empty for single-domain deployments (cookie scoped to exact host only)."
+  type        = string
+  default     = ""
+}
+
+variable "cors_allowed_origins" {
+  description = "Comma-separated exact browser origins allowed to make credentialed cross-origin requests to the registry API (e.g. 'https://app.example.com,https://admin.example.com'). The registry's own origin is always trusted. Empty means same-origin only; there is no wildcard fallback."
   type        = string
   default     = ""
 }
@@ -837,10 +843,15 @@ variable "pf_admin_user" {
 }
 
 variable "pf_admin_pass" {
-  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production."
+  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production. No default: supply a strong value when pingfederate_enabled is true."
   type        = string
-  default     = "2FederateM0re"
+  default     = ""
   sensitive   = true
+
+  validation {
+    condition     = var.pf_admin_pass != "2FederateM0re"
+    error_message = "pf_admin_pass must not be the well-known development default. Set a strong, unique PingFederate admin password."
+  }
 }
 
 variable "registry_static_token_auth_enabled" {
@@ -893,6 +904,19 @@ variable "registration_webhook_timeout_seconds" {
   description = "Timeout for webhook HTTP calls in seconds."
   type        = number
   default     = 10
+}
+
+variable "registration_webhook_signing_secret" {
+  description = "Shared secret for HMAC-SHA256 signing of outbound webhook payloads."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_enforced_status" {
+  description = "Mandated initial lifecycle status for new registrations (e.g. 'draft'). Empty = default 'active'."
+  type        = string
+  default     = ""
 }
 
 # Agent batch API (issue #956)
@@ -1219,6 +1243,12 @@ variable "mcp_proxy_max_body_bytes" {
   default     = 2097152
 }
 
+variable "mcp_proxy_timeout" {
+  description = "Timeout (seconds) for the auth-server proxy hop's upstream MCP request. Raise for servers with long-running tools. Minimum 1. Default 30. Values above 60 also require raising proxy_read_timeout on the generated /mcp-proxy/ nginx blocks (they inherit nginx's 60s default)."
+  type        = number
+  default     = 30
+}
+
 variable "tool_filter_audit_log_level" {
   description = "Log level for tool-pruning audit lines during the launch window. Valid values: DEBUG, INFO, WARNING."
   type        = string
@@ -1535,4 +1565,67 @@ variable "mcpgw_extra_env" {
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
+}
+
+# ---------------------------------------------------------------------------
+# Per-user egress credential vault (third-party OBO support).
+# On ECS the natural secret store is AWS Secrets Manager (OpenBao is the EKS
+# path), so only the secrets-manager vars are wired here. iam.tf grants the
+# task role secretsmanager + kms access (scoped to the path prefix) when
+# egress_auth_enabled.
+# ---------------------------------------------------------------------------
+
+variable "egress_auth_enabled" {
+  description = "Enable the per-user egress credential vault. Default: false."
+  type        = bool
+  default     = false
+}
+
+variable "egress_secret_store_backend" {
+  description = "Egress secret store backend: secrets-manager (openbao is the EKS/Helm path)."
+  type        = string
+  default     = "secrets-manager"
+}
+
+variable "egress_oauth_callback_base_url" {
+  description = "Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback)."
+  type        = string
+  default     = ""
+}
+
+variable "egress_token_refresh_skew_seconds" {
+  description = "Refresh a vaulted token this many seconds before expiry."
+  type        = number
+  default     = 300
+}
+
+variable "egress_state_ttl_seconds" {
+  description = "TTL for the AEAD-encrypted egress OAuth state blob."
+  type        = number
+  default     = 600
+}
+
+variable "egress_registry_internal_url" {
+  description = "URL the auth-server uses to reach the registry internal vend endpoint."
+  type        = string
+  default     = "http://registry:8080"
+}
+
+variable "egress_nginx_marker_secret" {
+  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally -- both services refuse to start without it."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "egress_secrets_manager_kms_key_id" {
+  description = "Optional KMS CMK id/ARN for the egress Secrets Manager secrets. Empty uses the AWS-managed key."
+  type        = string
+  default     = ""
+}
+
+variable "egress_secrets_manager_path_prefix" {
+  description = "Secrets Manager name prefix for the egress vault (also scopes the task IAM grant)."
+  type        = string
+  default     = "mcp/egress"
 }

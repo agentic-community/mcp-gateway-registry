@@ -85,6 +85,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             # Tool-level access control (issue #1026)
             ("mcp_tools_list_filter_enabled", "MCP tools/list Filter Enabled", False),
             ("mcp_proxy_max_body_bytes", "MCP Proxy Max Body Bytes", False),
+            ("mcp_proxy_timeout", "MCP Proxy Timeout (seconds)", False),
             ("tool_filter_audit_log_level", "Tool Filter Audit Log Level", False),
             ("internal_token_ttl_seconds", "MCP Proxy Token TTL (seconds)", False),
             ("internal_token_leeway_seconds", "MCP Proxy Token Leeway (seconds)", False),
@@ -301,6 +302,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("registration_webhook_auth_header", "Auth Header Name", False),
             ("registration_webhook_auth_token", "Auth Token", True),
             ("registration_webhook_timeout_seconds", "Timeout (s)", False),
+            ("registration_webhook_signing_secret", "Signing Secret", True),
+            ("registration_enforced_status", "Enforced Initial Status", False),
         ],
     },
     "registration_gate": {

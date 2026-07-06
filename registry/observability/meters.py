@@ -39,7 +39,6 @@ from registry.observability._compat import (
     _HistogramAdapter,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -204,6 +203,26 @@ _config_export_requests_counter = _meter.create_counter(
     unit="1",
 )
 config_export_requests_total = _CounterAdapter(_config_export_requests_counter)
+
+# Outbound registration-webhook delivery health (Issue #1330).
+# Labels: event_type (registration|update|deletion|scan_complete),
+#         outcome (success|timeout|error|skipped_no_url).
+_webhook_send_counter = _meter.create_counter(
+    name="mcpgw_registry_webhook_send_total",
+    description="Outbound registration webhook deliveries by event type and outcome",
+    unit="1",
+)
+webhook_send_total = _CounterAdapter(_webhook_send_counter)
+
+# Registrations rejected because REGISTRATION_ENFORCED_STATUS was set and the
+# request's status did not match (Issue #1330). Labels: registration_type
+# (server|agent|skill).
+_registration_status_rejected_counter = _meter.create_counter(
+    name="mcpgw_registry_registration_status_rejected_total",
+    description="Registrations rejected due to enforced-status mismatch (4xx)",
+    unit="1",
+)
+registration_status_rejected_total = _CounterAdapter(_registration_status_rejected_counter)
 
 
 # Deployment mode info (registry/core/metrics.py:19)
@@ -440,6 +459,32 @@ ard_access_filtered_total = _meter.create_counter(
 ard_errors_total = _meter.create_counter(
     name="mcpgw_ard_errors_total",
     description="ARD Registry adapter errors by operation and error_code",
+    unit="1",
+)
+
+# --- ARD Phase 3: ingestion + federation trust (issue #1296) ---
+
+ard_ingestion_runs_total = _meter.create_counter(
+    name="mcpgw_ard_ingestion_runs_total",
+    description="ARD ai-catalog ingestion runs by source_id and status",
+    unit="1",
+)
+
+ard_ingestion_entries_total = _meter.create_counter(
+    name="mcpgw_ard_ingestion_entries_total",
+    description="ARD ingestion entries by source_id and outcome (indexed/rejected/orphaned)",
+    unit="1",
+)
+
+ard_ingestion_duration_ms = _meter.create_histogram(
+    name="mcpgw_ard_ingestion_duration",
+    description="ARD ingestion run wall time in milliseconds, by source_id",
+    unit="ms",
+)
+
+ard_trust_mismatch_total = _meter.create_counter(
+    name="mcpgw_ard_trust_mismatch_total",
+    description="ARD domain-anchored trust mismatches by source_id and policy",
     unit="1",
 )
 

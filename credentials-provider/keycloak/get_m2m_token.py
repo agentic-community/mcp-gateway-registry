@@ -146,10 +146,14 @@ class TokenGenerator:
             expiry_timestamp = datetime.now(UTC).timestamp() + expires_in
             expires_at = datetime.fromtimestamp(expiry_timestamp, UTC).isoformat()
 
-        # Save .env file with restricted permissions (contains secrets)
+        # Save .env file with restricted permissions (contains secrets).
+        # Create the file atomically with owner-only (0600) permissions so the
+        # token/secret is never briefly world/group-readable between create and
+        # chmod (the previous open()+chmod left such a race window).
         env_file = os.path.join(oauth_tokens_dir, f"{agent_name}.env")
         try:
-            with open(env_file, "w") as f:  # nosec - intentional credential storage for CLI token cache
+            fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:  # nosec - intentional credential storage for CLI token cache
                 f.write(f"# Generated access token for {agent_name}\n")
                 f.write(f"# Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f'export ACCESS_TOKEN="{access_token}"\n')  # nosec - intentional token storage in secured file
@@ -158,7 +162,7 @@ class TokenGenerator:
                 f.write(f'export KEYCLOAK_URL="{keycloak_url}"\n')
                 f.write(f'export KEYCLOAK_REALM="{realm}"\n')
                 f.write('export AUTH_PROVIDER="keycloak"\n')
-            os.chmod(env_file, 0o600)  # Restrict file permissions to owner only
+            os.chmod(env_file, 0o600)  # enforce 0600 even if the file pre-existed
         except Exception as e:
             self.error(f"Failed to save .env file: {e}")
             return False
@@ -186,9 +190,13 @@ class TokenGenerator:
         }
 
         try:
-            with open(json_file, "w") as f:
+            # Create atomically with owner-only (0600) permissions; the JSON
+            # payload carries the access token so it must not be briefly
+            # world/group-readable between create and chmod.
+            fd = os.open(json_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
                 json.dump(token_json, f, indent=2)
-            os.chmod(json_file, 0o600)  # Restrict file permissions to owner only
+            os.chmod(json_file, 0o600)  # enforce 0600 even if the file pre-existed
         except Exception as e:
             self.error(f"Failed to save JSON file: {e}")
             return False

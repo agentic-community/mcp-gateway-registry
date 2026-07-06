@@ -3,9 +3,67 @@ from datetime import UTC
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from registry.common.secret_key import validate_secret_key
+
+
+def _normalize_cors_origin(value: str) -> str | None:
+    """Validate and normalize a single CORS origin string.
+
+    A valid origin is ``scheme://host[:port]`` with an ``http`` or ``https``
+    scheme and no path, query, fragment, credentials, or wildcard. This is a
+    strict allowlist check: anything that does not parse cleanly to an exact
+    origin returns ``None`` so the caller can reject it rather than widening
+    the CORS policy.
+
+    Args:
+        value: Candidate origin string (already whitespace-stripped).
+
+    Returns:
+        The normalized ``scheme://host[:port]`` origin (lower-cased scheme and
+        host), or ``None`` if the value is not a well-formed exact origin.
+    """
+    if not value or "*" in value:
+        return None
+    try:
+        parsed = urlparse(value)
+        # Accessing .port validates the port and may raise ValueError for an
+        # out-of-range or non-numeric port; catching it here fails closed.
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    if not parsed.hostname:
+        return None
+    # Reject anything carrying a path/query/fragment or userinfo: an origin is
+    # only scheme + host + optional port.
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    host = parsed.hostname.lower()
+    # Strip a single trailing dot (FQDN root label). Browsers never send a
+    # trailing-dot Origin header, so a configured "example.com." would be a
+    # dead entry; normalizing it keeps the allowlist matching real origins.
+    if host.endswith(".") and not host.endswith(".."):
+        host = host[:-1]
+    if not host:
+        return None
+    # urlparse strips the brackets from IPv6 literals; restore them so the
+    # reconstructed origin matches the bracketed form a browser sends in the
+    # Origin header (e.g. http://[::1]:8080). A colon in the hostname is only
+    # valid for an IPv6 literal.
+    if ":" in host:
+        host = f"[{host}]"
+    scheme = parsed.scheme.lower()
+    if port is not None:
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
 
 # Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist
 # at terraform/aws-ecs/variables.tf (issue #955) so both layers reject the same
@@ -17,6 +75,22 @@ ALLOWED_STORAGE_BACKENDS: frozenset[str] = frozenset(
         "mongodb",
         "mongodb-atlas",
     }
+)
+
+
+# Loopback origins auto-trusted for CORS only in local development (when the
+# container /app directory is absent). Covers the common React/Vite dev-server
+# ports on both localhost and 127.0.0.1. These are NEVER added in a container
+# deployment; production must configure CORS_ALLOWED_ORIGINS explicitly.
+LOCAL_DEV_CORS_ORIGINS: tuple[str, ...] = (
+    "http://localhost",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8000",
 )
 
 
@@ -90,8 +164,29 @@ class Settings(BaseSettings):
     secret_key: str = ""
     session_cookie_name: str = "mcp_gateway_session"
     session_max_age_seconds: int = 60 * 60 * 8  # 8 hours
-    session_cookie_secure: bool = False  # Set to True in production with HTTPS
+    # Secure-by-default: the session cookie carries the Secure flag so browsers
+    # only transmit it over HTTPS. Operators running a plain-HTTP local dev
+    # stack can explicitly opt out with SESSION_COOKIE_SECURE=false; every other
+    # deployment stays protected without extra configuration.
+    session_cookie_secure: bool = True
     session_cookie_domain: str | None = None  # e.g., ".example.com" for cross-subdomain sharing
+
+    # CORS allowlist. Comma-separated list of exact origins (scheme + host +
+    # optional port) permitted to make credentialed cross-origin requests to
+    # the registry API, e.g. "https://app.example.com,https://admin.example.com".
+    # There is deliberately NO wildcard / regex fallback: an unset or empty list
+    # means only same-origin requests are accepted (fail closed). In local dev
+    # (no /app dir) the loopback origins are auto-added so the React dev server
+    # keeps working; production must set this explicitly.
+    cors_allowed_origins: str = Field(
+        default="",
+        description=(
+            "Comma-separated exact origins allowed to make credentialed "
+            "cross-origin requests (e.g. https://app.example.com). Empty means "
+            "same-origin only; there is no wildcard fallback. Loopback origins "
+            "are auto-added in local dev."
+        ),
+    )
     auth_server_url: str = "http://localhost:8888"
     auth_server_external_url: str = "http://localhost:8888"  # External URL for OAuth redirects
     auth_provider: str = "cognito"  # Auth provider: cognito, keycloak, entra, github
@@ -143,6 +238,25 @@ class Settings(BaseSettings):
     registration_webhook_timeout_seconds: int = Field(
         default=10,
         description="Timeout for webhook HTTP calls in seconds",
+    )
+    registration_webhook_signing_secret: str | None = Field(
+        default=None,
+        description=(
+            "Shared secret for HMAC-SHA256 signing of outbound registration "
+            "webhook payloads. When set, an X-Registry-Signature header is added. "
+            "When unset, no signature is sent (current behavior)."
+        ),
+    )
+
+    # Lifecycle workflow settings (Issue #1330)
+    registration_enforced_status: str | None = Field(
+        default=None,
+        description=(
+            "When set (e.g. 'draft'), mandates the initial lifecycle status for all "
+            "new asset registrations. A registration with no status is forced to this "
+            "value; a registration with a different explicit status fails with 4xx. "
+            "Unset = current behavior (new assets default to 'active')."
+        ),
     )
 
     # Registration Gate Configuration (Admission Control, Issue #809)
@@ -297,6 +411,11 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ARD Phase 3 ingestion (issue #1296): all behavior config lives in the DB
+    # (FederationConfig.ai_catalog) and is managed via the federation API / External
+    # Registries UI, mirroring the Anthropic/ASOR/AWS upstream registries. No
+    # per-knob env vars here by design.
+
     # MCP OAuth discovery settings (RFC 9728 / RFC 8414)
     mcp_https_required: bool = Field(
         default=True,
@@ -410,6 +529,47 @@ class Settings(BaseSettings):
     github_api_base_url: str = Field(
         default="https://api.github.com",
         description="GitHub API base URL for App token exchange (for GHES: https://github.mycompany.com/api/v3)",
+    )
+
+    # SSRF guard allowlist for server/agent targets that legitimately live on
+    # private networks (e.g. self-hosted MCP servers behind Docker service DNS
+    # or an internal VPC). The URL guard fails closed by default: any host that
+    # resolves to a private/loopback/link-local/metadata address is rejected at
+    # registration and refused at fetch time. Operators who proxy to internal
+    # backends must explicitly opt those targets in here. The cloud metadata
+    # endpoint (169.254.169.254) can never be allowlisted.
+    ssrf_allowed_hosts: str = Field(
+        default="",
+        description=(
+            "Comma-separated hostnames (or literal IPs) that may resolve to "
+            "private addresses and still be accepted by the SSRF guard for "
+            "proxy_pass_url / agent URLs (e.g. 'mcpgw,host.docker.internal,"
+            "localhost'). Keep this list tight. The cloud metadata endpoint is "
+            "never permitted."
+        ),
+    )
+    ssrf_allowed_cidrs: str = Field(
+        default="",
+        description=(
+            "Comma-separated CIDR ranges whose addresses the SSRF guard accepts "
+            "for proxy_pass_url / agent URLs even though they are private (e.g. "
+            "'10.0.0.0/8,192.168.0.0/16'). Use for internal MCP-server subnets. "
+            "The cloud metadata address 169.254.169.254 is never permitted."
+        ),
+    )
+    nginx_config_validation_required: bool = Field(
+        default=False,
+        description=(
+            "Fail closed when a generated nginx config cannot be validated with "
+            "'nginx -t' because the nginx binary is absent from this process. "
+            "Leave False for single-container and local-dev deployments where the "
+            "registry and nginx share a process/image (a missing binary means "
+            "there is no nginx to cold-start). Set True for split topologies where "
+            "nginx runs in a separate container/sidecar sharing the config volume: "
+            "the registry cannot run 'nginx -t' itself, so an unvalidated config "
+            "must NOT be promoted (it would poison the sidecar's next cold start). "
+            "When True and the binary is absent, the last-known-good config is kept."
+        ),
     )
 
     # Update check (GitHub Releases API for newer registry versions)
@@ -868,6 +1028,17 @@ class Settings(BaseSettings):
             "with unusually large tool catalogs."
         ),
     )
+    mcp_proxy_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        description=(
+            "Timeout (seconds) for the auth-server proxy hop's upstream MCP "
+            "request. Raise for servers with long-running tools. The generated "
+            "/mcp-proxy/ nginx blocks derive their proxy_read_timeout from this "
+            "value (plus a 30s buffer), so raising it lifts the whole proxy "
+            "chain; no separate nginx change is needed."
+        ),
+    )
     tool_filter_audit_log_level: str = Field(
         default="INFO",
         description=(
@@ -972,13 +1143,17 @@ class Settings(BaseSettings):
     secret_store_backend: str = Field(
         default="openbao",
         description=(
-            "Secret store for per-user egress tokens. Accepted values: "
-            "secrets-manager, openbao."
+            "Secret store for per-user egress tokens. Accepted values: secrets-manager, openbao."
         ),
     )
     egress_oauth_callback_base_url: str = Field(
         default="",
-        description="Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback).",
+        description=(
+            "Public base URL for the egress OAuth callback "
+            "({base}/oauth2/egress/callback). Empty means derive from "
+            "registry_url; if neither is set, startup fails when "
+            "egress_auth_enabled."
+        ),
     )
     egress_token_refresh_skew_seconds: int = Field(
         default=300,
@@ -991,6 +1166,17 @@ class Settings(BaseSettings):
     egress_state_ttl_seconds: int = Field(
         default=600,
         description="Lifetime of the signed+encrypted OAuth consent state.",
+    )
+    egress_consent_use_elicitation: bool = Field(
+        default=False,
+        description=(
+            "How consent is delivered on a tools/call (etc.) for an unconnected "
+            "egress server. False (default, LLD baseline): a SUCCESSFUL tool "
+            "result with isError=true whose text carries the connect URL -- works "
+            "on every MCP client. True (enhancement): a -32042 "
+            "URLElicitationRequiredError -- cleaner UX but only on clients that "
+            "understand url-mode elicitation (others may swallow it)."
+        ),
     )
     egress_registry_internal_url: str = Field(
         default="http://registry:8080",
@@ -1265,14 +1451,91 @@ class Settings(BaseSettings):
         """Check if running in local development mode."""
         return not Path("/app").exists()
 
+    def _registry_url_is_loopback(self) -> bool:
+        """Return True when ``registry_url`` points at a loopback host.
+
+        Used to gate auto-trust of loopback CORS dev origins so a production
+        host that merely lacks the container ``/app`` directory does not widen
+        its CORS policy. Fails closed: an unparseable URL returns False.
+        """
+        try:
+            host = urlparse(self.registry_url).hostname
+        except ValueError:
+            return False
+        if not host:
+            return False
+        host = host.lower()
+        return host in ("localhost", "127.0.0.1", "::1") or host.endswith(".localhost")
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        """Resolve the effective CORS allowlist of exact origins.
+
+        The list is the union of:
+
+        1. Explicit operator-configured origins from ``CORS_ALLOWED_ORIGINS``
+           (comma-separated), each validated to be a well-formed origin
+           (``scheme://host[:port]`` with an http/https scheme, no path, query,
+           fragment, or wildcard). Malformed entries are dropped with a warning
+           rather than silently widening the policy.
+        2. The registry's own external origin derived from ``registry_url``
+           (so the app can always talk to itself).
+        3. The loopback dev origins in :data:`LOCAL_DEV_CORS_ORIGINS`, but only
+           when running against a loopback registry (a genuine local-dev stack).
+
+        There is intentionally no wildcard or regex fallback. If nothing is
+        configured and we are not in local dev, the result is either just the
+        registry's own origin or an empty list, meaning cross-origin requests
+        from third parties are denied (fail closed).
+
+        Returns:
+            De-duplicated list of exact origin strings, order-stable.
+        """
+        origins: list[str] = []
+
+        for raw in self.cors_allowed_origins.split(","):
+            candidate = raw.strip()
+            if not candidate:
+                continue
+            normalized = _normalize_cors_origin(candidate)
+            if normalized is None:
+                logger.warning(
+                    "Ignoring invalid CORS origin %r in CORS_ALLOWED_ORIGINS; "
+                    "expected an exact origin like https://app.example.com",
+                    candidate,
+                )
+                continue
+            origins.append(normalized)
+
+        self_origin = _normalize_cors_origin(self.registry_url)
+        if self_origin is not None:
+            origins.append(self_origin)
+
+        # Auto-trust loopback dev-server origins ONLY for a genuine local-dev
+        # stack. is_local_dev alone is a filesystem heuristic (no /app dir) that
+        # is also true on bare-metal / custom-image hosts, so we additionally
+        # require the registry itself to be reachable at a loopback host. This
+        # prevents a production host that merely lacks /app from silently
+        # trusting http://localhost:* origins (fail closed).
+        if self.is_local_dev and self._registry_url_is_loopback():
+            origins.extend(LOCAL_DEV_CORS_ORIGINS)
+
+        # De-duplicate while preserving insertion order.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for origin in origins:
+            if origin not in seen:
+                seen.add(origin)
+                deduped.append(origin)
+        return deduped
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if not self.secret_key:
-            raise RuntimeError(
-                "SECRET_KEY environment variable is required. "
-                "Set it to a value at least 32 bytes long, identical across all auth_server "
-                "and registry replicas (see chart values.yaml: global.secretKey)."
-            )
+        # Reject a missing, too-short, or well-known SECRET_KEY at startup so the
+        # registry can never run with a forgeable signing key. Store the
+        # validated (whitespace-stripped) value so the registry and auth_server
+        # derive an identical signing key from the same environment variable.
+        self.secret_key = validate_secret_key(self.secret_key)
         if not self.auth_server_nginx_marker_secret:
             raise RuntimeError(
                 "AUTH_SERVER_NGINX_MARKER_SECRET environment variable is required. "
@@ -1280,6 +1543,12 @@ class Settings(BaseSettings):
                 "auth_server and registry replicas (see chart values.yaml). Without it, the "
                 "auth_server mints mcp-proxy tokens unconditionally, letting a direct :8888 "
                 "/validate call with a forged X-Resolved-Upstream bypass nginx and obtain one."
+            )
+        if len(self.auth_server_nginx_marker_secret.encode()) < 32:
+            raise RuntimeError(
+                "AUTH_SERVER_NGINX_MARKER_SECRET must be at least 32 bytes long. Set it to a "
+                "strong random value at least 32 bytes long, identical across all auth_server "
+                "and registry replicas (see chart values.yaml)."
             )
         self._validate_egress_auth_config()
 
@@ -1305,11 +1574,23 @@ class Settings(BaseSettings):
                 f"{self.storage_backend!r}."
             )
 
-        if not self.egress_oauth_callback_base_url:
+        if not self.egress_oauth_callback_base_url and not self.registry_url:
             raise ValueError(
                 "EGRESS_AUTH_ENABLED=true requires EGRESS_OAUTH_CALLBACK_BASE_URL "
-                "(the public base URL for {base}/oauth2/egress/callback)."
+                "(the public base URL for {base}/oauth2/egress/callback), or a "
+                "REGISTRY_URL to derive it from; neither is set."
             )
+
+    @property
+    def egress_oauth_callback_base(self) -> str:
+        """Resolved public base URL for the egress OAuth callback.
+
+        Explicit egress_oauth_callback_base_url wins; otherwise fall back to
+        registry_url (the callback is served by the same host through nginx).
+        Both empty is rejected at startup by _validate_egress_auth_config when
+        egress is enabled, so a non-empty value is guaranteed there.
+        """
+        return self.egress_oauth_callback_base_url or self.registry_url
 
     @property
     def embeddings_model_dir(self) -> Path:

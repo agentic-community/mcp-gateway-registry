@@ -133,7 +133,8 @@ Save and exit (Ctrl+X, then Y, then Enter if using nano).
 
 **Set environment variables for deployment:**
 ```bash
-export DOCKERHUB_ORG=mcpgateway
+# Pre-built images are pulled from Amazon ECR Public (public.ecr.aws/p3v1o3c6)
+# by default. No registry login or DOCKERHUB_ORG is required.
 source .env
 export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
 ```
@@ -194,40 +195,17 @@ curl http://localhost:8080/realms/master
 # Should return JSON with realm information
 ```
 
-**6b. Disable SSL for master realm (required for HTTP access):**
-```bash
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "username=${KEYCLOAK_ADMIN}" \
-    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    -d "grant_type=password" \
-    -d "client_id=admin-cli" | \
-    jq -r '.access_token') && \
-curl -X PUT "http://localhost:8080/admin/realms/master" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"sslRequired": "none"}'
-```
+**6b. About SSL (no action needed):**
+
+Both realms ship with `sslRequired: external`, which requires TLS for external
+requests but allows plaintext HTTP from loopback. The commands below reach
+Keycloak over `http://localhost`, so they work without any change. Do NOT set
+`sslRequired: none` — that disables TLS enforcement for external requests too.
 
 **6c. Initialize Keycloak realm and clients:**
 ```bash
 chmod +x keycloak/setup/init-keycloak.sh
 ./keycloak/setup/init-keycloak.sh
-```
-
-**6d. Disable SSL for application realm:**
-```bash
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "username=${KEYCLOAK_ADMIN}" \
-    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    -d "grant_type=password" \
-    -d "client_id=admin-cli" | \
-    jq -r '.access_token') && \
-curl -X PUT "http://localhost:8080/admin/realms/mcp-gateway" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"sslRequired": "none"}'
 ```
 
 **6e. Retrieve and save client credentials:**

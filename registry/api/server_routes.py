@@ -31,18 +31,30 @@ from ..auth.csrf import (
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..auth.tool_filter import filter_tools_for_user
+from ..common.log_redaction import redact_mapping
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
+from ..schemas.registry_card import LifecycleStatus
 from ..schemas.server_update_models import (
     SERVER_REGISTRANT_ONLY_FIELDS,
     ServerCardPatch,
     ServerUpdateRequest,
 )
 from ..services.canonical_export import redact_backend_urls, to_canonical
+from ..services.lifecycle_events import (
+    EnforcedStatusError,
+    enforce_registration_status,
+    fire_scan_complete_event,
+    user_can_change_lifecycle_status,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
+from ..services.visibility import (
+    redact_server_backend_fields,
+    should_redact_backend_urls,
+)
 from ..services.webhook_service import send_registration_webhook
 from ..utils.credential_encryption import (
     encrypt_credential_in_server_dict,
@@ -62,6 +74,29 @@ class RatingRequest(BaseModel):
 
 # Templates
 templates = Jinja2Templates(directory=settings.templates_dir)
+
+
+def _require_admin(
+    user_context: dict | None,
+) -> None:
+    """Verify the caller has admin permissions.
+
+    Mirrors the gate used across the IAM management routes (see
+    registry/api/management_routes.py:_require_admin). Used by the External API
+    group-management endpoints, which are JWT mirrors of the admin-only
+    /api/internal/* routes and must enforce the same admin requirement.
+
+    Args:
+        user_context: User context from authentication.
+
+    Raises:
+        HTTPException: 403 if the caller is not an admin.
+    """
+    if not (user_context and user_context.get("is_admin")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator permissions are required for this operation",
+        )
 
 
 def _build_scan_headers_from_credentials(
@@ -365,6 +400,7 @@ async def _perform_security_scan_on_registration(
         )
 
         # Handle unsafe servers
+        auto_disabled = False
         if not scan_result.is_safe:
             logger.warning(
                 f"Server {path} failed security scan. "
@@ -385,6 +421,7 @@ async def _perform_security_scan_on_registration(
                 from ..repositories.factory import get_search_repository
 
                 await server_service.toggle_service(path, False)
+                auto_disabled = True
                 logger.warning(f"Disabled server {path} due to failed security scan")
 
                 # Update search index with disabled state
@@ -398,9 +435,24 @@ async def _perform_security_scan_on_registration(
         else:
             logger.info(f"Server {path} passed security scan")
 
+        # Emit scan_complete webhook (Issue #1330) on both safe and unsafe paths.
+        fire_scan_complete_event(
+            server_entry,
+            scan_result,
+            auto_disabled=auto_disabled,
+            registration_type="server",
+        )
+
     except Exception as e:
         logger.error(f"Security scan failed for {path}: {e}")
-        # Non-fatal error - server is registered but scan failed
+        # Non-fatal error - server is registered but scan failed. Still notify
+        # consumers so they are not left polling for a scan that never reports.
+        fire_scan_complete_event(
+            server_entry,
+            None,
+            scan_error=f"{type(e).__name__}: {e}",
+            registration_type="server",
+        )
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -519,11 +571,15 @@ async def read_root(
                     "mcp_endpoint": server_info.get("mcp_endpoint"),
                 }
             )
+            # Keep internal backend URLs out of the non-admin render context in
+            # with-gateway mode, matching the JSON read endpoints.
+            if should_redact_backend_urls(user_context):
+                redact_server_backend_fields(service_data[-1])
 
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "services": service_data,
             "username": user_context["username"],
             "user_context": user_context,  # Pass full user context to template
@@ -555,6 +611,15 @@ async def get_servers_json(
             "compatibility."
         ),
     ),
+    status_filter: str | None = Query(
+        None,
+        alias="status",
+        description=(
+            "Filter by exact lifecycle status: active, beta, draft, deprecated. "
+            "'active' also matches servers with no status field. Omit for default "
+            "behavior (active and beta shown; draft and deprecated excluded)."
+        ),
+    ),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """Get servers data as JSON for React frontend and external API.
@@ -573,15 +638,28 @@ async def get_servers_json(
     # Set audit action for server list
     set_audit_action(request, "list", "server", description="List all servers")
 
-    # CRITICAL DIAGNOSTIC: Log user_context received by endpoint
-    logger.debug(f"[GET_SERVERS_DEBUG] Received user_context: {user_context}")
-    logger.debug(f"[GET_SERVERS_DEBUG] user_context type: {type(user_context)}")
+    # Diagnostics: user_context can carry credential material, so redact before
+    # logging even at DEBUG.
+    logger.debug(f"[GET_SERVERS_DEBUG] user_context (redacted): {redact_mapping(user_context)}")
     if user_context:
         logger.debug(f"[GET_SERVERS_DEBUG] Username: {user_context.get('username', 'NOT PRESENT')}")
         logger.debug(f"[GET_SERVERS_DEBUG] Scopes: {user_context.get('scopes', 'NOT PRESENT')}")
         logger.debug(
             f"[GET_SERVERS_DEBUG] Auth method: {user_context.get('auth_method', 'NOT PRESENT')}"
         )
+
+    # Validate the optional lifecycle status filter (Issue #1330).
+    if status_filter is not None:
+        valid_statuses = {s.value for s in LifecycleStatus}
+        status_filter = status_filter.lower().strip()
+        if status_filter not in valid_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Invalid status '{status_filter}'. "
+                    f"Must be one of: {', '.join(sorted(valid_statuses))}"
+                ),
+            )
 
     service_data = []
     search_query = query.lower() if query else ""
@@ -591,7 +669,12 @@ async def get_servers_json(
     accessible_servers_list = user_context.get("accessible_servers", []) if user_context else []
     accessible_services = user_context.get("accessible_services", []) if user_context else []
     is_unrestricted = is_admin or "all" in accessible_servers_list or "all" in accessible_services
-    has_field_filters = bool(query)
+    # Redaction decision is per-request (admin + deployment mode), so compute
+    # it once rather than per server row.
+    redact_backend = should_redact_backend_urls(user_context)
+    # A status filter is a field filter: force the fallback path so it applies
+    # uniformly for both restricted and unrestricted users (Issue #1330).
+    has_field_filters = bool(query) or status_filter is not None
 
     # Dual-path pagination:
     # - Fast path: DB-level skip/limit for unrestricted users without field filters
@@ -635,6 +718,13 @@ async def get_servers_json(
             and technical_name not in normalized_accessible_services
         ):
             continue
+
+        # Exact lifecycle status filter (Issue #1330). Missing status is treated
+        # as 'active', consistent with _build_status_filter in search.
+        if status_filter is not None:
+            server_status = (server_info.get("status") or "active").lower()
+            if server_status != status_filter:
+                continue
 
         # Include description, tags, and metadata in search
         server_metadata = server_info.get("metadata", {})
@@ -711,6 +801,11 @@ async def get_servers_json(
                         "mcp_server_version_updated_at"
                     ),
                     "sync_metadata": server_info.get("sync_metadata"),
+                    # ARD discovery imports (issue #1296): link to the source's
+                    # original descriptor (server.json) so a client can resolve +
+                    # connect at the source. None for local/non-ARD servers.
+                    "record_kind": server_info.get("record_kind"),
+                    "ard_source_url": server_info.get("ard_source_url"),
                     "auth_scheme": server_info.get("auth_scheme", "none"),
                     "auth_header_name": server_info.get("auth_header_name"),
                     "tool_list": _filtered_tools,
@@ -747,6 +842,10 @@ async def get_servers_json(
                     "registered_by": server_info.get("registered_by"),
                 }
             )
+            # Strip internal backend URLs (top-level and per-version) for
+            # non-admins in with-gateway mode, matching GET /servers/{path}.
+            if redact_backend:
+                redact_server_backend_fields(service_data[-1])
 
     # Compute pagination metadata
     if is_unrestricted and not has_field_filters:
@@ -936,6 +1035,26 @@ def _to_dt(value: Any) -> datetime | None:
     return None
 
 
+def _require_admin(user_context: dict | None) -> None:
+    """Reject the request unless the caller is an authenticated admin.
+
+    Mirrors the sibling ``_require_admin`` helpers in management_routes.py,
+    log_routes.py, etc. Used to gate scope/group mutation endpoints, which
+    have no finer-grained permission model and must be admin-only.
+
+    Args:
+        user_context: Authenticated user context (may be None if auth failed).
+
+    Raises:
+        HTTPException: 403 if the user is missing or not an admin.
+    """
+    if not user_context or not user_context.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator permissions are required for this operation",
+        )
+
+
 def _check_server_permission(
     permission: str,
     server_name: str,
@@ -969,6 +1088,41 @@ def _check_server_permission(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"You do not have permission to {permission} for {server_name}",
         )
+
+
+def _check_lifecycle_status_permission(
+    server_name: str,
+    user_context: dict[str, Any],
+) -> None:
+    """Check whether the user may change a server's lifecycle status (Issue #1330).
+
+    Lifecycle promotion/deprecation is gated separately from modify_service so a
+    scope can allow ordinary metadata edits without allowing status changes.
+    Admins always pass (existing admin scopes predate this permission); other
+    users need the 'change_lifecycle_status' UI permission for the server.
+
+    Args:
+        server_name: Display name of the server, used for the 403 detail.
+        user_context: Authenticated user context.
+
+    Raises:
+        HTTPException: 403 if the user may not change lifecycle status.
+    """
+    if user_can_change_lifecycle_status(server_name, user_context):
+        return
+
+    logger.warning(
+        f"User {user_context.get('username')} attempted to change lifecycle status "
+        f"of server {server_name} without change_lifecycle_status permission"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"You do not have permission to change the lifecycle status of "
+            f"{server_name}. This action requires the 'change_lifecycle_status' "
+            f"permission, which is typically granted to admins."
+        ),
+    )
 
 
 def _merge_server_update(
@@ -1287,9 +1441,18 @@ async def register_service(
                 detail="Failed to encrypt custom headers",
             )
 
-    # Add lifecycle and federation fields
-    if service_status:
-        server_entry["status"] = service_status
+    # Add lifecycle and federation fields. Apply the enforced-status policy
+    # (Issue #1330): when REGISTRATION_ENFORCED_STATUS is set, a missing status
+    # is forced to it and a mismatched status is rejected with 400.
+    try:
+        effective_status = enforce_registration_status(service_status, "server")
+    except EnforcedStatusError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    if effective_status:
+        server_entry["status"] = effective_status
 
     # Add provider information (stored as nested AgentProvider object)
     if provider_organization or provider_url:
@@ -1678,9 +1841,7 @@ async def internal_register_service(
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
 
-    logger.warning(
-        "INTERNAL REGISTER: Updating scopes for new server"
-    )  # TODO: replace with debug
+    logger.warning("INTERNAL REGISTER: Updating scopes for new server")  # TODO: replace with debug
 
     # Update scopes with the new server's tools
     from ..services.scope_service import update_server_scopes
@@ -2078,9 +2239,9 @@ async def edit_server_form(
             )
 
     return templates.TemplateResponse(
+        request,
         "edit_server.html",
         {
-            "request": request,
             "server": server_info,
             "username": user_context["username"],
             "user_context": user_context,
@@ -2450,9 +2611,9 @@ async def token_generation_page(
 ):
     """Show token generation page for authenticated users."""
     return templates.TemplateResponse(
+        request,
         "token_generation.html",
         {
-            "request": request,
             "username": user_context["username"],
             "user_context": user_context,
             "user_scopes": user_context["scopes"],
@@ -2486,10 +2647,16 @@ async def get_server_details(
     if service_path == "/all":
         if user_context["is_admin"]:
             return await server_service.get_all_servers()
-        else:
-            return await server_service.get_all_servers_with_permissions(
-                user_context["accessible_servers"]
-            )
+        all_accessible = await server_service.get_all_servers_with_permissions(
+            user_context["accessible_servers"]
+        )
+        # Strip internal backend URLs per server for non-admins in with-gateway
+        # mode (this branch is non-admin only; admins returned above).
+        if should_redact_backend_urls(user_context):
+            for server_entry in all_accessible.values():
+                if isinstance(server_entry, dict):
+                    redact_server_backend_fields(server_entry)
+        return all_accessible
 
     # Regular case: return details for a specific server
     server_info = await server_service.get_server_info(service_path)
@@ -2509,10 +2676,16 @@ async def get_server_details(
                 detail="You do not have access to this server",
             )
 
+    # Redaction decision is per-request; compute once so both the local
+    # early-return and the multi-version return path apply it.
+    redact_backend = should_redact_backend_urls(user_context)
+
     # Local (stdio) servers don't support multi-version routing — early-return
     # avoids guarding the synthesis block below. _build_versions_list() also
     # handles this (returns []), but skipping it here saves the work.
     if server_info.get("deployment") == DeploymentType.LOCAL:
+        if redact_backend:
+            redact_server_backend_fields(server_info)
         return server_info
 
     current_version = server_info.get("version", "v1.0.0")
@@ -2523,6 +2696,11 @@ async def get_server_details(
     if len(versions) > 1 or server_info.get("version_group"):
         server_info["versions"] = versions
         server_info["default_version"] = current_version
+
+    # Strip internal backend URLs (top-level and per-version) for non-admins in
+    # with-gateway mode, matching GET /servers/{path} and the versions endpoint.
+    if redact_backend:
+        redact_server_backend_fields(server_info)
 
     return server_info
 
@@ -2721,9 +2899,7 @@ async def get_service_tools(
                     from ..repositories.factory import get_search_repository
 
                     search_repo = get_search_repository()
-                    await search_repo.index_server(
-                        service_path, updated_server_info, is_enabled
-                    )
+                    await search_repo.index_server(service_path, updated_server_info, is_enabled)
                 except Exception as e:
                     logger.warning(f"Failed to update search index for {service_path}: {e}")
                 logger.info(f"Updated search index for {service_path}")
@@ -2849,7 +3025,8 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
         logger.error(f"ERROR during manual refresh check for {service_path}: {e}")
         # Still broadcast the error state
         await health_service.broadcast_health_update(service_path)
-        raise HTTPException(status_code=500, detail=f"Refresh check failed: {e}")
+        # Generic detail: the exception is logged above.
+        raise HTTPException(status_code=500, detail="Refresh check failed")
 
     # Update DocumentDB search index
     try:
@@ -3668,12 +3845,25 @@ async def register_service_api(
 
     is_local = deployment == DeploymentType.LOCAL
 
-    # Admin check for local registration
+    # Authorization: local registration requires admin (distributes executable
+    # launch recipes); remote registration requires the register_service UI
+    # permission, matching the legacy session/UI route POST /register.
     if is_local:
         if not user_context.get("is_admin"):
             raise HTTPException(
                 status_code=fastapi_status.HTTP_403_FORBIDDEN,
                 detail="Local server registration requires admin privileges",
+            )
+    else:
+        ui_permissions = user_context.get("ui_permissions", {})
+        if not ui_permissions.get("register_service"):
+            logger.warning(
+                f"User '{user_context.get('username')}' attempted API register "
+                f"without register_service permission"
+            )
+            raise HTTPException(
+                status_code=fastapi_status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to register new services",
             )
 
     logger.info(
@@ -3804,8 +3994,20 @@ async def register_service_api(
 
     if version:
         server_entry["version"] = version
-    if status:
-        server_entry["status"] = status
+
+    # Apply the enforced-status policy (Issue #1330): when
+    # REGISTRATION_ENFORCED_STATUS is set, a missing status is forced to it and
+    # a mismatched status is rejected with 400. The Form param is named `status`
+    # so the FastAPI status module is aliased as fastapi_status in this handler.
+    try:
+        effective_status = enforce_registration_status(status, "server")
+    except EnforcedStatusError as e:
+        raise HTTPException(
+            status_code=fastapi_status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    if effective_status:
+        server_entry["status"] = effective_status
 
     # Add provider information
     if provider_organization or provider_url:
@@ -3902,6 +4104,29 @@ async def register_service_api(
 
     # Check if server exists and handle overwrite/version logic
     existing_server = await server_service.get_server_info(path)
+
+    # Ownership guard: overwriting (or auto-versioning) an existing server
+    # replaces another user's registration and can redirect its traffic. Only
+    # the original owner (registered_by) or an admin may do so. Without this,
+    # any user with registration permission could hijack any server by
+    # re-registering at the same path. Mirrors the guard on the dedicated
+    # update endpoint. Fails closed when ownership can't be established.
+    if existing_server and (
+        not user_context.get("is_admin")
+        and existing_server.get("registered_by") != user_context.get("username")
+    ):
+        logger.warning(
+            f"SERVERS REGISTER: User {user_context.get('username')} attempted to "
+            f"overwrite server {path} owned by {existing_server.get('registered_by')}"
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Service registration failed",
+                "reason": "You can only overwrite servers you registered",
+                "detail": f"Server at path '{path}' is owned by another user",
+            },
+        )
 
     # If server exists with a different version, register_server will auto-create new version
     # Only reject if overwrite=False AND it's the same version (or no version specified)
@@ -4027,6 +4252,46 @@ async def update_server_auth_credential(
     if not server_path.startswith("/"):
         server_path = "/" + server_path
 
+    # Look up the server first so the permission check can use its display name.
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not existing_server:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "Server not found",
+                "reason": f"No server registered at path '{server_path}'",
+            },
+        )
+
+    # Authorization: rewriting a backend credential is a server modification, so
+    # require the same modify_service permission as PUT/PATCH /servers/{path}.
+    # nginx_proxied_auth only authenticates; it does not authorize.
+    _check_server_permission(
+        "modify_service",
+        existing_server.get("server_name", server_path),
+        user_context,
+    )
+
+    # Ownership guard: overwriting a backend credential can hijack the server's
+    # upstream connection, so only the original owner (registered_by) or an
+    # admin may do it -- matching PUT /servers/{path}. modify_service alone is
+    # granted to any user with an /execute scope and is not sufficient. Fails
+    # closed when ownership cannot be established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {username} attempted to update auth credential for server "
+            f"{server_path} owned by {existing_server.get('registered_by')}"
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Not authorized",
+                "reason": "You can only modify servers you registered",
+            },
+        )
+
     # Validate auth_scheme
     if body.auth_scheme not in VALID_AUTH_SCHEMES:
         return JSONResponse(
@@ -4044,17 +4309,6 @@ async def update_server_auth_credential(
             content={
                 "error": "Missing credential",
                 "reason": "auth_credential is required when auth_scheme is not 'none'",
-            },
-        )
-
-    # Look up existing server (with credentials so we can update properly)
-    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
-    if not existing_server:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": "Server not found",
-                "reason": f"No server registered at path '{server_path}'",
             },
         )
 
@@ -4162,6 +4416,37 @@ async def toggle_service_api(
     server_info = await server_service.get_server_info(path)
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not registered")
+
+    # Authorization: mirror the legacy UI toggle route (toggle_service_route).
+    # Require the toggle_service UI permission for this service, then a
+    # per-server access check for non-admin callers.
+    from ..auth.dependencies import user_has_ui_permission_for_service
+
+    service_name = server_info["server_name"]
+
+    if not user_has_ui_permission_for_service(
+        "toggle_service", service_name, user_context.get("ui_permissions", {})
+    ):
+        logger.warning(
+            f"User '{user_context.get('username')}' attempted to toggle "
+            f"'{service_name}' without toggle_service permission"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You do not have permission to toggle {service_name}",
+        )
+
+    if not user_context.get("is_admin"):
+        if not await server_service.user_can_access_server_path(
+            path, user_context.get("accessible_servers", [])
+        ):
+            logger.warning(
+                f"User '{user_context.get('username')}' attempted to toggle '{path}' without access"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
 
     # Toggle the service
     success = await server_service.toggle_service(path, new_state)
@@ -4296,18 +4581,26 @@ async def remove_service_api(
             },
         )
 
-    # Fine-grained delete permission check (gateway already validated api.servers access)
+    # Fine-grained delete permission check (gateway already validated api.servers access).
+    # Key the check on the stored server_name (matching every other mutation handler),
+    # not the URL path token, so the trust key is consistent and cannot be satisfied by
+    # a delete_service grant for a raw path string that differs from the server_name.
     if not user_context.get("is_admin", False):
-        ui_permissions = user_context.get("ui_permissions", {})
-        delete_service_perms = ui_permissions.get("delete_service", [])
-        server_name = path.strip("/")
-        if "all" not in delete_service_perms and server_name not in delete_service_perms:
-            logger.warning(f"User {user_context.get('username')} denied delete for server {path}")
+        from ..auth.dependencies import user_has_ui_permission_for_service
+
+        service_name = server_info["server_name"]
+        if not user_has_ui_permission_for_service(
+            "delete_service", service_name, user_context.get("ui_permissions", {})
+        ):
+            logger.warning(
+                f"User {user_context.get('username')} denied delete for server "
+                f"'{service_name}' ({path})"
+            )
             return JSONResponse(
                 status_code=403,
                 content={
                     "error": "Permission denied",
-                    "reason": f"User does not have delete_service permission for '{path}'",
+                    "reason": f"User does not have delete_service permission for '{service_name}'",
                 },
             )
 
@@ -4444,6 +4737,9 @@ async def add_server_to_groups_api(
       -F "group_names=admin,developers"
     ```
     """
+    # Mapping servers into scope groups changes access control, so it is admin-only.
+    _require_admin(user_context)
+
     logger.info(
         f"API add to groups request from user '{user_context.get('username')}' for server '{server_name}'"
     )
@@ -4483,6 +4779,9 @@ async def remove_server_from_groups_api(
       -F "group_names=developers"
     ```
     """
+    # Removing servers from scope groups changes access control, so it is admin-only.
+    _require_admin(user_context)
+
     logger.info(
         f"API remove from groups request from user '{user_context.get('username')}' for server '{server_name}'"
     )
@@ -4598,6 +4897,9 @@ async def create_group_api(
       -F "create_in_idp=true"
     ```
     """
+    # Creating scope groups is an access-control change, so it is admin-only.
+    _require_admin(user_context)
+
     logger.info(
         f"API create group request from user '{user_context.get('username')}' for group '{group_name}'"
     )
@@ -4726,6 +5028,9 @@ async def delete_group_api(
       -F "force=false"
     ```
     """
+    # Deleting scope groups is an access-control change, so it is admin-only.
+    _require_admin(user_context)
+
     logger.info(
         f"API delete group request from user '{user_context.get('username')}' for group '{group_name}'"
     )
@@ -4759,6 +5064,11 @@ async def list_groups_api(
       -H "Authorization: Bearer $JWT_TOKEN"
     ```
     """
+    # The response exposes the full access-control model (server_access,
+    # group_mappings, ui_permissions), including which groups confer admin, so
+    # it is admin-only — matching every write sibling and /internal/list-groups.
+    _require_admin(user_context)
+
     logger.info(
         f"API list groups request from user '{user_context.get('username') if user_context else 'unknown'}'"
     )
@@ -4800,6 +5110,11 @@ async def get_group_api(
     ```
     """
     from ..services.scope_service import get_group
+
+    # The response exposes the full group definition (server_access,
+    # group_mappings, ui_permissions), so it is admin-only — matching the
+    # list-groups sibling and every group write endpoint.
+    _require_admin(user_context)
 
     logger.info(
         f"API get group request from user '{user_context.get('username') if user_context else 'unknown'}' "
@@ -4888,8 +5203,14 @@ async def import_group_definition(
       -d @group-definition.json
     ```
     """
+    _require_admin(user_context)
+
     from ..services.scope_service import import_group
     from ..utils.iam_manager import get_iam_manager
+
+    # Importing a group definition writes group_mappings and ui_permissions
+    # (including privileged scopes like mcp-registry-admin), so it is admin-only.
+    _require_admin(user_context)
 
     try:
         # Parse request body
@@ -4917,7 +5238,9 @@ async def import_group_definition(
             f"for group '{scope_name}'"
         )
 
-        # Import group definition
+        # Import group definition. This route is admin-only (see _require_admin
+        # above); allow_privileged satisfies the service- and repository-layer
+        # privileged-scope guards for legitimate admin imports.
         success = await import_group(
             scope_name=scope_name,
             scope_type=scope_type,
@@ -4925,6 +5248,7 @@ async def import_group_definition(
             server_access=server_access,
             group_mappings=group_mappings,
             ui_permissions=ui_permissions,
+            allow_privileged=bool(user_context and user_context.get("is_admin")),
         )
 
         if not success:
@@ -5325,6 +5649,36 @@ async def remove_server_version(
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
+    # Authorization: removing a version mutates the server, so require the same
+    # modify_service permission as PUT/PATCH /servers/{path}. nginx_proxied_auth
+    # only authenticates; it does not authorize.
+    existing_server = await server_service.get_server_info(decoded_path)
+    if not existing_server:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+    _check_server_permission(
+        "modify_service",
+        existing_server.get("server_name", decoded_path),
+        user_context,
+    )
+
+    # Ownership guard: removing a version mutates another user's server and can
+    # break its routing, so only the owner (registered_by) or an admin may do
+    # it -- matching PUT /servers/{path}. modify_service alone (any /execute
+    # scope) is not sufficient. Fails closed when ownership cannot be
+    # established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to remove version "
+            f"{version} from server {decoded_path} owned by "
+            f"{existing_server.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only modify servers you registered",
+        )
+
     try:
         result = await server_service.remove_server_version(path=decoded_path, version=version)
 
@@ -5360,6 +5714,35 @@ async def set_default_version(
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
+    # Authorization: changing the default version mutates the server, so require
+    # the same modify_service permission as PUT/PATCH /servers/{path}.
+    # nginx_proxied_auth only authenticates; it does not authorize.
+    existing_server = await server_service.get_server_info(decoded_path)
+    if not existing_server:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+    _check_server_permission(
+        "modify_service",
+        existing_server.get("server_name", decoded_path),
+        user_context,
+    )
+
+    # Ownership guard: changing the default version reroutes another user's
+    # server, so only the owner (registered_by) or an admin may do it --
+    # matching PUT /servers/{path}. modify_service alone (any /execute scope) is
+    # not sufficient. Fails closed when ownership cannot be established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to set default "
+            f"version for server {decoded_path} owned by "
+            f"{existing_server.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only modify servers you registered",
+        )
+
     try:
         result = await server_service.set_default_version(
             path=decoded_path, version=version_data.version
@@ -5393,14 +5776,47 @@ async def get_server_versions(
 
     Returns:
         Version information
+
+    Non-admin callers must have access to the server (403 otherwise) and never
+    receive the internal backend URLs in with-gateway mode — mirroring the
+    authorization and redaction that ``GET /servers/{path}`` already enforces.
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
-    try:
-        return await server_service.get_server_versions(decoded_path)
+    # Resolve the server first, then authorize — mirroring GET /servers/{path}:
+    # 404 for an unknown path, 403 for a real-but-inaccessible server. (The
+    # 403-vs-404 split is the established contract across the native server read
+    # endpoints; see FOLLOWUPS for the shared existence-oracle note.)
+    server_info = await server_service.get_server_info(decoded_path)
+    if not server_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found: {decoded_path}",
+        )
 
+    # Access control — admins bypass; non-admins must be able to reach the server.
+    if not (user_context and user_context.get("is_admin")):
+        accessible_servers = user_context.get("accessible_servers", []) if user_context else []
+        has_access = await server_service.user_can_access_server_path(
+            decoded_path, accessible_servers
+        )
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
+
+    try:
+        versions_response = await server_service.get_server_versions(decoded_path)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    # Strip internal backend URLs (including per-version proxy_pass_url) for
+    # non-admins in with-gateway mode, matching the sibling read endpoints.
+    if should_redact_backend_urls(user_context):
+        redact_server_backend_fields(versions_response)
+
+    return versions_response
 
 
 @router.get("/servers/{service_path:path}/connect-config")
@@ -5470,6 +5886,11 @@ async def get_server_connect_config(
         "oauth_client_id": oauth_client_id,
         "oauth_callback_port": callback_port,
         "append_mcp_path": server_info.get("append_mcp_path"),
+        # Per-user egress credential vault mode. When "oauth_user", the gateway
+        # injects the user's vaulted upstream token on egress, so the Connect
+        # config must NOT emit a server Authorization/API-key header (the client
+        # sends none; a placeholder would be forwarded verbatim and break it).
+        "egress_auth_mode": server_info.get("egress_auth_mode", "none"),
         "decrypt_failures": decrypt_failures,
     }
 
@@ -5574,6 +5995,15 @@ async def update_server_endpoint(
         incoming["provider"] = body.provider.model_dump()
 
     merged = _merge_server_update(existing, incoming)
+
+    # Lifecycle status change via PUT is gated like PATCH (Issue #1330).
+    old_status = existing.get("status") or "active"
+    new_status = merged.get("status") or "active"
+    if new_status != old_status:
+        _check_lifecycle_status_permission(
+            existing.get("server_name", path),
+            user_context,
+        )
 
     gate_result = await check_registration_gate(
         asset_type="server",
@@ -5739,6 +6169,20 @@ async def patch_server_endpoint(
             detail="Empty patch body",
         )
 
+    # Changing the lifecycle status requires a dedicated permission (Issue #1330),
+    # separate from modify_service, so a scope can grant "edit metadata" without
+    # "promote/deprecate". Only enforced when the status actually changes.
+    # Admins always pass (backwards compatible: existing admin scopes predate
+    # this permission); non-admins need change_lifecycle_status explicitly.
+    if "status" in patch_dict:
+        old_status = existing.get("status") or "active"
+        new_status = patch_dict.get("status") or "active"
+        if new_status != old_status:
+            _check_lifecycle_status_permission(
+                existing.get("server_name", path),
+                user_context,
+            )
+
     merged = _merge_server_update(existing, patch_dict)
 
     gate_result = await check_registration_gate(
@@ -5867,11 +6311,10 @@ async def get_server(
                 detail="You do not have access to this server",
             )
 
-    # Strip proxy_pass_url for non-admin users in with-gateway mode.
+    # Strip internal backend URLs for non-admin users in with-gateway mode.
     # In registry-only mode, users need the URL to connect directly.
-    if not user_context.get("is_admin"):
-        if settings.deployment_mode != DeploymentMode.REGISTRY_ONLY:
-            server_info.pop("proxy_pass_url", None)
+    if should_redact_backend_urls(user_context):
+        redact_server_backend_fields(server_info)
 
     # Normalize visibility for servers stored before the write-side fix
     # always persisted the field (#1181). Matches the default-on-read

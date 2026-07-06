@@ -103,10 +103,12 @@ async def list_m2m_clients(
     skip: int = Query(default=0, ge=0),
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
 ) -> M2MClientListResponse:
-    """List M2M clients (any authenticated user)."""
-    if not user_context:
-        m2m_management_requests_total.labels(operation="list", outcome="auth_error").inc()
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    """List M2M clients (admin only).
+
+    Returns M2M service-account client IDs, providers, and group mappings --
+    sensitive IAM data, so restricted to admins like the mutating siblings.
+    """
+    _require_admin(user_context, "list")
     service = await _get_service()
     items, total = await service.list_paged(provider=provider, limit=limit, skip=skip)
     m2m_management_requests_total.labels(operation="list", outcome="success").inc()
@@ -118,10 +120,12 @@ async def get_m2m_client(
     client_id: str,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
 ) -> IdPM2MClient:
-    """Get a specific M2M client (any authenticated user)."""
-    if not user_context:
-        m2m_management_requests_total.labels(operation="get", outcome="auth_error").inc()
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    """Get a specific M2M client (admin only).
+
+    Returns a single M2M service-account record (client ID + group mappings) --
+    sensitive IAM data, so restricted to admins like the mutating siblings.
+    """
+    _require_admin(user_context, "get")
     service = await _get_service()
     try:
         result = await service.get(client_id)

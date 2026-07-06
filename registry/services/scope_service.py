@@ -13,6 +13,7 @@ from typing import (
 import httpx
 
 from ..auth.internal import generate_internal_token
+from ..auth.privileged_constants import PRIVILEGED_SCOPE_NAMES
 from ..core.config import settings
 from ..repositories.factory import get_scope_repository
 from .server_service import server_service
@@ -35,6 +36,74 @@ STANDARD_METHODS: list[str] = [
     "resources/list",
     "resources/templates/list",
 ]
+
+# PRIVILEGED_SCOPE_NAMES is imported from registry.auth.privileged_constants
+# (single source of truth, shared with the repository-layer guard and the
+# admin-derivation rule). Re-exported here so existing callers/tests that import
+# it from this module keep working.
+
+
+def _grants_all(granted_resources: object) -> bool:
+    """Return True if a ui_permission value grants access to "all" resources.
+
+    Mirrors the ``"all" in resources`` test in
+    ``registry.auth.dependencies._user_is_admin`` exactly, including its
+    behaviour for BOTH shapes the value can take:
+
+    - ``["all"]`` (list) -> membership check
+    - ``"all"`` (bare string) -> equality (the string case ``_user_is_admin``
+      accepts via substring matching; we accept it explicitly here)
+
+    Keeping this aligned with ``_user_is_admin`` is the whole point of the guard:
+    if the admin-derivation rule treats a value as admin-conferring, the guard
+    must treat the same value as privileged, regardless of list-vs-string shape.
+    """
+    if isinstance(granted_resources, str):
+        return granted_resources == "all"
+    if isinstance(granted_resources, list | tuple | set | frozenset):
+        return "all" in granted_resources
+    return False
+
+
+class PrivilegedScopeWriteError(Exception):
+    """Raised when a non-admin actor attempts to write a privileged scope/group."""
+
+
+def _import_touches_privileged_scope(
+    scope_name: str,
+    group_mappings: list | None,
+    ui_permissions: dict | None,
+) -> bool:
+    """Return True if an import_group write touches a privileged scope/group.
+
+    A write is considered privileged when the scope itself is privileged, when it
+    maps any privileged group, or when its ui_permissions grant a privileged
+    permission to "all" servers (an admin-equivalent grant).
+
+    Args:
+        scope_name: The scope/group being written.
+        group_mappings: IdP group names this scope maps to.
+        ui_permissions: UI permission grants for this scope.
+
+    Returns:
+        True if the write requires admin privileges.
+    """
+    if scope_name in PRIVILEGED_SCOPE_NAMES:
+        return True
+
+    for mapped in group_mappings or []:
+        if mapped in PRIVILEGED_SCOPE_NAMES:
+            return True
+
+    # A scope that grants any permission to "all" resources is admin-equivalent
+    # (see _user_is_admin, which confers admin on any mutating-prefix action with
+    # "all"). _grants_all handles both the list (["all"]) and bare-string ("all")
+    # shapes so a string-shaped grant cannot slip past this last line of defense.
+    for granted_resources in (ui_permissions or {}).values():
+        if _grants_all(granted_resources):
+            return True
+
+    return False
 
 
 async def _trigger_auth_server_reload() -> bool:
@@ -65,7 +134,7 @@ async def _trigger_auth_server_reload() -> bool:
                 return True
             else:
                 logger.error(
-                    f"Failed to reload auth server scopes: {response.status_code} - {response.text}"
+                    f"Failed to reload auth server scopes: HTTP {response.status_code}"
                 )
                 return False
 
@@ -368,6 +437,7 @@ async def import_group(
     ui_permissions: dict = None,
     agent_access: list = None,
     is_idp_managed: bool = True,
+    allow_privileged: bool = False,
 ) -> bool:
     """
     Import a complete group definition with all document types.
@@ -385,10 +455,38 @@ async def import_group(
         agent_access: Optional list of agent paths this group can access
         is_idp_managed: Whether PATCH/DELETE should call the upstream IdP.
             See issue #946. Defaults to True to preserve pre-#946 behavior.
+        allow_privileged: Whether the caller is admin-authorized to write a
+            privileged (admin-conferring) scope. Defaults to False (fail-closed);
+            only admin-gated callers pass True. Enforced as defense-in-depth at
+            BOTH this service layer (privileged scope_name / group_mappings /
+            ui_permissions) and the repository layer (admin-conferring
+            ui_permissions), so a caller reaching either layer without a
+            route-level admin check cannot self-assign admin.
 
     Returns:
         True if successful, False otherwise
+
+    Raises:
+        PrivilegedScopeWriteError: If a non-admin actor attempts to write a
+            privileged scope/group.
     """
+    # Defense-in-depth: a privileged scope write must come from an admin-authorized
+    # caller, regardless of any route-level check. This service-layer guard is
+    # broader than the repository's _grants_admin (it also catches a privileged
+    # scope_name and privileged group_mappings, e.g. mapping a group to
+    # mcp-registry-admin -- the original privesc vector).
+    if not allow_privileged and _import_touches_privileged_scope(
+        scope_name, group_mappings, ui_permissions
+    ):
+        logger.warning(
+            "Rejected non-admin privileged scope write for '%s' (group_mappings=%s)",
+            scope_name,
+            group_mappings,
+        )
+        raise PrivilegedScopeWriteError(
+            f"Writing privileged scope '{scope_name}' requires administrator privileges"
+        )
+
     try:
         scope_repo = get_scope_repository()
 
@@ -404,6 +502,7 @@ async def import_group(
             ui_permissions=ui_permissions,
             agent_access=agent_access,
             is_idp_managed=is_idp_managed,
+            allow_privileged=allow_privileged,
         )
 
         if success:

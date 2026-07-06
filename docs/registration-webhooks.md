@@ -15,7 +15,15 @@ Registration webhooks are **fire-and-forget**: the registry sends an async POST 
 | Event Type | Trigger | Asset Types |
 |------------|---------|-------------|
 | `registration` | A new asset is added to the registry | server, agent, skill |
+| `update` | An existing asset's metadata is edited (PUT/PATCH) | server, agent, skill |
 | `deletion` | An existing asset is removed from the registry | server, agent, skill |
+| `scan_complete` | The async security scan finishes after registration | server, agent, skill |
+
+The `scan_complete` event (Issue #1330) is the registry's second outbound webhook in the
+lifecycle workflow: the first integration point is the synchronous **registration gate**
+("quick checks"), and `scan_complete` reports the asynchronous security-scan result once it
+finishes. Lifecycle status transitions (draft to beta to active to deprecated) are driven by
+the operator via PATCH and deliberately emit **no** webhook.
 
 ### Key Design Decisions
 
@@ -36,6 +44,8 @@ Registration webhooks are **fire-and-forget**: the registry sends an async POST 
 | `REGISTRATION_WEBHOOK_AUTH_HEADER` | string | `Authorization` | Name of the HTTP header used for authentication. If set to `Authorization`, the token is auto-prefixed with `Bearer `. For any other header (e.g. `X-API-Key`), the token is sent as-is. |
 | `REGISTRATION_WEBHOOK_AUTH_TOKEN` | string | `""` | Auth token value. Leave empty for unauthenticated webhooks. |
 | `REGISTRATION_WEBHOOK_TIMEOUT_SECONDS` | int | `10` | HTTP timeout per request in seconds. |
+| `REGISTRATION_WEBHOOK_SIGNING_SECRET` | string | `""` (disabled) | Shared secret for HMAC-SHA256 signing of the payload. When set, an `X-Registry-Signature: sha256=<hex>` header is added over the exact transmitted body. |
+| `REGISTRATION_ENFORCED_STATUS` | string | `""` (disabled) | When set (e.g. `draft`), mandates the initial lifecycle status for new registrations; a mismatched status fails with 4xx. |
 
 ### Example Configurations
 
@@ -208,6 +218,111 @@ Run with: `uvicorn receiver:app --host 0.0.0.0 --port 6789`
 | Webhook env vars set but no calls | Variables on the wrong ECS service | Ensure they are on the **registry** service, not the auth server |
 | Timeout warnings | Receiver too slow or unreachable | Increase `REGISTRATION_WEBHOOK_TIMEOUT_SECONDS` or check network connectivity |
 | HTTP warning in logs | URL uses `http://` instead of `https://` | Switch to HTTPS for production |
+
+---
+
+## Lifecycle Workflow (Issue #1330)
+
+This section covers the additions that let an external orchestrator drive the asset
+lifecycle (draft to beta to active to deprecated) entirely on registry events and APIs.
+
+### The `scan_complete` event
+
+After an asset is registered, the registry runs an asynchronous security scan. When the
+scan finishes (whether the asset is safe, unsafe, or the scan errored), the registry fires a
+`scan_complete` webhook. This is the signal an external CI/CD pipeline should act on, rather
+than polling `GET /api/servers/{path}/security-scan`.
+
+```json
+{
+    "event_type": "scan_complete",
+    "registration_type": "server",
+    "timestamp": "2026-06-25T14:30:00Z",
+    "performed_by": "alice",
+    "card": { "...sanitized card..." },
+    "scan": {
+        "is_safe": true,
+        "severity_counts": { "critical": 0, "high": 0, "medium": 2, "low": 5 },
+        "tags_applied": [],
+        "auto_disabled": false,
+        "scan_error": null
+    }
+}
+```
+
+- `is_safe`: `true`/`false`, or `null` when the scan itself errored.
+- `tags_applied`: e.g. `["security-pending"]` when the scan flagged the asset.
+- `auto_disabled`: `true` when the asset was disabled because it failed the scan and
+  `SECURITY_BLOCK_UNSAFE_SERVERS` (or the agent/skill equivalent) is enabled.
+- `scan_error`: a short, sanitized message when the scan raised (never a stack trace).
+
+### Signature verification
+
+When `REGISTRATION_WEBHOOK_SIGNING_SECRET` is set, every outbound webhook carries an
+`X-Registry-Signature: sha256=<hex>` header computed as HMAC-SHA256 over the exact bytes of
+the request body. Verify with a constant-time compare:
+
+```python
+import hmac
+import hashlib
+
+
+def verify(raw_body: bytes, header_sig: str, secret: str) -> bool:
+    expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header_sig)  # constant-time
+```
+
+Compute the signature over the **raw request body** (the exact bytes received), not a
+re-serialized copy, or the digest will not match.
+
+### Event ordering, idempotency, and replay
+
+- **Not ordered.** Events are fire-and-forget with no retry. A consumer may receive
+  `scan_complete` before `registration`. Key off `card.path` + `event_type` and be
+  idempotent. Treat the registry as the source of truth and reconcile via
+  `GET /api/servers?status=...` rather than relying on delivery.
+- **No durability.** A dropped delivery is not retried. The reconciliation poll above is the
+  backstop; do not treat a missing event as "nothing happened".
+- **Replay protection.** The signature covers the body, which includes `timestamp`.
+  Consumers should reject events whose `timestamp` is outside a small skew window (e.g. 5
+  minutes) to limit replay of captured signed events.
+- **Secret rotation.** Rotating `REGISTRATION_WEBHOOK_SIGNING_SECRET` is a hard cutover. To
+  rotate without dropped events, have the consumer temporarily accept both the old and new
+  secret during the rotation window.
+
+### Mandating an initial status
+
+Set `REGISTRATION_ENFORCED_STATUS=draft` so that every new asset must start as `draft`. A
+registration with no status is forced to `draft`; a registration with a different explicit
+status fails with HTTP 400. This lets an operator guarantee nothing becomes `active` without
+going through an external promotion pipeline. The default (unset) preserves current behavior
+(new assets default to `active`, except skills which already default to `draft`).
+
+### Separating "register" from "promote"
+
+Changing an asset's lifecycle `status` via `PUT`/`PATCH` requires a dedicated
+`change_lifecycle_status` UI permission, separate from `modify_service`. This lets a scope
+grant "register and edit metadata" without granting "promote/deprecate":
+
+- A scope with `register_service` but **without** `change_lifecycle_status` can register and
+  edit an asset, but receives 403 when a request changes the `status` field.
+- Admins always pass (existing admin scopes predate this permission).
+- Ordinary metadata edits (description, tags, URL) are unaffected and stay under
+  `modify_service`.
+
+### Building the review queue
+
+`GET /api/servers?status=draft` (or `status=beta`) returns only assets at that lifecycle
+status, for an admin "review queue". `status=active` also matches legacy documents that have
+no `status` field. The filter is applied for both unrestricted and permission-restricted
+users.
+
+### Delivery metric
+
+`webhook_send_total{event_type, outcome}` counts every outbound webhook by event type and
+outcome (`success`, `timeout`, `error`, `skipped_no_url`) so operators can detect a silently
+unreachable consumer endpoint. `registration_status_rejected_total{registration_type}` counts
+registrations rejected by the enforced-status policy.
 
 ---
 

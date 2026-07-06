@@ -31,7 +31,9 @@ from pydantic import BaseModel, ValidationError
 from ..audit import set_audit_action
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
+from ..exceptions import UrlValidationError
 from ..repositories.factory import get_search_repository
 from ..repositories.interfaces import SearchRepositoryBase
 from ..schemas.agent_models import (
@@ -56,10 +58,17 @@ from ..services.agent_batch_service import (
 )
 from ..services.agent_service import agent_service
 from ..services.duplicate_check_service import get_duplicate_check_service
+from ..services.lifecycle_events import (
+    EnforcedStatusError,
+    enforce_registration_status,
+    fire_scan_complete_event,
+    user_can_change_lifecycle_status,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import flatten_metadata_to_text
 from ..utils.request_utils import get_client_ip
+from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_agent_url
 from ._etag_utils import (
     parse_if_match,
     updated_ms,
@@ -167,16 +176,37 @@ async def _perform_agent_security_scan_on_registration(
                 # added a few lines above.
                 search_repo = get_search_repository()
                 await search_repo.index_agent(path, agent_card, is_enabled=False)
+                # scan_complete webhook (Issue #1330): agent was disabled.
+                fire_scan_complete_event(
+                    agent_card.model_dump(),
+                    scan_result,
+                    auto_disabled=True,
+                    registration_type="agent",
+                )
                 return False  # Agent disabled
 
         else:
             logger.info(f"Agent {path} passed security scan")
 
+        # scan_complete webhook (Issue #1330): safe, or unsafe-but-not-blocked.
+        fire_scan_complete_event(
+            agent_card.model_dump(),
+            scan_result,
+            auto_disabled=False,
+            registration_type="agent",
+        )
         return True  # Agent remains enabled
 
     except Exception as e:
         logger.error(f"Failed to run security scan for agent {path}: {e}")
-        # Non-fatal error - agent is registered but not scanned
+        # Non-fatal error - agent is registered but not scanned. Still notify
+        # consumers so they are not left polling for a scan that never reports.
+        fire_scan_complete_event(
+            agent_card_dict,
+            None,
+            scan_error=f"{type(e).__name__}: {e}",
+            registration_type="agent",
+        )
         return True  # Agent remains enabled on scan error
 
 
@@ -266,12 +296,17 @@ async def _fetch_remote_agent_card(
     """
     import json
 
+    # Fail-closed pre-check: reject a caller-supplied base_url that targets a
+    # private/metadata address or bad scheme before any outbound fetch. The
+    # guarded client below additionally re-validates and pins at connect time.
+    validate_agent_url(base_url)
+
     urls = _build_agent_health_urls(base_url)
     agent_card_url = urls[0]
     timeout_seconds = max(1, settings.health_check_timeout_seconds)
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with guarded_async_client(profile=PROXY_PROFILE, timeout=timeout_seconds) as client:
             response = await client.get(agent_card_url)
 
         if response.status_code != 200:
@@ -300,20 +335,30 @@ async def _fetch_remote_agent_card(
 
     except HTTPException:
         raise
+    except UrlValidationError as exc:
+        logger.warning("Agent card fetch blocked by SSRF guard for %s: %s", agent_card_url, exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent URL failed SSRF validation and cannot be fetched",
+        ) from exc
     except httpx.TimeoutException:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Timeout fetching agent card from {agent_card_url}",
         )
     except httpx.HTTPError as exc:
+        # Do not reflect the httpx error (leaks resolved hosts / internal
+        # network detail); log it and return the URL only.
+        logger.warning("Failed to fetch agent card from %s: %s", agent_card_url, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch agent card from {agent_card_url}: {exc}",
+            detail=f"Failed to fetch agent card from {agent_card_url}",
         )
     except Exception as exc:
+        logger.warning("Invalid response from %s: %s", agent_card_url, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Invalid response from {agent_card_url}: {exc}",
+            detail=f"Invalid response from {agent_card_url}",
         )
 
 
@@ -377,9 +422,7 @@ def _compute_card_diff(
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
                 )
             if isinstance(remote_value, list):
-                remote_value = [
-                    _drop_nulls(s) if isinstance(s, dict) else s for s in remote_value
-                ]
+                remote_value = [_drop_nulls(s) if isinstance(s, dict) else s for s in remote_value]
                 remote_value = sorted(
                     remote_value,
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
@@ -387,13 +430,11 @@ def _compute_card_diff(
 
         if field_name == "security_schemes" and isinstance(current_value, dict):
             current_value = {
-                k: _drop_nulls(v) if isinstance(v, dict) else v
-                for k, v in current_value.items()
+                k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in current_value.items()
             }
             if isinstance(remote_value, dict):
                 remote_value = {
-                    k: _drop_nulls(v) if isinstance(v, dict) else v
-                    for k, v in remote_value.items()
+                    k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in remote_value.items()
                 }
 
         if current_value != remote_value:
@@ -530,6 +571,41 @@ def _check_agent_permission(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"You do not have permission to {permission} for {agent_name}",
         )
+
+
+def _check_agent_lifecycle_status_permission(
+    existing_agent,
+    merged_agent,
+    user_context: dict[str, Any],
+) -> None:
+    """Gate agent lifecycle status changes on change_lifecycle_status (Issue #1330).
+
+    No-op when the status is unchanged. Admins always pass; other users need the
+    'change_lifecycle_status' permission for the agent.
+
+    Raises:
+        HTTPException: 403 if the user may not change lifecycle status.
+    """
+    old_status = (getattr(existing_agent, "status", None) or "active").lower()
+    new_status = (getattr(merged_agent, "status", None) or "active").lower()
+    if new_status == old_status:
+        return
+
+    if user_can_change_lifecycle_status(existing_agent.name, user_context):
+        return
+
+    logger.warning(
+        f"User {user_context['username']} attempted to change lifecycle status "
+        f"of agent {existing_agent.name} without change_lifecycle_status permission"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"You do not have permission to change the lifecycle status of "
+            f"{existing_agent.name}. This action requires the 'change_lifecycle_status' "
+            f"permission, which is typically granted to admins."
+        ),
+    )
 
 
 def _has_delete_agent_permission(user_context: dict[str, Any], agent_path: str) -> bool:
@@ -779,6 +855,18 @@ async def register_agent(
         if capabilities:
             optional_card_kwargs["capabilities"] = capabilities
 
+        # Enforced-status policy (Issue #1330). Use model_fields_set to tell an
+        # omitted status (force to enforced) from an explicit one (reject on
+        # mismatch). When the policy is unset, fall back to the request value.
+        requested_status = request.status if "status" in request.model_fields_set else None
+        try:
+            effective_status = enforce_registration_status(requested_status, "agent")
+        except EnforcedStatusError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
         agent_card = AgentCard(
             protocol_version=request.protocol_version,
             name=request.name,
@@ -786,7 +874,7 @@ async def register_agent(
             url=request.url,
             path=path,
             version=request.version,
-            status=request.status,
+            status=effective_status or request.status,
             provider=provider_obj,
             security_schemes=request.security_schemes or {},
             skills=request.skills or [],
@@ -965,21 +1053,20 @@ async def list_agents(
         f"query={query!r}, enabled_only={enabled_only}, visibility={visibility}"
     )
 
-    # CRITICAL DIAGNOSTIC: Log that we reached this endpoint
+    # Diagnostics: log at DEBUG with sensitive values redacted. Raw headers carry
+    # Authorization/Cookie and the user_context can carry credential material, so
+    # neither is ever emitted verbatim or at INFO.
     logger.info(f"[GET_AGENTS_ENTRY] GET /api/agents called from {get_client_ip(request)}")
-    logger.info(f"[GET_AGENTS_ENTRY] Request headers: {dict(request.headers)}")
+    logger.debug(
+        f"[GET_AGENTS_ENTRY] Request headers (redacted): {redact_headers(request.headers)}"
+    )
 
-    # CRITICAL DIAGNOSTIC: Log user_context received by endpoint (for comparison with /servers)
-    logger.info(f"[GET_AGENTS_DEBUG] Received user_context: {user_context}")
-    logger.info(f"[GET_AGENTS_DEBUG] user_context type: {type(user_context)}")
     if user_context:
-        logger.info(f"[GET_AGENTS_DEBUG] Username: {user_context.get('username', 'NOT PRESENT')}")
-        logger.info(f"[GET_AGENTS_DEBUG] Scopes: {user_context.get('scopes', 'NOT PRESENT')}")
-        logger.info(
+        logger.debug(f"[GET_AGENTS_DEBUG] user_context (redacted): {redact_mapping(user_context)}")
+        logger.debug(f"[GET_AGENTS_DEBUG] Username: {user_context.get('username', 'NOT PRESENT')}")
+        logger.debug(f"[GET_AGENTS_DEBUG] Scopes: {user_context.get('scopes', 'NOT PRESENT')}")
+        logger.debug(
             f"[GET_AGENTS_DEBUG] Auth method: {user_context.get('auth_method', 'NOT PRESENT')}"
-        )
-        logger.info(
-            f"[GET_AGENTS_DEBUG] Accessible agents: {user_context.get('accessible_agents', 'NOT PRESENT')}"
         )
 
     # Determine if user has unrestricted access (no agents will be filtered out)
@@ -1061,6 +1148,8 @@ async def list_agents(
                 streaming=streaming,
                 trust_level=agent.trust_level,
                 sync_metadata=agent.sync_metadata,
+                record_kind=getattr(agent, "record_kind", None),
+                ard_source_url=getattr(agent, "ard_source_url", None),
                 ans_metadata=agent.ans_metadata,
                 registered_by=agent.registered_by,
                 status=agent.status if hasattr(agent, "status") and agent.status else "active",
@@ -1167,7 +1256,9 @@ async def check_agent_health(
         start_time = datetime.now(UTC)
 
         try:
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            async with guarded_async_client(
+                profile=PROXY_PROFILE, timeout=timeout_seconds
+            ) as client:
                 response = await client.get(url)
             status_code = response.status_code
             response_time_ms = int((datetime.now(UTC) - start_time).total_seconds() * 1000)
@@ -1197,7 +1288,9 @@ async def check_agent_health(
         logger.info(f"Agent {path} GET checks failed, falling back to HEAD ping on {base_url}")
         try:
             start_time = datetime.now(UTC)
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            async with guarded_async_client(
+                profile=PROXY_PROFILE, timeout=timeout_seconds
+            ) as client:
                 response = await client.head(base_url)
             status_code = response.status_code
             response_time_ms = int((datetime.now(UTC) - start_time).total_seconds() * 1000)
@@ -1374,6 +1467,23 @@ async def toggle_agent(
 
     _check_agent_permission("toggle_service", agent_card.name, user_context)
 
+    # Per-resource access check for non-admins, mirroring the server toggle
+    # (POST /api/servers/toggle). Having toggle_service permission is not
+    # enough; the caller must also have access to this specific agent (in
+    # accessible_agents, or be its owner).
+    if not user_context.get("is_admin", False):
+        accessible_agents = user_context.get("accessible_agents", [])
+        owns_agent = agent_card.registered_by == user_context.get("username")
+        if "all" not in accessible_agents and path not in accessible_agents and not owns_agent:
+            logger.warning(
+                f"User {user_context.get('username')} attempted to toggle agent "
+                f"{path} without access"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this agent",
+            )
+
     success = await agent_service.toggle_agent(path, enabled)
 
     if not success:
@@ -1438,10 +1548,19 @@ async def get_agent_security_scan(
             detail=f"Agent not found at path '{path}'",
         )
 
-    # Check user permissions
+    # Authorization: scan results expose security findings for the agent, so
+    # restrict to users who can see the agent (admins always can). Without this
+    # a non-admin could read scan results for a private/group agent. Reuse the
+    # agent_info we already fetched via the *_from_doc helper so the visibility
+    # check does not trigger a second identical agent lookup.
     if not user_context["is_admin"]:
-        # Allow all authenticated users to view agent scan results
-        pass
+        from ..services.visibility import user_can_access_agent_from_doc
+
+        if not user_can_access_agent_from_doc(agent_info.model_dump(), user_context):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this agent",
+            )
 
     # Get scan results
     from ..services.agent_scanner import agent_scanner_service
@@ -1736,6 +1855,28 @@ async def pull_agent_card(
                 f"'{change.current_value}' to '{change.remote_value}' "
                 f"(requested by '{user_context['username']}')"
             )
+            # Fail closed on a remote card that tries to point the stored agent
+            # URL at an internal/metadata target. Reject in BOTH preview and
+            # apply modes so a poisoned card is surfaced during dry-run and can
+            # never be persisted. update_agent re-validates on the write path;
+            # this earlier check also covers the preview, which does not persist
+            # the URL and therefore would not otherwise validate it.
+            try:
+                validate_agent_url(str(change.remote_value))
+            except UrlValidationError as exc:
+                logger.warning(
+                    "pull-card: rejecting URL change for agent %s -> %s: %s",
+                    path,
+                    change.remote_value,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Remote agent card URL failed SSRF validation and was "
+                        "rejected (private/internal addresses are not allowed)"
+                    ),
+                ) from exc
 
     # R4: single structured log line per pull-card op so adoption/outcomes can be
     #     scraped without a dedicated metric. The audit trail also records this.
@@ -1766,6 +1907,17 @@ async def pull_agent_card(
     #    mode it is health + A2A fields in one call.
     try:
         updated_agent = await agent_service.update_agent(path, updates)
+    except UrlValidationError as e:
+        # A poisoned URL that reached the write path is a client-side rejection,
+        # not a server error: surface it as 400 and never persist it.
+        logger.warning(f"pull-card: URL rejected on write for agent {path}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Remote agent card URL failed SSRF validation and was rejected "
+                "(private/internal addresses are not allowed)"
+            ),
+        ) from e
     except Exception as e:
         # In dry-run mode a failed health write should not fail the preview.
         if dry_run or not has_changes:
@@ -1951,6 +2103,9 @@ async def update_agent(
             **update_optional_kwargs,
         )
 
+        # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+        _check_agent_lifecycle_status_permission(existing_agent, updated_agent, user_context)
+
         from ..utils.agent_validator import agent_validator
 
         validation_result = await agent_validator.validate_agent_card(
@@ -2121,6 +2276,9 @@ async def patch_agent(
     # Defence in depth: re-pin server-managed fields from the existing card.
     for field in REGISTRANT_ONLY_FIELDS:
         setattr(merged_agent, field, getattr(existing_agent, field))
+
+    # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+    _check_agent_lifecycle_status_permission(existing_agent, merged_agent, user_context)
 
     from ..utils.agent_validator import agent_validator
 

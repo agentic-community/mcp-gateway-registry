@@ -3,15 +3,13 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.7
+    tag: 1.26.0
     pullPolicy: IfNotPresent
-
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
     # on AWS regardless of auth provider (Keycloak, Entra, Okta, etc.).
     # Previously only injected for Cognito; now available unconditionally.
     awsRegion: ""
-
   # Defaults below cover both standalone (`helm template charts/registry`)
   # and umbrella deploys; the umbrella overrides what it needs from
   # charts/mcp-gateway-registry-stack/values.yaml. Most operators should
@@ -22,7 +20,6 @@ global:
     routingMode: subdomain
     paths:
       registry: /registry
-
   # Auth provider used by the registry. Defaults match the umbrella's
   # bundled-Keycloak setup. Set to your real provider when deploying
   # standalone without the umbrella.
@@ -31,15 +28,13 @@ global:
     keycloak:
       adminUsername: user
       realm: mcp-gateway
-
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
 image:
-  registry: ""      # Overrides global.image.registry when set
-  repository: registry  # Image name within the registry
-  tag: ""           # Overrides global.image.tag when set
-  pullPolicy: ""    # Overrides global.image.pullPolicy when set
-
+  registry: "" # Overrides global.image.registry when set
+  repository: registry # Image name within the registry
+  tag: "" # Overrides global.image.tag when set
+  pullPolicy: "" # Overrides global.image.pullPolicy when set
 # Application configuration
 # ServiceAccount the registry pod runs as. Created by default so roles can be
 # attached to a stable identity (OpenBao kubernetes-auth `registry` role for the
@@ -47,15 +42,13 @@ image:
 # bring your own.
 serviceAccount:
   create: true
-  name: ""  # defaults to app.name ("registry") when empty
+  name: "" # defaults to app.name ("registry") when empty
   annotations: {}
-
 app:
   name: registry
   replicas: 2
   envSecretName: registry-secret
-  existingSecret: ""  # If set, use this existing secret instead of creating one
-
+  existingSecret: "" # If set, use this existing secret instead of creating one
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated.
   # When deployed via mcp-gateway-registry-stack, the key is shared with auth-server.
@@ -66,71 +59,71 @@ app:
   # ".<global.domain>". See charts/auth-server/values.yaml for a longer
   # note on when to override.
   sessionCookieDomain: ""
-
+  # Comma-separated exact browser origins allowed to make credentialed
+  # cross-origin requests to the registry API (e.g.
+  # "https://app.example.com,https://admin.example.com"). The registry's own
+  # ingress origin is always trusted. Leave empty for same-origin-only access;
+  # there is deliberately no wildcard fallback.
+  corsAllowedOrigins: ""
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
   federationStaticToken: # If not provided, a random token is auto-generated
   federationEncryptionKey: # If not provided, a Fernet key is auto-generated
   registryId: # Unique identifier for this registry instance (optional)
   # Federation OAuth2 authentication (alternative to static token for outbound peer connections)
-  federationTokenEndpoint: ""  # OAuth2 token endpoint for federation authentication
-  federationClientId: ""  # OAuth2 client ID for federation
-  federationClientSecret: ""  # OAuth2 client secret for federation
-
+  federationTokenEndpoint: "" # OAuth2 token endpoint for federation authentication
+  federationClientId: "" # OAuth2 client ID for federation
+  federationClientSecret: "" # OAuth2 client secret for federation
   # ASOR (Workday) integration (independent of peer federation)
-  asorAccessToken: ""  # Pre-obtained access token for ASOR federation
-  workdayTokenUrl: ""  # Workday OAuth2 token endpoint URL
-
+  asorAccessToken: "" # Pre-obtained access token for ASOR federation
+  workdayTokenUrl: "" # Workday OAuth2 token endpoint URL
   # Skill security scanning configuration
-  skillSecurityScanEnabled: true  # Enable/disable skill security scanning
-  skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
-
+  skillSecurityScanEnabled: true # Enable/disable skill security scanning
+  skillSecurityAnalyzers: "static" # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
   # Static API keys for registry path authentication (JSON string)
   # Configures multiple static API keys that fall through to JWT validation when unmatched
   registryApiKeys: ""
-  registryApiKeysExistingSecret: ""  # If set, read REGISTRY_API_KEYS from this K8s secret instead
-  registryApiKeysExistingSecretKey: "REGISTRY_API_KEYS"  # Key within the existing secret
-
+  registryApiKeysExistingSecret: "" # If set, read REGISTRY_API_KEYS from this K8s secret instead
+  registryApiKeysExistingSecretKey: "REGISTRY_API_KEYS" # Key within the existing secret
   # Registration webhook (issue #742)
   # Fire an async POST when a server, agent, or skill is registered or deleted.
-  registrationWebhookUrl: ""  # Webhook URL. Disabled when empty.
-  registrationWebhookAuthHeader: "Authorization"  # If "Authorization", Bearer is auto-prepended.
-  registrationWebhookAuthToken: ""  # Auth token. Leave empty for unauthenticated webhooks.
+  registrationWebhookUrl: "" # Webhook URL. Disabled when empty.
+  registrationWebhookAuthHeader: "Authorization" # If "Authorization", Bearer is auto-prepended.
+  registrationWebhookAuthToken: "" # Auth token. Leave empty for unauthenticated webhooks.
   registrationWebhookTimeoutSeconds: "10"
-
+  # Lifecycle workflow webhooks (issue #1330)
+  registrationWebhookSigningSecret: "" # HMAC-SHA256 signing secret (X-Registry-Signature). Empty = disabled.
+  registrationEnforcedStatus: "" # Mandate initial status (e.g. "draft"); mismatched registrations 4xx. Empty = default "active".
   # Agent batch API (issue #956)
   # Async batch register/patch/replace/delete for agent cards, drained by an
   # in-process worker. Lease-based claiming makes multi-worker operation safe:
   # any number of replicas may set batchWorkerEnabled=true.
-  batchWorkerEnabled: true  # Enable the in-process batch worker loop.
-  batchMaxOperationsPerJob: "1000"  # Max items in one batch submission.
-  batchMaxConcurrentJobsPerUser: "3"  # Max active jobs per submitter.
-  batchJobRetentionDays: "7"  # TTL (days) for batch job documents.
-  batchWorkerPollIntervalSeconds: "1.0"  # Worker poll interval.
-  batchWorkerLeaseTtlSeconds: "60.0"  # Lease lifetime before a job can be reclaimed.
-  batchWorkerLeaseHeartbeatSeconds: "15.0"  # Interval at which a worker renews its lease.
-  batchMaxRequestBytes: "4194304"  # Max batch request body size in bytes (4 MiB).
-
+  batchWorkerEnabled: true # Enable the in-process batch worker loop.
+  batchMaxOperationsPerJob: "1000" # Max items in one batch submission.
+  batchMaxConcurrentJobsPerUser: "3" # Max active jobs per submitter.
+  batchJobRetentionDays: "7" # TTL (days) for batch job documents.
+  batchWorkerPollIntervalSeconds: "1.0" # Worker poll interval.
+  batchWorkerLeaseTtlSeconds: "60.0" # Lease lifetime before a job can be reclaimed.
+  batchWorkerLeaseHeartbeatSeconds: "15.0" # Interval at which a worker renews its lease.
+  batchMaxRequestBytes: "4194304" # Max batch request body size in bytes (4 MiB).
   # Registration gate / admission control (issue #809)
   # Calls an external endpoint to approve or deny registrations and updates
   # BEFORE they are persisted. Fail-closed when gate is unreachable.
   registrationGateEnabled: false
-  registrationGateUrl: ""  # Gate URL. Must be set when enabled.
-  registrationGateAuthType: "none"  # none, api_key, or bearer
-  registrationGateAuthCredential: ""  # Credential for api_key or bearer
-  registrationGateAuthHeaderName: "X-Api-Key"  # Header for api_key auth
+  registrationGateUrl: "" # Gate URL. Must be set when enabled.
+  registrationGateAuthType: "none" # none, api_key, or bearer
+  registrationGateAuthCredential: "" # Credential for api_key or bearer
+  registrationGateAuthHeaderName: "X-Api-Key" # Header for api_key auth
   registrationGateTimeoutSeconds: "5"
   registrationGateMaxRetries: "2"
-  registrationGateOauth2TokenUrl: ""  # OAuth2 token endpoint for client credentials flow
-  registrationGateOauth2ClientId: ""  # OAuth2 client ID
-  registrationGateOauth2ClientSecret: ""  # OAuth2 client secret
-  registrationGateOauth2Scope: ""  # OAuth2 scope (e.g., api://app-id/.default for Entra)
-
+  registrationGateOauth2TokenUrl: "" # OAuth2 token endpoint for client credentials flow
+  registrationGateOauth2ClientId: "" # OAuth2 client ID
+  registrationGateOauth2ClientSecret: "" # OAuth2 client secret
+  registrationGateOauth2Scope: "" # OAuth2 scope (e.g., api://app-id/.default for Entra)
   # M2M direct client registration (issue #851)
   # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and
   # their group mappings directly, without requiring an IdP Admin API token.
   m2mDirectRegistrationEnabled: true
-
   # Registration deduplication
   # Advisory checks that surface likely-duplicate entities (servers, agents,
   # skills) before a user registers a new one. The /api/<entity>/check-duplicates
@@ -139,20 +132,18 @@ app:
   # registration form pre-flights the check and renders the hint modal. The
   # check is advisory and never blocks registration.
   dedup:
-    registrationHintEnabled: true  # When true, registration UI pre-flights /check-duplicates and shows hint modal.
-    scoreThreshold: "0.7"          # Minimum similarity score (0.0..1.0) for advisory matches.
-    maxSuggestions: "3"            # Cap on advisory suggestions per request.
-
+    registrationHintEnabled: true # When true, registration UI pre-flights /check-duplicates and shows hint modal.
+    scoreThreshold: "0.7" # Minimum similarity score (0.0..1.0) for advisory matches.
+    maxSuggestions: "3" # Cap on advisory suggestions per request.
   # OpenTelemetry direct OTLP push export configuration
   # Standard OTel SDK var. Setting this activates the OTLP push exporter (the
   # entrypoint wraps uvicorn with opentelemetry-instrument) and is read by
   # registry/main.py. Default empty: pull-only via the prometheus listener.
-  otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
-  otelOtlpEndpoint: ""  # metrics-service OTLP endpoint (legacy; metrics-service removed in 1.26.0)
-  otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
-  otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
-  otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
-
+  otelExporterOtlpEndpoint: "" # OTLP endpoint URL (e.g., http://otel-collector:4317)
+  otelOtlpEndpoint: "" # metrics-service OTLP endpoint (legacy; metrics-service removed in 1.26.0)
+  otelExporterOtlpHeaders: "" # OTLP headers (e.g., dd-api-key=YOUR_KEY)
+  otelOtlpExportIntervalMs: "30000" # Export interval in milliseconds
+  otelExporterOtlpMetricsTemporalityPreference: "cumulative" # cumulative or delta
   # OTel-native metric emission (Issue #1122)
   # In 1.25.0+ the registry emits metrics natively via the OTel SDK.
   # metricsLegacyHttpPost=true ALSO posts to metrics-service (one-release transition).
@@ -160,32 +151,26 @@ app:
   metricsLegacyHttpPost: false
   # OTel SDK metric export interval in milliseconds (default 15s).
   otelMetricExportIntervalMs: "15000"
-
   # OTel exporter-prometheus listener: where in-cluster Prometheus scrapes
   # the registry's in-process meters. On EKS, defaults to 0.0.0.0 because
   # Prometheus runs in a different pod; the NetworkPolicy below restricts
   # who can reach this port.
   otelExporterPrometheusHost: "0.0.0.0"
   otelExporterPrometheusPort: "9464"
-
   # Telemetry configuration
   # Anonymous usage telemetry (startup ping + daily heartbeat, both on by default)
-  mcpTelemetryDisabled: false  # Set to true to disable all telemetry
-  mcpTelemetryOptOut: false  # Set to true to disable daily heartbeat only (startup ping still sent)
-  telemetryHeartbeatIntervalMinutes: "1440"  # Heartbeat interval in minutes (default: 1440 = 24 hours)
-  telemetryDebug: false  # Set to true to log payloads instead of sending
-  mcpTelemetryImdsProbeDisabled: false  # Set to true to disable IMDS probing in cloud detection (issue #986)
-  mcpCloudProvider: ""  # Override cloud auto-detection: aws|azure|gcp|on_premises|other (issue #1120)
-
+  mcpTelemetryDisabled: false # Set to true to disable all telemetry
+  mcpTelemetryOptOut: false # Set to true to disable daily heartbeat only (startup ping still sent)
+  telemetryHeartbeatIntervalMinutes: "1440" # Heartbeat interval in minutes (default: 1440 = 24 hours)
+  telemetryDebug: false # Set to true to log payloads instead of sending
+  mcpTelemetryImdsProbeDisabled: false # Set to true to disable IMDS probing in cloud detection (issue #986)
+  mcpCloudProvider: "" # Override cloud auto-detection: aws|azure|gcp|on_premises|other (issue #1120)
   # Demo server configuration
-  disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
-
+  disableAiRegistryToolsServer: false # Set to true to disable auto-registration of the built-in airegistry-tools server
   # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
   deploymentMode: with-gateway
-
   # Registry mode: full, skills-only, mcp-servers-only, agents-only
   registryMode: full
-
   # Internal/workshop deployment classification (telemetry labels only; issue #1216).
   # Tags a deployment as one of our own internal/workshop installs so it can be
   # distinguished from community installs in telemetry. Does NOT change access control.
@@ -195,64 +180,55 @@ app:
   #       internalOnlyDeployment is true and left unset.
   internalOnlyDeployment: false
   internalDeploymentType: "none"
-
   # Tab visibility overrides (AND-ed with registryMode)
   showServersTab: true
   showVirtualServersTab: true
   showSkillsTab: true
   showAgentsTab: true
-
   # Coding assistants allowlist for Server Configuration modal (IDE selector).
   # Comma-separated string. Empty means show all supported assistants.
   # Supported values: cursor, roo-code, claude-code, kiro
   # Example: "cursor,claude-code"
   codingAssistants: ""
-
   # UI title override. Empty string defers to the deployment-mode
   # default ("AI Gateway & Registry" for with-gateway, "AI Registry" for
   # registry-only). Set to brand the deployment with your organization's
   # product name (e.g., "Acme AI Portal").
   uiTitle: ""
-
   # Application Log Configuration (centralized log rotation and retrieval)
-  appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
-  appLogBackupCount: "5"           # Number of rotated backup log files to keep
-  appLogCentralizedEnabled: "true"  # Write application logs to centralized store (requires MongoDB backend)
-  appLogCentralizedTtlDays: "1"    # Days to retain log entries in centralized store (TTL index)
-  appLogMongodbBufferSize: "50"    # Records to buffer before flushing to MongoDB
-  appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
-  appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
+  appLogMaxBytes: "52428800" # Max size per log file before rotation (default 50 MB)
+  appLogBackupCount: "5" # Number of rotated backup log files to keep
+  appLogCentralizedEnabled: "true" # Write application logs to centralized store (requires MongoDB backend)
+  appLogCentralizedTtlDays: "1" # Days to retain log entries in centralized store (TTL index)
+  appLogMongodbBufferSize: "50" # Records to buffer before flushing to MongoDB
+  appLogMongodbFlushIntervalSeconds: "5.0" # Seconds between periodic flushes
+  appLogLevel: "INFO" # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor" # Comma-separated logger names to exclude from MongoDB
   # Log file path and format (issue #987). On EKS, pod stdout is scraped by
   # Splunk Connect for Kubernetes - these settings control the in-container
   # file path for code-path consistency with Docker Compose deployments.
-  appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
-  appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
-  appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
-
+  appLogDir: "" # Empty uses backend default: /var/log/containers/ai-registry
+  appLogFileFormat: "json" # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
+  appLogConsoleFormat: "json" # "json" (default, structured logging) or "text" (human-readable)
   # Update-check: background poll of the GitHub Releases API to surface
   # newer registry versions in an admin-only banner. Set updateCheck.enabled=false
   # for air-gapped clusters or to silence the banner.
   updateCheck:
     enabled: true
     intervalHours: 24
-
   # Tool-level access control (issue #1026)
-  mcpToolsListFilterEnabled: true   # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
-  toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
-
+  mcpToolsListFilterEnabled: true # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
+  toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
   # Custom entity types (admin-defined, schema-driven catalog types)
-  customEntityTypesEnabled: false   # Main switch for dynamic tabs + endpoints; off = no behavior change
-  customTypeCacheTtlSeconds: 60     # TTL (s) for the in-process custom-type descriptor cache
-  maxCustomRecordsPerType: 1000     # Soft cap on records per type (0 = unlimited); best-effort, rejects create at cap
-  maxCustomTypes: 50                # Cap on number of custom types (0 = unlimited); rejects type create at limit
-
+  customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
+  customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
+  maxCustomRecordsPerType: 1000 # Soft cap on records per type (0 = unlimited); best-effort, rejects create at cap
+  maxCustomTypes: 50 # Cap on number of custom types (0 = unlimited); rejects type create at limit
   # Registry-UI internal token verification (the /api/ hop). The auth-server mints
   # the token (using its own INTERNAL_TOKEN_TTL_SECONDS); the registry verifies it
   # and uses the leeway below. Not secrets -- plain env. See docs/unified-parameter-reference.md.
-  internalTokenTtlSeconds: "30"     # Token lifetime (seconds); the replay-window cap (min 5)
-  internalTokenLeewaySeconds: "5"   # Clock-skew leeway (seconds) on token exp/iat
-
+  internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
+  internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
   # Override the `scopes_supported` array in the Protected Resource Metadata
   # document (`/.well-known/oauth-protected-resource`). Space-separated scope
   # names.
@@ -272,7 +248,6 @@ app:
   #
   # See docs/ai-coding-assistant-registry-integration.md for the rationale.
   mcpAdvertisedScopes: "profile email offline_access"
-
   # IDE OAuth login (PR #1224). Pre-registered PUBLIC OAuth client_id that IDEs
   # (Cursor, Claude Code, Codex) use to start the gateway login flow. When set,
   # the Connect config advertises it and drops the static gateway token. Empty
@@ -284,7 +259,6 @@ app:
   # set the same value here so the Connect dialog emits --callback-port. 0
   # (default) lets the IDE pick a port (correct for Keycloak's wildcard redirect).
   ideOauthCallbackPort: 0
-
 # Metrics scrape configuration (Issue #1122)
 # Controls the NetworkPolicy that gates the OTel exporter-prometheus port.
 metricsScrape:
@@ -298,54 +272,47 @@ metricsScrape:
       kubernetes.io/metadata.name: monitoring
     fromPodSelector:
       app.kubernetes.io/name: prometheus
-
 # AWS Agent Registry Federation
 awsRegistry:
-  federationEnabled: false  # Enable AWS Agent Registry federation (overrides MongoDB config on startup)
-
+  federationEnabled: false # Enable AWS Agent Registry federation (overrides MongoDB config on startup)
 # ANS (Agent Name Service) Integration
 ans:
-  enabled: false  # Enable ANS integration for trust verification
-  apiEndpoint: "https://api.godaddy.com"  # ANS API base URL
-  apiKey: ""  # GoDaddy API key (required when enabled)
-  apiKeyExistingSecret: ""  # If set, read ANS_API_KEY from this K8s secret instead of apiKey
-  apiKeyExistingSecretKey: "ANS_API_KEY"  # Key within the existing secret
-  apiSecret: ""  # GoDaddy API secret (required when enabled)
-  apiSecretExistingSecret: ""  # If set, read ANS_API_SECRET from this K8s secret instead of apiSecret
-  apiSecretExistingSecretKey: "ANS_API_SECRET"  # Key within the existing secret
-  apiTimeoutSeconds: "30"  # HTTP request timeout for ANS API calls
-  syncIntervalHours: "6"  # Background re-verification interval
-  verificationCacheTtlSeconds: "3600"  # Cache TTL for verification results
-
+  enabled: false # Enable ANS integration for trust verification
+  apiEndpoint: "https://api.godaddy.com" # ANS API base URL
+  apiKey: "" # GoDaddy API key (required when enabled)
+  apiKeyExistingSecret: "" # If set, read ANS_API_KEY from this K8s secret instead of apiKey
+  apiKeyExistingSecretKey: "ANS_API_KEY" # Key within the existing secret
+  apiSecret: "" # GoDaddy API secret (required when enabled)
+  apiSecretExistingSecret: "" # If set, read ANS_API_SECRET from this K8s secret instead of apiSecret
+  apiSecretExistingSecretKey: "ANS_API_SECRET" # Key within the existing secret
+  apiTimeoutSeconds: "30" # HTTP request timeout for ANS API calls
+  syncIntervalHours: "6" # Background re-verification interval
+  verificationCacheTtlSeconds: "3600" # Cache TTL for verification results
 # Registry Card Configuration (for federation and discovery)
 registryCard:
-  url: ""  # External URL of the registry (e.g., https://registry.example.com). Defaults to computed ingress URL.
-  name: "AI Registry"  # Human-readable name
-  organizationName: "ACME Inc."  # Organization operating the registry
-  description: ""  # Optional description
-  contactEmail: ""  # Optional contact email
-  contactUrl: ""  # Optional contact URL/website
-
+  url: "" # External URL of the registry (e.g., https://registry.example.com). Defaults to computed ingress URL.
+  name: "AI Registry" # Human-readable name
+  organizationName: "ACME Inc." # Organization operating the registry
+  description: "" # Optional description
+  contactEmail: "" # Optional contact email
+  contactUrl: "" # Optional contact URL/website
 # ARD Catalog Publisher (issue #1294): publishes /.well-known/ai-catalog.json
 ard:
-  catalogEnabled: true  # Set false to disable the public ARD catalog endpoint
-  registryEnabled: true  # Set false to disable the ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents)
-  publisherDomain: ""  # URN publisher FQDN (urn:air:<domain>:...). Empty derives from registryCard.url host.
-  defaultNamespace: ""  # Optional override for the URN namespace segment (empty uses entity type)
-
+  catalogEnabled: true # Set false to disable the public ARD catalog endpoint
+  registryEnabled: true # Set false to disable the ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents)
+  publisherDomain: "" # URN publisher FQDN (urn:air:<domain>:...). Empty derives from registryCard.url host.
+  defaultNamespace: "" # Optional override for the URN namespace segment (empty uses entity type)
 # Entra ID integration (used when authProvider.type = "entra" in standalone deployment)
 entra:
   clientId: ""
   clientSecret: ""
-  clientSecretExistingSecret: ""  # If set, read ENTRA_CLIENT_SECRET from this K8s secret instead of clientSecret
-  clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET"  # Key within the existing secret
+  clientSecretExistingSecret: "" # If set, read ENTRA_CLIENT_SECRET from this K8s secret instead of clientSecret
+  clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET" # Key within the existing secret
   tenantId: ""
-
 # IdP group filtering (applies to all identity providers)
 # When set, only groups matching any of these prefixes are shown in IAM > Groups
 # Example: "mcp-,registry-,ai-"
 idpGroupFilterPrefix: ""
-
 # Login-time IdP group allowlist (applies to all identity providers)
 # When set, only these EXACT group names/IDs are stored in a user's session at
 # login. When empty, the registry auto-derives the allowlist from scope mappings
@@ -353,55 +320,50 @@ idpGroupFilterPrefix: ""
 # group memberships (e.g. Entra ID with hundreds of AD groups).
 # Example: "registry_readonly,registry_write,ai_admins"
 allowedIdpGroups: ""
-
 # IdP user-to-group fallback (issue #1127)
 # Comma-separated list of IdP providers (e.g. pingfederate) for which the
 # registry's local idp_user_groups collection is consulted to populate empty
 # JWT groups claims. Empty string disables the fallback for all providers.
 # Default: "pingfederate"
 idpUserGroupFallbackEnabledProviders: "pingfederate"
-
 # Okta integration (used when authProvider.type = "okta" in standalone deployment)
 okta:
-  domain: ""  # e.g., dev-123456.okta.com
+  domain: "" # e.g., dev-123456.okta.com
   clientId: ""
   clientSecret: ""
-  clientSecretExistingSecret: ""  # If set, read OKTA_CLIENT_SECRET from this K8s secret
+  clientSecretExistingSecret: "" # If set, read OKTA_CLIENT_SECRET from this K8s secret
   clientSecretExistingSecretKey: "OKTA_CLIENT_SECRET"
-  m2mClientId: ""  # Optional: defaults to clientId
-  m2mClientSecret: ""  # Optional: defaults to clientSecret
-  m2mClientSecretExistingSecret: ""  # If set, read OKTA_M2M_CLIENT_SECRET from this K8s secret
+  m2mClientId: "" # Optional: defaults to clientId
+  m2mClientSecret: "" # Optional: defaults to clientSecret
+  m2mClientSecretExistingSecret: "" # If set, read OKTA_M2M_CLIENT_SECRET from this K8s secret
   m2mClientSecretExistingSecretKey: "OKTA_M2M_CLIENT_SECRET"
-  apiToken: ""  # Optional: required for IAM operations
-  apiTokenExistingSecret: ""  # If set, read OKTA_API_TOKEN from this K8s secret
+  apiToken: "" # Optional: required for IAM operations
+  apiTokenExistingSecret: "" # If set, read OKTA_API_TOKEN from this K8s secret
   apiTokenExistingSecretKey: "OKTA_API_TOKEN"
-  authServerId: ""  # Optional: uses default Org Authorization Server if not set
-
+  authServerId: "" # Optional: uses default Org Authorization Server if not set
 # Auth0 integration (used when authProvider.type = "auth0" in standalone deployment)
 auth0:
-  domain: ""  # e.g., your-tenant.us.auth0.com
+  domain: "" # e.g., your-tenant.us.auth0.com
   clientId: ""
   clientSecret: ""
-  clientSecretExistingSecret: ""  # If set, read AUTH0_CLIENT_SECRET from this K8s secret
+  clientSecretExistingSecret: "" # If set, read AUTH0_CLIENT_SECRET from this K8s secret
   clientSecretExistingSecretKey: "AUTH0_CLIENT_SECRET"
-  audience: ""  # Optional: API audience for M2M tokens
-  groupsClaim: "https://mcp-gateway/groups"  # Custom namespaced claim for groups
-  m2mClientId: ""  # Required for IAM Management (user/role administration)
-  m2mClientSecret: ""  # Required for IAM Management
-  m2mClientSecretExistingSecret: ""  # If set, read AUTH0_M2M_CLIENT_SECRET from this K8s secret
+  audience: "" # Optional: API audience for M2M tokens
+  groupsClaim: "https://mcp-gateway/groups" # Custom namespaced claim for groups
+  m2mClientId: "" # Required for IAM Management (user/role administration)
+  m2mClientSecret: "" # Required for IAM Management
+  m2mClientSecretExistingSecret: "" # If set, read AUTH0_M2M_CLIENT_SECRET from this K8s secret
   m2mClientSecretExistingSecretKey: "AUTH0_M2M_CLIENT_SECRET"
-  managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
-  managementApiTokenExistingSecret: ""  # If set, read AUTH0_MANAGEMENT_API_TOKEN from this K8s secret
+  managementApiToken: "" # Optional: alternative to M2M credentials (expires after 24h)
+  managementApiTokenExistingSecret: "" # If set, read AUTH0_MANAGEMENT_API_TOKEN from this K8s secret
   managementApiTokenExistingSecretKey: "AUTH0_MANAGEMENT_API_TOKEN"
-
 # Cognito integration (used when authProvider.type = "cognito" in standalone deployment)
 cognito:
-  userPoolId: ""  # Cognito User Pool ID
+  userPoolId: "" # Cognito User Pool ID
   clientId: ""
   clientSecret: ""
-  domain: ""  # Optional: custom Cognito domain
-  region: "us-east-1"  # AWS region for the User Pool
-
+  domain: "" # Optional: custom Cognito domain
+  region: "us-east-1" # AWS region for the User Pool
 # Per-user egress credential vault (third-party OBO support).
 # When enabled, the registry renders a discrete `registry-egress-config`
 # ConfigMap (non-secret vars) consumed via envFrom; the nginx marker secret is
@@ -425,23 +387,22 @@ egressAuth:
   # standalone subchart secret.
   markerSecret: ""
   secretsManager:
-    kmsKeyId: ""  # Optional CMK; empty uses the AWS-managed key.
+    kmsKeyId: "" # Optional CMK; empty uses the AWS-managed key.
     pathPrefix: "mcp/egress"
   openbao:
-    addr: ""  # e.g. http://openbao.default.svc:8200
-    namespace: ""  # Enterprise namespaces only.
+    addr: "" # e.g. http://openbao.default.svc:8200
+    namespace: "" # Enterprise namespaces only.
     kvMount: "secret"
-    authMethod: "token"  # token | kubernetes
+    authMethod: "token" # token | kubernetes
     # OpenBao kubernetes-auth role, bound to the registry ServiceAccount by the
     # stack's openbao-init Job. Named "registry" (not egress-specific) so more
     # policies can attach to the same role/SA over time.
     role: "registry"
-
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false
-  baseUrl: ""             # Internal URL (server-to-server), e.g. https://pf:9031
-  externalUrl: ""         # Browser-facing URL, e.g. https://pf.example.com:9031
+  baseUrl: "" # Internal URL (server-to-server), e.g. https://pf:9031
+  externalUrl: "" # Browser-facing URL, e.g. https://pf.example.com:9031
   clientId: ""
   clientSecret: ""
   clientSecretExistingSecret: ""
@@ -452,7 +413,6 @@ pingfederate:
   m2mClientSecretExistingSecretKey: "PINGFEDERATE_M2M_CLIENT_SECRET"
   applicationIdUri: ""
   groupsClaim: "groups"
-
 # PingFederate Admin API (registry only).
 # Used by the registry to call the PingFederate admin API to create OAuth
 # clients and Simple PCV users at runtime. The PASS is sensitive; the URL
@@ -462,16 +422,14 @@ pingfederateAdmin:
   user: "administrator"
   # Set passwordExistingSecret to source PF_ADMIN_PASS from an existing
   # K8s Secret instead of values.yaml. When set, `password` is ignored.
-  password: ""                       # plain-text fallback; ignored when passwordExistingSecret is set
-  passwordExistingSecret: ""         # name of existing secret (optional)
+  password: "" # plain-text fallback; ignored when passwordExistingSecret is set
+  passwordExistingSecret: "" # name of existing secret (optional)
   passwordExistingSecretKey: "PF_ADMIN_PASS"
-
 # Service configuration
 service:
   type: ClusterIP
   port: 8000
   annotations: {}
-
 # Resource limits and requests
 resources:
   requests:
@@ -480,7 +438,6 @@ resources:
   limits:
     cpu: 2
     memory: 2Gi
-
 # Ingress configuration
 ingress:
   enabled: false
@@ -499,7 +456,6 @@ ingress:
   routingMode: subdomain
   # Path prefix when using path-based routing (default: /registry)
   path: /registry
-
 # Extra environment variables appended to the container's `env:` list.
 # Uses the native Kubernetes EnvVar schema, so `valueFrom` is supported.
 #
@@ -525,7 +481,6 @@ ingress:
 #         name: my-secret
 #         key: my-key
 extraEnv: []
-
 # Extra `envFrom:` sources appended to the container. Use this to inject
 # all keys from an external ConfigMap or Secret you manage (e.g. via
 # External Secrets Operator, SealedSecrets, or Vault CSI).
@@ -552,5 +507,4 @@ extraEnv: []
 #       name: my-external-config
 #       optional: true
 extraEnvFrom: []
-
 nodeSelector: {}

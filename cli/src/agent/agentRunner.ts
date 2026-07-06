@@ -1,4 +1,5 @@
 import { anthropicTools, buildTaskContext, executeMappedTool, mapToolCall } from "./tools.js";
+import type { ConfirmToolExecution } from "./tools.js";
 import type { TaskContext } from "../tasks/types.js";
 import { sendMessage, getDefaultProvider, getDefaultModel, type ModelProvider, type TokenUsage } from "./modelClient.js";
 
@@ -14,6 +15,11 @@ export interface AgentConfig {
   backendToken?: string;
   model?: string;
   provider?: ModelProvider;
+  /**
+   * Human-approval handler for mutating / shell tool calls. When omitted, the
+   * execution boundary fails closed and denies every gated action.
+   */
+  confirmToolExecution?: ConfirmToolExecution;
 }
 
 export interface AgentResult {
@@ -99,7 +105,7 @@ export async function runAgentTurn(history: AgentMessage[], config: AgentConfig)
 
     for (const call of toolCalls) {
       const invocation = mapToolCall(call);
-      const result = await executeMappedTool(invocation, config.gatewayUrl, context);
+      const result = await executeMappedTool(invocation, config.gatewayUrl, context, config.confirmToolExecution);
       toolOutputs.push({ name: call.name, output: result.output, isError: result.isError });
       conversation = [
         ...conversation,

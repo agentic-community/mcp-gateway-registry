@@ -361,23 +361,19 @@ curl http://localhost:8080/realms/master
 # Should return JSON with realm information
 ```
 
-### Disable SSL Requirement for Master Realm
-```bash
-# Note: KEYCLOAK_ADMIN defaults to "admin" - ensure KEYCLOAK_ADMIN_PASSWORD is set
-export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
+### About Keycloak's SSL Requirement (no action needed)
 
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "username=${KEYCLOAK_ADMIN}" \
-    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    -d "grant_type=password" \
-    -d "client_id=admin-cli" | \
-    jq -r '.access_token') && \
-curl -X PUT "http://localhost:8080/admin/realms/master" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"sslRequired": "none"}'
-```
+Both realms ship with `sslRequired: external`, which requires TLS for external
+requests but allows plaintext HTTP from private/loopback addresses. Because the
+setup commands below talk to Keycloak over `http://localhost:8080` (a loopback
+address), they work as-is. In a deployed stack, external traffic reaches
+Keycloak over HTTPS through the nginx front door, and Keycloak trusts the
+forwarded scheme via `KC_PROXY=edge`.
+
+Do NOT lower this to `sslRequired: none`. `none` disables TLS enforcement even
+for genuinely external requests, which allows admin login and all OIDC/token
+traffic over plaintext HTTP. `external` is the correct, secure value and needs
+no change.
 
 ### Initialize Keycloak Configuration
 
@@ -402,23 +398,7 @@ chmod +x keycloak/setup/init-keycloak.sh
 # IMPORTANT: The script will tell you to run get-all-client-credentials.sh
 # to retrieve and save the credentials. This is the next required step!
 
-# Step 2: Disable SSL for Application Realm
-# Note: KEYCLOAK_ADMIN defaults to "admin" - ensure KEYCLOAK_ADMIN_PASSWORD is set
-export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
-
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "username=${KEYCLOAK_ADMIN}" \
-    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    -d "grant_type=password" \
-    -d "client_id=admin-cli" | \
-    jq -r '.access_token') && \
-curl -X PUT "http://localhost:8080/admin/realms/mcp-gateway" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"sslRequired": "none"}'
-
-# Step 3: Retrieve and save all client credentials (REQUIRED)
+# Step 2: Retrieve and save all client credentials (REQUIRED)
 chmod +x keycloak/setup/get-all-client-credentials.sh
 ./keycloak/setup/get-all-client-credentials.sh
 

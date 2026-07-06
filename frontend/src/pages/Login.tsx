@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { useUiTitle } from '../hooks/useUiTitle';
+import { isSafeUrl } from '../utils/safeUrl';
 
 interface OAuthProvider {
   name: string;
@@ -70,9 +71,13 @@ const Login: React.FC = () => {
     const basePath = baseElement?.getAttribute('href') || '/';
     const redirectUri = encodeURIComponent(currentOrigin + basePath);
 
-    // Use the auth server URL from config, fallback to localhost if not loaded yet
-    const authUrl = authServerUrl || 'http://localhost:8888';
-    window.location.href = `${authUrl}/oauth2/login/${provider}?redirect_uri=${redirectUri}`;
+    // Use the auth server URL from config, fallback to localhost if not loaded
+    // yet. authServerUrl comes from /api/auth/config (server-supplied), so treat
+    // it as untrusted: only navigate to an http/https base, never a
+    // javascript:/data: scheme. Fall back to the safe default otherwise.
+    const configuredAuthUrl =
+      authServerUrl && isSafeUrl(authServerUrl) ? authServerUrl : 'http://localhost:8888';
+    window.location.href = `${configuredAuthUrl}/oauth2/login/${provider}?redirect_uri=${redirectUri}`;
   };
 
   return (

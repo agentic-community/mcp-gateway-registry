@@ -99,12 +99,13 @@ def _get_token_from_entra(
                 )
                 print(f"{Colors.RED}[ERROR]{Colors.NC} Entra ID error: {error_msg}")
                 if verbose:
-                    print(
-                        f"{Colors.BLUE}[DEBUG]{Colors.NC} Full error response: {json.dumps(error_data, indent=2)}"
-                    )
+                    # Only the standard OAuth error code, not the full body: it
+                    # can carry correlation/tenant ids and error_uri context.
+                    _e = error_data.get("error") if isinstance(error_data, dict) else None
+                    print(f"{Colors.BLUE}[DEBUG]{Colors.NC} error={_e}")
             except json.JSONDecodeError:
                 print(
-                    f"{Colors.RED}[ERROR]{Colors.NC} HTTP {response.status_code}: {response.text}"
+                    f"{Colors.RED}[ERROR]{Colors.NC} HTTP {response.status_code}: (non-JSON body omitted)"
                 )
             return None
 

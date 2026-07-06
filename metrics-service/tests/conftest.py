@@ -12,6 +12,15 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# The API-key hashing pepper is a REQUIRED per-deployment secret. Set a strong
+# test value in the environment before any app module reads it, so the fail-
+# closed hashing path works under test. Individual tests may override/clear it
+# to exercise the fail-closed behavior.
+os.environ.setdefault(
+    "METRICS_KEY_PEPPER",
+    "test-metrics-key-pepper-that-is-long-enough-1234567890",
+)
+
 from app.config import Settings
 from app.storage.database import init_database, MetricsStorage
 from app.core.models import MetricType, Metric, MetricRequest

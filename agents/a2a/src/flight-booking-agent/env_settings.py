@@ -30,11 +30,21 @@ class EnvSettings:
         # Agent's public URL (AgentCore Runtime injects automatically)
         self.agent_url: str = os.getenv("AGENTCORE_RUNTIME_URL", "http://127.0.0.1:9000/")
 
-        # Server configuration (fixed for A2A protocol)
-        # Agent binds to 0.0.0.0 for container/K8s deployment where network isolation
-        # is provided by container runtime. In production, use firewall rules.
-        self.host: str = os.getenv("AGENT_HOST", "0.0.0.0")  # nosec B104 - intentional for containerized agent deployment
+        # Server configuration (fixed for A2A protocol).
+        # Default to loopback so the agent is not exposed on all interfaces unless
+        # the deployment explicitly opts in via AGENT_HOST (e.g. "0.0.0.0" inside a
+        # container whose network is isolated by the runtime). JWT auth still gates
+        # every request regardless of the bind address.
+        self.host: str = os.getenv("AGENT_HOST", "127.0.0.1")
         self.port: int = 9000
+
+        # Keycloak configuration for inbound JWT validation.
+        self.keycloak_url: str = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
+        self.keycloak_realm: str = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
+
+        # Expected audience for inbound bearer tokens. When unset, audience is not
+        # enforced (set AGENT_AUDIENCE in production to bind tokens to this agent).
+        self.agent_audience: str | None = os.getenv("AGENT_AUDIENCE") or None
 
         logger.info(
             f"EnvSettings initialized: agent_name={self.agent_name}, version={self.agent_version}"

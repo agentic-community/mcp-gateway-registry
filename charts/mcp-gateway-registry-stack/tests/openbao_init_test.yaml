@@ -76,3 +76,37 @@ tests:
       - equal:
           path: spec.template.spec.restartPolicy
           value: Never
+
+  - it: Job passes the OpenBao server SA + reviewer-secret name for the stable token_reviewer_jwt
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      # OPENBAO_SA must be the subchart fullname (<release>-openbao), which owns
+      # the system:auth-delegator binding used to review TokenReviews.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENBAO_SA
+            value: test-openbao
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REVIEWER_SECRET
+            value: openbao-reviewer-token
+
+  - it: Job script provisions and uses a stable token_reviewer_jwt (not the rotating pod token)
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      # Creates the long-lived SA-token Secret for the OpenBao server SA...
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubernetes\.io/service-account-token'
+      # ...and feeds it into auth/kubernetes/config as token_reviewer_jwt.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'token_reviewer_jwt:\$rjwt'

@@ -145,8 +145,9 @@ async def ard_search(
         window = offset + body.page_size
         source = f"{_base_url_from_request(http_request)}/api/ard/search"
         try:
-            results, scoped_out = await ard_search_service.search_and_scope(
-                body.query.text, entity_types, tags, window, user_context, source
+            results, scoped_out, referrals = await ard_search_service.search_and_scope(
+                body.query.text, entity_types, tags, window, user_context, source,
+                federation=body.federation,
             )
         except Exception as e:  # noqa: BLE001 - reshape to ARD envelope, detail to logs
             raise ARDHTTPException(500, "INTERNAL", repr(e)) from e
@@ -157,8 +158,9 @@ async def ard_search(
             else None
         )
         m.returned, m.filtered = len(page), scoped_out
-        # Phase 2: own-index only; referrals empty (no peers configured). #1296.
-        return ArdSearchResponse(results=page, referrals=[], page_token=next_token)
+        # Federation (#1296): auto -> unified index source-tagged; none -> local
+        # only; referrals -> local results + application/ai-registry+json peers.
+        return ArdSearchResponse(results=page, referrals=referrals, page_token=next_token)
 
 
 @router.get("/agents", response_model=ArdListResponse)

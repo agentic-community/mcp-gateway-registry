@@ -42,6 +42,10 @@ being deployed by this stack.
 {{- if and .Values.registry .Values.registry.serviceAccount .Values.registry.serviceAccount.name }}
   {{- $registrySa = .Values.registry.serviceAccount.name }}
 {{- end }}
+{{- /* The OpenBao server ServiceAccount (subchart fullname; holds
+       system:auth-delegator via "<fullname>-server-binding"). Its long-lived
+       token is used as the kubernetes-auth token_reviewer_jwt. */ -}}
+{{- $openbaoSa := include "mcp-gateway-registry-stack.openbaoName" . }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -66,8 +70,9 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
 rules:
-  # Read/create/update the keys Secret (operator init output). Scoped to the
-  # single Secret name; create needs collection-level create.
+  # Read/create/update the keys Secret (operator init output) and the OpenBao
+  # server SA's long-lived token Secret (used as the kubernetes-auth
+  # token_reviewer_jwt). create needs collection-level create.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "create", "update", "patch"]
@@ -138,6 +143,10 @@ spec:
               value: {{ $role | quote }}
             - name: REGISTRY_SA
               value: {{ $registrySa | quote }}
+            - name: OPENBAO_SA
+              value: {{ $openbaoSa | quote }}
+            - name: REVIEWER_SECRET
+              value: "openbao-reviewer-token"
           command:
             - /bin/bash
             - -c
@@ -217,12 +226,36 @@ spec:
               if ! bao_api GET sys/auth | jq -e '."kubernetes/"' >/dev/null 2>&1; then
                 bao_api POST sys/auth/kubernetes '{"type":"kubernetes"}' >/dev/null
               fi
-              # Omit token_reviewer_jwt: OpenBao uses its OWN continuously-refreshed
-              # pod SA token as the TokenReview reviewer (recommended; no static JWT
-              # that rotates and breaks login).
+
+              # Provision a STABLE token_reviewer_jwt. Without it, OpenBao reviews
+              # incoming logins by calling TokenReview with its OWN pod's projected
+              # SA token -- which the kubelet rotates/expires (~1h). OpenBao caches
+              # that token and does not re-read it, so once it lapses every login
+              # fails with "permission denied" ("works for a while, then breaks").
+              # A kubernetes.io/service-account-token Secret yields a non-expiring
+              # token for the OpenBao server SA (which holds system:auth-delegator
+              # via "<fullname>-server-binding"), so TokenReview keeps working.
+              echo "ensuring reviewer-token Secret $REVIEWER_SECRET for SA $OPENBAO_SA..."
+              # Build the manifest with jq (kubectl accepts JSON) to avoid heredoc
+              # indentation pitfalls inside this YAML block scalar.
+              jq -nc --arg name "$REVIEWER_SECRET" --arg sa "$OPENBAO_SA" \
+                '{apiVersion:"v1",kind:"Secret",metadata:{name:$name,annotations:{"kubernetes.io/service-account.name":$sa}},type:"kubernetes.io/service-account-token"}' \
+                | kubectl -n "$NAMESPACE" apply -f -
+              # The token controller populates .data.token asynchronously.
+              REVIEWER_JWT=""
+              for _ in $(seq 1 30); do
+                REVIEWER_JWT=$(kubectl -n "$NAMESPACE" get secret "$REVIEWER_SECRET" \
+                  -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)
+                [ -n "$REVIEWER_JWT" ] && break
+                sleep 2
+              done
+              [ -n "$REVIEWER_JWT" ] || { echo "FATAL: reviewer token Secret never populated" >&2; exit 1; }
+
+              echo "configuring kubernetes auth (with stable token_reviewer_jwt)..."
               CACERT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt)
               bao_api POST auth/kubernetes/config \
-                "$(jq -nc --arg ca "$CACERT" '{kubernetes_host:"https://kubernetes.default.svc",kubernetes_ca_cert:$ca,disable_iss_validation:true}')" >/dev/null
+                "$(jq -nc --arg ca "$CACERT" --arg rjwt "$REVIEWER_JWT" \
+                  '{kubernetes_host:"https://kubernetes.default.svc",kubernetes_ca_cert:$ca,token_reviewer_jwt:$rjwt,disable_iss_validation:true}')" >/dev/null
 
               echo "creating role $ROLE (sa=$REGISTRY_SA ns=$NAMESPACE)..."
               bao_api POST "auth/kubernetes/role/$ROLE" \

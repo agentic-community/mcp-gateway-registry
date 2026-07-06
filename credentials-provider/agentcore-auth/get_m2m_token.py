@@ -209,12 +209,15 @@ def _save_egress_token(
     else:
         filename = f"{provider}-egress.json"
 
-    # Save to file
+    # Save to file. Create atomically with owner-only (0600) permissions so the
+    # egress access token is never briefly world/group-readable between create
+    # and chmod.
     egress_path = tokens_dir / filename
-    with open(egress_path, "w") as f:
+    fd = os.open(str(egress_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(egress_data, f, indent=2)
 
-    # Set secure file permissions
+    # Enforce 0600 even if the file pre-existed with looser permissions.
     egress_path.chmod(0o600)
 
     logger.info(f"Egress token saved to {egress_path}")

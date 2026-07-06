@@ -1,7 +1,7 @@
 # EFS storage resources for MCP Gateway Registry
 
-#checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "efs" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   source  = "terraform-aws-modules/efs/aws"
   version = "~> 2.0"
 

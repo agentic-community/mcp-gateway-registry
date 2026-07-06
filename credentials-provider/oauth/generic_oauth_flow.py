@@ -88,6 +88,22 @@ except ImportError:
     logger.debug("python-dotenv not available, skipping .env loading")
 
 
+def _safe_oauth_error(response: "requests.Response") -> str:
+    """Extract a non-sensitive OAuth error summary from a token-endpoint response.
+
+    The full response body can echo back the client_id or (on some providers)
+    partial credentials in ``error_description``, so never log ``response.text``.
+    Return only the standard ``error`` code when the body is JSON, else nothing.
+    """
+    try:
+        data = response.json()
+        if isinstance(data, dict) and data.get("error"):
+            return f"error={data['error']}"
+    except Exception:
+        pass
+    return "(body omitted)"
+
+
 def _validate_environment_variables() -> None:
     """Validate that all required INGRESS and EGRESS OAuth environment variables are set."""
     required_ingress_vars = [
@@ -271,7 +287,8 @@ class OAuthConfig:
 
             if not response.ok:
                 logger.error(
-                    f"Token exchange failed with status {response.status_code}. Response: {response.text}"
+                    f"Token exchange failed with status {response.status_code}. "
+                    f"{_safe_oauth_error(response)}"
                 )
                 return False
 
@@ -840,7 +857,9 @@ def wait_for_callback(timeout: int = 300) -> bool:
         logger.error("No authorization code received")
         return False
 
-    logger.info(f"Received authorization code: {authorization_code[:20]}...")
+    # Do not log any portion of the authorization code — it is a single-use
+    # credential that exchanges for tokens; log only that one was received.
+    logger.info("Received authorization code")
     return True
 
 
@@ -1102,7 +1121,8 @@ def run_m2m_flow(config: OAuthConfig) -> bool:
 
         if not response.ok:
             logger.error(
-                f"M2M token request failed with status {response.status_code}. Response: {response.text}"
+                f"M2M token request failed with status {response.status_code}. "
+                f"{_safe_oauth_error(response)}"
             )
             return False
 
@@ -1542,8 +1562,12 @@ Supported providers: """
     # Run the OAuth flow
     success = run_oauth_flow(oauth_config, force_new=args.force)
 
-    # Output token data as JSON if successful (for integration with other scripts)
-    # This stdout output is consumed by egress_oauth.py and other scripts in the pipeline
+    # Output token data as JSON on success. This is a deliberate IPC channel:
+    # egress_oauth.py runs this module as a child process with
+    # subprocess.run(capture_output=True) and json.loads() the last stdout line.
+    # The token therefore travels only over the private parent<->child pipe (in
+    # memory), never to a terminal, log, or file. The consumer must NOT log the
+    # captured stdout (see egress_oauth.py) or the token would leak in clear text.
     if success and oauth_config.access_token:
         token_output = {
             "provider": oauth_config.provider,

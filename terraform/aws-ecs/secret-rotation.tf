@@ -43,9 +43,9 @@ resource "aws_iam_role" "rotation_lambda" {
 # does not reference non-existent resources when DocumentDB is gated out.
 # Issue #955.
 #
-#checkov:skip=CKV_AWS_290:GetRandomPassword and EC2 network interface actions require wildcard resource per AWS API design
-#checkov:skip=CKV_AWS_355:GetRandomPassword and EC2 network interface actions require wildcard resource per AWS API design
 resource "aws_iam_role_policy" "rotation_lambda" {
+  #checkov:skip=CKV_AWS_290:GetRandomPassword and EC2 network interface actions require wildcard resource per AWS API design
+  #checkov:skip=CKV_AWS_355:GetRandomPassword and EC2 network interface actions require wildcard resource per AWS API design
   name = "${var.name}-secret-rotation-policy"
   role = aws_iam_role.rotation_lambda.id
 
@@ -257,8 +257,9 @@ resource "aws_vpc_security_group_egress_rule" "lambda_to_https" {
 #
 # CloudWatch Log Groups for Lambda Functions
 #
-#checkov:skip=CKV_AWS_158:KMS encryption for CloudWatch logs not required in this deployment
 resource "aws_cloudwatch_log_group" "documentdb_rotation" {
+  #checkov:skip=CKV_AWS_158:KMS encryption for CloudWatch logs not required in this deployment
+  #checkov:skip=CKV_AWS_338:Short retention is intentional for rotation Lambda logs - operational diagnostics
   count = local.is_aws_documentdb ? 1 : 0
 
   name              = "/aws/lambda/${var.name}-rotate-documentdb"
@@ -272,8 +273,9 @@ resource "aws_cloudwatch_log_group" "documentdb_rotation" {
   )
 }
 
-#checkov:skip=CKV_AWS_158:KMS encryption for CloudWatch logs not required in this deployment
 resource "aws_cloudwatch_log_group" "rds_rotation" {
+  #checkov:skip=CKV_AWS_158:KMS encryption for CloudWatch logs not required in this deployment
+  #checkov:skip=CKV_AWS_338:Short retention is intentional for rotation Lambda logs - operational diagnostics
   name              = "/aws/lambda/${var.name}-rotate-rds"
   retention_in_days = 30
 
@@ -310,11 +312,11 @@ data "archive_file" "rds_rotation" {
 #
 # Lambda Function - DocumentDB Rotation (gated on is_aws_documentdb)
 #
-#checkov:skip=CKV_AWS_115:Reserved concurrency not needed for secret rotation Lambda
-#checkov:skip=CKV_AWS_116:DLQ not needed for synchronous secret rotation Lambda
-#checkov:skip=CKV_AWS_173:Lambda environment variables use default encryption
-#checkov:skip=CKV_AWS_272:Code signing not configured for internal rotation Lambdas
 resource "aws_lambda_function" "documentdb_rotation" {
+  #checkov:skip=CKV_AWS_115:Reserved concurrency not needed for secret rotation Lambda
+  #checkov:skip=CKV_AWS_116:DLQ not needed for synchronous secret rotation Lambda
+  #checkov:skip=CKV_AWS_173:Lambda environment variables use default encryption
+  #checkov:skip=CKV_AWS_272:Code signing not configured for internal rotation Lambdas
   count = local.is_aws_documentdb ? 1 : 0
 
   filename         = data.archive_file.documentdb_rotation[0].output_path
@@ -359,11 +361,11 @@ resource "aws_lambda_function" "documentdb_rotation" {
 #
 # Lambda Function - RDS Rotation
 #
-#checkov:skip=CKV_AWS_115:Reserved concurrency not needed for secret rotation Lambda
-#checkov:skip=CKV_AWS_116:DLQ not needed for synchronous secret rotation Lambda
-#checkov:skip=CKV_AWS_173:Lambda environment variables use default encryption
-#checkov:skip=CKV_AWS_272:Code signing not configured for internal rotation Lambdas
 resource "aws_lambda_function" "rds_rotation" {
+  #checkov:skip=CKV_AWS_115:Reserved concurrency not needed for secret rotation Lambda
+  #checkov:skip=CKV_AWS_116:DLQ not needed for synchronous secret rotation Lambda
+  #checkov:skip=CKV_AWS_173:Lambda environment variables use default encryption
+  #checkov:skip=CKV_AWS_272:Code signing not configured for internal rotation Lambdas
   filename         = data.archive_file.rds_rotation.output_path
   function_name    = "${var.name}-rotate-rds"
   role             = aws_iam_role.rotation_lambda.arn
@@ -406,8 +408,8 @@ resource "aws_lambda_function" "rds_rotation" {
 #
 # Lambda Permission for Secrets Manager - DocumentDB (gated on is_aws_documentdb)
 #
-#checkov:skip=CKV_AWS_364:Lambda resource-based policy does not use IAM policy document version field
 resource "aws_lambda_permission" "documentdb_rotation" {
+  #checkov:skip=CKV_AWS_364:Lambda resource-based policy does not use IAM policy document version field
   count = local.is_aws_documentdb ? 1 : 0
 
   statement_id  = "AllowExecutionFromSecretsManager"
@@ -419,8 +421,8 @@ resource "aws_lambda_permission" "documentdb_rotation" {
 #
 # Lambda Permission for Secrets Manager - RDS
 #
-#checkov:skip=CKV_AWS_364:Lambda resource-based policy does not use IAM policy document version field
 resource "aws_lambda_permission" "rds_rotation" {
+  #checkov:skip=CKV_AWS_364:Lambda resource-based policy does not use IAM policy document version field
   statement_id  = "AllowExecutionFromSecretsManager"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.rds_rotation.function_name

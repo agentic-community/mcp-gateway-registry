@@ -96,8 +96,12 @@ class TestPathAllowed:
         assert _is_path_allowed("/api/peers", RegistryMode.SKILLS_ONLY) is False
 
     def test_skills_only_allows_wellknown(self):
-        """Skills-only mode should allow well-known endpoints (returns empty list)."""
-        assert _is_path_allowed("/.well-known/mcp-servers", RegistryMode.SKILLS_ONLY) is True
+        """Skills-only mode should allow well-known discovery endpoints."""
+        assert (
+            _is_path_allowed("/.well-known/oauth-protected-resource", RegistryMode.SKILLS_ONLY)
+            is True
+        )
+        assert _is_path_allowed("/.well-known/ai-catalog.json", RegistryMode.SKILLS_ONLY) is True
 
     def test_mcp_servers_only_allows_servers(self):
         """MCP-servers-only mode should allow servers endpoints."""

@@ -491,3 +491,102 @@ class TestServerPatch:
         called_path, called_dict = svc.update_server.call_args[0]
         assert called_path == "/test-server"
         assert called_dict["description"] == "patched"
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServerPatchLifecycleStatusPermission:
+    """PATCH status field is gated by change_lifecycle_status (Issue #1330)."""
+
+    def test_status_change_denied_without_permission(self, client):
+        """A non-admin without change_lifecycle_status gets 403 on a status change."""
+        existing = _existing()
+        existing["status"] = "draft"
+
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            # modify_service passes; change_lifecycle_status denied.
+            patch(
+                "registry.api.server_routes.user_can_change_lifecycle_status",
+                return_value=False,
+            ),
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, existing])
+            svc.update_server = AsyncMock(return_value=True)
+
+            response = client.patch("/servers/test-server", json={"status": "active"})
+
+        assert response.status_code == 403
+        assert "lifecycle status" in response.json()["detail"]
+
+    def test_status_change_allowed_with_permission(self, client):
+        """change_lifecycle_status permits the status change."""
+        existing = _existing()
+        existing["status"] = "draft"
+        fresh = {**existing, "status": "active"}
+
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.api.server_routes.user_can_change_lifecycle_status",
+                return_value=True,
+            ),
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, fresh])
+            svc.update_server = AsyncMock(return_value=True)
+
+            response = client.patch("/servers/test-server", json={"status": "active"})
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "active"
+
+    def test_non_status_patch_does_not_require_permission(self, client):
+        """A metadata-only patch never invokes the lifecycle status gate."""
+        existing = _existing(description="old description")
+        existing["status"] = "draft"
+        fresh = {**existing, "description": "patched"}
+
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.api.server_routes.user_can_change_lifecycle_status",
+                return_value=False,
+            ) as gate,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, fresh])
+            svc.update_server = AsyncMock(return_value=True)
+
+            response = client.patch(
+                "/servers/test-server", json={"description": "patched"}
+            )
+
+        assert response.status_code == 200
+        gate.assert_not_called()

@@ -20,6 +20,8 @@ import {
   SemanticCustomHit
 } from '../hooks/useSemanticSearch';
 import { humanize } from '../utils/humanize';
+import { isSafeUrl } from '../utils/safeUrl';
+import { SafeLink, safeMarkdownAnchor } from './SafeLink';
 import ServerConfigModal from './ServerConfigModal';
 import AgentDetailsModal from './AgentDetailsModal';
 import type { Server } from './ServerCard';
@@ -339,7 +341,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
         {/* Action buttons */}
         <div className="flex items-center gap-4 px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
           {skill.skill_md_url && (
-            <a
+            <SafeLink
               href={skill.skill_md_url}
               target="_blank"
               rel="noopener noreferrer"
@@ -347,10 +349,10 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
             >
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               View Skill
-            </a>
+            </SafeLink>
           )}
           {skill.repository_url && (
-            <a
+            <SafeLink
               href={skill.repository_url}
               target="_blank"
               rel="noopener noreferrer"
@@ -358,7 +360,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
             >
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               View Repo
-            </a>
+            </SafeLink>
           )}
           {content && (
             <>
@@ -393,14 +395,14 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               {skill.skill_md_url && (
                 <p className="mt-2 text-sm">
                   Try visiting the{' '}
-                  <a
+                  <SafeLink
                     href={skill.skill_md_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-amber-600 hover:underline"
                   >
                     source URL
-                  </a>{' '}
+                  </SafeLink>{' '}
                   directly.
                 </p>
               )}
@@ -428,7 +430,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               )}
               {/* Markdown Body */}
               <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-amber-800 dark:prose-headings:text-amber-200 prose-a:text-amber-600 dark:prose-a:text-amber-400 prose-code:bg-gray-100 dark:prose-code:bg-gray-900 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: safeMarkdownAnchor }}>{body}</ReactMarkdown>
               </div>
             </>
           ) : (
@@ -916,6 +918,12 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                 ? server.sync_metadata.source_peer_id.replace('peer-registry-', '').replace('peer-', '').toUpperCase()
                 : null;
               const isOrphanedServer = server.sync_metadata?.is_orphaned === true;
+              // Detect ARD discovery-only import: read-only metadata-only record
+              // from an ai-catalog ingest. These are non-connectable; the gear
+              // icon opens the source descriptor instead of an MCP config modal.
+              const isArdDiscovery =
+                server.record_kind === 'ard_ingested' || (server.tags || []).includes('ard');
+              const ardSourceUrl = server.ard_source_url || server.sync_metadata?.upstream_path;
 
               return (
               <div
@@ -940,6 +948,12 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                           ORPHANED
                         </span>
                       )}
+                      {/* Discovery badge — ARD discovery-only import (metadata only) */}
+                      {isArdDiscovery && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-600" title="Discovery-only import — resolve and connect at the source registry">
+                          Discovery
+                        </span>
+                      )}
                     </div>
                     <p className="text-sm text-gray-500 dark:text-gray-300">{server.path}</p>
                   </div>
@@ -952,14 +966,30 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     >
                       <InformationCircleIcon className="h-4 w-4" />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfigServer(server)}
-                      className="p-2 text-gray-400 hover:text-green-600 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-700/30 rounded-lg transition-colors"
-                      title="Open MCP configuration"
-                    >
-                      <CogIcon className="h-4 w-4" />
-                    </button>
+                    {/* For ARD discovery imports there's no MCP config to open
+                        (read-only, no endpoint). The gear instead links to the
+                        source descriptor, and only renders when that URL exists. */}
+                    {isArdDiscovery ? (
+                      ardSourceUrl && isSafeUrl(ardSourceUrl) && (
+                        <button
+                          type="button"
+                          onClick={() => window.open(ardSourceUrl, '_blank', 'noopener,noreferrer')}
+                          className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-700/30 rounded-lg transition-colors"
+                          title="View at source"
+                        >
+                          <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+                        </button>
+                      )
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfigServer(server)}
+                        className="p-2 text-gray-400 hover:text-green-600 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-700/30 rounded-lg transition-colors"
+                        title="Open MCP configuration"
+                      >
+                        <CogIcon className="h-4 w-4" />
+                      </button>
+                    )}
                     <span className="inline-flex items-center rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-200 px-3 py-1 text-xs font-semibold">
                       {formatPercent(server.relevance_score)} match
                     </span>

@@ -3,17 +3,15 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.7
+    tag: 1.26.0
     pullPolicy: IfNotPresent
-
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
 image:
-  registry: ""      # Overrides global.image.registry when set
-  repository: mcpgw  # Image name within the registry
-  tag: ""           # Overrides global.image.tag when set
-  pullPolicy: ""    # Overrides global.image.pullPolicy when set
-
+  registry: "" # Overrides global.image.registry when set
+  repository: mcpgw # Image name within the registry
+  tag: "" # Overrides global.image.tag when set
+  pullPolicy: "" # Overrides global.image.pullPolicy when set
 # Application configuration
 app:
   name: mcpgw-server
@@ -23,19 +21,17 @@ app:
   # wired through the chart; see issue #895.
   replicas: 1
   envSecretName: mcpgw-secret
-  existingSecret: ""  # If set, use this existing secret instead of creating one
+  existingSecret: "" # If set, use this existing secret instead of creating one
   port: 8000
   # Server bind address. Default "0.0.0.0" works on all Kubernetes nodes.
   # Set to "::" only for IPv6-only clusters (requires net.ipv6.bindv6only=0
   # on the node). See docs/unified-parameter-reference.md Group 4.
   bindHost: "0.0.0.0"
-
   # Registry connection — default is the standalone fallback. When this
   # subchart is deployed as part of mcp-gateway-registry-stack, the
   # template overrides this with the full ClusterIP DNS and the
   # registry Service's correct port (8000, see charts/registry/values.yaml).
   registryUrl: http://registry:8000
-
   # Security settings
   # secretKey: Required for standalone deployment (not needed when deployed via stack).
   # When deployed via mcp-gateway-registry-stack, SECRET_KEY comes from the shared secret.
@@ -44,26 +40,24 @@ app:
 
   # GitHub private repo auth (SKILL.md fetching)
   githubPat: ""
-  githubPatExistingSecret: ""  # If set, read GITHUB_PAT from this K8s secret
+  githubPatExistingSecret: "" # If set, read GITHUB_PAT from this K8s secret
   githubPatExistingSecretKey: "GITHUB_PAT"
   githubAppId: ""
   githubAppInstallationId: ""
   githubAppPrivateKey: ""
-  githubAppPrivateKeyExistingSecret: ""  # If set, read GITHUB_APP_PRIVATE_KEY from this K8s secret
+  githubAppPrivateKeyExistingSecret: "" # If set, read GITHUB_APP_PRIVATE_KEY from this K8s secret
   githubAppPrivateKeyExistingSecretKey: "GITHUB_APP_PRIVATE_KEY"
   githubExtraHosts: ""
   githubApiBaseUrl: "https://api.github.com"
-
   # Application Log Configuration
   # mcpgw uses a smaller subset than registry/auth-server (no MongoDB writer);
   # see servers/mcpgw/logging_setup.py for the env vars actually consumed.
-  appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
-  appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
-  appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
-  appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
-  appLogBackupCount: "5"           # Number of rotated backup log files to keep
-
+  appLogDir: "" # Empty uses backend default: /var/log/containers/ai-registry
+  appLogFileFormat: "json" # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
+  appLogConsoleFormat: "json" # "json" (default, structured logging) or "text" (human-readable)
+  appLogLevel: "INFO" # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  appLogMaxBytes: "52428800" # Max size per log file before rotation (default 50 MB)
+  appLogBackupCount: "5" # Number of rotated backup log files to keep
 # Service configuration
 service:
   type: ClusterIP
@@ -74,14 +68,12 @@ service:
   # "None" unless you have a specific reason (e.g. debugging per-replica
   # behavior) to pin clients to a single pod.
   sessionAffinity: None
-
 # PodDisruptionBudget. Only rendered when replicas > 1; protects against
 # voluntary disruptions (node drains, rolling deploys) taking the whole
 # gateway down.
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
-
 # Resource limits and requests
 resources:
   requests:
@@ -90,7 +82,6 @@ resources:
   limits:
     cpu: 1
     memory: 2Gi
-
 # mcpgw does NOT expose a public ingress. External MCP clients reach
 # its tools via the registry's nginx reverse proxy, which dynamically
 # generates a `location /airegistry-tools/` block from the registered
@@ -127,7 +118,6 @@ resources:
 #         name: my-secret
 #         key: my-key
 extraEnv: []
-
 # Extra `envFrom:` sources appended to the container. Use this to inject
 # all keys from an external ConfigMap or Secret you manage (e.g. via
 # External Secrets Operator, SealedSecrets, or Vault CSI).
@@ -153,7 +143,6 @@ extraEnv: []
 #       name: my-external-config
 #       optional: true
 extraEnvFrom: []
-
 # OTel-native metric emission (Issue #1122)
 # In 1.25.0+ mcpgw emits metrics natively via the OTel SDK.
 # metricsLegacyHttpPost=true ALSO posts to metrics-service (one-release transition).
@@ -163,7 +152,6 @@ metrics:
   otelExportIntervalMs: "15000"
   exporterPrometheusHost: "0.0.0.0"
   exporterPrometheusPort: "9464"
-
 # Metrics scrape configuration (Issue #1122)
 # Controls the NetworkPolicy that gates the OTel exporter-prometheus port.
 metricsScrape:
@@ -174,5 +162,4 @@ metricsScrape:
       kubernetes.io/metadata.name: monitoring
     fromPodSelector:
       app.kubernetes.io/name: prometheus
-
 nodeSelector: {}

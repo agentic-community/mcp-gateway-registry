@@ -11,9 +11,45 @@ version: '3.8'
 # Note: DocumentDB is a managed AWS service and runs outside of Docker.
 
 services:
+  # OpenBao - per-user egress credential vault (third-party OBO support).
+  # Runs in DEV mode: in-memory storage, auto-unsealed, with a fixed root
+  # token. This is the local-dev equivalent of the Helm standalone OpenBao
+  # (charts/mcp-gateway-registry-stack); the Helm path is sealed + file-backed
+  # and bootstraps via an init Job, none of which is needed for local compose.
+  # Data is NOT persisted across restarts (dev mode is in-memory by design).
+  # The registry reaches it via token auth using OPENBAO_TOKEN.
+  openbao:
+    image: openbao/openbao:2.5.5
+    container_name: mcp-openbao
+    command: ["server", "-dev"]
+    environment:
+      # Dev mode auto-mounts KV v2 at secret/ and auto-unseals with this token.
+      # OPENBAO_TOKEN is required (no default): reaching :8200 with a known token
+      # grants root access to every stored egress credential, so we fail fast
+      # rather than ship a guessable "dev-root-token" default.
+      - BAO_DEV_ROOT_TOKEN_ID=${OPENBAO_TOKEN:?Set OPENBAO_TOKEN in .env (a strong random value; do not reuse the old dev-root-token default)}
+      - BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+    # Published on loopback only: the dev vault is auto-unsealed and must never
+    # be reachable from other hosts on the network.
+    ports:
+      # Loopback-only: vault root == all egress credentials; never expose beyond
+      # the host. Override with HOST_BIND_IP=0.0.0.0 only if you understand the risk.
+      - "${HOST_BIND_IP:-127.0.0.1}:8200:8200"
+    healthcheck:
+      # Health endpoint reports 200 once the API is listening (dev mode is
+      # always unsealed + initialized, so the default codes are fine).
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
   # Registry service (includes nginx, SSL, FAISS, models) - using pre-built image
+  # Pre-built images are published to Amazon ECR Public (public.ecr.aws/p3v1o3c6).
+  # Override the namespace with ECR_REGISTRY if you mirror them elsewhere.
   registry:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/registry:${REGISTRY_VERSION:-latest}
+    image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/registry:${REGISTRY_VERSION:-latest}
     environment:
       # Deployment Mode Configuration
       - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-with-gateway}
@@ -59,11 +95,16 @@ services:
       - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
       - SECRETS_MANAGER_KMS_KEY_ID=${SECRETS_MANAGER_KMS_KEY_ID:-}
       - SECRETS_MANAGER_PATH_PREFIX=${SECRETS_MANAGER_PATH_PREFIX:-mcp/egress}
-      - OPENBAO_ADDR=${OPENBAO_ADDR:-}
+      # Default to the in-stack OpenBao container (dev mode). Override for an
+      # external vault.
+      - OPENBAO_ADDR=${OPENBAO_ADDR:-http://openbao:8200}
       - OPENBAO_NAMESPACE=${OPENBAO_NAMESPACE:-}
       - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
       - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
       - OPENBAO_ROLE=${OPENBAO_ROLE:-}
+      # Static token for OPENBAO_AUTH_METHOD=token; matches the dev OpenBao root
+      # token. Required for token auth (kubernetes auth is EKS-only).
+      - OPENBAO_TOKEN=${OPENBAO_TOKEN:?Set OPENBAO_TOKEN in .env (a strong random value; do not reuse the old dev-root-token default)}
       - AUTH_SERVER_URL=${AUTH_SERVER_URL}
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -123,9 +164,12 @@ services:
       - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
       - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
       # PingFederate Admin API (registry only)
+      # PF_ADMIN_PASS has no default: the registry drives the PF admin API with
+      # it, so a shipped vendor default would be a usable credential. Set it in
+      # .env when the pingfederate profile is enabled; leave empty otherwise.
       - PF_ADMIN_URL=${PF_ADMIN_URL:-https://pingfederate:9999}
       - PF_ADMIN_USER=${PF_ADMIN_USER:-administrator}
-      - PF_ADMIN_PASS=${PF_ADMIN_PASS:-2FederateM0re}
+      - PF_ADMIN_PASS=${PF_ADMIN_PASS:-}
       # Login-time IdP group allowlist (blank = auto-derive from scope mappings)
       - ALLOWED_IDP_GROUPS=${ALLOWED_IDP_GROUPS:-}
       # IdP user-to-group fallback (issue #1127)
@@ -194,6 +238,8 @@ services:
       - REGISTRATION_WEBHOOK_AUTH_HEADER=${REGISTRATION_WEBHOOK_AUTH_HEADER:-Authorization}
       - REGISTRATION_WEBHOOK_AUTH_TOKEN=${REGISTRATION_WEBHOOK_AUTH_TOKEN:-}
       - REGISTRATION_WEBHOOK_TIMEOUT_SECONDS=${REGISTRATION_WEBHOOK_TIMEOUT_SECONDS:-10}
+      - REGISTRATION_WEBHOOK_SIGNING_SECRET=${REGISTRATION_WEBHOOK_SIGNING_SECRET:-}
+      - REGISTRATION_ENFORCED_STATUS=${REGISTRATION_ENFORCED_STATUS:-}
       # Agent Batch API (issue #956)
       - BATCH_WORKER_ENABLED=${BATCH_WORKER_ENABLED:-true}
       - BATCH_MAX_OPERATIONS_PER_JOB=${BATCH_MAX_OPERATIONS_PER_JOB:-1000}
@@ -276,53 +322,23 @@ services:
     depends_on:
       auth-server:
         condition: service_started
-      metrics-service:
-        condition: service_healthy
       mongodb-init:
         condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
     restart: unless-stopped
 
-  # Metrics Collection Service - using pre-built image
-  metrics-service:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/metrics-service:${METRICS_VERSION:-latest}
-    environment:
-      - METRICS_SERVICE_PORT=8890
-      - METRICS_SERVICE_HOST=0.0.0.0
-      - SQLITE_DB_PATH=/var/lib/sqlite/metrics.db
-      - METRICS_RETENTION_DAYS=90
-      - METRICS_API_KEY_AUTH=${METRICS_API_KEY_AUTH_SERVER}
-      - METRICS_API_KEY_REGISTRY=${METRICS_API_KEY_REGISTRY}
-      - METRICS_API_KEY_MCPGW=${METRICS_API_KEY_MCPGW_SERVER}
-      - OTEL_SERVICE_NAME=mcp-metrics-service
-      - OTEL_PROMETHEUS_ENABLED=true
-      - OTEL_PROMETHEUS_PORT=9465
-      - OTEL_OTLP_ENDPOINT=${OTEL_OTLP_ENDPOINT:-}
-      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
-      - OTEL_OTLP_EXPORT_INTERVAL_MS=${OTEL_OTLP_EXPORT_INTERVAL_MS:-30000}
-      - OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE:-cumulative}
-      - METRICS_RATE_LIMIT=1000
-    ports:
-      - "8890:8890"
-      - "9465:9465"  # Prometheus metrics endpoint
-    volumes:
-      - metrics-db-data:/var/lib/sqlite
-      - ${HOME}/mcp-gateway/logs:/app/logs
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    depends_on:
-      - metrics-db
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8890/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+  # NOTE: The standalone metrics-service (and its SQLite metrics-db) were removed
+  # from the pre-built stack. The core services emit OTel-native metrics directly
+  # (scraped by Prometheus at :9464 on each service); the legacy HTTP POST path
+  # to metrics-service is off by default (METRICS_LEGACY_HTTP_POST=false). This
+  # matches the ECS and Helm deployments, where metrics-service is optional and
+  # is being removed entirely in 1.26.0. The build-mode docker-compose.yml still
+  # builds metrics-service locally if you need it.
 
   # Auth service (separate and scalable) - using pre-built image
   auth-server:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/auth-server:${AUTH_SERVER_VERSION:-latest}
+    image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/auth-server:${AUTH_SERVER_VERSION:-latest}
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
       - SECRET_KEY=${SECRET_KEY}
@@ -427,11 +443,16 @@ services:
       # Tool-level access control (Issue #1026)
       - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
       - MCP_PROXY_MAX_BODY_BYTES=${MCP_PROXY_MAX_BODY_BYTES:-2097152}
+      - MCP_PROXY_TIMEOUT=${MCP_PROXY_TIMEOUT:-30}
       - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
+    # Fronted by nginx; published on loopback only so callers cannot bypass the
+    # auth front door from the network (in-cluster: auth-server:8888).
     ports:
-      - "8888:8888"
+      # Loopback-only: normal traffic goes through the nginx front door; direct
+      # port is for host health checks / tests only.
+      - "${HOST_BIND_IP:-127.0.0.1}:8888:8888"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -445,29 +466,19 @@ services:
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     depends_on:
-      metrics-service:
-        condition: service_healthy
       mongodb-init:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Current Time MCP Server - using pre-built image
-  currenttime-server:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/currenttime-server:${CURRENTTIME_VERSION:-latest}
-    environment:
-      - PORT=8000
-      - MCP_TRANSPORT=streamable-http
-    ports:
-      - "8000:8000"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    restart: unless-stopped
+  # NOTE: The currenttime-server and realserverfaketools-server demo MCP servers
+  # were removed from the pre-built stack because they are not published to ECR
+  # Public. To run them locally, use the build-mode stack (docker-compose.yml),
+  # which builds them from source.
 
   # MCP Gateway Server - using pre-built image
+  # ECR repository is named "mcpgw" (the published image), service stays mcpgw-server.
   mcpgw-server:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/mcpgw-server:${MCPGW_VERSION:-latest}
+    image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/mcpgw:${MCPGW_VERSION:-latest}
     environment:
       - HOST=0.0.0.0
       - PORT=8003
@@ -496,47 +507,22 @@ services:
       - ${HOME}/mcp-gateway/models:/app/registry/models
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
+    # Backend MCP server: reached through the nginx/auth front door in-cluster.
+    # Published on loopback only (direct network calls would bypass auth).
     ports:
-      - "8003:8003"
+      # Loopback-only: reached through the nginx front door in normal use.
+      - "${HOST_BIND_IP:-127.0.0.1}:8003:8003"
     depends_on:
       - registry
     restart: unless-stopped
 
-  # Real Server Fake Tools MCP Server - using pre-built image
-  realserverfaketools-server:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/realserverfaketools-server:${REALSERVERFAKETOOLS_VERSION:-latest}
-    environment:
-      - PORT=8002
-    ports:
-      - "8002:8002"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    restart: unless-stopped
-
-  # SQLite container for metrics database - using mirrored pre-built image
-  metrics-db:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/alpine:${ALPINE_VERSION:-latest}
-    volumes:
-      - metrics-db-data:/var/lib/sqlite
-    command: ["sh", "-c", "apk add --no-cache sqlite && mkdir -p /var/lib/sqlite && sqlite3 /var/lib/sqlite/metrics.db 'CREATE TABLE IF NOT EXISTS _health (id INTEGER);' && tail -f /dev/null"]
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "sqlite3", "/var/lib/sqlite/metrics.db", ".tables"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Prometheus for metrics collection - using mirrored pre-built image
+  # Prometheus for metrics collection - using canonical upstream image
   prometheus:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/prometheus:${PROMETHEUS_VERSION:-latest}
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.11.3}
+    # Operator dashboard: published on loopback only (no auth on Prometheus).
     ports:
-      - "9090:9090"
+      # Loopback-only: Prometheus UI is a local-dev convenience, not a public surface.
+      - "${HOST_BIND_IP:-127.0.0.1}:9090:9090"
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
@@ -553,11 +539,14 @@ services:
       - ALL
     restart: unless-stopped
 
-  # Grafana for metrics visualization - using mirrored pre-built image
+  # Grafana for metrics visualization - using canonical upstream image
   grafana:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/grafana:${GRAFANA_VERSION:-latest}
+    image: grafana/grafana:${GRAFANA_VERSION:-12.3.1}
+    # Operator dashboard: published on loopback only. Reach it via an SSH
+    # tunnel for remote access rather than exposing it to the network.
     ports:
-      - "3000:3000"
+      # Loopback-only: Grafana UI is a local-dev convenience, not a public surface.
+      - "${HOST_BIND_IP:-127.0.0.1}:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -574,13 +563,15 @@ services:
       - prometheus
     restart: unless-stopped
 
-  # PostgreSQL database for Keycloak - using mirrored pre-built image
+  # PostgreSQL database for Keycloak - using canonical upstream image
   keycloak-db:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/postgres:${POSTGRES_VERSION:-latest}
+    image: postgres:${POSTGRES_VERSION:-16-alpine}
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
-      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      # No default: the Keycloak realm lives in this database, so a shipped
+      # "keycloak" password would be a usable credential. Set it in .env.
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set KEYCLOAK_DB_PASSWORD in .env}
     volumes:
       - keycloak_db_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -590,20 +581,22 @@ services:
       timeout: 5s
       retries: 5
 
-  # Keycloak Identity Provider - using mirrored pre-built image
+  # Keycloak Identity Provider - using canonical upstream image
   keycloak:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/keycloak:${KEYCLOAK_VERSION:-latest}
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION:-25.0}
     command: start-dev  # Use 'start' for production with proper SSL
     environment:
       # Database configuration
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
       KC_DB_USERNAME: keycloak
-      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set KEYCLOAK_DB_PASSWORD in .env}
 
-      # Admin credentials
+      # Admin credentials. No default password: this bootstraps the Keycloak
+      # master-realm admin, so an empty/guessable value would be a full
+      # takeover of the IdP. Set KEYCLOAK_ADMIN_PASSWORD in .env.
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
 
       # HTTP configuration
       KC_HTTP_ENABLED: 'true'
@@ -621,8 +614,14 @@ services:
       # Logging
       KC_LOG_LEVEL: INFO
 
+    # start-dev serves plain HTTP with a bootstrap admin account, so the
+    # published port is bound to loopback: the browser reaches it via
+    # http://localhost:8080 on the same host, and in-cluster services use the
+    # keycloak:8080 service DNS name. For network-exposed Keycloak, front it
+    # with nginx/TLS (KEYCLOAK_EXTERNAL_URL) and switch to `start`.
     ports:
-      - "8080:8080"
+      # Loopback-only: Keycloak is reached through the nginx front door in normal use.
+      - "${HOST_BIND_IP:-127.0.0.1}:8080:8080"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -652,9 +651,12 @@ services:
       - PING_IDENTITY_DEVOPS_KEY=${PING_IDENTITY_DEVOPS_KEY}
       - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
       - SERVER_PROFILE_PATH=getting-started/pingfederate
+    # Runtime (9031) and admin (9999) published on loopback only. The admin
+    # console in particular must never be reachable from the network.
     ports:
-      - "9031:9031"
-      - "9999:9999"
+      # Loopback-only: PingFederate runtime + admin console stay on the host.
+      - "${HOST_BIND_IP:-127.0.0.1}:9031:9031"
+      - "${HOST_BIND_IP:-127.0.0.1}:9999:9999"
     volumes:
       - pingfederate-data:/opt/out/instance/server/default/data
     restart: unless-stopped
@@ -668,7 +670,8 @@ services:
   # MongoDB keyfile initialization (generates keyfile for replica set authentication)
   # This runs once before MongoDB starts to create the keyfile with correct permissions
   mongodb-keyfile-init:
-    image: alpine:latest
+    # Pinned (not :latest) so rebuilds are reproducible.
+    image: alpine:3.21
     container_name: mcp-mongodb-keyfile-init
     volumes:
       - mongodb-keyfile:/keyfile
@@ -691,14 +694,21 @@ services:
   # Vector search is implemented in application code (see search_repository.py)
   # Running with authentication enabled for security
   mongodb:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/mongo:${MONGODB_VERSION:-latest}
+    image: mongo:${MONGODB_VERSION:-8.2}
     container_name: mcp-mongodb
     command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb --auth --keyFile /keyfile/replica.key
     environment:
+      # No password default: MongoDB runs with --auth here, so a shipped
+      # "admin/admin" would be usable root credentials. DOCUMENTDB_PASSWORD is
+      # required; set a strong value in .env.
       - MONGO_INITDB_ROOT_USERNAME=${DOCUMENTDB_USERNAME:-admin}
-      - MONGO_INITDB_ROOT_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${DOCUMENTDB_PASSWORD:?Set DOCUMENTDB_PASSWORD in .env (do not use the old admin default)}
+    # Authenticated, but the published port is still bound to loopback so the
+    # database is not reachable from other hosts on the network.
     ports:
-      - "27017:27017"
+      # Loopback-only: host tools (mongosh, tests) reach it via localhost, but it
+      # is never exposed on other interfaces. Set HOST_BIND_IP=0.0.0.0 to override.
+      - "${HOST_BIND_IP:-127.0.0.1}:27017:27017"
     volumes:
       - mongodb-data:/data/db
       - mongodb-config:/data/configdb
@@ -714,7 +724,7 @@ services:
       mongodb-keyfile-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "mongosh", "-u", "${DOCUMENTDB_USERNAME:-admin}", "-p", "${DOCUMENTDB_PASSWORD:-admin}", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "-u", "${DOCUMENTDB_USERNAME:-admin}", "-p", "${DOCUMENTDB_PASSWORD:?Set DOCUMENTDB_PASSWORD in .env}", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')"]
       interval: 60s
       timeout: 5s
       retries: 5
@@ -737,7 +747,7 @@ services:
       - DOCUMENTDB_PORT=27017
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
       - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-admin}
-      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:?Set DOCUMENTDB_PASSWORD in .env}
       - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
       - ENTRA_GROUP_ADMIN_ID=${ENTRA_GROUP_ADMIN_ID:-}
     volumes:
@@ -757,7 +767,6 @@ services:
 volumes:
   ssl_data:
   keycloak_db_data:
-  metrics-db-data:
   prometheus-data:
   grafana-data:
   mongodb-data:

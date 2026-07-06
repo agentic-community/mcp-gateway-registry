@@ -98,4 +98,8 @@ export interface Skill {
   created_at?: string;
   updated_at?: string;
   resource_manifest?: SkillResourceManifest | null;
+  // ARD discovery imports: read-only marker from the federation sync layer and
+  // the URL to the source registry's descriptor for the "View at source" link.
+  is_read_only?: boolean;
+  ard_source_url?: string;
 }

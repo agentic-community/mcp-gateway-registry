@@ -72,7 +72,7 @@ def get_egress_auth_service() -> EgressAuthService:
 
     _egress_service = EgressAuthService(
         secret_store=get_secret_store(),
-        callback_base_url=settings.egress_oauth_callback_base_url,
+        callback_base_url=settings.egress_oauth_callback_base,
         refresh_skew_seconds=settings.egress_token_refresh_skew_seconds,
         state_ttl_seconds=settings.egress_state_ttl_seconds,
         replay_guard=replay_guard,

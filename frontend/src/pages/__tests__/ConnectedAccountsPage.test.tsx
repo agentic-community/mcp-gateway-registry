@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 import ConnectedAccountsPage from '../ConnectedAccountsPage';
 import * as egressAuth from '../../utils/egressAuth';
@@ -7,9 +8,20 @@ import * as egressAuth from '../../utils/egressAuth';
 jest.mock('../../utils/egressAuth');
 const mocked = egressAuth as jest.Mocked<typeof egressAuth>;
 
+// The page uses useNavigate() for the "Back to Dashboard" link, so it must be
+// rendered inside a Router.
+const renderPage = () =>
+  render(
+    <MemoryRouter>
+      <ConnectedAccountsPage />
+    </MemoryRouter>
+  );
+
 describe('ConnectedAccountsPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Default: no egress-enabled servers available (overridden per test).
+    mocked.listAvailableServers.mockResolvedValue([]);
   });
 
   it('lists existing connections', async () => {
@@ -24,7 +36,7 @@ describe('ConnectedAccountsPage', () => {
       },
     ]);
 
-    render(<ConnectedAccountsPage />);
+    renderPage();
 
     expect(await screen.findByText('github')).toBeInTheDocument();
     expect(screen.getByText('/github-mcp')).toBeInTheDocument();
@@ -33,19 +45,22 @@ describe('ConnectedAccountsPage', () => {
 
   it('shows empty state when no connections', async () => {
     mocked.listConnections.mockResolvedValue([]);
-    render(<ConnectedAccountsPage />);
+    renderPage();
     expect(await screen.findByText('No connected accounts yet.')).toBeInTheDocument();
   });
 
   it('opens the authorize URL on Connect', async () => {
     mocked.listConnections.mockResolvedValue([]);
+    mocked.listAvailableServers.mockResolvedValue([
+      { server_path: '/github-mcp', server_name: 'GitHub MCP', provider: 'github' },
+    ]);
     mocked.initiateConsent.mockResolvedValue('https://github.com/login/oauth/authorize?x=1');
     const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
 
-    render(<ConnectedAccountsPage />);
+    renderPage();
     await screen.findByText('No connected accounts yet.');
 
-    fireEvent.change(screen.getByLabelText('Server path'), {
+    fireEvent.change(screen.getByLabelText('Server requiring per-user authentication'), {
       target: { value: '/github-mcp' },
     });
     fireEvent.click(screen.getByRole('button', { name: /connect/i }));
@@ -74,7 +89,7 @@ describe('ConnectedAccountsPage', () => {
       .mockResolvedValueOnce([]);
     mocked.disconnect.mockResolvedValue();
 
-    render(<ConnectedAccountsPage />);
+    renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /disconnect github/i }));
 
     await waitFor(() =>
@@ -85,7 +100,7 @@ describe('ConnectedAccountsPage', () => {
 
   it('surfaces a load error', async () => {
     mocked.listConnections.mockRejectedValue(new Error('boom'));
-    render(<ConnectedAccountsPage />);
+    renderPage();
     expect(await screen.findByText('Could not load connections.')).toBeInTheDocument();
   });
 });

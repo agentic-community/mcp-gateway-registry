@@ -124,7 +124,7 @@ Authorization: Bearer <token>
 ```json
 [
   {
-    "client_id": "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd",
+    "client_id": "EXAMPLE_AUTH0_CLIENT_ID",
     "name": "MCP Gateway M2M",
     "description": "M2M client for registry access",
     "groups": ["registry-admins"],
@@ -169,7 +169,7 @@ Content-Type: application/json
 **Response:**
 ```json
 {
-  "client_id": "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd",
+  "client_id": "EXAMPLE_AUTH0_CLIENT_ID",
   "groups": ["registry-admins", "developers"],
   "message": "Groups updated successfully"
 }
@@ -236,7 +236,7 @@ You can configure default groups for specific client IDs in `registry/services/a
 
 ```python
 DEFAULT_CLIENT_GROUPS = {
-    "KhZMijfKUcl2TEJqZzrzVJb8rmwk6Qcd": ["registry-admins"],
+    "EXAMPLE_AUTH0_CLIENT_ID": ["registry-admins"],
     "another_client_id": ["public-mcp-users"],
 }
 ```

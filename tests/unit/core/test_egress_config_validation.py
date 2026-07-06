@@ -72,10 +72,30 @@ class TestEgressCrossFieldValidation:
         s = Settings(**_valid_egress_kwargs(storage_backend=backend))
         assert s.storage_backend == backend
 
-    def test_callback_url_required_when_enabled(self, monkeypatch):
+    def test_callback_url_derives_from_registry_url_when_unset(self, monkeypatch):
+        """An empty EGRESS_OAUTH_CALLBACK_BASE_URL is allowed when registry_url is
+        set: the callback base derives from registry_url. It only fails when BOTH
+        are empty (see test_callback_url_required_when_both_empty)."""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        s = Settings(
+            **_valid_egress_kwargs(
+                egress_oauth_callback_base_url="",
+                registry_url="https://gw.example",
+            )
+        )
+        assert s.egress_oauth_callback_base == "https://gw.example"
+
+    def test_callback_url_required_when_both_empty(self, monkeypatch):
+        """Fail loudly only when neither the explicit callback base nor
+        registry_url is available to derive it from."""
         monkeypatch.delenv("ENVIRONMENT", raising=False)
         with pytest.raises(ValueError, match="EGRESS_OAUTH_CALLBACK_BASE_URL"):
-            Settings(**_valid_egress_kwargs(egress_oauth_callback_base_url=""))
+            Settings(
+                **_valid_egress_kwargs(
+                    egress_oauth_callback_base_url="",
+                    registry_url="",
+                )
+            )
 
     def test_secrets_manager_allowed_in_production(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "production")

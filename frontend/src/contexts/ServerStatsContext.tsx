@@ -43,6 +43,10 @@ interface Server {
   num_tools?: number;
   type: 'server' | 'agent';
   proxy_pass_url?: string;
+  // ARD discovery imports (#1296): URL to the source registry's server.json
+  // descriptor, and the record-kind marker for ingested entries.
+  ard_source_url?: string;
+  record_kind?: string;
   // Local-server fields
   deployment?: 'remote' | 'local';
   local_runtime?: LocalRuntime;
@@ -264,6 +268,9 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           ans_metadata: serverInfo.ans_metadata || serverInfo.ansMetadata,
           auth_scheme: serverInfo.auth_scheme,
           auth_header_name: serverInfo.auth_header_name,
+          // ARD discovery imports (#1296): link to the source's server.json.
+          ard_source_url: serverInfo.ard_source_url,
+          record_kind: serverInfo.record_kind,
           lifecycle_status: serverInfo.status || 'active',
           // Local-server fields
           deployment: serverInfo.deployment || 'remote',
@@ -290,6 +297,8 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           status: mapHealthStatus(agentInfo.health_status || agentInfo.healthStatus || 'unknown'),
           num_tools: agentInfo.num_skills || 0, // Use num_skills for agents
           type: 'agent' as const,
+          ard_source_url: agentInfo.ard_source_url,
+          record_kind: agentInfo.record_kind,
           sync_metadata: agentInfo.sync_metadata,
           ans_metadata: agentInfo.ans_metadata || agentInfo.ansMetadata,
           registered_by: agentInfo.registered_by || agentInfo.registeredBy || null,

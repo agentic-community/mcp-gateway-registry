@@ -21,6 +21,7 @@ Security model for POST /internal/egress-token:
 
 import logging
 import secrets
+from html import escape
 from typing import Annotated
 from urllib.parse import urlencode, urlparse
 
@@ -37,9 +38,11 @@ from registry.core.schemas import _is_gateway_own_audience
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
 from registry.egress_auth.service import EgressAuthError, is_per_user_auth_method
+from registry.exceptions import UrlValidationError
 from registry.repositories.factory import get_server_repository
 from registry.services.server_service import server_service
 from registry.utils.credential_encryption import encrypt_credential
+from registry.utils.url_guard import PROXY_PROFILE, validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +55,7 @@ def _feature_enabled_or_404() -> None:
 
 
 def _callback_url() -> str:
-    return settings.egress_oauth_callback_base_url.rstrip("/") + "/oauth2/egress/callback"
+    return settings.egress_oauth_callback_base.rstrip("/") + "/oauth2/egress/callback"
 
 
 def _build_connect_url(server_path: str) -> str:
@@ -400,6 +403,31 @@ async def configure_egress_auth(
             "custom_scope_separator": body.custom_scope_separator,
             "custom_token_auth_style": body.custom_token_auth_style,
         }
+        # For a 'custom' provider the authorize/token URLs are registrant-supplied
+        # and become an outbound token POST (carrying the client_secret) and a
+        # browser 302. Fail closed at registration: require https and reject any
+        # literal private/metadata IP or bad scheme via the shared SSRF guard, so
+        # a config that would exfiltrate the secret to an internal target (e.g.
+        # 169.254.169.254) can never be persisted. resolve=False keeps this a
+        # structural check; the rebinding-safe block for hostname targets is the
+        # pinned guarded client at token-exchange time.
+        if body.egress_provider == "custom":
+            for field, url in (
+                ("custom_authorize_url", body.custom_authorize_url),
+                ("custom_token_url", body.custom_token_url),
+            ):
+                try:
+                    validate_url(
+                        url or "",
+                        profile=PROXY_PROFILE,
+                        require_https=True,
+                        resolve=False,
+                    )
+                except UrlValidationError as exc:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        detail=f"{field} rejected: {exc}",
+                    ) from exc
         # Validate provider resolution (custom requires URLs) before persisting.
         try:
             resolve_provider(eo)
@@ -456,6 +484,52 @@ async def get_egress_auth_config(
     if not server:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="server not found")
     return _egress_config_view(server)
+
+
+@router.get("/egress-auth/available-servers")
+async def list_available_egress_servers(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """List egress-enabled servers the current user can access (for the
+    Connected Accounts dropdown).
+
+    Returns only servers with ``egress_auth_mode == 'oauth_user'`` AND a valid
+    ``egress_oauth`` config, intersected with the user's accessible servers, so
+    a user is never offered a server they cannot reach. Tokens/secrets are never
+    included -- only path, display name, and provider.
+    """
+    _feature_enabled_or_404()
+
+    # Only per-user principals can connect an account; non-per-user callers
+    # (e.g. federation/network-trusted) get an empty list rather than an error.
+    auth_method = user_context.get("auth_method") or ""
+    if not is_per_user_auth_method(auth_method):
+        return []
+
+    # "*" in accessible_servers = unrestricted (admin); otherwise the user only
+    # sees servers whose path is explicitly granted. accessible_servers stores
+    # names WITHOUT a leading slash (e.g. "slack") while server paths carry one
+    # (e.g. "/slack"), so compare on the slash-stripped form.
+    accessible = user_context.get("accessible_servers") or []
+    unrestricted = "*" in accessible
+    accessible_norm = {s.lstrip("/") for s in accessible}
+    all_servers = await server_service.get_all_servers()
+    results: list[dict] = []
+    for path, server in all_servers.items():
+        if server.get("egress_auth_mode") != "oauth_user" or not server.get("egress_oauth"):
+            continue
+        if not unrestricted and str(path).lstrip("/") not in accessible_norm:
+            continue
+        eo = server.get("egress_oauth") or {}
+        results.append(
+            {
+                "server_path": path,
+                "server_name": server.get("server_name") or path,
+                "provider": eo.get("provider") or "custom",
+            }
+        )
+    results.sort(key=lambda r: r["server_name"].lower())
+    return results
 
 
 @router.get("/egress/obo-identifier-uris")
@@ -592,14 +666,24 @@ async def egress_callback(
             current_auth_method=current_method,
         )
     except EgressAuthError as exc:
+        # Detail to server logs only. Do NOT reflect the exception text into the
+        # browser response: EgressAuthError messages embed internal state (e.g.
+        # decryption / SECRET_KEY hints, wrapped upstream errors) — a
+        # stack-trace/internal-detail exposure. Show a generic message.
         logger.warning("egress callback failed: %s", exc)
-        return HTMLResponse(f"<h3>Connection failed: {exc}.</h3>", status_code=400)
+        return HTMLResponse(
+            "<h3>Connection failed. Please close this tab and try connecting again.</h3>",
+            status_code=400,
+        )
 
     # The egress consent is the web Connected-Accounts / MCP URL-mode elicitation
     # flow: the token is now vaulted, so show the close-tab page and let the user
-    # retry their original request.
+    # retry their original request. HTML-escape the interpolated values: the
+    # server_path is admin-registrant-supplied and validate_server_path blocks
+    # nginx metacharacters but not '<'/'>' (a different sink), so escape here to
+    # keep a crafted path (e.g. /<svg onload=...>) from executing in the browser.
     return HTMLResponse(
-        f"<h3>Connected {conn.provider} for {conn.server_path}.</h3>"
+        f"<h3>Connected {escape(conn.provider)} for {escape(conn.server_path)}.</h3>"
         "<p>You can close this tab and retry your request.</p>"
     )
 

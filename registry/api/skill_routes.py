@@ -57,6 +57,12 @@ from ..schemas.skill_models import (
     VisibilityEnum,
 )
 from ..services.duplicate_check_service import get_duplicate_check_service
+from ..services.lifecycle_events import (
+    EnforcedStatusError,
+    enforce_registration_status,
+    fire_scan_complete_event,
+    user_can_change_lifecycle_status,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.skill_service import (
     _build_fetch_headers,
@@ -96,6 +102,39 @@ def get_normalized_path(
 ) -> str:
     """Normalize skill path."""
     return normalize_skill_path(skill_path)
+
+
+def _require_admin_for_global_credentials(
+    user_context: dict,
+    auth_scheme: str | None,
+) -> None:
+    """Restrict the ``global_credentials`` auth scheme to administrators.
+
+    The ``global_credentials`` scheme causes the registry to attach the
+    server's shared GitHub credentials (PAT / GitHub App installation token) to
+    a caller-supplied URL. Those credentials can read any private repository the
+    server principal can see, so allowing a non-admin to select this scheme is a
+    privilege-escalation path (a caller could exfiltrate private repo contents
+    via the server's identity). Any caller-driven flow that honors the scheme
+    must therefore gate it behind an actual admin check and fail closed.
+
+    Args:
+        user_context: Authenticated user context.
+        auth_scheme: The auth scheme requested by the caller.
+
+    Raises:
+        HTTPException: 403 if a non-admin requests ``global_credentials``.
+    """
+    if auth_scheme != "global_credentials":
+        return
+    if not user_context.get("is_admin", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The 'global_credentials' auth scheme uses the server's shared "
+                "credentials and is restricted to administrators."
+            ),
+        )
 
 
 @router.get(
@@ -277,6 +316,22 @@ async def parse_skill_md(
     Useful for auto-populating the skill registration form.
     Accepts optional auth parameters for parsing private repo SKILL.md files.
     """
+    # Authorization: this registration helper drives a server-side fetch of a
+    # caller-supplied URL (SSRF is mitigated by the service's _is_safe_url
+    # allowlist, but the fetch should still be limited to users who may
+    # register skills), so require the publish_skill permission like
+    # check_skill_duplicates / register_skill.
+    publish_permissions = (user_context.get("ui_permissions") or {}).get("publish_skill", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register skills",
+        )
+
+    # The global_credentials scheme uses the server's shared GitHub token;
+    # only admins may select it (fail closed for everyone else).
+    _require_admin_for_global_credentials(user_context, auth_scheme)
+
     service = get_skill_service()
     try:
         result = await service.parse_skill_md(
@@ -458,6 +513,21 @@ async def check_skill_health(
     """
     normalized_path = normalize_skill_path(skill_path)
     service = get_skill_service()
+
+    # Authorization: a health probe both confirms existence and triggers an
+    # outbound request to the skill's URL, so gate it behind view access like
+    # the sibling read endpoints. Otherwise a private/group skill could be
+    # probed by any authenticated user.
+    skill = await service.get_skill(normalized_path)
+    if not skill:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+    if not _user_can_access_skill(skill, user_context):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this skill"
+        )
+
     result = await service.check_skill_health(normalized_path)
     return {
         "path": normalized_path,
@@ -615,6 +685,11 @@ async def get_skill_tools(
     if not skill:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+
+    if not _user_can_access_skill(skill, user_context):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this skill"
         )
 
     tool_service = get_tool_validation_service()
@@ -888,6 +963,21 @@ async def register_skill(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
 ) -> SkillCard:
     """Register a new skill in the registry."""
+    # Authorization: require the publish_skill UI permission, mirroring
+    # check_skill_duplicates and register_agent. Without this any authenticated
+    # user could register a skill (and drive an outbound fetch/scan of an
+    # attacker-supplied URL). nginx_proxied_auth only authenticates.
+    publish_permissions = (user_context.get("ui_permissions") or {}).get("publish_skill", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register skills",
+        )
+
+    # The global_credentials scheme uses the server's shared GitHub token;
+    # only admins may persist a skill that relies on it (fail closed).
+    _require_admin_for_global_credentials(user_context, getattr(request, "auth_scheme", None))
+
     # Set audit action for skill registration
     # Note: path is derived from name, so use name as resource_id
     set_audit_action(
@@ -914,6 +1004,20 @@ async def register_skill(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
+
+    # Enforced-status policy (Issue #1330). Use model_fields_set to tell an
+    # omitted status (force to enforced) from an explicit one (reject on
+    # mismatch). When the policy is unset, the request value is unchanged.
+    requested_status = request.status if "status" in request.model_fields_set else None
+    try:
+        effective_status = enforce_registration_status(requested_status, "skill")
+    except EnforcedStatusError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    if effective_status:
+        request.status = effective_status
 
     service = get_skill_service()
     owner = user_context.get("username")
@@ -990,6 +1094,28 @@ async def update_skill(
     if not _user_can_modify_skill(existing, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
+    # The global_credentials scheme uses the server's shared GitHub token; only
+    # admins may set (or switch a skill to) it. Only gate when the update
+    # actually requests global_credentials, so non-admins can still edit skills
+    # that use their own credentials.
+    if "auth_scheme" in request.model_fields_set:
+        _require_admin_for_global_credentials(user_context, request.auth_scheme)
+
+    # Guard against repointing a global_credentials skill at a new URL without
+    # admin authorization. The auth_scheme gate above only fires when the scheme
+    # is changed; without this, a non-admin owner of an existing
+    # global_credentials skill could aim the server's shared GitHub token at an
+    # arbitrary (e.g. private) repository by changing only skill_md_url.
+    effective_scheme = (
+        request.auth_scheme
+        if "auth_scheme" in request.model_fields_set
+        else getattr(existing, "auth_scheme", "none")
+    )
+    if effective_scheme == "global_credentials" and "skill_md_url" in request.model_fields_set:
+        new_url = str(request.skill_md_url)
+        if new_url != str(getattr(existing, "skill_md_url", "")):
+            _require_admin_for_global_credentials(user_context, "global_credentials")
+
     # Registration gate check for update (admission control, issue #809)
     gate_result = await check_registration_gate(
         asset_type="skill",
@@ -1008,6 +1134,22 @@ async def update_skill(
         )
 
     updates = request.model_dump(exclude_unset=True, mode="json")
+
+    # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+    if "status" in updates:
+        old_status = (getattr(existing, "status", None) or "active").lower()
+        new_status = (updates.get("status") or "active").lower()
+        if new_status != old_status and not user_can_change_lifecycle_status(
+            existing.name, user_context
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"You do not have permission to change the lifecycle status of "
+                    f"{existing.name}. This action requires the 'change_lifecycle_status' "
+                    f"permission, which is typically granted to admins."
+                ),
+            )
 
     # Convert raw metadata dict to SkillMetadata structure for consistent storage
     if "metadata" in updates and updates["metadata"] is not None:
@@ -1282,16 +1424,25 @@ async def _perform_skill_security_scan_on_registration(
             headers=fetch_headers or None,
         )
 
+        auto_disabled = False
         if not result.is_safe and config.block_unsafe_skills:
             logger.warning(f"Disabling unsafe skill: {skill.path}")
             await service.toggle_skill(skill.path, enabled=False)
+            auto_disabled = True
 
             if config.add_security_pending_tag:
                 current_tags = skill.tags or []
                 if "security-pending" not in current_tags:
-                    await service.update_skill(
-                        skill.path, {"tags": current_tags + ["security-pending"]}
-                    )
+                    skill.tags = current_tags + ["security-pending"]
+                    await service.update_skill(skill.path, {"tags": skill.tags})
+
+        # scan_complete webhook (Issue #1330): safe or unsafe path.
+        fire_scan_complete_event(
+            skill.model_dump(),
+            result,
+            auto_disabled=auto_disabled,
+            registration_type="skill",
+        )
 
     except Exception as e:
         logger.error(f"Security scan failed for skill {skill.path}: {e}")
@@ -1299,8 +1450,14 @@ async def _perform_skill_security_scan_on_registration(
             try:
                 current_tags = skill.tags or []
                 if "security-pending" not in current_tags:
-                    await service.update_skill(
-                        skill.path, {"tags": current_tags + ["security-pending"]}
-                    )
+                    skill.tags = current_tags + ["security-pending"]
+                    await service.update_skill(skill.path, {"tags": skill.tags})
             except Exception as tag_err:
                 logger.error(f"Failed to add security-pending tag: {tag_err}")
+        # Still notify consumers so they are not left polling.
+        fire_scan_complete_event(
+            skill.model_dump(),
+            None,
+            scan_error=f"{type(e).__name__}: {e}",
+            registration_type="skill",
+        )

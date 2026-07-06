@@ -121,6 +121,22 @@ class TestPeerFederationServiceSingleton:
 class TestPeerFederationServiceCRUD:
     """Tests for CRUD operations on PeerFederationService."""
 
+    @pytest.fixture(autouse=True)
+    def _allow_safe_endpoints(self):
+        """Treat endpoints as SSRF-safe so CRUD logic is tested without real DNS.
+
+        add_peer/update_peer/sync_peer now validate the endpoint via the SSRF
+        guard, which performs a DNS lookup and fails closed on unresolvable hosts.
+        These CRUD tests use example.com placeholders and are not about SSRF, so
+        the guard is stubbed to a no-op. Dedicated SSRF rejection tests live in
+        TestPeerEndpointSsrfGuard (which does not use this fixture).
+        """
+        with patch(
+            "registry.services.peer_federation_service._assert_endpoint_safe",
+            return_value=None,
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_add_peer_success(self, mock_repository, sample_peer_config):
         """Test successfully adding a peer."""
@@ -557,3 +573,192 @@ class TestPeerFederationServiceHelpers:
 
             result = service._matches_tag_filter(item, ["production"])
             assert result is False
+
+
+@pytest.mark.unit
+class TestPeerEndpointSsrfGuard:
+    """Peer endpoints must pass SSRF validation at write time and before sync.
+
+    The endpoint is fetched server-side during sync with the peer's
+    federation_token attached as a bearer credential. An attacker-chosen endpoint
+    (private/loopback/link-local or the cloud-metadata address) is both an SSRF
+    pivot and a token-exfiltration vector, so it must be rejected fail-closed.
+    """
+
+    @pytest.fixture
+    def metadata_peer_config(self):
+        # 169.254.169.254 is the cloud metadata endpoint (link-local); a literal
+        # IP is validated without a DNS lookup, keeping the test hermetic.
+        return PeerRegistryConfig(
+            peer_id="evil-peer",
+            name="Evil Peer",
+            endpoint="http://169.254.169.254",
+            federation_token="super-secret-token",
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_peer_rejects_metadata_endpoint(self, mock_repository, metadata_peer_config):
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            service = PeerFederationService()
+
+            with pytest.raises(ValueError, match="SSRF safety validation"):
+                await service.add_peer(metadata_peer_config)
+
+            # The unsafe peer must never be persisted.
+            mock_repository.create_peer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_add_peer_rejects_private_endpoint(self, mock_repository):
+        private_peer = PeerRegistryConfig(
+            peer_id="internal-peer",
+            name="Internal Peer",
+            endpoint="http://10.0.0.5:8080",
+            federation_token="super-secret-token",
+        )
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            service = PeerFederationService()
+
+            with pytest.raises(ValueError, match="SSRF safety validation"):
+                await service.add_peer(private_peer)
+
+            mock_repository.create_peer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_peer_rejects_repointing_to_private_endpoint(
+        self, mock_repository, sample_peer_config
+    ):
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            mock_repository.get_peer.return_value = sample_peer_config
+            service = PeerFederationService()
+
+            with pytest.raises(ValueError, match="SSRF safety validation"):
+                await service.update_peer(
+                    sample_peer_config.peer_id,
+                    {"endpoint": "http://127.0.0.1:9000"},
+                )
+
+            mock_repository.update_peer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_add_peer_allows_safe_public_endpoint(self, mock_repository, sample_peer_config):
+        # Stub the endpoint guard to accept, isolating the wiring from real DNS.
+        with (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            patch(
+                "registry.services.peer_federation_service._assert_endpoint_safe",
+                return_value=None,
+            ),
+        ):
+            mock_repository.create_peer.return_value = sample_peer_config
+            mock_repository.get_peer.return_value = None
+
+            service = PeerFederationService()
+            result = await service.add_peer(sample_peer_config)
+
+            assert result.peer_id == sample_peer_config.peer_id
+            mock_repository.create_peer.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sync_peer_refuses_unsafe_endpoint_and_never_builds_client(self, mock_repository):
+        # A peer that somehow reached storage with an unsafe endpoint must not be
+        # synced: no client is created and the token is never sent.
+        unsafe_peer = PeerRegistryConfig(
+            peer_id="stored-evil",
+            name="Stored Evil",
+            endpoint="http://169.254.169.254",
+            enabled=True,
+            federation_token="super-secret-token",
+        )
+        with (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            patch(
+                "registry.services.peer_federation_service.PeerRegistryClient"
+            ) as mock_client_cls,
+        ):
+            mock_repository.get_peer.return_value = unsafe_peer
+            service = PeerFederationService()
+            service.registered_peers[unsafe_peer.peer_id] = unsafe_peer
+
+            with pytest.raises(ValueError, match="SSRF safety validation"):
+                await service.sync_peer(unsafe_peer.peer_id)
+
+            # No federation client (and therefore no token egress) for an unsafe peer.
+            mock_client_cls.assert_not_called()
+
+    def test_resolves_only_to_public_ips_rejects_private_resolution(self):
+        """A host that resolves to a private IP is rejected, allowlist or not.
+
+        This closes the trusted-domain-allowlist bypass in _is_safe_url: even a
+        host that skips the shared guard's IP check must not pass federation
+        validation when it resolves to a private/metadata address.
+        """
+        from registry.services.peer_federation_service import _resolves_only_to_public_ips
+
+        private_addr_info = [(2, 1, 6, "", ("10.1.2.3", 443))]
+        with patch(
+            "registry.services.peer_federation_service.socket.getaddrinfo",
+            return_value=private_addr_info,
+        ):
+            assert _resolves_only_to_public_ips("https://evil.example.com") is False
+
+    def test_resolves_only_to_public_ips_accepts_public_resolution(self):
+        from registry.services.peer_federation_service import _resolves_only_to_public_ips
+
+        public_addr_info = [(2, 1, 6, "", ("93.184.216.34", 443))]
+        with patch(
+            "registry.services.peer_federation_service.socket.getaddrinfo",
+            return_value=public_addr_info,
+        ):
+            assert _resolves_only_to_public_ips("https://good.example.com") is True
+
+    def test_resolves_only_to_public_ips_fails_closed_on_error(self):
+        from registry.services.peer_federation_service import _resolves_only_to_public_ips
+
+        with patch(
+            "registry.services.peer_federation_service.socket.getaddrinfo",
+            side_effect=OSError("resolution failure"),
+        ):
+            assert _resolves_only_to_public_ips("https://unresolvable.example.com") is False
+
+    @pytest.mark.asyncio
+    async def test_add_peer_rejects_allowlisted_host_resolving_private(self, mock_repository):
+        """Even if _is_safe_url allowlists the host, a private resolution is rejected."""
+        peer = PeerRegistryConfig(
+            peer_id="allowlist-abuse",
+            name="Allowlist Abuse",
+            endpoint="https://github.com",
+            federation_token="super-secret-token",
+        )
+        private_addr_info = [(2, 1, 6, "", ("10.0.0.7", 443))]
+        with (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            # _is_safe_url returns True for allowlisted hosts (bypasses IP check).
+            patch("registry.services.skill_service._is_safe_url", return_value=True),
+            patch(
+                "registry.services.peer_federation_service.socket.getaddrinfo",
+                return_value=private_addr_info,
+            ),
+        ):
+            service = PeerFederationService()
+            with pytest.raises(ValueError, match="SSRF safety validation"):
+                await service.add_peer(peer)
+
+            mock_repository.create_peer.assert_not_called()

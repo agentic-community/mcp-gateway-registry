@@ -236,7 +236,10 @@ class TestSkillInlineContent:
 
         with (
             patch("registry.services.skill_service._is_safe_url", return_value=True),
-            patch("httpx.AsyncClient", return_value=mock_async_client),
+            patch(
+                "registry.services.skill_service.guarded_async_client",
+                return_value=mock_async_client,
+            ),
         ):
             # Act
             response = test_client.get("/api/skills/inline-test/content")
@@ -271,7 +274,10 @@ class TestSkillInlineContent:
 
         with (
             patch("registry.services.skill_service._is_safe_url", return_value=True),
-            patch("httpx.AsyncClient", return_value=mock_async_client),
+            patch(
+                "registry.services.skill_service.guarded_async_client",
+                return_value=mock_async_client,
+            ),
         ):
             # Act
             response = test_client.get("/api/skills/inline-test/content")

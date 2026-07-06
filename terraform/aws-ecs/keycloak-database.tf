@@ -39,13 +39,13 @@ resource "aws_db_proxy_target" "keycloak" {
 }
 
 # Aurora MySQL Serverless v2 Cluster
-#checkov:skip=CKV_AWS_139:Deletion protection configured per environment
-#checkov:skip=CKV_AWS_162:IAM database authentication not used - Keycloak uses password auth
-#checkov:skip=CKV_AWS_324:CloudWatch log exports not enabled for Keycloak database - log volume is low and Keycloak application logs provide sufficient observability
-#checkov:skip=CKV_AWS_325:Preferred backup window is configured on this resource
-#checkov:skip=CKV_AWS_326:Serverless v2 scaling configuration is present on this resource
-#checkov:skip=CKV2_AWS_8:Backup retention period of 7 days is configured on this resource
 resource "aws_rds_cluster" "keycloak" {
+  #checkov:skip=CKV_AWS_139:Deletion protection configured per environment
+  #checkov:skip=CKV_AWS_162:IAM database authentication not used - Keycloak uses password auth
+  #checkov:skip=CKV_AWS_324:CloudWatch log exports not enabled for Keycloak database - log volume is low and Keycloak application logs provide sufficient observability
+  #checkov:skip=CKV_AWS_325:Preferred backup window is configured on this resource
+  #checkov:skip=CKV_AWS_326:Serverless v2 scaling configuration is present on this resource
+  #checkov:skip=CKV2_AWS_8:Backup retention period of 7 days is configured on this resource
   cluster_identifier = "keycloak"
   engine             = "aurora-mysql"
   engine_version     = "8.0.mysql_aurora.3.10.3"
@@ -81,9 +81,9 @@ resource "aws_rds_cluster" "keycloak" {
 }
 
 # Aurora Cluster Instance (Serverless v2)
-#checkov:skip=CKV_AWS_118:Enhanced monitoring configured per environment requirements
-#checkov:skip=CKV_AWS_353:Performance insights configured per environment requirements
 resource "aws_rds_cluster_instance" "keycloak" {
+  #checkov:skip=CKV_AWS_118:Enhanced monitoring configured per environment requirements
+  #checkov:skip=CKV_AWS_353:Performance insights configured per environment requirements
   cluster_identifier = aws_rds_cluster.keycloak.id
   instance_class     = "db.serverless"
   engine             = aws_rds_cluster.keycloak.engine
@@ -255,8 +255,8 @@ resource "aws_iam_role_policy" "rds_proxy_policy" {
 }
 
 # Secrets Manager Secret for Database Credentials
-#checkov:skip=CKV2_AWS_57:Secret rotation managed externally via dedicated rotation Lambda
 resource "aws_secretsmanager_secret" "keycloak_db_secret" {
+  #checkov:skip=CKV2_AWS_57:Secret rotation managed externally via dedicated rotation Lambda
   name                    = "keycloak/database"
   description             = "Keycloak database credentials"
   recovery_window_in_days = 0

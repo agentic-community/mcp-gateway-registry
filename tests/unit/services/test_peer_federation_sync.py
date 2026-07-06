@@ -29,6 +29,22 @@ def reset_singleton():
     PeerFederationService._instance = None
 
 
+@pytest.fixture(autouse=True)
+def _allow_safe_endpoints():
+    """Treat peer endpoints as SSRF-safe so sync flow is tested without real DNS.
+
+    sync_peer now re-validates the endpoint via the SSRF guard before creating the
+    client. These tests use example.com placeholders and are not about SSRF, so
+    the guard is stubbed to a no-op. Endpoint-rejection behaviour is covered by
+    TestPeerEndpointSsrfGuard in test_peer_federation_service.py.
+    """
+    with patch(
+        "registry.services.peer_federation_service._assert_endpoint_safe",
+        return_value=None,
+    ):
+        yield
+
+
 @pytest.fixture
 def mock_repository():
     """Create a mock repository for testing."""
