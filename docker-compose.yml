@@ -836,14 +836,13 @@ services:
       - "${HOST_BIND_IP:-127.0.0.1}:4318:4318"   # OTLP HTTP
       # 8889 (Prometheus exporter) is scraped container-to-container (see
       # config/prometheus.yml job 'otel-collector' -> otel-collector:8889) and
-      # 13133 (health_check) is used only by the in-container healthcheck below,
-      # so neither needs a host mapping. Not published.
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      # 13133 hosts the health_check extension, so neither needs a host mapping.
+      # Not published.
+    # No container healthcheck: the upstream image is distroless (no curl, wget
+    # or shell), so nothing inside the container can probe the health_check
+    # extension on :13133. A wget/curl-based check here only ever reports a false
+    # "unhealthy". Nothing depends_on this service's health; monitor readiness
+    # externally via the health_check extension (:13133) if needed.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -946,6 +945,12 @@ services:
       # Features
       KC_FEATURES: token-exchange,admin-api
 
+      # Health endpoints. Keycloak 25 only serves /health, /health/ready and
+      # /health/live when this is enabled, and exposes them on the management
+      # interface (port 9000), not on KC_HTTP_PORT (8080). The healthcheck below
+      # probes 9000 accordingly.
+      KC_HEALTH_ENABLED: 'true'
+
       # Logging
       KC_LOG_LEVEL: INFO
 
@@ -971,7 +976,10 @@ services:
       - ./keycloak/import:/opt/keycloak/data/import
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      # The Keycloak image ships neither curl nor wget, so probe the readiness
+      # endpoint on the management port (9000) with bash's built-in /dev/tcp and
+      # match the HTTP 200 status line. Requires KC_HEALTH_ENABLED=true above.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; grep -q '200' <&3"]
       interval: 30s
       timeout: 10s
       retries: 3
