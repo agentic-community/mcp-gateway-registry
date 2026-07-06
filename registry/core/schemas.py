@@ -38,6 +38,16 @@ _SERVER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
 # the shape rule.
 _GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
+# The authority of an accepted ``api://<authority>`` target, and the accepted bare
+# (schemeless) client-id form. Deliberately narrow so the shape rule fails CLOSED:
+# only these two shapes are ever accepted; every other/unknown form is dropped.
+# Allowed chars are those Entra App ID URIs and Keycloak client-ids actually use
+# (alphanumerics and ``. _ - :`` for host:port-style App ID URIs). No slashes,
+# quotes, whitespace, or scheme markers -- so ``spiffe://x``, ``urn:uuid:...``,
+# ``{guid}``, ``http(s)://...`` etc. never match.
+_OBO_API_AUTHORITY_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
+_OBO_BARE_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
 
 def _gateway_own_client_id() -> str:
     """The gateway's own IdP client id, resolved by the configured auth provider.
@@ -121,18 +131,22 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
 
     A **denylist of hosts/GUIDs cannot express this** (new first-party hosts,
     ports, path suffixes, sovereign clouds, and the full first-party app-id GUID
-    set all evade it), so this is a POSITIVE control:
+    set all evade it), so this is a POSITIVE control that **fails closed**:
 
     1. If the operator set ``EGRESS_OBO_ALLOWED_AUDIENCES``, the target must be in
        that exact set (authoritative). Anything else is disallowed.
-    2. Otherwise a shape rule: an internal MCP server audience is an ``api://``
-       App ID URI (Entra) or a bare non-GUID client-id (Keycloak), NOT an
-       ``http(s)://`` host URL and NOT a bare/``api://`` GUID. Every shared
-       first-party API (Graph/ARM/Key Vault, all clouds) is either an ``https://``
-       host or a well-known app-id GUID; rejecting host-URL audiences and
-       GUID-shaped audiences blocks them by construction. A GUID-shaped target is
-       ambiguous (could be an internal app OR any first-party resource), so it is
-       only permitted via the explicit allowlist in (1), never the shape rule.
+    2. Otherwise a shape allowlist: ONLY two shapes are accepted, everything else
+       (unknown schemes, host URLs, GUIDs in any spelling, braced/urn forms,
+       garbage) is disallowed:
+         a. ``api://<authority>`` where the authority is a non-GUID token
+            (Entra App ID URI for an internal server -- e.g. ``api://outlook-mcp``).
+         b. a bare, schemeless non-GUID client-id token (Keycloak -- e.g.
+            ``outlook-mcp-client``).
+       A GUID (bare or ``api://<guid>``) is NOT accepted by shape -- it could be
+       any Microsoft first-party resource (Graph/ARM/Key Vault/..., not safely
+       enumerable) -- so a genuinely-GUID internal audience must be pinned via the
+       operator allowlist in (1). ``http(s)://`` hosts (all shared first-party
+       APIs) and every unrecognized form fail the allowlist and are dropped.
     """
     target = target_audience.strip().lower().rstrip("/")
     if not target:
@@ -143,18 +157,22 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
     if allowlist:
         return target not in allowlist
 
-    # Shape rule (no operator allowlist): reject host-based URLs (all shared
-    # first-party resources are https hosts).
-    if target.startswith("https://") or target.startswith("http://"):
+    # Shape allowlist (no operator allowlist). Fail closed: disallowed UNLESS the
+    # target matches one of exactly two accepted shapes.
+    if target.startswith("api://"):
+        authority = target[len("api://") :]
+        # Accept a well-formed non-GUID api:// authority; reject a GUID authority
+        # (ambiguous first-party resource) or a malformed one.
+        if _GUID_RE.match(authority):
+            return True
+        return not bool(_OBO_API_AUTHORITY_RE.match(authority))
+    # No scheme: accept only a bare non-GUID client-id token; reject a GUID or any
+    # value carrying a scheme marker / disallowed characters.
+    if "://" in target or ":" in target:
         return True
-    # Reject GUID-shaped targets (bare or api://<guid>). A GUID could be any
-    # Microsoft first-party resource (Graph/ARM/Key Vault/...) -- the set is not
-    # safely enumerable -- so a GUID target must be pinned via the operator
-    # allowlist, not accepted by shape.
-    bare = target[len("api://") :] if target.startswith("api://") else target
-    if _GUID_RE.match(bare):
+    if _GUID_RE.match(target):
         return True
-    return False
+    return not bool(_OBO_BARE_CLIENT_ID_RE.match(target))
 
 
 def _obo_scope_resource(scope: str) -> str:
@@ -162,16 +180,22 @@ def _obo_scope_resource(scope: str) -> str:
 
     Entra scopes are ``<resource>/<permission>`` (e.g.
     ``api://outlook-mcp-server/.default`` or ``https://graph.microsoft.com/User.Read``).
-    The resource is everything before the last ``/`` segment; the permission
-    (``.default``, ``User.Read``, ...) is stripped. A scope with no ``/`` is
-    treated as its own resource (a bare client-id/GUID).
+    The resource is the scope minus the final permission segment; a scope with no
+    permission segment is its own resource. The ``scheme://`` prefix is split off
+    first so the authority's ``//`` is never mistaken for the permission separator
+    (otherwise ``api://app`` would wrongly yield ``api:/``).
     """
     s = scope.strip().rstrip("/")
-    if "/" not in s:
-        return s
-    # For an api:// or https:// URI, the resource is the URI minus the final
-    # permission segment. Split on the last '/'.
-    return s.rsplit("/", 1)[0]
+    if "://" in s:
+        scheme, _, rest = s.partition("://")
+        # Strip only a trailing permission segment AFTER the authority.
+        if "/" in rest:
+            return f"{scheme}://{rest.rsplit('/', 1)[0]}"
+        return s  # bare scheme://authority (no permission segment)
+    # No scheme (bare client-id / GUID): strip a trailing permission if present.
+    if "/" in s:
+        return s.rsplit("/", 1)[0]
+    return s
 
 
 def _obo_scope_mismatches_target(scope: str, target_audience: str) -> bool:
@@ -699,6 +723,19 @@ class ServerInfo(BaseModel):
             raise ValueError(
                 "egress_auth_mode='obo_exchange' requires egress_oauth.target_audience"
             )
+        # Reject a malformed scheme audience (e.g. 'api://', 'api:/', 'api:'): a
+        # value carrying a ':' scheme separator must be a well-formed
+        # 'scheme://<non-empty-authority>'. A degenerate scheme would collapse to a
+        # bare scheme in scope-resource extraction, letting a scope for another
+        # resource appear to "match" it.
+        if ":" in target:
+            scheme, sep, rest = target.partition("://")
+            if not sep or not rest.strip() or not scheme.strip():
+                raise ValueError(
+                    f"egress_oauth.target_audience {target!r} is malformed: a scheme "
+                    "audience must be 'scheme://<authority>' with a non-empty authority "
+                    "(e.g. 'api://<app-id>')"
+                )
         if _is_gateway_own_audience(target):
             raise ValueError(
                 "egress_oauth.target_audience must differ from the gateway's own IdP "
@@ -721,6 +758,8 @@ class ServerInfo(BaseModel):
         # defeat the target check entirely. Require every scope to grant against the
         # validated target.
         for scope in self.egress_oauth.scopes or []:
+            if not scope or not scope.strip():
+                raise ValueError("egress_oauth.scope entries must be non-empty")
             if _obo_scope_mismatches_target(scope, target):
                 raise ValueError(
                     f"egress_oauth.scope {scope!r} grants against a resource other than "

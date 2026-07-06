@@ -181,12 +181,31 @@ class TestDisallowedOboAudience:
         [
             "api://outlook-mcp-server",
             "api://obo-echo-mcp-server",
-            "api://echo/access_as_user",
+            "api://host.example:8000",  # api:// authority may carry a host:port
             "my-keycloak-client",  # a bare non-GUID client id
         ],
     )
     def test_internal_app_audiences_allowed(self, aud):
         assert schemas._is_disallowed_obo_audience(aud) is False
+
+    @pytest.mark.parametrize(
+        "aud",
+        [
+            "spiffe://cluster/ns/sa",  # unknown scheme
+            "ftp://host",  # unknown scheme
+            "urn:uuid:00000003-0000-0000-c000-000000000000",  # urn form
+            "{00000003-0000-0000-c000-000000000000}",  # braced GUID
+            "custom-scheme://app",  # any non-api scheme
+            "api://echo/access_as_user",  # api:// authority must not carry a path
+            'api://has"quote',  # disallowed char in authority
+            "api://has space",
+        ],
+    )
+    def test_unknown_or_malformed_shapes_fail_closed(self, aud):
+        # The shape rule is an allowlist: anything that is not api://<non-guid> or
+        # a bare non-GUID client-id is dropped, so unknown schemes / GUID spellings
+        # / malformed values never slip through.
+        assert schemas._is_disallowed_obo_audience(aud) is True
 
     @pytest.mark.parametrize(
         "aud",
@@ -277,10 +296,43 @@ class TestDisallowedOboAudience:
                 scopes=[
                     "api://outlook-mcp-server/.default",
                     "api://outlook-mcp-server/Mail.Read",
+                    # A bare scope equal to the target (no permission segment) must
+                    # be accepted -- the scheme's '//' must not be mistaken for the
+                    # permission separator.
+                    "api://outlook-mcp-server",
                 ],
             ),
         )
         assert s.egress_oauth.target_audience == "api://outlook-mcp-server"
+
+    def test_malformed_scheme_target_rejected(self, monkeypatch):
+        # A scheme audience with an empty authority ('api://' / 'api:/') is not a
+        # usable IdP audience and would collapse to a bare scheme, letting an
+        # off-resource scope appear to match. Reject it outright.
+        from registry.core.config import settings
+
+        monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(settings, "entra_client_id", "", raising=False)
+        for bad in ("api://", "api:/", "https://"):
+            with pytest.raises(ValidationError, match="malformed|not an allowed"):
+                _server(
+                    egress_auth_mode="obo_exchange",
+                    egress_oauth=EgressOAuthConfig(target_audience=bad),
+                )
+
+    def test_empty_scope_rejected(self, monkeypatch):
+        from registry.core.config import settings
+
+        monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(settings, "entra_client_id", "", raising=False)
+        with pytest.raises(ValidationError, match="must be non-empty"):
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth=EgressOAuthConfig(
+                    target_audience="api://outlook-mcp-server",
+                    scopes=["  "],
+                ),
+            )
 
     def test_scope_binding_holds_even_under_allowlist(self, monkeypatch):
         # The allowlist gates target_audience; scopes must still bind to the target,
