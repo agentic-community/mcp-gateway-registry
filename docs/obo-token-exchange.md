@@ -69,8 +69,19 @@ Deployment facts for the verification runbook (`mcp-entra` release):
   nginx location that exists only after the server is registered, §3b).
 - Namespace `mcp-entra`; the echo upstream is in-cluster at
   `http://obo-echo.mcp-entra.svc.cluster.local:8000/mcp`.
-- `target_audience` MUST differ from the gateway's own `ENTRA_CLIENT_ID`
-  (same-app OBO is rejected at registration).
+- `target_audience` MUST be an internal MCP server's own IdP audience and is
+  validated at registration: it must differ from the gateway's own
+  `ENTRA_CLIENT_ID` / App ID URI (same-app OBO is rejected), and must be an
+  `api://` App ID URI or a bare non-GUID client-id — never an `https://` host URL
+  or a bare/`api://` GUID (which could be a shared first-party resource such as
+  Microsoft Graph, ARM, or Key Vault). Every `egress_oauth.scope` must also be
+  audience-scoped to `target_audience` (e.g. `api://<app>/.default`); a scope for
+  a different resource is rejected, since the exchange engine sends scopes
+  verbatim. To register a target that legitimately IS a GUID, pin it via
+  `EGRESS_OBO_ALLOWED_AUDIENCES` (an operator allowlist that, when set, is the
+  authoritative control). This prevents a confused-deputy where an over-permitted
+  gateway app mints a broad delegated token for a first-party API that is then
+  forwarded to the server's upstream.
 
 ---
 

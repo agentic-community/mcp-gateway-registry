@@ -1535,6 +1535,14 @@ module "ecs_service_registry" {
           name  = "EGRESS_STATE_TTL_SECONDS"
           value = tostring(var.egress_state_ttl_seconds)
         },
+        # obo_exchange target_audience allowlist (whitespace-separated). When set,
+        # the authoritative positive control; when empty a shape rule applies
+        # (api:// App ID URI / bare client-id only, no https host URLs), so shared
+        # first-party APIs (Graph/ARM/Key Vault) are rejected at registration.
+        {
+          name  = "EGRESS_OBO_ALLOWED_AUDIENCES"
+          value = var.egress_obo_allowed_audiences
+        },
         # AUTH_SERVER_NGINX_MARKER_SECRET is injected via secrets/valueFrom below
         # (required unconditionally, not just for egress).
         {

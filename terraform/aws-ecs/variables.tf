@@ -1792,6 +1792,18 @@ variable "egress_state_ttl_seconds" {
   default     = 600
 }
 
+variable "egress_obo_allowed_audiences" {
+  description = <<-EOT
+    Optional allowlist (whitespace-separated) for obo_exchange target_audience
+    values. When set, an obo server may only use a listed audience (authoritative
+    positive control). When empty, a shape rule applies: the target must be an
+    internal app audience (api:// App ID URI or bare client-id/GUID), never an
+    https host URL, so shared first-party APIs (Graph/ARM/Key Vault) are rejected.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "egress_registry_internal_url" {
   description = "URL the auth-server uses to reach the registry internal vend endpoint."
   type        = string

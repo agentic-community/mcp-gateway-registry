@@ -182,11 +182,37 @@ class TestDisallowedOboAudience:
             "api://outlook-mcp-server",
             "api://obo-echo-mcp-server",
             "api://echo/access_as_user",
-            "7f3b0000-internal-app-guid",  # a non-first-party bare client id/GUID
+            "my-keycloak-client",  # a bare non-GUID client id
         ],
     )
     def test_internal_app_audiences_allowed(self, aud):
         assert schemas._is_disallowed_obo_audience(aud) is False
+
+    @pytest.mark.parametrize(
+        "aud",
+        [
+            "797f4846-ba00-4fd7-ba43-dac1f8f63013",  # Azure Resource Manager
+            "cfa8b339-82a2-471a-a3c9-0fc0be7a4093",  # Azure Key Vault
+            "00000003-0000-0000-c000-000000000000",  # Microsoft Graph (bare)
+            "api://00000003-0000-0000-c000-000000000000",  # Graph GUID via api://
+        ],
+    )
+    def test_guid_targets_rejected_by_shape_rule(self, aud):
+        # A GUID could be any first-party resource (the set isn't enumerable), so
+        # under the shape rule (no operator allowlist) every GUID target is rejected.
+        assert schemas._is_disallowed_obo_audience(aud) is True
+
+    def test_guid_target_allowed_only_via_allowlist(self, monkeypatch):
+        from registry.core.config import settings
+
+        # An internal server whose audience genuinely IS a GUID must be pinned.
+        monkeypatch.setattr(
+            settings,
+            "egress_obo_allowed_audiences",
+            "11111111-2222-3333-4444-555555555555",
+            raising=False,
+        )
+        assert schemas._is_disallowed_obo_audience("11111111-2222-3333-4444-555555555555") is False
 
     def test_obo_registration_rejects_graph_target(self, monkeypatch):
         from registry.core.config import settings
@@ -221,6 +247,58 @@ class TestDisallowedOboAudience:
             _server(
                 egress_auth_mode="obo_exchange",
                 egress_oauth=EgressOAuthConfig(target_audience="api://not-approved"),
+            )
+
+    def test_scope_for_other_resource_rejected(self, monkeypatch):
+        # Bypass: benign target but a scope for Graph. The engine sends scopes
+        # verbatim (ignoring target), so an off-target scope must be rejected.
+        from registry.core.config import settings
+
+        monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(settings, "entra_client_id", "", raising=False)
+        with pytest.raises(ValidationError, match="grants against a resource other than"):
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth=EgressOAuthConfig(
+                    target_audience="api://outlook-mcp-server",
+                    scopes=["https://graph.microsoft.com/.default"],
+                ),
+            )
+
+    def test_scope_matching_target_accepted(self, monkeypatch):
+        from registry.core.config import settings
+
+        monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(settings, "entra_client_id", "", raising=False)
+        s = _server(
+            egress_auth_mode="obo_exchange",
+            egress_oauth=EgressOAuthConfig(
+                target_audience="api://outlook-mcp-server",
+                scopes=[
+                    "api://outlook-mcp-server/.default",
+                    "api://outlook-mcp-server/Mail.Read",
+                ],
+            ),
+        )
+        assert s.egress_oauth.target_audience == "api://outlook-mcp-server"
+
+    def test_scope_binding_holds_even_under_allowlist(self, monkeypatch):
+        # The allowlist gates target_audience; scopes must still bind to the target,
+        # or an allowlisted target + Graph scope would slip through.
+        from registry.core.config import settings
+
+        monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(settings, "entra_client_id", "", raising=False)
+        monkeypatch.setattr(
+            settings, "egress_obo_allowed_audiences", "api://outlook-mcp-server", raising=False
+        )
+        with pytest.raises(ValidationError, match="grants against a resource other than"):
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth=EgressOAuthConfig(
+                    target_audience="api://outlook-mcp-server",
+                    scopes=["https://graph.microsoft.com/.default"],
+                ),
             )
 
 

@@ -1155,6 +1155,11 @@ aws_registry_federation_enabled = true
 # egress_oauth_callback_base_url     = "https://mcpgateway.example.com"
 # egress_token_refresh_skew_seconds  = 300
 # egress_state_ttl_seconds           = 600
+# obo_exchange target_audience allowlist (whitespace-separated). When set, an obo
+# server may only use a listed audience; when empty a shape rule applies (api://
+# App ID URI / bare client-id only, no https host URLs or GUIDs), so shared
+# first-party APIs (Graph/ARM/Key Vault) are rejected at registration.
+# egress_obo_allowed_audiences       = "api://outlook-mcp-server api://calendar-mcp-server"
 # egress_registry_internal_url       = "http://registry:8080"
 # egress_secrets_manager_kms_key_id  = ""   # optional CMK; empty uses the AWS-managed key
 # egress_secrets_manager_path_prefix = "mcp/egress"

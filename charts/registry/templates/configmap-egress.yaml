@@ -46,6 +46,13 @@ data:
   EGRESS_TOKEN_REFRESH_SKEW_SECONDS: {{ .Values.egressAuth.tokenRefreshSkewSeconds | default "300" | quote }}
   EGRESS_REFRESH_WORKER_INTERVAL_SECONDS: {{ .Values.egressAuth.refreshWorkerIntervalSeconds | default "300" | quote }}
   EGRESS_STATE_TTL_SECONDS: {{ .Values.egressAuth.stateTtlSeconds | default "600" | quote }}
+  {{- if .Values.egressAuth.oboAllowedAudiences }}
+  # obo_exchange target_audience allowlist (whitespace-separated). When set, the
+  # authoritative positive control: an obo server may only use a listed audience.
+  # When unset, a shape rule applies (api:// App ID URI / bare client-id only; no
+  # https host URLs), so shared first-party APIs (Graph/ARM/Key Vault) are rejected.
+  EGRESS_OBO_ALLOWED_AUDIENCES: {{ .Values.egressAuth.oboAllowedAudiences | quote }}
+  {{- end }}
   {{- if .Values.egressAuth.secretsManager }}
   {{- if .Values.egressAuth.secretsManager.kmsKeyId }}
   SECRETS_MANAGER_KMS_KEY_ID: {{ .Values.egressAuth.secretsManager.kmsKeyId | quote }}

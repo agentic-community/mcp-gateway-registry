@@ -78,3 +78,21 @@ tests:
       - equal:
           path: data.OPENBAO_KV_MOUNT
           value: "secret"
+
+  - it: omits the obo audience allowlist by default (shape rule applies)
+    set:
+      egressAuth:
+        enabled: true
+    asserts:
+      - notExists:
+          path: data.EGRESS_OBO_ALLOWED_AUDIENCES
+
+  - it: renders the obo audience allowlist when set
+    set:
+      egressAuth:
+        enabled: true
+        oboAllowedAudiences: "api://outlook-mcp-server api://calendar-mcp-server"
+    asserts:
+      - equal:
+          path: data.EGRESS_OBO_ALLOWED_AUDIENCES
+          value: "api://outlook-mcp-server api://calendar-mcp-server"

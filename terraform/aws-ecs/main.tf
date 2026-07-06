@@ -364,6 +364,7 @@ module "mcp_gateway" {
   egress_oauth_callback_base_url     = var.egress_oauth_callback_base_url
   egress_token_refresh_skew_seconds  = var.egress_token_refresh_skew_seconds
   egress_state_ttl_seconds           = var.egress_state_ttl_seconds
+  egress_obo_allowed_audiences       = var.egress_obo_allowed_audiences
   egress_registry_internal_url       = var.egress_registry_internal_url
   egress_nginx_marker_secret         = var.egress_nginx_marker_secret
   egress_secrets_manager_kms_key_id  = var.egress_secrets_manager_kms_key_id
