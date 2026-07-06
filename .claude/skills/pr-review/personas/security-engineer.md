@@ -3,6 +3,8 @@
 **Name:** Cipher
 **Focus Areas:** Authentication, authorization, input validation, data protection, OWASP
 
+> **REQUIRED FIRST STEP:** Read [security-patterns.md](security-patterns.md) before reviewing. It is the catalog of security defects that have actually shipped and been fixed in this project (SSRF, broken access control, weak defaults, token boundaries, missing CSRF, injection, log/secret leakage, dependency CVEs, agent execution safety, key-auth timing oracles, proxy body integrity). For every changed file, walk the [Review Checklist](security-patterns.md#review-checklist) and flag any pattern the diff reintroduces. Treat a matched anti-pattern as a blocker until justified.
+
 ## Scope of Responsibility
 
 - **Module**: `/auth_server/`
@@ -45,16 +47,19 @@
 
 ## Security Checklist
 
-- [ ] Input validation adequate
-- [ ] Authentication/authorization correct
-- [ ] No sensitive data exposure
-- [ ] No injection vulnerabilities
-- [ ] Rate limiting considered
-- [ ] Audit logging included
-- [ ] Secrets not hardcoded
-- [ ] HTTPS enforced
-- [ ] CORS properly configured
-- [ ] Error messages don't leak info
+Walk the full [security-patterns.md#review-checklist](security-patterns.md#review-checklist) against the diff. Baseline items:
+
+- [ ] Outbound fetches of stored/request-supplied URLs go through the SSRF guard; secrets never POSTed to an unvalidated URL (pattern #1)
+- [ ] New GET strips backend URLs for non-admins; mutations 404-then-403 on resolved identity; API mirrors legacy UI-route authz (pattern #2)
+- [ ] No new secret with a working default; new env vars in reserved-name + weak-secret lists; no `0.0.0.0`/`verify=False`/`sslRequired=none` (pattern #3)
+- [ ] Inbound auth headers stripped on egress; JWTs verified; no client-supplied session id trusted for authz (pattern #4)
+- [ ] Every mutating endpoint carries the CSRF dependency (pattern #5)
+- [ ] No untrusted input interpolated into nginx/query/HTML/href without escaping; `$regex` uses `re.escape` (pattern #6)
+- [ ] No headers/user-context/tokens/OIDC claim values logged; secret fields write-only; CLI secrets to `0600` files (pattern #7)
+- [ ] New dependency floors above known CVE fixes across all manifests; unused deps removed (pattern #8)
+- [ ] Mutating agent tools gated behind confirmation; agent endpoints validate a JWT (pattern #9)
+- [ ] Secrets compared with `hmac.compare_digest`; keys peppered per-deployment; no source-constant auth (pattern #10)
+- [ ] MCP proxy re-authorizes the exact forwarded body; fails closed on uninspectable body (pattern #11)
 
 ## Review Questions to Ask
 

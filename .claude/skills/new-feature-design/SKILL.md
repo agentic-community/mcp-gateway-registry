@@ -1169,6 +1169,8 @@ it unless the item count is small and bounded.
 **Reviewer:** Cipher
 **Focus Areas:** Authentication, authorization, input validation, data protection, OWASP
 
+> **Before writing this section, read [security-patterns.md](../pr-review/personas/security-patterns.md)** — the catalog of security defects that have shipped and been fixed in this project. Design the feature so it does not reintroduce any of them (SSRF on outbound fetches, broken access control / info disclosure on new endpoints, weak defaults, token-boundary confusion, missing CSRF, injection, log/secret leakage, agent execution safety). Call out in the Concerns/Recommendations below which patterns this feature touches and how the design avoids them.
+
 ### Assessment
 
 #### Strengths
@@ -1178,12 +1180,15 @@ it unless the item count is small and bounded.
 - {Issues or risks identified}
 
 #### Security Checklist
-- [ ] Input validation adequate
-- [ ] Authentication/authorization correct
-- [ ] No sensitive data exposure
-- [ ] No injection vulnerabilities
-- [ ] Rate limiting considered
-- [ ] Audit logging included
+See [security-patterns.md#review-checklist](../pr-review/personas/security-patterns.md#review-checklist) for the full per-pattern list. Key items:
+- [ ] Outbound fetches of stored/request-supplied URLs go through the SSRF guard (pattern #1)
+- [ ] New GET endpoints strip backend URLs for non-admins; mutations 404-then-403 on resolved identity (pattern #2)
+- [ ] No new secret ships with a working default; new env vars added to reserved-name + weak-secret lists (pattern #3)
+- [ ] Inbound auth headers stripped on egress; JWTs verified; no client-supplied session id trusted (pattern #4)
+- [ ] Every mutating endpoint carries the CSRF dependency (pattern #5)
+- [ ] No untrusted input interpolated into nginx/query/HTML/href without escaping (pattern #6)
+- [ ] No secrets/headers/OIDC claim values logged; secret fields write-only in responses (pattern #7)
+- [ ] Mutating agent tools gated behind confirmation; agent endpoints authenticate (pattern #9)
 
 #### Recommendations
 1. {Specific recommendation}
