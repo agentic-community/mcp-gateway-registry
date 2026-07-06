@@ -230,7 +230,7 @@ The scope validation is implemented in the [`validate_server_tool_access()`](../
 def validate_server_tool_access(server_name: str, method: str, tool_name: str, user_scopes: List[str]) -> bool:
     """
     Validate if the user has access to the specified server method/tool based on scopes.
-    
+
     Returns True if access is allowed, False otherwise
     """
 ```

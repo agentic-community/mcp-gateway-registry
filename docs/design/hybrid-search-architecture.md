@@ -502,7 +502,7 @@ Query: "flight booking"
   Pipeline 3: $search vectorSearch (k=30) + $match entity_type=skill       -> top 30 skills
   Pipeline 4: $search vectorSearch (k=30) + $match entity_type=virtual_server -> top 30 virtual servers
   Keyword:    collection.find({$or: [name/path/desc/tags/tools regex match]})
-  
+
   All candidates merged -> RRF scoring -> _distribute_results -> normalize -> response
 ```
 

@@ -17,7 +17,7 @@ Follow these steps:
    cd agents/
    python cli_user_auth.py
    python agent.py --use-session-cookie --message "test message"
-   
+
    # For agent identity mode
    python agent.py --message "test message"
    ```

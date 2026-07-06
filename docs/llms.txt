@@ -48,7 +48,7 @@ Key features include: centralized server management, OAuth 2.0/3.0 authenticatio
 | `credentials-provider/` | **Credential Management** - OAuth token handling | `app.py` (credentials service) |
 | `agents/` | **A2A Agent Cards** - Agent-to-Agent protocol agent cards | JSON files for registered agents |
 | `api/` | **Legacy API** - Deprecated standalone API (use `registry/api/`) | - |
-| `release-notes/` | **Release History** - Version release notes | Markdown files per version |
+| `docs/release-notes/` | **Release History** - Version release notes | Markdown files per version |
 
 **Registry Application Structure (`registry/`):**
 

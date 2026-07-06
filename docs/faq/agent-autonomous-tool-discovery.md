@@ -10,7 +10,7 @@ Use the Dynamic Tool Discovery feature:
        session_cookie=session_cookie,
        top_n_tools=3
    )
-   
+
    # Then invoke the discovered tool
    if tools:
        result = await invoke_mcp_tool(

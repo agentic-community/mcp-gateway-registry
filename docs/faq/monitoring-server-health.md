@@ -13,7 +13,7 @@ The registry provides built-in health monitoring:
    ```bash
    # View all service logs
    docker compose logs -f
-   
+
    # View specific service logs
    docker compose logs -f registry
    docker compose logs -f auth-server

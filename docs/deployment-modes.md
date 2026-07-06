@@ -162,7 +162,7 @@ CloudFront is configured to send `X-Forwarded-Proto: https` as a custom origin h
 
 **Cause:** The CloudFront URL is not in Keycloak's allowed redirect URIs for the `mcp-gateway-web` client.
 
-**Solution:** 
+**Solution:**
 1. Re-run `init-keycloak.sh` after generating fresh terraform outputs:
    ```bash
    cd terraform/aws-ecs
@@ -241,7 +241,7 @@ Rebuild and redeploy the registry container.
 
 **Cause:** Route53 hosted zone doesn't exist or DNS propagation is slow.
 
-**Solution:** 
+**Solution:**
 1. Verify the hosted zone exists: `aws route53 list-hosted-zones`
 2. Check the `base_domain` matches your hosted zone
 3. Wait for DNS propagation (up to 5 minutes)

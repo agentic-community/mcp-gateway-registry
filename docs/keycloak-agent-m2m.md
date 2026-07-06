@@ -52,7 +52,7 @@ sequenceDiagram
 #### Production Architecture (Recommended)
 ```
 AI Agent A → Service Account A (agent-{agent-id}-m2m) → Group: mcp-servers-restricted/unrestricted
-AI Agent B → Service Account B (agent-{agent-id}-m2m) → Group: mcp-servers-restricted/unrestricted  
+AI Agent B → Service Account B (agent-{agent-id}-m2m) → Group: mcp-servers-restricted/unrestricted
 AI Agent C → Service Account C (agent-{agent-id}-m2m) → Group: mcp-servers-restricted/unrestricted
                                       ↓
                               Individual JWT Tokens per Agent
@@ -455,7 +455,7 @@ uv run python credentials-provider/keycloak/get_m2m_token.py --agent-id new-agen
 # Access Keycloak admin console
 open https://mcpgateway.ddns.net/admin
 
-# Navigate to: 
+# Navigate to:
 # Realm: mcp-gateway → Users → agent-<id>-m2m → Groups
 
 # Add/remove group memberships:
@@ -547,12 +547,12 @@ AGENTS=(
 
 for agent_config in "${AGENTS[@]}"; do
   IFS=':' read -r agent_id group <<< "$agent_config"
-  
+
   echo "Creating agent: $agent_id with group: $group"
   ./keycloak/setup/setup-agent-service-account.sh \
     --agent-id "$agent_id" \
     --group "$group"
-  
+
   echo "Generating token for: $agent_id"
   uv run python credentials-provider/keycloak/get_m2m_token.py --agent-id "$agent_id"
 done
@@ -730,7 +730,7 @@ export KEYCLOAK_DB_PASSWORD="$(openssl rand -base64 32)"
 
 **Before running any setup scripts:**
 1. **REQUIRED**: Set `KEYCLOAK_ADMIN_PASSWORD` environment variable
-2. **REQUIRED**: Set `KEYCLOAK_DB_PASSWORD` environment variable  
+2. **REQUIRED**: Set `KEYCLOAK_DB_PASSWORD` environment variable
 3. Never commit these to version control
 4. Use a proper secrets management system
 

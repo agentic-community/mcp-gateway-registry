@@ -567,7 +567,7 @@ To add custom claims to tokens:
 ### Group Filtering
 
 To limit which groups are included in tokens:
-1. Go to **Token configuration** 
+1. Go to **Token configuration**
 2. Click **Add groups claim**
 3. Configure **Groups assigned to the application**
 

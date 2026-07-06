@@ -66,10 +66,10 @@ curl -X POST http://localhost/api/auth/logout \
 
 Registers a new MCP service with the gateway.
 
-**URL:** `/api/servers/register`  
-**Method:** `POST`  
-**Content-Type:** `application/x-www-form-urlencoded`  
-**Authentication:** Required (session cookie)  
+**URL:** `/api/servers/register`
+**Method:** `POST`
+**Content-Type:** `application/x-www-form-urlencoded`
+**Authentication:** Required (session cookie)
 **Parameters:**
 - `name` (required): Display name of the service
 - `description` (required): Description of the service
@@ -138,10 +138,10 @@ curl -X POST http://localhost/api/servers/toggle \
 
 Updates the details of an existing service.
 
-**URL:** `/api/edit/{service_path}`  
-**Method:** `POST`  
-**Content-Type:** `application/x-www-form-urlencoded`  
-**Authentication:** Required (session cookie)  
+**URL:** `/api/edit/{service_path}`
+**Method:** `POST`
+**Content-Type:** `application/x-www-form-urlencoded`
+**Authentication:** Required (session cookie)
 **URL Parameters:**
 - `service_path`: Path of the service to edit
 **Form Parameters:**
@@ -171,14 +171,14 @@ curl -X POST http://localhost/api/edit/weather \
 
 Retrieves detailed information about registered services. Use `GET /api/servers` to list all servers, or `GET /api/servers/{path}` to fetch a single server.
 
-**URL:** `/api/servers`  
-**Method:** `GET`  
-**Authentication:** Required (session cookie)  
+**URL:** `/api/servers`
+**Method:** `GET`
+**Authentication:** Required (session cookie)
 **Description:** Lists all registered services.
 
-**URL:** `/api/servers/{path}`  
-**Method:** `GET`  
-**Authentication:** Required (session cookie)  
+**URL:** `/api/servers/{path}`
+**Method:** `GET`
+**Authentication:** Required (session cookie)
 **URL Parameters:**
 - `path`: Path of the service to get details for
 
@@ -200,9 +200,9 @@ curl -X GET http://localhost/api/servers \
 
 Retrieves the list of tools provided by a service.
 
-**URL:** `/api/tools/{service_path}`  
-**Method:** `GET`  
-**Authentication:** Required (session cookie)  
+**URL:** `/api/tools/{service_path}`
+**Method:** `GET`
+**Authentication:** Required (session cookie)
 **URL Parameters:**
 - `service_path`: Path of the service to get tools for, or "all" to get tools from all services
 
@@ -224,9 +224,9 @@ curl -X GET http://localhost/api/tools/all \
 
 Manually triggers a health check and tool discovery (rescan) for a service.
 
-**URL:** `/api/servers/{path}/rescan`  
-**Method:** `POST`  
-**Authentication:** Required (session cookie)  
+**URL:** `/api/servers/{path}/rescan`
+**Method:** `POST`
+**Authentication:** Required (session cookie)
 **URL Parameters:**
 - `path`: Path of the service to rescan
 
@@ -246,9 +246,9 @@ curl -X POST http://localhost/api/servers/weather/rescan \
 
 Provides real-time updates on the health status of all registered services.
 
-**URL:** `/api/health/ws/health_status`  
-**Protocol:** WebSocket  
-**Authentication:** Not required (public endpoint)  
+**URL:** `/api/health/ws/health_status`
+**Protocol:** WebSocket
+**Authentication:** Not required (public endpoint)
 **Response:** JSON messages with health status updates
 
 **Example using websocat:**
@@ -280,13 +280,13 @@ async def health_status_monitor():
     uri = "ws://localhost/api/health/ws/health_status"
     async with websockets.connect(uri) as websocket:
         print("WebSocket connection established")
-        
+
         while True:
             try:
                 # Receive health status updates
                 message = await websocket.recv()
                 data = json.loads(message)
-                
+
                 print("Health status update received:")
                 for path, info in data.items():
                     print(f"Service {path}: {info['status']}")

@@ -214,4 +214,3 @@ podman machine start
 # Deploy correctly on Apple Silicon
 ./build_and_run.sh --podman  # NO --prebuilt!
 ```
-
