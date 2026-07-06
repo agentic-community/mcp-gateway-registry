@@ -221,8 +221,24 @@ class TestDisallowedOboAudience:
     def test_bare_guid_targets_rejected_by_shape_rule(self, aud):
         # A BARE GUID is how first-party resources are directly addressable (the set
         # isn't enumerable), so under the shape rule (no operator allowlist) every
-        # bare-GUID target is rejected. The api://<guid> form is NOT rejected -- it
-        # is a custom-app App ID URI (see test_internal_app_audiences_allowed).
+        # bare-GUID target is rejected. A generic api://<guid> form IS accepted --
+        # it is a custom-app App ID URI (see test_internal_app_audiences_allowed).
+        assert schemas._is_disallowed_obo_audience(aud) is True
+
+    @pytest.mark.parametrize(
+        "aud",
+        [
+            "api://00000003-0000-0000-c000-000000000000",  # Microsoft Graph
+            "api://00000002-0000-0000-c000-000000000000",  # Azure AD Graph (legacy)
+            "api://797f4846-ba00-4fd7-ba43-dac1f8f63013",  # Azure Resource Manager
+            "api://cfa8b339-82a2-471a-a3c9-0fc0be7a4093",  # Azure Key Vault
+        ],
+    )
+    def test_known_first_party_guids_rejected_even_in_api_form(self, aud):
+        # Defense-in-depth: although a generic api://<guid> is accepted (custom app),
+        # the KNOWN first-party app-id GUIDs are rejected in the api:// form too, in
+        # case Entra scheme-normalizes api://<appId> to a bare-GUID SPN match. Their
+        # bare form is already rejected by the shape rule.
         assert schemas._is_disallowed_obo_audience(aud) is True
 
     def test_bare_guid_target_allowed_only_via_allowlist(self, monkeypatch):

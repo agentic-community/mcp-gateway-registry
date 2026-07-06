@@ -28,16 +28,34 @@ _RFC7230_TOKEN_RE = re.compile(r"[A-Za-z0-9!#$%&'*+\-.^_`|~]+")
 _SERVER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
 
 
-# A bare GUID (optionally in ``api://<guid>`` form) as an obo_exchange target is
-# ambiguous: it could be an internal server's app id OR a Microsoft first-party
-# resource (Graph 00000003-..., ARM 797f4846-..., Key Vault cfa8b339-..., Storage,
-# SQL, ...). A BARE GUID is how those first-party resources are directly
-# addressable, and the set cannot be enumerated safely, so a bare-GUID target is
-# only permitted via the operator allowlist (EGRESS_OBO_ALLOWED_AUDIENCES). An
-# ``api://<guid>`` App ID URI is the OPPOSITE: it is the standard auto-generated
-# identifier for a custom (tenant-local) app and can never address a first-party
-# resource, so it is accepted by shape like any other ``api://`` App ID URI.
+# obo_exchange target-audience GUID handling. A GUID could be an internal server's
+# app id OR a Microsoft first-party resource, so form matters:
+#   - A BARE GUID is how first-party resources are DIRECTLY addressable (Graph
+#     00000003-..., ARM 797f4846-..., Key Vault cfa8b339-..., Storage, SQL, ...).
+#     The set cannot be enumerated safely, so ANY bare GUID is rejected by shape
+#     and only permitted via the operator allowlist (EGRESS_OBO_ALLOWED_AUDIENCES).
+#   - The ``api://<guid>`` form is Entra's standard auto-generated App ID URI for a
+#     CUSTOM (tenant-local) app, so it is accepted by shape -- with one caveat: we
+#     do NOT rely on the assumption that Entra never scheme-normalizes
+#     ``api://<appId>`` to a bare-GUID first-party service-principal-name match.
+#     As defense-in-depth we still reject the ``api://`` form of the KNOWN
+#     first-party app-id GUIDs below, so the documented confused-deputy targets
+#     (Graph/ARM/Key Vault) are blocked in both bare and api:// spellings even if
+#     that normalization exists. A genuinely-GUID first-party resource outside
+#     this set would still require the operator to have granted the gateway app
+#     delegated permissions on it AND to register the obo server for it.
 _GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+# Known Microsoft first-party resource app-id GUIDs -- rejected as an obo target in
+# BOTH bare and ``api://<guid>`` forms (see _GUID_RE comment).
+_FIRST_PARTY_APPID_GUIDS: frozenset[str] = frozenset(
+    {
+        "00000003-0000-0000-c000-000000000000",  # Microsoft Graph
+        "00000002-0000-0000-c000-000000000000",  # Azure AD Graph (legacy)
+        "797f4846-ba00-4fd7-ba43-dac1f8f63013",  # Azure Resource Manager
+        "cfa8b339-82a2-471a-a3c9-0fc0be7a4093",  # Azure Key Vault
+    }
+)
 
 # The authority of an accepted ``api://<authority>`` target, and the accepted bare
 # (schemeless) client-id form. Deliberately narrow so the shape rule fails CLOSED:
@@ -142,13 +160,13 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
          a. ``api://<authority>`` where the authority is a well-formed token --
             an Entra App ID URI for an internal server. This is the standard form,
             INCLUDING the auto-generated ``api://<app-guid>`` (e.g.
-            ``api://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee``): Entra only resolves an
-            ``api://`` string to a custom app registration that advertises it as an
-            identifierUri, and no Microsoft first-party resource (Graph/ARM/Key
-            Vault) does -- their identifiers are ``https://<host>`` URLs and BARE
-            GUIDs. So ``api://<anything>`` can only ever address a tenant-local
-            app, i.e. the internal-server audience this control intends to allow.
-            No per-server allowlist entry is required for the normal case.
+            ``api://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee``): an ``api://`` string
+            names a custom (tenant-local) app registration, so no per-server
+            allowlist entry is required for the normal case. As defense-in-depth we
+            still reject the ``api://`` form of the KNOWN first-party app-id GUIDs
+            (Graph/ARM/Key Vault -- see _FIRST_PARTY_APPID_GUIDS), so the documented
+            confused-deputy targets are blocked in both bare and api:// spellings
+            regardless of Entra's internal SPN-matching semantics.
          b. a bare, schemeless non-GUID client-id token (Keycloak -- e.g.
             ``outlook-mcp-client``).
        A BARE GUID is NOT accepted by shape -- that IS how first-party resources
@@ -170,11 +188,18 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
     # target matches one of exactly two accepted shapes.
     if target.startswith("api://"):
         authority = target[len("api://") :]
-        # Any well-formed api:// authority is a custom-app App ID URI (including
-        # the auto-generated api://<guid> form) -- Entra never resolves an api://
-        # string to a first-party resource, so this cannot reach Graph/ARM/etc.
-        # Reject only a malformed/empty authority.
-        return not bool(_OBO_API_AUTHORITY_RE.match(authority))
+        # Reject a malformed/empty authority.
+        if not _OBO_API_AUTHORITY_RE.match(authority):
+            return True
+        # Defense-in-depth: block the api:// form of the known first-party app-id
+        # GUIDs (Graph/ARM/Key Vault) even though an api://<guid> normally names a
+        # custom app -- in case Entra scheme-normalizes api://<appId> to a
+        # bare-GUID first-party SPN match. Their bare form is already rejected.
+        if authority in _FIRST_PARTY_APPID_GUIDS:
+            return True
+        # Any other well-formed api:// authority (a named App ID URI or the
+        # auto-generated api://<guid> for a custom app) is accepted.
+        return False
     # No scheme: accept only a bare non-GUID client-id token; reject a BARE GUID
     # (directly addresses a first-party resource) or any value carrying a scheme
     # marker / disallowed characters.
