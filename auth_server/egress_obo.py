@@ -189,9 +189,27 @@ async def obo_exchange(
         target_audience,
         scopes or "[.default]",
     )
+    # The token endpoint receives the gateway's OWN client_secret and the user's
+    # ingress JWT (the OBO assertion). token_url comes from the gateway's IdP
+    # provider config (not per-request/registration input), so it is trusted --
+    # but we still route through the SSRF/rebinding-safe client for defense-in-
+    # depth and consistency with the 3LO path (registry.egress_auth.oauth_engine),
+    # so a future change that lets token_url be derived from IdP discovery can
+    # never silently become an SSRF that exfiltrates the client_secret/assertion
+    # to an internal target. The pinned guard rejects a non-http(s) scheme or a
+    # private/metadata IP (including a post-config DNS rebind) at connect time.
+    from registry.exceptions import UrlValidationError
+    from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
+
     try:
-        async with httpx.AsyncClient(timeout=_TOKEN_EXCHANGE_TIMEOUT_SECONDS) as client:
+        async with guarded_async_client(
+            profile=PROXY_PROFILE, timeout=_TOKEN_EXCHANGE_TIMEOUT_SECONDS
+        ) as client:
             resp = await client.post(token_url, data=body)
+    except UrlValidationError as exc:
+        # Guard rejected the target WITHOUT sending the credential/assertion.
+        logger.error("obo_exchange: token endpoint blocked by SSRF guard: %s", exc)
+        raise OboExchangeError(f"IdP token endpoint blocked by SSRF guard: {exc}") from exc
     except httpx.HTTPError as exc:
         logger.error("obo_exchange: transport error calling IdP token endpoint: %s", exc)
         raise OboExchangeError(f"IdP token endpoint unreachable: {exc}") from exc

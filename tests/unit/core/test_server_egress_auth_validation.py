@@ -125,3 +125,81 @@ class TestGatewayOwnAudienceHelper:
         monkeypatch.setattr(settings, "auth_provider", "keycloak", raising=False)
         monkeypatch.setattr(settings, "keycloak_client_id", "MCP-Gateway", raising=False)
         assert schemas._is_gateway_own_audience("mcp-gateway") is True
+
+    def test_gateway_own_resource_url_is_same_app(self, monkeypatch):
+        # The gateway's own public resource URL (registry_url) is an audience of
+        # the gateway app; target_audience equal to it must be flagged same-app,
+        # with or without a trailing slash.
+        from registry.core.config import settings
+
+        monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(settings, "entra_client_id", "gw-client-123", raising=False)
+        monkeypatch.setattr(settings, "registry_url", "https://gw.example.com", raising=False)
+        assert schemas._is_gateway_own_audience("https://gw.example.com") is True
+        assert schemas._is_gateway_own_audience("https://gw.example.com/") is True
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestForbiddenOboAudience:
+    """target_audience must not be a shared first-party IdP resource (confused deputy)."""
+
+    @pytest.mark.parametrize(
+        "aud",
+        [
+            "https://graph.microsoft.com",
+            "https://graph.microsoft.com/",
+            "https://GRAPH.microsoft.com",  # case-insensitive
+            "00000003-0000-0000-c000-000000000000",  # Graph app id GUID
+            "https://management.azure.com",
+            "https://vault.azure.net",
+        ],
+    )
+    def test_forbidden_audiences_rejected(self, aud):
+        assert schemas._is_forbidden_obo_audience(aud) is True
+
+    def test_internal_app_audience_allowed(self):
+        assert schemas._is_forbidden_obo_audience("api://outlook-mcp-server") is False
+
+    def test_obo_registration_rejects_graph_target(self, monkeypatch):
+        from registry.core.config import settings
+
+        # No gateway id set, so the same-app check is inert -- the forbidden-audience
+        # check is what must reject Graph.
+        monkeypatch.setattr(settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(settings, "entra_client_id", "", raising=False)
+        with pytest.raises(ValidationError, match="shared first-party IdP resource"):
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth=EgressOAuthConfig(target_audience="https://graph.microsoft.com"),
+            )
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestServerPathValidation:
+    """ServerInfo.path must be a safe slug (nginx-injection defense at the source)."""
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/atlassian", "/currenttime/", "/a/b-c_d.e", "/x", "bare/segment"],
+    )
+    def test_valid_paths_accepted(self, path):
+        s = ServerInfo(server_name="s", path=path, proxy_pass_url="http://u.test")
+        assert s.path == path
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            '/x" ; return 200 "pwned"; #',  # nginx directive injection
+            "/x\ny",  # newline
+            "/x y",  # whitespace
+            "/x{}",  # braces
+            "/x;drop",  # semicolon
+            "/x$var",  # nginx variable sigil
+            "",  # empty
+        ],
+    )
+    def test_hostile_paths_rejected(self, path):
+        with pytest.raises(ValidationError, match="invalid server path"):
+            ServerInfo(server_name="s", path=path, proxy_pass_url="http://u.test")

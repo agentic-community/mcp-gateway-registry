@@ -18,6 +18,7 @@ from auth_server import egress_obo
 from auth_server.egress_obo import (
     OboConfigError,
     OboConsentRequired,
+    OboExchangeError,
     OboReauthRequired,
     OboUnsupportedIdpError,
     obo_exchange,
@@ -51,9 +52,12 @@ class _FakeResponse:
 
 
 def _patch_post(monkeypatch, response, capture: dict):
-    """Patch httpx.AsyncClient so .post records its args and returns `response`.
+    """Patch the SSRF-guarded client so .post records its args and returns `response`.
 
-    `capture` is filled with {"url":..., "data":..., "calls": n}.
+    obo_exchange routes the IdP token POST through
+    ``registry.utils.url_guard.guarded_async_client`` (imported lazily inside the
+    function), so we patch it at its source module. `capture` is filled with
+    {"url":..., "data":..., "calls": n}.
     """
     capture["calls"] = 0
 
@@ -69,7 +73,7 @@ def _patch_post(monkeypatch, response, capture: dict):
         client.post = AsyncMock(side_effect=_post)
         yield client
 
-    monkeypatch.setattr(egress_obo.httpx, "AsyncClient", _fake_client)
+    monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", _fake_client)
 
 
 @pytest.mark.unit
@@ -184,3 +188,44 @@ class TestUnsupportedAndConfig:
 
         with pytest.raises(OboConfigError):
             await obo_exchange(_NoCreds(), subject_token="j", target_audience="a")
+
+
+@pytest.mark.unit
+class TestSsrfGuard:
+    """The IdP token POST is routed through the SSRF-guarded client (#1396 parity)."""
+
+    @pytest.mark.asyncio
+    async def test_guard_rejection_maps_to_exchange_error_without_leaking(self, monkeypatch):
+        """If the guarded client rejects the token endpoint (private/metadata IP,
+        bad scheme, DNS rebind), obo_exchange fails closed with OboExchangeError and
+        never sends the assertion/client_secret."""
+        from registry.exceptions import UrlValidationError
+
+        def _blocking_client(*args, **kwargs):
+            # The guard validates the target when the context manager is created
+            # (before any bytes leave), so raising here models a rejected endpoint.
+            raise UrlValidationError("https://169.254.169.254/token", "resolves to metadata IP")
+
+        monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", _blocking_client)
+
+        with pytest.raises(OboExchangeError, match="SSRF guard"):
+            await obo_exchange(_FakeEntraProvider(), subject_token="j", target_audience="api://srv")
+
+    @pytest.mark.asyncio
+    async def test_success_path_uses_guarded_client(self, monkeypatch):
+        """The happy path flows through the guarded client (proves the POST is
+        actually routed through it, not a raw httpx.AsyncClient)."""
+        capture: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "ok"}), capture)
+        # Make a raw httpx.AsyncClient blow up so a regression to the unguarded
+        # path would fail loudly rather than silently pass.
+        monkeypatch.setattr(
+            egress_obo.httpx,
+            "AsyncClient",
+            MagicMock(side_effect=AssertionError("must use guarded client")),
+        )
+        token = await obo_exchange(
+            _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
+        )
+        assert token == "ok"
+        assert capture["calls"] == 1

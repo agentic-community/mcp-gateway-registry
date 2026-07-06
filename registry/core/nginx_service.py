@@ -1698,8 +1698,17 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 per_server_prm = build_per_server_prm_url(
                     settings.registry_url, path, append_mcp=append_mcp
                 )
+                # Defense-in-depth: the PRM URL embeds the registrant-supplied
+                # server path (build_per_server_prm_url does a raw concat, no
+                # escaping), so sanitize before it lands in the quoted
+                # `set $mcp_resource_metadata "..."` directive -- matching the
+                # escaping applied to every other interpolated value in this file
+                # (e.g. $backend_url above). Without it, a path containing a
+                # double-quote + semicolon could break out of the string and
+                # inject nginx directives into the obo location block.
+                safe_per_server_prm = self._sanitize_for_nginx_set(per_server_prm)
                 obo_resource_metadata = (
-                    f'\n        set $mcp_resource_metadata "{per_server_prm}";'
+                    f'\n        set $mcp_resource_metadata "{safe_per_server_prm}";'
                 )
             except ValueError:
                 obo_resource_metadata = ""

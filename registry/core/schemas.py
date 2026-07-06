@@ -15,6 +15,43 @@ _IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RFC7230_TOKEN_RE = re.compile(r"[A-Za-z0-9!#$%&'*+\-.^_`|~]+")
 
 
+# A registered server path is interpolated into generated nginx config (location
+# directives, `set` directives, regex maps) and into per-server discovery URLs.
+# Restrict it to a safe slug so a hostile value can never carry nginx
+# metacharacters (quotes, semicolons, braces, whitespace, newlines, backslashes)
+# that could break out of a directive/string context. Allowed: alphanumerics and
+# `-` `_` `.` `/` (multi-segment paths, optional leading/trailing slash -- the
+# registration write path normalizes the leading slash, and some callers build
+# ServerInfo with the bare segment). This is the systemic guard behind the
+# per-site nginx sanitization in NginxConfigService (defense-in-depth: reject the
+# dangerous character class at the model, escape at every render site).
+_SERVER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
+
+
+# Well-known first-party IdP resources an obo_exchange target_audience must never
+# point at: exchanging the user's ingress token for one of these would mint a
+# broadly-scoped delegated token (e.g. Microsoft Graph) and forward it to the
+# server's upstream -- a confused-deputy token-exfiltration vector. obo targets
+# must be an internal MCP server's own app, not a shared first-party API. Matched
+# case-insensitively against both the GUID and host/URI forms.
+_FORBIDDEN_OBO_AUDIENCES: frozenset[str] = frozenset(
+    {
+        # Microsoft Graph (app id + canonical hosts)
+        "00000003-0000-0000-c000-000000000000",
+        "https://graph.microsoft.com",
+        "https://graph.microsoft.com/",
+        "graph.microsoft.com",
+        # Azure AD Graph (legacy) + ARM + Key Vault + Office 365 shared APIs
+        "00000002-0000-0000-c000-000000000000",
+        "https://management.azure.com",
+        "https://management.azure.com/",
+        "https://management.core.windows.net",
+        "https://vault.azure.net",
+        "https://vault.azure.net/",
+    }
+)
+
+
 def _gateway_own_client_id() -> str:
     """The gateway's own IdP client id, resolved by the configured auth provider.
 
@@ -32,17 +69,61 @@ def _gateway_own_client_id() -> str:
     return ""
 
 
+def _gateway_own_audiences() -> set[str]:
+    """All audience forms that refer to the gateway's own IdP app.
+
+    Includes the bare client id, the Entra ``api://<client_id>`` App ID URI, and
+    the gateway's own public resource URL (``registry_url``, which is an App ID
+    URI the gateway app owns and advertises in its PRM). Covering these means a
+    same-app OBO cannot be smuggled past the check by using a non-client-id
+    audience form the gateway app also owns. Returned lower-cased for
+    case-insensitive comparison (Entra audiences are GUIDs/URIs, not
+    case-sensitive).
+    """
+    from registry.core.config import settings
+
+    own = _gateway_own_client_id().strip().lower()
+    auds: set[str] = set()
+    if own:
+        auds.add(own)
+        auds.add(f"api://{own}")
+    # The gateway's own public resource URL is an audience of the gateway app
+    # (advertised in its PRM as the gateway-wide resource), so a target_audience
+    # equal to it is still a same-app OBO (Entra rejects it at runtime).
+    registry_url = (getattr(settings, "registry_url", "") or "").strip().lower()
+    if registry_url:
+        auds.add(registry_url)
+        auds.add(registry_url.rstrip("/"))
+    return auds
+
+
 def _is_gateway_own_audience(target_audience: str) -> bool:
     """True if target_audience refers to the gateway's own IdP app.
 
-    Matches the bare client id and the Entra ``api://<client_id>`` App ID URI
-    form, case-insensitively (Entra audiences are GUIDs/URIs, not case-sensitive).
+    Matches the bare client id, the Entra ``api://<client_id>`` App ID URI form,
+    and any configured gateway App ID URI, case-insensitively.
     """
-    own = _gateway_own_client_id().strip().lower()
+    own = _gateway_own_audiences()
     if not own:
         return False
     target = target_audience.strip().lower()
-    return target in (own, f"api://{own}")
+    return target in own or target.rstrip("/") in own
+
+
+def _is_forbidden_obo_audience(target_audience: str) -> bool:
+    """True if target_audience is a well-known shared first-party IdP resource.
+
+    An obo_exchange target must be an internal MCP server's own app. Pointing it
+    at Microsoft Graph / ARM / Key Vault / other shared APIs would exchange the
+    user's ingress token for a broadly-scoped delegated token and forward it to
+    the server's upstream (confused-deputy token exfiltration). Matched
+    case-insensitively against the GUID and host/URI forms, with and without a
+    trailing slash.
+    """
+    target = target_audience.strip().lower()
+    if not target:
+        return False
+    return target in _FORBIDDEN_OBO_AUDIENCES or target.rstrip("/") in _FORBIDDEN_OBO_AUDIENCES
 
 
 class CustomHeader(BaseModel):
@@ -480,6 +561,29 @@ class ServerInfo(BaseModel):
 
         return validate_visibility(v)
 
+    @field_validator("path")
+    @classmethod
+    def _validate_path(
+        cls,
+        v: str,
+    ) -> str:
+        """Reject server paths carrying nginx/URL-unsafe characters.
+
+        The path is interpolated into generated nginx config (location and `set`
+        directives, regex maps) and into per-server discovery URLs. A value with
+        a double-quote, semicolon, brace, whitespace, or newline could break out
+        of a directive/string context and inject nginx config. Restrict to a safe
+        slug (alphanumerics and ``. _ - /``) so the class of injection is
+        impossible at the source, not only escaped at each render site
+        (defense-in-depth with NginxConfigService._sanitize_for_nginx_set).
+        """
+        if not v or not _SERVER_PATH_RE.fullmatch(v):
+            raise ValueError(
+                f"invalid server path {v!r}: must be non-empty and contain only "
+                "letters, digits, '.', '_', '-', and '/'"
+            )
+        return v
+
     @model_validator(mode="after")
     def _populate_provider_default(self) -> "ServerInfo":
         """Populate default provider from config if not set."""
@@ -504,10 +608,13 @@ class ServerInfo(BaseModel):
 
         - oauth_user: requires egress_oauth with a provider (3LO needs a provider).
         - obo_exchange: requires egress_oauth.target_audience, and that audience
-          MUST differ from the gateway's own IdP client id / app ID URI. Entra
-          rejects an OBO assertion whose aud equals the requested resource (it is
-          a passthrough, not an exchange), so a same-app target is misconfiguration
-          we reject at registration rather than at the first live request.
+          MUST (a) differ from the gateway's own IdP client id / app ID URI (Entra
+          rejects a same-app OBO -- it is a passthrough, not an exchange), and
+          (b) not be a shared first-party IdP resource (Microsoft Graph / ARM /
+          Key Vault / ...): an obo target must be an internal MCP server's own
+          app, never a broad first-party API whose delegated token would be
+          exfiltrated to the server's upstream. Both are rejected at registration
+          rather than at the first live request.
         """
         mode = self.egress_auth_mode
         if mode not in ("none", "oauth_user", "obo_exchange"):
@@ -533,6 +640,14 @@ class ServerInfo(BaseModel):
             raise ValueError(
                 "egress_oauth.target_audience must differ from the gateway's own IdP "
                 "client id / app ID URI; same-app OBO is not a valid exchange"
+            )
+        if _is_forbidden_obo_audience(target):
+            raise ValueError(
+                f"egress_oauth.target_audience {target!r} is a shared first-party IdP "
+                "resource (e.g. Microsoft Graph / ARM / Key Vault); an obo_exchange "
+                "target must be an internal MCP server's own app, never a broad "
+                "first-party API (a delegated token for it would be exfiltrated to "
+                "the server's upstream)"
             )
         return self
 

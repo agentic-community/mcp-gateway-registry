@@ -2062,8 +2062,16 @@ def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
     gateway's public URL -- no static env list. Returns both the ``/mcp`` and
     bare-path forms to be robust to the server's ``append_mcp_path``. Returns []
     when there's no server context or no configured gateway URL.
+
+    Gated on the egress feature: the per-server resource audience is only ever a
+    valid ingress ``aud`` for an obo_exchange server, and obo cannot function with
+    egress disabled. Returning [] when egress is off keeps the accepted-audience
+    surface at exactly the gateway-app audience for every non-egress deployment
+    rather than always widening it to the per-server resource form.
     """
     if not server_name_from_url:
+        return []
+    if not getattr(settings, "egress_auth_enabled", False):
         return []
     # The token's aud is the PUBLIC per-server resource the registry advertised
     # in its PRM, built from the PUBLIC gateway URL. On auth-server, settings.
@@ -5209,6 +5217,38 @@ def _ingress_subject_token(request: "Request") -> str:
     return ""
 
 
+def _obo_subject_matches_principal(subject_token: str, internal_claims: dict) -> bool:
+    """True if the OBO subject token belongs to the /validate-authorized principal.
+
+    The internal mcp-proxy token (``internal_claims``) is minted at /validate with
+    ``subject == validation_result["username"]``. For an Entra ingress JWT that
+    username is ``preferred_username`` (falling back to ``sub``); for other paths
+    it is ``sub``. So we accept a match against EITHER the subject token's
+    ``preferred_username`` or its ``sub`` -- whichever the provider used to derive
+    the authorized username. This re-checks that the raw subject token we are
+    about to exchange in OBO hop 1 identifies the SAME principal the internal
+    token authorized, removing reliance on the implicit "nginx forwards the same
+    header to both the auth_request subrequest and this hop" invariant.
+
+    The subject token's signature was already verified by /validate; here we only
+    read identity claims (unverified decode) to compare. A missing internal
+    principal, no matching claim, or an undecodable token fails closed.
+    """
+    principal = (internal_claims or {}).get("sub") or ""
+    if not principal:
+        return False
+    try:
+        subject_claims = jwt.decode(subject_token, options={"verify_signature": False})
+    except jwt.InvalidTokenError:
+        return False
+    candidates = {
+        str(subject_claims.get("preferred_username") or ""),
+        str(subject_claims.get("sub") or ""),
+    }
+    candidates.discard("")
+    return principal in candidates
+
+
 def _obo_error_response(req_id: object, detail: str):
     """Terminal JSON-RPC error for an obo_exchange failure.
 
@@ -5707,6 +5747,24 @@ async def mcp_proxy(
                     return _obo_error_response(
                         req_id, "OBO exchange requires a bearer JWT on the ingress request"
                     )
+                # Bind the OBO assertion to the authorized principal. /validate
+                # authorized this request and minted the internal token over the
+                # ingress token's `sub`; the internal token is verified (claims,
+                # above) but does NOT carry the ingress token itself. Rather than
+                # rely solely on nginx forwarding the same header to both the
+                # auth_request subrequest and this hop, re-check that the raw
+                # subject token we are about to exchange belongs to the same
+                # principal the internal token authorized. Signature was already
+                # verified at /validate; here we only compare the `sub` claim.
+                if not _obo_subject_matches_principal(subject_token, claims):
+                    logger.warning(
+                        "mcp_proxy: obo_exchange server=%s subject-token principal does not "
+                        "match the /validate-authorized principal; refusing to exchange",
+                        server_name,
+                    )
+                    return _obo_error_response(
+                        req_id, "OBO subject token does not match the authorized principal"
+                    )
                 try:
                     obo_token = await obo_exchange(
                         get_auth_provider(),
@@ -5727,6 +5785,11 @@ async def mcp_proxy(
                     if k.lower() not in _EGRESS_STRIP_HEADERS
                 }
                 forward_headers["Authorization"] = f"Bearer {obo_token}"
+                # We injected an egress token (the exchanged OBO token). Mark it so
+                # that if the upstream still 401s, its foreign WWW-Authenticate /
+                # resource_metadata is dropped rather than relayed to the client
+                # (same cross-resource-PRM protection as the vaulted-token path).
+                egress_token_injected = True
             elif vend and vend.get("access_token"):
                 # Token is vaulted (consent done): strip the user's gateway
                 # credentials/identity and inject the vaulted upstream token.
