@@ -14,17 +14,25 @@ from pydantic import BaseModel, Field, field_validator
 
 def mask_credential(value: str) -> str:
     """
-    Mask credential to show only last 6 characters.
+    Mask a credential, emitting no part of its value.
+
+    Audit records persist to a store that may be read more widely than the
+    request path, so a credential value must never survive there -- not even a
+    suffix. The last characters of a bearer token, session cookie, or API key
+    are real key-space (and for short tokens a large fraction of it), so nothing
+    from the value is emitted; the fixed marker records only that a credential
+    was present. The credential TYPE (session vs bearer) is captured separately
+    on the audit Identity, so this loses no diagnostic value.
 
     Args:
         value: The credential string to mask
 
     Returns:
-        Masked string in format "***" + last 6 chars, or "***" if too short
+        A fixed ``"***"`` marker regardless of the value's length or content.
     """
-    if not value or len(value) <= 6:
+    if not value:
         return "***"
-    return "***" + value[-6:]
+    return "***"
 
 
 # Set of sensitive query parameter keys that should be masked by exact match.
@@ -111,7 +119,9 @@ class Identity(BaseModel):
         description="Type of credential: session_cookie, bearer_token, none"
     )
     credential_hint: str | None = Field(
-        default=None, description="Masked hint of the credential (last 6 chars)"
+        default=None,
+        description="Fixed marker recording that a credential was present; "
+        "emits no part of the credential value",
     )
 
     @field_validator("credential_hint", mode="before")

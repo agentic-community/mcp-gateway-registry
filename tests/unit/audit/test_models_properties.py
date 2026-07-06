@@ -26,16 +26,21 @@ class TestCredentialMasking:
     @given(st.text(min_size=0, max_size=6))
     @settings(max_examples=50)
     def test_short_credentials_masked_completely(self, credential: str):
-        """Short credentials (<=6 chars) return '***'."""
+        """Short credentials return the fixed marker."""
         assert mask_credential(credential) == "***"
 
     @given(st.text(min_size=7, max_size=100))
     @settings(max_examples=50)
-    def test_long_credentials_show_last_six(self, credential: str):
-        """Long credentials return '***' + last 6 characters."""
+    def test_long_credentials_emit_no_value(self, credential: str):
+        """Long credentials return the fixed marker with NO substring of the value.
+
+        Emitting even a suffix is a leak: for opaque tokens/cookies the trailing
+        bytes are real key-space. The masker must reveal nothing.
+        """
         result = mask_credential(credential)
-        assert result == "***" + credential[-6:]
-        assert len(result[3:]) <= 6
+        assert result == "***"
+        # No non-trivial substring of the credential appears in the output.
+        assert credential[-6:] not in result or len(credential[-6:].strip()) == 0
 
 
 class TestSensitiveQueryParamMasking:

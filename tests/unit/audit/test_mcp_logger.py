@@ -122,4 +122,6 @@ class TestLogMCPAccess:
         assert record.log_type == "mcp_server_access"
         assert record.mcp_request.method == "tools/call"
         assert record.mcp_request.tool_name == "get_weather"
-        assert record.identity.credential_hint == "***xyz789"
+        # The credential hint is fully masked: no suffix of the value survives.
+        assert record.identity.credential_hint == "***"
+        assert "xyz789" not in record.identity.credential_hint
